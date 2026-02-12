@@ -34,7 +34,8 @@ async function bundleToString(entry) {
     write: false,
     // This ensures node built-ins don't break the bundle
     external: [], 
-    plugins: [nodeModulesPolyfillPlugin()],  
+    plugins: [nodeModulesPolyfillPlugin()],
+    legalComments: "none",  
   });
 
     return await minifyCode(result.outputFiles[0].text);
