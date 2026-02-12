@@ -2,7 +2,7 @@ import { build } from "esbuild";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import polyfillNode from "esbuild-plugins-node-modules-polyfill";
+import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill";
 // Get __dirname equivalent in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,12 +18,12 @@ async function bundleToString(entry) {
     write: false,
     // This ensures node built-ins don't break the bundle
     external: [], 
-    plugins: [polyfillNode()],  
+    plugins: [nodeModulesPolyfillPlugin()],  
   });
 
     return result.outputFiles[0].text;
   } catch (err) {
-    console.error(`Build failed for ${entry}:`, err);
+    console.error(`Build failed for ${entryPath}:`, err);
     process.exit(1);
   }
 }
