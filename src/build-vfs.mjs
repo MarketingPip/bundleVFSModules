@@ -35,7 +35,7 @@ async function main() {
   "/node_modules/memfs/index.js": ${JSON.stringify(memfsCode)}
 };`;
 
-  fs.writeFileSync(output, vfsContent.trim());
+  fs.writeFileSync("dist/vfs.js", vfsContent.trim());
   console.log(`Successfully wrote VFS to ${output}`);
 }
 
