@@ -2,7 +2,7 @@ import { build } from "esbuild";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import polyfillNode from "esbuild-plugin-node-modules-polyfill";
+import polyfillNode from "esbuild-plugins-node-modules-polyfill";
 // Get __dirname equivalent in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
