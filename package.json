@@ -1,0 +1,13 @@
+{
+  "name": "my-vfs",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:vfs": "node src/build-vfs.mjs"
+  },
+  "dependencies": {
+    "memfs": "^3.4.0",
+    "esbuild": "^0.22.0"
+  }
+}
