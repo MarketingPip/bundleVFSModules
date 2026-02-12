@@ -15,6 +15,10 @@ async function minifyCode(code) {
   return result.code;
 }
 
+
+
+const DIST_DIR = "dist";
+
 // Get __dirname equivalent in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,7 +39,8 @@ async function bundleToString(entry) {
     // This ensures node built-ins don't break the bundle
     external: [], 
     plugins: [nodeModulesPolyfillPlugin()],
-    legalComments: "external",  
+    legalComments: "external", 
+    outdir: DIST_DIR
   });
 
     return await minifyCode(result.outputFiles[0].text);
@@ -45,7 +50,6 @@ async function bundleToString(entry) {
   }
 }
 
-const DIST_DIR = "dist";
 
 // Modules that should be bundled
 const BUNDLED_MODULES = {
