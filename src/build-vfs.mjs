@@ -2,20 +2,23 @@ import { build } from "esbuild";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
+import polyfillNode from "esbuild-plugin-node-modules-polyfill";
 // Get __dirname equivalent in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function bundleToString(entryPath) {
   try {
     const result = await build({
-      entryPoints: [entryPath],
-      bundle: true,
-      format: "esm",
-      platform: "node",
-      write: false,
-      logLevel: "info", // This will show errors in the console
-    });
+    entryPoints: [entry],
+    bundle: true,
+    format: "esm",
+    platform: "browser", // Use "browser" to force esbuild to include everything
+    target: "es2020",
+    minify: true,        // Optional: keeps the VFS file size smaller
+    write: false,
+    // This ensures node built-ins don't break the bundle
+    external: [], 
+  });
 
     return result.outputFiles[0].text;
   } catch (err) {
