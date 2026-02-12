@@ -23,7 +23,7 @@ async function bundleToString(entry) {
 
     return result.outputFiles[0].text;
   } catch (err) {
-    console.error(`Build failed for ${entryPath}:`, err);
+    console.error(`Build failed for ${entry}:`, err);
     process.exit(1);
   }
 }
