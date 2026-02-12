@@ -14,7 +14,7 @@ async function bundleToString(entry) {
 }
 
 async function main() {
-  const memfsCode = await bundleToString("./memfs-entry.js");
+  const memfsCode = await bundleToString("memfs-entry.js");
 
   const vfsContent = `
 export const myVFS = {
