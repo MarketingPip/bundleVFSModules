@@ -6,7 +6,7 @@ import polyfillNode from "esbuild-plugins-node-modules-polyfill";
 // Get __dirname equivalent in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-async function bundleToString(entryPath) {
+async function bundleToString(entry) {
   try {
     const result = await build({
     entryPoints: [entry],
