@@ -1,28 +1,43 @@
 import { build } from "esbuild";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-async function bundleToString(entry) {
-  const result = await build({
-    entryPoints: [entry],
-    bundle: true,
-    format: "esm",
-    platform: "node", // or "node"
-    write: false
-  });
+// Get __dirname equivalent in ESM
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-  return result.outputFiles[0].text;
+async function bundleToString(entryPath) {
+  try {
+    const result = await build({
+      entryPoints: [entryPath],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      write: false,
+      logLevel: "info", // This will show errors in the console
+    });
+
+    return result.outputFiles[0].text;
+  } catch (err) {
+    console.error(`Build failed for ${entryPath}:`, err);
+    process.exit(1);
+  }
 }
 
 async function main() {
-  const memfsCode = await bundleToString("src/memfs-entry.js");
+  // Use absolute paths to be safe
+  const entry = path.resolve(__dirname, "src/memfs-entry.js");
+  const output = path.resolve(__dirname, "src/vfs.js");
 
-  const vfsContent = `
-export const myVFS = {
+  console.log("Bundling...");
+  const memfsCode = await bundleToString(entry);
+
+  const vfsContent = `export const myVFS = {
   "/node_modules/memfs/index.js": ${JSON.stringify(memfsCode)}
-};
-`;
+};`;
 
-  fs.writeFileSync("src/vfs.js", vfsContent.trim());
+  fs.writeFileSync(output, vfsContent.trim());
+  console.log(`Successfully wrote VFS to ${output}`);
 }
 
 main();
