@@ -133,7 +133,7 @@ function generateVFS(bundledModules, stubModules) {
     ...stubModules,
   };
 
-  return `export const myVFS = ${JSON.stringify(vfsObject, null, 2)};`;
+  return `export const myVFS = ${JSON.stringify(vfsObject)};`;
 }
 
 async function main() {
