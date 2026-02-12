@@ -35,9 +35,78 @@ async function main() {
 
   const memfsCode = await bundleToString(entry);
 
-  const vfsContent = `export const myVFS = {
-  "/node_modules/memfs/index.js": ${JSON.stringify(memfsCode)}
+const vfsContent = `export const myVFS = {
+  "fs": ${JSON.stringify(memfsCode)},
+
+  // Node core modules (not implemented)
+  "path": { 
+    get: () => { throw new Error("Not implemented: path"); }
+  },
+  "os": { 
+    get: () => { throw new Error("Not implemented: os"); }
+  },
+  "http": { 
+    get: () => { throw new Error("Not implemented: http"); }
+  },
+  "https": { 
+    get: () => { throw new Error("Not implemented: https"); }
+  },
+  "url": { 
+    get: () => { throw new Error("Not implemented: url"); }
+  },
+  "stream": { 
+    get: () => { throw new Error("Not implemented: stream"); }
+  },
+  "crypto": { 
+    get: () => { throw new Error("Not implemented: crypto"); }
+  },
+  "events": { 
+    get: () => { throw new Error("Not implemented: events"); }
+  },
+  "util": { 
+    get: () => { throw new Error("Not implemented: util"); }
+  },
+  "child_process": { 
+    get: () => { throw new Error("Not implemented: child_process"); }
+  },
+  "readline": { 
+    get: () => { throw new Error("Not implemented: readline"); }
+  },
+  "zlib": { 
+    get: () => { throw new Error("Not implemented: zlib"); }
+  },
+  "dns": { 
+    get: () => { throw new Error("Not implemented: dns"); }
+  },
+  "net": { 
+    get: () => { throw new Error("Not implemented: net"); }
+  },
+  "tls": { 
+    get: () => { throw new Error("Not implemented: tls"); }
+  },
+  "dgram": { 
+    get: () => { throw new Error("Not implemented: dgram"); }
+  },
+  "assert": { 
+    get: () => { throw new Error("Not implemented: assert"); }
+  },
+  "vm": { 
+    get: () => { throw new Error("Not implemented: vm"); }
+  },
+  "tty": { 
+    get: () => { throw new Error("Not implemented: tty"); }
+  },
+  "perf_hooks": { 
+    get: () => { throw new Error("Not implemented: perf_hooks"); }
+  },
+  "worker_threads": { 
+    get: () => { throw new Error("Not implemented: worker_threads"); }
+  },
+  "cluster": { 
+    get: () => { throw new Error("Not implemented: cluster"); }
+  },
 };`;
+
 
   // --- The Fix ---
   // Ensure the directory exists before writing
