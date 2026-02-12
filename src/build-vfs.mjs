@@ -7,6 +7,10 @@ import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function bundleToString(entry) {
+     function getEntryPath(entry){
+    return path.resolve(__dirname, entry);
+   }
+  entry = getEntryPath(entry);
   try {
     const result = await build({
     entryPoints: [entry],
@@ -29,19 +33,17 @@ async function bundleToString(entry) {
 }
 
 async function main() {
-  const entry = path.resolve(__dirname, "memfs-entry.js");
+
   const outputPath = "dist/vfs.js"; // or "src/vfs.js" based on your error
   const outputDir = path.dirname(outputPath);
 
-  const memfsCode = await bundleToString(entry);
+  const memfsCode = await bundleToString("memfs-entry.js");
 
 const vfsContent = `export const myVFS = {
   "fs": ${JSON.stringify(memfsCode)},
 
   // Node core modules (not implemented)
-  "path": { 
-    get: () => { throw new Error("Not implemented: path"); }
-  },
+  "path": ${JSON.stringify(await bundleToString("path.js"))},
   "os": { 
     get: () => { throw new Error("Not implemented: os"); }
   },
