@@ -25,18 +25,25 @@ async function bundleToString(entryPath) {
 }
 
 async function main() {
-  // Use absolute paths to be safe
   const entry = path.resolve(__dirname, "memfs-entry.js");
+  const outputPath = "dist/vfs.js"; // or "src/vfs.js" based on your error
+  const outputDir = path.dirname(outputPath);
 
-  console.log("Bundling...");
   const memfsCode = await bundleToString(entry);
 
   const vfsContent = `export const myVFS = {
   "/node_modules/memfs/index.js": ${JSON.stringify(memfsCode)}
 };`;
 
-  fs.writeFileSync("dist/vfs.js", vfsContent.trim());
-  console.log(`Successfully wrote VFS to ${output}`);
+  // --- The Fix ---
+  // Ensure the directory exists before writing
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+  // ----------------
+
+  fs.writeFileSync(outputPath, vfsContent.trim());
+  console.log(`✅ Success! Written to ${outputPath}`);
 }
 
 main();
