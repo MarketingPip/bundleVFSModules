@@ -3,6 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill";
+
+import { minify } from "terser";
+
+async function minifyCode(code) {
+  const result = await minify(code, {
+    compress: true,
+    mangle: true,
+    module: true
+  });
+  return result.code;
+}
+
 // Get __dirname equivalent in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,7 +37,7 @@ async function bundleToString(entry) {
     plugins: [nodeModulesPolyfillPlugin()],  
   });
 
-    return result.outputFiles[0].text;
+    return await minifyCode(result.outputFiles[0].text);
   } catch (err) {
     console.error(`Build failed for ${entryPath}:`, err);
     process.exit(1);
