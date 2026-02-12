@@ -20,20 +20,6 @@ jobs:
           node-version: 20
 
 
-      - name: Ensure package-lock exists
-        run: |
-          if [ ! -f package-lock.json ]; then
-            echo "package-lock.json not found. Generating..."
-            npm install --package-lock-only
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add package-lock.json
-            git commit -m "chore: add package-lock.json"
-            git push
-          else
-            echo "package-lock.json exists"
-          fi
-
       - name: Install dependencies
         run: npm ci
 
