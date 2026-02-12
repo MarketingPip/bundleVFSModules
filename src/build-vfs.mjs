@@ -32,93 +32,98 @@ async function bundleToString(entry) {
   }
 }
 
-async function main() {
+const DIST_DIR = "dist";
 
-  const outputPath = "dist/vfs.js"; // or "src/vfs.js" based on your error
-  const outputDir = path.dirname(outputPath);
+// Modules that should be bundled
+const BUNDLED_MODULES = {
+  fs: "memfs-entry.js",
+  path: "path.js",
+};
 
-  const memfsCode = await bundleToString("memfs-entry.js");
+// Node core modules to stub
+const STUB_MODULES = [
+  "os",
+  "http",
+  "https",
+  "url",
+  "stream",
+  "crypto",
+  "events",
+  "util",
+  "child_process",
+  "readline",
+  "zlib",
+  "dns",
+  "net",
+  "tls",
+  "dgram",
+  "assert",
+  "vm",
+  "tty",
+  "perf_hooks",
+  "worker_threads",
+  "cluster",
+];
 
-const vfsContent = `export const myVFS = {
-  "fs": ${JSON.stringify(memfsCode)},
-
-  // Node core modules (not implemented)
-  "path": ${JSON.stringify(await bundleToString("path.js"))},
-  "os": { 
-    get: () => { throw new Error("Not implemented: os"); }
-  },
-  "http": { 
-    get: () => { throw new Error("Not implemented: http"); }
-  },
-  "https": { 
-    get: () => { throw new Error("Not implemented: https"); }
-  },
-  "url": { 
-    get: () => { throw new Error("Not implemented: url"); }
-  },
-  "stream": { 
-    get: () => { throw new Error("Not implemented: stream"); }
-  },
-  "crypto": { 
-    get: () => { throw new Error("Not implemented: crypto"); }
-  },
-  "events": { 
-    get: () => { throw new Error("Not implemented: events"); }
-  },
-  "util": { 
-    get: () => { throw new Error("Not implemented: util"); }
-  },
-  "child_process": { 
-    get: () => { throw new Error("Not implemented: child_process"); }
-  },
-  "readline": { 
-    get: () => { throw new Error("Not implemented: readline"); }
-  },
-  "zlib": { 
-    get: () => { throw new Error("Not implemented: zlib"); }
-  },
-  "dns": { 
-    get: () => { throw new Error("Not implemented: dns"); }
-  },
-  "net": { 
-    get: () => { throw new Error("Not implemented: net"); }
-  },
-  "tls": { 
-    get: () => { throw new Error("Not implemented: tls"); }
-  },
-  "dgram": { 
-    get: () => { throw new Error("Not implemented: dgram"); }
-  },
-  "assert": { 
-    get: () => { throw new Error("Not implemented: assert"); }
-  },
-  "vm": { 
-    get: () => { throw new Error("Not implemented: vm"); }
-  },
-  "tty": { 
-    get: () => { throw new Error("Not implemented: tty"); }
-  },
-  "perf_hooks": { 
-    get: () => { throw new Error("Not implemented: perf_hooks"); }
-  },
-  "worker_threads": { 
-    get: () => { throw new Error("Not implemented: worker_threads"); }
-  },
-  "cluster": { 
-    get: () => { throw new Error("Not implemented: cluster"); }
-  },
-};`;
-
-
-  // --- The Fix ---
-  // Ensure the directory exists before writing
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
+async function ensureDir(dir) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
-  // ----------------
+}
 
-  fs.writeFileSync(outputPath, vfsContent.trim());
-  console.log(`✅ Success! Written to ${outputPath}`);
+async function buildBundledModules() {
+  const output = {};
+
+  for (const [name, entry] of Object.entries(BUNDLED_MODULES)) {
+    const code = await bundleToString(entry);
+
+    // Write individual bundle file
+    const bundlePath = path.join(DIST_DIR, `${name}.bundle.js`);
+    fs.writeFileSync(bundlePath, code);
+
+    console.log(`✅ Built ${name} → ${bundlePath}`);
+
+    output[name] = code;
+  }
+
+  return output;
+}
+
+function generateStubModules() {
+  const stubs = {};
+
+  for (const name of STUB_MODULES) {
+    stubs[name] = {
+      get: () => {
+        throw new Error(`Not implemented: ${name}`);
+      },
+    };
+  }
+
+  return stubs;
+}
+
+function generateVFS(bundledModules, stubModules) {
+  const vfsObject = {
+    ...bundledModules,
+    ...stubModules,
+  };
+
+  return `export const myVFS = ${JSON.stringify(vfsObject, null, 2)};`;
+}
+
+async function main() {
+  await ensureDir(DIST_DIR);
+
+  const bundledModules = await buildBundledModules();
+  const stubModules = generateStubModules();
+
+  const vfsContent = generateVFS(bundledModules, stubModules);
+
+  const vfsPath = path.join(DIST_DIR, "vfs.js");
+  fs.writeFileSync(vfsPath, vfsContent);
+
+  console.log(`✅ VFS written → ${vfsPath}`);
 }
 
 main();
