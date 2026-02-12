@@ -26,7 +26,7 @@ async function bundleToString(entryPath) {
 
 async function main() {
   // Use absolute paths to be safe
-  const entry = path.resolve(__dirname, "src/memfs-entry.js");
+  const entry = path.resolve(__dirname, "memfs-entry.js");
   const output = path.resolve(__dirname, "src/vfs.js");
 
   console.log("Bundling...");
