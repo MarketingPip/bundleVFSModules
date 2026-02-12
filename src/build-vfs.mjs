@@ -18,6 +18,7 @@ async function bundleToString(entryPath) {
     write: false,
     // This ensures node built-ins don't break the bundle
     external: [], 
+    plugins: [polyfillNode()],  
   });
 
     return result.outputFiles[0].text;
