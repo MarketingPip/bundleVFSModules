@@ -9,6 +9,6 @@
   "dependencies": {
     "memfs": "^3.4.0",
     "esbuild": "^0.22.0",
-    "esbuild-plugin-node-modules-polyfill": "^1.8.1"
+    "esbuild-plugins-node-modules-polyfill": "^1.8.1"
   }
 }
