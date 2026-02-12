@@ -1,16 +1,28 @@
-const path = require("path");
+import { build } from "esbuild";
+import fs from "node:fs";
 
-module.exports = {
-  mode: "production",
-  entry: "./memfs-entry.js",
-  output: {
-    path: path.resolve(__dirname, "dist"),
-    filename: "memfs.bundle.js",
-    library: {
-      type: "module",
-    },
-  },
-  experiments: {
-    outputModule: true,
-  },
+async function bundleToString(entry) {
+  const result = await build({
+    entryPoints: [entry],
+    bundle: true,
+    format: "esm",
+    platform: "browser", // or "node"
+    write: false
+  });
+
+  return result.outputFiles[0].text;
+}
+
+async function main() {
+  const memfsCode = await bundleToString("memfs");
+
+  const vfsContent = `
+export const myVFS = {
+  "/node_modules/memfs/index.js": ${JSON.stringify(memfsCode)}
 };
+`;
+
+  fs.writeFileSync("src/vfs.js", vfsContent.trim());
+}
+
+main();
