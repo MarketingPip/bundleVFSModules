@@ -74,20 +74,32 @@ async function ensureDir(dir) {
 async function buildBundledModules() {
   const output = {};
 
-  for (const [name, entry] of Object.entries(BUNDLED_MODULES)) {
-    const code = await bundleToString(entry);
+  // Create a promise for each bundle
+  const bundlePromises = Object.entries(BUNDLED_MODULES).map(
+    async ([name, entry]) => {
+      const code = await bundleToString(entry);
 
-    // Write individual bundle file
-    const bundlePath = path.join(DIST_DIR, `${name}.bundle.js`);
-    fs.writeFileSync(bundlePath, code);
+      // Write individual bundle file
+      const bundlePath = path.join(DIST_DIR, `${name}.js`);
+      fs.writeFileSync(bundlePath, code);
 
-    console.log(`✅ Built ${name} → ${bundlePath}`);
+      console.log(`✅ Built ${name} → ${bundlePath}`);
 
+      return { name, code };
+    }
+  );
+
+  // Wait for all bundles to complete
+  const results = await Promise.all(bundlePromises);
+
+  // Store results in output object
+  for (const { name, code } of results) {
     output[name] = code;
   }
 
   return output;
 }
+
 
 function generateStubModules() {
   const stubs = {};
