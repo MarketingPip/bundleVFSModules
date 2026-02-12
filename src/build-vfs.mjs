@@ -36,6 +36,7 @@ async function bundleToString(entry) {
       external: [], 
       plugins: [nodeModulesPolyfillPlugin()],
       legalComments: "linked", // This creates a separate file in the output array
+      outdir: DIST_DIR
     });
 
     // Find the JS file specifically, don't just grab index 0
