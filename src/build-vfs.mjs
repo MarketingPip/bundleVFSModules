@@ -23,27 +23,31 @@ const DIST_DIR = "dist";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function bundleToString(entry) {
-     function getEntryPath(entry){
-    return path.resolve(__dirname, entry);
-   }
-  entry = getEntryPath(entry);
+  entry = path.resolve(__dirname, entry);
   try {
     const result = await build({
-    entryPoints: [entry],
-    bundle: true,
-    format: "esm",
-    platform: "browser", // Use "browser" to force esbuild to include everything
-    target: "es2020",
-    minify: true,        // Optional: keeps the VFS file size smaller
-    write: false,
-    // This ensures node built-ins don't break the bundle
-    external: [], 
-    plugins: [nodeModulesPolyfillPlugin()],
-    legalComments: "linked", 
-    outdir: DIST_DIR
-  });
+      entryPoints: [entry],
+      bundle: true,
+      format: "esm",
+      platform: "browser",
+      target: "es2020",
+      minify: true, // esbuild's minifier is extremely fast and reliable
+      write: false,
+      external: [], 
+      plugins: [nodeModulesPolyfillPlugin()],
+      legalComments: "linked", // This creates a separate file in the output array
+    });
 
-    return await minifyCode(result.outputFiles[0].text);
+    // Find the JS file specifically, don't just grab index 0
+    const jsFile = result.outputFiles.find(f => f.path.endsWith('.js'));
+    const legalFile = result.outputFiles.find(f => f.path.endsWith('.txt'));
+
+    if (!jsFile) throw new Error("No JS output found");
+
+    // If you already set minify: true in build(), 
+    // you might not even need the minifyCode() wrapper.
+    return jsFile.text; 
+    
   } catch (err) {
     console.error(`Build failed for ${entry}:`, err);
     process.exit(1);
