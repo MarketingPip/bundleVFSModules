@@ -6,7 +6,7 @@ async function bundleToString(entry) {
     entryPoints: [entry],
     bundle: true,
     format: "esm",
-    platform: "browser", // or "node"
+    platform: "node", // or "node"
     write: false
   });
 
