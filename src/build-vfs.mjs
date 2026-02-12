@@ -39,7 +39,7 @@ async function bundleToString(entry) {
     // This ensures node built-ins don't break the bundle
     external: [], 
     plugins: [nodeModulesPolyfillPlugin()],
-    legalComments: "external", 
+    legalComments: "linked", 
     outdir: DIST_DIR
   });
 
