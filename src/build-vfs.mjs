@@ -141,16 +141,6 @@ function ${name}() {
   return stubs;
 }
 
-function serializeObject(obj) {
-  const entries = Object.entries(obj).map(([key, val]) => {
-    if (typeof val === "function") {
-      return `${key}: ${val.toString()}`;
-    }
-    return `${key}: ${JSON.stringify(val)}`;
-  });
-
-  return `{\n  ${entries.join(",\n  ")}\n}`;
-}
 
 
 function generateVFS(bundledModules, stubModules) {
@@ -162,13 +152,9 @@ function generateVFS(bundledModules, stubModules) {
   let output = "";
 
   // 1️⃣ Export each module individually
-  for (const [name, value] of Object.entries(allModules)) {
-  if (typeof value === "object" && value !== null) {
-    output += `export const ${name} = ${serializeObject(value)};\n\n`;
-  } else {
-    output += `export const ${name} = ${JSON.stringify(value)};\n\n`;
+    for (const [name, value] of Object.entries(allModules)) {
+    output += `export const ${name} = ${value};\n\n`;
   }
- }
 
 
   // 2️⃣ Export combined VFS object (using references, not JSON)
