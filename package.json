@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:vfs": "node src/webpack.config.js"
+    "build": "node src/build-vfs.mjs"
   },
   "dependencies": {
     "memfs": "^3.4.0",
