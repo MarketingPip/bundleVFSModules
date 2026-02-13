@@ -15,4 +15,4 @@ fs.constants = constants;
 
 // Export the Node-like fs object and named exports
 export default fs;
-export { fs, promises, constants };
+export { fs, promises, constants, vol };
