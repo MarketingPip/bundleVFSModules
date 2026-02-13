@@ -138,13 +138,26 @@ function generateStubModules() {
 }
 
 function generateVFS(bundledModules, stubModules) {
-  const vfsObject = {
+  const allModules = {
     ...bundledModules,
     ...stubModules,
   };
 
-  return `export const myVFS = ${JSON.stringify(vfsObject)};`;
+  let output = "";
+
+  // 1️⃣ Export each module individually
+  for (const [name, value] of Object.entries(allModules)) {
+    output += `export const ${name} = ${JSON.stringify(value)};\n\n`;
+  }
+
+  // 2️⃣ Export combined VFS object (using references, not JSON)
+  const moduleNames = Object.keys(allModules).join(", ");
+
+  output += `export const myVFS = { ${moduleNames} };`;
+
+  return output;
 }
+
 
 async function main() {
   await ensureDir(DIST_DIR);
