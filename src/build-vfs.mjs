@@ -153,7 +153,7 @@ function generateVFS(bundledModules, stubModules) {
   // 2️⃣ Export combined VFS object (using references, not JSON)
   const moduleNames = Object.keys(allModules).join(", ");
 
-  output += `export const myVFS = { ${moduleNames} };`;
+  output += `export const myVFS = ${JSON.stringify(vfsObject)};`;
 
   return output;
 }
