@@ -153,7 +153,7 @@ function generateVFS(bundledModules, stubModules) {
 
   // 1️⃣ Export each module individually
     for (const [name, value] of Object.entries(allModules)) {
-    output += `export const ${name} = ${value};\n\n`;
+    output += `export const ${name} = ${JSON.stringify(value)};\n\n`;
   }
 
 
