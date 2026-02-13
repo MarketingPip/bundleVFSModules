@@ -10,6 +10,9 @@ fs.promises = promises;
 // Also attach constants (Node-style)
 fs.constants = constants;
 
+
+ fs._vol = vol;
+
 // Export the Node-like fs object and named exports
 export default fs;
 export { fs, promises, constants };
