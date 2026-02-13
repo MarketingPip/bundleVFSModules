@@ -126,12 +126,16 @@ async function buildBundledModules() {
 function generateStubModules() {
   const stubs = {};
 
+ 
+ 
+
+  
   for (const name of STUB_MODULES) {
-    stubs[name] = {
-      get: () => {
-        throw new Error(`Not implemented: ${name}`);
-      },
-    };
+    stubs[name] = `
+function ${name}() {
+  throw new Error("Not implemented: ${name}");
+}
+` 
   }
 
   return stubs;
@@ -182,7 +186,7 @@ async function main() {
   const bundledModules = await buildBundledModules();
   const stubModules = generateStubModules();
 
-  const vfsContent = generateVFS(bundledModules, stubModules);
+  const vfsContent = await minifyCode(generateVFS(bundledModules, stubModules));
 
   const vfsPath = path.join(DIST_DIR, "vfs.js");
   fs.writeFileSync(vfsPath, vfsContent);
