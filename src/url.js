@@ -8,7 +8,11 @@ const isWindows =
    Modern WHATWG URL Exports
 ================================ */
 
-export { URL, URLSearchParams };
+// Explicitly bind globals so they are properly exported
+const URLClass = globalThis.URL;
+const URLSearchParamsClass = globalThis.URLSearchParams;
+
+export { URLClass as URL, URLSearchParamsClass as URLSearchParams };
 
 /* ================================
    fileURLToPath
