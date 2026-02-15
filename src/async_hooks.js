@@ -1,200 +1,121 @@
-// async-hooks-shim.mjs
 'use strict';
 
+let asyncIdCounter = 1;
+const asyncResourceMap = new Map();
+let currentAsyncId = 0;
+const asyncHooks = [];
+
+function generateAsyncId() { return asyncIdCounter++; }
+
 /**
- * Async Hooks Shim (ESM)
- * Emulates Node.js async_hooks API for emulated runtime
+ * Node.js Official: AsyncResource Class
+ * This is the standard way to manually track custom async boundaries.
  */
+export class AsyncResource {
+  constructor(type, triggerAsyncId = currentAsyncId) {
+    this._type = type;
+    this._asyncId = generateAsyncId();
+    this._triggerAsyncId = triggerAsyncId;
 
-
-/**
- * Monkey-patch global timers to trigger our shim hooks
- */
-const nativeSetTimeout = globalThis.setTimeout;
-
-globalThis.setTimeout = (callback, delay, ...args) => {
-  const triggerId = currentAsyncId;
-  const id = generateAsyncId();
-  const type = 'Timeout';
-  const resource = { asyncId: id, type, triggerAsyncId: triggerId };
-
-  asyncResourceMap.set(id, resource);
-
-  // 1. Trigger 'init'
-  asyncHooks.forEach(h => {
-    if (h.enabled && h.callbacks.init) {
-      h.callbacks.init(id, type, triggerId, resource);
-    }
-  });
-
-  return nativeSetTimeout(async () => {
-    const previousId = currentAsyncId;
-    currentAsyncId = id;
-
-    // 2. Trigger 'before'
+    // Emit 'init' hook
     asyncHooks.forEach(h => {
-      if (h.enabled && h.callbacks.before) h.callbacks.before(id);
+      if (h.enabled && h.callbacks.init) {
+        h.callbacks.init(this._asyncId, this._type, this._triggerAsyncId, this);
+      }
+    });
+  }
+
+  runInAsyncScope(fn, thisArg, ...args) {
+    const previousId = currentAsyncId;
+    currentAsyncId = this._asyncId;
+
+    // Emit 'before'
+    asyncHooks.forEach(h => {
+      if (h.enabled && h.callbacks.before) h.callbacks.before(this._asyncId);
     });
 
     try {
-      await callback(...args);
+      return fn.apply(thisArg, args);
     } finally {
-      // 3. Trigger 'after'
+      // Emit 'after'
       asyncHooks.forEach(h => {
-        if (h.enabled && h.callbacks.after) h.callbacks.after(id);
+        if (h.enabled && h.callbacks.after) h.callbacks.after(this._asyncId);
       });
-
-      // 4. Trigger 'destroy'
-      asyncHooks.forEach(h => {
-        if (h.enabled && h.callbacks.destroy) h.callbacks.destroy(id);
-      });
-
       currentAsyncId = previousId;
-      asyncResourceMap.delete(id);
     }
-  }, delay);
-};
+  }
 
-let asyncIdCounter = 1; // global asyncId counter
-const asyncResourceMap = new Map(); // asyncId -> resource info
-let currentAsyncId = 0; // currently executing asyncId
+  emitDestroy() {
+    asyncHooks.forEach(h => {
+      if (h.enabled && h.callbacks.destroy) h.callbacks.destroy(this._asyncId);
+    });
+  }
 
-/**
- * Generates a new asyncId for a resource
- */
-function generateAsyncId() {
-  return asyncIdCounter++;
+  asyncId() { return this._asyncId; }
+  triggerAsyncId() { return this._triggerAsyncId; }
 }
 
 /**
- * AsyncHook class
+ * Node.js Official: AsyncLocalStorage
+ * Built on top of the hooks to provide scoped state.
  */
+export class AsyncLocalStorage {
+  constructor() {
+    this._storeMap = new Map(); // asyncId -> store data
+  }
+
+  run(store, callback, ...args) {
+    const resource = new AsyncResource('AsyncLocalStorage');
+    return resource.runInAsyncScope(() => {
+      this._storeMap.set(resource.asyncId(), store);
+      try {
+        return callback(...args);
+      } finally {
+        this._storeMap.delete(resource.asyncId());
+      }
+    });
+  }
+
+  getStore() {
+    return this._storeMap.get(currentAsyncId);
+  }
+}
+
 class AsyncHook {
   constructor(callbacks) {
     this.callbacks = callbacks || {};
     this.enabled = false;
   }
-
   enable() {
-    this.enabled = true;
-    registerHook(this);
+    if (!this.enabled) {
+      this.enabled = true;
+      if (!asyncHooks.includes(this)) asyncHooks.push(this);
+    }
     return this;
   }
-
   disable() {
     this.enabled = false;
+    const idx = asyncHooks.indexOf(this);
+    if (idx !== -1) asyncHooks.splice(idx, 1);
     return this;
   }
 }
 
-/**
- * Create a new async hook
- * @param {*} callbacks object { init, before, after, destroy, promiseResolve }
- */
-function createHook(callbacks) {
-  return new AsyncHook(callbacks);
+export function createHook(callbacks) { return new AsyncHook(callbacks); }
+export function executionAsyncId() { return currentAsyncId; }
+export function triggerAsyncId() { 
+  const res = asyncResourceMap.get(currentAsyncId);
+  return res ? res.triggerAsyncId : 0; 
 }
 
-/**
- * Returns the currently executing asyncId
- */
-function executionAsyncId() {
-  return currentAsyncId;
-}
-
-/**
- * Returns the asyncId of the resource that triggered current execution
- */
-function triggerAsyncId() {
-  const resource = asyncResourceMap.get(currentAsyncId);
-  return resource ? resource.triggerAsyncId : 0;
-}
-
-/**
- * Wraps a function to track async resource lifecycle
- */
-function wrapAsyncResource(fn, type = 'Function', triggerId = currentAsyncId) {
-  const id = generateAsyncId();
-  const resource = { asyncId: id, type, triggerAsyncId: triggerId };
-  asyncResourceMap.set(id, resource);
-
-  // call init hooks
-  asyncHooks.forEach(h => {
-    if (h.enabled && h.callbacks.init) {
-      try { h.callbacks.init(id, type, triggerId, resource); } catch {}
-    }
-  });
-
-  return async function (...args) {
-    const previousId = currentAsyncId;
-    currentAsyncId = id;
-
-    // call before hooks
-    asyncHooks.forEach(h => {
-      if (h.enabled && h.callbacks.before) {
-        try { h.callbacks.before(id); } catch {}
-      }
+// Monkey-patching Timers (as previously discussed)
+const nativeSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, delay, ...args) => {
+  const resource = new AsyncResource('Timeout');
+  return nativeSetTimeout(() => {
+    resource.runInAsyncScope(() => {
+      callback(...args);
+      resource.emitDestroy();
     });
-
-    let result;
-    try {
-      result = await fn(...args);
-
-      // call promiseResolve if function returns a Promise
-      asyncHooks.forEach(h => {
-        if (h.enabled && h.callbacks.promiseResolve) {
-          try { h.callbacks.promiseResolve(id); } catch {}
-        }
-      });
-    } catch (err) {
-      throw err;
-    } finally {
-      // call after hooks
-      asyncHooks.forEach(h => {
-        if (h.enabled && h.callbacks.after) {
-          try { h.callbacks.after(id); } catch {}
-        }
-      });
-
-      // call destroy hooks
-      asyncHooks.forEach(h => {
-        if (h.enabled && h.callbacks.destroy) {
-          try { h.callbacks.destroy(id); } catch {}
-        }
-      });
-
-      asyncResourceMap.delete(id);
-      currentAsyncId = previousId;
-    }
-
-    return result;
-  };
-}
-
-// Internal: list of all active hooks
-const asyncHooks = [];
-
-/**
- * Register a hook globally
- */
-function registerHook(hook) {
-  asyncHooks.push(hook);
-}
-
-/**
- * Utility to wrap a Promise-returning function
- */
-function wrapPromise(fn, type = 'Promise', triggerId = currentAsyncId) {
-  const wrappedFn = wrapAsyncResource(fn, type, triggerId);
-  return wrappedFn();
-}
-
-// --- ESM exports ---
-export {
-  createHook,
-  executionAsyncId,
-  triggerAsyncId,
-  wrapAsyncResource,
-  wrapPromise,
-  registerHook,
+  }, delay);
 };
