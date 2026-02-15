@@ -103,7 +103,7 @@ const STUB_MODULES = [
   "worker_threads",
   "wasi",
   "trace_events",
-  "sys",
+ // "sys",
   "stream",
 //  "stream/promises",
 //  "stream/web",
