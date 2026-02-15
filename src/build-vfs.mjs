@@ -66,6 +66,7 @@ const BUNDLED_MODULES = {
   sys: "sys.js",
   async_hooks: "async_hooks.js",
   url: "url.js",
+ // buffer: "buffer.js",
 };
 
 // Node core modules to stub
