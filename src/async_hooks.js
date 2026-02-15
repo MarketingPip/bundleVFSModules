@@ -77,6 +77,7 @@ class AsyncHook {
 
   enable() {
     this.enabled = true;
+    registerHook(this);
     return this;
   }
 
