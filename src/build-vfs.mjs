@@ -61,11 +61,12 @@ const BUNDLED_MODULES = {
   fs: "memfs-entry.js",
   path: "path.js",
   assert: "assert.js",
+  os: "os.js",
 };
 
 // Node core modules to stub
 const STUB_MODULES = [
-  "os",
+  //"os",
   "http",
   "https",
   "url",
