@@ -6,6 +6,55 @@
  * Emulates Node.js async_hooks API for emulated runtime
  */
 
+
+/**
+ * Monkey-patch global timers to trigger our shim hooks
+ */
+const nativeSetTimeout = globalThis.setTimeout;
+
+globalThis.setTimeout = (callback, delay, ...args) => {
+  const triggerId = currentAsyncId;
+  const id = generateAsyncId();
+  const type = 'Timeout';
+  const resource = { asyncId: id, type, triggerAsyncId: triggerId };
+
+  asyncResourceMap.set(id, resource);
+
+  // 1. Trigger 'init'
+  asyncHooks.forEach(h => {
+    if (h.enabled && h.callbacks.init) {
+      h.callbacks.init(id, type, triggerId, resource);
+    }
+  });
+
+  return nativeSetTimeout(async () => {
+    const previousId = currentAsyncId;
+    currentAsyncId = id;
+
+    // 2. Trigger 'before'
+    asyncHooks.forEach(h => {
+      if (h.enabled && h.callbacks.before) h.callbacks.before(id);
+    });
+
+    try {
+      await callback(...args);
+    } finally {
+      // 3. Trigger 'after'
+      asyncHooks.forEach(h => {
+        if (h.enabled && h.callbacks.after) h.callbacks.after(id);
+      });
+
+      // 4. Trigger 'destroy'
+      asyncHooks.forEach(h => {
+        if (h.enabled && h.callbacks.destroy) h.callbacks.destroy(id);
+      });
+
+      currentAsyncId = previousId;
+      asyncResourceMap.delete(id);
+    }
+  }, delay);
+};
+
 let asyncIdCounter = 1; // global asyncId counter
 const asyncResourceMap = new Map(); // asyncId -> resource info
 let currentAsyncId = 0; // currently executing asyncId
