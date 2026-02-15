@@ -76,6 +76,7 @@ const STUB_MODULES = [
   "util",
   "child_process",
   "readline",
+  "readline/promises",
   "zlib",
   "dns",
   "net",
