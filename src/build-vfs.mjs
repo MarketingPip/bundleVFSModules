@@ -60,6 +60,7 @@ async function bundleToString(entry) {
 const BUNDLED_MODULES = {
   fs: "memfs-entry.js",
   path: "path.js",
+  assert: "assert.js",
 };
 
 // Node core modules to stub
@@ -79,7 +80,7 @@ const STUB_MODULES = [
   "net",
   "tls",
   "dgram",
-  "assert",
+//  "assert",
   "vm",
   "tty",
   "perf_hooks",
