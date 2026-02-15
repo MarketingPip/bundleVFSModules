@@ -1,4 +1,29 @@
-import path from "path-browserify";
+import * as path from "path-browserify";
 
-export * from "path-browserify";  // export all named exports
-// export default path;              // keep default export
+
+const { 
+  resolve, 
+  join, 
+  dirname, 
+  basename, 
+  extname, 
+  format, 
+  parse, 
+  sep, 
+  delimiter 
+} = path;
+
+export { 
+  // Path methods
+  resolve, 
+  join, 
+  dirname, 
+  basename, 
+  extname, 
+  format, 
+  parse, 
+  sep, 
+  delimiter
+};
+
+ 
