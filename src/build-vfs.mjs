@@ -62,6 +62,7 @@ const BUNDLED_MODULES = {
   path: "path.js",
   assert: "assert.js",
   os: "os.js",
+  utill: "util.js",
 };
 
 // Node core modules to stub
@@ -78,7 +79,7 @@ const STUB_MODULES = [
   "crypto",
   "constants",
   "events",
-  "util",
+ // "util",
   "child_process",
   "readline",
   "readline/promises",
