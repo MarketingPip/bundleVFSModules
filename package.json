@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "./src/build-vfs.mjs"
+    "build": "./src/build-vfs.mjs",
+    "build_fixture": "node -e \"const m = require('module').builtinModules; console.log(JSON.stringify([...m, ...m.filter(x => !x.startsWith('node:')).map(x => 'node:'+x)]))\" > ./lib/builtin-modules.json"
   },
   "dependencies": {
     "memfs": "^3.4.0",
