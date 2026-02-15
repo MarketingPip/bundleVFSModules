@@ -10,7 +10,5 @@ TODO implement emitWarning: https://github.com/nodejs/node/blob/9cc7fcc26dece769
 process.emitWarning('sys is deprecated. Use `node:util` instead.',
                     'DeprecationWarning', 'DEP0025');
  */                    
-
-const sys = util;
-
-export default sys; 
+ 
+export default util; 
