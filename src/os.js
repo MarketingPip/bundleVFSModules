@@ -50,48 +50,48 @@ function getBrowserRelease() {
 
 // ---------- Exports ----------
 
-exports.endianness = () =>
+export const endianness = () =>
   nodeOS ? nodeOS.endianness() : 'LE';
 
-exports.hostname = () =>
+export const hostname = () =>
   nodeOS ? nodeOS.hostname() : (
     typeof location !== 'undefined' ? location.hostname : ''
   );
 
-exports.loadavg = () =>
+export const loadavg = () =>
   nodeOS ? nodeOS.loadavg() : [0, 0, 0];
 
-exports.uptime = () =>
+export const uptime = () =>
   nodeOS ? nodeOS.uptime() : 0;
 
-exports.freemem = () =>
+export const freemem = () =>
   nodeOS ? nodeOS.freemem() : 0;
 
-exports.totalmem = () =>
+export const totalmem = () =>
   nodeOS ? nodeOS.totalmem() : 0;
 
-exports.cpus = () =>
+export const cpus = () =>
   nodeOS ? nodeOS.cpus() : [];
 
-exports.type = () =>
+export const type = () =>
   nodeOS ? nodeOS.type() : getBrowserType();
 
-exports.release = () =>
+export const release = () =>
   nodeOS ? nodeOS.release() : getBrowserRelease();
 
-exports.networkInterfaces = () =>
+export const networkInterfaces = () =>
   nodeOS ? nodeOS.networkInterfaces() : {};
 
-exports.arch = () =>
+export const arch = () =>
   nodeOS ? nodeOS.arch() : getBrowserArch();
 
-exports.platform = () =>
+export const platform = () =>
   nodeOS ? nodeOS.platform() : getBrowserPlatform();
 
-exports.tmpdir = () =>
+export const tmpdir = () =>
   nodeOS ? nodeOS.tmpdir() : '/tmp';
 
-exports.EOL = nodeOS ? nodeOS.EOL : '\n';
+export const EOL = nodeOS ? nodeOS.EOL : '\n';
 
-exports.homedir = () =>
+export const homedir = () =>
   nodeOS ? nodeOS.homedir() : '/';
