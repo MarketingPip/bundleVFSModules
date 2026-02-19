@@ -66,6 +66,7 @@ const BUNDLED_MODULES = {
   sys: "sys.js",
   async_hooks: "async_hooks.js",
   url: "url.js",
+  readline: "readline.js",
  // buffer: "buffer.js",
 };
 
@@ -85,7 +86,7 @@ const STUB_MODULES = [
   "events",
  // "util",
   "child_process",
-  "readline",
+ // "readline",
 //  "readline/promises",
   "zlib",
   "dns",
