@@ -67,15 +67,17 @@ const BUNDLED_MODULES = {
   async_hooks: "async_hooks.js",
   url: "url.js",
   readline: "readline.js",
+  http: "http.js",
+  https: "https.js"
  // buffer: "buffer.js",
 };
 
 // Node core modules to stub
 const STUB_MODULES = [
   //"os",
-  "http",
+ // "http",
   "http2",
-  "https",
+  //"https",
   "events",
   //"async_hooks",
   "module",
