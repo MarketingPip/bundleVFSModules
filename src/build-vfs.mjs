@@ -70,7 +70,9 @@ const BUNDLED_MODULES = {
   http: "http.js",
   https: "https.js",
   stream: "stream.js",
-  crypto: "crypto.js"
+  crypto: "crypto.js",
+  net: "net.js",
+  events: "events.js"
  // buffer: "buffer.js",
 };
 
@@ -80,7 +82,7 @@ const STUB_MODULES = [
  // "http",
   "http2",
   //"https",
-  "events",
+//  "events",
   //"async_hooks",
   "module",
   //"url",
@@ -93,7 +95,7 @@ const STUB_MODULES = [
 //  "readline/promises",
   "zlib",
   "dns",
-  "net",
+ // "net",
   "tls",
   
   "dgram",
