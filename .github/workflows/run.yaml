@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           npm install
-          npm install path-browserify terser assert
+          npm install path-browserify terser assert http-browserify https-browserify
 
       - name: Build VFS
         run: node src/build-vfs.mjs
