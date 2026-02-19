@@ -72,7 +72,8 @@ const BUNDLED_MODULES = {
   stream: "stream.js",
   crypto: "crypto.js",
   net: "net.js",
-  events: "events.js"
+  events: "events.js",
+  inspector: "inspector.js"
  // buffer: "buffer.js",
 };
 
