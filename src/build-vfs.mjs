@@ -69,7 +69,8 @@ const BUNDLED_MODULES = {
   readline: "readline.js",
   http: "http.js",
   https: "https.js",
-  stream: "stream.js"
+  stream: "stream.js",
+  crypto: "crypto.js"
  // buffer: "buffer.js",
 };
 
@@ -83,7 +84,7 @@ const STUB_MODULES = [
   //"async_hooks",
   "module",
   //"url",
-  "crypto",
+//  "crypto",
   "constants",
   "events",
  // "util",
