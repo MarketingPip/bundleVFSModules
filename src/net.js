@@ -3,8 +3,8 @@
  * Basic Socket and Server classes for virtual networking
  */
 
-import { EventEmitter } from "./events"
-import { Duplex, Buffer } from "./stream"
+import { EventEmitter } from "events"
+import { Duplex, Buffer } from "stream-browserify"
 
 /**
  * Virtual Socket implementation
