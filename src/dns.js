@@ -151,70 +151,83 @@ function makeQuery(qname, qtype='A') {
  .then(response => response.answers.forEach(ans => console.log(ans.data.toString())))
  .catch(console.error);
  */
-function sendDohMsg(packet, url, method, headers, timeout) {
+function sendDohMsg(packet, url, method = 'GET', headers, timeout) {
   return new Promise((resolve, reject) => {
     const transport = url.startsWith('https://') ? https : http;
+
+    // Encode DNS packet
     const buf = dnsPacket.encode(packet);
-    let requestOptions;
+
+    // Default headers
     if (!headers) {
       headers = {
         'Accept': 'application/dns-message',
         'User-Agent': 'dohjs/0.2.0'
       };
     }
+
     if (method === 'POST') {
+      // Force binary serialization for browser polyfill
       Object.assign(headers, {
         'Content-Type': 'application/dns-message',
         'Content-Length': buf.length
       });
     } else if (method === 'GET') {
-      const dnsQueryParam = buf.toString('base64').toString('utf-8').replace(/=/g, '');
+      // Base64url encoding for GET requests (RFC 8484)
+      const dnsQueryParam = buf.toString('base64')
+        .replace(/\+/g, '-')  // + -> -
+        .replace(/\//g, '_')  // / -> _
+        .replace(/=+$/g, ''); // Remove padding
       url = `${url}?dns=${dnsQueryParam}`;
     }
-    url = new URL(url);
-    requestOptions = {
+
+    const u = new URL(url);
+    const requestOptions = {
       method: method,
-      hostname: url.hostname,
-      port: url.port || 443,
-      path: url.pathname + url.search,
+      hostname: u.hostname,
+      port: u.port || 443,
+      path: u.pathname + u.search,
       headers: headers
     };
+
     let data;
     let timer;
-    const request = transport.request(requestOptions, (response) => {
-      response.on('data', (d) => {
-        if (!data) {
-          data = d;
-        } else {
-          data = Buffer.concat([data, d]);
-        }
+
+    const req = transport.request(requestOptions, (res) => {
+      res.on('data', (chunk) => {
+        if (!data) data = chunk;
+        else data = Buffer.concat([data, chunk]);
       });
-      response.on('end', () => {
-        if (timer) {
-          clearTimeout(timer);
-        }
+
+      res.on('end', () => {
+        if (timer) clearTimeout(timer);
         try {
           const decoded = dnsPacket.decode(data);
           resolve(decoded);
-        } catch (e) {
-          reject(e);
+        } catch (err) {
+          reject(err);
         }
       });
     });
-    request.on('error', (err) => {
-      request.destroy();
-      return reject(err);
+
+    req.on('error', (err) => {
+      req.destroy();
+      reject(err);
     });
+
     if (timeout) {
       timer = setTimeout(() => {
-        request.destroy();
-        return reject(new Error(`Query timed out after ${timeout} milliseconds of inactivity`));
+        req.destroy();
+        reject(new Error(`Query timed out after ${timeout} ms`));
       }, timeout);
     }
+
     if (method === 'POST') {
-      request.write(buf)
+      // Write as Uint8Array for browser polyfill safety
+      req.write(new Uint8Array(buf));
     }
-    request.end()
+
+    req.end();
   });
 }
 
