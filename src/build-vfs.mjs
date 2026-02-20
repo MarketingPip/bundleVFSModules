@@ -73,7 +73,13 @@ const BUNDLED_MODULES = {
   crypto: "crypto.js",
   net: "net.js",
   events: "events.js",
-  inspector: "inspector.js"
+  inspector: "inspector.js",
+  v8: "v8.js",
+  tty: "tty.js",
+  ws: "ws.js",
+  dns: "dns.js"
+  
+  
  // buffer: "buffer.js",
 };
 
@@ -95,7 +101,7 @@ const STUB_MODULES = [
  // "readline",
 //  "readline/promises",
   "zlib",
-  "dns",
+//  "dns",
  // "net",
   "tls",
   
@@ -105,7 +111,7 @@ const STUB_MODULES = [
   
   "vm",
   "module",
-  "v8",
+  //"v8",
   "punycode",
   "querystring",
   "repl",
@@ -117,7 +123,7 @@ const STUB_MODULES = [
 //  "stream",
 //  "stream/promises",
 //  "stream/web",
-  "tty",
+  //"tty",
   "perf_hooks",
   "worker_threads",
   "cluster",
