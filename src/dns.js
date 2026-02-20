@@ -1,6 +1,6 @@
 import dnsPacket from 'dns-packet';
 import base32Encode from 'base32-encode'; 
-import http from 'http-browserify';        
+import http from './http.js';        
 import https from 'https-browserify';  
 import { URL } from 'url';
 
