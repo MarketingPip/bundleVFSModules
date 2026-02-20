@@ -22,14 +22,22 @@ export function esmShPlugin() {
       });
 
       // Optional: handle relative imports within esm.sh bundles
-      build.onResolve({ filter: /^\.\/|^\.\.\//, namespace: 'esm-sh-ns' }, args => {
-        const base = args.importer;
-        const resolved = new URL(args.path, base).toString();
-        return {
-          path: resolved,
-          namespace: 'esm-sh-ns'
-        };
-      });
+build.onResolve({ filter: /^\.\/|^\.\.\//, namespace: 'esm-sh-ns' }, args => {
+  try {
+    let resolved;
+    // Absolute paths starting with / -> resolve relative to esm.sh origin
+    if (args.path.startsWith('/')) {
+      const origin = new URL(args.importer).origin; // usually https://esm.sh
+      resolved = new URL(args.path, origin).toString();
+    } else {
+      // Normal relative imports
+      resolved = new URL(args.path, args.importer).toString();
+    }
+    return { path: resolved, namespace: 'esm-sh-ns' };
+  } catch (err) {
+    return { path: args.path, namespace: 'esm-sh-ns' };
+  }
+});
 
       build.onLoad({ filter: /.*/, namespace: 'esm-sh-ns' }, async args => {
         let url = args.path;
