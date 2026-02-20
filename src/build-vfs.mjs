@@ -6,20 +6,60 @@ import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill
 
 import { minify } from "terser";
 
-const urlPlugin = {
-  name: 'url-plugin',
-  setup(build) {
-    build.onResolve({ filter: /^https?:\/\// }, args => {
-      return { path: args.path, namespace: 'url-ns' };
-    });
+export function esmShPlugin() {
+  // Keep a simple cache so we don’t fetch the same URL twice
+  const cache = new Map();
 
-    build.onLoad({ filter: /.*/, namespace: 'url-ns' }, async args => {
-      const res = await fetch(args.path);
-      const contents = await res.text();
-      return { contents, loader: 'js' };
-    });
-  },
-};
+  return {
+    name: 'esm-sh-plugin',
+    setup(build) {
+      // Handle all http/https imports
+      build.onResolve({ filter: /^https?:\/\// }, args => {
+        return {
+          path: args.path,
+          namespace: 'esm-sh-ns'
+        };
+      });
+
+      // Optional: handle relative imports within esm.sh bundles
+      build.onResolve({ filter: /^\.\/|^\.\.\//, namespace: 'esm-sh-ns' }, args => {
+        const base = args.importer;
+        const resolved = new URL(args.path, base).toString();
+        return {
+          path: resolved,
+          namespace: 'esm-sh-ns'
+        };
+      });
+
+      build.onLoad({ filter: /.*/, namespace: 'esm-sh-ns' }, async args => {
+        let url = args.path;
+
+        // Automatically add ?bundle if missing
+        if (url.includes('esm.sh') && !url.includes('?bundle')) {
+          url += url.includes('?') ? '&bundle' : '?bundle';
+        }
+
+        if (cache.has(url)) {
+          return { contents: cache.get(url), loader: 'js' };
+        }
+
+        // Fetch from remote
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
+        }
+        const contents = await res.text();
+
+        cache.set(url, contents);
+
+        return {
+          contents,
+          loader: 'js',
+        };
+      });
+    },
+  };
+}
 
 async function minifyCode(code) {
   const result = await minify(code, {
@@ -54,7 +94,7 @@ async function bundleToString(entry) {
       globals: {
         Buffer: true, // can also be 'global', 'process'
       },
-    }), urlPlugin],
+    }), esmShPlugin()],
       legalComments: "linked", // This creates a separate file in the output array
       outdir: DIST_DIR
     });
