@@ -3,7 +3,7 @@
  * Provides terminal detection utilities
  */
 
-import { Readable, Writable } from "stream-browserify"
+import { Readable, Writable } from "stream"
 
 export class ReadStream extends Readable {
   isTTY = false
