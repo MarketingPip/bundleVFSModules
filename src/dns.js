@@ -300,7 +300,7 @@ const defer = fn => setTimeout(fn, 0)
 /**
  * Real-ish Lookup using DoH
  */
-export function function lookup(hostname, optionsOrCallback, callback) {
+export function lookup(hostname, optionsOrCallback, callback) {
   const cb = typeof optionsOrCallback === "function" ? optionsOrCallback : callback;
   const options = typeof optionsOrCallback === "object" ? optionsOrCallback : {};
 
