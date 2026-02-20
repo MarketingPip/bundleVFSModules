@@ -136,7 +136,8 @@ const BUNDLED_MODULES = {
   ws: "ws.js",
   dns: "dns.js",
   constants: "constants.js",
-  querystring: "querystring.js" 
+  querystring: "querystring.js",
+  vm: "vm.js",
   
   
  // buffer: "buffer.js",
@@ -168,7 +169,7 @@ const STUB_MODULES = [
 //  "assert",
   "inspector",
   
-  "vm",
+//  "vm",
   "module",
   //"v8",
   "punycode",
