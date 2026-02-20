@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Readable, Writable, Buffer } from 'stream-browserify';
+import { Readable, Writable, Buffer } from 'stream';
 import { Socket, Server as NetServer, AddressInfo } from './net';
 import { createHash } from 'crypto-browserify';
 
