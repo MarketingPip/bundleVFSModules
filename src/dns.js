@@ -1,6 +1,6 @@
 import dnsPacket from 'dns-packet';
 import base32Encode from 'base32-encode'; 
-import http from 'https://esm.sh/gh/MarketingPip/http-browserify@d25da09?target=es2016&bundle';        
+import http from 'https://esm.sh/gh/MarketingPip/http-browserify@d25da09?target=node&bundle';        
 import https from 'https-browserify';  
 import { URL } from 'url';
 
