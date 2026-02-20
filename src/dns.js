@@ -318,7 +318,7 @@ export function lookup(hostname, optionsOrCallback, callback) {
   resolver
     .query(hostname, "A")
     .then(response => {
-      const answers = response.answer.filter(a => a.type === "A")
+      const answers = response.filter(a => a.type === "A")
       if (answers.length === 0) {
         return cb(new Error(`ENOTFOUND ${hostname}`))
       }
@@ -340,7 +340,7 @@ export function resolve4(hostname, callback) {
   resolver
     .query(hostname, "A")
     .then(response => {
-      const ips = response.answer.filter(a => a.type === "A").map(a => a.data)
+      const ips = response.filter(a => a.type === "A").map(a => a.data)
       callback(null, ips)
     })
     .catch(err => callback(err))
