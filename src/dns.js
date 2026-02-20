@@ -288,6 +288,8 @@ const dohjs = {
 
 // END OF DOH-JS
 
+const doh = dohjs;
+
 // Configuration
 const CLOUDFLARE_DOH = "https://cloudflare-dns.com/dns-query"
 const resolver = new doh.DohResolver(CLOUDFLARE_DOH)
