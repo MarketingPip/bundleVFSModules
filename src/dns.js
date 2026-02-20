@@ -1,6 +1,6 @@
 import dnsPacket from 'dns-packet';
 import base32Encode from 'base32-encode'; 
-import http from './http.js';        
+import http from 'http';        
 import https from 'https-browserify';  
 import { URL } from 'url';
 
@@ -317,7 +317,7 @@ export function lookup(hostname, optionsOrCallback, callback) {
     .query(hostname, "A")
     .then(response => {
       // Ensure answer exists and is an array
-      return response;
+      return cb(response);
       const answers = (response.answer || []).filter(a => a.type === "A");
 
       if (answers.length === 0) {
