@@ -135,7 +135,8 @@ const BUNDLED_MODULES = {
   tty: "tty.js",
   ws: "ws.js",
   dns: "dns.js",
-  constants: "constants.js"
+  constants: "constants.js",
+  querystring: "querystring.js" 
   
   
  // buffer: "buffer.js",
@@ -171,7 +172,7 @@ const STUB_MODULES = [
   "module",
   //"v8",
   "punycode",
-  "querystring",
+ // "querystring",
   "repl",
   "string_decoder",
   "worker_threads",
