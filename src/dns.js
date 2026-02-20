@@ -317,7 +317,6 @@ export function lookup(hostname, optionsOrCallback, callback) {
     .query(hostname, "A")
     .then(response => {
       // Ensure answer exists and is an array
-      return response;
       const answers = (response.answer || []).filter(a => a.type === "A");
 
       if (answers.length === 0) {
