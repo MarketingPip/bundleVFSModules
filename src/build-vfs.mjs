@@ -6,6 +6,21 @@ import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill
 
 import { minify } from "terser";
 
+const urlPlugin = {
+  name: 'url-plugin',
+  setup(build) {
+    build.onResolve({ filter: /^https?:\/\// }, args => {
+      return { path: args.path, namespace: 'url-ns' };
+    });
+
+    build.onLoad({ filter: /.*/, namespace: 'url-ns' }, async args => {
+      const res = await fetch(args.path);
+      const contents = await res.text();
+      return { contents, loader: 'js' };
+    });
+  },
+};
+
 async function minifyCode(code) {
   const result = await minify(code, {
     compress: true,
@@ -39,7 +54,7 @@ async function bundleToString(entry) {
       globals: {
         Buffer: true, // can also be 'global', 'process'
       },
-    })],
+    }), urlPlugin],
       legalComments: "linked", // This creates a separate file in the output array
       outdir: DIST_DIR
     });
