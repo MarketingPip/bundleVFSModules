@@ -34,7 +34,12 @@ async function bundleToString(entry) {
       minify: true, // esbuild's minifier is extremely fast and reliable
       write: false,
       external: [], 
-      plugins: [nodeModulesPolyfillPlugin()],
+      plugins: [nodeModulesPolyfillPlugin({
+      // Whether to polyfill specific globals.
+      globals: {
+        Buffer: true, // can also be 'global', 'process'
+      },
+    })],
       legalComments: "linked", // This creates a separate file in the output array
       outdir: DIST_DIR
     });
