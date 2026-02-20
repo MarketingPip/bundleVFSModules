@@ -134,7 +134,8 @@ const BUNDLED_MODULES = {
   v8: "v8.js",
   tty: "tty.js",
   ws: "ws.js",
-  dns: "dns.js"
+  dns: "dns.js",
+  constants: "constants.js"
   
   
  // buffer: "buffer.js",
@@ -151,8 +152,8 @@ const STUB_MODULES = [
   "module",
   //"url",
 //  "crypto",
-  "constants",
-  "events",
+//  "constants",
+//  "events",
  // "util",
   "child_process",
  // "readline",
