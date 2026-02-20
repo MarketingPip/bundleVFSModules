@@ -1,3 +1,3 @@
-import stream from "stream-browserify"
+import stream from "stream"
 
 export default stream
