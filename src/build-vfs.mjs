@@ -7,63 +7,52 @@ import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill
 import { minify } from "terser";
 
 export function esmShPlugin() {
-  // Keep a simple cache so we don’t fetch the same URL twice
   const cache = new Map();
 
   return {
     name: 'esm-sh-plugin',
     setup(build) {
-      // Handle all http/https imports
+      // Resolve remote URLs
       build.onResolve({ filter: /^https?:\/\// }, args => {
-        return {
-          path: args.path,
-          namespace: 'esm-sh-ns'
-        };
+        return { path: args.path, namespace: 'esm-sh-ns' };
       });
 
-      // Optional: handle relative imports within esm.sh bundles
-build.onResolve({ filter: /^\.\/|^\.\.\//, namespace: 'esm-sh-ns' }, args => {
-  try {
-    let resolved;
-    // Absolute paths starting with / -> resolve relative to esm.sh origin
-    if (args.path.startsWith('/')) {
-      const origin = new URL(args.importer).origin; // usually https://esm.sh
-      resolved = new URL(args.path, origin).toString();
-    } else {
-      // Normal relative imports
-      resolved = new URL(args.path, args.importer).toString();
-    }
-    return { path: resolved, namespace: 'esm-sh-ns' };
-  } catch (err) {
-    return { path: args.path, namespace: 'esm-sh-ns' };
-  }
-});
+      // Resolve relative or absolute paths inside esm.sh bundles
+      build.onResolve({ filter: /^\.\/|^\.\.\/|^\//, namespace: 'esm-sh-ns' }, args => {
+        let resolved;
+        try {
+          if (args.path.startsWith('/')) {
+            // Absolute esm.sh path → prepend origin
+            const origin = new URL(args.importer).origin;
+            resolved = new URL(args.path, origin).toString();
+          } else {
+            // Relative import
+            resolved = new URL(args.path, args.importer).toString();
+          }
+          return { path: resolved, namespace: 'esm-sh-ns' };
+        } catch {
+          return { path: args.path, namespace: 'esm-sh-ns' };
+        }
+      });
 
+      // Load remote content
       build.onLoad({ filter: /.*/, namespace: 'esm-sh-ns' }, async args => {
         let url = args.path;
 
-        // Automatically add ?bundle if missing
+        // Always add bundle query for esm.sh imports
         if (url.includes('esm.sh') && !url.includes('?bundle')) {
           url += url.includes('?') ? '&bundle' : '?bundle';
         }
 
-        if (cache.has(url)) {
-          return { contents: cache.get(url), loader: 'js' };
-        }
+        if (cache.has(url)) return { contents: cache.get(url), loader: 'js' };
 
-        // Fetch from remote
         const res = await fetch(url);
-        if (!res.ok) {
-          throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
-        }
+        if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
         const contents = await res.text();
 
         cache.set(url, contents);
 
-        return {
-          contents,
-          loader: 'js',
-        };
+        return { contents, loader: 'js' };
       });
     },
   };
