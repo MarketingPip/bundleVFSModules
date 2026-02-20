@@ -2,7 +2,7 @@ import doh from "dohjs"
 
 // Configuration 
 const CLOUDFLARE_DOH = "https://cloudflare-dns.com/dns-query";
-const resolver = new doh.DohResolver(CLOUDFLARE_DOH);
+let resolver = new doh.DohResolver(CLOUDFLARE_DOH);
 
 // Always async like Node
 const defer = fn => setTimeout(fn, 0);
