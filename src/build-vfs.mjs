@@ -138,6 +138,7 @@ const BUNDLED_MODULES = {
   constants: "constants.js",
   querystring: "querystring.js",
   vm: "vm.js",
+  string_decoder: "string_decoder.js"
   
   
  // buffer: "buffer.js",
@@ -175,7 +176,7 @@ const STUB_MODULES = [
   "punycode",
  // "querystring",
   "repl",
-  "string_decoder",
+ // "string_decoder",
   "worker_threads",
   "wasi",
   "trace_events",
