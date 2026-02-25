@@ -88,6 +88,7 @@ async function bundleToString(entry) {
       external: [], 
       plugins: [nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
+      modules: { fs: false, path: true, /* only what's needed */ },  
       globals: {
         Buffer: true, // can also be 'global', 'process'
       },
@@ -104,8 +105,7 @@ async function bundleToString(entry) {
 
     // If you already set minify: true in build(), 
     // you might not even need the minifyCode() wrapper.
-    return jsFile.text; 
-    
+    return await minifyCode(jsFile.text); 
   } catch (err) {
     console.error(`Build failed for ${entry}:`, err);
     process.exit(1);
