@@ -1,3 +1,1 @@
-import string_decoder from "string_decoder"
-
-export default string_decoder;
+export { StringDecoder } from "string_decoder";
