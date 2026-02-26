@@ -945,8 +945,7 @@ function _waitForAllServers() {
 }
 
 globalThis.__httpServerRunTime = {
-  waitForAllServers: _waitForAllServers,
-  handleRequest
+  waitForAllServers: _waitForAllServers
 }
 
 
