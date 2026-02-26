@@ -924,6 +924,31 @@ export function _createClientRequest(
 }
 
 const serverRegistry = new Map()
+
+let _waitForServersPromise = null
+let _waitForServersResolve = null
+
+function _waitForAllServers() {
+  if (serverRegistry.size === 0) {
+    return Promise.resolve()
+  }
+
+  if (_waitForServersPromise) {
+    return _waitForServersPromise
+  }
+
+  _waitForServersPromise = new Promise(resolve => {
+    _waitForServersResolve = resolve
+  })
+
+  return _waitForServersPromise
+}
+
+globalThis.__httpServerRunTime = {
+  waitForAllServers: _waitForAllServers
+}
+
+
 let onServerListenCallback = null
 let onServerCloseCallback = null
 
