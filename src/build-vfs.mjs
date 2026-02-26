@@ -88,7 +88,7 @@ async function bundleToString(entry) {
       external: [], 
       plugins: [nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
-      modules: { fs: false, path: true, /* only what's needed */ },  
+      //modules: { fs: false, path: true, /* only what's needed */ },  
       globals: {
         Buffer: true, // can also be 'global', 'process'
       },
