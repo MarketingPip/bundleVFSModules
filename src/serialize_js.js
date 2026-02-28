@@ -1,3 +1,3 @@
-import * as serialize from 'serialize-javascript';
+import serialize from 'serialize-javascript';
 
 export default serialize;
