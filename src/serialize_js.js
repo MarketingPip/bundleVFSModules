@@ -1,5 +1,3 @@
-import serializeJS from 'serialize-javascript';
+import serializeJS from 'https://esm.sh/serialize-javascript@7.0.3/es2022/serialize-javascript.mjs';
 
-export function serialize(){
-  return serializeJS
-}
+export default serializeJS
