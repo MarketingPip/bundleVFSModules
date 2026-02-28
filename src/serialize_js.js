@@ -1,3 +1,5 @@
-import serialize from 'serialize-javascript';
+import serializeJS from 'serialize-javascript';
 
-export default serialize;
+export function serialize(){
+  return serializeJS
+}
