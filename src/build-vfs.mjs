@@ -81,7 +81,7 @@ async function bundleToString(entry) {
       entryPoints: [entry],
       bundle: true,
       format: "esm",
-      platform: "esm",
+      platform: "browser",
       target: "es2020",
       minify: true, // esbuild's minifier is extremely fast and reliable
       write: false,
