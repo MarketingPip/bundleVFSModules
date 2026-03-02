@@ -1,9 +1,10 @@
-
 /**
  * node-test-browser.js
  * Drop-in browser ESM port of Node.js `node:test`
  * Same named exports as the native module.
  */
+
+import assert from "./assert.js"
 
 // ─── Internal error types ────────────────────────────────────────────────────
 export class SkipError    extends Error { constructor(m=''){super(m);this.name='SkipError';} }
@@ -394,7 +395,7 @@ function makeApiValues() {
   const mock = new Proxy({}, {
     get(_, k) { return (_mock ??= new MockTracker())[k]; }
   });
-  return [test, it, suite, describe, before, after, beforeEach, afterEach, mock, snapshot, assert];
+  return [test, it, suite, describe, before, after, beforeEach, afterEach, mock, snapshot, _assert];
 }
 
 
