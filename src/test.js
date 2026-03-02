@@ -413,7 +413,7 @@ async function execute(userCode, opts = {}) {
   return await run().drain();  // → { root, events }
 }
 
-globalThis._RUNTIME_TEST_RUNNER_ = execute;
+
 
 // ─── Detect test files (mirrors Node --test heuristic) ───────────────────────
 /*
@@ -432,3 +432,156 @@ describe('my suite', () => {
   });
 });`)
 */
+
+
+
+/**
+ * reporters.js
+ * Formats { root, events } from execute() to match Node.js built-in reporters.
+ *
+ * Usage:
+ *   const result = await execute(code);
+ *   console.log(spec(result));
+ *   console.log(tap(result));
+ */
+
+// ─── Shared helpers ───────────────────────────────────────────────────────────
+
+function countAll(root) {
+  let tests=0, pass=0, fail=0, skip=0, todo=0, cancelled=0;
+  function walk(node) {
+    for (const c of node.children) {
+      if (!c.isSuite) {
+        tests++;
+        if (c.result === 'pass')   pass++;
+        if (c.result === 'fail')   fail++;
+        if (c.result === 'skip')   skip++;
+        if (c.result === 'todo')   todo++;
+      }
+      walk(c);
+    }
+  }
+  walk(root);
+  return { tests, pass, fail, skip, todo, cancelled };
+}
+
+function ms(n) { return +n.toFixed(3); }
+
+// ─── Spec reporter ────────────────────────────────────────────────────────────
+// Matches: node --test --test-reporter=spec
+
+function spec({ root, events }) {
+  const lines = [];
+  const totalMs = root.children.reduce((a, c) => a + (c.duration ?? 0), 0);
+
+  function renderNode(node, depth) {
+    const indent = '  '.repeat(depth);
+    if (node._isSuite || node.isSuite) {
+      // suite open
+      lines.push(`${indent}▶ ${node.name}`);
+      for (const child of node.children) renderNode(child, depth + 1);
+      // suite close
+      const dur = node.children.reduce((a,c)=>a+(c.duration??0),0);
+      lines.push(`${indent}▶ ${node.name} (${ms(dur)}ms)`);
+      lines.push('');
+    } else {
+      const sym =
+        node.result === 'pass' ? '✔' :
+        node.result === 'fail' ? '✖' :
+        node.result === 'skip' ? '- ' :
+        node.result === 'todo' ? '# TODO' : '?';
+      lines.push(`${indent}${sym} ${node.name} (${ms(node.duration)}ms)`);
+      if (node.result === 'fail' && node.error) {
+        lines.push(`${indent}  AssertionError [ERR_ASSERTION]: ${node.error.message}`);
+        lines.push(`${indent}    at TestContext.<anonymous>`);
+      }
+      if (node.result === 'skip' && typeof node.opts?.skip === 'string' && node.opts.skip) {
+        lines.push(`${indent}  # SKIP ${node.opts.skip}`);
+      }
+    }
+  }
+
+  for (const child of root.children) renderNode(child, 0);
+
+  const counts = countAll(root);
+  lines.push(`ℹ tests ${counts.tests}`);
+  lines.push(`ℹ pass ${counts.pass}`);
+  lines.push(`ℹ fail ${counts.fail}`);
+  lines.push(`ℹ cancelled ${counts.cancelled}`);
+  lines.push(`ℹ skipped ${counts.skip}`);
+  lines.push(`ℹ todo ${counts.todo}`);
+  lines.push(`ℹ duration_ms ${ms(totalMs)}`);
+
+  return lines.join('\n');
+}
+
+// ─── TAP reporter ─────────────────────────────────────────────────────────────
+// Matches: node --test  (default output)
+
+function tap({ root, events }) {
+  const lines = ['TAP version 13'];
+  let counter = 0;   // global test counter across the whole file
+
+  function yamlBlock(obj, indent) {
+    const pad = ' '.repeat(indent);
+    const inner = Object.entries(obj)
+      .map(([k,v]) => `${pad}  ${k}: ${v}`)
+      .join('\n');
+    return `${pad}---\n${inner}\n${pad}...`;
+  }
+
+  function renderNode(node, depth) {
+    const indent = ' '.repeat(depth * 4);
+
+    if (node._isSuite || node.isSuite) {
+      lines.push(`${indent}# Subtest: ${node.name}`);
+      let localCounter = 0;
+      for (const child of node.children) {
+        localCounter++;
+        renderNode(child, depth + 1);
+      }
+      lines.push(`${indent}${' '.repeat(4)}1..${localCounter}`);
+
+      // suite result line at parent level
+      counter++;
+      const dur = node.children.reduce((a,c)=>a+(c.duration??0),0);
+      lines.push(`ok ${counter} - ${node.name}`);
+      lines.push(yamlBlock({ duration_ms: ms(dur) }, 2));
+    } else {
+      counter++;
+      const ok = node.result === 'pass' ? 'ok' : 'not ok';
+      const directive =
+        node.result === 'skip' ? ` # SKIP${typeof node.opts?.skip==='string'&&node.opts.skip?' '+node.opts.skip:''}` :
+        node.result === 'todo' ? ` # TODO${typeof node.opts?.todo==='string'&&node.opts.todo?' '+node.opts.todo:''}` :
+        '';
+      lines.push(`${indent}${ok} ${counter} - ${node.name}${directive}`);
+
+      const meta = { duration_ms: ms(node.duration) };
+      if (node.result === 'fail' && node.error) {
+        meta.failureType  = 'testCodeFailure';
+        meta['error']     = `'${node.error.message}'`;
+        meta['code']      = node.error.code ?? 'ERR_TEST_FAILURE';
+        meta['name']      = node.error.name ?? 'Error';
+      }
+      lines.push(yamlBlock(meta, depth * 4 + 2));
+    }
+  }
+
+  for (const child of root.children) renderNode(child, 0);
+
+  lines.push(`1..${counter}`);
+
+  const counts = countAll(root);
+  const totalMs = root.children.reduce((a,c)=>a+(c.duration??0),0);
+  lines.push(`# tests ${counts.tests}`);
+  lines.push(`# pass ${counts.pass}`);
+  lines.push(`# fail ${counts.fail}`);
+  lines.push(`# cancelled ${counts.cancelled}`);
+  lines.push(`# skipped ${counts.skip}`);
+  lines.push(`# todo ${counts.todo}`);
+  lines.push(`# duration_ms ${ms(totalMs)}`);
+
+  return lines.join('\n');
+}
+
+globalThis._RUNTIME_TEST_RUNNER_ = {execute, tap, spec};
