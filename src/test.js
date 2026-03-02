@@ -4,7 +4,7 @@
  * Same named exports as the native module.
  */
 
-import assert from "./assert.js"
+import _assert from "./assert.js"
 
 // ─── Internal error types ────────────────────────────────────────────────────
 export class SkipError    extends Error { constructor(m=''){super(m);this.name='SkipError';} }
