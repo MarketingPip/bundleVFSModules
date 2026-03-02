@@ -139,7 +139,8 @@ const BUNDLED_MODULES = {
   querystring: "querystring.js",
   vm: "vm.js",
   string_decoder: "string_decoder.js",
-  serialize_js: "serialize_js.js"
+  serialize_js: "serialize_js.js",
+  'node:test': "test.js"
   
   
  // buffer: "buffer.js",
