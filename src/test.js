@@ -163,7 +163,9 @@ async function _runNode(node, iBefore = [], iAfter = []) {
       const timer = new Promise((_, rej) =>
         setTimeout(() => rej(new Error(`Test "${node.name}" timed out after ${node.opts.timeout}ms`)), node.opts.timeout)
       );
-      await Promise.race([Promise.resolve(node.fn(ctx)), timer]);
+      
+      const _run = new Promise((res, rej) => { try { res(node.fn(ctx)); } catch(e) { rej(e); } });
+      await Promise.race([_run, timer]);
     }
     node.result = 'pass';
     _emit('test:pass', { name: node.name, node });
