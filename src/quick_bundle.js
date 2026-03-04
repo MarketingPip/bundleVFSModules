@@ -2,123 +2,140 @@
 import * as acorn from "https://esm.sh/acorn";
 import { simple } from "https://esm.sh/acorn-walk";
 
-const cache = new Map();
+// ─── Fetch cache ─────────────────────────────────────────────────────────────
 
-async function fetchModule(url) {
-  if (cache.has(url)) return cache.get(url);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
-  const text = await res.text();
-  cache.set(url, text);
-  return text;
-}
+const fetchCache = new Map(); // url → Promise<string>
 
-function resolveImport(importPath, importer) {
-  if (/^https?:\/\//.test(importPath)) return importPath;
-  if (importPath.startsWith("/")) return new URL(importPath, new URL(importer).origin).toString();
-  if (importPath.startsWith("./") || importPath.startsWith("../")) return new URL(importPath, importer).toString();
-  throw new Error(`Bare specifier "${importPath}" — pass a full URL or CDN prefix`);
-}
-
-/**
- * Collect every module reachable from entryUrl.
- * Returns:
- *   modules  — { url: rewrittenCode }   (import specifiers → absolute URLs)
- *   deps     — { url: [depUrl, …] }     (adjacency list for topo sort)
- */
-async function collectModules(entryUrl, modules = {}, deps = {}, seen = new Set()) {
-  if (seen.has(entryUrl)) return { modules, deps };
-  seen.add(entryUrl);
-
-  const code = await fetchModule(entryUrl);
-  const ast = acorn.parse(code, { ecmaVersion: "latest", sourceType: "module" });
-  const rewrites = [];  // { start, end, url }
-  const depUrls = [];
-
-  const handleSource = (node) => {
-    if (!node.source) return;
-    const url = resolveImport(node.source.value, entryUrl);
-    rewrites.push({ start: node.source.start, end: node.source.end, url });
-    depUrls.push(url);
-  };
-
-  simple(ast, {
-    ImportDeclaration: handleSource,
-    ExportNamedDeclaration: handleSource,
-    ExportAllDeclaration: handleSource,
+function fetchModule(url) {
+  if (fetchCache.has(url)) return fetchCache.get(url);
+  const p = fetch(url).then((res) => {
+    if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${url}`);
+    return res.text();
   });
+  fetchCache.set(url, p);
+  return p; // shared Promise — no duplicate requests
+}
 
-  // Sort by position so slicing offsets stay valid
-  rewrites.sort((a, b) => a.start - b.start);
+// ─── URL resolution ───────────────────────────────────────────────────────────
 
-  // Rewrite all specifiers to absolute URLs in one pass
-  let rewritten = "";
-  let last = 0;
-  for (const { start, end, url } of rewrites) {
-    rewritten += code.slice(last, start) + `"${url}"`;
-    last = end;
+function resolveImport(spec, importer) {
+  if (/^https?:\/\//.test(spec)) return spec;
+  if (spec.startsWith("/")) return new URL(spec, new URL(importer).origin).href;
+  if (spec.startsWith("./") || spec.startsWith("../")) return new URL(spec, importer).href;
+  throw new Error(`Bare specifier "${spec}" — supply a full URL or CDN prefix`);
+}
+
+// ─── AST extraction ───────────────────────────────────────────────────────────
+
+function extractImports(code, baseUrl) {
+  let ast;
+  try {
+    ast = acorn.parse(code, { ecmaVersion: "latest", sourceType: "module" });
+  } catch {
+    return []; // opaque / CJS module — treat as leaf
   }
-  rewritten += code.slice(last);
+  const hits = [];
+  const record = (node) => {
+    const src = node.source;
+    if (!src || src.type !== "Literal" || typeof src.value !== "string") return;
+    hits.push({ start: src.start, end: src.end, url: resolveImport(src.value, baseUrl) });
+  };
+  simple(ast, {
+    ImportDeclaration: record,
+    ExportNamedDeclaration: record,
+    ExportAllDeclaration: record,
+    ImportExpression(node) {
+      const src = node.source;
+      if (src?.type === "Literal" && typeof src.value === "string")
+        hits.push({ start: src.start, end: src.end, url: resolveImport(src.value, baseUrl) });
+    },
+  });
+  return hits.sort((a, b) => a.start - b.start);
+}
 
-  modules[entryUrl] = rewritten;
-  deps[entryUrl] = depUrls;
+// ─── Parallel graph collection ────────────────────────────────────────────────
 
-  // Recurse into dependencies
-  for (const url of depUrls) {
-    await collectModules(url, modules, deps, seen);
+async function collectModules(entryUrl) {
+  const modules = new Map();
+  const deps = new Map();
+  const inFlight = new Map(); // dedup concurrent visits to the same URL
+
+  function visit(url) {
+    if (inFlight.has(url)) return inFlight.get(url);
+    const p = fetchModule(url).then(async (code) => {
+      const hits = extractImports(code, url);
+      const depUrls = hits.map((h) => h.url);
+      let rewritten = "";
+      let cursor = 0;
+      for (const { start, end, url: depUrl } of hits) {
+        rewritten += code.slice(cursor, start) + `"${depUrl}"`;
+        cursor = end;
+      }
+      rewritten += code.slice(cursor);
+      modules.set(url, rewritten);
+      deps.set(url, depUrls);
+      await Promise.all(depUrls.map(visit)); // fetch all deps in parallel
+    });
+    inFlight.set(url, p);
+    return p;
   }
 
+  await visit(entryUrl);
   return { modules, deps };
 }
 
-/**
- * Topological sort — dependencies come before dependents.
- * (Same ordering esbuild uses when it concatenates chunks.)
- */
+// ─── Topological sort ─────────────────────────────────────────────────────────
+
 function topoSort(entryUrl, deps) {
   const order = [];
   const visited = new Set();
-
   function visit(url) {
     if (visited.has(url)) return;
     visited.add(url);
-    for (const dep of deps[url] ?? []) visit(dep);
-    order.push(url);           // push AFTER children → leaves first
+    for (const dep of deps.get(url) ?? []) visit(dep);
+    order.push(url); // leaves first
   }
-
   visit(entryUrl);
   return order;
 }
 
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 /**
- * Bundle entryUrl and all its transitive dependencies.
+ * Bundle entryUrl and all transitive dependencies.
  *
- * Strategy (mirrors esbuild's chunk linking):
- *   1. Collect every module with absolute-URL specifiers.
- *   2. Topo-sort so every dep is ready before its consumer.
- *   3. For each module (leaves → entry), replace every absolute URL
- *      with the Blob URL already created for that dependency.
- *   4. Seal the module in its own Blob URL.
+ * Returns { url, revoke }.
+ *   url    — blob: URL ready for dynamic import (no base64, no size limit)
+ *   revoke — call after import() to free all Blob URLs for this bundle
  *
- * Returns a Blob URL for the entry module.
- * Use it with:  const mod = await import(blobUrl)
+ * @example
+ * const { url, revoke } = await bundle("https://esm.sh/some-lib");
+ * const mod = await import(url);
+ * revoke();
  */
 export async function bundle(entryUrl) {
   const { modules, deps } = await collectModules(entryUrl);
-  const order = topoSort(entryUrl, deps);     // e.g. [lodash.mjs, lodash-entry]
+  const order = topoSort(entryUrl, deps);
 
-  const dataUrls = {};   // absUrl → data: URL
+  const blobUrls = {};
+  const created = [];
 
   for (const url of order) {
-    let code = modules[url];
-
-    // Rewrite every already-resolved dependency to its data: URL
-    for (const [abs, data] of Object.entries(dataUrls)) {
-      code = code.split(`"${abs}"`).join(`"${data}"`);
+    let code = modules.get(url);
+    // Rewrite each dep's absolute URL to its blob: URL
+    for (const depUrl of deps.get(url) ?? []) {
+      if (blobUrls[depUrl])
+        code = code.replaceAll(`"${depUrl}"`, `"${blobUrls[depUrl]}"`);
     }
- 
-    dataUrls[url] = `data:application/javascript;base64,${btoa(unescape(encodeURIComponent(code)))}`;
+    const blobUrl = URL.createObjectURL(
+      new Blob([code], { type: "application/javascript" })
+    );
+    blobUrls[url] = blobUrl;
+    created.push(blobUrl);
   }
- 
-  return dataUrls[entryUrl];
+
+  return {
+    url: blobUrls[entryUrl],
+    revoke() { created.forEach((u) => URL.revokeObjectURL(u)); },
+  };
 }
