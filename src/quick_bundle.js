@@ -17,8 +17,7 @@ function resolveImport(importPath, importer) {
   if (/^https?:\/\//.test(importPath)) return importPath;
   if (importPath.startsWith("/")) return new URL(importPath, new URL(importer).origin).toString();
   if (importPath.startsWith("./") || importPath.startsWith("../")) return new URL(importPath, importer).toString();
-  return importPath;
- // throw new Error(`Bare specifier "${importPath}" — pass a full URL or CDN prefix`);
+  throw new Error(`Bare specifier "${importPath}" — pass a full URL or CDN prefix`);
 }
 
 /**
@@ -108,21 +107,18 @@ export async function bundle(entryUrl) {
   const { modules, deps } = await collectModules(entryUrl);
   const order = topoSort(entryUrl, deps);     // e.g. [lodash.mjs, lodash-entry]
 
-  const blobUrls = {};   // absUrl → blobUrl
+  const dataUrls = {};   // absUrl → data: URL
 
   for (const url of order) {
     let code = modules[url];
 
-    // Rewrite every already-resolved dependency to its Blob URL
-    for (const [abs, blob] of Object.entries(blobUrls)) {
-      // String split/join is safe: we already normalised all specifiers to abs URLs
-      code = code.split(`"${abs}"`).join(`"${blob}"`);
+    // Rewrite every already-resolved dependency to its data: URL
+    for (const [abs, data] of Object.entries(dataUrls)) {
+      code = code.split(`"${abs}"`).join(`"${data}"`);
     }
-
-    blobUrls[url] = URL.createObjectURL(
-      new Blob([code], { type: "application/javascript" })
-    );
+ 
+    dataUrls[url] = `data:application/javascript;base64,${btoa(unescape(encodeURIComponent(code)))}`;
   }
-
-  return blobUrls[entryUrl];
+ 
+  return dataUrls[entryUrl];
 }
