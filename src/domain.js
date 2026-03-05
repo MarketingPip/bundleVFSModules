@@ -193,9 +193,17 @@ function create() {
   return new Domain();
 }
 
-module.exports = {
+const api = {
   create,
   createDomain: create,
-  Domain,
-  active
+  Domain
 };
+
+Object.defineProperty(api, "active", {
+  enumerable: true,
+  get() {
+    return Domain.active;
+  }
+});
+
+module.exports = api;
