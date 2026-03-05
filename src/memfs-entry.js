@@ -1,55 +1,93 @@
 import { vol, promises, constants, fs as memfsFs } from "memfs";
 import { createFsFromVolume } from "memfs";
 
-// Create a Node-like fs object from the memfs volume
 const fs = createFsFromVolume(vol);
-
-// Attach the promises API (exact Node-style)
 fs.promises = promises;
-// Also attach constants (Node-style)
 fs.constants = constants;
 fs._vol = vol;
 
-// ── Monkey-patch ──────────────────────────────────────────────────────────────
-// Wrap every enumerable function on `fs` so that after the call completes
-// globalThis.emitMe("fs", methodName, ...args, result) is fired.
-// Async (callback-style) methods are detected by checking whether the last
-// argument supplied by the caller is a function; in that case we wrap the
-// callback so we can capture the result before forwarding it.
+// ── Node-compatible error factory ─────────────────────────────────────────────
+// Mirrors Node's internal makeCallback / maybeCallback validation.
+// Older Node used ERR_INVALID_CALLBACK; modern Node uses ERR_INVALID_ARG_TYPE.
+// We match modern Node (v14+).
+function makeArgTypeError(argName, expected, received) {
+  const receivedStr =
+    received === undefined
+      ? "undefined"
+      : received === null
+      ? "null"
+      : `type ${typeof received}`;
+  const msg = `The "${argName}" argument must be of type ${expected}. Received ${receivedStr}`;
+  const err = new TypeError(msg);
+  err.code = "ERR_INVALID_ARG_TYPE";
+  // Match Node's formatted name visible in stack traces
+  Object.defineProperty(err, "name", {
+    value: "TypeError [ERR_INVALID_ARG_TYPE]",
+    writable: true,
+    configurable: true,
+  });
+  return err;
+}
 
+// ── Classify methods ───────────────────────────────────────────────────────────
+// These fs methods either return a stream/watcher (not callback-based)
+// or accept an optional listener rather than a required error-first callback.
+const STREAM_OR_WATCHER = new Set([
+  "createReadStream",
+  "createWriteStream",
+  "watch",        // listener is optional; returns FSWatcher
+  "unwatchFile",  // no callback at all
+]);
+
+// Determines whether `key` is a callback-async method that *requires* its
+// last argument to be a function, matching Node's maybeCallback guard.
+function requiresCallback(key) {
+  if (key.endsWith("Sync")) return false;          // sync variants never take a cb
+  if (STREAM_OR_WATCHER.has(key)) return false;    // stream/watcher factories
+  return true;
+}
+
+// ── Monkey-patch ──────────────────────────────────────────────────────────────
 const SKIP = new Set(["promises", "constants", "_vol"]);
 
 for (const key of Object.keys(fs)) {
   if (SKIP.has(key)) continue;
-
   const original = fs[key];
   if (typeof original !== "function") continue;
 
+  const needsCb = requiresCallback(key);
+
   fs[key] = function (...args) {
+    // ── Callback validation (mirrors Node's makeCallback / maybeCallback) ──
+    if (needsCb) {
+      const lastArg = args[args.length - 1];
+      if (typeof lastArg !== "function") {
+        // Node throws synchronously before touching the FS at all
+        throw makeArgTypeError("cb", "function", lastArg);
+      }
+    }
+
     const emit = (result) => {
       if (typeof globalThis.emitMe === "function") {
         globalThis.emitMe("fs", key, ...args, result);
       }
     };
 
-    // Detect callback-style async call: last arg is a function
+    // Callback-style async: wrap the callback to capture the result
     const lastArg = args[args.length - 1];
     if (typeof lastArg === "function") {
-      // Replace the callback with a wrapper that emits then forwards
       const originalCb = lastArg;
       args[args.length - 1] = function (...cbArgs) {
-        // cbArgs[0] is the error (if any); cbArgs[1] is the result
+        // cbArgs[0] = err, cbArgs[1] = result (error-first convention)
         emit(cbArgs[1]);
         return originalCb.apply(this, cbArgs);
       };
       return original.apply(this, args);
     }
 
-    // Synchronous call
+    // Synchronous call (or stream factory etc.)
     const result = original.apply(this, args);
 
-    // If the return value is a Promise (e.g. someone called a *Sync variant
-    // that happens to return a thenable), handle both cases gracefully
     if (result && typeof result.then === "function") {
       return result.then(
         (val) => { emit(val); return val; },
@@ -61,11 +99,10 @@ for (const key of Object.keys(fs)) {
     return result;
   };
 
-  // Preserve the original function's name for stack traces
   Object.defineProperty(fs[key], "name", { value: key });
 }
 
-// Also patch fs.promises (returns Promises, no callbacks)
+// ── Patch fs.promises (Promise-based, no callbacks) ───────────────────────────
 for (const key of Object.keys(promises)) {
   const original = promises[key];
   if (typeof original !== "function") continue;
@@ -80,7 +117,7 @@ for (const key of Object.keys(promises)) {
 
   Object.defineProperty(fs.promises[key], "name", { value: key });
 }
-// ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
 export default fs;
 export { fs, promises, constants, vol };
