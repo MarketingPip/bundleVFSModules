@@ -124,6 +124,7 @@ const BUNDLED_MODULES = {
   async_hooks: "async_hooks.js",
   url: "url.js",
   readline: "readline.js",
+  readline_promises: "readline-promises.js",
   http: "http.js",
   https: "https.js",
   http2: "http2.js",
@@ -150,6 +151,7 @@ const BUNDLED_MODULES = {
   perf_hooks: "perf_hooks.js",
   zlib: "zlib.js",
   child_process: "child_process.js",
+  punycode: "punycode.js",
   
   
  // buffer: "buffer.js",
