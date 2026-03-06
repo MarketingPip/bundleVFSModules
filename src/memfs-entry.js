@@ -1,8 +1,8 @@
-import { vol, promises as memPromises, constants, fs as memfsFs } from "memfs";
+import { vol, promises, constants, fs as memfsFs } from "memfs";
 import { createFsFromVolume } from "memfs";
 
 const fs = createFsFromVolume(vol);
-fs.promises = memPromises;
+fs.promises = promises;
 fs.constants = constants;
 fs._vol = vol;
 
