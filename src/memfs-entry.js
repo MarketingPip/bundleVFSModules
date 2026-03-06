@@ -103,6 +103,29 @@ for (const key of Object.keys(fs)) {
 }
 
 // ── Patch fs.promises (Promise-based, no callbacks) ───────────────────────────
+
+// Define write methods for fs
+const WRITE_METHODS = new Set([
+  "writeFile",
+  "writeFileSync",
+  "appendFile",
+  "appendFileSync",
+  "mkdir",
+  "mkdirSync",
+  "rmdir",
+  "rmdirSync",
+  "unlink",
+  "unlinkSync",
+  "rename",
+  "renameSync",
+  "truncate",
+  "truncateSync",
+  "symlink",
+  "symlinkSync",
+  "link",
+  "linkSync",
+]);
+
 for (const key of Object.keys(promises)) {
   const original = promises[key];
   if (typeof original !== "function") continue;
@@ -122,7 +145,91 @@ for (const key of Object.keys(promises)) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export default fs;
-export { fs, promises, constants, vol };
+export const {
+  // fs methods
+  access,
+  accessSync,
+  appendFile,
+  appendFileSync,
+  chmod,
+  chmodSync,
+  chown,
+  chownSync,
+  copyFile,
+  copyFileSync,
+  cp,
+  cpSync,
+  cwd,
+  existsSync,
+  fchmod,
+  fchmodSync,
+  fchown,
+  fchownSync,
+  fdatasync,
+  fdatasyncSync,
+  fstat,
+  fstatSync,
+  fsync,
+  fsyncSync,
+  ftruncate,
+  ftruncateSync,
+  futimes,
+  futimesSync,
+  lchmod,
+  lchmodSync,
+  lchown,
+  lchownSync,
+  link,
+  linkSync,
+  lstat,
+  lstatSync,
+  mkdir,
+  mkdirSync,
+  mkdtemp,
+  mkdtempSync,
+  open,
+  openSync,
+  opendir,
+  opendirSync,
+  readdir,
+  readdirSync,
+  readFile,
+  readFileSync,
+  readlink,
+  readlinkSync,
+  realpath,
+  realpathSync,
+  rename,
+  renameSync,
+  rm,
+  rmdir,
+  rmdirSync,
+  stat,
+  statSync,
+  symlink,
+  symlinkSync,
+  truncate,
+  truncateSync,
+  unlink,
+  unlinkSync,
+  utimes,
+  utimesSync,
+  watch,
+  watchFile,
+  unwatchFile,
+  writeFile,
+  writeFileSync,
+  write,
+  writeSync,
+  createReadStream,
+  createWriteStream,
+  // constants
+  constants,
+  // promises API
+  promises
+} = _fs;
+
+
+export default _fs;
 
 globalThis.__RUNTIME_FS__ = fs; // expose to runtime
