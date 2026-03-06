@@ -1,8 +1,8 @@
-import { vol, promises, constants, fs as memfsFs } from "memfs";
+import { vol, promises as memPromises, constants, fs as memfsFs } from "memfs";
 import { createFsFromVolume } from "memfs";
 
 const fs = createFsFromVolume(vol);
-fs.promises = promises;
+fs.promises = memPromises;
 fs.constants = constants;
 fs._vol = vol;
 
@@ -103,12 +103,15 @@ for (const key of Object.keys(fs)) {
 }
 
 // ── Patch fs.promises (Promise-based, no callbacks) ───────────────────────────
-for (const key of Object.keys(promises)) {
-  const original = promises[key];
+for (const key of Object.keys(memPromises)) {
+  const original = memPromises[key];
   if (typeof original !== "function") continue;
 
+  const isWrite = WRITE_METHODS.has(key.replace("Sync", ""));
+
   fs.promises[key] = async function (...args) {
-    const result = await original.apply(this, args);
+    const target = isWrite ? fs._vol.promises : memPromises;
+    const result = await original.apply(target, args);
     if (typeof globalThis.emitMe === "function") {
       globalThis.emitMe("fs", `promises.${key}`, ...args, result);
     }
@@ -121,3 +124,5 @@ for (const key of Object.keys(promises)) {
 // ─────────────────────────────────────────────────────────────────────────────
 export default fs;
 export { fs, promises, constants, vol };
+
+globalThis.__RUNTIME_FS__ = fs; // expose to runtime
