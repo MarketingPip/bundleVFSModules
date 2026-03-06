@@ -1,9 +1,10 @@
-import { vol, promises, constants, fs as memfsFs } from "memfs";
+import { vol, promises as memPromises, constants as memConstants, fs as memfsFs } from "memfs";
 import { createFsFromVolume } from "memfs";
 
+
 const fs = createFsFromVolume(vol);
-fs.promises = promises;
-fs.constants = constants;
+fs.promises = memPromises;
+fs.constants = memConstants;
 fs._vol = vol;
 
 // ── Node-compatible error factory ─────────────────────────────────────────────
@@ -126,8 +127,8 @@ const WRITE_METHODS = new Set([
   "linkSync",
 ]);
 
-for (const key of Object.keys(promises)) {
-  const original = promises[key];
+for (const key of Object.keys(memPromises)) {
+  const original = memPromises[key];
   if (typeof original !== "function") continue;
 
   const isWrite = WRITE_METHODS.has(key.replace("Sync", ""));
@@ -227,9 +228,9 @@ export const {
   constants,
   // promises API
   promises
-} = _fs;
+} = fs;
 
 
-export default _fs;
+export default fs;
 
 globalThis.__RUNTIME_FS__ = fs; // expose to runtime
