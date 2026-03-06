@@ -118,6 +118,7 @@ const BUNDLED_MODULES = {
   fs: "memfs-entry.js",
   path: "path.js",
   assert: "assert.js",
+  assert_strict: "assert-strict.js",
   os: "os.js",
   util: "util.js",
   sys: "sys.js",
