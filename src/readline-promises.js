@@ -31,20 +31,22 @@ function _addAbortListener(signal, listener) {
 }
 
 // Interface class
-class Interface extends readline.createInterface().constructor {
+class Interface {
   constructor(input, output, completer, terminal) {
-    super({ input, output, terminal });
+    this._iface = readline.createInterface({ input, output, terminal });
 
-    this[kQuestion] = (query, cb) => super.question(query, cb);
-    this[kQuestionCancel] = () => {}; // no-op for browser
-    this[kQuestionReject] = null;
+    // Forward 'on', 'once', 'off' etc.
+    this.on = this._iface.on.bind(this._iface);
+    this.once = this._iface.once.bind(this._iface);
+    this.off = this._iface.off.bind(this._iface);
+    this.removeListener = this._iface.removeListener.bind(this._iface);
 
-    // Async iterator support
+    // Your async iterator queue
     this._lineQueue = [];
     this._lineResolve = null;
     this._lineDone = false;
 
-    this.on('line', (line) => {
+    this._iface.on('line', (line) => {
       if (this._lineResolve) {
         const r = this._lineResolve;
         this._lineResolve = null;
@@ -54,7 +56,7 @@ class Interface extends readline.createInterface().constructor {
       }
     });
 
-    this.on('close', () => {
+    this._iface.on('close', () => {
       this._lineDone = true;
       if (this._lineResolve) {
         this._lineResolve({ value: undefined, done: true });
@@ -63,49 +65,18 @@ class Interface extends readline.createInterface().constructor {
     });
   }
 
-  // Promise-based question
   question(query, options = {}) {
     return new Promise((resolve, reject) => {
-      let cb = resolve;
-
-      if (options.signal) {
-        _validateAbortSignal(options.signal, 'options.signal');
-        if (options.signal.aborted) {
-          return reject(new AbortError(undefined, { cause: options.signal.reason }));
-        }
-
-        const onAbort = () => {
-          this[kQuestionCancel]();
-          reject(new AbortError(undefined, { cause: options.signal.reason }));
-        };
-
-        addAbortListener ??= _addAbortListener;
-        const disposable = addAbortListener(options.signal, onAbort);
-
-        cb = (answer) => {
-          disposable[Symbol.dispose]();
-          resolve(answer);
-        };
-      }
-
-      this[kQuestionReject] = reject;
-      this[kQuestion](query, cb);
+      this._iface.question(query, resolve);
     });
   }
 
-  // Async iterator
   [Symbol.asyncIterator]() {
     return {
       next: () => {
-        if (this._lineQueue.length) {
-          return Promise.resolve({ value: this._lineQueue.shift(), done: false });
-        }
-        if (this._lineDone) {
-          return Promise.resolve({ value: undefined, done: true });
-        }
-        return new Promise((res) => {
-          this._lineResolve = res;
-        });
+        if (this._lineQueue.length) return Promise.resolve({ value: this._lineQueue.shift(), done: false });
+        if (this._lineDone) return Promise.resolve({ value: undefined, done: true });
+        return new Promise(res => { this._lineResolve = res; });
       },
       return: () => Promise.resolve({ value: undefined, done: true }),
     };
