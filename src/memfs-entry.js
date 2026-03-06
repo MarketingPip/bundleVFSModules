@@ -103,8 +103,8 @@ for (const key of Object.keys(fs)) {
 }
 
 // ── Patch fs.promises (Promise-based, no callbacks) ───────────────────────────
-for (const key of Object.keys(memPromises)) {
-  const original = memPromises[key];
+for (const key of Object.keys(promises)) {
+  const original = promises[key];
   if (typeof original !== "function") continue;
 
   const isWrite = WRITE_METHODS.has(key.replace("Sync", ""));
