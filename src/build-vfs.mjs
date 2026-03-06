@@ -186,7 +186,7 @@ const STUB_MODULES = [
 //  "vm",
  // "module",
   //"v8",
-  "punycode",
+//  "punycode",
  // "querystring",
 //  "repl",
  // "string_decoder",
