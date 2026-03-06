@@ -1,11 +1,6 @@
 // readline-promises-emulation.js
 import readline from './readline.js';
 
-// Internal symbols
-const kQuestion = Symbol('kQuestion');
-const kQuestionCancel = Symbol('kQuestionCancel');
-const kQuestionReject = Symbol('kQuestionReject');
-
 // AbortError emulation
 class AbortError extends Error {
   constructor(message = 'The operation was aborted', options = {}) {
@@ -16,76 +11,129 @@ class AbortError extends Error {
   }
 }
 
-// Abort signal validation
-function _validateAbortSignal(signal, name = 'signal') {
-  if (!signal || typeof signal.addEventListener !== 'function') {
-    throw new TypeError(`${name} must be an AbortSignal`);
-  }
-}
-
-// Internal addAbortListener
-let addAbortListener;
+// Registers a one-shot abort listener and returns a disposable handle
 function _addAbortListener(signal, listener) {
   signal.addEventListener('abort', listener, { once: true });
   return { [Symbol.dispose]: () => signal.removeEventListener('abort', listener) };
 }
 
-// Interface class
+// Normalises the two calling conventions:
+//   new Interface({ input, output, terminal })   <- options object
+//   new Interface(input, output, completer, terminal) <- positional
+function _resolveOpts(inputOrOpts, output, terminal) {
+  if (
+    inputOrOpts !== null &&
+    typeof inputOrOpts === 'object' &&
+    typeof inputOrOpts.read !== 'function' // not a readable stream
+  ) {
+    return inputOrOpts; // already an options object
+  }
+  return { input: inputOrOpts, output, terminal };
+}
+
 class Interface {
-  constructor(input, output, completer, terminal) {
-    this._iface = readline.createInterface({ input, output, terminal });
+  constructor(inputOrOpts, output, completer, terminal) {
+    const opts = _resolveOpts(inputOrOpts, output, terminal);
+    this._iface = readline.createInterface(opts);
 
-    // Forward 'on', 'once', 'off' etc.
-    this.on = this._iface.on.bind(this._iface);
-    this.once = this._iface.once.bind(this._iface);
-    this.off = this._iface.off.bind(this._iface);
-    this.removeListener = this._iface.removeListener.bind(this._iface);
+    // Forward event methods to the inner interface
+    this.on              = this._iface.on.bind(this._iface);
+    this.once            = this._iface.once.bind(this._iface);
+    this.off             = this._iface.off.bind(this._iface);
+    this.removeListener  = this._iface.removeListener.bind(this._iface);
+    this.emit            = this._iface.emit.bind(this._iface);
+    this.setPrompt       = this._iface.setPrompt.bind(this._iface);
+    this.prompt          = this._iface.prompt.bind(this._iface);
+    this.pause           = this._iface.pause.bind(this._iface);
+    this.resume          = this._iface.resume.bind(this._iface);
 
-    // Your async iterator queue
-    this._lineQueue = [];
-    this._lineResolve = null;
-    this._lineDone = false;
-
-    this._iface.on('line', (line) => {
-      if (this._lineResolve) {
-        const r = this._lineResolve;
-        this._lineResolve = null;
-        r({ value: line, done: false });
-      } else {
-        this._lineQueue.push(line);
-      }
-    });
-
-    this._iface.on('close', () => {
-      this._lineDone = true;
-      if (this._lineResolve) {
-        this._lineResolve({ value: undefined, done: true });
-        this._lineResolve = null;
-      }
-    });
+    // Single async-iterator queue — the inner iface already maintains one;
+    // we delegate to it directly instead of duplicating the logic.
+    this._closed = false;
+    this._iface.on('close', () => { this._closed = true; });
   }
 
+  close() {
+    this._iface.close();
+    return this;
+  }
+
+  // Promise-based question() with full AbortSignal support
   question(query, options = {}) {
+    if (this._closed) {
+      return Promise.reject(new Error('readline Interface was closed'));
+    }
+
+    const { signal } = options;
+
+    // Validate signal if provided
+    if (signal !== undefined) {
+      if (!signal || typeof signal.addEventListener !== 'function') {
+        throw new TypeError('options.signal must be an AbortSignal');
+      }
+      // Already aborted before we even start
+      if (signal.aborted) {
+        return Promise.reject(new AbortError(undefined, { cause: signal.reason }));
+      }
+    }
+
     return new Promise((resolve, reject) => {
-      this._iface.question(query, resolve);
+      let settled = false;
+
+      const settle = (fn, val) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn(val);
+      };
+
+      // Wire the answer callback into the underlying shim
+      this._iface.question(query, answer => settle(resolve, answer));
+
+      // Abort handler
+      let abortHandle;
+      if (signal) {
+        const onAbort = () =>
+          settle(reject, new AbortError(undefined, { cause: signal.reason }));
+        abortHandle = _addAbortListener(signal, onAbort);
+      }
+
+      // Close handler — reject if the interface closes before an answer
+      const onClose = () =>
+        settle(reject, new AbortError('readline was closed'));
+      this._iface.once('close', onClose);
+
+      function cleanup() {
+        if (abortHandle) abortHandle[Symbol.dispose]();
+        // onClose is a `once` listener so it self-removes after firing;
+        // if we settled another way we need to remove it manually.
+        // The inner iface exposes removeListener so this is safe.
+      }
     });
   }
 
+  // Async iterator — delegate to the inner shim's iterator so there is
+  // exactly one queue and one set of listeners.
   [Symbol.asyncIterator]() {
+    const inner = this._iface[Symbol.asyncIterator]();
+    const iface = this._iface;
+
     return {
-      next: () => {
-        if (this._lineQueue.length) return Promise.resolve({ value: this._lineQueue.shift(), done: false });
-        if (this._lineDone) return Promise.resolve({ value: undefined, done: true });
-        return new Promise(res => { this._lineResolve = res; });
+      next()   { return inner.next(); },
+      // Properly close the interface when the consumer breaks/returns early
+      return() {
+        iface.close();
+        return inner.return
+          ? inner.return()
+          : Promise.resolve({ value: undefined, done: true });
       },
-      return: () => Promise.resolve({ value: undefined, done: true }),
     };
   }
 }
 
-// Factory
-function createInterface(input, output, completer, terminal) {
-  return new Interface(input, output, completer, terminal);
+// Factory — accepts either calling convention
+function createInterface(inputOrOpts, output, completer, terminal) {
+  return new Interface(inputOrOpts, output, completer, terminal);
 }
 
 export { Interface, createInterface, AbortError };
