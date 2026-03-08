@@ -1,4 +1,4 @@
-import timers from './timers.js';
+import timers from '../timers.js';
 
 const { setTimeout: _setTimeout, setImmediate: _setImmediate, setInterval: _setInterval } = timers;
 
