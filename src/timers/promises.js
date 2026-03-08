@@ -1,4 +1,4 @@
-// npm install timers-browserify setimmediate  (via ./timers)
+// npm install setimmediate  (via ./timers)
 
 /*!
  * timers-web/promises — node:timers/promises for browsers & bundlers
@@ -6,78 +6,61 @@
  * Node.js parity: node:timers/promises @ Node 15.0.0+
  * Dependencies: ./timers
  * Limitations:
- *   - .ref() / .unref() on the returned Timeout/Immediate are no-ops.
- *   - scheduler.yield() and scheduler.wait() are approximated (no true
- *     task-scheduler integration available in all browsers).
+ *   - .ref() / .unref() on Timeout/Immediate handles are no-ops.
+ *   - scheduler.yield() approximated via setImmediate.
  */
 
 /**
  * @packageDocumentation
- * Implements `node:timers/promises` by wrapping `./timers` callback functions
- * in AbortSignal-aware promises.
+ * Implements `node:timers/promises` using the captured native references
+ * exported by `./timers`.
  *
- * Exports:
- *   - {@link setTimeout}    — resolves after delay with an optional value
- *   - {@link setInterval}   — async iterator that yields on each tick
- *   - {@link setImmediate}  — resolves after the current poll phase
- *   - {@link scheduler}     — `scheduler.wait()` and `scheduler.yield()`
- *
- * Note: named exports intentionally shadow the global setTimeout etc. inside
- * this module. The underlying native calls are safely isolated inside
- * ./timers which captures native references at its own evaluation time.
+ * Key design: promise bodies schedule via the raw `_setTimeout` /
+ * `_setImmediate` / `_setInterval` captures exported from `./timers` —
+ * NOT through the `Timeout`-wrapping exports. This avoids the extra
+ * indirection layer that caused timers to silently never fire in bundled
+ * environments where `globalThis.setTimeout` had already been shadowed by
+ * our own export by the time the wrapper was called.
  */
 
-import timers from '../timers.js';
+import timers, {
+  _setTimeout, _clearTimeout,
+  _setInterval, _clearInterval,
+  _setImmediate, _clearImmediate,
+} from './timers';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Builds a rejection for an aborted signal, matching Node's error shape.
+ * Builds an AbortError matching Node's shape.
  * @param {AbortSignal} signal
  * @returns {Error & { code: 'ABORT_ERR' }}
  */
 const abortError = signal =>
   Object.assign(
-    signal.reason instanceof Error
-      ? signal.reason
-      : new Error('The operation was aborted'),
+    signal.reason instanceof Error ? signal.reason : new Error('The operation was aborted'),
     { code: 'ABORT_ERR' },
   );
 
 /**
- * Guards a Promise executor against an already-aborted signal and wires up
- * a one-shot abort listener.
- *
+ * Wraps a simple cancel-on-abort pattern into a Promise.
+ * `body` receives `(resolve, reject)` and returns a cancel function.
  * @param {AbortSignal | undefined} signal
- * @param {(reject: (e: Error) => void) => void} onAbort
- * @param {(resolve: Function, reject: Function) => (() => void)} body
- *   Executor body — must return a cleanup fn invoked on settle or abort.
+ * @param {(resolve: Function, reject: Function) => () => void} body
  * @returns {Promise<any>}
  */
-function guardedPromise(signal, onAbort, body) {
+function withAbort(signal, body) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortError(signal));
 
-    let cleanup;
+    const cancel = body(resolve, reject);
 
-    const handleAbort = () => {
-      cleanup?.();
-      onAbort(reject);
-    };
-
-    signal?.addEventListener('abort', handleAbort, { once: true });
-
-    const done = (fn, value) => {
-      signal?.removeEventListener('abort', handleAbort);
-      fn(value);
-    };
-
-    cleanup = body(
-      v => done(resolve, v),
-      e => done(reject, e),
-    );
+    signal?.addEventListener('abort', function onAbort() {
+      cancel();
+      reject(abortError(signal));
+    }, { once: true });
   });
 }
 
@@ -86,36 +69,29 @@ function guardedPromise(signal, onAbort, body) {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns a Promise that resolves with `value` after `delay` ms.
- * Delegates the actual scheduling to `timers.setTimeout` whose native
- * reference was captured at module-load time — no risk of self-recursion.
+ * Resolves with `value` after `delay` ms.
+ *
+ * Uses `_setTimeout` — the native reference captured at `./timers` load time,
+ * guaranteed to be the real browser/Node setTimeout regardless of what any
+ * bundler may have replaced on `globalThis` since then.
  *
  * @template T
- * @param {number}  [delay=0]
- * @param {T}       [value]           - Value the promise resolves with.
+ * @param {number} [delay=0]
+ * @param {T} [value]
  * @param {{ signal?: AbortSignal }} [options]
  * @returns {Promise<T>}
  *
  * @example
- * await setTimeout(1_000);
- * const v = await setTimeout(500, 'hello');  // → 'hello'
- *
- * const ac = new AbortController();
- * setTimeout(2_000, null, { signal: ac.signal });
- * ac.abort();  // → rejects with { code: 'ABORT_ERR' }
+ * await setTimeout(2000);
+ * const msg = await setTimeout(1000, 'hello');  // → 'hello'
  */
 export function setTimeout(delay = 0, value, { signal } = {}) {
-  return guardedPromise(
-    signal,
-    reject => reject(abortError(signal)),
-    resolve => {
-      // timers.setTimeout uses _setTimeout (native, captured at load time).
-      // Passing `value` as an extra arg forwards it to the callback — native
-      // setTimeout(fn, delay, ...args) calls fn(...args) when it fires.
-      const handle = timers.setTimeout(resolve, delay, value);
-      return () => handle.close();
-    },
-  );
+  return withAbort(signal, (resolve, reject) => {
+    // Schedule directly on the captured native — no Timeout wrapper involved.
+    // The native will call resolve(value) after delay ms.
+    const id = _setTimeout(resolve, delay, value);
+    return () => _clearTimeout(id);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -123,26 +99,21 @@ export function setTimeout(delay = 0, value, { signal } = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns a Promise that resolves with `value` after the current poll phase.
+ * Resolves with `value` after the current poll phase.
  *
  * @template T
- * @param {T}  [value]
+ * @param {T} [value]
  * @param {{ signal?: AbortSignal }} [options]
  * @returns {Promise<T>}
  *
  * @example
- * const result = await setImmediate('done');
- * console.log(result); // 'done'
+ * const result = await setImmediate('done');  // → 'done'
  */
 export function setImmediate(value, { signal } = {}) {
-  return guardedPromise(
-    signal,
-    reject => reject(abortError(signal)),
-    resolve => {
-      const handle = timers.setImmediate(resolve, value);
-      return () => handle.close();
-    },
-  );
+  return withAbort(signal, (resolve) => {
+    const id = _setImmediate(resolve, value);
+    return () => _clearImmediate(id);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -150,13 +121,13 @@ export function setImmediate(value, { signal } = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns an async iterator that yields `value` on every `delay` ms tick.
+ * Async iterator that yields `value` on every `delay` ms tick.
  * Break or `return()` the iterator to clear the underlying interval.
- * An AbortSignal causes the iterator to throw `ABORT_ERR` and then close.
+ * An AbortSignal causes the iterator to throw `ABORT_ERR` and close.
  *
  * @template T
  * @param {number} [delay=0]
- * @param {T}      [value]
+ * @param {T} [value]
  * @param {{ signal?: AbortSignal }} [options]
  * @returns {AsyncGenerator<T>}
  *
@@ -165,27 +136,19 @@ export function setImmediate(value, { signal } = {}) {
  * for await (const _ of setInterval(200, 'tick')) {
  *   if (++n === 5) break;
  * }
- *
- * // Abort externally
- * const ac = new AbortController();
- * timers.setTimeout(() => ac.abort(), 350);
- * try {
- *   for await (const _ of setInterval(100, null, { signal: ac.signal })) { }
- * } catch (e) { console.log(e.code); } // 'ABORT_ERR'
  */
 export async function* setInterval(delay = 0, value, { signal } = {}) {
   if (signal?.aborted) throw abortError(signal);
 
-  // Small queue: ticks that fire while the consumer is busy are buffered
-  // rather than dropped — matches Node's back-pressure behaviour.
-  const queue = [];
-  let pending = null; // resolve fn for the currently parked await, if any
-  let done    = false;
-  let error   = null;
+  // Queue buffers ticks that fire while the consumer is busy.
+  const queue  = [];
+  let pending  = null; // { resolve, reject } for the parked await
+  let done     = false;
+  let abortErr = null;
 
-  const enqueue = () => {
+  const tick = () => {
     if (pending) {
-      const resolve = pending;
+      const { resolve } = pending;
       pending = null;
       resolve(value);
     } else {
@@ -193,40 +156,30 @@ export async function* setInterval(delay = 0, value, { signal } = {}) {
     }
   };
 
-  const handle = timers.setInterval(enqueue, delay);
-
   const onAbort = () => {
-    handle.close();
-    error = abortError(signal);
-    done  = true;
+    abortErr = abortError(signal);
+    done = true;
+    _clearInterval(id);
     if (pending) {
-      const reject = pending;
+      const { reject } = pending;
       pending = null;
-      // We stored a resolve but need to reject — use a small wrapper below.
-      reject(Promise.reject(error));
+      reject(abortErr);
     }
   };
+
+  // Use _setInterval from ./timers — the captured native.
+  const id = _setInterval(tick, delay);
   signal?.addEventListener('abort', onAbort, { once: true });
 
   try {
     while (!done) {
-      if (queue.length) {
-        yield queue.shift();
-        continue;
-      }
-      // Park until the next tick enqueues a value (or abort fires).
-      yield await new Promise((resolve, reject) => {
-        pending = v => {
-          // v may be a rejected promise if abort fired
-          if (v && typeof v.then === 'function') v.then(resolve, reject);
-          else resolve(v);
-        };
-      });
+      if (queue.length) { yield queue.shift(); continue; }
+      yield await new Promise((resolve, reject) => { pending = { resolve, reject }; });
     }
   } finally {
-    handle.close();
+    _clearInterval(id);
     signal?.removeEventListener('abort', onAbort);
-    if (error) throw error;
+    if (abortErr) throw abortErr;
   }
 }
 
@@ -235,23 +188,14 @@ export async function* setInterval(delay = 0, value, { signal } = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal `scheduler` object matching the node:timers/promises scheduler API.
- *
+ * Minimal `scheduler` matching `node:timers/promises`.
  * - `scheduler.wait(delay, options?)` — alias for {@link setTimeout}
- * - `scheduler.yield()`              — yields control via setImmediate
+ * - `scheduler.yield()`              — yields to the event loop
  */
 export const scheduler = {
-  /**
-   * @param {number} delay
-   * @param {{ signal?: AbortSignal }} [options]
-   * @returns {Promise<void>}
-   */
+  /** @param {number} delay @param {{ signal?: AbortSignal }} [options] */
   wait: (delay, options) => setTimeout(delay, undefined, options),
-
-  /**
-   * Yields control to the event loop, allowing other tasks to run.
-   * @returns {Promise<void>}
-   */
+  /** @returns {Promise<void>} */
   yield: () => setImmediate(undefined),
 };
 
@@ -264,22 +208,23 @@ export default { setTimeout, setInterval, setImmediate, scheduler };
 // import { setTimeout, setInterval, setImmediate, scheduler }
 //   from './timers/promises';
 //
-// // Basic — these now work without stack overflow
-// await setTimeout(1_000);
-// const msg = await setTimeout(500, 'ready');  // → 'ready'
+// // These now resolve correctly
+// await setTimeout(2000);
+// const msg = await setTimeout(1000, 'hello after 1 second');
+// console.log(msg); // 'hello after 1 second'
 //
-// // Cancellable setTimeout
+// // Cancellable
 // const ac = new AbortController();
 // const p  = setTimeout(5_000, 'late', { signal: ac.signal });
 // ac.abort();
-// await p.catch(e => console.log(e.code));  // 'ABORT_ERR'
+// await p.catch(e => console.log(e.code)); // 'ABORT_ERR'
 //
 // // setImmediate
-// const val = await setImmediate('next');   // → 'next'
+// console.log(await setImmediate('next')); // 'next'
 //
-// // setInterval async iterator — break after 3 ticks
+// // setInterval async iterator
 // let i = 0;
-// for await (const _ of setInterval(200)) {
+// for await (const _ of setInterval(200, 'tick')) {
 //   if (++i === 3) break;
 // }
 //
