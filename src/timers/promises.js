@@ -1,22 +1,8 @@
 /*!
- * timers/promises — node:timers/promises for browsers
- * Built on top of timers-browserify
+ * timers/promises — node:timers/promises using timers-browserify
  */
 
 import timers from 'timers-browserify';
-
-const {
-  setTimeout: _setTimeout,
-  clearTimeout: _clearTimeout,
-  setInterval: _setInterval,
-  clearInterval: _clearInterval,
-  setImmediate: _setImmediate,
-  clearImmediate: _clearImmediate
-} = timers;
-
-// ------------------------------------------------
-// AbortError helper
-// ------------------------------------------------
 
 function abortError(signal) {
   const err =
@@ -27,10 +13,6 @@ function abortError(signal) {
   err.code = 'ABORT_ERR';
   return err;
 }
-
-// ------------------------------------------------
-// Abort wrapper
-// ------------------------------------------------
 
 function withAbort(signal, body) {
   return new Promise((resolve, reject) => {
@@ -58,43 +40,30 @@ function withAbort(signal, body) {
   });
 }
 
-// ------------------------------------------------
-// setTimeout
-// ------------------------------------------------
-
 export function setTimeout(delay = 0, value, { signal } = {}) {
   return withAbort(signal, resolve => {
-    const id = _setTimeout(() => resolve(value), delay);
+    const timer = timers.setTimeout(() => resolve(value), delay);
 
-    return () => _clearTimeout(id);
+    return () => timer.close();
   });
 }
-
-// ------------------------------------------------
-// setImmediate
-// ------------------------------------------------
 
 export function setImmediate(value, { signal } = {}) {
   return withAbort(signal, resolve => {
-    const id = _setImmediate(() => resolve(value));
+    const id = timers.setImmediate(() => resolve(value));
 
-    return () => _clearImmediate(id);
+    return () => timers.clearImmediate(id);
   });
 }
 
-// ------------------------------------------------
-// setInterval async iterator
-// ------------------------------------------------
-
 export async function* setInterval(delay = 0, value, { signal } = {}) {
-
   if (signal?.aborted) throw abortError(signal);
 
   const queue = [];
   let pending = null;
   let done = false;
 
-  const tick = () => {
+  const interval = timers.setInterval(() => {
     if (pending) {
       const { resolve } = pending;
       pending = null;
@@ -102,13 +71,11 @@ export async function* setInterval(delay = 0, value, { signal } = {}) {
     } else {
       queue.push(value);
     }
-  };
-
-  const id = _setInterval(tick, delay);
+  }, delay);
 
   const onAbort = () => {
     done = true;
-    _clearInterval(id);
+    interval.close();
 
     if (pending) {
       const { reject } = pending;
@@ -131,14 +98,10 @@ export async function* setInterval(delay = 0, value, { signal } = {}) {
       });
     }
   } finally {
-    _clearInterval(id);
+    interval.close();
     signal?.removeEventListener('abort', onAbort);
   }
 }
-
-// ------------------------------------------------
-// scheduler
-// ------------------------------------------------
 
 export const scheduler = {
   wait: (delay, options) => setTimeout(delay, undefined, options),
