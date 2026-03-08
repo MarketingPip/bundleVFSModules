@@ -27,7 +27,7 @@
  * ./timers which captures native references at its own evaluation time.
  */
 
-import timers from './timers';
+import timers from '../timers.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
