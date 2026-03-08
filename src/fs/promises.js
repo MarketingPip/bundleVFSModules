@@ -1,6 +1,6 @@
 import fs, { promises as rawPromises, constants } from '../fs';
 
-import Buffer from "buffer"
+import { Buffer } from 'buffer';
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
