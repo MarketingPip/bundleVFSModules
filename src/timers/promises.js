@@ -28,7 +28,7 @@ const validateAbortSignal = (signal, name) => {
   }
 }
 
-export function SetTimeout (after, value, options = {}) {
+export function setTimeout (after, value, options = {}) {
   const args = value !== undefined ? [value] : value
   if (options == null || typeof options !== 'object') {
     return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
@@ -66,7 +66,7 @@ export function SetTimeout (after, value, options = {}) {
     : ret
 }
 
-export function SetImmediate (value, options = {}) {
+export function setImmediate (value, options = {}) {
   if (options == null || typeof options !== 'object') {
     return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
   }
