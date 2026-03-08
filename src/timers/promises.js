@@ -1,180 +1,133 @@
 'use strict';
 
-// --- Errors & Validators ---
+// --- Custom Error Classes ---
 
-class ERR_INVALID_ARG_TYPE extends TypeError {
-  constructor(name, expected, actual) {
-    super(`The "${name}" argument must be of type ${expected}. Received ${typeof actual}`);
+export class ERR_INVALID_ARG_TYPE extends Error {
+  constructor(name, expected) {
+    super(`${name} must be of type ${expected}`);
     this.code = 'ERR_INVALID_ARG_TYPE';
   }
 }
 
-class AbortError extends Error {
-  constructor(message = 'The operation was aborted', options = {}) {
+export class AbortError extends Error {
+  constructor(message = 'The operation was aborted') {
     super(message);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
     this.name = 'AbortError';
-    this.code = 'ABORT_ERR';
-    if (options.cause) this.cause = options.cause;
+    this.type = 'AbortError';
   }
 }
 
-const validateObject = (value, name) => {
-  if (value === null || typeof value !== 'object') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'Object', value);
-  }
-}
-
-const validateBoolean = (value, name) => {
-  if (typeof value !== 'boolean') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'boolean', value);
-  }
-}
-
-const validateNumber = (value, name) => {
-  if (typeof value !== 'number') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
-  }
-}
+// --- Validation Helper ---
 
 const validateAbortSignal = (signal, name) => {
-  if (signal !== undefined && (signal === null || typeof signal !== 'object' || !('aborted' in signal))) {
-    throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal', signal);
+  if (
+    signal !== undefined &&
+    (signal === null || typeof signal !== 'object' || !('aborted' in signal))
+  ) {
+    throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal');
   }
-}
+};
 
-const promiseWithResolvers = () => {
-  let resolve, reject;
-  const promise = new Promise((res, rej) => { resolve = res; reject = rej });
-  return { promise, resolve, reject };
-}
+// --- Exported Timer Functions ---
 
-// --- Timer Promises ---
-
-export function setTimeout(after = 1, value, options = {}) {
-  try {
-    if (after !== undefined) validateNumber(after, 'delay');
-    validateObject(options, 'options');
-    if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
-    if (options.ref !== undefined) validateBoolean(options.ref, 'options.ref');
-  } catch (err) {
-    return Promise.reject(err);
+/**
+ * Promise-based setTimeout
+ */
+export function setTimeout(after, value, options = {}) {
+  if (options === null || typeof options !== 'object') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'));
   }
 
   const { signal, ref = true } = options;
 
-  if (signal?.aborted) {
-    return Promise.reject(new AbortError(undefined, { cause: signal.reason }));
+  try {
+    validateAbortSignal(signal, 'options.signal');
+  } catch (err) {
+    return Promise.reject(err);
   }
 
-  const { promise, resolve, reject } = promiseWithResolvers();
-  const timerId = globalThis.setTimeout(() => resolve(value), after);
+  if (typeof ref !== 'boolean') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'));
+  }
 
-  if (!ref && timerId?.unref) timerId.unref();
+  // Simplified using optional chaining as per original TODO
+  if (signal?.aborted) {
+    return Promise.reject(new AbortError());
+  }
 
   let oncancel;
-  if (signal) {
-    oncancel = () => {
-      globalThis.clearTimeout(timerId);
-      reject(new AbortError(undefined, { cause: signal.reason }));
+  const ret = new Promise((resolve, reject) => {
+    const timeout = globalThis.setTimeout(() => resolve(value), after);
+    
+    if (!ref && typeof timeout.unref === 'function') {
+      timeout.unref();
     }
-    signal.addEventListener('abort', oncancel, { once: true });
-  }
 
-  return oncancel ? promise.finally(() => signal.removeEventListener('abort', oncancel)) : promise;
+    if (signal) {
+      oncancel = () => {
+        clearTimeout(timeout);
+        reject(new AbortError());
+      };
+      signal.addEventListener('abort', oncancel, { once: true });
+    }
+  });
+
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret;
 }
 
+/**
+ * Promise-based setImmediate
+ */
 export function setImmediate(value, options = {}) {
+  if (options === null || typeof options !== 'object') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'));
+  }
+
+  const { signal, ref = true } = options;
+
   try {
-    validateObject(options, 'options');
-    if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
-    if (options.ref !== undefined) validateBoolean(options.ref, 'options.ref');
+    validateAbortSignal(signal, 'options.signal');
   } catch (err) {
     return Promise.reject(err);
   }
 
-  const { signal, ref = true } = options;
+  if (typeof ref !== 'boolean') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'));
+  }
 
   if (signal?.aborted) {
-    return Promise.reject(new AbortError(undefined, { cause: signal.reason }));
+    return Promise.reject(new AbortError());
   }
-
-  const { promise, resolve, reject } = promiseWithResolvers();
-  const immediateId = globalThis.setTimeout(() => resolve(value), 0);
-
-  if (!ref && immediateId?.unref) immediateId.unref();
 
   let oncancel;
-  if (signal) {
-    oncancel = () => {
-      globalThis.clearTimeout(immediateId);
-      reject(new AbortError(undefined, { cause: signal.reason }));
-    }
-    signal.addEventListener('abort', oncancel, { once: true });
-  }
+  const ret = new Promise((resolve, reject) => {
+    const immediate = globalThis.setImmediate(() => resolve(value));
 
-  return oncancel ? promise.finally(() => signal.removeEventListener('abort', oncancel)) : promise;
+    if (!ref && typeof immediate.unref === 'function') {
+      immediate.unref();
+    }
+
+    if (signal) {
+      oncancel = () => {
+        clearImmediate(immediate);
+        reject(new AbortError());
+      };
+      signal.addEventListener('abort', oncancel, { once: true });
+    }
+  });
+
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret;
 }
 
-export async function* setInterval(after = 1, value, options = {}) {
-  if (after !== undefined) validateNumber(after, 'delay');
-  validateObject(options, 'options');
-  if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
-
-  const { signal, ref = true } = options;
-  if (signal?.aborted) throw new AbortError(undefined, { cause: signal.reason });
-
-  let callback;
-  let notYielded = 0;
-  const intervalId = globalThis.setInterval(() => {
-    notYielded++;
-    if (callback) { callback(); callback = undefined; }
-  }, after);
-
-  if (!ref && intervalId?.unref) intervalId.unref();
-
-  const cancel = () => {
-    globalThis.clearInterval(intervalId);
-    if (callback) {
-      callback(); // Simply resolve to check loop condition
-      callback = undefined;
-    }
-  };
-
-  if (signal) signal.addEventListener('abort', cancel, { once: true });
-
-  try {
-    while (!signal?.aborted) {
-      if (notYielded === 0) await new Promise(res => callback = res);
-      while (notYielded > 0 && !signal?.aborted) { 
-        notYielded--; 
-        yield value; 
-      }
-    }
-  } finally {
-    globalThis.clearInterval(intervalId);
-    signal?.removeEventListener('abort', cancel);
-  }
-}
-
-// --- Scheduler API ---
-
-const kScheduler = Symbol('kScheduler');
-
-class Scheduler {
-  constructor(secret) {
-    if (secret !== kScheduler) throw new TypeError('Illegal constructor');
-    this[kScheduler] = true;
-  }
-
-  yield() {
-    if (!this[kScheduler]) throw new TypeError('Invalid this for Scheduler');
-    return setImmediate(); // Fixed name
-  }
-
-  wait(delay, options) {
-    if (!this[kScheduler]) throw new TypeError('Invalid this for Scheduler');
-    return setTimeout(delay, undefined, options); // Fixed name
-  }
-}
-
-export const scheduler = new Scheduler(kScheduler);
+// Default export for convenience
+export default {
+  setTimeout,
+  setImmediate
+};
