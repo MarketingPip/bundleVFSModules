@@ -1,177 +1,109 @@
-'use strict';
+// Based on
+// https://github.com/nodejs/node/blob/9158d61debaf2c9cb05820454788f859274c7470/lib/timers/promises.js
+// juliangruber/timers-promises
 
-// Custom error classes for handling invalid argument types and abortion
+'use strict'
+
 class ERR_INVALID_ARG_TYPE extends Error {
-  constructor(name, expected) {
-    super(`${name} must be of type ${expected}`);
-    this.code = 'ERR_INVALID_ARG_TYPE';
+  constructor (name, expected) {
+    super(`${name} must be of type ${expected}`)
+    this.code = 'ERR_INVALID_ARG_TYPE'
   }
 }
 
 class AbortError extends Error {
-  constructor(message) {
-    super(message);
-    this.type = 'AbortError';
-    Error.captureStackTrace(this, this.constructor);
+  constructor (message) {
+    super(message)
+    Error.captureStackTrace(this, this.constructor)
+    this.type = 'AbortError'
   }
 }
 
-// Helper function to validate AbortSignal
 const validateAbortSignal = (signal, name) => {
-  if (signal !== undefined && (signal === null || typeof signal !== 'object' || !('aborted' in signal))) {
-    throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal');
+  if (
+    signal !== undefined &&
+    (signal === null || typeof signal !== 'object' || !('aborted' in signal))
+  ) {
+    throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal')
   }
-};
-
-// `setTimeout` implementation with Promise support
-function promisesSetTimeout(after, value, options = {}) {
-  if (typeof after !== 'number' || after < 0) {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('after', 'number'));
-  }
-
-  if (options && typeof options !== 'object') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'object'));
-  }
-
-  const { signal, ref = true } = options;
-
-  if (signal) {
-    validateAbortSignal(signal, 'options.signal');
-    if (signal.aborted) {
-      return Promise.reject(new AbortError('The operation was aborted.'));
-    }
-  }
-
-  let oncancel;
-  const promise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      resolve(value);
-    }, after);
-
-    if (!ref) timeout.unref();
-
-    if (signal) {
-      oncancel = () => {
-        clearTimeout(timeout);
-        reject(new AbortError('The operation was aborted.'));
-      };
-      signal.addEventListener('abort', oncancel);
-    }
-  });
-
-  return oncancel
-    ? promise.finally(() => signal.removeEventListener('abort', oncancel))
-    : promise;
 }
 
-// `setImmediate` implementation with Promise support
-function promisesSetImmediate(value, options = {}) {
-  if (options && typeof options !== 'object') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'object'));
+function promisesSetTimeout (after, value, options = {}) {
+  const args = value !== undefined ? [value] : value
+  if (options == null || typeof options !== 'object') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
   }
-
-  const { signal, ref = true } = options;
-
-  if (signal) {
-    validateAbortSignal(signal, 'options.signal');
-    if (signal.aborted) {
-      return Promise.reject(new AbortError('The operation was aborted.'));
-    }
+  const { signal, ref = true } = options
+  try {
+    validateAbortSignal(signal, 'options.signal')
+  } catch (err) {
+    return Promise.reject(err)
   }
-
-  let oncancel;
-  const promise = new Promise((resolve, reject) => {
-    const immediate = setImmediate(() => {
-      resolve(value);
-    });
-
-    if (!ref) immediate.unref();
-
+  if (typeof ref !== 'boolean') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'))
+  }
+  // TODO(@jasnell): If a decision is made that this cannot be backported
+  // to 12.x, then this can be converted to use optional chaining to
+  // simplify the check.
+  if (signal && signal.aborted) {
+    return Promise.reject(new AbortError())
+  }
+  let oncancel
+  const ret = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => resolve(value), after, ...(args || []))
+    /* istanbul ignore next */
+    if (!ref) timeout.unref()
     if (signal) {
       oncancel = () => {
-        clearImmediate(immediate);
-        reject(new AbortError('The operation was aborted.'));
-      };
-      signal.addEventListener('abort', oncancel);
-    }
-  });
-
-  return oncancel
-    ? promise.finally(() => signal.removeEventListener('abort', oncancel))
-    : promise;
-}
-
-// `setInterval` implementation with Promise support
-function promisesSetInterval(after, value, options = {}) {
-  if (typeof after !== 'number' || after < 0) {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('after', 'number'));
-  }
-
-  if (options && typeof options !== 'object') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'object'));
-  }
-
-  const { signal, ref = true } = options;
-
-  if (signal) {
-    validateAbortSignal(signal, 'options.signal');
-    if (signal.aborted) {
-      return Promise.reject(new AbortError('The operation was aborted.'));
-    }
-  }
-
-  let oncancel;
-  const promise = new Promise((resolve, reject) => {
-    let interval;
-    let iterationCount = 0;
-
-    const intervalHandler = () => {
-      iterationCount++;
-      resolve(value);
-
-      if (signal && signal.aborted) {
-        clearInterval(interval);
-        reject(new AbortError('The operation was aborted.'));
+        clearTimeout(timeout)
+        reject(new AbortError())
       }
-    };
+      signal.addEventListener('abort', oncancel)
+    }
+  })
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret
+}
 
-    interval = setInterval(intervalHandler, after);
-
-    if (!ref) interval.unref();
-
+function promisesSetImmediate (value, options = {}) {
+  if (options == null || typeof options !== 'object') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
+  }
+  const { signal, ref = true } = options
+  try {
+    validateAbortSignal(signal, 'options.signal')
+  } catch (err) {
+    return Promise.reject(err)
+  }
+  if (typeof ref !== 'boolean') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'))
+  }
+  // TODO(@jasnell): If a decision is made that this cannot be backported
+  // to 12.x, then this can be converted to use optional chaining to
+  // simplify the check.
+  if (signal && signal.aborted) {
+    return Promise.reject(new AbortError())
+  }
+  let oncancel
+  const ret = new Promise((resolve, reject) => {
+    const immediate = setImmediate(() => resolve(value))
+    /* istanbul ignore next */
+    if (!ref) immediate.unref()
     if (signal) {
       oncancel = () => {
-        clearInterval(interval);
-        reject(new AbortError('The operation was aborted.'));
-      };
-      signal.addEventListener('abort', oncancel);
+        clearImmediate(immediate)
+        reject(new AbortError())
+      }
+      signal.addEventListener('abort', oncancel)
     }
-  });
-
-  return oncancel
-    ? promise.finally(() => signal.removeEventListener('abort', oncancel))
-    : promise;
+  })
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret
 }
 
-// Custom scheduler class (a simple abstraction for now)
-const kScheduler = Symbol('kScheduler');
-
-class Scheduler {
-  constructor() {
-    this[kScheduler] = true;
-  }
-
-  yield() {
-    return promisesSetImmediate();
-  }
-
-  wait(delay, options) {
-    return promisesSetTimeout(delay, undefined, options);
-  }
+module.exports = {
+  setTimeout: promisesSetTimeout,
+  setImmediate: promisesSetImmediate
 }
-
-// ES6 Exporting the functions
-export { promisesSetTimeout as setTimeout };
-export { promisesSetImmediate as setImmediate };
-export { promisesSetInterval as setInterval };
-export const scheduler = new Scheduler();
