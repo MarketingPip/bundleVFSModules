@@ -1,246 +1,119 @@
-import fs, { promises as rawPromises, constants } from '../fs';
+/**
+ * fs/promises — Node.js-compliant drop-in for the custom runtime.
+ *
+ * Pulls from the already-patched `fs.promises` (which wraps memfs and
+ * calls globalThis.emitMe) so every operation is observable by the
+ * runtime exactly the same way the callback-style fs is.
+ *
+ * Usage:
+ *   import { readFile, writeFile } from './fs-promises.js';
+ *   // or
+ *   import fsPromises from './fs-promises.js';
+ */
 
-import { Buffer } from 'buffer';
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
+import fs from '../fs.js';          // your existing patched fs module
+import { constants } from '../fs.js';
 
-function toBuffer(data, encoding) {
-  if (Buffer.isBuffer(data)) return data;
-  if (typeof data === 'string') return Buffer.from(data, encoding);
-  return Buffer.from(data);
-}
+const p = fs.promises;
 
-// ---------------------------------------------------------------------------
-// FileHandle — Node-compatible wrapper around memfs numeric fd
-// ---------------------------------------------------------------------------
+// ── Core file I/O ─────────────────────────────────────────────────────────────
 
-export class FileHandle {
-  constructor(fd) {
-    this.fd = fd;
-  }
+export const access    = (path, mode = constants.F_OK)        => p.access(path, mode);
+export const open      = (path, flags, mode)                  => p.open(path, flags, mode);
+export const readFile  = (path, options)                      => p.readFile(path, options);
+export const writeFile = (path, data, options)                => p.writeFile(path, data, options);
+export const appendFile= (path, data, options)                => p.appendFile(path, data, options);
+export const truncate  = (path, len = 0)                      => p.truncate(path, len);
+export const copyFile  = (src, dest, mode)                    => p.copyFile(src, dest, mode);
+export const rename    = (oldPath, newPath)                   => p.rename(oldPath, newPath);
+export const unlink    = (path)                               => p.unlink(path);
 
-  // ── Reads ────────────────────────────────────────────────────────────────
+// ── Directory operations ───────────────────────────────────────────────────────
 
-  read(buffer, offset, length, position) {
-    return new Promise((resolve, reject) => {
-      fs.read(this.fd, buffer, offset, length, position, (err, bytesRead, buf) => {
-        if (err) return reject(err);
-        resolve({ bytesRead, buffer: buf });
-      });
-    });
-  }
+export const mkdir   = (path, options)         => p.mkdir(path, options);
+export const mkdtemp = (prefix, options)       => p.mkdtemp(prefix, options);
+export const opendir = (path, options)         => p.opendir(path, options);
+export const readdir = (path, options)         => p.readdir(path, options);
+export const rmdir   = (path, options)         => p.rmdir(path, options);
+export const rm      = (path, options)         => p.rm(path, options);
 
-  readFile(options) {
-    return rawPromises.readFile(this.fd, options);
-  }
+// ── Stat & metadata ───────────────────────────────────────────────────────────
 
-  // ── Writes ───────────────────────────────────────────────────────────────
+export const stat    = (path, options)         => p.stat(path, options);
+export const lstat   = (path, options)         => p.lstat(path, options);
+export const fstat   = (handle, options)       => p.fstat(handle, options);   // FileHandle compat
+export const utimes  = (path, atime, mtime)    => p.utimes(path, atime, mtime);
+export const futimes = (handle, atime, mtime)  => p.futimes(handle, atime, mtime);
 
-  write(buffer, offsetOrOptions, length, position) {
-    if (typeof buffer === 'string') {
-      return new Promise((resolve, reject) => {
-        fs.write(this.fd, buffer, offsetOrOptions, length, (err, bytesWritten, str) => {
-          if (err) return reject(err);
-          resolve({ bytesWritten, buffer: str });
-        });
-      });
-    }
+// ── Links ─────────────────────────────────────────────────────────────────────
 
-    return new Promise((resolve, reject) => {
-      fs.write(this.fd, buffer, offsetOrOptions, length, position, (err, bytesWritten, buf) => {
-        if (err) return reject(err);
-        resolve({ bytesWritten, buffer: buf });
-      });
-    });
-  }
+export const link      = (existingPath, newPath) => p.link(existingPath, newPath);
+export const symlink   = (target, path, type)    => p.symlink(target, path, type);
+export const readlink  = (path, options)         => p.readlink(path, options);
+export const realpath  = (path, options)         => p.realpath(path, options);
 
-  // Node behaviour: truncate then write
-  async writeFile(data, options) {
-    const encoding = typeof options === 'string' ? options : options?.encoding;
+// ── Permissions ───────────────────────────────────────────────────────────────
 
-    const buffer = toBuffer(data, encoding);
+export const chmod  = (path, mode)              => p.chmod(path, mode);
+export const lchmod = (path, mode)              => p.lchmod(path, mode);
+export const chown  = (path, uid, gid)          => p.chown(path, uid, gid);
+export const lchown = (path, uid, gid)          => p.lchown(path, uid, gid);
 
-    await new Promise((resolve, reject) =>
-      fs.ftruncate(this.fd, 0, err => (err ? reject(err) : resolve()))
-    );
+// ── Low-level read/write (FileHandle-style) ───────────────────────────────────
+// memfs exposes these via the opened file descriptor handle returned by open().
+// We wrap them here so callers get a consistent interface.
 
-    return new Promise((resolve, reject) => {
-      fs.write(this.fd, buffer, 0, buffer.length, 0, err => {
-        if (err) return reject(err);
-        resolve();
-      });
-    });
-  }
+export const read = (handle, buffer, offset, length, position) =>
+  p.read
+    ? p.read(handle, buffer, offset, length, position)
+    : Promise.reject(new Error('fs.promises.read not supported by this runtime'));
 
-  // FIXED appendFile — ensures append semantics
-  async appendFile(data, options) {
-    const encoding = typeof options === 'string' ? options : options?.encoding;
+export const write = (handle, buffer, offset, length, position) =>
+  p.write
+    ? p.write(handle, buffer, offset, length, position)
+    : Promise.reject(new Error('fs.promises.write not supported by this runtime'));
 
-    const buffer = toBuffer(data, encoding);
-
-    const stats = await new Promise((resolve, reject) =>
-      fs.fstat(this.fd, (err, stats) => (err ? reject(err) : resolve(stats)))
-    );
-
-    const position = stats.size;
-
-    return new Promise((resolve, reject) => {
-      fs.write(this.fd, buffer, 0, buffer.length, position, err => {
-        if (err) return reject(err);
-        resolve();
-      });
-    });
-  }
-
-  // ── Sync / stat / meta ───────────────────────────────────────────────────
-
-  datasync() {
-    return new Promise((resolve, reject) =>
-      fs.fdatasync(this.fd, err => (err ? reject(err) : resolve()))
-    );
-  }
-
-  sync() {
-    return new Promise((resolve, reject) =>
-      fs.fsync(this.fd, err => (err ? reject(err) : resolve()))
-    );
-  }
-
-  stat(options) {
-    return rawPromises.fstat(this.fd, options);
-  }
-
-  chmod(mode) {
-    return new Promise((resolve, reject) =>
-      fs.fchmod(this.fd, mode, err => (err ? reject(err) : resolve()))
-    );
-  }
-
-  chown(uid, gid) {
-    return new Promise((resolve, reject) =>
-      fs.fchown(this.fd, uid, gid, err => (err ? reject(err) : resolve()))
-    );
-  }
-
-  truncate(len = 0) {
-    return new Promise((resolve, reject) =>
-      fs.ftruncate(this.fd, len, err => (err ? reject(err) : resolve()))
-    );
-  }
-
-  utimes(atime, mtime) {
-    return new Promise((resolve, reject) =>
-      fs.futimes(this.fd, atime, mtime, err => (err ? reject(err) : resolve()))
-    );
-  }
-
-  // ── Streams ──────────────────────────────────────────────────────────────
-
-  createReadStream(options) {
-    return fs.createReadStream(null, { ...options, fd: this.fd, autoClose: false });
-  }
-
-  createWriteStream(options) {
-    return fs.createWriteStream(null, { ...options, fd: this.fd, autoClose: false });
-  }
-
-  // ── Close ─────────────────────────────────────────────────────────────────
-
-  close() {
-    return new Promise((resolve, reject) =>
-      fs.close(this.fd, err => (err ? reject(err) : resolve()))
-    );
-  }
-
-  async [Symbol.asyncDispose]() {
-    await this.close();
-  }
-}
-
-// ---------------------------------------------------------------------------
-// open() — returns FileHandle
-// ---------------------------------------------------------------------------
-
-export async function open(path, flags = 'r', mode = 0o666) {
-  const fd = await rawPromises.open(path, flags, mode);
-  return new FileHandle(fd);
-}
-
-// ---------------------------------------------------------------------------
-// Named exports from patched fs.promises
-// ---------------------------------------------------------------------------
-
-export const {
-  access,
-  appendFile,
-  chmod,
-  chown,
-  copyFile,
-  cp,
-  lchmod,
-  lchown,
-  link,
-  lstat,
-  mkdir,
-  mkdtemp,
-  opendir,
-  readdir,
-  readFile,
-  readlink,
-  realpath,
-  rename,
-  rm,
-  rmdir,
-  stat,
-  symlink,
-  truncate,
-  unlink,
-  utimes,
-  watch,
-  writeFile,
-} = rawPromises;
+// ── Constants re-export ───────────────────────────────────────────────────────
+// Node's `fs/promises` does NOT export constants itself — callers are expected
+// to import them from `fs` or `fs/promises` depending on version.
+// We export them anyway for convenience, matching the Node ≥18 behaviour.
 
 export { constants };
 
-// ---------------------------------------------------------------------------
-// Default export
-// ---------------------------------------------------------------------------
+// ── Default export (mirrors `import fsPromises from 'fs/promises'`) ───────────
 
-export default {
-  FileHandle,
-  open,
-
+const fsPromises = {
   access,
+  open,
+  readFile,
+  writeFile,
   appendFile,
-  chmod,
-  chown,
+  truncate,
   copyFile,
-  cp,
-
-  lchmod,
-  lchown,
-  link,
-  lstat,
+  rename,
+  unlink,
   mkdir,
   mkdtemp,
   opendir,
-
   readdir,
-  readFile,
+  rmdir,
+  rm,
+  stat,
+  lstat,
+  fstat,
+  utimes,
+  futimes,
+  link,
+  symlink,
   readlink,
   realpath,
-  rename,
-  rm,
-  rmdir,
-
-  stat,
-  symlink,
-  truncate,
-  unlink,
-  utimes,
-  watch,
-  writeFile,
-
+  chmod,
+  lchmod,
+  chown,
+  lchown,
+  read,
+  write,
   constants,
 };
+
+export default fsPromises;
