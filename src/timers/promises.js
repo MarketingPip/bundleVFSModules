@@ -1,106 +1,181 @@
-// Based on 
-// https://github.com/nodejs/node/blob/9158d61debaf2c9cb05820454788f859274c7470/lib/timers/promises.js
-// juliangruber/timers-promises/blob/main/index.js
-
 'use strict'
 
-class ERR_INVALID_ARG_TYPE extends Error {
-  constructor (name, expected) {
-    super(`${name} must be of type ${expected}`)
-    this.code = 'ERR_INVALID_ARG_TYPE'
+// --- Errors & Validators ---
+
+class ERR_INVALID_ARG_TYPE extends TypeError {
+  constructor(name, expected, actual) {
+    super(`The "${name}" argument must be of type ${expected}. Received ${typeof actual}`);
+    this.code = 'ERR_INVALID_ARG_TYPE';
   }
 }
 
 class AbortError extends Error {
-  constructor (message) {
-    super(message)
-    Error.captureStackTrace(this, this.constructor)
-    this.type = 'AbortError'
+  constructor(message = 'The operation was aborted', options = {}) {
+    super(message);
+    this.name = 'AbortError';
+    this.code = 'ABORT_ERR';
+    if (options.cause) this.cause = options.cause;
+  }
+}
+
+const validateObject = (value, name) => {
+  if (value === null || typeof value !== 'object') {
+    throw new ERR_INVALID_ARG_TYPE(name, 'Object', value);
+  }
+}
+
+const validateBoolean = (value, name) => {
+  if (typeof value !== 'boolean') {
+    throw new ERR_INVALID_ARG_TYPE(name, 'boolean', value);
+  }
+}
+
+const validateNumber = (value, name) => {
+  if (typeof value !== 'number') {
+    throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
   }
 }
 
 const validateAbortSignal = (signal, name) => {
-  if (
-    signal !== undefined &&
-    (signal === null || typeof signal !== 'object' || !('aborted' in signal))
-  ) {
-    throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal')
+  if (signal !== undefined && (signal === null || typeof signal !== 'object' || !('aborted' in signal))) {
+    throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal', signal);
   }
 }
 
-export function setTimeout (after, value, options = {}) {
-  const args = value !== undefined ? [value] : value
-  if (options == null || typeof options !== 'object') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
-  }
-  const { signal, ref = true } = options
+// --- PromiseWithResolvers Helper ---
+
+const promiseWithResolvers = () => {
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej });
+  return { promise, resolve, reject };
+}
+
+// --- Timer Promises ---
+
+export function setTimeoutPromise(after, value, options = {}) {
   try {
-    validateAbortSignal(signal, 'options.signal')
+    if (after !== undefined) validateNumber(after, 'delay');
+    validateObject(options, 'options');
+    if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
+    if (options.ref !== undefined) validateBoolean(options.ref, 'options.ref');
   } catch (err) {
-    return Promise.reject(err)
+    return Promise.reject(err);
   }
-  if (typeof ref !== 'boolean') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'))
+
+  const { signal, ref = true } = options;
+
+  if (signal?.aborted) {
+    return Promise.reject(new AbortError(undefined, { cause: signal.reason }));
   }
-  // TODO(@jasnell): If a decision is made that this cannot be backported
-  // to 12.x, then this can be converted to use optional chaining to
-  // simplify the check.
-  if (signal && signal.aborted) {
-    return Promise.reject(new AbortError())
-  }
-  let oncancel
-  const ret = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => resolve(value), after, ...(args || []))
-    /* istanbul ignore next */
-    if (!ref) timeout.unref()
-    if (signal) {
-      oncancel = () => {
-        clearTimeout(timeout)
-        reject(new AbortError())
-      }
-      signal.addEventListener('abort', oncancel)
+
+  const { promise, resolve, reject } = promiseWithResolvers();
+  const timerId = globalThis.setTimeout(() => resolve(value), after);
+
+  // Node.js supports ref/unref; noop in browsers
+  if (!ref && timerId.unref) timerId.unref?.();
+
+  let oncancel;
+  if (signal) {
+    oncancel = () => {
+      clearTimeout(timerId);
+      reject(new AbortError(undefined, { cause: signal.reason }));
     }
-  })
-  return oncancel !== undefined
-    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
-    : ret
+    signal.addEventListener('abort', oncancel, { once: true });
+  }
+
+  return oncancel ? promise.finally(() => signal.removeEventListener('abort', oncancel)) : promise;
 }
 
-export function setImmediate (value, options = {}) {
-  if (options == null || typeof options !== 'object') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
-  }
-  const { signal, ref = true } = options
+export function setImmediatePromise(value, options = {}) {
   try {
-    validateAbortSignal(signal, 'options.signal')
+    validateObject(options, 'options');
+    if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
+    if (options.ref !== undefined) validateBoolean(options.ref, 'options.ref');
   } catch (err) {
-    return Promise.reject(err)
+    return Promise.reject(err);
   }
-  if (typeof ref !== 'boolean') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'))
+
+  const { signal, ref = true } = options;
+
+  if (signal?.aborted) {
+    return Promise.reject(new AbortError(undefined, { cause: signal.reason }));
   }
-  // TODO(@jasnell): If a decision is made that this cannot be backported
-  // to 12.x, then this can be converted to use optional chaining to
-  // simplify the check.
-  if (signal && signal.aborted) {
-    return Promise.reject(new AbortError())
-  }
-  let oncancel
-  const ret = new Promise((resolve, reject) => {
-    const immediate = setImmediate(() => resolve(value))
-    /* istanbul ignore next */
-    if (!ref) immediate.unref()
-    if (signal) {
-      oncancel = () => {
-        clearImmediate(immediate)
-        reject(new AbortError())
-      }
-      signal.addEventListener('abort', oncancel)
+
+  const { promise, resolve, reject } = promiseWithResolvers();
+  const immediateId = globalThis.setTimeout(() => resolve(value), 0);
+
+  if (!ref && immediateId.unref) immediateId.unref?.();
+
+  let oncancel;
+  if (signal) {
+    oncancel = () => {
+      clearTimeout(immediateId);
+      reject(new AbortError(undefined, { cause: signal.reason }));
     }
-  })
-  return oncancel !== undefined
-    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
-    : ret
+    signal.addEventListener('abort', oncancel, { once: true });
+  }
+
+  return oncancel ? promise.finally(() => signal.removeEventListener('abort', oncancel)) : promise;
 }
 
+export async function* setIntervalPromise(after, value, options = {}) {
+  if (after !== undefined) validateNumber(after, 'delay');
+  validateObject(options, 'options');
+  if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
 
+  const { signal, ref = true } = options;
+  if (signal?.aborted) throw new AbortError(undefined, { cause: signal.reason });
+
+  let callback;
+  let notYielded = 0;
+  const intervalId = globalThis.setInterval(() => {
+    notYielded++;
+    if (callback) { callback(); callback = undefined; }
+  }, after);
+
+  if (!ref && intervalId.unref) intervalId.unref?.();
+
+  const cancel = () => {
+    clearInterval(intervalId);
+    if (callback) {
+      callback(Promise.reject(new AbortError(undefined, { cause: signal?.reason })));
+      callback = undefined;
+    }
+  };
+
+  if (signal) signal.addEventListener('abort', cancel, { once: true });
+
+  try {
+    while (!signal?.aborted) {
+      if (notYielded === 0) await new Promise(res => callback = res);
+      while (notYielded > 0) { notYielded--; yield value; }
+    }
+    throw new AbortError(undefined, { cause: signal?.reason });
+  } finally {
+    clearInterval(intervalId);
+    signal?.removeEventListener('abort', cancel);
+  }
+}
+
+// --- Scheduler API ---
+
+const kScheduler = Symbol('kScheduler');
+
+export class Scheduler {
+  constructor(secret) {
+    if (secret !== kScheduler) throw new TypeError('Illegal constructor');
+    this[kScheduler] = true;
+  }
+
+  yield() {
+    if (!this[kScheduler]) throw new TypeError('Invalid this for Scheduler');
+    return setImmediatePromise();
+  }
+
+  wait(delay, options) {
+    if (!this[kScheduler]) throw new TypeError('Invalid this for Scheduler');
+    return setTimeoutPromise(delay, undefined, options);
+  }
+}
+
+export const scheduler = new Scheduler(kScheduler);
