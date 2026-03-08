@@ -116,6 +116,7 @@ async function bundleToString(entry) {
 // Modules that should be bundled
 const BUNDLED_MODULES = {
   fs: "memfs-entry.js",
+  fs_promises: "fs/promises.js",
   path: "path.js",
   path_posix: "path/posix.js",
   path_win32: "path/win32.js",
@@ -123,6 +124,7 @@ const BUNDLED_MODULES = {
   assert_strict: "assert/strict.js",
   os: "os.js",
   util: "util.js",
+  util_types: "util/types.js",
   sys: "sys.js",
   async_hooks: "async_hooks.js",
   url: "url.js",
