@@ -1,4 +1,4 @@
-import fs, { promises: rawPromises, constants } from '../fs';
+import fs, { promises as rawPromises, constants } from '../fs';
 
 // ---------------------------------------------------------------------------
 // FileHandle — Node-compatible wrapper around memfs numeric fd
