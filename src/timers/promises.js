@@ -52,7 +52,7 @@ const promiseWithResolvers = () => {
 
 // --- Timer Promises ---
 
-export function setTimeoutPromise(after, value, options = {}) {
+export function setTimeout(after, value, options = {}) {
   try {
     if (after !== undefined) validateNumber(after, 'delay');
     validateObject(options, 'options');
@@ -86,7 +86,7 @@ export function setTimeoutPromise(after, value, options = {}) {
   return oncancel ? promise.finally(() => signal.removeEventListener('abort', oncancel)) : promise;
 }
 
-export function setImmediatePromise(value, options = {}) {
+export function setImmediate(value, options = {}) {
   try {
     validateObject(options, 'options');
     if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
@@ -118,7 +118,7 @@ export function setImmediatePromise(value, options = {}) {
   return oncancel ? promise.finally(() => signal.removeEventListener('abort', oncancel)) : promise;
 }
 
-export async function* setIntervalPromise(after, value, options = {}) {
+export async function* setInterval(after, value, options = {}) {
   if (after !== undefined) validateNumber(after, 'delay');
   validateObject(options, 'options');
   if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
