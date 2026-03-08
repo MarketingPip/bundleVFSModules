@@ -1,5 +1,8 @@
 'use strict';
 
+/**
+ * Custom Error for invalid argument types.
+ */
 class ERR_INVALID_ARG_TYPE extends Error {
   constructor(name, expected) {
     super(`${name} must be of type ${expected}`);
@@ -7,14 +10,22 @@ class ERR_INVALID_ARG_TYPE extends Error {
   }
 }
 
+/**
+ * Custom Error for operation cancellation.
+ */
 class AbortError extends Error {
   constructor(message = 'The operation was aborted') {
     super(message);
-    Error.captureStackTrace(this, this.constructor);
-    this.type = 'AbortError';
+    this.name = 'AbortError';
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
   }
 }
 
+/**
+ * Validates that the provided signal is an AbortSignal.
+ */
 const validateAbortSignal = (signal, name) => {
   if (
     signal !== undefined &&
@@ -24,9 +35,11 @@ const validateAbortSignal = (signal, name) => {
   }
 };
 
-const promisesSetTimeout = (after, value, options = {}) => {
-  const args = value !== undefined ? [value] : [];
-  if (!options || typeof options !== 'object') {
+/**
+ * Promise-based setTimeout with AbortSignal support.
+ */
+export function setTimeout(after, value, options = {}) {
+  if (options === null || typeof options !== 'object') {
     return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'));
   }
 
@@ -47,24 +60,32 @@ const promisesSetTimeout = (after, value, options = {}) => {
   }
 
   let oncancel;
-  const promise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => resolve(value), after, ...args);
-    if (!ref) timeout.unref?.();
+  const ret = new Promise((resolve, reject) => {
+    const timeout = globalThis.setTimeout(() => resolve(value), after);
+
+    if (!ref && typeof timeout.unref === 'function') {
+      timeout.unref();
+    }
 
     if (signal) {
       oncancel = () => {
-        clearTimeout(timeout);
+        globalThis.clearTimeout(timeout);
         reject(new AbortError());
       };
-      signal.addEventListener('abort', oncancel);
+      signal.addEventListener('abort', oncancel, { once: true });
     }
   });
 
-  return oncancel ? promise.finally(() => signal.removeEventListener('abort', oncancel)) : promise;
-};
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret;
+}
 
-const promisesSetImmediate = (value, options = {}) => {
-  if (!options || typeof options !== 'object') {
+/**
+ * Promise-based setImmediate with AbortSignal support.
+ */
+export function setImmediate(value, options = {}) {
+  if (options === null || typeof options !== 'object') {
     return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'));
   }
 
@@ -85,20 +106,23 @@ const promisesSetImmediate = (value, options = {}) => {
   }
 
   let oncancel;
-  const promise = new Promise((resolve, reject) => {
-    const immediate = setImmediate(() => resolve(value));
-    if (!ref) immediate.unref?.();
+  const ret = new Promise((resolve, reject) => {
+    const immediate = globalThis.setImmediate(() => resolve(value));
+
+    if (!ref && typeof immediate.unref === 'function') {
+      immediate.unref();
+    }
 
     if (signal) {
       oncancel = () => {
-        clearImmediate(immediate);
+        globalThis.clearImmediate(immediate);
         reject(new AbortError());
       };
-      signal.addEventListener('abort', oncancel);
+      signal.addEventListener('abort', oncancel, { once: true });
     }
   });
 
-  return oncancel ? promise.finally(() => signal.removeEventListener('abort', oncancel)) : promise;
-};
-
-export { promisesSetTimeout as setTimeout, promisesSetImmediate as setImmediate };
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret;
+}
