@@ -28,7 +28,7 @@ const validateAbortSignal = (signal, name) => {
   }
 }
 
-function promisesSetTimeout (after, value, options = {}) {
+export function SetTimeout (after, value, options = {}) {
   const args = value !== undefined ? [value] : value
   if (options == null || typeof options !== 'object') {
     return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
@@ -66,7 +66,7 @@ function promisesSetTimeout (after, value, options = {}) {
     : ret
 }
 
-function promisesSetImmediate (value, options = {}) {
+export function SetImmediate (value, options = {}) {
   if (options == null || typeof options !== 'object') {
     return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
   }
@@ -103,7 +103,4 @@ function promisesSetImmediate (value, options = {}) {
     : ret
 }
 
-module.exports = {
-  setTimeout: promisesSetTimeout,
-  setImmediate: promisesSetImmediate
-}
+
