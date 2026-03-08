@@ -22,7 +22,7 @@
  *                       PTR (reverse) · CAA · NAPTR · ANY (best-effort)
  */
 
-import dns from './dns';
+import dns from '../dns';
 import doh from 'dohjs';
 
 // ---------------------------------------------------------------------------
