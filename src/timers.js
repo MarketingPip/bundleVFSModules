@@ -1,224 +1,153 @@
 /*!
- * timers-web — node:timers for browsers & sandbox runtimes
- * MIT License.
- *
- * Node.js parity: node:timers
- *
- * Safe for:
- *  - iframes
- *  - workers
- *  - bundlers
- *  - sandbox runtimes
- *
- * Fixes:
- *  - removes fragile `setimmediate` dependency
- *  - prevents cross-realm timer capture bugs
- *  - uses MessageChannel for accurate setImmediate scheduling
+ * timers/promises — node:timers/promises for browsers
+ * Built on top of timers-browserify
  */
 
-// ---------------------------------------------------------------------------
-// Capture native timers from the CURRENT realm
-// ---------------------------------------------------------------------------
+import timers from 'timers-browserify';
 
-const g = globalThis;
+const {
+  setTimeout: _setTimeout,
+  clearTimeout: _clearTimeout,
+  setInterval: _setInterval,
+  clearInterval: _clearInterval,
+  setImmediate: _setImmediate,
+  clearImmediate: _clearImmediate
+} = timers;
 
-const _setTimeout    = g.setTimeout.bind(g);
-const _clearTimeout  = g.clearTimeout.bind(g);
-const _setInterval   = g.setInterval.bind(g);
-const _clearInterval = g.clearInterval.bind(g);
+// ------------------------------------------------
+// AbortError helper
+// ------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Robust setImmediate implementation
-// ---------------------------------------------------------------------------
+function abortError(signal) {
+  const err =
+    signal?.reason instanceof Error
+      ? signal.reason
+      : new Error('The operation was aborted');
 
-let _setImmediate;
-let _clearImmediate;
+  err.code = 'ABORT_ERR';
+  return err;
+}
 
-if (typeof g.setImmediate === 'function') {
-  _setImmediate   = g.setImmediate.bind(g);
-  _clearImmediate = g.clearImmediate.bind(g);
-} else {
+// ------------------------------------------------
+// Abort wrapper
+// ------------------------------------------------
+
+function withAbort(signal, body) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(abortError(signal));
+
+    let cancel = () => {};
+
+    const onAbort = () => {
+      cancel();
+      reject(abortError(signal));
+    };
+
+    cancel = body(
+      value => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      err => {
+        signal?.removeEventListener('abort', onAbort);
+        reject(err);
+      }
+    );
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+// ------------------------------------------------
+// setTimeout
+// ------------------------------------------------
+
+export function setTimeout(delay = 0, value, { signal } = {}) {
+  return withAbort(signal, resolve => {
+    const id = _setTimeout(() => resolve(value), delay);
+
+    return () => _clearTimeout(id);
+  });
+}
+
+// ------------------------------------------------
+// setImmediate
+// ------------------------------------------------
+
+export function setImmediate(value, { signal } = {}) {
+  return withAbort(signal, resolve => {
+    const id = _setImmediate(() => resolve(value));
+
+    return () => _clearImmediate(id);
+  });
+}
+
+// ------------------------------------------------
+// setInterval async iterator
+// ------------------------------------------------
+
+export async function* setInterval(delay = 0, value, { signal } = {}) {
+
+  if (signal?.aborted) throw abortError(signal);
 
   const queue = [];
-  const tasks = new Map();
-  let id = 1;
+  let pending = null;
+  let done = false;
 
-  const channel = new MessageChannel();
-
-  channel.port1.onmessage = () => {
-    const task = queue.shift();
-    if (!task) return;
-
-    if (!tasks.has(task.id)) return;
-
-    tasks.delete(task.id);
-
-    try {
-      task.fn(...task.args);
-    } catch (err) {
-      // rethrow async like Node
-      _setTimeout(() => { throw err; });
+  const tick = () => {
+    if (pending) {
+      const { resolve } = pending;
+      pending = null;
+      resolve(value);
+    } else {
+      queue.push(value);
     }
   };
 
-  _setImmediate = (fn, ...args) => {
-    const taskId = id++;
+  const id = _setInterval(tick, delay);
 
-    const task = { id: taskId, fn, args };
+  const onAbort = () => {
+    done = true;
+    _clearInterval(id);
 
-    tasks.set(taskId, task);
-    queue.push(task);
-
-    channel.port2.postMessage(0);
-
-    return taskId;
+    if (pending) {
+      const { reject } = pending;
+      pending = null;
+      reject(abortError(signal));
+    }
   };
 
-  _clearImmediate = (taskId) => {
-    tasks.delete(taskId);
-  };
-}
+  signal?.addEventListener('abort', onAbort, { once: true });
 
-// Export captured natives for timers/promises
-export {
-  _setTimeout, _clearTimeout,
-  _setInterval, _clearInterval,
-  _setImmediate, _clearImmediate
-};
+  try {
+    while (!done) {
+      if (queue.length) {
+        yield queue.shift();
+        continue;
+      }
 
-// ---------------------------------------------------------------------------
-// Timeout wrapper (Node compatibility)
-// ---------------------------------------------------------------------------
-
-function Timeout(id, clearFn) {
-  this._id = id;
-  this._clearFn = clearFn;
-}
-
-Timeout.prototype.ref = function () { return this; };
-Timeout.prototype.unref = function () { return this; };
-
-Timeout.prototype.close = function () {
-  this._clearFn(this._id);
-};
-
-Timeout.prototype[Symbol.toPrimitive] = function () {
-  return this._id;
-};
-
-// ---------------------------------------------------------------------------
-// Immediate wrapper
-// ---------------------------------------------------------------------------
-
-function Immediate(id) {
-  this._id = id;
-}
-
-Immediate.prototype.ref = function () { return this; };
-Immediate.prototype.unref = function () { return this; };
-
-Immediate.prototype.close = function () {
-  _clearImmediate(this._id);
-};
-
-// ---------------------------------------------------------------------------
-// setTimeout
-// ---------------------------------------------------------------------------
-
-export function setTimeout(fn, delay = 0, ...args) {
-  const id = _setTimeout(fn, delay, ...args);
-  return new Timeout(id, _clearTimeout);
-}
-
-// ---------------------------------------------------------------------------
-// setInterval
-// ---------------------------------------------------------------------------
-
-export function setInterval(fn, delay = 0, ...args) {
-  const id = _setInterval(fn, delay, ...args);
-  return new Timeout(id, _clearInterval);
-}
-
-// ---------------------------------------------------------------------------
-// clearTimeout / clearInterval
-// ---------------------------------------------------------------------------
-
-export function clearTimeout(timeout) {
-  if (!timeout) return;
-
-  if (typeof timeout.close === 'function') {
-    timeout.close();
-  } else {
-    _clearTimeout(timeout);
+      yield await new Promise((resolve, reject) => {
+        pending = { resolve, reject };
+      });
+    }
+  } finally {
+    _clearInterval(id);
+    signal?.removeEventListener('abort', onAbort);
   }
 }
 
-export const clearInterval = clearTimeout;
+// ------------------------------------------------
+// scheduler
+// ------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// setImmediate
-// ---------------------------------------------------------------------------
-
-export function setImmediate(fn, ...args) {
-  const id = _setImmediate(fn, ...args);
-  return new Immediate(id);
-}
-
-// ---------------------------------------------------------------------------
-// clearImmediate
-// ---------------------------------------------------------------------------
-
-export function clearImmediate(immediate) {
-  if (!immediate) return;
-
-  if (typeof immediate.close === 'function') {
-    immediate.close();
-  } else {
-    _clearImmediate(immediate);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Legacy idle timeout helpers (rarely used but Node-compatible)
-// ---------------------------------------------------------------------------
-
-export function enroll(item, msecs) {
-  _clearTimeout(item._idleTimeoutId);
-  item._idleTimeout = msecs;
-}
-
-export function unenroll(item) {
-  _clearTimeout(item._idleTimeoutId);
-  item._idleTimeout = -1;
-}
-
-export function active(item) {
-  _clearTimeout(item._idleTimeoutId);
-
-  const ms = item._idleTimeout;
-
-  if (ms >= 0) {
-    item._idleTimeoutId = _setTimeout(() => {
-      item._onTimeout?.();
-    }, ms);
-  }
-}
-
-export const _unrefActive = active;
-
-// ---------------------------------------------------------------------------
-// Default export (Node style)
-// ---------------------------------------------------------------------------
+export const scheduler = {
+  wait: (delay, options) => setTimeout(delay, undefined, options),
+  yield: () => setImmediate()
+};
 
 export default {
   setTimeout,
-  clearTimeout,
-  setInterval,
-  clearInterval,
   setImmediate,
-  clearImmediate,
-  enroll,
-  unenroll,
-  active,
-  _unrefActive
+  setInterval,
+  scheduler
 };
