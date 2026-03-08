@@ -1,5 +1,5 @@
 // readline-promises-emulation.js
-import readline from './readline.js';
+import readline from '../readline.js';
 
 // AbortError emulation
 class AbortError extends Error {
