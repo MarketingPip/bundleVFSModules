@@ -1,153 +1,212 @@
 /*!
- * timers/promises — node:timers/promises for browsers
- * Built on top of timers-browserify
+ * timers-web — node:timers for browsers & bundlers
+ * MIT License. Adapted from timers-browserify (MIT, J. Buchanan)
+ * Node.js parity: node:timers @ Node 0.0.1+
+ * Dependencies: timers-browserify, setimmediate
+ * Limitations:
+ *   - .ref() / .unref() are no-ops (no Node event loop integration).
+ *   - enroll / unenroll / active are legacy idle-timer helpers; included for
+ *     ecosystem compat but rarely needed in new code.
  */
 
-import timers from 'timers-browserify';
+/**
+ * @packageDocumentation
+ * Drop-in replacement for `node:timers` in browser/bundler environments.
+ * Wraps native browser timer APIs with Node.js-compatible Timeout objects
+ * that expose `.close()`, `.ref()`, and `.unref()`.
+ */
 
-const {
-  setTimeout: _setTimeout,
-  clearTimeout: _clearTimeout,
-  setInterval: _setInterval,
-  clearInterval: _clearInterval,
-  setImmediate: _setImmediate,
-  clearImmediate: _clearImmediate
-} = timers;
+import 'setimmediate'; // installs setImmediate / clearImmediate onto globalThis
 
-// ------------------------------------------------
-// AbortError helper
-// ------------------------------------------------
+/** Resolved global scope — avoids typeof window checks. */
+const scope =
+  (typeof global !== 'undefined' && global) ||
+  (typeof self   !== 'undefined' && self)   ||
+  globalThis;
 
-function abortError(signal) {
-  const err =
-    signal?.reason instanceof Error
-      ? signal.reason
-      : new Error('The operation was aborted');
+const { apply } = Function.prototype;
 
-  err.code = 'ABORT_ERR';
-  return err;
+// ---------------------------------------------------------------------------
+// Timeout — wraps a native timer handle with the Node.js Timeout interface
+// ---------------------------------------------------------------------------
+
+/**
+ * Node-compatible timer handle.
+ * @param {ReturnType<typeof setTimeout>} id  - Native browser timer id.
+ * @param {(id: any) => void} clearFn         - Matching clear function.
+ */
+function Timeout(id, clearFn) {
+  this._id      = id;
+  this._clearFn = clearFn;
 }
 
-// ------------------------------------------------
-// Abort wrapper
-// ------------------------------------------------
+/** No-ops — Node uses these to manage event-loop ref counts. */
+Timeout.prototype.ref   = function () { return this; };
+Timeout.prototype.unref = function () { return this; };
 
-function withAbort(signal, body) {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(abortError(signal));
+/** Returns the underlying numeric timer id (matches Node ≥ 14.9 behaviour). */
+Timeout.prototype[Symbol.toPrimitive] = function () { return this._id; };
 
-    let cancel = () => {};
+/**
+ * Cancels the timer. Equivalent to clearTimeout / clearInterval.
+ * @returns {void}
+ */
+Timeout.prototype.close = function () {
+  this._clearFn.call(scope, this._id);
+};
 
-    const onAbort = () => {
-      cancel();
-      reject(abortError(signal));
-    };
+// Immediate mirrors Timeout but uses clearImmediate.
+/**
+ * @param {ReturnType<typeof setImmediate>} id
+ */
+function Immediate(id) {
+  this._id = id;
+}
+Immediate.prototype.ref   = function () { return this; };
+Immediate.prototype.unref = function () { return this; };
+Immediate.prototype.close = function () { scope.clearImmediate(this._id); };
 
-    cancel = body(
-      value => {
-        signal?.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      err => {
-        signal?.removeEventListener('abort', onAbort);
-        reject(err);
-      }
-    );
+// ---------------------------------------------------------------------------
+// Core timer exports
+// ---------------------------------------------------------------------------
 
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
+/**
+ * Schedules `fn` to run after at least `delay` ms.
+ * @param {(...args: any[]) => void} fn
+ * @param {number} [delay=0]
+ * @param {...any} args - Forwarded to fn when it fires.
+ * @returns {Timeout}
+ * @example
+ * const t = setTimeout(() => console.log('hi'), 500);
+ * t.close(); // cancel
+ */
+export function setTimeout(fn, delay, ...args) {
+  return new Timeout(
+    apply.call(scope.setTimeout, scope, [fn, delay, ...args]),
+    clearTimeout,
+  );
 }
 
-// ------------------------------------------------
-// setTimeout
-// ------------------------------------------------
-
-export function setTimeout(delay = 0, value, { signal } = {}) {
-  return withAbort(signal, resolve => {
-    const id = _setTimeout(() => resolve(value), delay);
-
-    return () => _clearTimeout(id);
-  });
+/**
+ * Schedules `fn` to run repeatedly every `delay` ms.
+ * @param {(...args: any[]) => void} fn
+ * @param {number} [delay=0]
+ * @param {...any} args
+ * @returns {Timeout}
+ * @example
+ * const iv = setInterval(() => console.log('tick'), 1000);
+ * setTimeout(() => iv.close(), 3500); // stop after ~3 ticks
+ */
+export function setInterval(fn, delay, ...args) {
+  return new Timeout(
+    apply.call(scope.setInterval, scope, [fn, delay, ...args]),
+    clearInterval,
+  );
 }
 
-// ------------------------------------------------
-// setImmediate
-// ------------------------------------------------
-
-export function setImmediate(value, { signal } = {}) {
-  return withAbort(signal, resolve => {
-    const id = _setImmediate(() => resolve(value));
-
-    return () => _clearImmediate(id);
-  });
+/**
+ * Cancels a Timeout or raw native handle.
+ * @param {Timeout | number | undefined} timeout
+ */
+export function clearTimeout(timeout) {
+  if (!timeout) return;
+  if (typeof timeout.close === 'function') timeout.close();
+  else scope.clearTimeout(timeout);
 }
 
-// ------------------------------------------------
-// setInterval async iterator
-// ------------------------------------------------
+/** Alias — clearInterval and clearTimeout are interchangeable in browsers. */
+export { clearTimeout as clearInterval };
 
-export async function* setInterval(delay = 0, value, { signal } = {}) {
+/**
+ * Schedules `fn` to run after the current poll phase (before I/O callbacks).
+ * @param {(...args: any[]) => void} fn
+ * @param {...any} args
+ * @returns {Immediate}
+ * @example
+ * const im = setImmediate(() => console.log('immediate'));
+ * clearImmediate(im);
+ */
+export function setImmediate(fn, ...args) {
+  return new Immediate(
+    apply.call(scope.setImmediate, scope, [fn, ...args]),
+  );
+}
 
-  if (signal?.aborted) throw abortError(signal);
+/**
+ * Cancels an Immediate handle.
+ * @param {Immediate | any} immediate
+ */
+export function clearImmediate(immediate) {
+  if (!immediate) return;
+  if (typeof immediate.close === 'function') immediate.close();
+  else scope.clearImmediate(immediate);
+}
 
-  const queue = [];
-  let pending = null;
-  let done = false;
+// ---------------------------------------------------------------------------
+// Legacy idle-timeout helpers (node ecosystem compat)
+// ---------------------------------------------------------------------------
 
-  const tick = () => {
-    if (pending) {
-      const { resolve } = pending;
-      pending = null;
-      resolve(value);
-    } else {
-      queue.push(value);
-    }
-  };
+/**
+ * Prepares an object for idle-timeout tracking without starting the timer.
+ * @param {{ _idleTimeoutId?: any; _idleTimeout?: number }} item
+ * @param {number} msecs
+ */
+export function enroll(item, msecs) {
+  scope.clearTimeout(item._idleTimeoutId);
+  item._idleTimeout = msecs;
+}
 
-  const id = _setInterval(tick, delay);
+/**
+ * Cancels and removes an enrolled idle timer.
+ * @param {{ _idleTimeoutId?: any; _idleTimeout?: number }} item
+ */
+export function unenroll(item) {
+  scope.clearTimeout(item._idleTimeoutId);
+  item._idleTimeout = -1;
+}
 
-  const onAbort = () => {
-    done = true;
-    _clearInterval(id);
-
-    if (pending) {
-      const { reject } = pending;
-      pending = null;
-      reject(abortError(signal));
-    }
-  };
-
-  signal?.addEventListener('abort', onAbort, { once: true });
-
-  try {
-    while (!done) {
-      if (queue.length) {
-        yield queue.shift();
-        continue;
-      }
-
-      yield await new Promise((resolve, reject) => {
-        pending = { resolve, reject };
-      });
-    }
-  } finally {
-    _clearInterval(id);
-    signal?.removeEventListener('abort', onAbort);
+/**
+ * Starts (or restarts) the idle timer for an enrolled object.
+ * Calls `item._onTimeout()` when the timer fires.
+ * @param {{ _idleTimeoutId?: any; _idleTimeout?: number; _onTimeout?: () => void }} item
+ */
+export function active(item) {
+  scope.clearTimeout(item._idleTimeoutId);
+  const ms = item._idleTimeout;
+  if (ms >= 0) {
+    item._idleTimeoutId = scope.setTimeout(() => {
+      if (item._onTimeout) item._onTimeout();
+    }, ms);
   }
 }
 
-// ------------------------------------------------
-// scheduler
-// ------------------------------------------------
-
-export const scheduler = {
-  wait: (delay, options) => setTimeout(delay, undefined, options),
-  yield: () => setImmediate()
-};
+/** Alias preserved for older Node.js ecosystem code. */
+export { active as _unrefActive };
 
 export default {
-  setTimeout,
-  setImmediate,
-  setInterval,
-  scheduler
+  setTimeout, clearTimeout,
+  setInterval, clearInterval,
+  setImmediate, clearImmediate,
+  enroll, unenroll, active, _unrefActive: active,
 };
+
+// ---------------------------------------------------------------------------
+// Usage
+// ---------------------------------------------------------------------------
+//
+// import timers from './timers';
+//
+// // setTimeout / clearTimeout
+// const t = timers.setTimeout(() => console.log('fired'), 500);
+// t.close(); // cancel before firing — no handle leak
+//
+// // setInterval
+// const iv = timers.setInterval(() => console.log('tick'), 1_000);
+// timers.setTimeout(() => iv.close(), 3_500); // stop after ~3 ticks
+//
+// // setImmediate
+// const im = timers.setImmediate(() => console.log('next iteration'));
+// timers.clearImmediate(im); // cancel if not yet fired
+//
+// // Edge: extra args forwarded to callback
+// timers.setTimeout((a, b) => console.log(a + b), 100, 1, 2); // logs 3
