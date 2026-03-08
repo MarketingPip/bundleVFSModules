@@ -27,7 +27,7 @@ import timers, {
   _setTimeout, _clearTimeout,
   _setInterval, _clearInterval,
   _setImmediate, _clearImmediate,
-} from './timers';
+} from '../timers';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
