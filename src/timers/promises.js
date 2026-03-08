@@ -1,62 +1,109 @@
-// timers/promise.js
+// Based on 
+// https://github.com/nodejs/node/blob/9158d61debaf2c9cb05820454788f859274c7470/lib/timers/promises.js
+// juliangruber/timers-promises/blob/main/index.js
 
-import timers from '../timers.js'; // Import your timers polyfill
+'use strict'
 
-/**
- * Returns a promise that resolves after the specified delay.
- * Matches Node.js timers/promises API for setTimeout.
- * @param {number} delay - The delay in milliseconds.
- * @param {...any} args - Arguments passed to the callback when resolved.
- * @returns {Promise<void>} A promise that resolves after the specified delay.
- */
-export function setTimeout(delay, ...args) {
-  return new Promise((resolve) => {
-    const timeout = timers.setTimeout(() => {
-      resolve(...args);  // Resolves with any passed arguments
-    }, delay);
-    timeout.close = timeout.close.bind(timeout);  // Ensure proper cleanup
-  });
+class ERR_INVALID_ARG_TYPE extends Error {
+  constructor (name, expected) {
+    super(`${name} must be of type ${expected}`)
+    this.code = 'ERR_INVALID_ARG_TYPE'
+  }
 }
 
-/**
- * Returns a promise that resolves periodically after each interval.
- * Matches Node.js timers/promises API for setInterval.
- * @param {number} delay - The delay in milliseconds.
- * @param {...any} args - Arguments passed to the callback when resolved.
- * @returns {Promise<void>} A promise that resolves after each interval.
- */
-export function setInterval(delay, ...args) {
-  return new Promise((resolve, reject) => {
-    const interval = timers.setInterval(() => {
-      resolve(...args);  // Resolves with any passed arguments
-    }, delay);
-
-    // Make sure interval can be canceled
-    interval.close = interval.close.bind(interval);
-
-    // Optional: reject promise after a timeout to avoid infinite intervals (use case based)
-    // For example, we could set an upper limit here if needed
-    // setTimeout(() => interval.close(), 10000);  // Auto cancel after 10 seconds
-  });
+class AbortError extends Error {
+  constructor (message) {
+    super(message)
+    Error.captureStackTrace(this, this.constructor)
+    this.type = 'AbortError'
+  }
 }
 
-/**
- * Returns a promise that resolves in the next event loop cycle.
- * Matches Node.js timers/promises API for setImmediate.
- * @param {...any} args - Arguments passed to the callback when resolved.
- * @returns {Promise<void>} A promise that resolves immediately after the current event loop.
- */
-export function setImmediate(...args) {
-  return new Promise((resolve) => {
-    const immediate = timers.setImmediate(() => {
-      resolve(...args);  // Resolves with any passed arguments
-    });
-    immediate.close = immediate.close.bind(immediate);  // Ensure proper cleanup
-  });
+const validateAbortSignal = (signal, name) => {
+  if (
+    signal !== undefined &&
+    (signal === null || typeof signal !== 'object' || !('aborted' in signal))
+  ) {
+    throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal')
+  }
 }
 
-export default {
-  setTimeout,
-  setInterval,
-  setImmediate,
-};
+function promisesSetTimeout (after, value, options = {}) {
+  const args = value !== undefined ? [value] : value
+  if (options == null || typeof options !== 'object') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
+  }
+  const { signal, ref = true } = options
+  try {
+    validateAbortSignal(signal, 'options.signal')
+  } catch (err) {
+    return Promise.reject(err)
+  }
+  if (typeof ref !== 'boolean') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'))
+  }
+  // TODO(@jasnell): If a decision is made that this cannot be backported
+  // to 12.x, then this can be converted to use optional chaining to
+  // simplify the check.
+  if (signal && signal.aborted) {
+    return Promise.reject(new AbortError())
+  }
+  let oncancel
+  const ret = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => resolve(value), after, ...(args || []))
+    /* istanbul ignore next */
+    if (!ref) timeout.unref()
+    if (signal) {
+      oncancel = () => {
+        clearTimeout(timeout)
+        reject(new AbortError())
+      }
+      signal.addEventListener('abort', oncancel)
+    }
+  })
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret
+}
+
+function promisesSetImmediate (value, options = {}) {
+  if (options == null || typeof options !== 'object') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
+  }
+  const { signal, ref = true } = options
+  try {
+    validateAbortSignal(signal, 'options.signal')
+  } catch (err) {
+    return Promise.reject(err)
+  }
+  if (typeof ref !== 'boolean') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'))
+  }
+  // TODO(@jasnell): If a decision is made that this cannot be backported
+  // to 12.x, then this can be converted to use optional chaining to
+  // simplify the check.
+  if (signal && signal.aborted) {
+    return Promise.reject(new AbortError())
+  }
+  let oncancel
+  const ret = new Promise((resolve, reject) => {
+    const immediate = setImmediate(() => resolve(value))
+    /* istanbul ignore next */
+    if (!ref) immediate.unref()
+    if (signal) {
+      oncancel = () => {
+        clearImmediate(immediate)
+        reject(new AbortError())
+      }
+      signal.addEventListener('abort', oncancel)
+    }
+  })
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret
+}
+
+module.exports = {
+  setTimeout: promisesSetTimeout,
+  setImmediate: promisesSetImmediate
+}
