@@ -1,6 +1,6 @@
-// Based on
+// Based on 
 // https://github.com/nodejs/node/blob/9158d61debaf2c9cb05820454788f859274c7470/lib/timers/promises.js
-// juliangruber/timers-promises
+// juliangruber/timers-promises/blob/main/index.js
 
 'use strict'
 
@@ -28,7 +28,7 @@ const validateAbortSignal = (signal, name) => {
   }
 }
 
-function promisesSetTimeout (after, value, options = {}) {
+export function setTimeout (after, value, options = {}) {
   const args = value !== undefined ? [value] : value
   if (options == null || typeof options !== 'object') {
     return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
@@ -66,7 +66,7 @@ function promisesSetTimeout (after, value, options = {}) {
     : ret
 }
 
-function promisesSetImmediate (value, options = {}) {
+export function setImmediate (value, options = {}) {
   if (options == null || typeof options !== 'object') {
     return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'))
   }
@@ -103,7 +103,3 @@ function promisesSetImmediate (value, options = {}) {
     : ret
 }
 
-module.exports = {
-  setTimeout: promisesSetTimeout,
-  setImmediate: promisesSetImmediate
-}
