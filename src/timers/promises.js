@@ -1,4 +1,4 @@
-'use strict'
+'use strict';
 
 // --- Errors & Validators ---
 
@@ -42,8 +42,6 @@ const validateAbortSignal = (signal, name) => {
   }
 }
 
-// --- PromiseWithResolvers Helper ---
-
 const promiseWithResolvers = () => {
   let resolve, reject;
   const promise = new Promise((res, rej) => { resolve = res; reject = rej });
@@ -52,7 +50,7 @@ const promiseWithResolvers = () => {
 
 // --- Timer Promises ---
 
-export function setTimeout(after, value, options = {}) {
+export function setTimeout(after = 1, value, options = {}) {
   try {
     if (after !== undefined) validateNumber(after, 'delay');
     validateObject(options, 'options');
@@ -71,13 +69,12 @@ export function setTimeout(after, value, options = {}) {
   const { promise, resolve, reject } = promiseWithResolvers();
   const timerId = globalThis.setTimeout(() => resolve(value), after);
 
-  // Node.js supports ref/unref; noop in browsers
-  if (!ref && timerId.unref) timerId.unref?.();
+  if (!ref && timerId?.unref) timerId.unref();
 
   let oncancel;
   if (signal) {
     oncancel = () => {
-      clearTimeout(timerId);
+      globalThis.clearTimeout(timerId);
       reject(new AbortError(undefined, { cause: signal.reason }));
     }
     signal.addEventListener('abort', oncancel, { once: true });
@@ -104,12 +101,12 @@ export function setImmediate(value, options = {}) {
   const { promise, resolve, reject } = promiseWithResolvers();
   const immediateId = globalThis.setTimeout(() => resolve(value), 0);
 
-  if (!ref && immediateId.unref) immediateId.unref?.();
+  if (!ref && immediateId?.unref) immediateId.unref();
 
   let oncancel;
   if (signal) {
     oncancel = () => {
-      clearTimeout(immediateId);
+      globalThis.clearTimeout(immediateId);
       reject(new AbortError(undefined, { cause: signal.reason }));
     }
     signal.addEventListener('abort', oncancel, { once: true });
@@ -118,7 +115,7 @@ export function setImmediate(value, options = {}) {
   return oncancel ? promise.finally(() => signal.removeEventListener('abort', oncancel)) : promise;
 }
 
-export async function* setInterval(after, value, options = {}) {
+export async function* setInterval(after = 1, value, options = {}) {
   if (after !== undefined) validateNumber(after, 'delay');
   validateObject(options, 'options');
   if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
@@ -133,12 +130,12 @@ export async function* setInterval(after, value, options = {}) {
     if (callback) { callback(); callback = undefined; }
   }, after);
 
-  if (!ref && intervalId.unref) intervalId.unref?.();
+  if (!ref && intervalId?.unref) intervalId.unref();
 
   const cancel = () => {
-    clearInterval(intervalId);
+    globalThis.clearInterval(intervalId);
     if (callback) {
-      callback(Promise.reject(new AbortError(undefined, { cause: signal?.reason })));
+      callback(); // Simply resolve to check loop condition
       callback = undefined;
     }
   };
@@ -148,11 +145,13 @@ export async function* setInterval(after, value, options = {}) {
   try {
     while (!signal?.aborted) {
       if (notYielded === 0) await new Promise(res => callback = res);
-      while (notYielded > 0) { notYielded--; yield value; }
+      while (notYielded > 0 && !signal?.aborted) { 
+        notYielded--; 
+        yield value; 
+      }
     }
-    throw new AbortError(undefined, { cause: signal?.reason });
   } finally {
-    clearInterval(intervalId);
+    globalThis.clearInterval(intervalId);
     signal?.removeEventListener('abort', cancel);
   }
 }
@@ -161,7 +160,7 @@ export async function* setInterval(after, value, options = {}) {
 
 const kScheduler = Symbol('kScheduler');
 
-export class Scheduler {
+class Scheduler {
   constructor(secret) {
     if (secret !== kScheduler) throw new TypeError('Illegal constructor');
     this[kScheduler] = true;
@@ -169,12 +168,12 @@ export class Scheduler {
 
   yield() {
     if (!this[kScheduler]) throw new TypeError('Invalid this for Scheduler');
-    return setImmediatePromise();
+    return setImmediate(); // Fixed name
   }
 
   wait(delay, options) {
     if (!this[kScheduler]) throw new TypeError('Invalid this for Scheduler');
-    return setTimeoutPromise(delay, undefined, options);
+    return setTimeout(delay, undefined, options); // Fixed name
   }
 }
 
