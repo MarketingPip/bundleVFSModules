@@ -1,25 +1,26 @@
-/*!
- * timers/promises — node:timers/promises using timers-browserify
- */
+import timers from './timers.js';
 
-import timers from 'timers-browserify';
+const { setTimeout: _setTimeout, setImmediate: _setImmediate, setInterval: _setInterval } = timers;
 
+// ------------------------------------------------
+// AbortError helper
+// ------------------------------------------------
 function abortError(signal) {
-  const err =
-    signal?.reason instanceof Error
-      ? signal.reason
-      : new Error('The operation was aborted');
-
+  const err = signal?.reason instanceof Error
+    ? signal.reason
+    : new Error('The operation was aborted');
   err.code = 'ABORT_ERR';
   return err;
 }
 
+// ------------------------------------------------
+// Abort wrapper
+// ------------------------------------------------
 function withAbort(signal, body) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortError(signal));
 
     let cancel = () => {};
-
     const onAbort = () => {
       cancel();
       reject(abortError(signal));
@@ -40,22 +41,29 @@ function withAbort(signal, body) {
   });
 }
 
+// ------------------------------------------------
+// setTimeout
+// ------------------------------------------------
 export function setTimeout(delay = 0, value, { signal } = {}) {
   return withAbort(signal, resolve => {
-    const timer = timers.setTimeout(() => resolve(value), delay);
-
+    const timer = _setTimeout(() => resolve(value), delay);
     return () => timer.close();
   });
 }
 
+// ------------------------------------------------
+// setImmediate
+// ------------------------------------------------
 export function setImmediate(value, { signal } = {}) {
   return withAbort(signal, resolve => {
-    const id = timers.setImmediate(() => resolve(value));
-
+    const id = _setImmediate(() => resolve(value));
     return () => timers.clearImmediate(id);
   });
 }
 
+// ------------------------------------------------
+// setInterval async iterator
+// ------------------------------------------------
 export async function* setInterval(delay = 0, value, { signal } = {}) {
   if (signal?.aborted) throw abortError(signal);
 
@@ -63,7 +71,7 @@ export async function* setInterval(delay = 0, value, { signal } = {}) {
   let pending = null;
   let done = false;
 
-  const interval = timers.setInterval(() => {
+  const interval = _setInterval(() => {
     if (pending) {
       const { resolve } = pending;
       pending = null;
@@ -76,7 +84,6 @@ export async function* setInterval(delay = 0, value, { signal } = {}) {
   const onAbort = () => {
     done = true;
     interval.close();
-
     if (pending) {
       const { reject } = pending;
       pending = null;
@@ -88,14 +95,8 @@ export async function* setInterval(delay = 0, value, { signal } = {}) {
 
   try {
     while (!done) {
-      if (queue.length) {
-        yield queue.shift();
-        continue;
-      }
-
-      yield await new Promise((resolve, reject) => {
-        pending = { resolve, reject };
-      });
+      if (queue.length) yield queue.shift();
+      else yield await new Promise((resolve, reject) => { pending = { resolve, reject }; });
     }
   } finally {
     interval.close();
@@ -103,14 +104,12 @@ export async function* setInterval(delay = 0, value, { signal } = {}) {
   }
 }
 
+// ------------------------------------------------
+// scheduler
+// ------------------------------------------------
 export const scheduler = {
   wait: (delay, options) => setTimeout(delay, undefined, options),
   yield: () => setImmediate()
 };
 
-export default {
-  setTimeout,
-  setImmediate,
-  setInterval,
-  scheduler
-};
+export default { setTimeout, setImmediate, setInterval, scheduler };
