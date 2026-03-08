@@ -115,7 +115,7 @@ async function bundleToString(entry) {
 
 // Modules that should be bundled
 const BUNDLED_MODULES = {
-  fs: "memfs-entry.js",
+  fs: "fs.js",
   fs_promises: "fs/promises.js",
   path: "path.js",
   path_posix: "path/posix.js",
