@@ -1,133 +1,177 @@
 'use strict';
 
-// --- Custom Error Classes ---
-
-export class ERR_INVALID_ARG_TYPE extends Error {
+// Custom error classes for handling invalid argument types and abortion
+class ERR_INVALID_ARG_TYPE extends Error {
   constructor(name, expected) {
     super(`${name} must be of type ${expected}`);
     this.code = 'ERR_INVALID_ARG_TYPE';
   }
 }
 
-export class AbortError extends Error {
-  constructor(message = 'The operation was aborted') {
+class AbortError extends Error {
+  constructor(message) {
     super(message);
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor);
-    }
-    this.name = 'AbortError';
     this.type = 'AbortError';
+    Error.captureStackTrace(this, this.constructor);
   }
 }
 
-// --- Validation Helper ---
-
+// Helper function to validate AbortSignal
 const validateAbortSignal = (signal, name) => {
-  if (
-    signal !== undefined &&
-    (signal === null || typeof signal !== 'object' || !('aborted' in signal))
-  ) {
+  if (signal !== undefined && (signal === null || typeof signal !== 'object' || !('aborted' in signal))) {
     throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal');
   }
 };
 
-// --- Exported Timer Functions ---
+// `setTimeout` implementation with Promise support
+function promisesSetTimeout(after, value, options = {}) {
+  if (typeof after !== 'number' || after < 0) {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('after', 'number'));
+  }
 
-/**
- * Promise-based setTimeout
- */
-export function setTimeout(after, value, options = {}) {
-  if (options === null || typeof options !== 'object') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'));
+  if (options && typeof options !== 'object') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'object'));
   }
 
   const { signal, ref = true } = options;
 
-  try {
+  if (signal) {
     validateAbortSignal(signal, 'options.signal');
-  } catch (err) {
-    return Promise.reject(err);
-  }
-
-  if (typeof ref !== 'boolean') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'));
-  }
-
-  // Simplified using optional chaining as per original TODO
-  if (signal?.aborted) {
-    return Promise.reject(new AbortError());
+    if (signal.aborted) {
+      return Promise.reject(new AbortError('The operation was aborted.'));
+    }
   }
 
   let oncancel;
-  const ret = new Promise((resolve, reject) => {
-    const timeout = globalThis.setTimeout(() => resolve(value), after);
-    
-    if (!ref && typeof timeout.unref === 'function') {
-      timeout.unref();
-    }
+  const promise = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      resolve(value);
+    }, after);
+
+    if (!ref) timeout.unref();
 
     if (signal) {
       oncancel = () => {
         clearTimeout(timeout);
-        reject(new AbortError());
+        reject(new AbortError('The operation was aborted.'));
       };
-      signal.addEventListener('abort', oncancel, { once: true });
+      signal.addEventListener('abort', oncancel);
     }
   });
 
-  return oncancel !== undefined
-    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
-    : ret;
+  return oncancel
+    ? promise.finally(() => signal.removeEventListener('abort', oncancel))
+    : promise;
 }
 
-/**
- * Promise-based setImmediate
- */
-export function setImmediate(value, options = {}) {
-  if (options === null || typeof options !== 'object') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'Object'));
+// `setImmediate` implementation with Promise support
+function promisesSetImmediate(value, options = {}) {
+  if (options && typeof options !== 'object') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'object'));
   }
 
   const { signal, ref = true } = options;
 
-  try {
+  if (signal) {
     validateAbortSignal(signal, 'options.signal');
-  } catch (err) {
-    return Promise.reject(err);
-  }
-
-  if (typeof ref !== 'boolean') {
-    return Promise.reject(new ERR_INVALID_ARG_TYPE('options.ref', 'boolean'));
-  }
-
-  if (signal?.aborted) {
-    return Promise.reject(new AbortError());
+    if (signal.aborted) {
+      return Promise.reject(new AbortError('The operation was aborted.'));
+    }
   }
 
   let oncancel;
-  const ret = new Promise((resolve, reject) => {
-    const immediate = globalThis.setImmediate(() => resolve(value));
+  const promise = new Promise((resolve, reject) => {
+    const immediate = setImmediate(() => {
+      resolve(value);
+    });
 
-    if (!ref && typeof immediate.unref === 'function') {
-      immediate.unref();
-    }
+    if (!ref) immediate.unref();
 
     if (signal) {
       oncancel = () => {
         clearImmediate(immediate);
-        reject(new AbortError());
+        reject(new AbortError('The operation was aborted.'));
       };
-      signal.addEventListener('abort', oncancel, { once: true });
+      signal.addEventListener('abort', oncancel);
     }
   });
 
-  return oncancel !== undefined
-    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
-    : ret;
+  return oncancel
+    ? promise.finally(() => signal.removeEventListener('abort', oncancel))
+    : promise;
 }
 
-// Default export for convenience
-export default {
-  setTimeout,
-  setImmediate
-};
+// `setInterval` implementation with Promise support
+function promisesSetInterval(after, value, options = {}) {
+  if (typeof after !== 'number' || after < 0) {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('after', 'number'));
+  }
+
+  if (options && typeof options !== 'object') {
+    return Promise.reject(new ERR_INVALID_ARG_TYPE('options', 'object'));
+  }
+
+  const { signal, ref = true } = options;
+
+  if (signal) {
+    validateAbortSignal(signal, 'options.signal');
+    if (signal.aborted) {
+      return Promise.reject(new AbortError('The operation was aborted.'));
+    }
+  }
+
+  let oncancel;
+  const promise = new Promise((resolve, reject) => {
+    let interval;
+    let iterationCount = 0;
+
+    const intervalHandler = () => {
+      iterationCount++;
+      resolve(value);
+
+      if (signal && signal.aborted) {
+        clearInterval(interval);
+        reject(new AbortError('The operation was aborted.'));
+      }
+    };
+
+    interval = setInterval(intervalHandler, after);
+
+    if (!ref) interval.unref();
+
+    if (signal) {
+      oncancel = () => {
+        clearInterval(interval);
+        reject(new AbortError('The operation was aborted.'));
+      };
+      signal.addEventListener('abort', oncancel);
+    }
+  });
+
+  return oncancel
+    ? promise.finally(() => signal.removeEventListener('abort', oncancel))
+    : promise;
+}
+
+// Custom scheduler class (a simple abstraction for now)
+const kScheduler = Symbol('kScheduler');
+
+class Scheduler {
+  constructor() {
+    this[kScheduler] = true;
+  }
+
+  yield() {
+    return promisesSetImmediate();
+  }
+
+  wait(delay, options) {
+    return promisesSetTimeout(delay, undefined, options);
+  }
+}
+
+// ES6 Exporting the functions
+export { promisesSetTimeout as setTimeout };
+export { promisesSetImmediate as setImmediate };
+export { promisesSetInterval as setInterval };
+export const scheduler = new Scheduler();
