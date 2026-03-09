@@ -164,6 +164,8 @@ const BUNDLED_MODULES = {
   punycode: "punycode.js",
   timers: "timers.js",
   timers_promises: "timers/promises.js",
+
+  RUNTIME_CLI_TABLE: "timers/promises.js",
   
   
  // buffer: "buffer.js",
