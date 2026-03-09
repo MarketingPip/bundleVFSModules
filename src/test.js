@@ -1,7 +1,7 @@
 /**
  * node-test-browser.js
  * Drop-in browser ESM port of Node.js `node:test`
- * Same named exports as the native module.
+ * Same named exports as the native module. 
  */
 
 import _assert from "./assert.js"
