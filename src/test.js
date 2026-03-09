@@ -1,7 +1,7 @@
 /**
  * node-test-browser.js
  * Drop-in browser ESM port of Node.js `node:test`
- * Same named exports as the native module. 
+ * Same named exports as the native module.
  */
 
 import _assert from "./assert.js"
@@ -425,11 +425,13 @@ export default nodeTest;
 
 // ─── Full API injected on every run ──────────────────────────────────────────
 
+// Reporter names must be injected so user code can write { reporter: tap } etc.
 const API_KEYS = [
   'test','it','suite','describe',
   'before','after','beforeEach','afterEach',
   'mock','snapshot','assert',
   'dot','spec','tap','junit','lcov',
+  'reporters',
 ];
 
 function makeApiValues() {
@@ -437,10 +439,30 @@ function makeApiValues() {
   const mock = new Proxy({}, {
     get(_, k) { return (_mock ??= new MockTracker())[k]; }
   });
-  return [test, it, suite, describe, before, after, beforeEach, afterEach, mock, snapshot, _assert, _dot, _spec, _tap, _junit, _lcov];
+  return [
+    test, it, suite, describe,
+    before, after, beforeEach, afterEach,
+    mock, snapshot, _assert,
+    _dot, _spec, _tap, _junit, _lcov,
+    REPORTERS, // reporters map — lets user code do reporters.tap etc.
+  ];
 }
 
 // ─── execute ─────────────────────────────────────────────────────────────────
+
+/**
+ * Lightweight source scan — extracts the reporter name from the first
+ * `{ reporter: <name> }` occurrence in user code without executing it.
+ * Matches identifiers only (dot, spec, tap, junit, lcov).
+ * Falls back to _spec if nothing is found.
+ * @param {string} src
+ * @returns {Function}
+ */
+function _scanReporter(src) {
+  const m = src.match(/reporter\s*:\s*([a-zA-Z_$][a-zA-Z0-9_$]*)/);
+  if (!m) return _spec;
+  return _resolveReporter(m[1]) ?? _spec;
+}
 
 /**
  * Execute user-supplied test code in an isolated function scope.
@@ -459,19 +481,46 @@ async function execute(userCode, opts = {}) {
 
   // Allow execute() caller to pre-set the reporter before the user code runs.
   // Individual test({ reporter }) calls inside the code can still override it.
-  if (opts.reporter) _activeReporter = _resolveReporter(opts.reporter);
+  // ── Step 1: resolve reporter ─────────────────────────────────────────────
+  // Priority: opts.reporter > reporter found on any test() call in userCode
+  // (first occurrence wins) > default spec.
+  // We do a lightweight pre-scan of the source so the reporter is known
+  // before any TestNode is constructed, keeping it strictly run-level.
+  let resolvedReporter = opts.reporter
+    ? _resolveReporter(opts.reporter)
+    : _scanReporter(userCode);
 
-  let fn;
+  _activeReporter = resolvedReporter;
+
+  // ── Step 2: patch test() so reporter is stripped from per-node opts ───────
+  // This prevents { reporter } from being stored on TestNode.opts where it
+  // has no meaning and could confuse future introspection.
+  const _origTest = test;
+  const _patchedTest = (name, opts, fn) => {
+    if (opts && typeof opts === 'object') {
+      const { reporter: _, ...rest } = opts;
+      opts = rest;
+    }
+    return _origTest(name, opts, fn);
+  };
+
+  let execFn;
   try {
-    fn = new Function(...API_KEYS, `return (async()=>{\n${userCode}\n})()`);
+    // Swap 'test' and 'it' slots for patched versions during this run.
+    const patchedKeys   = [...API_KEYS];
+    const patchedValues = makeApiValues();
+    const testIdx = patchedKeys.indexOf('test');
+    const itIdx   = patchedKeys.indexOf('it');
+    patchedValues[testIdx] = _patchedTest;
+    patchedValues[itIdx]   = _patchedTest;
+
+    execFn = new Function(...patchedKeys, `return (async()=>{\n${userCode}\n})()`);
+    await execFn(...patchedValues);
   } catch(e) {
-    throw new SyntaxError(`[node:test runtime] ${e.message}`);
+    if (e instanceof SyntaxError) throw new SyntaxError(`[node:test runtime] ${e.message}`);
+    throw e;
   }
 
-  await fn(...makeApiValues());
-
-  // drain() captures whatever reporter is active at the END of user code,
-  // so a test({ reporter: junit }) anywhere in the code wins over the default.
   const { root, events, reporter } = await run().drain();
 
   // Produce the formatted string output with the resolved reporter.
@@ -494,5 +543,6 @@ globalThis._RUNTIME_TEST_RUNNER_ = {
   execute,
   // Reporter functions exposed for external use / custom pipelines.
   reporters: REPORTERS,
-  get activeReporter() { return _activeReporter; } // to set via flag in runtime
+  // Convenience: the currently active reporter after the last execute() call.
+  get activeReporter() { return _activeReporter; },
 };
