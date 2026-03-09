@@ -6,7 +6,7 @@
 
 import _assert from "./assert.js"
 
-import {dot, spec, tap, junit, lcov} from "/test/reporters.js"
+import {dot, spec, tap, junit, lcov} from "./test/reporters.js"
 // ─── Internal error types ────────────────────────────────────────────────────
 export class SkipError    extends Error { constructor(m=''){super(m);this.name='SkipError';} }
 export class TodoError    extends Error { constructor(m=''){super(m);this.name='TodoError';} }
