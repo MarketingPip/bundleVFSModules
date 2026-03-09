@@ -494,5 +494,5 @@ globalThis._RUNTIME_TEST_RUNNER_ = {
   execute,
   // Reporter functions exposed for external use / custom pipelines.
   reporters: REPORTERS,
-  _activeReporter // to set via flag in runtime
+  get activeReporter() { return _activeReporter; } // to set via flag in runtime
 };
