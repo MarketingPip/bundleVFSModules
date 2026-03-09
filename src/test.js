@@ -531,9 +531,7 @@ async function execute(userCode, opts = {}) {
     // Re-throw with reporter name prepended so the caller sees exactly where it failed.
     throw Object.assign(e, { message: `[reporter:${reporter?.name ?? '?'}] ${e.message}` });
   }
-
-  // Produce the formatted string output with the resolved reporter.
-  const output = reporter({ root, events });
+ 
 
   return { root, events, output, reporter };
 }
