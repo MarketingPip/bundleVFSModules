@@ -158,6 +158,7 @@ const BUNDLED_MODULES = {
   string_decoder: "string_decoder.js",
   serialize_js: "serialize_js.js",
   test: "test.js",
+  test_reporters: "test/reporters.js",
   perf_hooks: "perf_hooks.js",
   zlib: "zlib.js",
   child_process: "child_process.js",
@@ -165,7 +166,7 @@ const BUNDLED_MODULES = {
   timers: "timers.js",
   timers_promises: "timers/promises.js",
 
-  RUNTIME_CLI_TABLE: "specials/cli_table.js",
+ // RUNTIME_CLI_TABLE: "specials/cli_table.js",
   
   
  // buffer: "buffer.js",
