@@ -115,6 +115,7 @@ async function bundleToString(entry) {
 
 // Modules that should be bundled
 const BUNDLED_MODULES = {
+  buffer: "buffer.js",
   fs: "fs.js",
   fs_promises: "fs/promises.js",
   path: "path.js",
