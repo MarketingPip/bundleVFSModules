@@ -391,14 +391,14 @@ export default nodeTest;
 
 // ─── Full API injected on every run ──────────────────────────────────────────
 
-const API_KEYS = ['test','it','suite','describe','before','after','beforeEach','afterEach','mock','snapshot','assert'];
+const API_KEYS = ['test','it','suite','describe','before','after','beforeEach','afterEach','mock','snapshot','assert', 'dot', 'spec', 'tap', 'junit', 'lcov'];
 
 function makeApiValues() {
   let _mock;
   const mock = new Proxy({}, {
     get(_, k) { return (_mock ??= new MockTracker())[k]; }
   });
-  return [test, it, suite, describe, before, after, beforeEach, afterEach, mock, snapshot, _assert];
+  return [test, it, suite, describe, before, after, beforeEach, afterEach, mock, snapshot, _assert, spec, tap, junit, lcov];
 }
 
 
