@@ -157,8 +157,8 @@ const BUNDLED_MODULES = {
   vm: "vm.js",
   string_decoder: "string_decoder.js",
   serialize_js: "serialize_js.js",
-  test_reporters: "test/reporters.js", // reporters need built first.
   test: "test.js",
+  test_reporters: "test/reporters.js",
   perf_hooks: "perf_hooks.js",
   zlib: "zlib.js",
   child_process: "child_process.js",
