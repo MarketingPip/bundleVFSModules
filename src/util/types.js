@@ -17,7 +17,7 @@
  *   Source: lib/internal/util/types.js + internalBinding('types')
  */
 
-import { types as nodeTypes } from "https://esm.sh/util";
+import { types as nodeTypes } from "util";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
