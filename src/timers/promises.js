@@ -1,160 +1,97 @@
 /**
- * timers/promises — Node.js-compliant drop-in for browser/iframe runtimes.
+ * Hardened timers/promises — Node.js parity for browsers.
+ * This version uses unique internal names to prevent recursion crashes.
  */
 
-// ── Capture native timer primitives ──────────────────────────────────────────
-// We bind these immediately to ensure we have the real browser implementation
-// before any third-party scripts (or our own exports) can modify globalThis.
+// 1. CAPTURE & RENAME
+// We use "native" prefix to ensure no collision with the exported function names.
+const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+const nativeSetInterval = globalThis.setInterval.bind(globalThis);
+const nativeClearInterval = globalThis.clearInterval.bind(globalThis);
 
-const _setTimeout      = globalThis.setTimeout.bind(globalThis);
-const _clearTimeout    = globalThis.clearTimeout.bind(globalThis);
-const _setInterval     = globalThis.setInterval.bind(globalThis);
-const _clearInterval   = globalThis.clearInterval.bind(globalThis);
+// Fallback for setImmediate
+const nativeSetImmediate = (globalThis.setImmediate || ((fn, ...args) => nativeSetTimeout(fn, 0, ...args))).bind(globalThis);
+const nativeClearImmediate = (globalThis.clearImmediate || nativeClearTimeout).bind(globalThis);
 
-// setImmediate fallback logic
-const _nativeSetImmediate = globalThis.setImmediate?.bind(globalThis);
-const _nativeClearImmediate = globalThis.clearImmediate?.bind(globalThis);
-
-const _setImmediate = _nativeSetImmediate ?? ((fn, ...a) => _setTimeout(fn, 0, ...a));
-const _clearImmediate = _nativeClearImmediate ?? _clearTimeout;
-
-// ── Internal helpers ──────────────────────────────────────────────────────────
-
-function makeAbortError(signal) {
-  const reason = signal?.reason;
-  if (reason instanceof Error) return reason;
-  const msg =
-    (reason && typeof reason === 'object' && reason.message) ||
-    (typeof reason === 'string' && reason) ||
-    'The operation was aborted';
-  try {
-    return new DOMException(msg, 'AbortError');
-  } catch {
-    const e = new Error(msg);
-    e.name = 'AbortError';
-    e.code = 20; 
-    return e;
-  }
+// 2. HELPER: ABORT LOGIC
+function createAbortError(signal) {
+  const error = new Error(signal?.reason || 'The operation was aborted');
+  error.name = 'AbortError';
+  return error;
 }
 
-function abortRace(signal) {
-  let onAbort;
-  const rejectPromise = new Promise((_, reject) => {
-    onAbort = () => reject(makeAbortError(signal));
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-  const cleanup = () => signal.removeEventListener('abort', onAbort);
-  return { rejectPromise, cleanup };
-}
-
-// ── setTimeout ────────────────────────────────────────────────────────────────
-
+// 3. EXPORTS
+/**
+ * Resolves after a delay.
+ * Uses nativeSetTimeout internally to avoid calling itself.
+ */
 export function setTimeout(delay = 0, value, { signal } = {}) {
-  if (signal?.aborted) return Promise.reject(makeAbortError(signal));
+  if (signal?.aborted) return Promise.reject(createAbortError(signal));
 
-  let id;
-  let cleanup = () => {};
-
-  const timerPromise = new Promise((resolve, reject) => {
-    id = _setTimeout(() => { cleanup(); resolve(value); }, delay);
-    if (signal) {
-      const race = abortRace(signal);
-      cleanup = () => { _clearTimeout(id); race.cleanup(); };
-      race.rejectPromise.catch(err => { _clearTimeout(id); reject(err); });
-    }
-  });
-
-  return timerPromise;
-}
-
-// ── setImmediate ──────────────────────────────────────────────────────────────
-
-export function setImmediate(value, { signal } = {}) {
-  if (signal?.aborted) return Promise.reject(makeAbortError(signal));
-
-  let id;
-  let cleanup = () => {};
-
-  const timerPromise = new Promise((resolve, reject) => {
-    id = _setImmediate(() => { cleanup(); resolve(value); });
-    if (signal) {
-      const race = abortRace(signal);
-      cleanup = () => { _clearImmediate(id); race.cleanup(); };
-      race.rejectPromise.catch(err => { _clearImmediate(id); reject(err); });
-    }
-  });
-
-  return timerPromise;
-}
-
-// ── setInterval ───────────────────────────────────────────────────────────────
-
-export async function* setInterval(delay = 0, value, { signal } = {}) {
-  if (signal?.aborted) throw makeAbortError(signal);
-
-  const queue   = [];
-  const waiters = [];
-
-  let done     = false;
-  let abortErr = null;
-  let id;
-
-  const push = (v) => {
-    if (done) return;
-    if (waiters.length) {
-      waiters.shift()(v);
-    } else {
-      queue.push(v);
-    }
-  };
-
-  const stop = () => {
-    if (done) return;
-    done = true;
-    _clearInterval(id); // FIXED: Uses captured _clearInterval
-    for (const w of waiters) w(Symbol.for('done'));
-    waiters.length = 0;
-  };
-
-  // FIXED: Uses captured _setInterval instead of globalThis.setInterval
-  id = _setInterval(() => push(value), delay);
-
-  let onAbort;
-  if (signal) {
-    onAbort = () => {
-      abortErr = makeAbortError(signal);
-      for (const w of waiters) w(Symbol.for('abort'));
-      waiters.length = 0;
-      stop();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      nativeClearTimeout(timerId);
+      reject(createAbortError(signal));
     };
-    signal.addEventListener('abort', onAbort, { once: true });
-  }
+
+    const timerId = nativeSetTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(value);
+    }, delay);
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Yields values at intervals.
+ * Critical: Uses nativeSetInterval to avoid infinite recursion.
+ */
+export async function* setInterval(delay = 0, value, { signal } = {}) {
+  if (signal?.aborted) throw createAbortError(signal);
+
+  const pullQueue = [];
+  const pushQueue = [];
+  let isDone = false;
+
+  const timerId = nativeSetInterval(() => {
+    if (pullQueue.length > 0) {
+      pullQueue.shift()(value);
+    } else {
+      pushQueue.push(value);
+    }
+  }, delay);
 
   const cleanup = () => {
-    stop();
-    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+    isDone = true;
+    nativeClearInterval(timerId);
   };
 
   try {
-    while (true) {
-      if (abortErr) throw abortErr;
-      if (done)     return;
+    if (signal) {
+      signal.addEventListener('abort', cleanup, { once: true });
+    }
 
-      let tick;
-      if (queue.length) {
-        tick = queue.shift();
+    while (!isDone) {
+      if (signal?.aborted) throw createAbortError(signal);
+      
+      if (pushQueue.length > 0) {
+        yield pushQueue.shift();
       } else {
-        tick = await new Promise(resolve => waiters.push(resolve));
+        yield await new Promise((resolve) => pullQueue.push(resolve));
       }
-
-      if (tick === Symbol.for('abort')) throw abortErr ?? makeAbortError(signal);
-      if (tick === Symbol.for('done'))  return;
-
-      yield tick;
     }
   } finally {
     cleanup();
   }
 }
 
-export default { setTimeout, setImmediate, setInterval };
+export function setImmediate(value, { signal } = {}) {
+  if (signal?.aborted) return Promise.reject(createAbortError(signal));
+  return new Promise((resolve) => {
+    nativeSetImmediate(() => resolve(value));
+  });
+}
+
+export default { setTimeout, setInterval, setImmediate };
