@@ -159,7 +159,7 @@ function _getRoot() {
 /** Reset all state — call between test runs */
 export function _reset() {
   _root = null; _current = null; _running = false;
-  _activeReporter = _spec; // reset to default reporter
+  _activeReporter = _defaultReporter; // reset to default reporter
   for (const k of Object.keys(_listeners)) delete _listeners[k];
   _lazyMock = undefined; _lazySnapshot = undefined; _lazyAssert = undefined;
 }
@@ -443,8 +443,8 @@ function makeApiValues() {
     test, it, suite, describe,
     before, after, beforeEach, afterEach,
     mock, snapshot, _assert,
-    _dot, _spec, _tap, _junit, _lcov,
-    REPORTERS, // reporters map — lets user code do reporters.tap etc.
+    _rDot, _rSpec, _rTap, _rJunit, _rLcov,
+    REPORTERS,
   ];
 }
 
@@ -522,6 +522,15 @@ async function execute(userCode, opts = {}) {
   }
 
   const { root, events, reporter } = await run().drain();
+
+  let output;
+  try {
+    output = reporter({ root, events });
+  } catch(e) {
+    console.warn('[node:test] Reporter threw during render — name:', reporter?.name, 'error:', e);
+    // Re-throw with reporter name prepended so the caller sees exactly where it failed.
+    throw Object.assign(e, { message: `[reporter:${reporter?.name ?? '?'}] ${e.message}` });
+  }
 
   // Produce the formatted string output with the resolved reporter.
   const output = reporter({ root, events });
