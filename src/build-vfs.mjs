@@ -167,6 +167,7 @@ const BUNDLED_MODULES = {
   timers_promises: "timers/promises.js",
 
   RUNTIME_CLI_TABLE: "specials/cli_table.js",
+  RUNTIME_BUNDLER: "specials/bundler.js",
   
   
  // buffer: "buffer.js",
