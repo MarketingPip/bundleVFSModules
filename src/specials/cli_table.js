@@ -1,6 +1,6 @@
 'use strict';
 
-import cTable from "https://esm.sh/console.table";
+import {getTable} from "https://esm.sh/console.table";
 
 // save original
 const originalConsoleTable = globalThis.console.table;
@@ -8,7 +8,7 @@ const originalConsoleTable = globalThis.console.table;
 // patched implementation
 function patchedConsoleTable(...args) {
   for (const arg of args) {
-    const table = cTable.getTable(arg);
+    const table = getTable(arg);
     originalConsoleTable.call(console, table);
   }
 }
