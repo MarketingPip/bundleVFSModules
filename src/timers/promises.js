@@ -3,9 +3,9 @@ import {
   setImmediate,
   setInterval,
   scheduler,
-} from 'node-internal:internal_timers_promises';
+} from 'node:timers/promises';
 
-export * from 'node-internal:internal_timers_promises';
+export * from 'node:timers/promises';
 
 export default {
   setTimeout,
