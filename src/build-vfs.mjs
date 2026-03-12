@@ -161,6 +161,10 @@ const BUNDLED_MODULES = {
   test_reporters: "test/reporters.js",
   perf_hooks: "perf_hooks.js",
   zlib: "zlib.js",
+  sea: "sea.js",
+  trace: "trace_events.js",
+  wasi: "wasi.js",
+  
   child_process: "child_process.js",
   punycode: "punycode.js",
   timers: "timers.js",
@@ -168,6 +172,7 @@ const BUNDLED_MODULES = {
 
   RUNTIME_CLI_TABLE: "specials/cli_table.js",
   RUNTIME_BUNDLER: "specials/bundler.js",
+  worker_threads: "worker_threads.js"
   
   
  // buffer: "buffer.js",
@@ -206,9 +211,9 @@ const STUB_MODULES = [
  // "querystring",
 //  "repl",
  // "string_decoder",
-  "worker_threads",
-  "wasi",
-  "trace_events",
+  //"worker_threads",
+  //"wasi",
+ // "trace_events",
  // "sys",
 //  "stream",
 //  "stream/promises",
