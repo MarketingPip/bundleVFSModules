@@ -66,13 +66,29 @@ export const {
   doesNotMatch,
 } = strict;
 
-// Re-export the strict object itself as a named export so consumers can do:
-//   import { strict } from './assert/strict';
-export { strict };
-
 // Default export is the strict module directly — identical to Node's behaviour
 // where `import assert from 'node:assert/strict'` gives you assert.strict.
-export default strict;
+export default {
+  ok,
+  fail,
+  ifError,
+  equal,
+  notEqual,
+  strictEqual,
+  notStrictEqual,
+  deepEqual,
+  notDeepEqual,
+  deepStrictEqual,
+  notDeepStrictEqual,
+  throws,
+  doesNotThrow,
+  rejects,
+  doesNotReject,
+  match,
+  doesNotMatch,
+  AssertionError: strict.AssertionError,
+  strict, // self-referential like Node: strict.strict === strict
+};
 
 // ---------------------------------------------------------------------------
 // Usage
