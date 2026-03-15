@@ -28,7 +28,7 @@
  *   Constants                  → defined inline, matches Node 20 exactly
  */
 
-import { Buffer } from "https://esm.sh/buffer";
+import { Buffer } from "buffer";
 import {
   gzip      as _pakoGzip,
   ungzip    as _pakoUngzip,
@@ -36,8 +36,8 @@ import {
   inflate   as _pakoInflate,
   deflateRaw as _pakoDeflateRaw,
   inflateRaw as _pakoInflateRaw,
-} from "https://esm.sh/pako";
-import brotliLib from "https://esm.sh/brotli";
+} from "pako";
+import brotliLib from "brotli";
 
 // ---------------------------------------------------------------------------
 // Re-export everything from browserify-zlib as the base.
@@ -59,7 +59,7 @@ export {
   createUnzip,
   // codes map  {0:'Z_OK', Z_OK:0, …}
   codes,
-} from "https://esm.sh/browserify-zlib";
+} from "browserify-zlib";
 
 // ---------------------------------------------------------------------------
 // constants — Node 20 values; includes brotli params and operation codes
