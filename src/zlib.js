@@ -27,7 +27,8 @@
  *   Transform stream classes   → browserify-zlib (re-exported as-is)
  *   Constants                  → defined inline, matches Node 20 exactly
  */
- 
+
+import { Buffer } from 'buffer';
 import {
   gzip      as _pakoGzip,
   ungzip    as _pakoUngzip,
@@ -35,8 +36,8 @@ import {
   inflate   as _pakoInflate,
   deflateRaw as _pakoDeflateRaw,
   inflateRaw as _pakoInflateRaw,
-} from "pako";
-import brotliLib from "brotli";
+} from 'pako';
+import brotliLib from 'brotli';
 
 // ---------------------------------------------------------------------------
 // Re-export everything from browserify-zlib as the base.
@@ -58,7 +59,7 @@ export {
   createUnzip,
   // codes map  {0:'Z_OK', Z_OK:0, …}
   codes,
-} from "browserify-zlib";
+} from 'browserify-zlib';
 
 // ---------------------------------------------------------------------------
 // constants — Node 20 values; includes brotli params and operation codes
@@ -313,6 +314,16 @@ export const unzip      = asyncWrap(unzipSync);
  * @param {{ params?: Record<number, number> } | undefined} opts
  * @returns {{ mode: number; quality: number; lgwin: number }}
  */
+/**
+ * Translate Node's `options.params` map (keyed by BROTLI_PARAM_* integers)
+ * into the flat `{ mode, quality, lgwin }` shape that brotli.js compress() expects.
+ *
+ * Node API:  brotliCompressSync(buf, { params: { [BROTLI_PARAM_QUALITY]: 6 } })
+ * brotli.js: compress(buf, { mode: 0, quality: 6, lgwin: 22 })
+ *
+ * @param {{ params?: Record<number, number> } | undefined} opts
+ * @returns {{ mode: number; quality: number; lgwin: number }}
+ */
 function toBrotliOpts(opts) {
   const p = (opts && opts.params) || {};
   return {
@@ -423,7 +434,7 @@ export default {
 //
 // ── Streams (via browserify-zlib re-export) ───────────────────────────────────
 // import { createGzip, createGunzip } from './zlib-web.js';
-// import { pipeline } from "https://esm.sh/readable-stream";
+// import { pipeline } from 'readable-stream';
 // pipeline(source, createGzip(), createGunzip(), sink, err => console.log(err ?? 'done'));
 //
 // ── Error / edge case ─────────────────────────────────────────────────────────
