@@ -6,6 +6,12 @@
 
 import _assert from "./assert.js"
 
+import { parse } from "https://esm.sh/acorn";
+import { simple } from "https://esm.sh/acorn-walk";
+
+ 
+
+
 import {
   dot   as _dot,
   spec  as _spec,
@@ -451,7 +457,7 @@ function makeApiValues() {
 // ─── execute ─────────────────────────────────────────────────────────────────
 
 /**
- * Lightweight source scan — extracts the reporter name from the first
+ * Source scan — extracts the reporter name from the first
  * `{ reporter: <name> }` occurrence in user code without executing it.
  * Matches identifiers only (dot, spec, tap, junit, lcov).
  * Falls back to _spec if nothing is found.
@@ -459,9 +465,36 @@ function makeApiValues() {
  * @returns {Function}
  */
 function _scanReporter(src) {
-  const m = src.match(/reporter\s*:\s*([a-zA-Z_$][a-zA-Z0-9_$]*)/);
-  if (!m) return _spec;
-  return _resolveReporter(m[1]) ?? _spec;
+  try {
+    const ast = parse(src, { 
+      ecmaVersion: 'latest', 
+      sourceType: 'module' 
+    });
+
+    let foundName = null;
+
+    // The walker only visits 'Property' nodes, ignoring everything else.
+    simple(ast, {
+      Property(node) {
+        // We only care if the key is named 'reporter'
+        const isReporterKey = (node.key.type === 'Identifier' && node.key.name === 'reporter') ||
+                              (node.key.type === 'Literal' && node.key.value === 'reporter');
+
+        if (isReporterKey) {
+          if (node.value.type === 'Identifier') {
+            foundName = node.value.name;
+          } else if (node.value.type === 'Literal') {
+            foundName = node.value.value;
+          }
+        }
+      }
+    });
+
+    return foundName ? (_resolveReporter(foundName) ?? _spec) : _spec;
+  } catch (err) {
+    // If the user's code has a syntax error, we don't crash; we fallback.
+    return _spec;
+  }
 }
 
 /**
