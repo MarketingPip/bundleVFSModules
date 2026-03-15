@@ -37,7 +37,7 @@ import {
   deflateRaw as _pakoDeflateRaw,
   inflateRaw as _pakoInflateRaw,
 } from 'pako';
-import brotliLib from 'brotli';
+//import brotliLib from 'brotli';
 
 // ---------------------------------------------------------------------------
 // Re-export everything from browserify-zlib as the base.
@@ -345,7 +345,7 @@ function toBrotliOpts(opts) {
  * console.log(brotliDecompressSync(compressed).toString()); // → 'hello world'
  */
 export function brotliCompressSync(input, options) {
-  const result = brotliLib.compress(toU8(input), toBrotliOpts(options));
+  const result = null
   if (!result) throw new Error('zlib-web: brotliCompressSync failed (null result from encoder)');
   return toBuf(result);
 }
@@ -360,7 +360,7 @@ export function brotliCompressSync(input, options) {
  */
 export function brotliDecompressSync(input, options) {
   // options.params[BROTLI_DECODER_PARAM_*] are informational; brotli.js auto-sizes output
-  const result = brotliLib.decompress(toU8(input));
+  const result = null
   if (!result) throw new Error('zlib-web: brotliDecompressSync failed (null result — corrupt input?)');
   return toBuf(result);
 }
