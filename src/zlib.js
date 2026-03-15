@@ -27,8 +27,7 @@
  *   Transform stream classes   → browserify-zlib (re-exported as-is)
  *   Constants                  → defined inline, matches Node 20 exactly
  */
-
-import { Buffer } from "buffer";
+ 
 import {
   gzip      as _pakoGzip,
   ungzip    as _pakoUngzip,
