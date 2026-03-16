@@ -28,6 +28,7 @@ const REPORTERS = { dot: _dot, spec: _spec, tap: _tap, junit: _junit, lcov: _lco
 /** Currently active reporter — defaults to spec, overridable per-run. */
 let _activeReporter = _spec;
 
+const _defaultReporter = _spec;
 /**
  * Resolve a reporter from a string name, function reference, or undefined.
  * Falls back to `spec` when the value is unrecognised.
