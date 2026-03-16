@@ -450,7 +450,7 @@ function makeApiValues() {
     test, it, suite, describe,
     before, after, beforeEach, afterEach,
     mock, snapshot, _assert,
-    _rDot, _rSpec, _rTap, _rJunit, _rLcov,
+    _dot, _spec, _tap, _junit, _lcov,
     REPORTERS,
   ];
 }
