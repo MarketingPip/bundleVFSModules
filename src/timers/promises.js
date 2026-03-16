@@ -6,15 +6,17 @@
  * Node.js parity: node:timers/promises @ Node 15.0.0+
  * Dependencies: ./timers
  * Limitations:
- *   - .ref() / .unref() on the returned Timeout/Immediate are no-ops.
- *   - scheduler.yield() and scheduler.wait() are approximated (no true
- *     task-scheduler integration available in all browsers).
+ *   - options.ref is accepted and validated but is a no-op (no Node event loop).
+ *   - scheduler.yield() / scheduler.wait() are approximated via setImmediate /
+ *     setTimeout — no true task-scheduler integration.
+ *   - AbortError carries { cause } when signal.reason is set, matching Node 17.3+.
  */
 
 /**
  * @packageDocumentation
  * Implements `node:timers/promises` by wrapping `./timers` callback functions
- * in AbortSignal-aware promises.
+ * in AbortSignal-aware promises. Matches the Node.js 18+ source API exactly:
+ * argument order, option shapes, validation errors, and AbortError cause.
  *
  * Exports:
  *   - {@link setTimeout}    — resolves after delay with an optional value
@@ -26,55 +28,73 @@
 import timers from '../timers';
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Error types
+// ---------------------------------------------------------------------------
+
+class ERR_INVALID_ARG_TYPE extends TypeError {
+  /** @param {string} name @param {string} expected */
+  constructor(name, expected) {
+    super(`The "${name}" argument must be of type ${expected}.`);
+    this.code = 'ERR_INVALID_ARG_TYPE';
+  }
+}
+
+/**
+ * Mirrors Node's internal AbortError — name is 'AbortError', code is
+ * 'ABORT_ERR', and an optional cause is attached when signal.reason is set.
+ * @param {AbortSignal} [signal]
+ * @returns {Error & { code: 'ABORT_ERR' }}
+ */
+function mkAbortError(signal) {
+  const cause = signal?.reason;
+  const msg   = 'The operation was aborted';
+  const err   = cause !== undefined
+    ? new Error(msg, { cause })
+    : new Error(msg);
+  err.name = 'AbortError';
+  err.code = 'ABORT_ERR';
+  return err;
+}
+
+// ---------------------------------------------------------------------------
+// Validators (mirror internal/validators subset used by timers/promises)
 // ---------------------------------------------------------------------------
 
 /**
- * Builds a rejection for an aborted signal, matching Node's error shape.
- * @param {AbortSignal} signal
- * @returns {Error & { code: 'ABORT_ERR' }}
+ * @param {unknown} v @param {string} name
+ * @throws {ERR_INVALID_ARG_TYPE}
  */
-const abortError = signal =>
-  Object.assign(
-    signal.reason instanceof Error
-      ? signal.reason
-      : new Error('The operation was aborted'),
-    { code: 'ABORT_ERR' },
-  );
+function validateObject(v, name) {
+  if (v === null || typeof v !== 'object')
+    throw new ERR_INVALID_ARG_TYPE(name, 'Object');
+}
 
 /**
- * Guards a Promise executor against an already-aborted signal and wires up
- * a one-shot abort listener that fires `onAbort`.
- *
- * @param {AbortSignal | undefined} signal
- * @param {(reject: (e: Error) => void) => void} onAbort  - called with reject on abort
- * @param {(resolve: Function, reject: Function) => (() => void)} body
- *   - executor body; must return a cleanup fn (called after settle or abort)
- * @returns {Promise<any>}
+ * @param {unknown} v @param {string} name
+ * @throws {ERR_INVALID_ARG_TYPE}
  */
-function guardedPromise(signal, onAbort, body) {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(abortError(signal));
+function validateBoolean(v, name) {
+  if (typeof v !== 'boolean')
+    throw new ERR_INVALID_ARG_TYPE(name, 'boolean');
+}
 
-    let cleanup;
+/**
+ * @param {unknown} v @param {string} name
+ * @throws {ERR_INVALID_ARG_TYPE}
+ */
+function validateNumber(v, name) {
+  if (typeof v !== 'number')
+    throw new ERR_INVALID_ARG_TYPE(name, 'number');
+}
 
-    const handleAbort = () => {
-      cleanup?.();
-      onAbort(reject);
-    };
-
-    signal?.addEventListener('abort', handleAbort, { once: true });
-
-    const done = (fn, value) => {
-      signal?.removeEventListener('abort', handleAbort);
-      fn(value);
-    };
-
-    cleanup = body(
-      v => done(resolve, v),
-      e => done(reject, e),
-    );
-  });
+/**
+ * @param {unknown} signal @param {string} name
+ * @throws {ERR_INVALID_ARG_TYPE}
+ */
+function validateAbortSignal(signal, name) {
+  if (signal !== undefined &&
+      (signal === null || typeof signal !== 'object' || !('aborted' in signal)))
+    throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal');
 }
 
 // ---------------------------------------------------------------------------
@@ -83,31 +103,55 @@ function guardedPromise(signal, onAbort, body) {
 
 /**
  * Returns a Promise that resolves with `value` after `delay` ms.
- * Passing an AbortSignal lets the caller cancel the pending timer.
+ *
+ * Matches Node signature: `setTimeout([delay[, value[, options]]])`
  *
  * @template T
- * @param {number}  [delay=0]
- * @param {T}       [value]           - Value the promise resolves with.
- * @param {{ signal?: AbortSignal }} [options]
+ * @param {number}  [delay=1]
+ * @param {T}       [value]
+ * @param {{ signal?: AbortSignal; ref?: boolean }} [options={}]
  * @returns {Promise<T>}
  *
  * @example
- * await setTimeout(1_000);                          // wait 1 s
- * const v = await setTimeout(500, 'hello');         // resolves 'hello'
+ * await setTimeout(1_000);
+ * const v = await setTimeout(500, 'hello');  // → 'hello'
  *
  * const ac = new AbortController();
- * setTimeout(2_000, null, { signal: ac.signal });
- * ac.abort();  // → rejects with { code: 'ABORT_ERR' }
+ * const p  = setTimeout(5_000, null, { signal: ac.signal });
+ * ac.abort();
+ * await p.catch(e => console.log(e.code));   // 'ABORT_ERR'
  */
-export function setTimeout(delay = 0, value, { signal } = {}) {
-  return guardedPromise(
-    signal,
-    reject => reject(abortError(signal)),
-    (resolve) => {
-      const handle = timers.setTimeout(resolve, delay, value);
-      return () => handle.close();
-    },
-  );
+export function setTimeout(delay, value, options = {}) {
+  // Validate — return rejected promise on failure (matches Node source)
+  try {
+    if (delay !== undefined) validateNumber(delay, 'delay');
+    validateObject(options, 'options');
+    if (options.signal    !== undefined) validateAbortSignal(options.signal, 'options.signal');
+    if (options.ref       !== undefined) validateBoolean(options.ref, 'options.ref');
+  } catch (err) {
+    return Promise.reject(err);
+  }
+
+  const { signal } = options;
+  // ref is a no-op in browser, but we accept it for API parity
+
+  if (signal?.aborted) return Promise.reject(mkAbortError(signal));
+
+  let oncancel;
+  const ret = new Promise((resolve, reject) => {
+    const handle = timers.setTimeout(resolve, delay, value);
+    if (signal) {
+      oncancel = () => {
+        handle.close();
+        reject(mkAbortError(signal));
+      };
+      signal.addEventListener('abort', oncancel, { once: true });
+    }
+  });
+
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,24 +161,48 @@ export function setTimeout(delay = 0, value, { signal } = {}) {
 /**
  * Returns a Promise that resolves with `value` after the current poll phase.
  *
+ * Matches Node signature: `setImmediate([value[, options]])`
+ *
  * @template T
  * @param {T}  [value]
- * @param {{ signal?: AbortSignal }} [options]
+ * @param {{ signal?: AbortSignal; ref?: boolean }} [options={}]
  * @returns {Promise<T>}
  *
  * @example
- * const result = await setImmediate('done');
- * console.log(result); // 'done'
+ * const result = await setImmediate('done');  // → 'done'
+ *
+ * const ac = new AbortController();
+ * setImmediate('x', { signal: ac.signal }).catch(e => console.log(e.code));
+ * ac.abort();  // → 'ABORT_ERR'
  */
-export function setImmediate(value, { signal } = {}) {
-  return guardedPromise(
-    signal,
-    reject => reject(abortError(signal)),
-    (resolve) => {
-      const handle = timers.setImmediate(resolve, value);
-      return () => handle.close();
-    },
-  );
+export function setImmediate(value, options = {}) {
+  try {
+    validateObject(options, 'options');
+    if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
+    if (options.ref    !== undefined) validateBoolean(options.ref, 'options.ref');
+  } catch (err) {
+    return Promise.reject(err);
+  }
+
+  const { signal } = options;
+
+  if (signal?.aborted) return Promise.reject(mkAbortError(signal));
+
+  let oncancel;
+  const ret = new Promise((resolve, reject) => {
+    const handle = timers.setImmediate(resolve, value);
+    if (signal) {
+      oncancel = () => {
+        handle.close();
+        reject(mkAbortError(signal));
+      };
+      signal.addEventListener('abort', oncancel, { once: true });
+    }
+  });
+
+  return oncancel !== undefined
+    ? ret.finally(() => signal.removeEventListener('abort', oncancel))
+    : ret;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,66 +214,86 @@ export function setImmediate(value, { signal } = {}) {
  * Break or `return()` the iterator to clear the underlying interval.
  * An AbortSignal causes the iterator to throw `ABORT_ERR` and then close.
  *
+ * Matches Node signature: `setInterval([delay[, value[, options]]])`
+ *
+ * Node source uses a `notYielded` counter + a single `callback` slot so that
+ * ticks which fire while the consumer is mid-`await` are queued rather than
+ * dropped. We replicate that pattern exactly.
+ *
  * @template T
- * @param {number} [delay=0]
+ * @param {number} [delay=1]
  * @param {T}      [value]
- * @param {{ signal?: AbortSignal }} [options]
+ * @param {{ signal?: AbortSignal; ref?: boolean }} [options={}]
  * @returns {AsyncGenerator<T>}
  *
  * @example
- * // Consume 5 ticks then stop
  * let n = 0;
  * for await (const _ of setInterval(200, 'tick')) {
- *   console.log(++n);
- *   if (n === 5) break;
+ *   if (++n === 5) break;
  * }
  *
  * // Abort externally
  * const ac = new AbortController();
- * (async () => {
- *   try {
- *     for await (const _ of setInterval(100, null, { signal: ac.signal })) { }
- *   } catch (e) { console.log(e.code); } // 'ABORT_ERR'
- * })();
- * setTimeout(() => ac.abort(), 350);
+ * timers.setTimeout(() => ac.abort(), 350);
+ * try {
+ *   for await (const _ of setInterval(100, null, { signal: ac.signal })) {}
+ * } catch (e) { console.log(e.code); } // 'ABORT_ERR'
  */
-export async function* setInterval(delay = 0, value, { signal } = {}) {
-  if (signal?.aborted) throw abortError(signal);
+export async function* setInterval(delay, value, options = {}) {
+  // Throw synchronously (not returned reject) — matches Node async generator
+  if (delay !== undefined) validateNumber(delay, 'delay');
+  validateObject(options, 'options');
+  if (options.signal !== undefined) validateAbortSignal(options.signal, 'options.signal');
+  if (options.ref    !== undefined) validateBoolean(options.ref, 'options.ref');
 
-  // A small queue so ticks that fire while the consumer is awaiting its
-  // own work don't get lost — matches Node's back-pressure behaviour.
-  const queue   = [];
-  let resolve   = null;
-  let done      = false;
-  let error     = null;
+  const { signal } = options;
 
-  const enqueue = v => {
-    if (resolve) { const r = resolve; resolve = null; r({ value: v, done: false }); }
-    else queue.push(v);
-  };
+  if (signal?.aborted) throw mkAbortError(signal);
 
-  const handle = timers.setInterval(() => enqueue(value), delay);
+  let notYielded = 0;  // ticks that fired while consumer was awaiting
+  let callback   = null;
+  let onCancel;
 
-  const onAbort = () => {
-    handle.close();
-    error = abortError(signal);
-    done  = true;
-    if (resolve) { const r = resolve; resolve = null; r(Promise.reject(error)); }
-  };
-  signal?.addEventListener('abort', onAbort, { once: true });
+  const handle = timers.setInterval(() => {
+    notYielded++;
+    if (callback) {
+      const cb = callback;
+      callback = null;
+      cb();
+    }
+  }, delay);
+
+  if (signal) {
+    onCancel = () => {
+      handle.close();
+      if (callback) {
+        const cb = callback;
+        callback = null;
+        // Resolve the parked Promise with a rejected one — mirrors Node source
+        cb(Promise.reject(mkAbortError(signal)));
+      }
+    };
+    signal.addEventListener('abort', onCancel, { once: true });
+  }
 
   try {
-    while (!done) {
-      if (queue.length) { yield queue.shift(); continue; }
-      // Park until the next tick or abort.
-      const next = await new Promise(r => { resolve = r; });
-      if (next.done) break;
-      yield next.value;
+    while (!signal?.aborted) {
+      if (notYielded === 0) {
+        // Park until next tick fires or abort fires.
+        // The interval callback passes an optional rejection promise.
+        await new Promise((resolve, reject) => {
+          callback = (rejection) => rejection ? reject(rejection) : resolve();
+        });
+      }
+      for (; notYielded > 0; notYielded--) {
+        yield value;
+      }
     }
+    // If we exit the while because signal aborted between ticks, throw.
+    throw mkAbortError(signal);
   } finally {
     handle.close();
-    signal?.removeEventListener('abort', onAbort);
-    if (error) throw error;
+    signal?.removeEventListener('abort', onCancel);
   }
 }
 
@@ -213,28 +301,45 @@ export async function* setInterval(delay = 0, value, { signal } = {}) {
 // scheduler
 // ---------------------------------------------------------------------------
 
-/**
- * Minimal `scheduler` object matching the node:timers/promises scheduler API.
- *
- * - `scheduler.wait(delay, options?)` — alias for {@link setTimeout}
- * - `scheduler.yield()`              — yields control, resuming on next
- *   task (approximated via setImmediate → setTimeout(0) fallback).
- */
-export const scheduler = {
-  /**
-   * @param {number} delay
-   * @param {{ signal?: AbortSignal }} [options]
-   * @returns {Promise<void>}
-   */
-  wait: (delay, options) => setTimeout(delay, undefined, options),
+const kScheduler = Symbol('kScheduler');
+
+class Scheduler {
+  /** @hideconstructor */
+  constructor() {
+    throw new TypeError('Illegal constructor');
+  }
 
   /**
-   * Yields control to the event loop, allowing other tasks to run.
-   * Resolves on the next available microtask/macrotask boundary.
+   * Yields control to the event loop. Equivalent to `setImmediate()`.
    * @returns {Promise<void>}
    */
-  yield: () => setImmediate(undefined),
-};
+  yield() {
+    if (!this[kScheduler]) throw new TypeError('Invalid receiver');
+    return setImmediate(undefined);
+  }
+
+  /**
+   * Waits `delay` ms. Equivalent to `setTimeout(delay, undefined, options)`.
+   * @param {number} delay
+   * @param {{ signal?: AbortSignal; ref?: boolean }} [options]
+   * @returns {Promise<void>}
+   */
+  wait(delay, options) {
+    if (!this[kScheduler]) throw new TypeError('Invalid receiver');
+    return setTimeout(delay, undefined, options);
+  }
+}
+
+/**
+ * Scheduler instance (constructed via Reflect.construct to bypass the public
+ * constructor guard, exactly as Node does internally).
+ * @type {Scheduler}
+ */
+export const scheduler = (() => {
+  const s = Object.create(Scheduler.prototype);
+  s[kScheduler] = true;
+  return s;
+})();
 
 export default { setTimeout, setInterval, setImmediate, scheduler };
 
@@ -255,23 +360,32 @@ export default { setTimeout, setInterval, setImmediate, scheduler };
 // ac.abort();
 // await p.catch(e => console.log(e.code));  // 'ABORT_ERR'
 //
-// // setImmediate — deferred microtask
-// const val = await setImmediate('next');   // → 'next'
+// // setTimeout — abort with cause
+// const ac2 = new AbortController();
+// ac2.abort(new Error('user cancelled'));
+// await setTimeout(0, null, { signal: ac2.signal })
+//   .catch(e => console.log(e.cause.message));  // 'user cancelled'
 //
-// // setInterval — async iterator, break after 3 ticks
+// // setImmediate — deferred resolution
+// const val = await setImmediate('next');  // → 'next'
+//
+// // setInterval — break after 3 ticks
 // let i = 0;
-// for await (const tick of setInterval(200, i++)) {
-//   console.log(tick);   // 0, 1, 2
-//   if (i === 3) break;
+// for await (const _ of setInterval(200, 'tick')) {
+//   if (++i === 3) break;
 // }
 //
 // // setInterval — abort mid-stream
-// const ac2 = new AbortController();
-// timers.setTimeout(() => ac2.abort(), 350);
+// const ac3 = new AbortController();
+// setTimeout(350).then(() => ac3.abort());
 // try {
-//   for await (const _ of setInterval(100, null, { signal: ac2.signal })) { }
+//   for await (const _ of setInterval(100, null, { signal: ac3.signal })) {}
 // } catch (e) { console.log(e.code); }  // 'ABORT_ERR'
 //
 // // scheduler
-// await scheduler.wait(200);   // same as setTimeout(200)
-// await scheduler.yield();     // hand control back to event loop
+// await scheduler.wait(200);  // same as setTimeout(200)
+// await scheduler.yield();    // hand control back to event loop
+//
+// // validation errors (rejected promise, not thrown)
+// await setTimeout('oops').catch(e => console.log(e.code));  // ERR_INVALID_ARG_TYPE
+// await setImmediate('v', null).catch(e => console.log(e.code));  // ERR_INVALID_ARG_TYPE
