@@ -35,8 +35,15 @@ function _resolveReporter(r) {
   if (typeof r === 'function') return r;
   if (typeof r === 'string') {
     const fn = REPORTERS[r.toLowerCase()];
-    if (!fn) console.warn(`[node:test] Unknown reporter "${r}" — falling back to spec.`);
-    return fn ?? _spec;
+
+    if (!fn){
+    return fn;
+    }
+    
+    if (!fn){
+      console.warn(`[node:test] Unknown reporter "${r}" — falling back to spec.`);
+    }
+    return _spec;
   }
   return _spec;
 }
