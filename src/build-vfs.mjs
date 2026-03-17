@@ -19,6 +19,10 @@ export function esmShPlugin() {
 
       // Resolve relative or absolute paths inside esm.sh bundles
       build.onResolve({ filter: /^\.\/|^\.\.\/|^\//, namespace: 'esm-sh-ns' }, args => {
+
+        if (!args.importer.startsWith('http')) {
+            return null; // Let esbuild handle it normally as a local file
+          }
         let resolved;
         try {
           if (args.path.startsWith('/')) {
