@@ -1,3 +1,5 @@
+// npm install timers-browserify setimmediate
+
 /*!
  * timers-web — node:timers for browsers & bundlers
  * MIT License. Adapted from timers-browserify (MIT, J. Buchanan)
@@ -24,7 +26,20 @@ const scope =
   (typeof self   !== 'undefined' && self)   ||
   globalThis;
 
-const { apply } = Function.prototype;
+// ---------------------------------------------------------------------------
+// !! Capture native functions at module evaluation time !!
+//
+// This MUST happen before any export is defined. Bundlers (webpack, esbuild,
+// Rollup) can replace globalThis.setTimeout with our own export after the
+// module loads. If we looked up scope.setTimeout at call time we'd recurse
+// infinitely. Capturing here freezes the native reference permanently.
+// ---------------------------------------------------------------------------
+const _setTimeout    = scope.setTimeout.bind(scope);
+const _clearTimeout  = scope.clearTimeout.bind(scope);
+const _setInterval   = scope.setInterval.bind(scope);
+const _clearInterval = scope.clearInterval.bind(scope);
+const _setImmediate  = (scope.setImmediate  ?? globalThis.setImmediate).bind(scope);
+const _clearImmediate= (scope.clearImmediate ?? globalThis.clearImmediate).bind(scope);
 
 // ---------------------------------------------------------------------------
 // Timeout — wraps a native timer handle with the Node.js Timeout interface
@@ -33,7 +48,7 @@ const { apply } = Function.prototype;
 /**
  * Node-compatible timer handle.
  * @param {ReturnType<typeof setTimeout>} id  - Native browser timer id.
- * @param {(id: any) => void} clearFn         - Matching clear function.
+ * @param {(id: any) => void} clearFn         - Captured native clear function.
  */
 function Timeout(id, clearFn) {
   this._id      = id;
@@ -49,22 +64,20 @@ Timeout.prototype[Symbol.toPrimitive] = function () { return this._id; };
 
 /**
  * Cancels the timer. Equivalent to clearTimeout / clearInterval.
+ * Uses the captured native clear function — never our own exported wrapper.
  * @returns {void}
  */
 Timeout.prototype.close = function () {
-  this._clearFn.call(scope, this._id);
+  this._clearFn(this._id);
 };
 
-// Immediate mirrors Timeout but uses clearImmediate.
-/**
- * @param {ReturnType<typeof setImmediate>} id
- */
+/** @param {ReturnType<typeof setImmediate>} id */
 function Immediate(id) {
   this._id = id;
 }
 Immediate.prototype.ref   = function () { return this; };
 Immediate.prototype.unref = function () { return this; };
-Immediate.prototype.close = function () { scope.clearImmediate(this._id); };
+Immediate.prototype.close = function () { _clearImmediate(this._id); };
 
 // ---------------------------------------------------------------------------
 // Core timer exports
@@ -76,15 +89,14 @@ Immediate.prototype.close = function () { scope.clearImmediate(this._id); };
  * @param {number} [delay=0]
  * @param {...any} args - Forwarded to fn when it fires.
  * @returns {Timeout}
+ *
  * @example
  * const t = setTimeout(() => console.log('hi'), 500);
  * t.close(); // cancel
  */
 export function setTimeout(fn, delay, ...args) {
-  return new Timeout(
-    apply.call(scope.setTimeout, scope, [fn, delay, ...args]),
-    clearTimeout,
-  );
+  // Use _setTimeout — the reference captured at module load, never our own export.
+  return new Timeout(_setTimeout(fn, delay, ...args), _clearTimeout);
 }
 
 /**
@@ -93,15 +105,13 @@ export function setTimeout(fn, delay, ...args) {
  * @param {number} [delay=0]
  * @param {...any} args
  * @returns {Timeout}
+ *
  * @example
  * const iv = setInterval(() => console.log('tick'), 1000);
  * setTimeout(() => iv.close(), 3500); // stop after ~3 ticks
  */
 export function setInterval(fn, delay, ...args) {
-  return new Timeout(
-    apply.call(scope.setInterval, scope, [fn, delay, ...args]),
-    clearInterval,
-  );
+  return new Timeout(_setInterval(fn, delay, ...args), _clearInterval);
 }
 
 /**
@@ -111,7 +121,7 @@ export function setInterval(fn, delay, ...args) {
 export function clearTimeout(timeout) {
   if (!timeout) return;
   if (typeof timeout.close === 'function') timeout.close();
-  else scope.clearTimeout(timeout);
+  else _clearTimeout(timeout);
 }
 
 /** Alias — clearInterval and clearTimeout are interchangeable in browsers. */
@@ -122,14 +132,13 @@ export { clearTimeout as clearInterval };
  * @param {(...args: any[]) => void} fn
  * @param {...any} args
  * @returns {Immediate}
+ *
  * @example
  * const im = setImmediate(() => console.log('immediate'));
  * clearImmediate(im);
  */
 export function setImmediate(fn, ...args) {
-  return new Immediate(
-    apply.call(scope.setImmediate, scope, [fn, ...args]),
-  );
+  return new Immediate(_setImmediate(fn, ...args));
 }
 
 /**
@@ -139,7 +148,7 @@ export function setImmediate(fn, ...args) {
 export function clearImmediate(immediate) {
   if (!immediate) return;
   if (typeof immediate.close === 'function') immediate.close();
-  else scope.clearImmediate(immediate);
+  else _clearImmediate(immediate);
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +161,7 @@ export function clearImmediate(immediate) {
  * @param {number} msecs
  */
 export function enroll(item, msecs) {
-  scope.clearTimeout(item._idleTimeoutId);
+  _clearTimeout(item._idleTimeoutId);
   item._idleTimeout = msecs;
 }
 
@@ -161,7 +170,7 @@ export function enroll(item, msecs) {
  * @param {{ _idleTimeoutId?: any; _idleTimeout?: number }} item
  */
 export function unenroll(item) {
-  scope.clearTimeout(item._idleTimeoutId);
+  _clearTimeout(item._idleTimeoutId);
   item._idleTimeout = -1;
 }
 
@@ -171,10 +180,10 @@ export function unenroll(item) {
  * @param {{ _idleTimeoutId?: any; _idleTimeout?: number; _onTimeout?: () => void }} item
  */
 export function active(item) {
-  scope.clearTimeout(item._idleTimeoutId);
+  _clearTimeout(item._idleTimeoutId);
   const ms = item._idleTimeout;
   if (ms >= 0) {
-    item._idleTimeoutId = scope.setTimeout(() => {
+    item._idleTimeoutId = _setTimeout(() => {
       if (item._onTimeout) item._onTimeout();
     }, ms);
   }
