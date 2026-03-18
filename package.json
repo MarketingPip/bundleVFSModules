@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "jest",
     "build": "./src/build-vfs.mjs",
     "build_fixture": "node -e \"const m = require('module').builtinModules; console.log(JSON.stringify([...m, ...m.filter(x => !x.startsWith('node:')).map(x => 'node:'+x)]))\" > ./lib/builtin-modules.json"
   },
