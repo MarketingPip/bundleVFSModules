@@ -36,7 +36,7 @@ function _resolveReporter(r) {
   if (typeof r === 'string') {
     const fn = REPORTERS[r.toLowerCase()];
 
-    if (!fn){
+    if (fn){
     return fn;
     }
     
