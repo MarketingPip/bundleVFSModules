@@ -1,5 +1,5 @@
 // adjust path if needed
-import { describe, test, expect } from '@jest/globals';
+import {jest, describe, test, expect } from '@jest/globals';
 
 import timers, {
   setTimeout, clearTimeout,
