@@ -72,6 +72,7 @@ export function monitorEventLoopDelay(options) {
 
 export default {
   performance,
+  Histogram,
   PerformanceObserver,
   createHistogram,
   monitorEventLoopDelay
