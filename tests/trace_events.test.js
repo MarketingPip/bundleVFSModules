@@ -13,26 +13,24 @@ describe('trace_events wrapper', () => {
     jest.restoreAllMocks();
   });
 
+  // ================================
+  // createTracing() Validation Tests
+  // ================================
   describe('createTracing()', () => {
     test('validates options is an object', () => {
-      // FIX: Match the actual message string. 
-      // Your factory: `The "options" argument must be of type an Object. Received null`
       expect(() => trace_events.createTracing(null))
-        .toThrow(/argument must be of type an Object/);
+        .toThrow(/must be an Object/);
     });
 
     test('validates categories is a string array', () => {
       expect(() => trace_events.createTracing({ categories: 'not-an-array' }))
-        .toThrow(/argument must be of type an Array/);
-        
-      // Your factory uses "a string" for nested elements
+        .toThrow(/must be of type Array/);
+
       expect(() => trace_events.createTracing({ categories: ['valid', 123] }))
-        .toThrow(/argument must be of type a string/);
+        .toThrow(/must be of type a string/);
     });
 
     test('throws if categories array is empty', () => {
-      // FIX: Match the message. 
-      // To check the code property specifically, we'd need a try/catch.
       expect(() => trace_events.createTracing({ categories: [] }))
         .toThrow(/At least one category is required/);
     });
@@ -41,10 +39,13 @@ describe('trace_events wrapper', () => {
       const t = trace_events.createTracing({ categories: ['node', 'v8'] });
       expect(t.enabled).toBe(false);
       expect(t.categories).toBe('node,v8');
-      t.disable(); 
+      t.disable();
     });
   });
 
+  // ================================
+  // Enabled Categories & Reference Counting
+  // ================================
   describe('getEnabledCategories() and Reference Counting', () => {
     test('accurately tracks union of enabled categories', () => {
       const t1 = trace_events.createTracing({ categories: ['node', 'v8'] });
@@ -69,6 +70,9 @@ describe('trace_events wrapper', () => {
     });
   });
 
+  // ================================
+  // Event Bus (onTraceEvent / emitTraceEvent)
+  // ================================
   describe('Event Bus (onTraceEvent / emitTraceEvent)', () => {
     test('listeners receive events only when category is enabled', () => {
       const handler = jest.fn();
@@ -105,12 +109,14 @@ describe('trace_events wrapper', () => {
     });
   });
 
+  // ================================
+  // PerformanceObserver Bridge
+  // ================================
   describe('PerformanceObserver Bridge', () => {
     test('activates PerformanceObserver when perf categories enabled', () => {
       const mockObserve = jest.fn();
       const mockDisconnect = jest.fn();
       
-      // FIX: Better global mocking pattern for globals that might not exist in JSDOM
       const originalPO = global.PerformanceObserver;
       global.PerformanceObserver = class {
         constructor() {}
@@ -132,6 +138,9 @@ describe('trace_events wrapper', () => {
     });
   });
 
+  // ================================
+  // Memory Leak Warning
+  // ================================
   describe('Memory Leak Warning', () => {
     test('warns when more than 10 Tracing objects are enabled', async () => {
       const pool = [];
@@ -152,6 +161,9 @@ describe('trace_events wrapper', () => {
     });
   });
 
+  // ================================
+  // util.inspect support
+  // ================================
   describe('util.inspect support', () => {
     test('returns correct string representation via custom symbol', () => {
       const t = trace_events.createTracing({ categories: ['v8'] });
