@@ -1,4 +1,4 @@
-import dc, { channel, hasSubscribers, subscribe, unsubscribe } from './diagnostic_channel';
+import dc, { channel, hasSubscribers, subscribe, unsubscribe } from '../src/diagnostic_channel.js';
 
 describe('diagnostics_channel shim', () => {
   const CHANNEL_NAME = 'test:event';
