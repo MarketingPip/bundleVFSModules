@@ -57,6 +57,8 @@ export class AssertionError extends Error { constructor(m=''){super(m);this.name
 function deepEq(a, b) {
   if (Object.is(a, b)) return true;
   if (typeof a !== typeof b || a === null || b === null) return false;
+  // Primitives: same type but Object.is failed → not equal
+  if (typeof a !== 'object' && typeof a !== 'function') return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   if (Array.isArray(a)) return a.length === b.length && a.every((v, i) => deepEq(v, b[i]));
   const ka = Object.keys(a), kb = Object.keys(b);
@@ -516,7 +518,12 @@ class TestNode {
     // each node gets its own MockTracker (auto-restored after run)
     this.mockTracker = new MockTracker();
   }
-  get isSuite() { return this._isSuite || !this.fn; }
+  get isSuite() {
+    // A node is only a suite if explicitly flagged — a fn-less skip/todo leaf is NOT a suite
+    if (this._isSuite) return true;
+    if (this.opts.skip || this.opts.todo) return false;
+    return !this.fn;
+  }
 }
 
 // ─── TestContext ──────────────────────────────────────────────────────────────
