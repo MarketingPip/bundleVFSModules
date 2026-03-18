@@ -9,7 +9,14 @@ import timers, {
 } from '../dist/timers.js';
 
 describe('timers-web', () => {
+  
+    beforeAll(() => {
+    jest.useFakeTimers();
+  });
 
+  afterAll(() => {
+    jest.useRealTimers();
+  });
   // -------------------------------------------------------------------------
   // setTimeout / clearTimeout
   // -------------------------------------------------------------------------
