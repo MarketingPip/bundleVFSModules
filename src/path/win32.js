@@ -25,7 +25,7 @@
 // path-browserify exposes only posix; win32 must be implemented here.
 // We import path solely for the fallback win32 alias it provides, but
 // we override every method with correct win32 semantics below.
-import path from '../path';
+import {posix} from '../path';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -363,9 +363,9 @@ export const win32 = {
   dirname, basename, extname, format, parse,
 };
 win32.win32 = win32;
-win32.posix = path.posix;  // forward to the POSIX impl from ./path
+win32.posix = posix;  // forward to the POSIX impl from ./path
 
-export const posix = path.posix;
+export posix;
 
 export default win32;
 
