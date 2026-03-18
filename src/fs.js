@@ -310,7 +310,7 @@ export default {
   createReadStream,
   createWriteStream,
   // constants
-  constants:memConstants,
+  constants,
   // promises API
   promises
 };
