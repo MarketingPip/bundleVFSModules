@@ -135,41 +135,43 @@ export class Interface {
   // ── Async iterator ──────────────────────────────────────────────────────
   /**
    * Iterates over each line of input, including unterminated final lines.
+   * We intercept raw 'data' events on the input stream so we can track any
+   * partial (newline-free) tail that the inner readline shim never emits.
    */
   [Symbol.asyncIterator]() {
-    const iface = this._iface;
-
-    // If the inner shim already implements asyncIterator, delegate to it.
-    // This preserves any internal buffering/queueing the shim provides.
-    if (typeof iface[Symbol.asyncIterator] === 'function') {
-      const inner = iface[Symbol.asyncIterator]();
-      return {
-        next:   ()     => inner.next(),
-        return: (value) => {
-          iface.close();
-          return inner.return
-            ? inner.return(value)
-            : Promise.resolve({ value, done: true });
-        },
-      };
-    }
-
-    // Fallback: build our own async queue over 'line' and 'close' events,
-    // plus a final flush of any unterminated buffered line at EOF.
-    const queue   = [];
-    let   done    = false;
-    let   waiting = null; // resolve fn of the consumer's pending next() call
+    const iface  = this._iface;
+    const input  = iface.input ?? iface._input;
+    const queue  = [];
+    let   done   = false;
+    let   waiting = null;
+    let   tail    = '';  // raw buffer of chars after the last \n
 
     const push = (value) => {
       if (waiting) { const r = waiting; waiting = null; r({ value, done: false }); }
       else queue.push(value);
     };
 
+    // Track raw bytes so we always know the un-emitted tail at EOF.
+    const onData = (chunk) => {
+      const str = typeof chunk === 'string' ? chunk : chunk.toString();
+      const nl  = str.lastIndexOf('\n');
+      if (nl === -1) {
+        tail += str;
+      } else {
+        tail = str.slice(nl + 1);
+      }
+    };
+    if (input && typeof input.on === 'function') {
+      input.on('data', onData);
+    }
+
     iface.on('line', push);
+
     iface.once('close', () => {
-      // Flush any final unterminated line buffered inside the inner shim.
-      const tail = iface.line;
-      if (tail) push(tail);
+      if (input && typeof input.off === 'function') input.off('data', onData);
+      // Flush any unterminated final line the inner shim never emitted.
+      if (tail.length) push(tail);
+      tail = '';
       done = true;
       if (waiting) { const r = waiting; waiting = null; r({ value: undefined, done: true }); }
     });
