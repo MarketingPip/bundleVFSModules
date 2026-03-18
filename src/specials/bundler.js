@@ -89,12 +89,28 @@ async function collectModules(entryUrl) {
 function topoSort(entryUrl, deps) {
   const order = [];
   const visited = new Set();
+  const recursionStack = new Set(); // Tracks modules in the current path
+
   function visit(url) {
+    if (recursionStack.has(url)) {
+      // Circular dependency detected!
+      console.warn(`Circular dependency detected: ${url} is part of a loop.`);
+      return; 
+    }
     if (visited.has(url)) return;
+
+    recursionStack.add(url);
     visited.add(url);
-    for (const dep of deps.get(url) ?? []) visit(dep);
-    order.push(url); // leaves first
+
+    const moduleDeps = deps.get(url) ?? [];
+    for (const dep of moduleDeps) {
+      visit(dep);
+    }
+
+    recursionStack.delete(url); // Path finished
+    order.push(url); // Post-order: dependencies first
   }
+
   visit(entryUrl);
   return order;
 }
@@ -117,25 +133,42 @@ export async function bundle(entryUrl) {
   const { modules, deps } = await collectModules(entryUrl);
   const order = topoSort(entryUrl, deps);
 
-  const blobUrls = {};
+  const blobUrls = new Map();
   const created = [];
 
   for (const url of order) {
     let code = modules.get(url);
-    // Rewrite each dep's absolute URL to its blob: URL
-    for (const depUrl of deps.get(url) ?? []) {
-      if (blobUrls[depUrl])
-        code = code.replaceAll(`"${depUrl}"`, `"${blobUrls[depUrl]}"`);
+    const moduleDeps = deps.get(url) ?? [];
+
+    /**
+     * Precise Rewriting:
+     * Instead of replaceAll (which might corrupt string literals), 
+     * we should ideally use the AST offsets. However, since we already 
+     * performed one pass of rewriting in collectModules, the offsets 
+     * have shifted. 
+     * * To be safe, we replace the absolute URLs generated in collectModules
+     * with their final blob: equivalents.
+     */
+    for (const depUrl of moduleDeps) {
+      const blobUrl = blobUrls.get(depUrl);
+      if (blobUrl) {
+        // We only replace exact quoted matches of the absolute URL
+        // to minimize accidental "partial string" corruption.
+        code = code.split(`"${depUrl}"`).join(`"${blobUrl}"`);
+      }
     }
-    const blobUrl = URL.createObjectURL(
-      new Blob([code], { type: "application/javascript" })
-    );
-    blobUrls[url] = blobUrl;
+
+    const blob = new Blob([code], { type: "application/javascript" });
+    const blobUrl = URL.createObjectURL(blob);
+    
+    blobUrls.set(url, blobUrl);
     created.push(blobUrl);
   }
 
   return {
-    url: blobUrls[entryUrl],
-    revoke() { created.forEach((u) => URL.revokeObjectURL(u)); },
+    url: blobUrls.get(entryUrl),
+    revoke() {
+      created.forEach((u) => URL.revokeObjectURL(u));
+    },
   };
 }
