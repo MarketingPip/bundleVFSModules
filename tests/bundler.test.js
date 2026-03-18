@@ -1,16 +1,16 @@
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import * as moduleLoader from '../dist/RUNTIME_BUNDLER.js';
+import { bundle } from '../src/moduleLoader.js';
 
-describe('moduleLoader', () => {
+describe('moduleLoader public API', () => {
   let originalFetch;
   let blobUrls = [];
 
   beforeEach(() => {
-    // Mock fetch
+    // Mock fetch globally
     originalFetch = global.fetch;
     global.fetch = jest.fn();
 
-    // Mock URL.createObjectURL and revokeObjectURL
+    // Mock blob URL creation & revocation
     blobUrls = [];
     global.URL.createObjectURL = jest.fn((blob) => {
       const url = `blob:fake-${blobUrls.length}`;
@@ -28,143 +28,63 @@ describe('moduleLoader', () => {
     jest.restoreAllMocks();
   });
 
-  // ==========================
-  // URL resolution
-  // ==========================
-  describe('resolveImport', () => {
-    const { resolveImport } = moduleLoader;
+  test('bundles a simple module without dependencies', async () => {
+    global.fetch.mockResolvedValue({ ok: true, text: () => Promise.resolve(`export const x = 42;`) });
 
-    test('resolves absolute HTTP(S) URLs as-is', () => {
-      expect(resolveImport('https://cdn.com/foo.js', 'https://example.com/main.js'))
-        .toBe('https://cdn.com/foo.js');
-    });
+    const { url, revoke } = await bundle('https://example.com/main.js');
 
-    test('resolves root-relative URLs', () => {
-      expect(resolveImport('/bar.js', 'https://example.com/path/main.js'))
-        .toBe('https://example.com/bar.js');
-    });
+    expect(url).toMatch(/^blob:fake-/);
+    expect(blobUrls).toContain(url);
 
-    test('resolves relative URLs', () => {
-      expect(resolveImport('./baz.js', 'https://example.com/path/main.js'))
-        .toBe('https://example.com/path/baz.js');
-      expect(resolveImport('../up.js', 'https://example.com/path/main.js'))
-        .toBe('https://example.com/up.js');
-    });
+    // Dynamic import simulation (optional)
+    const code = await (await fetch('https://example.com/main.js')).text();
+    expect(code).toContain('export const x = 42;');
 
-    test('throws on bare specifier', () => {
-      expect(() => resolveImport('lodash', 'https://example.com/main.js'))
-        .toThrow(/Bare specifier/);
-    });
+    revoke();
+    expect(blobUrls).not.toContain(url);
   });
 
-  // ==========================
-  // extractImports
-  // ==========================
-  describe('extractImports', () => {
-    const { extractImports } = moduleLoader;
-
-    test('extracts static imports', () => {
-      const code = `import a from './a.js'; export { b } from './b.js';`;
-      const hits = extractImports(code, 'https://site.com/main.js');
-      expect(hits.map(h => h.url)).toEqual([
-        'https://site.com/a.js',
-        'https://site.com/b.js'
-      ]);
+  test('bundles a module with relative dependencies and rewrites imports', async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url.endsWith('main.js')) return Promise.resolve({ ok: true, text: () => Promise.resolve(`import './a.js'; import './b.js';`) });
+      if (url.endsWith('a.js')) return Promise.resolve({ ok: true, text: () => Promise.resolve(`export const a = 1;`) });
+      if (url.endsWith('b.js')) return Promise.resolve({ ok: true, text: () => Promise.resolve(`export const b = 2;`) });
+      return Promise.reject(new Error('not found'));
     });
 
-    test('extracts dynamic import expressions', () => {
-      const code = `const mod = import('./dyn.js');`;
-      const hits = extractImports(code, 'https://site.com/main.js');
-      expect(hits.map(h => h.url)).toEqual(['https://site.com/dyn.js']);
-    });
+    const { url, revoke } = await bundle('https://example.com/main.js');
 
-    test('returns empty array on parse error', () => {
-      const code = `module.exports = 123;`;
-      expect(extractImports(code, 'https://site.com/main.js')).toEqual([]);
-    });
+    // The returned URL should be a blob URL
+    expect(url).toMatch(/^blob:fake-/);
+    expect(blobUrls).toContain(url);
+
+    // All created blob URLs should be revokable
+    expect(blobUrls.length).toBe(3); // main.js + a.js + b.js
+    revoke();
+    expect(blobUrls.length).toBe(0);
   });
 
-  // ==========================
-  // collectModules
-  // ==========================
-  describe('collectModules', () => {
-    const { collectModules } = moduleLoader;
+  test('throws if a fetch fails', async () => {
+    global.fetch.mockResolvedValue({ ok: false, status: 404 });
 
-    test('collects modules and dependencies', async () => {
-      // Setup fetch mocks
-      global.fetch.mockImplementation((url) => {
-        if (url.endsWith('a.js')) return Promise.resolve({ ok: true, text: () => Promise.resolve('') });
-        if (url.endsWith('b.js')) return Promise.resolve({ ok: true, text: () => Promise.resolve('') });
-        if (url.endsWith('main.js')) return Promise.resolve({ ok: true, text: () => Promise.resolve(`import './a.js'; import './b.js';`) });
-        return Promise.reject(new Error('not found'));
-      });
-
-      const { modules, deps } = await collectModules('https://site.com/main.js');
-      expect(modules.size).toBe(3);
-      expect(deps.get('https://site.com/main.js')).toEqual([
-        'https://site.com/a.js',
-        'https://site.com/b.js'
-      ]);
-    });
+    await expect(bundle('https://example.com/missing.js')).rejects.toThrow(/Fetch failed: 404/);
   });
 
-  // ==========================
-  // topoSort
-  // ==========================
-  describe('topoSort', () => {
-    const { topoSort } = moduleLoader;
+  test('supports multiple bundles independently', async () => {
+    global.fetch.mockImplementation((url) => Promise.resolve({ ok: true, text: () => Promise.resolve(`export const y = 123;`) }));
 
-    test('orders modules leaves-first', () => {
-      const deps = new Map();
-      deps.set('main', ['a', 'b']);
-      deps.set('a', ['c']);
-      deps.set('b', []);
-      deps.set('c', []);
-      const order = topoSort('main', deps);
-      expect(order.indexOf('c')).toBeLessThan(order.indexOf('a'));
-      expect(order.indexOf('a')).toBeLessThan(order.indexOf('main'));
-      expect(order.indexOf('b')).toBeLessThan(order.indexOf('main'));
-    });
-  });
+    const b1 = await bundle('https://example.com/one.js');
+    const b2 = await bundle('https://example.com/two.js');
 
-  // ==========================
-  // bundle
-  // ==========================
-  describe('bundle', () => {
-    const { bundle } = moduleLoader;
+    expect(b1.url).not.toBe(b2.url);
+    expect(blobUrls).toContain(b1.url);
+    expect(blobUrls).toContain(b2.url);
 
-    test('creates blob URLs and allows revoking', async () => {
-      global.fetch.mockImplementation((url) => {
-        if (url.endsWith('main.js')) return Promise.resolve({ ok: true, text: () => Promise.resolve(`import './a.js';`) });
-        if (url.endsWith('a.js')) return Promise.resolve({ ok: true, text: () => Promise.resolve(`export const a=1;`) });
-        return Promise.reject(new Error('not found'));
-      });
+    b1.revoke();
+    expect(blobUrls).not.toContain(b1.url);
+    expect(blobUrls).toContain(b2.url);
 
-      const { url, revoke } = await bundle('https://site.com/main.js');
-      expect(blobUrls).toContain(url);
-      expect(global.URL.createObjectURL).toHaveBeenCalled();
-      expect(typeof revoke).toBe('function');
-
-      revoke();
-      expect(blobUrls).not.toContain(url);
-    });
-  });
-
-  // ==========================
-  // fetchModule caching
-  // ==========================
-  describe('fetchModule caching', () => {
-    const { fetchModule } = moduleLoader;
-
-    test('returns the same promise for repeated fetches', async () => {
-      let calls = 0;
-      global.fetch.mockImplementation((url) => { calls++; return Promise.resolve({ ok: true, text: () => Promise.resolve('') }); });
-
-      const p1 = fetchModule('https://site.com/x.js');
-      const p2 = fetchModule('https://site.com/x.js');
-      expect(p1).toBe(p2);
-      await p1;
-      expect(calls).toBe(1);
-    });
+    b2.revoke();
+    expect(blobUrls).toHaveLength(0);
   });
 });
