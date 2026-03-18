@@ -185,7 +185,9 @@ export const types = {
    * @param {unknown} v
    * @returns {boolean}
    */
-  isAnyArrayBuffer: (v) => v instanceof ArrayBuffer,
+  isAnyArrayBuffer: (v) =>
+    v instanceof ArrayBuffer ||
+    (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer),
 
   /**
    * Returns `true` if the value is a `DataView`.
