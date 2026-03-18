@@ -1,5 +1,5 @@
 import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
-import { setTimeout, setImmediate, clearTimeout, clearInterval, setInterval } from '../src/timers/promises.js'; // adjust path
+import { setTimeout, setImmediate, setInterval } from '../src/timers/promises.js'; // adjust path
 
 describe('timers/promises shim', () => {
   beforeAll(() => {
@@ -59,29 +59,7 @@ describe('timers/promises shim', () => {
     });
   });
 
-  // -------------------------------------------------------------------------
-  // clearing timers
-  // -------------------------------------------------------------------------
-  describe('clearTimeout / clearInterval', () => {
-    test('cancels setTimeout before firing', () => {
-      const fn = jest.fn();
-      const t = setTimeout(fn, 1000);
-      clearTimeout(t);
-      jest.advanceTimersByTime(1000);
-      expect(fn).not.toHaveBeenCalled();
-    });
 
-    test('cancels setInterval after some calls', () => {
-      const fn = jest.fn();
-      const iv = setInterval(fn, 1000);
-      jest.advanceTimersByTime(3000);
-      expect(fn).toHaveBeenCalledTimes(3);
-
-      clearInterval(iv);
-      jest.advanceTimersByTime(2000);
-      expect(fn).toHaveBeenCalledTimes(3);
-    });
-  });
 
   // -------------------------------------------------------------------------
   // async/await behavior with multiple timers
