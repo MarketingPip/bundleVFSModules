@@ -406,8 +406,7 @@ export default win32;
 // // → 'C:\Windows'
 
 
-/// TESTS
-/* 
+/**
 import {
   describe,
   test,
@@ -581,4 +580,4 @@ describe('win32 path implementation', () => {
 // run tests
 run().then(console.log);
 
-/
+*/
