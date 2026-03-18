@@ -1,86 +1,132 @@
 /**
- * tls shim - TLS/SSL is not available in browser
- * Provides stubs that allow code to load without crashing
+ * tls shim - Wraps net.Socket to simulate encrypted connections
  */
+import { Socket } from "./net"
+import { EventEmitter } from "events"
+import { Buffer } from 'buffer'
 
-import { EventEmitter } from "./events"
-
-export class TLSSocket extends EventEmitter {
-  authorized = false
+/**
+ * TLSSocket inherits from net.Socket to provide stream capabilities
+ */
+export class TLSSocket extends Socket {
+  authorized = true
   encrypted = true
+  _secureEstablished = false
 
-  constructor(_socket, _options) {
-    super()
+  constructor(socket, options = {}) {
+    // If a raw socket is provided, we wrap it (Node.js behavior)
+    // Otherwise, we act as a standalone socket
+    super(options)
+    
+    if (socket instanceof Socket) {
+      this._parentSocket = socket
+    }
+
+    // Node.js TLS sockets must emit 'secureConnect' after 'connect'
+    this.on("connect", () => {
+      queueMicrotask(() => {
+        this._secureEstablished = true
+        this.emit("secureConnect")
+      })
+    })
   }
 
-  getPeerCertificate(_detailed) {
-    return {}
+  getPeerCertificate(detailed) {
+    return {
+      subject: { CN: "localhost" },
+      issuer: { CN: "Browser Shim CA" },
+      valid_from: new Date().toUTCString(),
+      valid_to: "Dec 31 2099",
+      fingerprint: "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+    }
   }
 
   getCipher() {
-    return null
+    return {
+      name: "TLS_AES_256_GCM_SHA384",
+      standardName: "TLS_AES_256_GCM_SHA384",
+      version: "TLSv1.3"
+    }
   }
 
   getProtocol() {
-    return null
+    return "TLSv1.3"
   }
 
-  setServername(_name) {}
+  setServername(name) {
+    this.servername = name
+  }
 
-  renegotiate(_options, _callback) {
-    return false
+  renegotiate(_options, callback) {
+    if (callback) queueMicrotask(callback)
+    return true
   }
 }
 
+/**
+ * Virtual TLS Server
+ */
 export class Server extends EventEmitter {
-  constructor(_options, _connectionListener) {
+  constructor(options, connectionListener) {
     super()
+    if (connectionListener) this.on("secureConnection", connectionListener)
   }
 
-  listen(..._args) {
+  listen(...args) {
+    // Return this for chaining, simulates starting a listener
+    queueMicrotask(() => this.emit("listening"))
     return this
   }
 
-  close(_callback) {
+  close(callback) {
+    if (callback) queueMicrotask(callback)
+    this.emit("close")
     return this
   }
 
   address() {
-    return null
+    return { port: 443, family: "IPv4", address: "127.0.0.1" }
   }
 
   getTicketKeys() {
-    return Buffer.from("")
+    return Buffer.alloc(48)
   }
 
   setTicketKeys(_keys) {}
-
   setSecureContext(_options) {}
 }
 
-export function createServer(_options, _connectionListener) {
-  return new Server(_options, _connectionListener)
+/**
+ * Factory functions
+ */
+export function createServer(options, connectionListener) {
+  return new Server(options, connectionListener)
 }
 
-export function connect(_options, _callback) {
+export function connect(portOrOptions, hostOrCallback, callback) {
   const socket = new TLSSocket()
-  if (_callback) {
-    setTimeout(_callback, 0)
+  
+  // Reuse the connection logic from net.Socket
+  let options = {}
+  let cb = callback
+
+  if (typeof portOrOptions === "object") {
+    options = portOrOptions
+    cb = hostOrCallback || callback
+  } else {
+    options.port = portOrOptions
+    options.host = hostOrCallback
   }
-  return socket
+
+  return socket.connect(options, cb)
 }
 
+// Constants and Helpers
 export const createSecureContext = _options => ({})
-
-export const getCiphers = () => [
-  "TLS_AES_256_GCM_SHA384",
-  "TLS_AES_128_GCM_SHA256"
-]
-
+export const getCiphers = () => ["TLS_AES_256_GCM_SHA384", "TLS_AES_128_GCM_SHA256"]
 export const DEFAULT_ECDH_CURVE = "auto"
 export const DEFAULT_MAX_VERSION = "TLSv1.3"
 export const DEFAULT_MIN_VERSION = "TLSv1.2"
-
 export const rootCertificates = []
 
 export default {
