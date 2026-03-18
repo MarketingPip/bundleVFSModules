@@ -141,6 +141,8 @@ Function.prototype.toString = function () {
 
 /* install patch while preserving descriptor */
 
+globalThis.console.table = table;
+        
 Object.defineProperty(console, "table", {
   ...originalDescriptor,
   value: table
