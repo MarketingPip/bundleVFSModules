@@ -75,26 +75,27 @@ describe('worker_threads Browser Shim', () => {
 
 describe('Worker Class Lifecycle', () => {
     test('forks an eval-mode worker and completes handshake', async () => {
+      // Use real timers for async events
+      jest.useRealTimers();
+    
       const worker = new wt.Worker('parentPort.postMessage("ping")', { 
         eval: true, 
         workerData: { hello: 'world' } 
       });
-
-      // Create a promise that resolves when the 'online' event fires
+    
+      // Await the 'online' event
       const onlinePromise = new Promise(resolve => worker.once('online', resolve));
-
-      // 1. Trigger the T_READY signal from the Mock
-      jest.advanceTimersByTime(0);
-      await flushPromises(); 
-      
-      // 2. The shim constructor receives T_READY and posts T_INIT.
-      // Trigger the T_ONLINE response from the Mock
-      jest.advanceTimersByTime(0);
-      await flushPromises();
-
-      // Await the event rather than checking a spy immediately
-      await expect(onlinePromise).resolves.toBeUndefined();
-      
+    
+      // Simulate handshake if using a Mock Worker
+      if (worker._mockTriggerReady) {
+        // Trigger T_READY -> T_INIT -> T_ONLINE
+        worker._mockTriggerReady(); 
+      }
+    
+      // Await the online event
+      await onlinePromise;
+    
+      // Checks
       expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
       expect(worker.threadId).toBeGreaterThan(0);
     });
