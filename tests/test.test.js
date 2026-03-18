@@ -1,6 +1,12 @@
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 import nodeTest, { MockTracker, MockTimers, _reset } from '../src/test.js';
 
+globalThis._RUNTIME_ = {
+  _TEST_RUNNER_: {
+    REPORTER_TYPE: 'spec'
+  }
+};
+
 describe('node:test Browser Shim', () => {
   beforeEach(() => {
     _reset(); // Clear singleton state between tests
