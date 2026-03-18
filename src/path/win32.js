@@ -365,7 +365,7 @@ export const win32 = {
 win32.win32 = win32;
 win32.posix = posix;  // forward to the POSIX impl from ./path
 
-export posix;
+export {posix};
 
 export default win32;
 
