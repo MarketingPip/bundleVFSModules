@@ -46,16 +46,19 @@ describe('SEA (Single Executable Application) wrapper', () => {
 
   describe('Global Injection (__SEA_INJECT__)', () => {
     test('decodes base64 assets from global object on load', async () => {
+      // Setup global before importing the module
       global.__SEA_INJECT__ = {
         'config.json': btoa(JSON.stringify({ port: 8080 }))
       };
-
-      // FIX: isolateModulesAsync returns the result of the callback
-      const isolatedSea = await jest.isolateModulesAsync(async () => {
-        const mod = await import('../src/sea.js');
-        return mod;
+  
+      let isolatedSea; // outer variable to capture the imported module
+  
+      // Isolate module to trigger load-time injection logic
+      await jest.isolateModulesAsync(async () => {
+        isolatedSea = await import('../src/sea.js');
       });
-
+  
+      // Now isolatedSea is defined
       expect(isolatedSea.isSea()).toBe(true);
       const config = isolatedSea.getAsset('config.json', 'utf-8');
       expect(JSON.parse(config)).toEqual({ port: 8080 });
