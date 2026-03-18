@@ -655,69 +655,69 @@ async function _scheduleSubtest(parent, name, opts, fn) {
 
 async function _runNode(node, iBefore = [], iAfter = []) {
   const ctx = new TestContext(node);
-  const t0  = performance.now();
+  const t0 = performance.now();
 
-  if (node.opts.skip) {
-    node.result = 'skip';
-    _emit('test:skip', { name: node.name, node });
-    node.duration = performance.now() - t0;
-    _emit('test:complete', { name: node.name, node });
-    return node;
-  }
-  if (node.opts.todo) {
-    node.result = 'todo';
-    _emit('test:todo', { name: node.name, node });
+  // Handle immediate Skip/Todo
+  if (node.opts.skip || node.opts.todo) {
+    node.result = node.opts.skip ? 'skip' : 'todo';
+    _emit(`test:${node.result}`, { name: node.name, node });
     node.duration = performance.now() - t0;
     _emit('test:complete', { name: node.name, node });
     return node;
   }
 
-  // before hooks
+  // Before hooks
   for (const h of [...iBefore, ...node._before]) {
     try { await h.fn(ctx); } catch (e) { if (!node.error) node.error = e; }
   }
 
   try {
     if (node.fn) {
-      const timer = new Promise((_, rej) =>
-        (node._timerHandle = globalThis.setTimeout(
-          () => rej(new Error(`Test "${node.name}" timed out after ${node.opts.timeout}ms`)),
-          node.opts.timeout,
-        ))
-      );
-      const _run = new Promise((res, rej) => {
-        try { res(node.fn(ctx)); } catch (e) { rej(e); }
+      let timeoutId;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = globalThis.setTimeout(() => {
+          reject(new Error(`Test "${node.name}" timed out after ${node.opts.timeout}ms`));
+        }, node.opts.timeout);
       });
-      await Promise.race([_run, timer]);
-      globalThis.clearTimeout(node._timerHandle);
+
+      // Wrap fn call in Promise.resolve to handle both sync and async functions
+      const testPromise = Promise.resolve(node.fn(ctx));
+
+      try {
+        await Promise.race([testPromise, timeoutPromise]);
+      } finally {
+        globalThis.clearTimeout(timeoutId);
+      }
     }
+
     node._passed = true;
-    node.result  = 'pass';
+    node.result = 'pass';
     _emit('test:pass', { name: node.name, node });
   } catch (e) {
-    globalThis.clearTimeout(node._timerHandle);
+    // This catch block now correctly receives rejected promises and sync throws
     if (e instanceof SkipError) {
-      node.result = 'skip'; _emit('test:skip', { name: node.name, node });
+      node.result = 'skip';
+      _emit('test:skip', { name: node.name, node });
     } else if (e instanceof TodoError) {
-      node.result = 'todo'; _emit('test:todo', { name: node.name, node });
+      node.result = 'todo';
+      _emit('test:todo', { name: node.name, node });
     } else {
       node._passed = false;
-      node.result  = 'fail';
-      node.error   = e;
+      node.result = 'fail';
+      node.error = e;
       _emit('test:fail', { name: node.name, node, error: e });
     }
   }
 
-  // after hooks (run even on failure, matching Node spec)
+  // After hooks
   for (const h of [...node._after, ...iAfter].reverse()) {
     try { await h.fn(ctx); } catch (e) { if (!node.error) node.error = e; }
   }
 
-  // auto-restore per-test mocks
   node.mockTracker.reset();
-
   node.duration = performance.now() - t0;
   _emit('test:complete', { name: node.name, node });
+  
   return node;
 }
 
