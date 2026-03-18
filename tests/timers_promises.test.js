@@ -1,6 +1,11 @@
 import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
-import { setTimeout, setImmediate, setInterval } from '../src/timers/promises.js';
-
+ 
+import {
+  setTimeout as tpSetTimeout,
+  setImmediate,
+  setInterval,
+  scheduler
+} from '../src/timers/promises.js';
 
 describe('timers/promises', () => {
 
@@ -8,23 +13,23 @@ describe('timers/promises', () => {
   // setTimeout tests
   // ---------------------------
   describe('setTimeout', () => {
-    jest.useRealTimers(); // ensure real timers for async behavior
+    jest.useRealTimers();
 
     it('resolves after a delay with the given value', async () => {
-      const result = await setTimeout(50, 'ok');
+      const result = await tpSetTimeout(50, 'ok');
       expect(result).toBe('ok');
     });
 
     it('uses default delay when none is provided', async () => {
       const start = Date.now();
-      await setTimeout();
+      await tpSetTimeout();
       expect(Date.now() - start).toBeGreaterThanOrEqual(1);
     });
 
     it('rejects immediately if signal is already aborted', async () => {
       const ac = new AbortController();
       ac.abort();
-      await expect(setTimeout(10, null, { signal: ac.signal })).rejects.toMatchObject({
+      await expect(tpSetTimeout(10, null, { signal: ac.signal })).rejects.toMatchObject({
         name: 'AbortError',
         code: 'ABORT_ERR'
       });
@@ -32,8 +37,9 @@ describe('timers/promises', () => {
 
     it('rejects if aborted during the timeout', async () => {
       const ac = new AbortController();
-      const promise = setTimeout(100, 'late', { signal: ac.signal });
-      setTimeout(() => ac.abort(), 20);
+      const promise = tpSetTimeout(100, 'late', { signal: ac.signal });
+      // use native timer to abort
+      globalThis.setTimeout(() => ac.abort(), 20);
       await expect(promise).rejects.toMatchObject({
         name: 'AbortError',
         code: 'ABORT_ERR'
@@ -41,13 +47,13 @@ describe('timers/promises', () => {
     });
 
     it('rejects with ERR_INVALID_ARG_TYPE for invalid delay', async () => {
-      await expect(setTimeout('oops')).rejects.toMatchObject({
+      await expect(tpSetTimeout('oops')).rejects.toMatchObject({
         code: 'ERR_INVALID_ARG_TYPE'
       });
     });
 
     it('rejects with ERR_INVALID_ARG_TYPE for invalid options', async () => {
-      await expect(setTimeout(10, null, 'not-an-object')).rejects.toMatchObject({
+      await expect(tpSetTimeout(10, null, 'not-an-object')).rejects.toMatchObject({
         code: 'ERR_INVALID_ARG_TYPE'
       });
     });
@@ -93,9 +99,10 @@ describe('timers/promises', () => {
     });
 
     it('throws AbortError if signal is aborted during iteration', async () => {
+      jest.setTimeout(1000); // prevent Jest timeout
       const ac = new AbortController();
       const interval = setInterval(50, 'x', { signal: ac.signal });
-      setTimeout(() => ac.abort(), 60);
+      globalThis.setTimeout(() => ac.abort(), 60); // use native timer
       await expect(async () => {
         for await (const _ of interval) {}
       }).rejects.toMatchObject({ name: 'AbortError', code: 'ABORT_ERR' });
@@ -128,7 +135,7 @@ describe('timers/promises', () => {
 
     it('scheduler.yield resolves immediately (next tick)', async () => {
       let executed = false;
-      setImmediate(() => { executed = true; });
+      globalThis.setImmediate(() => { executed = true; });
       await scheduler.yield();
       expect(executed).toBe(true);
     });
