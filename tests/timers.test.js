@@ -54,7 +54,7 @@ describe('timers-web', () => {
       // Closing the timeout prevents the callback from firing
       t.close();
       jest.advanceTimersByTime(20);
-      expect(fn).not.toBeCalled();
+      expect(fn).not.toHaveBeenCalled();
     });
   }); 
   // -------------------------------------------------------------------------
