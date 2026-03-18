@@ -1,5 +1,4 @@
- import BrowserStdout from 'browser-stdout';
+import BrowserStdout from 'browser-stdout';
 
-if(globalThis.process){
-process.stdout = browserStdout({ label: false });
-}
+export default browserStdout({ label: false });
+
