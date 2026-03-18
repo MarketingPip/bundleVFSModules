@@ -8,6 +8,7 @@ import http, {
 } from '../src/http.js';
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 
+global.Buffer = Buffer;
 
 // Mock the Fetch API
 global.fetch = jest.fn();
