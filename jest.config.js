@@ -6,7 +6,7 @@ export default {
 
   // important for modern ESM setups
   transform: {},
-  extensionsToTreatAsEsm: [".js"],
+
   // optional but useful
   verbose: true,
 };
