@@ -1,5 +1,5 @@
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import { bundle } from '../src/moduleLoader.js';
+import { bundle } from '../dist/RUNTIME_BUNDLER.js';
 
 describe('moduleLoader public API', () => {
   let originalFetch;
