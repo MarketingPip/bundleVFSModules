@@ -56,6 +56,7 @@ describe('timers-web', () => {
       jest.advanceTimersByTime(20);
       expect(fn).not.toBeCalled();
     });
+  }); 
   // -------------------------------------------------------------------------
   // setInterval / clearInterval
   // -------------------------------------------------------------------------
