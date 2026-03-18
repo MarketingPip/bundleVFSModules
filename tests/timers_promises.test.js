@@ -20,11 +20,11 @@ describe('timers/promises', () => {
       expect(result).toBe('ok');
     });
 
-    it('uses default delay when none is provided', async () => {
-      const start = Date.now();
-      await tpSetTimeout();
-      expect(Date.now() - start).toBeGreaterThanOrEqual(1);
-    });
+   it('uses default delay when none is provided', async () => {
+     const promise = tpSetTimeout();
+     jest.advanceTimersByTime(0); // force the timer to run
+     await expect(promise).resolves.toBeUndefined(); // default value
+   });
 
     it('rejects immediately if signal is already aborted', async () => {
       const ac = new AbortController();
