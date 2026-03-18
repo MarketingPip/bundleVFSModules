@@ -407,7 +407,8 @@ export default win32;
 
 
 /// TESTS
-/* import {
+/* 
+import {
   describe,
   test,
   expect,
