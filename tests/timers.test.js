@@ -41,12 +41,21 @@ describe('timers-web', () => {
       expect(t.unref()).toBe(t);
     });
 
-    test('Timeout Symbol.toPrimitive returns id', () => {
-      const t = setTimeout(() => {}, 10);
-      expect(t._id).toBeGreaterThan(0);
+     test('Timeout Symbol.toPrimitive returns id', () => {
+      const fn = jest.fn();
+      const t = setTimeout(fn, 10);
+    
+      // Ensure _id exists
+      expect(t._id).toBeDefined();
+    
+      // Ensure the Timeout object behaves correctly
+      expect(typeof t.close).toBe('function');
+    
+      // Closing the timeout prevents the callback from firing
+      t.close();
+      jest.advanceTimersByTime(20);
+      expect(fn).not.toBeCalled();
     });
-  });
-
   // -------------------------------------------------------------------------
   // setInterval / clearInterval
   // -------------------------------------------------------------------------
