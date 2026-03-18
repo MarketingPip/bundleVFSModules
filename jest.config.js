@@ -2,7 +2,7 @@ export default {
   testEnvironment: "node",
 
   // where tests live
-  testMatch: ["<rootDir>/test/*.test.js"],
+  testMatch: ["<rootDir>/tests/*.test.js"],
 
   // important for modern ESM setups
   transform: {},
