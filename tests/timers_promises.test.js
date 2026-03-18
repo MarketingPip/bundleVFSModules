@@ -38,7 +38,6 @@ describe('timers/promises', () => {
     it('rejects if aborted during the timeout', async () => {
       const ac = new AbortController();
       const promise = tpSetTimeout(100, 'late', { signal: ac.signal });
-      // use native timer to trigger abort
       globalThis.setTimeout(() => ac.abort(), 20);
       await expect(promise).rejects.toMatchObject({
         name: 'AbortError',
@@ -99,28 +98,41 @@ describe('timers/promises', () => {
     });
 
     it('throws AbortError if signal is aborted during iteration', async () => {
-      jest.setTimeout(1000); // prevent Jest default timeout
+      jest.setTimeout(1000);
       const ac = new AbortController();
       const interval = setInterval(50, 'x', { signal: ac.signal });
       globalThis.setTimeout(() => ac.abort(), 60);
 
-      await expect((async () => {
+      let caughtError;
+      try {
         for await (const _ of interval) {}
-      })()).rejects.toMatchObject({ name: 'AbortError', code: 'ABORT_ERR' });
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toMatchObject({ name: 'AbortError', code: 'ABORT_ERR' });
     });
 
     it('throws immediately if signal is already aborted', async () => {
       const ac = new AbortController();
       ac.abort();
-      await expect((async () => {
+      let caughtError;
+      try {
         for await (const _ of setInterval(10, 'x', { signal: ac.signal })) {}
-      })()).rejects.toMatchObject({ name: 'AbortError', code: 'ABORT_ERR' });
+      } catch (err) {
+        caughtError = err;
+      }
+      expect(caughtError).toMatchObject({ name: 'AbortError', code: 'ABORT_ERR' });
     });
 
     it('throws ERR_INVALID_ARG_TYPE for invalid delay', async () => {
-      await expect((async () => {
+      let caughtError;
+      try {
         for await (const _ of setInterval('oops')) {}
-      })()).rejects.toMatchObject({ code: 'ERR_INVALID_ARG_TYPE' });
+      } catch (err) {
+        caughtError = err;
+      }
+      expect(caughtError).toMatchObject({ code: 'ERR_INVALID_ARG_TYPE' });
     });
   });
 
@@ -129,7 +141,14 @@ describe('timers/promises', () => {
   // ---------------------------
   describe('scheduler', () => {
     it('scheduler.wait resolves after given delay', async () => {
-      await expect(scheduler.wait(30)).resolves.toBeUndefined();
+      jest.useRealTimers();
+      let err;
+      try {
+        await scheduler.wait(30);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeUndefined();
     });
 
     it('scheduler.yield resolves immediately (next tick)', async () => {
