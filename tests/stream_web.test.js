@@ -143,15 +143,19 @@ describe('stream/web shim', () => {
     });
 
     test('flush() is called on close', async () => {
-      const flushed = [];
       const ts = new TransformStream({
         transform(chunk, ctrl) { ctrl.enqueue(chunk); },
         flush(ctrl) { ctrl.enqueue('END'); },
       });
-      const writer = ts.writable.getWriter();
+      // Acquire reader BEFORE writing so the readable side is not blocked
       const reader = ts.readable.getReader();
-      await writer.write('data');
-      await writer.close();
+      const writer = ts.writable.getWriter();
+
+      // Write + close concurrently — don't await write before starting read,
+      // otherwise the readable buffer fills up and write() never resolves.
+      writer.write('data');
+      writer.close();
+
       const results = [];
       let r;
       while (!(r = await reader.read()).done) results.push(r.value);
