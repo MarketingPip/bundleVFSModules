@@ -73,48 +73,48 @@ describe('worker_threads Browser Shim', () => {
     });
   });
 
-  describe('Worker Class Lifecycle', () => {
+describe('Worker Class Lifecycle', () => {
     test('forks an eval-mode worker and completes handshake', async () => {
-      const onlineSpy = jest.fn();
       const worker = new wt.Worker('parentPort.postMessage("ping")', { 
         eval: true, 
         workerData: { hello: 'world' } 
       });
 
-      worker.on('online', onlineSpy);
+      // Create a promise that resolves when the 'online' event fires
+      const onlinePromise = new Promise(resolve => worker.once('online', resolve));
 
-      // 1. Advance for T_READY (triggers postMessage T_INIT in the constructor)
+      // 1. Trigger the T_READY signal from the Mock
       jest.advanceTimersByTime(0);
       await flushPromises(); 
       
-      expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
-      
-      // 2. Advance for T_ONLINE (the response to T_INIT)
+      // 2. The shim constructor receives T_READY and posts T_INIT.
+      // Trigger the T_ONLINE response from the Mock
       jest.advanceTimersByTime(0);
       await flushPromises();
 
-      expect(onlineSpy).toHaveBeenCalled();
+      // Await the event rather than checking a spy immediately
+      await expect(onlinePromise).resolves.toBeUndefined();
+      
+      expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
       expect(worker.threadId).toBeGreaterThan(0);
     });
 
     
 
     test('terminate() stops the native worker and emits exit', async () => {
-      const exitSpy = jest.fn();
       const worker = new wt.Worker('test.js');
+      const exitPromise = new Promise(resolve => worker.on('exit', resolve));
       
-      worker.on('exit', exitSpy);
-      const exitPromise = worker.terminate();
+      worker.terminate();
 
       jest.advanceTimersByTime(0);
       await flushPromises();
       
       const code = await exitPromise;
       expect(code).toBe(1);
-      expect(exitSpy).toHaveBeenCalledWith(1);
     });
   });
-
+  
   describe('Data Integrity Guards', () => {
     test('markAsUntransferable throws on postMessage attempt', () => {
       const worker = new wt.Worker('test.js');
