@@ -225,7 +225,7 @@ export const {
   createReadStream,
   createWriteStream,
   // constants
-  constants:_Constants = memConstants,
+  constants,
   // promises API
   promises
 } = fs;
@@ -310,7 +310,7 @@ export default {
   createReadStream,
   createWriteStream,
   // constants
-  constants:_Constants,
+  constants,
   // promises API
   promises
 };
