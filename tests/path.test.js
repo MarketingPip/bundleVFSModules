@@ -1,7 +1,7 @@
 // No imports needed for describe/test/expect in Jest
 
 // adjust path if needed
-import * as win32 from './src/path/win32.js';
+import * as win32 from '../src/path/win32.js';
 
 describe('win32 path implementation', () => {
 
