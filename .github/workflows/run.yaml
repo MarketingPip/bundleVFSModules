@@ -26,7 +26,7 @@ jobs:
           npm install jest @bjorn3/browser_wasi_shim web-streams-polyfill brotli pako browser-stdout easy-table timers-browserify path-browserify string_decoder setimmediate punycode serialize-javascript browserify-zlib constants-browserify terser assert vm-browserify querystring-browser http-browserify base32-encode dohjs dns-packet stream-browserify https-browserify crypto-browserify stream events
 
       - name: Run Tests
-        run: node --test
+        run: npm test
 
       - name: Build VFS
         run: node src/build-vfs.mjs
