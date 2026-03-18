@@ -1,4 +1,6 @@
 // adjust path if needed
+import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
+
 import timers, {
   setTimeout, clearTimeout,
   setInterval, clearInterval,
