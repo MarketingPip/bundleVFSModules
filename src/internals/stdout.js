@@ -2,6 +2,35 @@
 
 //export default browserStdout({ label: false });
 
+class EventEmitter {
+  constructor() { this._events = {}; }
+  on(type, listener) {
+    (this._events[type] || (this._events[type] = [])).push(listener);
+    return this;
+  }
+  emit(type, ...args) {
+    if (!this._events[type]) return false;
+    this._events[type].forEach(fn => fn.apply(this, args));
+    return true;
+  }
+  once(type, listener) {
+    const selfClosing = (...args) => {
+      this.off(type, selfClosing);
+      listener.apply(this, args);
+    };
+    return this.on(type, selfClosing);
+  }
+  off(type, listener) {
+    if (!this._events[type]) return this;
+    this._events[type] = this._events[type].filter(fn => fn !== listener);
+    return this;
+  }
+}
+// Alias for Node compliance
+EventEmitter.prototype.addListener = EventEmitter.prototype.on;
+EventEmitter.prototype.removeListener = EventEmitter.prototype.off;
+
+
 function _makeOutputShim(name) {
   const stream = new EventEmitter();
   let _buffer = ''; // Internal storage for partial lines
