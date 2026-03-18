@@ -125,18 +125,22 @@ const readline = (function () {
         return this;
       },
 
-      close() {
-        if (closed) return this;
-        closed = true;
-        input.off('data', _handleChunk);
-        _emit('close');
-        setTimeout(() => {
-          if (input.listenerCount('data') === 0) {
-            if (input.end) input.end();
-          }
-        }, 0);
-        return this;
-      },
+
+    close() {
+            if (closed) return this;
+            closed = true;
+            input.off('data', _handleChunk);
+            // Flush any unterminated line buffered since the last newline.
+            // Without this, input like "no newline" (no trailing \n) is silently dropped.
+            if (lineBuffer.length) _flushLine();
+            _emit('close');
+            setTimeout(() => {
+              if (input.listenerCount('data') === 0) {
+                if (input.end) input.end();
+              }
+            }, 0);
+            return this;
+          },
 
       write(data, key) {
         if (closed) return this;
