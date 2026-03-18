@@ -7,6 +7,10 @@ export default {
   // important for modern ESM setups
   transform: {},
 
+   moduleNameMapper: {
+  '^stream-browserify$': 'stream',
+  '^crypto-browserify$': 'crypto'   
+}
   // optional but useful
   verbose: true,
 };
