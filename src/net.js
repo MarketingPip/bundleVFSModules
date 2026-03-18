@@ -4,7 +4,8 @@
  */
 
 import { EventEmitter } from "events"
-import { Duplex, Buffer } from "stream-browserify"
+import { Buffer } from 'buffer';
+import { Duplex } from "stream-browserify"
 
 /**
  * Virtual Socket implementation
