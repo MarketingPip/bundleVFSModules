@@ -125,18 +125,16 @@ describe('dohjs-based DNS wrapper', () => {
     }
   });
 
-  test('resolveSoa returns SOA record or ENOTFOUND', async () => {
-    try {
-      const soa = await promises.resolveSoa(TEST_DOMAIN);
-      expect(soa).toEqual(expect.objectContaining({
-        nsname: expect.any(String),
-        hostmaster: expect.any(String),
-        serial: expect.any(Number)
-      }));
-    } catch (err) {
-       expect(err).toMatchObject({ code: 'ENOTFOUND' });
-    }
+test('resolveSoa returns SOA record for example.com', async () => {
+  const soa = await promises.resolveSoa(TEST_DOMAIN);
+  expect(soa).toMatchObject({
+    serial: expect.any(Number),
+    refresh: expect.any(Number),
+    retry: expect.any(Number),
+    expire: expect.any(Number),
+    minimum: expect.any(Number),
   });
+});
 
   // ---------------------------
   // Error handling
