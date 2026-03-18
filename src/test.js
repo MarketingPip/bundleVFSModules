@@ -946,12 +946,11 @@ export async function execute(userCode, opts = {}) {
 
 // ─── Global runtime hook ─────────────────────────────────────────────────────
 
-if(globalThis._RUNTIME_){
+// Ensure the namespace exists first
+globalThis._RUNTIME_ = globalThis._RUNTIME_ || {};
 
 globalThis._RUNTIME_._TEST_RUNNER_ = {
   execute,
   reporters: REPORTERS,
   get activeReporter() { return _activeReporter; },
 };
-
-}
