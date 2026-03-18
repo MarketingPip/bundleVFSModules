@@ -27,7 +27,17 @@ export class Socket extends Duplex {
   readyState = "closed"
 
   constructor(options) {
-    super()
+    // allowHalfOpen mirrors Node's net.Socket default
+    super({ allowHalfOpen: false })
+  }
+
+  // Required by readable-stream / stream-browserify — this shim pushes data
+  // imperatively via _receiveData(), so the pull model is a no-op.
+  _read(_size) {}
+
+  // Required by Duplex — forward writes to the remote (no-op in shim).
+  _write(chunk, encoding, callback) {
+    callback()
   }
 
   connect(portOrOptions, hostOrCallback, callback) {
