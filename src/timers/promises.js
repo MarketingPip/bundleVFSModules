@@ -326,7 +326,7 @@ class Scheduler {
    */
   wait(delay, options) {
     if (!this[kScheduler]) throw new TypeError('Invalid receiver');
-    return setTimeout(delay, undefined, options);
+    return timers.setTimeout(delay, undefined, options);
   }
 }
 
