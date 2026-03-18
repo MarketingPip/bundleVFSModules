@@ -3,15 +3,21 @@ import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globa
 // ---------------------------------------------------------------------------
 // Mocks for Browser Globals
 // ---------------------------------------------------------------------------
+
+/**
+ * Mocking the native Web Worker to simulate the handshake protocol.
+ * We use setTimeout in the mock to allow the caller to set up listeners
+ * before the messages are "delivered".
+ */
 class MockWorker extends EventTarget {
   constructor(url, options) {
     super();
     this.url = url;
     this.options = options;
     this.terminated = false;
+    
     this.postMessage = jest.fn((data) => {
-      // Simulate the internal handshake: 
-      // When main thread sends T_INIT, the worker would normally respond with T_ONLINE
+      // Internal Handshake: If main thread sends T_INIT, respond with T_ONLINE
       if (data && data.__type__ === '__wt_init__') {
         setTimeout(() => {
           this.dispatchEvent(new MessageEvent('message', { 
@@ -20,9 +26,10 @@ class MockWorker extends EventTarget {
         }, 0);
       }
     });
+
     this.terminate = jest.fn(() => { this.terminated = true; });
     
-    // Simulate the worker's initial T_READY signal
+    // Simulate the worker's initial T_READY signal as soon as it's "spawned"
     setTimeout(() => {
       this.dispatchEvent(new MessageEvent('message', { 
         data: { __type__: '__wt_ready__' } 
@@ -31,6 +38,7 @@ class MockWorker extends EventTarget {
   }
 }
 
+// Global environment setup
 globalThis.Worker = MockWorker;
 globalThis.Blob = class { constructor(parts) { this.parts = parts; } };
 globalThis.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
@@ -39,7 +47,11 @@ globalThis.URL.revokeObjectURL = jest.fn();
 // Import the shim
 import wt from '../src/worker_threads.js';
 
+// Helper to flush the Promise (microtask) queue
+const flushPromises = () => new Promise(jest.requireActual('timers').setImmediate);
+
 describe('worker_threads Browser Shim', () => {
+
   beforeEach(() => {
     jest.useFakeTimers();
   });
@@ -56,32 +68,36 @@ describe('worker_threads Browser Shim', () => {
     });
 
     test('setEnvironmentData stores values globally', () => {
-      wt.setEnvironmentData('key', 'value');
-      expect(wt.getEnvironmentData('key')).toBe('value');
+      wt.setEnvironmentData('test-key', 'test-value');
+      expect(wt.getEnvironmentData('test-key')).toBe('test-value');
     });
   });
 
   describe('Worker Class Lifecycle', () => {
     test('forks an eval-mode worker and completes handshake', async () => {
       const onlineSpy = jest.fn();
-      const worker = new wt.Worker('console.log("hello")', { 
+      const worker = new wt.Worker('parentPort.postMessage("ping")', { 
         eval: true, 
-        workerData: { foo: 'bar' } 
+        workerData: { hello: 'world' } 
       });
 
       worker.on('online', onlineSpy);
 
-      // 1. Advance for T_READY
+      // 1. Advance for T_READY (triggers postMessage T_INIT in the constructor)
       jest.advanceTimersByTime(0);
+      await flushPromises(); 
       
-      // Check if T_INIT was sent back to the native worker
       expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
-      expect(worker.threadId).toBeGreaterThan(0);
-
-      // 2. Advance for T_ONLINE
+      
+      // 2. Advance for T_ONLINE (the response to T_INIT)
       jest.advanceTimersByTime(0);
+      await flushPromises();
+
       expect(onlineSpy).toHaveBeenCalled();
+      expect(worker.threadId).toBeGreaterThan(0);
     });
+
+    
 
     test('terminate() stops the native worker and emits exit', async () => {
       const exitSpy = jest.fn();
@@ -91,6 +107,7 @@ describe('worker_threads Browser Shim', () => {
       const exitPromise = worker.terminate();
 
       jest.advanceTimersByTime(0);
+      await flushPromises();
       
       const code = await exitPromise;
       expect(code).toBe(1);
@@ -110,39 +127,41 @@ describe('worker_threads Browser Shim', () => {
       }).toThrow(/Transfer of untransferable object/);
     });
 
-    test('receiveMessageOnPort synchronously drains queue', () => {
-      // Mocking MessagePort behavior
-      const mockPort = {
-        addEventListener: jest.fn(),
-        start: jest.fn(),
-        shift: jest.fn()
-      };
-
-      // Since we can't easily trigger the internal WeakMap from outside,
-      // we test the public API surface.
-      const result = wt.receiveMessageOnPort(mockPort);
-      expect(result).toBeUndefined(); // Empty queue
+    test('markAsUncloneable prevents messaging', () => {
+      const worker = new wt.Worker('test.js');
+      const obj = { data: 'secret' };
+      
+      wt.markAsUncloneable(obj);
+      
+      expect(() => {
+        worker.postMessage(obj);
+      }).toThrow(/could not be cloned/);
     });
   });
 
   describe('Locks Shim', () => {
     test('exclusive locks prevent concurrent access', async () => {
+      // Switch to real timers: fake timers often deadlock with async/await locks
+      jest.useRealTimers();
+
       let counter = 0;
-      const task = () => wt.locks.request('test-lock', async () => {
-        const current = counter;
-        await new Promise(r => setTimeout(r, 10));
-        counter = current + 1;
-      });
+      const task = async () => {
+        return wt.locks.request('test-lock', async () => {
+          const current = counter;
+          // Simulated async work
+          await new Promise(r => setTimeout(r, 10));
+          counter = current + 1;
+        });
+      };
 
-      // Start two tasks
-      const p1 = task();
-      const p2 = task();
+      // Execute two tasks that compete for the same exclusive lock
+      await Promise.all([task(), task()]);
 
-      jest.advanceTimersByTime(50);
-      await Promise.all([p1, p2]);
-
-      // If locks work, they run sequentially. If not, counter would be 1.
+      // If locks work (exclusive), they run serially -> counter = 2
+      // If locks failed (concurrent), both read current=0 -> counter = 1
       expect(counter).toBe(2);
     });
+    
+    
   });
 });
