@@ -1,3 +1,4 @@
+import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import { WASI } from '../src/wasi.js';
 
 describe('WASI wrapper', () => {
