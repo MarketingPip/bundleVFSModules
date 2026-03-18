@@ -1,12 +1,13 @@
+import { Buffer } from 'buffer';
 import http, { 
   IncomingMessage, 
   ServerResponse, 
   Server, 
   ClientRequest,
   createServer 
-} from '../dist/http.js';
+} from '../src/http.js';
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import { Buffer } from 'buffer';
+
 
 // Mock the Fetch API
 global.fetch = jest.fn();
