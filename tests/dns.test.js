@@ -134,7 +134,7 @@ describe('dohjs-based DNS wrapper', () => {
         serial: expect.any(Number)
       }));
     } catch (err) {
-       await expect(promises.resolveSoa(invalid)).rejects.toMatchObject({ code: 'ENOTFOUND' });
+       expect(err).toMatchObject({ code: 'ENOTFOUND' });
     }
   });
 
