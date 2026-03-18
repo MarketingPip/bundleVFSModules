@@ -151,7 +151,9 @@ describe('stream/promises — finished()', () => {
   test('{ error: false } does not reject on error event', async () => {
     const rs = new Readable({ read() {} });
     const p  = finished(rs, { error: false });
-    // destroy without error — should resolve, not reject
+    // Push null to signal end-of-stream — this is the normal completion path;
+    // error: false just means an 'error' event won't cause rejection, but the
+    // stream still needs to actually finish for the promise to resolve.
     rs.push(null);
     await expect(p).resolves.toBeUndefined();
   });
