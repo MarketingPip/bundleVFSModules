@@ -6,10 +6,17 @@ import timers, {
   enroll, unenroll, active, _unrefActive
 } from '../src/timers.js';
 
-jest.useFakeTimers();
+
 
 describe('timers-web', () => {
+  // Move jest.useFakeTimers() **inside describe**
+  beforeAll(() => {
+    jest.useFakeTimers();
+  });
 
+  afterAll(() => {
+    jest.useRealTimers();
+  });
   // -------------------------------------------------------------------------
   // setTimeout / clearTimeout
   // -------------------------------------------------------------------------
