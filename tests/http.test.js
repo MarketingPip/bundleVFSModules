@@ -4,7 +4,7 @@ import http, {
   Server, 
   ClientRequest,
   createServer 
-} from './src/http.js';
+} from '../src/http.js';
 import { Buffer } from 'buffer';
 
 // Mock the Fetch API
