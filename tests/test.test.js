@@ -5,7 +5,7 @@ globalThis._RUNTIME_ = {
   }
 };
 
-import nodeTest, { MockTracker, MockTimers, _reset } from '../src/test.js';
+import nodeTest, { MockTracker, MockTimers, _reset, execute} from '../src/test.js';
 
 
 
@@ -62,7 +62,6 @@ describe('node:test Browser Shim', () => {
 
   describe('Test Execution Flow', () => {
     test('runs a basic suite and reports passes', async () => {
-      const { execute } = globalThis._RUNTIME_._TEST_RUNNER_;
       
       const userCode = `
         test('math works', (t) => {
@@ -84,7 +83,6 @@ describe('node:test Browser Shim', () => {
     
 
     test('enforces timeout on slow tests', async () => {
-      const { execute } = globalThis._RUNTIME_._TEST_RUNNER_;
       
       // Test code that never resolves
       const userCode = `
@@ -102,7 +100,6 @@ describe('node:test Browser Shim', () => {
 
   describe('Assertions (CtxAssert)', () => {
     test('deepEqual identifies nested mismatches', async () => {
-      const { execute } = globalThis._RUNTIME_._TEST_RUNNER_;
       const userCode = `
         test('deep', (t) => {
           t.assert.deepEqual({a: 1, b: [2]}, {a: 1, b: [2]});
