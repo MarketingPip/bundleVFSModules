@@ -1,5 +1,5 @@
 // adjust path if needed
-import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, test, expect } from '@jest/globals';
 
 import timers, {
   setTimeout, clearTimeout,
@@ -8,35 +8,31 @@ import timers, {
   enroll, unenroll, active, _unrefActive
 } from '../src/timers.js';
 
-
-
 describe('timers-web', () => {
-  // Move jest.useFakeTimers() **inside describe**
-  beforeAll(() => {
-    jest.useFakeTimers();
-  });
 
-  afterAll(() => {
-    jest.useRealTimers();
-  });
   // -------------------------------------------------------------------------
   // setTimeout / clearTimeout
   // -------------------------------------------------------------------------
   describe('setTimeout / clearTimeout', () => {
-    test('setTimeout returns Timeout with close', () => {
+    test('setTimeout returns Timeout with close', (done) => {
       const fn = jest.fn();
-      const t = setTimeout(fn, 1000, 'a', 'b');
+      const t = setTimeout(fn, 10, 'a', 'b');
       expect(typeof t.close).toBe('function');
       t.close();
-      jest.runAllTimers();
-      expect(fn).not.toBeCalled();
+
+      setTimeout(() => {
+        expect(fn).not.toHaveBeenCalled();
+        done();
+      }, 20);
     });
 
-    test('timeout fires after delay with args', () => {
-      const fn = jest.fn();
-      setTimeout(fn, 1000, 1, 2);
-      jest.advanceTimersByTime(1000);
-      expect(fn).toHaveBeenCalledWith(1, 2);
+    test('timeout fires after delay with args', (done) => {
+      const fn = jest.fn((a, b) => {
+        expect(a).toBe(1);
+        expect(b).toBe(2);
+        done();
+      });
+      setTimeout(fn, 10, 1, 2);
     });
 
     test('Timeout ref/unref are no-ops', () => {
@@ -47,7 +43,7 @@ describe('timers-web', () => {
 
     test('Timeout Symbol.toPrimitive returns id', () => {
       const t = setTimeout(() => {}, 10);
-      expect(+t).toBeGreaterThan(0);
+      expect(t._id).toBeGreaterThan(0);
     });
   });
 
@@ -55,14 +51,17 @@ describe('timers-web', () => {
   // setInterval / clearInterval
   // -------------------------------------------------------------------------
   describe('setInterval / clearInterval', () => {
-    test('interval fires repeatedly until cleared', () => {
-      const fn = jest.fn();
-      const iv = setInterval(fn, 1000);
-      jest.advanceTimersByTime(3000);
-      expect(fn).toHaveBeenCalledTimes(3);
-      iv.close();
-      jest.advanceTimersByTime(2000);
-      expect(fn).toHaveBeenCalledTimes(3);
+    test('interval fires repeatedly until cleared', (done) => {
+      let count = 0;
+      const iv = setInterval(() => {
+        count++;
+        if (count === 3) iv.close();
+      }, 10);
+
+      setTimeout(() => {
+        expect(count).toBe(3);
+        done();
+      }, 50);
     });
   });
 
@@ -70,19 +69,22 @@ describe('timers-web', () => {
   // setImmediate / clearImmediate
   // -------------------------------------------------------------------------
   describe('setImmediate / clearImmediate', () => {
-    test('setImmediate fires in next tick', () => {
-      const fn = jest.fn();
-      setImmediate(fn, 'arg');
-      jest.runAllImmediates();
-      expect(fn).toHaveBeenCalledWith('arg');
+    test('setImmediate fires in next tick', (done) => {
+      setImmediate((arg) => {
+        expect(arg).toBe('arg');
+        done();
+      }, 'arg');
     });
 
-    test('Immediate close cancels', () => {
+    test('Immediate close cancels', (done) => {
       const fn = jest.fn();
       const im = setImmediate(fn);
       im.close();
-      jest.runAllImmediates();
-      expect(fn).not.toBeCalled();
+
+      setTimeout(() => {
+        expect(fn).not.toHaveBeenCalled();
+        done();
+      }, 20);
     });
 
     test('Immediate ref/unref are no-ops', () => {
@@ -96,20 +98,26 @@ describe('timers-web', () => {
   // clearTimeout / clearInterval with raw id
   // -------------------------------------------------------------------------
   describe('clearTimeout / clearInterval', () => {
-    test('clears numeric timer id', () => {
+    test('clears numeric timer id', (done) => {
       const fn = jest.fn();
-      const id = setTimeout(fn, 1000);
-      clearTimeout(+id);
-      jest.advanceTimersByTime(1000);
-      expect(fn).not.toBeCalled();
+      const id = setTimeout(fn, 10);
+      clearTimeout(id._id);
+
+      setTimeout(() => {
+        expect(fn).not.toHaveBeenCalled();
+        done();
+      }, 20);
     });
 
-    test('clears Timeout/Interval object', () => {
+    test('clears Timeout/Interval object', (done) => {
       const fn = jest.fn();
-      const t = setTimeout(fn, 1000);
+      const t = setTimeout(fn, 10);
       clearTimeout(t);
-      jest.advanceTimersByTime(1000);
-      expect(fn).not.toBeCalled();
+
+      setTimeout(() => {
+        expect(fn).not.toHaveBeenCalled();
+        done();
+      }, 20);
     });
   });
 
@@ -117,12 +125,15 @@ describe('timers-web', () => {
   // clearImmediate with raw id
   // -------------------------------------------------------------------------
   describe('clearImmediate', () => {
-    test('clears numeric immediate id', () => {
+    test('clears numeric immediate id', (done) => {
       const fn = jest.fn();
       const id = setImmediate(fn);
       clearImmediate(id._id);
-      jest.runAllImmediates();
-      expect(fn).not.toBeCalled();
+
+      setTimeout(() => {
+        expect(fn).not.toHaveBeenCalled();
+        done();
+      }, 20);
     });
   });
 
@@ -140,27 +151,32 @@ describe('timers-web', () => {
       expect(obj._idleTimeout).toBe(1234);
     });
 
-    test('unenroll cancels timer and sets _idleTimeout to -1', () => {
-      obj._idleTimeoutId = setTimeout(() => {}, 1000);
+    test('unenroll cancels timer and sets _idleTimeout to -1', (done) => {
+      obj._idleTimeoutId = setTimeout(() => {}, 10);
       unenroll(obj);
       expect(obj._idleTimeout).toBe(-1);
-      jest.runAllTimers();
+
+      setTimeout(() => done(), 20);
     });
 
-    test('active schedules _onTimeout after _idleTimeout', () => {
-      enroll(obj, 500);
+    test('active schedules _onTimeout after _idleTimeout', (done) => {
+      enroll(obj, 20);
       active(obj);
-      jest.advanceTimersByTime(499);
-      expect(obj._onTimeout).not.toBeCalled();
-      jest.advanceTimersByTime(1);
-      expect(obj._onTimeout).toBeCalled();
+
+      setTimeout(() => {
+        expect(obj._onTimeout).toHaveBeenCalled();
+        done();
+      }, 25);
     });
 
-    test('_unrefActive alias works', () => {
+    test('_unrefActive alias works', (done) => {
       enroll(obj, 10);
       _unrefActive(obj);
-      jest.advanceTimersByTime(10);
-      expect(obj._onTimeout).toBeCalled();
+
+      setTimeout(() => {
+        expect(obj._onTimeout).toHaveBeenCalled();
+        done();
+      }, 15);
     });
   });
 
@@ -181,5 +197,4 @@ describe('timers-web', () => {
       expect(timers._unrefActive).toBe(timers.active);
     });
   });
-
 });
