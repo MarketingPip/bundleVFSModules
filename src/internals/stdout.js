@@ -2,7 +2,7 @@
 
 //export default browserStdout({ label: false });
 
-export function _makeOutputShim(name) {
+function _makeOutputShim(name) {
   const stream = new EventEmitter();
   let _buffer = ''; // Internal storage for partial lines
 
@@ -43,3 +43,4 @@ export function _makeOutputShim(name) {
   });
   return stream;
 }
+export default _makeOutputShim;
