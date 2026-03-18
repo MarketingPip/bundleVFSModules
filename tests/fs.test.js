@@ -2,7 +2,9 @@
 import {jest, describe, test, expect } from '@jest/globals';
 
  
-import fs, { promises as fsp, constants } from '../src/fs.js';
+import fs from '../src/fs.js';
+
+import { promises as fsp, constants } from '../src/fs.js';
 
 describe('memfs wrapper', () => {
   beforeEach(async () => {
