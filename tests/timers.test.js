@@ -6,7 +6,7 @@ import timers, {
   setInterval, clearInterval,
   setImmediate, clearImmediate,
   enroll, unenroll, active, _unrefActive
-} from '../src/timers.js';
+} from '../dist/timers.js';
 
 describe('timers-web', () => {
 
