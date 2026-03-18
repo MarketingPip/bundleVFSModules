@@ -419,65 +419,77 @@ export class MockTimers {
 
 // ─── CtxAssert — t.assert namespace ──────────────────────────────────────────
 class CtxAssert {
-  #plan = null;     // set by context.plan()
+  #plan = null;
   #count = 0;
 
   _setPlan(n) { this.#plan = n; }
-  _tick()     { this.#count++; }
-  _checkPlan(){ return { expected: this.#plan, actual: this.#count }; }
+  _checkPlan() { return { expected: this.#plan, actual: this.#count }; }
 
-  #pass() { this.#count++; }
-  #fail(m) { this.#count++; throw new AssertionError(m); }
+  // Private helper to track attempts
+  #record(passed, message) {
+    this.#count++; 
+    if (!passed) {
+      // Node.js AssertionError usually includes actual/expected properties
+      throw new AssertionError(message);
+    }
+  }
 
-  ok(v, m)            { v ? this.#pass() : this.#fail(m ?? `Expected truthy, got ${v}`); }
-  fail(m)             { this.#fail(m ?? 'Explicit fail'); }
-  equal(a, b, m)      { a !== b   ? this.#fail(m ?? `${a} !== ${b}`) : this.#pass(); }
-  notEqual(a, b, m)   { a === b   ? this.#fail(m ?? 'Expected not equal') : this.#pass(); }
-  strictEqual(a, b, m){ !Object.is(a, b) ? this.#fail(m ?? `${String(a)} !== ${String(b)} (strict)`) : this.#pass(); }
-  notStrictEqual(a,b,m){ Object.is(a,b) ? this.#fail(m ?? 'Expected not strict equal') : this.#pass(); }
-  deepEqual(a, b, m)  { !deepEq(a, b) ? this.#fail(m ?? 'Deep equality failed') : this.#pass(); }
-  notDeepEqual(a,b,m) { deepEq(a, b)  ? this.#fail(m ?? 'Expected deep not equal') : this.#pass(); }
+  ok(v, m)             { this.#record(!!v, m ?? `Expected truthy, got ${v}`); }
+  fail(m)              { this.#record(false, m ?? 'Explicit fail'); }
+  equal(a, b, m)       { this.#record(a == b, m ?? `${a} == ${b} failed`); }
+  notEqual(a, b, m)    { this.#record(a != b, m ?? 'Expected not equal'); }
+  strictEqual(a, b, m) { this.#record(Object.is(a, b), m ?? `${String(a)} !== ${String(b)} (strict)`); }
+  notStrictEqual(a,b,m){ this.#record(!Object.is(a, b), m ?? 'Expected not strict equal'); }
+  
+  deepEqual(a, b, m) { 
+    // Ensure deepEq is returning a strict boolean true/false
+    const isEq = !!deepEq(a, b); 
+    this.#record(isEq, m ?? 'Deep equality failed'); 
+  }
+  
+  notDeepEqual(a,b,m)  { this.#record(!deepEq(a, b), m ?? 'Expected deep not equal'); }
 
   throws(fn, expected, m) {
-    try { fn(); }
-    catch (e) {
-      if (expected instanceof RegExp && !expected.test(e.message))
-        this.#fail(m ?? `Error message did not match ${expected}`);
-      this.#pass(); return;
+    this.#count++; // Manual increment since we handle the throw ourselves
+    try { 
+      fn(); 
+    } catch (e) {
+      if (expected instanceof RegExp && !expected.test(e.message)) {
+        throw new AssertionError(m ?? `Error message did not match ${expected}`);
+      }
+      if (typeof expected === 'function' && !(e instanceof expected)) {
+        throw new AssertionError(m ?? `Error was not instance of ${expected.name}`);
+      }
+      return; // Pass
     }
-    this.#fail(m ?? 'Expected function to throw');
+    throw new AssertionError(m ?? 'Expected function to throw');
   }
 
-  doesNotThrow(fn, m) {
-    try { fn(); this.#pass(); }
-    catch (e) { this.#fail(m ?? `Got: ${e}`); }
+  async rejects(fn, m) {
+    this.#count++;
+    try {
+      await (typeof fn === 'function' ? fn() : fn);
+    } catch (e) {
+      return; // Pass
+    }
+    throw new AssertionError(m ?? 'Expected rejection');
   }
 
-  rejects(fn, m) {
-    return Promise.resolve().then(() => fn())
-      .then(() => this.#fail(m ?? 'Expected rejection'), () => this.#pass());
+  async doesNotReject(fn, m) {
+    this.#count++;
+    try {
+      await (typeof fn === 'function' ? fn() : fn);
+    } catch (e) {
+      throw new AssertionError(m ?? `Got unexpected rejection: ${e}`);
+    }
   }
 
-  doesNotReject(fn, m) {
-    return Promise.resolve().then(() => fn())
-      .then(() => this.#pass())
-      .catch(e => this.#fail(m ?? `Got rejection: ${e}`));
-  }
+  ifError(e)           { this.#record(e == null, `ifError got ${e}`); }
+  match(s, re, m)      { this.#record(re.test(s), m ?? `${s} did not match ${re}`); }
+  doesNotMatch(s,re,m) { this.#record(!re.test(s), m ?? `${s} matched ${re}`); }
 
-  ifError(e)         { e != null ? this.#fail(`ifError got ${e}`) : this.#pass(); }
-  match(s, re, m)    { !re.test(s) ? this.#fail(m ?? `${s} did not match ${re}`) : this.#pass(); }
-  doesNotMatch(s,re,m){ re.test(s) ? this.#fail(m ?? `${s} matched ${re}`) : this.#pass(); }
-
-  /** Snapshot stub — no file system in browser. */
-  snapshot(value, _opts) {
-    // In browser we cannot persist snapshots; just pass.
-    this.#pass();
-  }
-
-  /** File snapshot stub — no file system in browser. */
-  fileSnapshot(value, path, _opts) {
-    this.#pass();
-  }
+  snapshot()     { this.#count++; /* No-op in browser */ }
+  fileSnapshot() { this.#count++; /* No-op in browser */ }
 }
 
 // ─── TestNode ────────────────────────────────────────────────────────────────
