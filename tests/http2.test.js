@@ -6,7 +6,7 @@ import http2, {
   constants, 
   createServer 
 } from '../src/http2.js';
-
+import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 describe('http2 shim (stub)', () => {
   
   describe('Classes and Inheritance', () => {
