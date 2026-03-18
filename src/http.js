@@ -641,7 +641,7 @@ export class ClientRequest extends Writable {
     }
   }
 
-  async _responseToIncomingMessage(response) {
+ async _responseToIncomingMessage(response) {
     const msg = new IncomingMessage()
 
     // Set status
@@ -655,9 +655,13 @@ export class ClientRequest extends Writable {
       msg.rawHeaders.push(key, value)
     })
 
-    // Read body and push to stream
+    // Read body and push to stream.
+    // IMPORTANT: Buffer.from(someBuffer).buffer returns the *entire* backing
+    // ArrayBuffer (which may be a large shared slab), not just the slice that
+    // belongs to this Buffer.  Always go through Uint8Array so we respect the
+    // byteOffset/byteLength of whatever view the mock (or real fetch) returns.
     const body = await response.arrayBuffer()
-    msg._setBody(Buffer.from(body))
+    msg._setBody(Buffer.from(new Uint8Array(body)))
 
     return msg
   }
