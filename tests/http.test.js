@@ -5,6 +5,7 @@ import http, {
   ClientRequest,
   createServer 
 } from '../src/http.js';
+import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { Buffer } from 'buffer';
 
 // Mock the Fetch API
