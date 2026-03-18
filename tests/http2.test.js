@@ -5,7 +5,7 @@ import http2, {
   connect, 
   constants, 
   createServer 
-} from './src/http2.js';
+} from '../src/http2.js';
 
 describe('http2 shim (stub)', () => {
   
