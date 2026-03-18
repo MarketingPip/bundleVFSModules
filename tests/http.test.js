@@ -18,7 +18,7 @@ global.AbortController = class {
 };
 
 // Mock the Net/Socket dependency
-jest.mock('./net', () => {
+jest.mock('../src/net.js', () => {
   const EventEmitter = require('events');
   class MockSocket extends EventEmitter {
     destroy() { this.emit('close'); return this; }
