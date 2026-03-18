@@ -23,7 +23,7 @@ const REPORTERS = { dot: _dot, spec: _spec, tap: _tap, junit: _junit, lcov: _lco
 
 /** Read the run-level reporter from the global hook, mirroring --test-reporter. */
 function _getConfiguredReporter() {
-  const name = globalThis._RUNTIME_TEST_RUNNER_?.REPORTER_TYPE;
+  const name = globalThis._RUNTIME_._TEST_RUNNER_?.REPORTER_TYPE;
   return name ? (_resolveReporter(name) ?? _spec) : _spec;
 }
 
@@ -945,7 +945,7 @@ export async function execute(userCode, opts = {}) {
 }
 
 // ─── Global runtime hook ─────────────────────────────────────────────────────
-globalThis._RUNTIME_TEST_RUNNER_ = {
+globalThis._RUNTIME_._TEST_RUNNER_ = {
   execute,
   reporters: REPORTERS,
   get activeReporter() { return _activeReporter; },
