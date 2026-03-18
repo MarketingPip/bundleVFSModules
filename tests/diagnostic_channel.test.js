@@ -1,5 +1,5 @@
 import dc, { channel, hasSubscribers, subscribe, unsubscribe } from '../src/diagnostics_channel.js';
-
+import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 describe('diagnostics_channel shim', () => {
   const CHANNEL_NAME = 'test:event';
 
