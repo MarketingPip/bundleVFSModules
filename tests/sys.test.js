@@ -1,3 +1,4 @@
+import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import util from '../src/sys.js'; // adjust path if needed
 
 describe('sys shim (util)', () => {
