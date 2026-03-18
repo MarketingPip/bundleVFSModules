@@ -10,7 +10,7 @@ export default {
    moduleNameMapper: {
   '^stream-browserify$': 'stream',
   '^crypto-browserify$': 'crypto'   
-}
+},
   // optional but useful
   verbose: true,
 };
