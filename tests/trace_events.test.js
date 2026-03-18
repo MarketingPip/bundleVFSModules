@@ -24,7 +24,7 @@ describe('trace_events wrapper', () => {
 
     test('validates categories is a string array', () => {
       expect(() => trace_events.createTracing({ categories: 'not-an-array' }))
-        .toThrow(/must be of type Array/);
+        .toThrow(/must be an Array/); 
 
       expect(() => trace_events.createTracing({ categories: ['valid', 123] }))
         .toThrow(/must be of type a string/);
