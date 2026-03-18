@@ -136,5 +136,5 @@ function createInterface(inputOrOpts, output, completer, terminal) {
   return new Interface(inputOrOpts, output, completer, terminal);
 }
 
-export { Interface, createInterface, AbortError, readline as ReadLine };
-export default { Interface, createInterface, AbortError, ReadLine: readline };
+export { Interface, createInterface, AbortError, readline as Readline };
+export default { Interface, createInterface, AbortError, Readline: readline };
