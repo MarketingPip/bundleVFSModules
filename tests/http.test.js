@@ -102,7 +102,12 @@ describe('HTTP Shim', () => {
         status: 200,
         statusText: 'OK',
         headers: new Map([['content-type', 'text/plain']]),
-        arrayBuffer: async () => Buffer.from('response body').buffer
+        // Buffer.from(...).buffer returns Node's shared pool slab, not just the
+        // 'response body' bytes. Use .buffer.slice() to get an isolated copy.
+        arrayBuffer: async () => {
+          const buf = Buffer.from('response body');
+          return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+        }
       };
       
       global.fetch.mockResolvedValue(mockResponse);
