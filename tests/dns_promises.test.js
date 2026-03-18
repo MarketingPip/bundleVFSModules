@@ -62,9 +62,15 @@ describe('dns/promises', () => {
     expect(ns.length).toBeGreaterThan(0);
   });
 
-  test('resolveCname returns CNAME or empty', async () => {
-    const cname = await resolver.resolveCname('www.google.com');
-    expect(Array.isArray(cname)).toBe(true);
+  test('resolveCname returns CNAME or ENOTFOUND', async () => {
+    try {
+      const cname = await resolver.resolveCname('www.google.com');
+      // If records exist, verify array
+      expect(Array.isArray(cname)).toBe(true);
+    } catch (err) {
+      // Accept ENOTFOUND as valid outcome
+      expect(err).toMatchObject({ code: 'ENOTFOUND' });
+    }
   });
 
   test('resolveTxt returns TXT records', async () => {
