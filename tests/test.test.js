@@ -1,11 +1,13 @@
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
-import nodeTest, { MockTracker, MockTimers, _reset } from '../src/test.js';
-
 globalThis._RUNTIME_ = {
   _TEST_RUNNER_: {
     REPORTER_TYPE: 'spec'
   }
 };
+
+import nodeTest, { MockTracker, MockTimers, _reset } from '../src/test.js';
+
+
 
 describe('node:test Browser Shim', () => {
   beforeEach(() => {
