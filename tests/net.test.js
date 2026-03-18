@@ -1,5 +1,6 @@
 import net, { Socket, Server, createServer, createConnection } from '../src/net.js';
 import { Buffer } from 'buffer';
+import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 
 describe('net shim', () => {
   
