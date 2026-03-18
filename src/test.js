@@ -322,16 +322,29 @@ export class MockTimers {
    * @param {{ apis?: string[], now?: number|Date }} [opts]
    */
   enable(opts = {}) {
-    const apis = opts.apis ?? ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'clearImmediate', 'Date'];
-    this.#clock = (opts.now instanceof globalThis._origDate ?? Date ? opts.now.getTime?.() ?? 0 : opts.now) ?? 0;
+    const apis = opts.apis ?? [
+      'setTimeout', 'clearTimeout',
+      'setInterval', 'clearInterval',
+      'setImmediate', 'clearImmediate',
+      'Date'
+    ];
+  
+    const origDate = globalThis._origDate ?? Date;
+    // Safe check: only do instanceof if opts.now is an object
+    if (opts.now != null && typeof opts.now === 'object' && opts.now instanceof origDate) {
+      this.#clock = opts.now.getTime?.() ?? 0;
+    } else {
+      this.#clock = Number(opts.now ?? 0);
+    }
+  
     for (const api of apis) {
       if (!this.#enabled.has(api)) {
         this.#install(api);
         this.#enabled.add(api);
         // implicitly enable paired clear functions
-        if (api === 'setTimeout'  && !this.#enabled.has('clearTimeout'))  { this.#enabled.add('clearTimeout'); }
+        if (api === 'setTimeout' && !this.#enabled.has('clearTimeout'))  { this.#enabled.add('clearTimeout'); }
         if (api === 'setInterval' && !this.#enabled.has('clearInterval')) { this.#enabled.add('clearInterval'); }
-        if (api === 'setImmediate'&& !this.#enabled.has('clearImmediate')){ this.#enabled.add('clearImmediate'); }
+        if (api === 'setImmediate' && !this.#enabled.has('clearImmediate')){ this.#enabled.add('clearImmediate'); }
       }
     }
   }
