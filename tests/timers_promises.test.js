@@ -1,105 +1,136 @@
 import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import { setTimeout, setImmediate, setInterval } from '../src/timers/promises.js';
 
-describe('timers/promises shim', () => {
-  beforeAll(() => {
-    jest.useFakeTimers();
-  });
 
-  afterAll(() => {
-    jest.useRealTimers();
-  });
+describe('timers/promises', () => {
 
-  // -------------------------------------------------------------------------
-  // setTimeout returns a promise
-  // -------------------------------------------------------------------------
+  // ---------------------------
+  // setTimeout tests
+  // ---------------------------
   describe('setTimeout', () => {
-    test('resolves after delay', async () => {
-      const fn = jest.fn();
-      const promise = setTimeout(() => {
-        fn();
-        return 'done';
-      }, 100);
+    jest.useRealTimers(); // ensure real timers for async behavior
 
-      jest.advanceTimersByTime(100);
-      const result = await promise;
-      expect(result).toBe('done');
-      expect(fn).toHaveBeenCalled();
+    it('resolves after a delay with the given value', async () => {
+      const result = await setTimeout(50, 'ok');
+      expect(result).toBe('ok');
     });
 
-    test('passes multiple arguments', async () => {
-      const fn = jest.fn();
-      const promise = setTimeout((a, b) => {
-        fn(a, b);
-        return a + b;
-      }, 50, 2, 3);
-
-      jest.advanceTimersByTime(50);
-      const result = await promise;
-      expect(result).toBe(5);
-      expect(fn).toHaveBeenCalledWith(2, 3);
+    it('uses default delay when none is provided', async () => {
+      const start = Date.now();
+      await setTimeout();
+      expect(Date.now() - start).toBeGreaterThanOrEqual(1);
     });
-  });
 
-  // -------------------------------------------------------------------------
-  // setImmediate returns a promise
-  // -------------------------------------------------------------------------
-  describe('setImmediate', () => {
-    test('resolves on next tick', async () => {
-      const fn = jest.fn();
-      const promise = setImmediate(() => {
-        fn();
-        return 'immediate';
+    it('rejects immediately if signal is already aborted', async () => {
+      const ac = new AbortController();
+      ac.abort();
+      await expect(setTimeout(10, null, { signal: ac.signal })).rejects.toMatchObject({
+        name: 'AbortError',
+        code: 'ABORT_ERR'
       });
+    });
 
-      jest.advanceTimersByTime(0); // instead of runAllTimers()
-      const result = await promise;
-      expect(result).toBe('immediate');
-      expect(fn).toHaveBeenCalled();
+    it('rejects if aborted during the timeout', async () => {
+      const ac = new AbortController();
+      const promise = setTimeout(100, 'late', { signal: ac.signal });
+      setTimeout(() => ac.abort(), 20);
+      await expect(promise).rejects.toMatchObject({
+        name: 'AbortError',
+        code: 'ABORT_ERR'
+      });
+    });
+
+    it('rejects with ERR_INVALID_ARG_TYPE for invalid delay', async () => {
+      await expect(setTimeout('oops')).rejects.toMatchObject({
+        code: 'ERR_INVALID_ARG_TYPE'
+      });
+    });
+
+    it('rejects with ERR_INVALID_ARG_TYPE for invalid options', async () => {
+      await expect(setTimeout(10, null, 'not-an-object')).rejects.toMatchObject({
+        code: 'ERR_INVALID_ARG_TYPE'
+      });
     });
   });
 
-  // -------------------------------------------------------------------------
-  // async/await behavior with multiple timers
-  // -------------------------------------------------------------------------
-  describe('async/await integration', () => {
-    test('await multiple timers sequentially', async () => {
-      const results = [];
-      const p1 = setTimeout(() => { results.push(1); }, 100);
-      const p2 = setTimeout(() => { results.push(2); }, 200);
+  // ---------------------------
+  // setImmediate tests
+  // ---------------------------
+  describe('setImmediate', () => {
+    it('resolves with the given value', async () => {
+      const result = await setImmediate('done');
+      expect(result).toBe('done');
+    });
 
-      jest.advanceTimersByTime(100);
-      await p1;
+    it('rejects immediately if signal is already aborted', async () => {
+      const ac = new AbortController();
+      ac.abort();
+      await expect(setImmediate('x', { signal: ac.signal })).rejects.toMatchObject({
+        name: 'AbortError',
+        code: 'ABORT_ERR'
+      });
+    });
 
-      jest.advanceTimersByTime(100);
-      await p2;
-
-      expect(results).toEqual([1, 2]);
+    it('rejects with ERR_INVALID_ARG_TYPE for invalid options', async () => {
+      await expect(setImmediate('v', null)).rejects.toMatchObject({
+        code: 'ERR_INVALID_ARG_TYPE'
+      });
     });
   });
 
-  // -------------------------------------------------------------------------
-  // setInterval returns a promise repeatedly
-  // -------------------------------------------------------------------------
+  // ---------------------------
+  // setInterval tests
+  // ---------------------------
   describe('setInterval', () => {
-    test('fires repeatedly until cleared', async () => {
-      const fn = jest.fn();
+    it('yields multiple values asynchronously', async () => {
+      const results = [];
       let count = 0;
+      for await (const val of setInterval(20, 'tick')) {
+        results.push(val);
+        if (++count === 3) break;
+      }
+      expect(results).toEqual(['tick', 'tick', 'tick']);
+    });
 
-      const interval = setInterval(() => {
-        count++;
-        fn(count);
-        if (count >= 3) interval.close(); // stop after 3
-        return count;
-      }, 50);
+    it('throws AbortError if signal is aborted during iteration', async () => {
+      const ac = new AbortController();
+      const interval = setInterval(50, 'x', { signal: ac.signal });
+      setTimeout(() => ac.abort(), 60);
+      await expect(async () => {
+        for await (const _ of interval) {}
+      }).rejects.toMatchObject({ name: 'AbortError', code: 'ABORT_ERR' });
+    });
 
-      jest.advanceTimersByTime(50 * 3);
-      const result = await interval;
-      expect(fn).toHaveBeenCalledTimes(3);
-      expect(fn).toHaveBeenNthCalledWith(1, 1);
-      expect(fn).toHaveBeenNthCalledWith(2, 2);
-      expect(fn).toHaveBeenNthCalledWith(3, 3);
-      expect(result).toBe(3);
+    it('throws immediately if signal is already aborted', async () => {
+      const ac = new AbortController();
+      ac.abort();
+      await expect(async () => {
+        for await (const _ of setInterval(10, 'x', { signal: ac.signal })) {}
+      }).rejects.toMatchObject({ name: 'AbortError', code: 'ABORT_ERR' });
+    });
+
+    it('throws ERR_INVALID_ARG_TYPE for invalid delay', async () => {
+      await expect(async () => {
+        for await (const _ of setInterval('oops')) {}
+      }).rejects.toMatchObject({ code: 'ERR_INVALID_ARG_TYPE' });
+    });
+  });
+
+  // ---------------------------
+  // scheduler tests
+  // ---------------------------
+  describe('scheduler', () => {
+    it('scheduler.wait resolves after given delay', async () => {
+      const start = Date.now();
+      await scheduler.wait(30);
+      expect(Date.now() - start).toBeGreaterThanOrEqual(30);
+    });
+
+    it('scheduler.yield resolves immediately (next tick)', async () => {
+      let executed = false;
+      setImmediate(() => { executed = true; });
+      await scheduler.yield();
+      expect(executed).toBe(true);
     });
   });
 });
