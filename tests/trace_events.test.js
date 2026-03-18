@@ -27,7 +27,7 @@ describe('trace_events wrapper', () => {
         .toThrow(/must be an Array/); 
 
       expect(() => trace_events.createTracing({ categories: ['valid', 123] }))
-        .toThrow(/must be of type a string/);
+        .toThrow(/must be a string/);
     });
 
     test('throws if categories array is empty', () => {
