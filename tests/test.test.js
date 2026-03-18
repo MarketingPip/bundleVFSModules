@@ -64,11 +64,11 @@ describe('node:test Browser Shim', () => {
     test('runs a basic suite and reports passes', async () => {
       
       const userCode = `
-        test('math works', (t) => {
+        await test('math works', (t) => {
           t.assert.strictEqual(1 + 1, 2);
         });
         
-        describe('nested suite', () => {
+        await describe('nested suite', () => {
           it('is todo', { todo: true });
         });
       `;
@@ -86,7 +86,7 @@ describe('node:test Browser Shim', () => {
       
       // Test code that never resolves
       const userCode = `
-        test('slow test', { timeout: 50 }, async () => {
+        await test('slow test', { timeout: 50 }, async () => {
           await new Promise(r => {}); 
         });
       `;
@@ -101,7 +101,7 @@ describe('node:test Browser Shim', () => {
   describe('Assertions (CtxAssert)', () => {
     test('deepEqual identifies nested mismatches', async () => {
       const userCode = `
-        test('deep', (t) => {
+        await test('deep', (t) => {
           t.assert.deepEqual({a: 1, b: [2]}, {a: 1, b: [2]});
           t.assert.deepEqual({a: 1}, {a: 2}); // This should fail
         });
