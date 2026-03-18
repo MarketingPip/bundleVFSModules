@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { Buffer } from 'buffer'; // ✅ Works with the 'buffer' package
-import { Readable, Writable} from 'stream-browserify';
+import { Readable, Writable} from 'stream';
 import { Socket, Server as NetServer, AddressInfo } from './net';
 import { createHash } from 'crypto-browserify';
 
