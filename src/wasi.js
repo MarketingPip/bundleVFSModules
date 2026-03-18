@@ -186,6 +186,12 @@ export class WASI {
     const env = [];
     if (options.env !== undefined) {
       validateObject(options.env, 'options.env');
+      if (Array.isArray(options.env)) {
+        throw Object.assign(
+          new TypeError(`The "options.env" argument must be of type object. Received type array`),
+          { code: 'ERR_INVALID_ARG_TYPE' }
+        );
+      }
       for (const [k, v] of Object.entries(options.env)) {
         if (v !== undefined) env.push(`${k}=${v}`);
       }
