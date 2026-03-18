@@ -945,8 +945,13 @@ export async function execute(userCode, opts = {}) {
 }
 
 // ─── Global runtime hook ─────────────────────────────────────────────────────
-globalThis?._RUNTIME_?._TEST_RUNNER_ = {
+
+if(globalThis._RUNTIME_){
+
+globalThis._RUNTIME_._TEST_RUNNER_ = {
   execute,
   reporters: REPORTERS,
   get activeReporter() { return _activeReporter; },
 };
+
+}
