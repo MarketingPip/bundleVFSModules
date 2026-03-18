@@ -4,7 +4,7 @@ import http, {
   Server, 
   ClientRequest,
   createServer 
-} from '../src/http.js';
+} from '../dist/http.js';
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { Buffer } from 'buffer';
 
