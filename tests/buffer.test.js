@@ -1,4 +1,4 @@
-import shim, * as namedExports from '../src/buffer/js';
+import shim, * as namedExports from '../src/buffer.js';
 
 describe('Buffer Shim Compliance', () => {
   
