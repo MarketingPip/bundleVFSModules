@@ -57,7 +57,8 @@ function _cleanStack(err) {
     !(l.includes('eval at ') && l.includes('data:')) &&
     !l.includes('new Function')
   ).map(l => { try { return decodeURIComponent(l); } catch { return l; } });
-  err.stack = cleaned.join('\n');
+  // err.stack = cleaned.join('\n');
+  err.stack = cleaned[0];
   return err;
 }
 
