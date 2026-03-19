@@ -27,6 +27,7 @@ class Interface {
   #closed = false;
   #lineBuffer = "";
   #crSeen = false;
+  #pendingOps = null; // for rollback/commit batching
   #ev = Object.create(null);
 
   // async-iterator state
@@ -118,6 +119,11 @@ class Interface {
 
   get terminal() { return this.#terminal; }
 
+  /** Current line buffer contents (mirrors Node's `rl.line`). @since Node.js v0.1.98 */
+  get line()   { return this.#lineBuffer; }
+  /** Current cursor position within `rl.line`. @since Node.js v0.1.98 */
+  get cursor() { return this.#lineBuffer.length; }
+
   on(ev, fn)             { this.#_on(ev, fn, false); return this; }
   once(ev, fn)           { this.#_on(ev, fn, true);  return this; }
   off(ev, fn)            { this.#_off(ev, fn);        return this; }
@@ -171,7 +177,79 @@ class Interface {
     return this;
   }
 
-  // ── question ─────────────────────────────────────────────────────────
+  // ── cursor / screen helpers (also available as module-level functions) ──
+
+  /**
+   * Move cursor to absolute position.
+   * @param {number} x  @param {number} [y]  @param {Function} [cb]
+   * @returns {this}
+   * @since Node.js v0.7.7
+   */
+  cursorTo(x, y, cb) {
+    if (this.#output) cursorTo(this.#output, x, y, cb);
+    return this;
+  }
+
+  /**
+   * Move cursor relative to current position.
+   * @param {number} dx  @param {number} dy  @param {Function} [cb]
+   * @returns {this}
+   * @since Node.js v0.7.7
+   */
+  moveCursor(dx, dy, cb) {
+    if (this.#output) moveCursor(this.#output, dx, dy, cb);
+    return this;
+  }
+
+  /**
+   * Clear current line in the given direction.
+   * @param {-1|0|1} dir  @param {Function} [cb]
+   * @returns {this}
+   * @since Node.js v0.7.7
+   */
+  clearLine(dir, cb) {
+    if (this.#output) clearLine(this.#output, dir, cb);
+    return this;
+  }
+
+  /**
+   * Clear from current cursor position to end of screen.
+   * @param {Function} [cb]
+   * @returns {this}
+   * @since Node.js v0.7.7
+   */
+  clearScreenDown(cb) {
+    if (this.#output) clearScreenDown(this.#output, cb);
+    return this;
+  }
+
+  // ── rollback / commit (Node v21.7+) ──────────────────────────────────
+
+  /**
+   * Begins buffering cursor/line operations for atomic application.
+   * Returns `this` for chaining.
+   * @since Node.js v21.7.0 / v20.13.0
+   */
+  rollback() {
+    this.#pendingOps = [];
+    return this;
+  }
+
+  /**
+   * Flushes all operations buffered since the last `rollback()` call.
+   * If no `rollback()` was called this is a no-op.
+   * Returns `this` for chaining.
+   * @since Node.js v21.7.0 / v20.13.0
+   */
+  commit() {
+    if (this.#pendingOps) {
+      for (const op of this.#pendingOps) op();
+      this.#pendingOps = null;
+    }
+    return this;
+  }
+
+  
 
   /**
    * @param {string} query
@@ -353,7 +431,6 @@ const promises = {
   Readline,
   createInterface,
 };
-
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
