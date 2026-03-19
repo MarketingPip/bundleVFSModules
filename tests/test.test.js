@@ -40,36 +40,39 @@ describe('node:test Browser Shim', () => {
   });
 
 
-test('run() emits pass/fail events', async () => {
-  // Define some tests using your shimmed API
-  await nodeTest.test('passing test', (t) => {
-    t.assert.strictEqual(2 + 2, 4);
+  test('run() emits pass/fail events', async () => {
+    // Define tests
+    await nodeTest.test('passing test', (t) => {
+      t.assert.strictEqual(2 + 2, 4);
+    });
+  
+    await nodeTest.test('failing test', (t) => {
+      t.assert.strictEqual(2 + 2, 5);
+    });
+  
+    const events = [];
+  
+    // Start runner
+    const runner = run({ concurrency: false });
+  
+    runner.on('test:pass', (e) => {
+      events.push({ type: 'pass', name: e.name });
+    });
+  
+    runner.on('test:fail', (e) => {
+      events.push({ type: 'fail', name: e.name });
+    });
+  
+    // ✅ Wait for ALL tests to finish
+    await runner.collect();
+  
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { type: 'pass', name: 'passing test' },
+        { type: 'fail', name: 'failing test' }
+      ])
+    );
   });
-
-  await nodeTest.test('failing test', (t) => {
-    t.assert.strictEqual(2 + 2, 5);
-  });
-
-  const events = [];
-
-  // Call your shimmed run()
-  const runner = run({ concurrency: false });
-
-  runner.on('test:pass', (e) => events.push({ type: 'pass', name: e.name }));
-  runner.on('test:fail', (e) => events.push({ type: 'fail', name: e.name }));
-
-  // Wait for completion (depends on your shim implementation)
-  await new Promise((resolve) => {
-    runner.on('test:complete', resolve);
-  });
-
-  expect(events).toEqual(
-    expect.arrayContaining([
-      { type: 'pass', name: 'passing test' },
-      { type: 'fail', name: 'failing test' }
-    ])
-  );
-});
   
   
 
