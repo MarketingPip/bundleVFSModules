@@ -661,6 +661,7 @@ function _emit(event, d) { (_listeners[event] ?? []).forEach(fn => fn(d)); }
 let _root    = null;
 let _current = null;
 let _running = false;
+let _testNamePattern = null;
 
 function _getRoot() {
   if (!_root) { _root = new TestNode('<root>', null, {}, null); _root._isSuite = true; }
@@ -687,6 +688,13 @@ async function _scheduleSubtest(parent, name, opts, fn) {
 }
 
 async function _runNode(node, iBefore = [], iAfter = []) {
+  
+  if (_testNamePattern && !_testNamePattern.test(_buildFull(node))) {
+    node.result = 'skip';
+    _emit('test:skip', { name: node.name, node });
+    _emit('test:complete', { name: node.name, node });
+    return node;
+  }
   const ctx = new TestContext(node);
   const t0 = performance.now();
 
@@ -843,15 +851,23 @@ export const afterEach   = (fn, o) => (_current ?? _getRoot())._afterEach.push({
 export function run(opts = {}) {
   if (opts.reporter) _activeReporter = _resolveReporter(opts.reporter);
   _running = true;
-
+  _testNamePattern = opts.testNamePatterns ?? null;
   const root  = _getRoot();
   const evts  = [];
+
   const types = ['test:pass','test:fail','test:skip','test:todo','test:complete','suite:start','suite:end','diagnostic'];
   for (const t of types) _on(t, e => evts.push({ type: t, ...e }));
 
   let _resolve;
   const done = new Promise(r => { _resolve = r; });
-  _runSuite(root).then(() => { _running = false; _resolve(evts); });
+
+  // ✅ FIX: defer execution
+  queueMicrotask(() => {
+    _runSuite(root).then(() => {
+      _running = false;
+      _resolve(evts);
+    });
+  });
 
   return {
     async *[Symbol.asyncIterator]() {
@@ -863,9 +879,14 @@ export function run(opts = {}) {
       const events = await done;
       return { root, events, reporter: _activeReporter };
     },
-    // minimal EventEmitter shim so run().on('test:fail', cb) works
     on(event, cb) {
       _on(event, cb);
+
+      // ✅ optional but recommended
+      for (const e of evts) {
+        if (e.type === event) cb(e);
+      }
+
       return this;
     },
   };
