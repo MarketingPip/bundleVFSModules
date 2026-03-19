@@ -125,7 +125,7 @@ import os, {
   EOL,
   constants,
   devNull,
-} from '../../src/shims/os';
+} from '../src/os';
 
 describe('os module (Node.js compat)', () => {
   test('os.hostname() returns a string', () => {
