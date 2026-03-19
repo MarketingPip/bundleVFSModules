@@ -700,7 +700,7 @@ async function _runNode(node, iBefore = [], iAfter = []) {
       });
 
       // Wrap fn call in Promise.resolve to handle both sync and async functions
-      const testPromise = Promise.resolve(node.fn(ctx));
+      const testPromise = Promise.resolve().then(() => node.fn(ctx));
 
       try {
         await Promise.race([testPromise, timeoutPromise]);
