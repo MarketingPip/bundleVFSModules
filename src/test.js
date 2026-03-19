@@ -48,6 +48,19 @@ function _resolveReporter(r) {
   return _spec;
 }
 
+// ─── Stack trace cleaner ─────────────────────────────────────────────────────
+function _cleanStack(err) {
+  if (!err || typeof err.stack !== 'string') return err;
+  const lines = err.stack.split('\n');
+  const cleaned = lines.filter(l =>
+    !l.includes('data:text/javascript') &&
+    !(l.includes('eval at ') && l.includes('data:')) &&
+    !l.includes('new Function')
+  ).map(l => { try { return decodeURIComponent(l); } catch { return l; } });
+  err.stack = cleaned.join('\n');
+  return err;
+}
+
 // ─── Internal error types ────────────────────────────────────────────────────
 export class SkipError      extends Error { constructor(m=''){super(m);this.name='SkipError';} }
 export class TodoError      extends Error { constructor(m=''){super(m);this.name='TodoError';} }
@@ -722,8 +735,8 @@ async function _runNode(node, iBefore = [], iAfter = []) {
     } else {
       node._passed = false;
       node.result = 'fail';
-      node.error = e;
-      _emit('test:fail', { name: node.name, node, error: e });
+      node.error = _cleanStack(e);
+      _emit('test:fail', { name: node.name, node, error: node.error });
     }
   }
 
@@ -936,6 +949,14 @@ function makeApiValues() {
 export async function execute(userCode, opts = {}) {
   if (opts.resetBefore !== false) _reset();
 
+  // Intercept console.log during execution so it doesn't interleave with
+  // reporter output. Logs are re-emitted as diagnostic events after the run.
+  const _origConsole = { log: console.log, warn: console.warn, info: console.info };
+  const _pendingLogs = [];
+  for (const level of ['log', 'warn', 'info']) {
+    console[level] = (...args) => _pendingLogs.push({ level, text: args.map(String).join(' ') });
+  }
+
   // Reporter comes from globalThis._RUNTIME_TEST_RUNNER_.REPORTER_TYPE (set by
   // the host before calling execute), or the execute() opts override — never
   // from inside user code, matching Node's --test-reporter CLI semantics.
@@ -949,6 +970,7 @@ export async function execute(userCode, opts = {}) {
 
   let execFn;
   try {
+
     const patchedValues = makeApiValues();
     const patchedKeys   = [...API_KEYS];
     const testIdx = patchedKeys.indexOf('test');
