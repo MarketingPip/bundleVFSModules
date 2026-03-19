@@ -5,7 +5,7 @@ globalThis._RUNTIME_ = {
   }
 };
 
-import nodeTest, { MockTracker, MockTimers, _reset, execute} from '../src/test.js';
+import nodeTest, { MockTracker, MockTimers, _reset, execute, run} from '../src/test.js';
 
 
 
@@ -39,6 +39,38 @@ describe('node:test Browser Shim', () => {
     });
   });
 
+
+test('run() emits pass/fail events', async () => {
+  // Define some tests using your shimmed API
+  await nodeTest.test('passing test', (t) => {
+    t.assert.strictEqual(2 + 2, 4);
+  });
+
+  await nodeTest.test('failing test', (t) => {
+    t.assert.strictEqual(2 + 2, 5);
+  });
+
+  const events = [];
+
+  // Call your shimmed run()
+  const runner = run({ concurrency: false });
+
+  runner.on('test:pass', (e) => events.push({ type: 'pass', name: e.name }));
+  runner.on('test:fail', (e) => events.push({ type: 'fail', name: e.name }));
+
+  // Wait for completion (depends on your shim implementation)
+  await new Promise((resolve) => {
+    runner.on('test:complete', resolve);
+  });
+
+  expect(events).toEqual(
+    expect.arrayContaining([
+      { type: 'pass', name: 'passing test' },
+      { type: 'fail', name: 'failing test' }
+    ])
+  );
+});
+  
   
 
   describe('MockTimers', () => {
