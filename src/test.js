@@ -954,7 +954,7 @@ export async function execute(userCode, opts = {}) {
   const _origConsole = { log: console.log, warn: console.warn, info: console.info };
   const _pendingLogs = [];
   for (const level of ['log', 'warn', 'info']) {
-    console[level] = (...args) => _pendingLogs.push({ level, text: args.map(String).join(' ') });
+   // console[level] = (...args) => _pendingLogs.push({ level, text: args.map(String).join(' ') });
   }
 
   // Reporter comes from globalThis._RUNTIME_TEST_RUNNER_.REPORTER_TYPE (set by
