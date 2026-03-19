@@ -166,7 +166,7 @@ export function type() {
  * @returns {string}
  */
 export function release() {
-  return typeof navigator !== 'undefined' ? (navigator.appVersion || '') : '';
+  return typeof navigator !== 'undefined' ? (navigator.appVersion || '') : '5.10.0';
 }
 
 // ---------------------------------------------------------------------------
