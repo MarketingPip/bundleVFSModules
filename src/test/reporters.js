@@ -152,7 +152,34 @@ export function spec({ root, events }) {
 
   function indent(depth) { return '  '.repeat(depth); }
 
+
   function formatError(node, depth) {
+  const err = node.error;
+  if (!err) return;
+
+  const pad = indent(depth + 1);
+  let msg = err.message ?? String(err);
+
+  // Transform "4 == 56" → "Expected 4 to equal 56"
+  const m = msg.match(/^(.+)\s*==\s*(.+)$/);
+  if (m) {
+    msg = `Expected ${m[1]} to equal ${m[2]}`;
+  }
+
+  rows.push(`${pad}${CLR.red(msg)}`);
+
+  if (err.stack) {
+    for (const f of err.stack
+      .split('\n')
+      .filter(l => /^\s+at /.test(l))
+      .slice(0, 5)
+    ) {
+      rows.push(`${pad}  ${f.trim()}`);
+    }
+  }
+}
+  
+  function formatError2(node, depth) {
     const err = node.error;
     if (!err) return;
     const pad = indent(depth + 1);
