@@ -50,10 +50,15 @@ function isAscii(input) {
 }
 
 function transcode(source, fromEnc, toEnc) {
-  return Buffer.from(
-    Buffer.from(source, fromEnc).toString(toEnc),
-    toEnc
-  );
+  // 1. Create a buffer from the source using the 'from' encoding
+  const buf = Buffer.isBuffer(source) ? source : Buffer.from(source, fromEnc);
+  
+  // 2. Node's transcode returns a NEW buffer. 
+  // We simulate this by converting to the target encoding string and back to a buffer.
+  const encodedString = buf.toString(toEnc);
+  
+  // Important: We return a buffer containing the raw bytes of that encoded string
+  return Buffer.from(encodedString); 
 }
 
 // Not really supported outside Node — stub safely
