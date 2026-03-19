@@ -27,7 +27,9 @@ class Interface {
   #closed = false;
   #lineBuffer = "";
   #crSeen = false;
-  #pendingOps = null; // for rollback/commit batching
+  #pendingOps = null;
+  #boundHandleChunk;
+  #boundOnInputClose;
   #ev = Object.create(null);
 
   // async-iterator state
@@ -63,8 +65,11 @@ class Interface {
       }
     });
 
-    input?.on('data',  chunk => this.#handleChunk(chunk));
-    input?.on('close', ()    => { if (!this.#closed) this.close(); });
+    this.#boundHandleChunk    = chunk => this.#handleChunk(chunk);
+    this.#boundOnInputClose   = ()    => { if (!this.#closed) this.close(); };
+
+    input?.on('data',  this.#boundHandleChunk);
+    input?.on('close', this.#boundOnInputClose);
   }
 
   // ── private event helpers ──────────────────────────────────────────────
@@ -159,14 +164,11 @@ class Interface {
   close() {
     if (this.#closed) return this;
     this.#closed = true;
-    this.#input?.off?.('data', chunk => this.#handleChunk(chunk));
+    // Remove only the handler this interface attached — leave other listeners alone.
+    this.#input?.removeListener?.('data', this.#boundHandleChunk);
+    this.#input?.removeListener?.('close', this.#boundOnInputClose);
     if (this.#lineBuffer.length) this.#flushLine();
     this.#_emit('close');
-    setTimeout(() => {
-      if (this.#input && this.#_listenerCount('data') === 0) {
-        this.#input.end?.();
-      }
-    }, 0);
     return this;
   }
 
@@ -430,6 +432,20 @@ const promises = {
   Interface,
   Readline,
   createInterface,
+};
+
+// ─── globalThis registration (optional, matches original shim behaviour) ─────
+
+globalThis.readline = {
+  createInterface,
+  emitKeypressEvents,
+  cursorTo,
+  moveCursor,
+  clearLine,
+  clearScreenDown,
+  Interface,
+  Readline,
+  promises,
 };
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
