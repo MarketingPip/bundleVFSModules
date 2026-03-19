@@ -1,188 +1,382 @@
-// readline-shim.js
+// @ts-self-types="./readline.d.ts"
+/**
+ * readline shim for browser / edge / bundler environments.
+ * Mirrors the Node.js `readline` module API surface.
+ *
+ * Named exports match Node's public API:
+ *   createInterface, emitKeypressEvents,
+ *   cursorTo, moveCursor, clearLine, clearScreenDown,
+ *   Interface, Readline, promises
+ *
+ * @module readline
+ * @since Node.js v0.1.98
+ */
 
-// ─── AbortError ─────────────────────────────────────────────────────────────
-class AbortError extends Error {
-  constructor(message = 'The operation was aborted') {
-    super(message);
-    this.name = 'AbortError';
-    this.code = 'ABORT_ERR';
-  }
-}
+// ─── Interface class ────────────────────────────────────────────────────────
 
-// ─── Interface ──────────────────────────────────────────────────────────────
+/**
+ * The readline Interface class.  Instances are created via `createInterface`.
+ * Exposed as both `Interface` and `Readline` to match Node's exports.
+ * @since Node.js v0.1.98
+ */
 class Interface {
+  #input;
+  #output;
+  #terminal;
+  #promptStr;
+  #closed = false;
+  #lineBuffer = "";
+  #crSeen = false;
+  #ev = Object.create(null);
+
+  // async-iterator state
+  #lineQueue = [];
+  #lineResolve = null;
+  #lineDone = false;
+
   constructor(options = {}) {
-    const input = options.input || process.stdin;
-    const output = options.output || process.stdout;
-    this.terminal = options.terminal != null ? !!options.terminal : !!output.isTTY;
+    const input  = options.input  || (typeof process !== 'undefined' ? process.stdin  : null);
+    const output = options.output || (typeof process !== 'undefined' ? process.stdout : null);
+    const terminal = options.terminal != null ? !!options.terminal : !!(output?.isTTY);
 
-    this._ev = Object.create(null);
-    this._lineBuffer = '';
-    this._closed = false;
-    this._lineQueue = [];
-    this._lineResolve = null;
-    this._lineDone = false;
-    this._prompt = options.prompt || (this.terminal ? '> ' : '');
+    this.#input    = input;
+    this.#output   = output;
+    this.#terminal = terminal;
+    this.#promptStr = options.prompt ?? (terminal ? '> ' : '');
 
-    const self = this;
-
-    const handleChunk = chunk => {
-      const str = typeof chunk === 'string' ? chunk : chunk.toString();
-      if (input.isRaw || this.terminal) {
-        const line = str.replace(/[\r\n]+$/, '');
-        if (line === '\u0003') { self.emit('SIGINT'); return; }
-        self.emit('line', line);
+    // wire line/close to the async-iterator queues
+    this.#_on('line', line => {
+      if (this.#lineResolve) {
+        const r = this.#lineResolve;
+        this.#lineResolve = null;
+        r({ value: line, done: false });
       } else {
-        for (let i = 0; i < str.length; i++) {
-          const ch = str[i];
-          if (ch === '\r' || ch === '\n') {
-            if (self._lineBuffer) self._flushLine();
-          } else {
-            self._lineBuffer += ch;
-          }
-        }
+        this.#lineQueue.push(line);
       }
-    };
+    });
+    this.#_on('close', () => {
+      this.#lineDone = true;
+      if (this.#lineResolve) {
+        this.#lineResolve({ value: undefined, done: true });
+        this.#lineResolve = null;
+      }
+    });
 
-    input.on('data', handleChunk);
-    input.on('close', () => { if (!this._closed) this.close(); });
+    input?.on('data',  chunk => this.#handleChunk(chunk));
+    input?.on('close', ()    => { if (!this.#closed) this.close(); });
   }
 
-  _on(ev, fn, once = false) {
-    if (!this._ev[ev]) this._ev[ev] = [];
-    this._ev[ev].push({ fn, once });
-    return this;
+  // ── private event helpers ──────────────────────────────────────────────
+
+  #_on(ev, fn, once = false) {
+    if (!this.#ev[ev]) this.#ev[ev] = [];
+    this.#ev[ev].push({ fn, once });
   }
 
-  _off(ev, fn) {
-    if (this._ev[ev]) this._ev[ev] = this._ev[ev].filter(e => e.fn !== fn);
-    return this;
+  #_off(ev, fn) {
+    if (this.#ev[ev]) this.#ev[ev] = this.#ev[ev].filter(e => e.fn !== fn);
   }
 
-  _emit(ev, ...args) {
-    const list = this._ev[ev]; if (!list) return false;
+  #_emit(ev, ...args) {
+    const list = this.#ev[ev];
+    if (!list) return false;
     const snap = [...list];
-    this._ev[ev] = list.filter(e => !e.once);
+    this.#ev[ev] = list.filter(e => !e.once);
     for (const e of snap) e.fn(...args);
     return true;
   }
 
-  _listenerCount(ev) { return (this._ev[ev] || []).length; }
+  #_listenerCount(ev) { return (this.#ev[ev] || []).length; }
 
-  _flushLine() {
-    const line = this._lineBuffer;
-    this._lineBuffer = '';
-    this._emit('line', line);
+  // ── input handling ────────────────────────────────────────────────────
+
+  #handleChunk(chunk) {
+    const str = typeof chunk === 'string' ? chunk : chunk.toString();
+    if (this.#input?.isRaw || this.#terminal) {
+      const line = str.replace(/[\r\n]+$/, '');
+      if (line === '\u0003') { this.#_emit('SIGINT'); return; }
+      this.#_emit('line', line);
+    } else {
+      for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+        if (ch === '\r') { this.#crSeen = true;  this.#flushLine(); continue; }
+        if (ch === '\n') { if (!this.#crSeen) this.#flushLine(); this.#crSeen = false; continue; }
+        this.#crSeen = false;
+        this.#lineBuffer += ch;
+      }
+    }
   }
 
-  on(ev, fn) { return this._on(ev, fn, false); }
-  once(ev, fn) { return this._on(ev, fn, true); }
-  off(ev, fn) { return this._off(ev, fn); }
-  removeListener(ev, fn) { return this._off(ev, fn); }
+  #flushLine() {
+    const line = this.#lineBuffer;
+    this.#lineBuffer = "";
+    if (line === '\u0003') { this.#_emit('SIGINT'); return; }
+    this.#_emit('line', line);
+  }
+
+  // ── public EventEmitter-like API ──────────────────────────────────────
+
+  get terminal() { return this.#terminal; }
+
+  on(ev, fn)             { this.#_on(ev, fn, false); return this; }
+  once(ev, fn)           { this.#_on(ev, fn, true);  return this; }
+  off(ev, fn)            { this.#_off(ev, fn);        return this; }
+  removeListener(ev, fn) { this.#_off(ev, fn);        return this; }
   removeAllListeners(ev) {
-    if (ev) delete this._ev[ev]; else Object.keys(this._ev).forEach(k => delete this._ev[k]);
+    if (ev) delete this.#ev[ev];
+    else Object.keys(this.#ev).forEach(k => delete this.#ev[k]);
     return this;
   }
-  listenerCount(ev) { return this._listenerCount(ev); }
-  emit(ev, ...args) { return this._emit(ev, ...args); }
+  listenerCount(ev) { return this.#_listenerCount(ev); }
+  emit(ev, ...a)    { return this.#_emit(ev, ...a); }
+
+  // ── prompt / pause / resume / close ──────────────────────────────────
+
+  setPrompt(str)         { this.#promptStr = str; return this; }
+  getPrompt()            { return this.#promptStr; }
+  prompt(/*preserveCursor*/) {
+    if (this.#output?.write) this.#output.write(this.#promptStr);
+    return this;
+  }
+
+  pause() {
+    this.#input?.pause?.();
+    this.#_emit('pause');
+    return this;
+  }
+  resume() {
+    this.#input?.resume?.();
+    this.#_emit('resume');
+    return this;
+  }
 
   close() {
-    if (this._closed) return this;
-    this._closed = true;
-    this._flushLine();
-    this._emit('close');
+    if (this.#closed) return this;
+    this.#closed = true;
+    this.#input?.off?.('data', chunk => this.#handleChunk(chunk));
+    if (this.#lineBuffer.length) this.#flushLine();
+    this.#_emit('close');
+    setTimeout(() => {
+      if (this.#input && this.#_listenerCount('data') === 0) {
+        this.#input.end?.();
+      }
+    }, 0);
     return this;
   }
 
-  setPrompt(str) { this._prompt = str; return this; }
-  getPrompt() { return this._prompt; }
-  prompt() { return this; }
+  write(data /*, key */) {
+    if (this.#closed) return this;
+    if (typeof data === 'string' && data.length)
+      this.#_emit('line', data.replace(/[\r\n]+$/, ''));
+    return this;
+  }
 
+  // ── question ─────────────────────────────────────────────────────────
+
+  /**
+   * @param {string} query
+   * @param {{ signal?: AbortSignal } | Function} [optionsOrCb]
+   * @param {Function} [cb]
+   * @returns {this | Promise<string>}
+   */
   question(query, optionsOrCb, cb) {
-    const output = {}; // placeholder for prompt output
-    if (output && output.write) output.write(query);
+    if (this.#closed) {
+      return typeof cb === 'function' || typeof optionsOrCb === 'function'
+        ? void 0
+        : Promise.reject(new Error('readline was closed'));
+    }
 
     let opts = {}, callback;
-    if (typeof optionsOrCb === 'function') callback = optionsOrCb;
-    else { opts = optionsOrCb || {}; callback = cb; }
+    if (typeof optionsOrCb === 'function') {
+      callback = optionsOrCb;
+    } else {
+      opts = optionsOrCb || {};
+      callback = cb;
+    }
 
+    if (this.#output?.write) this.#output.write(query);
     const signal = opts.signal;
 
     if (typeof callback === 'function') {
-      const onLine = ans => { callback(ans); this._off('line', onLine); };
-      this._on('line', onLine);
-      if (signal) signal.addEventListener('abort', () => { this._off('line', onLine); });
+      let called = false;
+      const onLine = answer => {
+        if (called) return; called = true;
+        this.#_off('line', onLine);
+        callback(answer);
+      };
+      this.#_on('line', onLine);
+      signal?.addEventListener('abort', () => {
+        if (called) return; called = true;
+        this.#_off('line', onLine);
+      }, { once: true });
       return this;
     }
 
     return new Promise((resolve, reject) => {
-      const onLine = ans => { this._off('line', onLine); resolve(ans); };
-      const onAbort = () => { this._off('line', onLine); reject(new AbortError()); };
-      this._on('line', onLine);
-      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      let settled = false;
+      const onLine = answer => {
+        if (settled) return; settled = true;
+        this.#_off('line', onLine);
+        resolve(answer);
+      };
+      this.#_on('line', onLine);
+      signal?.addEventListener('abort', () => {
+        if (settled) return; settled = true;
+        this.#_off('line', onLine);
+        const err = new Error('The question was aborted');
+        err.code = 'ABORT_ERR';
+        reject(err);
+      }, { once: true });
     });
   }
 
+  // ── async iterator ────────────────────────────────────────────────────
+
   [Symbol.asyncIterator]() {
+    const self = this;
     return {
-      next: () => {
-        if (this._lineQueue.length)
-          return Promise.resolve({ value: this._lineQueue.shift(), done: false });
-        if (this._lineDone)
+      next() {
+        if (self.#lineQueue.length)
+          return Promise.resolve({ value: self.#lineQueue.shift(), done: false });
+        if (self.#lineDone)
           return Promise.resolve({ value: undefined, done: true });
-        return new Promise(res => { this._lineResolve = res; });
+        return new Promise(res => { self.#lineResolve = res; });
       },
-      return: () => Promise.resolve({ value: undefined, done: true })
+      return() {
+        return Promise.resolve({ value: undefined, done: true });
+      }
     };
   }
 }
 
-// ─── Readline helper ────────────────────────────────────────────────────────
-class Readline {
-  constructor(rl) { this.rl = rl; }
+// ─── Readline (alias added in Node v17) ─────────────────────────────────────
 
-  clearLine(stream, dir, cb) {
-    const code = dir === 0 ? 2 : dir === -1 ? 1 : 0;
-    stream.write(`\u001b[${code}K`);
-    if (cb) cb();
-    return this;
-  }
+/**
+ * Alias for `Interface`, introduced as a named export in Node.js v17.0.0.
+ * @since Node.js v17.0.0
+ */
+const Readline = Interface;
 
-  clearScreenDown(stream, cb) {
-    stream.write('\u001b[0J');
-    if (cb) cb();
-    return this;
-  }
+// ─── Top-level functions ─────────────────────────────────────────────────────
 
-  moveCursor(stream, dx, dy, cb) {
-    if (dx > 0) stream.write(`\u001b[${dx}C`);
-    if (dx < 0) stream.write(`\u001b[${-dx}D`);
-    if (dy > 0) stream.write(`\u001b[${dy}B`);
-    if (dy < 0) stream.write(`\u001b[${-dy}A`);
-    if (cb) cb();
-    return this;
-  }
-
-  cursorTo(stream, x, y, cb) {
-    if (y == null) stream.write(`\u001b[${x + 1}G`);
-    else stream.write(`\u001b[${y + 1};${x + 1}H`);
-    if (cb) cb();
-    return this;
-  }
-
-  commit() { return Promise.resolve(); }
-  rollback() { return this; }
-}
-
-// ─── createInterface helper ────────────────────────────────────────────────
-function createInterface(options) {
+/**
+ * @param {object} [options]
+ * @returns {Interface}
+ * @since Node.js v0.1.98
+ */
+function createInterface(options = {}) {
   return new Interface(options);
 }
 
-// ─── Default export ─────────────────────────────────────────────────────────
-export default {
+/**
+ * Enables keypress event emission on a stream.
+ * No-ops in non-Node environments (TTY keypress is unavailable in browsers).
+ * @param {object} stream
+ * @since Node.js v0.7.7
+ */
+function emitKeypressEvents(stream) {
+  if (!stream || stream._keypressAttached) return;
+  stream._keypressAttached = true;
+}
+
+/**
+ * @param {object} stream
+ * @param {number} x
+ * @param {number} [y]
+ * @param {Function} [cb]
+ * @returns {boolean}
+ * @since Node.js v0.7.7
+ */
+function cursorTo(stream, x, y, cb) {
+  if (y == null) stream.write(`\u001b[${x + 1}G`);
+  else           stream.write(`\u001b[${y + 1};${x + 1}H`);
+  cb?.();
+  return true;
+}
+
+/**
+ * @param {object} stream
+ * @param {number} dx
+ * @param {number} dy
+ * @param {Function} [cb]
+ * @returns {boolean}
+ * @since Node.js v0.7.7
+ */
+function moveCursor(stream, dx, dy, cb) {
+  if (dx > 0) stream.write(`\u001b[${dx}C`);
+  if (dx < 0) stream.write(`\u001b[${-dx}D`);
+  if (dy > 0) stream.write(`\u001b[${dy}B`);
+  if (dy < 0) stream.write(`\u001b[${-dy}A`);
+  cb?.();
+  return true;
+}
+
+/**
+ * @param {object} stream
+ * @param {-1|0|1} dir
+ * @param {Function} [cb]
+ * @returns {boolean}
+ * @since Node.js v0.7.7
+ */
+function clearLine(stream, dir, cb) {
+  const code = dir === 0 ? 2 : dir === -1 ? 1 : 0;
+  stream.write(`\u001b[${code}K`);
+  cb?.();
+  return true;
+}
+
+/**
+ * @param {object} stream
+ * @param {Function} [cb]
+ * @returns {boolean}
+ * @since Node.js v0.7.7
+ */
+function clearScreenDown(stream, cb) {
+  stream.write('\u001b[0J');
+  cb?.();
+  return true;
+}
+
+// ─── promises sub-namespace ──────────────────────────────────────────────────
+
+/**
+ * Promise-based readline API (`readline/promises` or `readline.promises`).
+ *
+ * The `Interface` here is identical to the top-level one — Node's
+ * `readline/promises` Interface just returns Promises from `question`
+ * (which this implementation already does when no callback is supplied).
+ *
+ * @since Node.js v17.0.0
+ */
+const promises = {
   Interface,
-  createInterface,
   Readline,
-  AbortError
+  createInterface,
+};
+
+
+// ─── Exports ─────────────────────────────────────────────────────────────────
+
+export {
+  createInterface,
+  emitKeypressEvents,
+  cursorTo,
+  moveCursor,
+  clearLine,
+  clearScreenDown,
+  Interface,
+  Readline,
+  promises,
+};
+
+export default {
+  createInterface,
+  emitKeypressEvents,
+  cursorTo,
+  moveCursor,
+  clearLine,
+  clearScreenDown,
+  Interface,
+  Readline,
+  promises,
 };
