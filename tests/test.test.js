@@ -74,7 +74,30 @@ describe('node:test Browser Shim', () => {
     );
   });
   
+
+  test('run() respects testNamePatterns', async () => {
+    await nodeTest.test('fast test', (t) => {
+      t.assert.ok(true);
+    });
   
+    await nodeTest.test('slow test', (t) => {
+      t.assert.ok(true);
+    });
+  
+    const events = [];
+  
+    const runner = run({ testNamePatterns: /fast/ });
+  
+    runner.on('test:pass', (e) => {
+      events.push(e.name);
+    });
+  
+    // ✅ wait for full run
+    await runner.collect();
+  
+    expect(events).toEqual(['fast test']);
+  });
+    
 
   describe('MockTimers', () => {
     test('tick() advances time and triggers setTimeout', () => {
