@@ -793,6 +793,7 @@ export async function execute(userCode, opts = {}) {
     _emit('test:complete', { name: '<top-level>', node: synth });
   }
 
+  await new Promise(r => setTimeout(r, 0));
   const { root, events, reporter } = await run().drain();
   let output;
   try {
