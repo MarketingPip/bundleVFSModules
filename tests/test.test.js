@@ -25,8 +25,12 @@ import nodeTest, {
   assert,
 } from '../src/test.js';
 
-// Convenience aliases for the internal hooks the module registers on globalThis.
-const { _reset, reporters } = globalThis._RUNTIME_._TEST_RUNNER_;
+// _reset is read lazily inside beforeEach — not destructured at module
+// evaluation time — because ES imports run before any statement in this file,
+// meaning the module installs _RUNTIME_ before this line, but the assignment
+// `globalThis._RUNTIME_ = { ... }` at the top of *this* file also runs after
+// the import. Reading from globalThis inside a function call is always safe.
+const _reset = () => globalThis._RUNTIME_._TEST_RUNNER_._reset();
 
 describe('node:test Browser Shim', () => {
   beforeEach(() => {
