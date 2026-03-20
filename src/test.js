@@ -4,11 +4,24 @@
  * Same named exports as the native module.
  *
  * Spec parity target: node:test @ Node.js v22+
+ *
+ * node:test named exports (Node 22):
+ *   test, it, suite, describe,
+ *   before, after, beforeEach, afterEach,
+ *   run, mock, snapshot, assert
+ *
+ * node:test default export: the `test` function (not a wrapper object)
+ *
+ * Internal/custom symbols NOT on the public API surface are kept unexported
+ * (MockTracker, MockTimers, SuiteContext, TestContext, SkipError, TodoError,
+ * AssertionError, _reset, execute).  They are accessible via the
+ * globalThis._RUNTIME_._TEST_RUNNER_ hook for the host environment.
+ *
+ * Reporters (dot, spec, tap, junit, lcov) live in node:test/reporters — they
+ * are NOT re-exported from this module.
  */
 
 import _assert from './assert.js';
-
-
 
 import {
   dot   as _dot,
@@ -18,60 +31,51 @@ import {
   lcov  as _lcov,
 } from './test/reporters.js';
 
-// ─── Reporter registry ───────────────────────────────────────────────────────
+// ─── Reporter registry (internal) ────────────────────────────────────────────
 const REPORTERS = { dot: _dot, spec: _spec, tap: _tap, junit: _junit, lcov: _lcov };
 
-/** Read the run-level reporter from the global hook, mirroring --test-reporter. */
 function _getConfiguredReporter() {
   const name = globalThis._RUNTIME_?._TEST_RUNNER_?.REPORTER_TYPE;
   return name ? (_resolveReporter(name) ?? _spec) : _spec;
 }
 
-let _activeReporter  = _getConfiguredReporter();
-const _defaultReporter = _spec;
+let _activeReporter = _getConfiguredReporter();
 
 function _resolveReporter(r) {
   if (!r) return _spec;
   if (typeof r === 'function') return r;
   if (typeof r === 'string') {
     const fn = REPORTERS[r.toLowerCase()];
-
-    if (fn){
-    return fn;
-    }
-    
-    if (!fn){
-      console.warn(`[node:test] Unknown reporter "${r}" — falling back to spec.`);
-    }
-    return _spec;
+    if (!fn) console.warn(`[node:test] Unknown reporter "${r}" — falling back to spec.`);
+    return fn ?? _spec;
   }
   return _spec;
 }
 
-// ─── Stack trace cleaner ─────────────────────────────────────────────────────
+// ─── Stack trace cleaner (internal) ──────────────────────────────────────────
 function _cleanStack(err) {
   if (!err || typeof err.stack !== 'string') return err;
   const lines = err.stack.split('\n');
-  const cleaned = lines.filter(l =>
-    !l.includes('data:text/javascript') &&
-    !(l.includes('eval at ') && l.includes('data:')) &&
-    !l.includes('new Function')
-  ).map(l => { try { return decodeURIComponent(l); } catch { return l; } });
-  // err.stack = cleaned.join('\n');
+  const cleaned = lines
+    .filter(l =>
+      !l.includes('data:text/javascript') &&
+      !(l.includes('eval at ') && l.includes('data:')) &&
+      !l.includes('new Function')
+    )
+    .map(l => { try { return decodeURIComponent(l); } catch { return l; } });
   err.stack = cleaned[0];
   return err;
 }
 
-// ─── Internal error types ────────────────────────────────────────────────────
-export class SkipError      extends Error { constructor(m=''){super(m);this.name='SkipError';} }
-export class TodoError      extends Error { constructor(m=''){super(m);this.name='TodoError';} }
-export class AssertionError extends Error { constructor(m=''){super(m);this.name='AssertionError';} }
+// ─── Internal error types (not exported) ─────────────────────────────────────
+class SkipError      extends Error { constructor(m=''){super(m);this.name='SkipError';} }
+class TodoError      extends Error { constructor(m=''){super(m);this.name='TodoError';} }
+class AssertionError extends Error { constructor(m=''){super(m);this.name='AssertionError';} }
 
-// ─── Deep equality ───────────────────────────────────────────────────────────
+// ─── Deep equality (internal) ─────────────────────────────────────────────────
 function deepEq(a, b) {
   if (Object.is(a, b)) return true;
   if (typeof a !== typeof b || a === null || b === null) return false;
-  // Primitives: same type but Object.is failed → not equal
   if (typeof a !== 'object' && typeof a !== 'function') return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   if (Array.isArray(a)) return a.length === b.length && a.every((v, i) => deepEq(v, b[i]));
@@ -79,32 +83,21 @@ function deepEq(a, b) {
   return ka.length === kb.length && ka.every(k => deepEq(a[k], b[k]));
 }
 
-// ─── MockFunctionContext ──────────────────────────────────────────────────────
+// ─── MockFunctionContext (internal) ──────────────────────────────────────────
 class MockFunctionContext {
   #calls = [];
   #impl;
 
   constructor(impl) { this.#impl = impl; }
 
-  /** @returns {Array<{arguments,result,error,stack,target,this}>} */
   get calls() { return [...this.#calls]; }
-
-  /** Node-compatible callCount() method (more efficient than calls.length) */
   callCount() { return this.#calls.length; }
 
   _record(args, ret, err, stackErr, target, thisVal) {
-    this.#calls.push({
-      arguments: args,
-      result:    ret,
-      error:     err,
-      stack:     stackErr,   // Error whose .stack identifies call site
-      target:    target,     // set when called as constructor, else undefined
-      this:      thisVal,
-    });
+    this.#calls.push({ arguments: args, result: ret, error: err, stack: stackErr, target, this: thisVal });
   }
 
   resetCalls() { this.#calls = []; }
-
   mockImplementation(fn) { this.#impl = fn; }
 
   mockImplementationOnce(fn, onCall) {
@@ -112,35 +105,24 @@ class MockFunctionContext {
       const prev = this.#impl;
       this.#impl = (...a) => { this.#impl = prev; return fn(...a); };
     } else {
-      // schedule for a specific call index
       const orig = this.#impl;
       let calls = 0;
       this.#impl = (...a) => {
         calls++;
-        if (calls === onCall + 1) {
-          this.#impl = orig;
-          return fn(...a);
-        }
+        if (calls === onCall + 1) { this.#impl = orig; return fn(...a); }
         return orig(...a);
       };
     }
   }
 
-  restore() { /* implementation is restored by MockTracker.restoreAll() */ }
-
+  restore() {}
   get implementation() { return this.#impl; }
 }
 
-// ─── MockTracker ─────────────────────────────────────────────────────────────
-export class MockTracker {
+// ─── MockTracker (internal class, exported only via singleton `mock`) ─────────
+class MockTracker {
   #mocks = [];
 
-  /**
-   * Creates a spy/mock function.
-   * @param {Function} [original]
-   * @param {Function} [implementation]
-   * @param {{ times?: number }} [options]
-   */
   fn(original = () => {}, implementation, options) {
     if (typeof implementation === 'object' && implementation !== null) {
       options = implementation; implementation = undefined;
@@ -153,15 +135,9 @@ export class MockTracker {
     const m = function (...args) {
       const stackErr = new Error('mock call site');
       let r, e;
-      // detect `new` usage
-      const isNew = new.target !== undefined;
-      const tgt   = isNew ? new.target : undefined;
+      const tgt = new.target;
       try {
-        if (isNew) {
-          r = Reflect.construct(ctx.implementation, args, new.target);
-        } else {
-          r = ctx.implementation.apply(this, args);
-        }
+        r = tgt ? Reflect.construct(ctx.implementation, args, tgt) : ctx.implementation.apply(this, args);
       } catch (ex) {
         e = ex;
         ctx._record(args, undefined, ex, stackErr, tgt, this);
@@ -177,13 +153,6 @@ export class MockTracker {
     return m;
   }
 
-  /**
-   * Mocks an object method.
-   * @param {object} obj
-   * @param {string|symbol} name
-   * @param {Function} [impl]
-   * @param {{ getter?: boolean; setter?: boolean; times?: number }} [options]
-   */
   method(obj, name, impl, options) {
     if (typeof impl === 'object' && impl !== null) { options = impl; impl = undefined; }
     const isGetter = options?.getter === true;
@@ -202,9 +171,7 @@ export class MockTracker {
       const tgt = new.target;
       let r, e;
       try {
-        r = tgt
-          ? Reflect.construct(ctx.implementation, args, tgt)
-          : ctx.implementation.apply(this, args);
+        r = tgt ? Reflect.construct(ctx.implementation, args, tgt) : ctx.implementation.apply(this, args);
       } catch (ex) {
         e = ex;
         ctx._record(args, undefined, ex, stackErr, tgt, this);
@@ -221,9 +188,6 @@ export class MockTracker {
     return m;
   }
 
-  /**
-   * Mocks a property getter.
-   */
   getter(obj, prop, impl) {
     const orig = Object.getOwnPropertyDescriptor(obj, prop);
     const ctx  = new MockFunctionContext(impl);
@@ -239,9 +203,6 @@ export class MockTracker {
     return ctx;
   }
 
-  /**
-   * Mocks a property setter.
-   */
   setter(obj, prop, impl) {
     const orig = Object.getOwnPropertyDescriptor(obj, prop);
     const ctx  = new MockFunctionContext(impl);
@@ -256,33 +217,28 @@ export class MockTracker {
     return ctx;
   }
 
-  /** Restore all mocks and disassociate from this tracker. */
   reset() { this.restoreAll(); }
 
-  /** Restore original implementations without disassociating. */
   restoreAll() {
     for (const m of this.#mocks) {
       if (m.type === 'method') m.obj[m.name] = m.orig;
       if (m.type === 'getter' || m.type === 'setter') {
-        m.orig
-          ? Object.defineProperty(m.obj, m.prop, m.orig)
-          : delete m.obj[m.prop];
+        m.orig ? Object.defineProperty(m.obj, m.prop, m.orig) : delete m.obj[m.prop];
       }
     }
     this.#mocks = [];
   }
 
-  /** Expose timers sub-object (lazy). */
   get timers() {
     if (!this._timers) this._timers = new MockTimers();
     return this._timers;
   }
 }
 
-// ─── MockTimers ───────────────────────────────────────────────────────────────
-export class MockTimers {
+// ─── MockTimers (internal) ────────────────────────────────────────────────────
+class MockTimers {
   #enabled   = new Set();
-  #queue     = [];   // { fn, delay, id, interval }
+  #queue     = [];
   #clock     = 0;
   #originals = {};
   #nextId    = 1;
@@ -290,8 +246,8 @@ export class MockTimers {
   #install(api) {
     const g = globalThis;
     if (api === 'setTimeout') {
-      this.#originals.setTimeout    = g.setTimeout;
-      this.#originals.clearTimeout  = g.clearTimeout;
+      this.#originals.setTimeout   = g.setTimeout;
+      this.#originals.clearTimeout = g.clearTimeout;
       g.setTimeout  = (fn, delay = 0, ...args) => this.#schedule(fn, delay, false, args);
       g.clearTimeout = id => this.#cancel(id);
     }
@@ -310,14 +266,10 @@ export class MockTimers {
     if (api === 'Date') {
       this.#originals.Date = g.Date;
       const self = this;
-      const FakeDate = class Date extends g.Date {
-        constructor(...args) {
-          if (args.length === 0) super(self.#clock);
-          else super(...args);
-        }
+      g.Date = class Date extends g.Date {
+        constructor(...args) { if (args.length === 0) super(self.#clock); else super(...args); }
         static now() { return self.#clock; }
       };
-      g.Date = FakeDate;
     }
   }
 
@@ -329,52 +281,32 @@ export class MockTimers {
   }
 
   #cancel(id) {
-    const entry = this.#queue.find(e => e.id === id);
-    if (entry) entry.cancelled = true;
+    const e = this.#queue.find(e => e.id === id);
+    if (e) e.cancelled = true;
   }
 
-  /**
-   * Enable timer mocking.
-   * @param {{ apis?: string[], now?: number|Date }} [opts]
-   */
   enable(opts = {}) {
-    const apis = opts.apis ?? [
-      'setTimeout', 'clearTimeout',
-      'setInterval', 'clearInterval',
-      'setImmediate', 'clearImmediate',
-      'Date'
-    ];
-  
+    const apis = opts.apis ?? ['setTimeout','clearTimeout','setInterval','clearInterval','setImmediate','clearImmediate','Date'];
     const origDate = globalThis._origDate ?? Date;
-    // Safe check: only do instanceof if opts.now is an object
-    if (opts.now != null && typeof opts.now === 'object' && opts.now instanceof origDate) {
-      this.#clock = opts.now.getTime?.() ?? 0;
-    } else {
-      this.#clock = Number(opts.now ?? 0);
-    }
-  
+    this.#clock = (opts.now != null && typeof opts.now === 'object' && opts.now instanceof origDate)
+      ? (opts.now.getTime?.() ?? 0)
+      : Number(opts.now ?? 0);
     for (const api of apis) {
       if (!this.#enabled.has(api)) {
         this.#install(api);
         this.#enabled.add(api);
-        // implicitly enable paired clear functions
-        if (api === 'setTimeout' && !this.#enabled.has('clearTimeout'))  { this.#enabled.add('clearTimeout'); }
-        if (api === 'setInterval' && !this.#enabled.has('clearInterval')) { this.#enabled.add('clearInterval'); }
-        if (api === 'setImmediate' && !this.#enabled.has('clearImmediate')){ this.#enabled.add('clearImmediate'); }
+        if (api === 'setTimeout'  && !this.#enabled.has('clearTimeout'))   this.#enabled.add('clearTimeout');
+        if (api === 'setInterval' && !this.#enabled.has('clearInterval'))  this.#enabled.add('clearInterval');
+        if (api === 'setImmediate'&& !this.#enabled.has('clearImmediate')) this.#enabled.add('clearImmediate');
       }
     }
   }
 
-  /**
-   * Advance the mock clock by `ms` milliseconds, firing all due timers.
-   * @param {number} [ms=1]
-   */
   tick(ms = 1) {
     const target = this.#clock + ms;
     while (true) {
       const due = this.#queue.filter(e => !e.cancelled && e.triggerAt <= target);
       if (!due.length) break;
-      // fire the earliest
       due.sort((a, b) => a.triggerAt - b.triggerAt);
       const entry = due[0];
       this.#clock = entry.triggerAt;
@@ -391,15 +323,12 @@ export class MockTimers {
     this.#clock = target;
   }
 
-  /**
-   * Run all pending timers immediately.
-   */
   runAll() {
     const safety = 10_000;
     let i = 0;
     while (this.#queue.some(e => !e.cancelled)) {
       if (++i > safety) throw new Error('MockTimers.runAll(): infinite loop guard exceeded');
-      const entry = this.#queue.filter(e => !e.cancelled).sort((a, b) => a.triggerAt - b.triggerAt)[0];
+      const entry = this.#queue.filter(e => !e.cancelled).sort((a,b) => a.triggerAt - b.triggerAt)[0];
       if (!entry) break;
       this.#clock = entry.triggerAt;
       entry.fn(...entry.args);
@@ -412,28 +341,22 @@ export class MockTimers {
     }
   }
 
-  /**
-   * Manually set the mocked clock to an absolute timestamp.
-   * Does NOT fire timers (use tick(0) after to drain).
-   * @param {number} ms
-   */
   setTime(ms) { this.#clock = ms; }
 
-  /** Restore all real timer implementations. */
   reset() {
     const g = globalThis;
     for (const [k, v] of Object.entries(this.#originals)) g[k] = v;
     this.#originals = {};
     this.#enabled.clear();
-    this.#queue   = [];
-    this.#clock   = 0;
-    this.#nextId  = 1;
+    this.#queue  = [];
+    this.#clock  = 0;
+    this.#nextId = 1;
   }
 
   [Symbol.dispose]() { this.reset(); }
 }
 
-// ─── CtxAssert — t.assert namespace ──────────────────────────────────────────
+// ─── CtxAssert — t.assert namespace (internal) ───────────────────────────────
 class CtxAssert {
   #plan = null;
   #count = 0;
@@ -441,171 +364,115 @@ class CtxAssert {
   _setPlan(n) { this.#plan = n; }
   _checkPlan() { return { expected: this.#plan, actual: this.#count }; }
 
-  // Private helper to track attempts
   #record(passed, message) {
-    this.#count++; 
-    if (!passed) {
-      // Node.js AssertionError usually includes actual/expected properties
-      throw new AssertionError(message);
-    }
+    this.#count++;
+    if (!passed) throw new AssertionError(message);
   }
 
-  ok(v, m)             { this.#record(!!v, m ?? `Expected truthy, got ${v}`); }
-  fail(m)              { this.#record(false, m ?? 'Explicit fail'); }
-  equal(a, b, m)       { this.#record(a == b, m ?? `${a} == ${b} failed`); }
-  notEqual(a, b, m)    { this.#record(a != b, m ?? 'Expected not equal'); }
-  strictEqual(a, b, m) { this.#record(Object.is(a, b), m ?? `${String(a)} !== ${String(b)} (strict)`); }
-  notStrictEqual(a,b,m){ this.#record(!Object.is(a, b), m ?? 'Expected not strict equal'); }
-  
-  deepEqual(a, b, m) { 
-    // Ensure deepEq is returning a strict boolean true/false
-    const isEq = !!deepEq(a, b); 
-    this.#record(isEq, m ?? 'Deep equality failed'); 
-  }
-  
-  notDeepEqual(a,b,m)  { this.#record(!deepEq(a, b), m ?? 'Expected deep not equal'); }
+  ok(v, m)              { this.#record(!!v, m ?? `Expected truthy, got ${v}`); }
+  fail(m)               { this.#record(false, m ?? 'Explicit fail'); }
+  equal(a, b, m)        { this.#record(a == b, m ?? `${a} == ${b} failed`); }
+  notEqual(a, b, m)     { this.#record(a != b, m ?? 'Expected not equal'); }
+  strictEqual(a, b, m)  { this.#record(Object.is(a, b), m ?? `${String(a)} !== ${String(b)} (strict)`); }
+  notStrictEqual(a,b,m) { this.#record(!Object.is(a, b), m ?? 'Expected not strict equal'); }
+  deepEqual(a, b, m)    { this.#record(!!deepEq(a, b), m ?? 'Deep equality failed'); }
+  notDeepEqual(a,b,m)   { this.#record(!deepEq(a, b), m ?? 'Expected deep not equal'); }
 
   throws(fn, expected, m) {
-    this.#count++; // Manual increment since we handle the throw ourselves
-    try { 
-      fn(); 
-    } catch (e) {
-      if (expected instanceof RegExp && !expected.test(e.message)) {
+    this.#count++;
+    try { fn(); } catch (e) {
+      if (expected instanceof RegExp && !expected.test(e.message))
         throw new AssertionError(m ?? `Error message did not match ${expected}`);
-      }
-      if (typeof expected === 'function' && !(e instanceof expected)) {
+      if (typeof expected === 'function' && !(e instanceof expected))
         throw new AssertionError(m ?? `Error was not instance of ${expected.name}`);
-      }
-      return; // Pass
+      return;
     }
     throw new AssertionError(m ?? 'Expected function to throw');
   }
 
   async rejects(fn, m) {
     this.#count++;
-    try {
-      await (typeof fn === 'function' ? fn() : fn);
-    } catch (e) {
-      return; // Pass
-    }
+    try { await (typeof fn === 'function' ? fn() : fn); } catch { return; }
     throw new AssertionError(m ?? 'Expected rejection');
   }
 
   async doesNotReject(fn, m) {
     this.#count++;
-    try {
-      await (typeof fn === 'function' ? fn() : fn);
-    } catch (e) {
-      throw new AssertionError(m ?? `Got unexpected rejection: ${e}`);
-    }
+    try { await (typeof fn === 'function' ? fn() : fn); }
+    catch (e) { throw new AssertionError(m ?? `Got unexpected rejection: ${e}`); }
   }
 
-  ifError(e)           { this.#record(e == null, `ifError got ${e}`); }
-  match(s, re, m)      { this.#record(re.test(s), m ?? `${s} did not match ${re}`); }
-  doesNotMatch(s,re,m) { this.#record(!re.test(s), m ?? `${s} matched ${re}`); }
-
-  snapshot()     { this.#count++; /* No-op in browser */ }
-  fileSnapshot() { this.#count++; /* No-op in browser */ }
+  ifError(e)            { this.#record(e == null, `ifError got ${e}`); }
+  match(s, re, m)       { this.#record(re.test(s), m ?? `${s} did not match ${re}`); }
+  doesNotMatch(s, re, m){ this.#record(!re.test(s), m ?? `${s} matched ${re}`); }
+  snapshot()            { this.#count++; }
+  fileSnapshot()        { this.#count++; }
 }
 
-// ─── TestNode ────────────────────────────────────────────────────────────────
+// ─── TestNode (internal) ──────────────────────────────────────────────────────
 class TestNode {
   constructor(name, fn, opts, parent) {
     this.name      = name;
     this.fn        = fn;
     this.parent    = parent;
-    this.opts      = {
-      skip: false, todo: false, timeout: 5000,
-      concurrency: false, only: false, plan: undefined,
-      ...opts,
-    };
-    this.children   = [];
-    this.result     = null;   // 'pass' | 'fail' | 'skip' | 'todo'
-    this.error      = null;
-    this.duration   = 0;
-    this._isSuite   = false;
-    this._before    = [];
-    this._after     = [];
+    this.opts      = { skip: false, todo: false, timeout: 5000, concurrency: false, only: false, plan: undefined, ...opts };
+    this.children  = [];
+    this.result    = null;
+    this.error     = null;
+    this.duration  = 0;
+    this._isSuite  = false;
+    this._before   = [];
+    this._after    = [];
     this._beforeEach = [];
     this._afterEach  = [];
-    this._passed    = false;
-    // each node gets its own MockTracker (auto-restored after run)
+    this._passed   = false;
     this.mockTracker = new MockTracker();
   }
   get isSuite() {
-    // A node is only a suite if explicitly flagged — a fn-less skip/todo leaf is NOT a suite
     if (this._isSuite) return true;
     if (this.opts.skip || this.opts.todo) return false;
     return !this.fn;
   }
 }
 
-// ─── TestContext ──────────────────────────────────────────────────────────────
+// ─── TestContext (internal) ───────────────────────────────────────────────────
 class TestContext {
   #node;
   #assert;
 
   constructor(node) {
-    this.#node    = node;
-    this.#assert  = new CtxAssert();
+    this.#node   = node;
+    this.#assert = new CtxAssert();
     this.name     = node.name;
     this.fullName = _buildFull(node);
-    this.signal   = null;   // AbortSignal placeholder
+    this.signal   = null;
   }
 
-  // ── Assertions ──────────────────────────────────────────────────────────────
   get assert() { return this.#assert; }
-
-  // ── Per-test mock tracker (auto-reset after test) ──────────────────────────
-  get mock() { return this.#node.mockTracker; }
-
-  // ── Lifecycle info ─────────────────────────────────────────────────────────
-  /** false before test executes (e.g. in beforeEach), true/false after */
+  get mock()   { return this.#node.mockTracker; }
   get passed() { return this.#node._passed; }
-
-  /** The thrown error (wrapped), or null */
   get error()  { return this.#node.error ? Object.assign(new Error('test failure'), { cause: this.#node.error }) : null; }
+  get filePath(){ return ''; }
 
-  /** Absolute test file path — not meaningful in browser, returns empty string */
-  get filePath() { return ''; }
+  test(n, o, f)     { return _scheduleSubtest(this.#node, n, o, f); }
+  it(n, o, f)       { return this.test(n, o, f); }
+  before(fn, o)     { this.#node._before.push({ fn, o }); }
+  after(fn, o)      { this.#node._after.push({ fn, o }); }
+  beforeEach(fn, o) { this.#node._beforeEach.push({ fn, o }); }
+  afterEach(fn, o)  { this.#node._afterEach.push({ fn, o }); }
 
-  // ── Sub-tests / hooks ──────────────────────────────────────────────────────
-  test(n, o, f)      { return _scheduleSubtest(this.#node, n, o, f); }
-  it(n, o, f)        { return this.test(n, o, f); }
-  before(fn, o)      { this.#node._before.push({ fn, o }); }
-  after(fn, o)       { this.#node._after.push({ fn, o }); }
-  beforeEach(fn, o)  { this.#node._beforeEach.push({ fn, o }); }
-  afterEach(fn, o)   { this.#node._afterEach.push({ fn, o }); }
-
-  // ── Control flow ───────────────────────────────────────────────────────────
   skip(msg = '')  { this.#node.opts.skip = msg || true; throw new SkipError(String(msg)); }
   todo(msg = '')  { this.#node.opts.todo = msg || true; throw new TodoError(String(msg)); }
   diagnostic(msg) { _emit('diagnostic', { message: String(msg), node: this.#node }); }
 
-  /**
-   * Restrict sub-test execution to only() tests.
-   * @param {boolean} shouldRunOnlyTests
-   */
-  runOnly(shouldRunOnlyTests) {
-    this.#node._runOnly = !!shouldRunOnlyTests;
-  }
+  runOnly(shouldRunOnlyTests) { this.#node._runOnly = !!shouldRunOnlyTests; }
 
-  /**
-   * Assert a fixed number of assertions/sub-tests will run.
-   * @param {number} count
-   * @param {{ wait?: boolean|number }} [options]
-   */
   plan(count, options = {}) {
-    this.#node._plan      = count;
-    this.#node._planOpts  = options;
+    this.#node._plan     = count;
+    this.#node._planOpts = options;
     this.#assert._setPlan(count);
   }
 
-  /**
-   * Poll condition until it passes or timeout elapses.
-   * @param {Function} condition
-   * @param {{ interval?: number, timeout?: number }} [options]
-   */
   waitFor(condition, options = {}) {
     const interval = options.interval ?? 50;
     const timeout  = options.timeout  ?? 1000;
@@ -622,7 +489,7 @@ class TestContext {
   }
 }
 
-// ─── SuiteContext ─────────────────────────────────────────────────────────────
+// ─── SuiteContext (internal) ──────────────────────────────────────────────────
 class SuiteContext {
   #node;
   constructor(node) {
@@ -634,7 +501,7 @@ class SuiteContext {
   get filePath() { return ''; }
 }
 
-// ─── Internal helpers ────────────────────────────────────────────────────────
+// ─── Internal helpers ─────────────────────────────────────────────────────────
 function _buildFull(node) {
   const parts = []; let n = node;
   while (n) { if (n.name && n.name !== '<root>') parts.unshift(n.name); n = n.parent; }
@@ -644,7 +511,6 @@ function _buildFull(node) {
 function _resolveArgs(name, opts, fn) {
   if (typeof name === 'function')      { fn = name; name = fn.name || '<anon>'; opts = {}; }
   else if (typeof opts === 'function') { fn = opts; opts = {}; }
-  // strip reporter from per-node opts (not meaningful on TestNode)
   if (opts && typeof opts === 'object') {
     const { reporter: _, ...rest } = opts;
     opts = rest;
@@ -652,12 +518,12 @@ function _resolveArgs(name, opts, fn) {
   return { name: name || fn?.name || '<anon>', opts: opts ?? {}, fn };
 }
 
-// ─── Event bus ───────────────────────────────────────────────────────────────
+// ─── Event bus (internal) ─────────────────────────────────────────────────────
 const _listeners = {};
 function _on(event, fn)  { (_listeners[event] ??= []).push(fn); }
 function _emit(event, d) { (_listeners[event] ?? []).forEach(fn => fn(d)); }
 
-// ─── Root suite singleton ────────────────────────────────────────────────────
+// ─── Root suite singleton (internal) ─────────────────────────────────────────
 let _root    = null;
 let _current = null;
 let _running = false;
@@ -668,27 +534,23 @@ function _getRoot() {
   return _root;
 }
 
-/** Reset all state between test runs. */
-export function _reset() {
+function _reset() {
   _root = null; _current = null; _running = false;
-  // Re-read REPORTER_TYPE on each reset so the host can change it between runs.
   _activeReporter = _getConfiguredReporter();
   for (const k of Object.keys(_listeners)) delete _listeners[k];
-  _lazyMock = undefined; _lazySnapshot = undefined; _lazyAssert = undefined;
+  _lazyMockInstance = undefined;
 }
 
-// ─── Execution ───────────────────────────────────────────────────────────────
+// ─── Execution (internal) ─────────────────────────────────────────────────────
 async function _scheduleSubtest(parent, name, opts, fn) {
   const { name: n, opts: o, fn: f } = _resolveArgs(name, opts, fn);
   const node = new TestNode(n, f, o, parent);
-  // honour parent's runOnly setting
-  if (parent._runOnly && !o.only) { node.opts.skip = 'runOnly'; }
+  if (parent._runOnly && !o.only) node.opts.skip = 'runOnly';
   parent.children.push(node);
   return _runNode(node, parent._beforeEach, parent._afterEach);
 }
 
 async function _runNode(node, iBefore = [], iAfter = []) {
-  
   if (_testNamePattern && !_testNamePattern.test(_buildFull(node))) {
     node.result = 'skip';
     _emit('test:skip', { name: node.name, node });
@@ -696,9 +558,8 @@ async function _runNode(node, iBefore = [], iAfter = []) {
     return node;
   }
   const ctx = new TestContext(node);
-  const t0 = performance.now();
+  const t0  = performance.now();
 
-  // Handle immediate Skip/Todo
   if (node.opts.skip || node.opts.todo) {
     node.result = node.opts.skip ? 'skip' : 'todo';
     _emit(`test:${node.result}`, { name: node.name, node });
@@ -707,7 +568,6 @@ async function _runNode(node, iBefore = [], iAfter = []) {
     return node;
   }
 
-  // Before hooks
   for (const h of [...iBefore, ...node._before]) {
     try { await h.fn(ctx); } catch (e) { if (!node.error) node.error = e; }
   }
@@ -716,23 +576,19 @@ async function _runNode(node, iBefore = [], iAfter = []) {
     if (node.fn) {
       let timeoutId;
       const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = globalThis.setTimeout(() => {
-          reject(new Error(`Test "${node.name}" timed out after ${node.opts.timeout}ms`));
-        }, node.opts.timeout);
+        timeoutId = globalThis.setTimeout(
+          () => reject(new Error(`Test "${node.name}" timed out after ${node.opts.timeout}ms`)),
+          node.opts.timeout
+        );
       });
-
-      // Use .then() to wrap fn call so synchronous throws become rejections
-      const testPromise = Promise.resolve().then(() => node.fn(ctx));
-
       try {
-        await Promise.race([testPromise, timeoutPromise]);
+        await Promise.race([Promise.resolve().then(() => node.fn(ctx)), timeoutPromise]);
       } finally {
         globalThis.clearTimeout(timeoutId);
       }
     }
-
     node._passed = true;
-    node.result = 'pass';
+    node.result  = 'pass';
     _emit('test:pass', { name: node.name, node });
   } catch (e) {
     if (e instanceof SkipError) {
@@ -743,13 +599,12 @@ async function _runNode(node, iBefore = [], iAfter = []) {
       _emit('test:todo', { name: node.name, node });
     } else {
       node._passed = false;
-      node.result = 'fail';
-      node.error = _cleanStack(e);
+      node.result  = 'fail';
+      node.error   = _cleanStack(e);
       _emit('test:fail', { name: node.name, node, error: node.error });
     }
   }
 
-  // After hooks
   for (const h of [...node._after, ...iAfter].reverse()) {
     try { await h.fn(ctx); } catch (e) { if (!node.error) node.error = e; }
   }
@@ -757,30 +612,25 @@ async function _runNode(node, iBefore = [], iAfter = []) {
   node.mockTracker.reset();
   node.duration = performance.now() - t0;
   _emit('test:complete', { name: node.name, node });
-  
   return node;
 }
 
 async function _runSuite(s) {
   _emit('suite:start', { name: s.name, node: s });
   const ctx = new SuiteContext(s);
-
   for (const h of s._before) { try { await h.fn(ctx); } catch (_) {} }
-
   if (s.opts.concurrency) {
     await Promise.all(s.children.map(c => c.isSuite ? _runSuite(c) : _runNode(c, s._beforeEach, s._afterEach)));
   } else {
     for (const c of s.children) {
-      if (c.isSuite) await _runSuite(c);
-      else           await _runNode(c, s._beforeEach, s._afterEach);
+      await (c.isSuite ? _runSuite(c) : _runNode(c, s._beforeEach, s._afterEach));
     }
   }
-
   for (const h of [...s._after].reverse()) { try { await h.fn(ctx); } catch (_) {} }
   _emit('suite:end', { name: s.name, node: s });
 }
 
-// ─── Public harness API ──────────────────────────────────────────────────────
+// ─── Public harness: register tests ─────────────────────────────────────────
 function _makeTest(name, opts, fn) {
   const { name: n, opts: o, fn: f } = _resolveArgs(name, opts, fn);
   const parent = _current ?? _getRoot();
@@ -789,10 +639,12 @@ function _makeTest(name, opts, fn) {
   return Promise.resolve(node);
 }
 
-export function test(name, opts, fn) { return _makeTest(name, opts, fn); }
-export function it(name, opts, fn)   { return _makeTest(name, opts, fn); }
+// ══════════════════════════════════════════════════════════════════════════════
+//  PUBLIC NAMED EXPORTS  —  matching node:test @ Node 22 exactly
+// ══════════════════════════════════════════════════════════════════════════════
 
-// ── Static shorthands: test.skip / test.todo / test.only ─────────────────────
+// ─── test ────────────────────────────────────────────────────────────────────
+export function test(name, opts, fn) { return _makeTest(name, opts, fn); }
 test.skip = (name, opts, fn) => {
   if (typeof opts === 'function') { fn = opts; opts = {}; }
   return test(name, { ...(opts ?? {}), skip: true }, fn);
@@ -806,10 +658,13 @@ test.only = (name, opts, fn) => {
   return test(name, { ...(opts ?? {}), only: true }, fn);
 };
 
+// ─── it (alias for test) ─────────────────────────────────────────────────────
+export function it(name, opts, fn) { return _makeTest(name, opts, fn); }
 it.skip = test.skip;
 it.todo = test.todo;
 it.only = test.only;
 
+// ─── suite ────────────────────────────────────────────────────────────────────
 export function suite(name, opts, fn) {
   const { name: n, opts: o, fn: f } = _resolveArgs(name, opts, fn);
   const parent = _current ?? _getRoot();
@@ -823,7 +678,6 @@ export function suite(name, opts, fn) {
   }
   return Promise.resolve(node);
 }
-
 suite.skip = (name, opts, fn) => {
   if (typeof opts === 'function') { fn = opts; opts = {}; }
   return suite(name, { ...(opts ?? {}), skip: true }, fn);
@@ -837,23 +691,25 @@ suite.only = (name, opts, fn) => {
   return suite(name, { ...(opts ?? {}), only: true }, fn);
 };
 
-export const describe = suite;
-describe.skip = suite.skip;
-describe.todo = suite.todo;
-describe.only = suite.only;
+// ─── describe (alias for suite) ──────────────────────────────────────────────
+export function describe(name, opts, fn) { return suite(name, opts, fn); }
+describe.skip  = suite.skip;
+describe.todo  = suite.todo;
+describe.only  = suite.only;
 
-export const before      = (fn, o) => (_current ?? _getRoot())._before.push({ fn, o });
-export const after       = (fn, o) => (_current ?? _getRoot())._after.push({ fn, o });
-export const beforeEach  = (fn, o) => (_current ?? _getRoot())._beforeEach.push({ fn, o });
-export const afterEach   = (fn, o) => (_current ?? _getRoot())._afterEach.push({ fn, o });
+// ─── Lifecycle hooks ─────────────────────────────────────────────────────────
+export const before     = (fn, o) => (_current ?? _getRoot())._before.push({ fn, o });
+export const after      = (fn, o) => (_current ?? _getRoot())._after.push({ fn, o });
+export const beforeEach = (fn, o) => (_current ?? _getRoot())._beforeEach.push({ fn, o });
+export const afterEach  = (fn, o) => (_current ?? _getRoot())._afterEach.push({ fn, o });
 
-// ─── run() — returns async-iterator-compatible stream object ─────────────────
+// ─── run ─────────────────────────────────────────────────────────────────────
 export function run(opts = {}) {
   if (opts.reporter) _activeReporter = _resolveReporter(opts.reporter);
   _running = true;
   _testNamePattern = opts.testNamePatterns ?? null;
-  const root  = _getRoot();
-  const evts  = [];
+  const root = _getRoot();
+  const evts = [];
 
   const types = ['test:pass','test:fail','test:skip','test:todo','test:complete','suite:start','suite:end','diagnostic'];
   for (const t of types) _on(t, e => evts.push({ type: t, ...e }));
@@ -861,7 +717,6 @@ export function run(opts = {}) {
   let _resolve;
   const done = new Promise(r => { _resolve = r; });
 
-  // ✅ FIX: defer execution
   queueMicrotask(() => {
     _runSuite(root).then(() => {
       _running = false;
@@ -881,157 +736,76 @@ export function run(opts = {}) {
     },
     on(event, cb) {
       _on(event, cb);
-
-      // ✅ optional but recommended
-      for (const e of evts) {
-        if (e.type === event) cb(e);
-      }
-
+      for (const e of evts) { if (e.type === event) cb(e); }
       return this;
     },
   };
 }
 
-// ─── snapshot / assert module-level objects ───────────────────────────────────
+// ─── mock  — singleton MockTracker instance  (node:test re-uses one instance) -
+let _lazyMockInstance;
+/** @type {MockTracker} */
+export const mock = new Proxy({}, {
+  get(_, k) { return (_lazyMockInstance ??= new MockTracker())[k]; },
+  set(_, k, v) { (_lazyMockInstance ??= new MockTracker())[k] = v; return true; },
+});
+
+// ─── snapshot ─────────────────────────────────────────────────────────────────
 export const snapshot = Object.freeze({
   setDefaultSnapshotSerializers(_fns) { /* no-op in browser */ },
   setResolveSnapshotPath(_fn)         { /* no-op in browser */ },
 });
 
+// ─── assert ───────────────────────────────────────────────────────────────────
 export const assert = Object.freeze({
   register(name, fn) { TestContext.prototype[name] = fn; },
 });
 
-// ─── Lazy singletons ──────────────────────────────────────────────────────────
-let _lazyMock, _lazySnapshot, _lazyAssert;
+// ══════════════════════════════════════════════════════════════════════════════
+//  DEFAULT EXPORT  —  `test` function (matches Node: `export default test`)
+//  Node.js does: module.exports = test  with named props bolted on.
+//  In ESM the default export IS the test function, not a wrapper object.
+// ══════════════════════════════════════════════════════════════════════════════
+export default test;
 
-// ─── Default export mirrors `module.exports = test` with all props attached ───
-const nodeTest = test;
-Object.assign(nodeTest, {
-  after, afterEach, before, beforeEach, describe, it, run, suite, test,
-  snapshot, assert,
-  // Reporter names exposed so user code can write { reporter: tap } etc.
-  dot: _dot, spec: _spec, tap: _tap, junit: _junit, lcov: _lcov,
-  reporters: REPORTERS,
-});
-
-Object.defineProperty(nodeTest, 'mock', {
-  configurable: true, enumerable: true,
-  get() { return (_lazyMock ??= new MockTracker()); },
-});
-Object.defineProperty(nodeTest, 'snapshot', {
-  configurable: true, enumerable: true,
-  get() { return (_lazySnapshot ??= snapshot); },
-});
-Object.defineProperty(nodeTest, 'assert', {
-  configurable: true, enumerable: true,
-  get() { return (_lazyAssert ??= assert); },
-});
-
-export default nodeTest;
-
-// ─── Full API surface injected into execute() scope ───────────────────────────
-const API_KEYS = [
-  'test','it','suite','describe',
-  'before','after','beforeEach','afterEach',
-  'mock','snapshot','assert',
-  'dot','spec','tap','junit','lcov',
-  'reporters',
-];
-
-function makeApiValues() {
-  let _mock;
-  const mockProxy = new Proxy({}, {
-    get(_, k) { return (_mock ??= new MockTracker())[k]; },
-  });
-  return [
-    test, it, suite, describe,
-    before, after, beforeEach, afterEach,
-    mockProxy, snapshot, _assert,
-    _dot, _spec, _tap, _junit, _lcov,
-    REPORTERS,
-  ];
-}
-
-
-
-// ─── execute() ───────────────────────────────────────────────────────────────
-/**
- * Execute user-supplied test code in an isolated function scope.
- *
- * Reporter resolution order (highest → lowest precedence):
- *   1. opts.reporter — passed directly to execute()
- *   2. { reporter } on any test() call in userCode (first occurrence wins)
- *   3. Module default (spec)
- *
- * @param {string} userCode
- * @param {{ resetBefore?: boolean, reporter?: string|Function }} [opts]
- * @returns {Promise<{ root: TestNode, events: object[], output: string, reporter: Function }>}
- */
+// ─── execute() — host-only helper (not part of node:test public API) ─────────
 export async function execute(userCode, opts = {}) {
   if (opts.resetBefore !== false) _reset();
-
-  // Intercept console.log during execution so it doesn't interleave with
-  // reporter output. Logs are re-emitted as diagnostic events after the run.
-  const _origConsole = { log: console.log, warn: console.warn, info: console.info };
-  const _pendingLogs = [];
-  for (const level of ['log', 'warn', 'info']) {
-   // console[level] = (...args) => _pendingLogs.push({ level, text: args.map(String).join(' ') });
-  }
-
-  // Reporter comes from globalThis._RUNTIME_TEST_RUNNER_.REPORTER_TYPE (set by
-  // the host before calling execute), or the execute() opts override — never
-  // from inside user code, matching Node's --test-reporter CLI semantics.
-  // _reset() already re-read REPORTER_TYPE; allow an explicit opts.reporter to
-  // further override for programmatic use.
   if (opts.reporter) _activeReporter = _resolveReporter(opts.reporter);
 
-  // test()/it() do not accept a reporter option in real Node.js.
-  // Pass through unchanged — no stripping needed.
-  const _patchedTest = test;
+  const API_KEYS = ['test','it','suite','describe','before','after','beforeEach','afterEach','mock','snapshot','assert'];
+  const _mockProxy = new Proxy({}, {
+    get(_, k) { return (_lazyMockInstance ??= new MockTracker())[k]; },
+  });
+  const apiVals = [test, it, suite, describe, before, after, beforeEach, afterEach, _mockProxy, snapshot, _assert];
 
-  let execFn;
   try {
-
-    const patchedValues = makeApiValues();
-    const patchedKeys   = [...API_KEYS];
-    const testIdx = patchedKeys.indexOf('test');
-    const itIdx   = patchedKeys.indexOf('it');
-    patchedValues[testIdx] = _patchedTest;
-    patchedValues[itIdx]   = _patchedTest;
-
-    execFn = new Function(...patchedKeys, `return (async()=>{\n${userCode}\n})()`);
-    await execFn(...patchedValues);
+    const execFn = new Function(...API_KEYS, `return (async()=>{\n${userCode}\n})()`);
+    await execFn(...apiVals);
   } catch (e) {
     if (e instanceof SyntaxError) throw new SyntaxError(`[node:test runtime] ${e.message}`);
-    // Register as a synthetic top-level failure so run() sees it
     const synth = new TestNode('<top-level>', null, {}, _getRoot());
-    synth.result = 'fail';
-    synth.error = e;
+    synth.result = 'fail'; synth.error = e;
     _getRoot().children.push(synth);
     _emit('test:fail', { name: '<top-level>', node: synth, error: e });
     _emit('test:complete', { name: '<top-level>', node: synth });
   }
 
   const { root, events, reporter } = await run().drain();
-
   let output;
   try {
     output = reporter({ root, events });
   } catch (e) {
     throw Object.assign(e, { message: `[reporter:${reporter?.name ?? '?'}] ${e.message}` });
   }
-
   return { root, events, output, reporter };
 }
 
-// ─── Global runtime hook ─────────────────────────────────────────────────────
-
-// Ensure the namespace exists first
-globalThis._RUNTIME_ = globalThis._RUNTIME_ || {};
-
+// ─── Global runtime hook (host environment only) ─────────────────────────────
+globalThis._RUNTIME_ ??= {};
 globalThis._RUNTIME_._TEST_RUNNER_ = {
   execute,
+  _reset,
   reporters: REPORTERS,
   get activeReporter() { return _activeReporter; },
 };
