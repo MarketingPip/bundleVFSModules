@@ -743,15 +743,10 @@ export function run(opts = {}) {
 }
 
 // ─── mock  — singleton MockTracker instance  (node:test re-uses one instance) -
-// The Proxy target must be the MockTracker instance itself so that method
-// calls have the correct `this` for private field access (#mocks, etc.).
-// A plain {} target causes `this` inside fn/method/etc. to be the Proxy,
-// which is not an instance of MockTracker and fails private field checks.
+// Direct instance export — no Proxy needed. A Proxy with a non-instance target
+// breaks private field access (#mocks etc.) because `this` becomes the Proxy.
 const _mockInstance = new MockTracker();
-export const mock = new Proxy(_mockInstance, {
-  get(target, k) { const v = target[k]; return typeof v === 'function' ? v.bind(target) : v; },
-  set(target, k, v) { target[k] = v; return true; },
-});
+export { _mockInstance as mock };
 
 // ─── snapshot ─────────────────────────────────────────────────────────────────
 export const snapshot = Object.freeze({
@@ -780,19 +775,27 @@ export async function execute(userCode, opts = {}) {
   const _mockProxy = mock;
   const apiVals = [test, it, suite, describe, before, after, beforeEach, afterEach, _mockProxy, snapshot, _assert];
 
+  // Call run() BEFORE executing user code so its event subscribers are
+  // already registered when we emit. execute() is async so the queueMicrotask
+  // inside run() hasn't fired yet — the root suite is still empty at this point.
+  const runHandle = run({ reporter: opts.reporter });
+
   try {
     const execFn = new Function(...API_KEYS, `return (async()=>{\n${userCode}\n})()`);
     await execFn(...apiVals);
   } catch (e) {
     if (e instanceof SyntaxError) throw new SyntaxError(`[node:test runtime] ${e.message}`);
-    const synth = new TestNode('<top-level>', null, {}, _getRoot());
+    // Register as a synthetic top-level failure so run() sees it.
+    // Because run() subscribed above, this emit IS captured.
+    const root = _getRoot();
+    const synth = new TestNode('<top-level>', null, {}, root);
     synth.result = 'fail'; synth.error = e;
-    _getRoot().children.push(synth);
-    _emit('test:fail', { name: '<top-level>', node: synth, error: e });
+    root.children.push(synth);
+    _emit('test:fail',     { name: '<top-level>', node: synth, error: e });
     _emit('test:complete', { name: '<top-level>', node: synth });
   }
 
-  const { root, events, reporter } = await run().drain();
+  const { root, events, reporter } = await runHandle.drain();
   let output;
   try {
     output = reporter({ root, events });
