@@ -746,7 +746,10 @@ export function run(opts = {}) {
 // Direct instance export — no Proxy needed. A Proxy with a non-instance target
 // breaks private field access (#mocks etc.) because `this` becomes the Proxy.
 const _mockInstance = new MockTracker();
-export { _mockInstance as mock };
+export const mock = new Proxy(_mockInstance, {
+  get(target, k) { const v = target[k]; return typeof v === 'function' ? v.bind(target) : v; },
+  set(target, k, v) { target[k] = v; return true; },
+});
 
 // ─── snapshot ─────────────────────────────────────────────────────────────────
 export const snapshot = Object.freeze({
