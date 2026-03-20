@@ -786,6 +786,8 @@ export async function execute(userCode, opts = {}) {
     await execFn(...apiVals);
   } catch (e) {
     if (e instanceof SyntaxError) throw new SyntaxError(`[node:test runtime] ${e.message}`);
+    // If no tests were registered at all, the throw is a top-level crash — re-throw it
+    if (_getRoot().children.length === 0) throw e;
     const synth = new TestNode('<top-level>', null, {}, _getRoot());
     synth.result = 'fail'; synth.error = e;
     _getRoot().children.push(synth);
