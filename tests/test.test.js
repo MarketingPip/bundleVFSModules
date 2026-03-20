@@ -1,10 +1,10 @@
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 
-globalThis._RUNTIME_ = {
-  _TEST_RUNNER_: {
-    REPORTER_TYPE: 'spec'
-  }
-};
+// Merge REPORTER_TYPE into the hook object test.js installs during import.
+// Do NOT replace _RUNTIME_ wholesale — that would wipe execute/reporters/etc.
+globalThis._RUNTIME_ ??= {};
+globalThis._RUNTIME_._TEST_RUNNER_ ??= {};
+globalThis._RUNTIME_._TEST_RUNNER_.REPORTER_TYPE = 'spec';
 
 // Only import what node:test actually exports.
 // MockTracker, MockTimers, and _reset are internal — reach them via the
@@ -25,17 +25,9 @@ import nodeTest, {
   assert,
 } from '../src/test.js';
 
-// _reset is read lazily inside beforeEach — not destructured at module
-// evaluation time — because ES imports run before any statement in this file,
-// meaning the module installs _RUNTIME_ before this line, but the assignment
-// `globalThis._RUNTIME_ = { ... }` at the top of *this* file also runs after
-// the import. Reading from globalThis inside a function call is always safe.
-const _reset = () => globalThis._RUNTIME_._TEST_RUNNER_._reset();
-
 describe('node:test Browser Shim', () => {
-  beforeEach(() => {
-    _reset(); // Clear singleton state between tests
-  });
+  // No beforeEach reset needed — execute() resets internally before each run,
+  // and run()/mock tests are written to be self-contained.
 
   // ── mock (singleton MockTracker instance, named export) ───────────────────
   describe('mock (named export)', () => {
