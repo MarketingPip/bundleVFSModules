@@ -620,9 +620,10 @@ async function _runSuite(s) {
   const ctx = new SuiteContext(s);
   for (const h of s._before) { try { await h.fn(ctx); } catch (_) {} }
   if (s.opts.concurrency) {
-    await Promise.all(s.children.map(c => c.isSuite ? _runSuite(c) : _runNode(c, s._beforeEach, s._afterEach)));
+    await Promise.all(s.children.filter(c => c.result === null).map(c => c.isSuite ? _runSuite(c) : _runNode(c, s._beforeEach, s._afterEach)));
   } else {
     for (const c of s.children) {
+      if (c.result !== null) continue; // pre-resolved (e.g. synthetic failure) — skip
       await (c.isSuite ? _runSuite(c) : _runNode(c, s._beforeEach, s._afterEach));
     }
   }
