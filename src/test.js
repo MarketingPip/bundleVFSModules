@@ -538,7 +538,7 @@ function _reset() {
   _root = null; _current = null; _running = false;
   _activeReporter = _getConfiguredReporter();
   for (const k of Object.keys(_listeners)) delete _listeners[k];
-  _lazyMockInstance = undefined;
+  _mockInstance.restoreAll();
 }
 
 // ─── Execution (internal) ─────────────────────────────────────────────────────
@@ -743,11 +743,14 @@ export function run(opts = {}) {
 }
 
 // ─── mock  — singleton MockTracker instance  (node:test re-uses one instance) -
-let _lazyMockInstance;
-/** @type {MockTracker} */
-export const mock = new Proxy({}, {
-  get(_, k) { return (_lazyMockInstance ??= new MockTracker())[k]; },
-  set(_, k, v) { (_lazyMockInstance ??= new MockTracker())[k] = v; return true; },
+// The Proxy target must be the MockTracker instance itself so that method
+// calls have the correct `this` for private field access (#mocks, etc.).
+// A plain {} target causes `this` inside fn/method/etc. to be the Proxy,
+// which is not an instance of MockTracker and fails private field checks.
+const _mockInstance = new MockTracker();
+export const mock = new Proxy(_mockInstance, {
+  get(target, k) { const v = target[k]; return typeof v === 'function' ? v.bind(target) : v; },
+  set(target, k, v) { target[k] = v; return true; },
 });
 
 // ─── snapshot ─────────────────────────────────────────────────────────────────
@@ -774,9 +777,7 @@ export async function execute(userCode, opts = {}) {
   if (opts.reporter) _activeReporter = _resolveReporter(opts.reporter);
 
   const API_KEYS = ['test','it','suite','describe','before','after','beforeEach','afterEach','mock','snapshot','assert'];
-  const _mockProxy = new Proxy({}, {
-    get(_, k) { return (_lazyMockInstance ??= new MockTracker())[k]; },
-  });
+  const _mockProxy = mock;
   const apiVals = [test, it, suite, describe, before, after, beforeEach, afterEach, _mockProxy, snapshot, _assert];
 
   try {
