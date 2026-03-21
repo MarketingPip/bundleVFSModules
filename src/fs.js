@@ -89,6 +89,8 @@ for (const key of Object.keys(fs)) {
     // Synchronous call (or stream factory etc.)
     const result = original.apply(this, args);
 
+    emit(val);
+
     if (result && typeof result.then === "function") {
       return result.then(
         (val) => { emit(val); return val; },
