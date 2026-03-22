@@ -230,10 +230,14 @@ export function spec({ root, events }) {
       }
 
       case 'test:fail': {
-        rows.push(
-          `${indent()}${CLR.red(SYM.fail)}${data.name} ${CLR.gray(formatDuration(data.duration))}`
-        );
-        formatError(data.details?.error ?? data.error, stack.length);
+        const name = data?.name ?? data?.data?.name ?? '(unknown)';
+        const dur  = data?.duration ?? data?.data?.duration ?? 0;
+      
+        rows.push(`${indent()}${CLR.red(SYM.fail)}${name} ${CLR.gray(`(${ms(dur)}ms)`)}`);
+      
+        // error formatting
+        const err = data?.details?.error ?? data?.error;
+        formatError(err, stack.length);
         break;
       }
 
