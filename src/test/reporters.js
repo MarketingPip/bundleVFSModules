@@ -63,8 +63,10 @@ function ms(n) { return typeof n === 'number' ? +n.toFixed(3) : 0; }
 
 /** Recursively sum duration of a node and all descendants. */
 function nodeDuration(node) {
-  if (typeof node.duration === 'number') return node.duration;
-  return (node.children ?? []).reduce((a, c) => a + nodeDuration(c), 0);
+  if (node.isSuite || node._isSuite) {
+    return (node.children ?? []).reduce((a, c) => a + nodeDuration(c), 0);
+  }
+  return typeof node.duration === 'number' ? node.duration : 0;
 }
 
 /** Total wall-time across all top-level children of root. */
@@ -82,58 +84,84 @@ function evtList(events) { return Array.isArray(events) ? events : []; }
 // After the loop a newline is emitted, then a "Failed tests:" block if needed.
 
 export function dot({ root, events }) {
-  // Node uses process.stdout.columns ?? 20, clamped to minimum 20.
-  const COLS = 20;
-  const rows  = [];
-  let   line  = '';
-  let   col   = 0;
-  const failed = [];
+  const COLS = 20; // Node uses terminal width, fallback 20
+  const rows = [];
+  let line = '';
+  let col = 0;
 
-  function addChar(ch, failData) {
+  const failures = [];
+
+  function pushChar(ch) {
     line += ch;
-    if (failData) failed.push(failData);
-    if (++col >= COLS) { rows.push(line); line = ''; col = 0; }
+    col++;
+
+    if (col >= COLS) {
+      rows.push(line);
+      line = '';
+      col = 0;
+    }
   }
 
-  // Prefer event stream (matches Node's own ordering precisely); fall back to
-  // tree traversal when events aren't wired through.
-  const evts = evtList(events);
-  if (evts.length) {
-    for (const { type, data } of evts) {
-      if (type === 'test:pass') addChar(CLR.green('.'), null);
-      if (type === 'test:fail') addChar(CLR.red('X'), data);
+  for (const evt of evtList(events)) {
+    const { type, data } = evt;
+    const result = data?.result;
+
+    // Handle pass
+    if (type === 'test:pass' && result !== 'skip' && result !== 'todo') {
+      pushChar(CLR.green('.'));
+      continue;
     }
-  } else {
-    (function walk(node) {
-      for (const c of node.children) {
-        if (!c.isSuite && !c._isSuite) {
-          if      (c.result === 'pass') addChar(CLR.green('.'), null);
-          else if (c.result === 'fail') addChar(CLR.red('X'),   c);
-        }
-        walk(c);
-      }
-    })(root);
+
+    // Handle fail
+    if (type === 'test:fail') {
+      pushChar(CLR.red('X'));
+      failures.push(data);
+      continue;
+    }
+
+    // Explicitly ignore skip/todo
+    if (
+      type === 'test:skip' ||
+      type === 'test:todo' ||
+      result === 'skip' ||
+      result === 'todo'
+    ) {
+      continue;
+    }
   }
 
   if (line) rows.push(line);
-  rows.push(''); // trailing newline after the dot grid
+  rows.push(''); // newline after grid
 
-  if (failed.length) {
+  // ─── Failure details (matches Node structure) ───
+  if (failures.length) {
     rows.push('');
-    rows.push(`${CLR.red('Failed tests:')}${CLR.white('')}`);
+    rows.push(CLR.red('Failed tests:'));
     rows.push('');
-    for (const data of failed) {
-      // data may be a raw event payload or a tree node — normalise both.
-      const name = data.name ?? data.data?.name ?? '(unknown)';
-      const err  = data.details?.error ?? data.error;
+
+    for (const f of failures) {
+      const name = f.name ?? '(unknown)';
+      const err = f.details?.error ?? f.error;
+
       rows.push(`${SYM.fail}${name}`);
+
       if (err) {
-        rows.push(`  ${err.name ?? 'Error'}: ${err.message ?? err}`);
+        const msg = err.message ?? String(err);
+        rows.push(`  ${err.name ?? 'Error'}: ${msg}`);
+
         if (err.stack) {
-          for (const f of err.stack.split('\n').filter(l => /^\s+at /.test(l)).slice(0, 3))
-            rows.push(`    ${f.trim()}`);
+          const frames = err.stack
+            .split('\n')
+            .filter(l => /^\s+at /.test(l))
+            .slice(0, 3);
+
+          for (const frame of frames) {
+            rows.push(`    ${frame.trim()}`);
+          }
         }
       }
+
+      rows.push('');
     }
   }
 
@@ -147,103 +175,91 @@ export function dot({ root, events }) {
 // Mirrors SpecReporter (internal/test_runner/reporter/spec.js).
 
 export function spec({ root, events }) {
-  const rows        = [];
-  const failedNodes = [];
+  const rows = [];
+  const stack = []; // track suite nesting
 
-  function indent(depth) { return '  '.repeat(depth); }
-
-
-  function formatError(node, depth) {
-  const err = node.error;
-  if (!err) return;
-
-  const pad = indent(depth + 1);
-  let msg = err.message ?? String(err);
-
-  // Transform "4 == 56" → "Expected 4 to equal 56"
-  const m = msg.match(/^(.+)\s*==\s*(.+)$/);
-  if (m) {
-    msg = `Expected ${m[1]} to equal ${m[2]}`;
+  function indent() {
+    return '  '.repeat(stack.length);
   }
 
-  rows.push(`${pad}${CLR.red(msg)}`);
-
-  if (err.stack) {
-    for (const f of err.stack
-      .split('\n')
-      .filter(l => /^\s+at /.test(l))
-      .slice(0, 5)
-    ) {
-      rows.push(`${pad}  ${f.trim()}`);
-    }
+  function formatDuration(msVal) {
+    return `(${ms(msVal)}ms)`;
   }
-}
-  
-  function formatError2(node, depth) {
-    const err = node.error;
+
+  function formatError(err, depth) {
     if (!err) return;
-    const pad = indent(depth + 1);
-    rows.push(`${pad}${CLR.red(err.message ?? String(err))}`);
+    const pad = '  '.repeat(depth + 1);
+
+    let msg = err.message ?? String(err);
+
+    // Match Node's assertion formatting tweak
+    const m = msg.match(/^(.+)\s*==\s*(.+)$/);
+    if (m) msg = `Expected ${m[1]} to equal ${m[2]}`;
+
+    rows.push(`${pad}${CLR.red(msg)}`);
+
     if (err.stack) {
-      for (const f of err.stack.split('\n').filter(l => /^\s+at /.test(l)).slice(0, 5))
-        rows.push(`${pad}  ${f.trim()}`);
-    }
-  }
-
-  function renderNode(node, depth) {
-    const pad = indent(depth);
-    const isSuite = node.isSuite || node._isSuite;
-
-    if (isSuite) {
-      // Suite open — Node prints "→ name" before the first child in event mode;
-      // tree mode uses "▶ name" which is the canonical suite symbol.
-      rows.push(`${pad}${CLR.blue(SYM.suite)}${node.name}`);
-      for (const child of node.children) renderNode(child, depth + 1);
-      // Suite close — always includes duration
-      const dur = nodeDuration(node);
-      const outcome = (node.children ?? []).some(
-        c => !c.isSuite && !c._isSuite && c.result === 'fail'
-      );
-      const sym = outcome ? CLR.red(SYM.suiteEnd) : CLR.blue(SYM.suiteEnd);
-      rows.push(`${pad}${sym}${node.name} ${CLR.gray(`(${ms(dur)}ms)`)}`);
-      rows.push('');
-    } else {
-      switch (node.result) {
-        case 'pass':
-          rows.push(`${pad}${CLR.green(SYM.pass)}${node.name} ${CLR.gray(`(${ms(node.duration)}ms)`)}`);
-          break;
-
-        case 'fail':
-          rows.push(`${pad}${CLR.red(SYM.fail)}${node.name} ${CLR.gray(`(${ms(node.duration)}ms)`)}`);
-          formatError(node, depth);
-          failedNodes.push({ node, depth });
-          break;
-
-        case 'skip': {
-          const reason = typeof node.opts?.skip === 'string' && node.opts.skip
-            ? ` # SKIP ${node.opts.skip}` : ' # SKIP';
-          rows.push(`${pad}${CLR.gray(`- ${node.name}${reason} (${ms(node.duration)}ms)`)}`);
-          break;
-        }
-
-        case 'todo': {
-          const reason = typeof node.opts?.todo === 'string' && node.opts.todo
-            ? ` ${node.opts.todo}` : '';
-          rows.push(`${pad}${CLR.gray(`# TODO ${node.name}${reason} (${ms(node.duration)}ms)`)}`);
-          break;
-        }
-
-        default:
-          rows.push(`${pad}? ${node.name} (${ms(node.duration)}ms)`);
+      for (const line of err.stack
+        .split('\n')
+        .filter(l => /^\s+at /.test(l))
+        .slice(0, 5)
+      ) {
+        rows.push(`${pad}  ${line.trim()}`);
       }
     }
   }
 
-  for (const child of root.children) renderNode(child, 0);
+  for (const evt of evtList(events)) {
+    const { type, data } = evt;
 
-  // Summary block — mirrors the ℹ diagnostic lines Node emits at the end.
+    switch (type) {
+      case 'test:start': {
+        if (data.nesting === stack.length) {
+          // entering a suite
+          rows.push(`${indent()}${CLR.blue(SYM.arrow)}${data.name}`);
+          stack.push(data.name);
+        }
+        break;
+      }
+
+      case 'test:pass': {
+        rows.push(
+          `${indent()}${CLR.green(SYM.pass)}${data.name} ${CLR.gray(formatDuration(data.duration))}`
+        );
+        break;
+      }
+
+      case 'test:fail': {
+        rows.push(
+          `${indent()}${CLR.red(SYM.fail)}${data.name} ${CLR.gray(formatDuration(data.duration))}`
+        );
+        formatError(data.details?.error ?? data.error, stack.length);
+        break;
+      }
+
+      case 'test:diagnostic': {
+        rows.push(`${indent()}${CLR.gray(`${SYM.info}${data.message}`)}`);
+        break;
+      }
+
+      case 'test:plan': {
+        // suite finished
+        const name = stack.pop();
+        const dur = data.duration ?? 0;
+
+        rows.push(
+          `${indent()}${CLR.blue(SYM.suiteEnd)}${name} ${CLR.gray(formatDuration(dur))}`
+        );
+        rows.push('');
+        break;
+      }
+    }
+  }
+
+  // Summary (same as yours)
   const counts = countAll(root);
-  const total  = totalMs(root);
+  const total = totalMs(root);
+
   rows.push(`${CLR.blue(SYM.info)}tests ${counts.tests}`);
   rows.push(`${CLR.blue(SYM.info)}pass ${counts.pass}`);
   rows.push(`${CLR.blue(SYM.info)}fail ${counts.fail}`);
@@ -251,23 +267,6 @@ export function spec({ root, events }) {
   rows.push(`${CLR.blue(SYM.info)}skipped ${counts.skip}`);
   rows.push(`${CLR.blue(SYM.info)}todo ${counts.todo}`);
   rows.push(`${CLR.blue(SYM.info)}duration_ms ${ms(total)}`);
-
-  // "▶ failing tests:" reprise — mirrors #formatFailedTestResults().
-  if (failedNodes.length) {
-    rows.push('');
-    rows.push(`${CLR.red(SYM.fail)}failing tests:`);
-    rows.push('');
-    for (const { node } of failedNodes) {
-      rows.push(`${CLR.red(SYM.fail)}${node.name}`);
-      if (node.error) {
-        rows.push(`  ${node.error.message ?? node.error}`);
-        if (node.error.stack) {
-          for (const f of node.error.stack.split('\n').filter(l => /^\s+at /.test(l)).slice(0, 5))
-            rows.push(`    ${f.trim()}`);
-        }
-      }
-    }
-  }
 
   return rows.join('\n');
 }
@@ -286,13 +285,10 @@ export function tap({ root, events }) {
   function tapEsc(s) {
     return String(s ?? '')
       .replace(/\\/g, '\\\\')
-      .replace(/#/g,  '\\#')
-      .replace(/\b/g, '\\b')
-      .replace(/\f/g, '\\f')
+      .replace(/#/g, '\\#')
       .replace(/\t/g, '\\t')
       .replace(/\n/g, '\\n')
-      .replace(/\r/g, '\\r')
-      .replace(/\v/g, '\\v');
+      .replace(/\r/g, '\\r');
   }
 
   // YAML block — mirrors reportDetails() + jsToYaml() in tap.js.
