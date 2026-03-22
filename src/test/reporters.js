@@ -175,95 +175,103 @@ export function dot({ root, events }) {
 // Mirrors SpecReporter (internal/test_runner/reporter/spec.js).
 
 export function spec({ root, events }) {
-  const rows = [];
-  const stack = []; // track suite nesting
+  const rows        = [];
+  const failedNodes = [];
 
-  function indent() {
-    return '  '.repeat(stack.length);
+  function indent(depth) { return '  '.repeat(depth); }
+
+
+  function formatError(node, depth) {
+  const err = node.error;
+  if (!err) return;
+
+  const pad = indent(depth + 1);
+  let msg = err.message ?? String(err);
+
+  // Transform "4 == 56" → "Expected 4 to equal 56"
+  const m = msg.match(/^(.+)\s*==\s*(.+)$/);
+  if (m) {
+    msg = `Expected ${m[1]} to equal ${m[2]}`;
   }
 
-  function formatDuration(msVal) {
-    return `(${ms(msVal)}ms)`;
-  }
+  rows.push(`${pad}${CLR.red(msg)}`);
 
-  function formatError(err, depth) {
+  if (err.stack) {
+    for (const f of err.stack
+      .split('\n')
+      .filter(l => /^\s+at /.test(l))
+      .slice(0, 5)
+    ) {
+      rows.push(`${pad}  ${f.trim()}`);
+    }
+  }
+}
+  
+  function formatError2(node, depth) {
+    const err = node.error;
     if (!err) return;
-    const pad = '  '.repeat(depth + 1);
-
-    let msg = err.message ?? String(err);
-
-    // Match Node's assertion formatting tweak
-    const m = msg.match(/^(.+)\s*==\s*(.+)$/);
-    if (m) msg = `Expected ${m[1]} to equal ${m[2]}`;
-
-    rows.push(`${pad}${CLR.red(msg)}`);
-
+    const pad = indent(depth + 1);
+    rows.push(`${pad}${CLR.red(err.message ?? String(err))}`);
     if (err.stack) {
-      for (const line of err.stack
-        .split('\n')
-        .filter(l => /^\s+at /.test(l))
-        .slice(0, 5)
-      ) {
-        rows.push(`${pad}  ${line.trim()}`);
-      }
+      for (const f of err.stack.split('\n').filter(l => /^\s+at /.test(l)).slice(0, 5))
+        rows.push(`${pad}  ${f.trim()}`);
     }
   }
 
-  for (const evt of evtList(events)) {
-    const { type, data } = evt;
+  function renderNode(node, depth) {
+    const pad = indent(depth);
+    const isSuite = node.isSuite || node._isSuite;
 
-    switch (type) {
-      case 'test:start': {
-        if (data.nesting === stack.length) {
-          // entering a suite
-          rows.push(`${indent()}${CLR.blue(SYM.arrow)}${data.name}`);
-          stack.push(data.name);
+    if (isSuite) {
+      // Suite open — Node prints "→ name" before the first child in event mode;
+      // tree mode uses "▶ name" which is the canonical suite symbol.
+      rows.push(`${pad}${CLR.blue(SYM.suite)}${node.name}`);
+      for (const child of node.children) renderNode(child, depth + 1);
+      // Suite close — always includes duration
+      const dur = nodeDuration(node);
+      const outcome = (node.children ?? []).some(
+        c => !c.isSuite && !c._isSuite && c.result === 'fail'
+      );
+      const sym = outcome ? CLR.red(SYM.suiteEnd) : CLR.blue(SYM.suiteEnd);
+      rows.push(`${pad}${sym}${node.name} ${CLR.gray(`(${ms(dur)}ms)`)}`);
+      rows.push('');
+    } else {
+      switch (node.result) {
+        case 'pass':
+          rows.push(`${pad}${CLR.green(SYM.pass)}${node.name} ${CLR.gray(`(${ms(node.duration)}ms)`)}`);
+          break;
+
+        case 'fail':
+          rows.push(`${pad}${CLR.red(SYM.fail)}${node.name} ${CLR.gray(`(${ms(node.duration)}ms)`)}`);
+          formatError(node, depth);
+          failedNodes.push({ node, depth });
+          break;
+
+        case 'skip': {
+          const reason = typeof node.opts?.skip === 'string' && node.opts.skip
+            ? ` # SKIP ${node.opts.skip}` : ' # SKIP';
+          rows.push(`${pad}${CLR.gray(`- ${node.name}${reason} (${ms(node.duration)}ms)`)}`);
+          break;
         }
-        break;
-      }
 
-      case 'test:pass': {
-        rows.push(
-          `${indent()}${CLR.green(SYM.pass)}${data.name} ${CLR.gray(formatDuration(data.duration))}`
-        );
-        break;
-      }
+        case 'todo': {
+          const reason = typeof node.opts?.todo === 'string' && node.opts.todo
+            ? ` ${node.opts.todo}` : '';
+          rows.push(`${pad}${CLR.gray(`# TODO ${node.name}${reason} (${ms(node.duration)}ms)`)}`);
+          break;
+        }
 
-      case 'test:fail': {
-        const name = data?.name ?? data?.data?.name ?? '(unknown)';
-        const dur  = data?.duration ?? data?.data?.duration ?? 0;
-      
-        rows.push(`${indent()}${CLR.red(SYM.fail)}${name} ${CLR.gray(`(${ms(dur)}ms)`)}`);
-      
-        // error formatting
-        const err = data?.details?.error ?? data?.error;
-        formatError(err, stack.length);
-        break;
-      }
-
-      case 'test:diagnostic': {
-        rows.push(`${indent()}${CLR.gray(`${SYM.info}${data.message}`)}`);
-        break;
-      }
-
-      case 'test:plan': {
-        // suite finished
-        const name = stack.pop();
-        const dur = data.duration ?? 0;
-
-        rows.push(
-          `${indent()}${CLR.blue(SYM.suiteEnd)}${name} ${CLR.gray(formatDuration(dur))}`
-        );
-        rows.push('');
-        break;
+        default:
+          rows.push(`${pad}? ${node.name} (${ms(node.duration)}ms)`);
       }
     }
   }
 
-  // Summary (same as yours)
-  const counts = countAll(root);
-  const total = totalMs(root);
+  for (const child of root.children) renderNode(child, 0);
 
+  // Summary block — mirrors the ℹ diagnostic lines Node emits at the end.
+  const counts = countAll(root);
+  const total  = totalMs(root);
   rows.push(`${CLR.blue(SYM.info)}tests ${counts.tests}`);
   rows.push(`${CLR.blue(SYM.info)}pass ${counts.pass}`);
   rows.push(`${CLR.blue(SYM.info)}fail ${counts.fail}`);
@@ -271,6 +279,23 @@ export function spec({ root, events }) {
   rows.push(`${CLR.blue(SYM.info)}skipped ${counts.skip}`);
   rows.push(`${CLR.blue(SYM.info)}todo ${counts.todo}`);
   rows.push(`${CLR.blue(SYM.info)}duration_ms ${ms(total)}`);
+
+  // "▶ failing tests:" reprise — mirrors #formatFailedTestResults().
+  if (failedNodes.length) {
+    rows.push('');
+    rows.push(`${CLR.red(SYM.fail)}failing tests:`);
+    rows.push('');
+    for (const { node } of failedNodes) {
+      rows.push(`${CLR.red(SYM.fail)}${node.name}`);
+      if (node.error) {
+        rows.push(`  ${node.error.message ?? node.error}`);
+        if (node.error.stack) {
+          for (const f of node.error.stack.split('\n').filter(l => /^\s+at /.test(l)).slice(0, 5))
+            rows.push(`    ${f.trim()}`);
+        }
+      }
+    }
+  }
 
   return rows.join('\n');
 }
