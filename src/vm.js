@@ -217,8 +217,15 @@ function clearAllPending(registry) {
 function createSandboxIframe() {
   const iframe = document.createElement('iframe');
   iframe.style.cssText = 'display:none;width:0;height:0;border:0;position:absolute';
-  iframe.sandbox = 'allow-scripts';
+  iframe.sandbox = 'allow-scripts allow-same-origin';
   document.body.appendChild(iframe);
+  // Prevent sandboxed code from escaping via parent/top references
+  const win = iframe.contentWindow;
+  try {
+    Object.defineProperty(win, 'parent', { value: win, configurable: false });
+    Object.defineProperty(win, 'top',    { value: win, configurable: false });
+    Object.defineProperty(win, 'opener', { value: null, configurable: false });
+  } catch (_) {}
   return iframe;
 }
 
