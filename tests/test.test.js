@@ -193,6 +193,8 @@ describe('node:test Browser Shim', () => {
     });
   });
 
+
+ 
   // ── Assertions ────────────────────────────────────────────────────────────
   describe('Assertions (t.assert)', () => {
     test('deepEqual identifies nested mismatches', async () => {
