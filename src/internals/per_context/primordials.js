@@ -1,19 +1,4 @@
-// primordials-wrapper.js
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
+import * as b from "https://github.com/nodejs/node/blob/main/lib/internal/per_context/primordials.js"; // using plugin namespace
 
-// Access Node's real internal primordials
-const primordials = require('internal/per_context/primordials');
-
-// Make sure it's available globally if needed
-if (!globalThis.primordials) globalThis.primordials = primordials;
-
-// Default export
-export default primordials;
-
-// Re-export all named properties individually
-for (const key of Object.keys(primordials)) {
-  if (!(key in exports)) {
-    export const [key] = primordials[key];
-  }
-}
+export * from "https://github.com/nodejs/node/blob/main/lib/internal/per_context/primordials.js"; // named exports
+export { b as default }; // default export
