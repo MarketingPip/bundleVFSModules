@@ -7,6 +7,71 @@ import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill
 import { minify } from "terser";
 import { builtinModules } from 'module';
 
+import babel from '@babel/core';
+ 
+
+export function nodeGitHubBabelPlugin() {
+  return {
+    name: 'node-github-babel-resolver',
+    setup(build) {
+      const GH_BASE = 'https://github.com/nodejs/node/blob/main/';
+      const RAW_BASE = 'https://raw.githubusercontent.com/nodejs/node/main/';
+      const nodeBuiltins = new Set(builtinModules);
+
+      build.onResolve({ filter: /.*/, namespace: 'node-gh' }, args => {
+        // Externalize standard built-ins
+        if (nodeBuiltins.has(args.path) || args.path.startsWith('node:')) {
+          return { path: args.path, external: true };
+        }
+
+        let finalPath = args.path;
+        // Map internal paths to GitHub lib directory
+        if (args.path.startsWith('internal/') || args.path.startsWith('v8/')) {
+          finalPath = `${GH_BASE}lib/${args.path}.js`;
+        } else if (args.path.startsWith('.')) {
+          finalPath = new URL(args.path, args.importer).href;
+          if (!finalPath.endsWith('.js')) finalPath += '.js';
+        }
+
+        return { path: finalPath, namespace: 'node-gh' };
+      });
+
+      build.onLoad({ filter: /.*/, namespace: 'node-gh' }, async (args) => {
+        const rawUrl = args.path.replace(GH_BASE, RAW_BASE);
+        
+        try {
+          const rawCode = await fetchWithRetry(rawUrl);
+
+          // Use Babel to transform CJS to ESM
+          const { code } = await babel.transformAsync(rawCode, {
+            plugins: [
+              // This plugin turns module.exports/require into ESM
+              ['@babel/plugin-transform-modules-commonjs', {
+                strictMode: false,
+                allowTopLevelThis: true,
+              }]
+            ],
+            sourceMaps: false,
+            compact: false,
+          });
+
+          // Inject a CJS 'require' shim so internal requires still work 
+          // even after the file itself is converted to an ES Module
+          const shimmedCode = `
+            import { createRequire } from 'module';
+            const require = createRequire(import.meta.url);
+            ${code}
+          `;
+
+          return { contents: shimmedCode, loader: 'js' };
+        } catch (err) {
+          return { contents: `export default {}; // Failed: ${err.message}`, loader: 'js' };
+        }
+      });
+    },
+  };
+}
+
 export function nodeGitHubPlugin() {
   return {
     name: 'node-github-resolver',
@@ -193,7 +258,7 @@ async function bundleToString(entry) {
       write: false,
       external: [], 
       treeShaking:true,
-      plugins: [nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
+      plugins: [nodeGitHubBabelPlugin(), nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
       //modules: { fs: false, path: true, /* only what's needed */ },  
       globals: {
