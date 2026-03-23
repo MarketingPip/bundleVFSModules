@@ -18,17 +18,23 @@ export function nodeGitHubCjsToEsmPlugin() {
       const GH_BASE = 'https://github.com/nodejs/node/blob/main/';
       const RAW_BASE = 'https://raw.githubusercontent.com/nodejs/node/main/';
       const nodeBuiltins = new Set(builtinModules);
+      const cache = new Map();
 
       // Resolve imports
       build.onResolve({ filter: /.*/, namespace: 'node-gh' }, args => {
+        // 1. Node built-ins stay external
         if (nodeBuiltins.has(args.path) || args.path.startsWith('node:')) {
           return { path: args.path, external: true };
         }
 
         let finalPath = args.path;
+
+        // 2. Map internal/ and v8/ to GitHub lib directory
         if (args.path.startsWith('internal/') || args.path.startsWith('v8/')) {
           finalPath = `${GH_BASE}lib/${args.path}.js`;
-        } else if (args.path.startsWith('.')) {
+        } 
+        // 3. Resolve relative paths
+        else if (args.path.startsWith('.')) {
           finalPath = new URL(args.path, args.importer).href;
           if (!finalPath.endsWith('.js')) finalPath += '.js';
         }
@@ -36,30 +42,46 @@ export function nodeGitHubCjsToEsmPlugin() {
         return { path: finalPath, namespace: 'node-gh' };
       });
 
-      // Load and transform
+      // Entry-point resolution for GitHub URLs
+      build.onResolve({ filter: /github\.com\/nodejs\/node/ }, args => {
+        return { path: args.path, namespace: 'node-gh' };
+      });
+
+      // Load and transform CJS → ESM
       build.onLoad({ filter: /.*/, namespace: 'node-gh' }, async args => {
+        if (!args.path.startsWith('http')) {
+          return { errors: [{ text: `Invalid path in node-gh namespace: ${args.path}` }] };
+        }
+
         const rawUrl = args.path.replace(GH_BASE, RAW_BASE);
+
+        if (cache.has(rawUrl)) {
+          return { contents: cache.get(rawUrl), loader: 'js' };
+        }
+
         try {
           const response = await fetch(rawUrl);
           if (!response.ok) throw new Error(`Failed to fetch ${rawUrl}`);
           const rawCode = await response.text();
 
-          // Convert CommonJS to ESM using cjstoesm
+          // Convert CommonJS to ESM
           const transformed = cjsToEsm(rawCode);
 
-          // Add shim for 'require' if still needed
+          // Shim require
           const finalCode = `import { createRequire } from 'module';\nconst require = createRequire(import.meta.url);\n${transformed.code}`;
 
+          cache.set(rawUrl, finalCode);
           return { contents: finalCode, loader: 'js' };
         } catch (err) {
           console.error(`CJS→ESM Transform Error for ${args.path}:`, err);
-          return { contents: `export default {};`, loader: 'js' };
+          const fallback = `/* Failed to fetch ${rawUrl} */\nexport default {};`;
+          cache.set(rawUrl, fallback);
+          return { contents: fallback, loader: 'js' };
         }
       });
     },
   };
 }
-
 export function nodeGitHubPlugin() {
   return {
     name: 'node-github-resolver',
