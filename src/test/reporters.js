@@ -84,6 +84,65 @@ function evtList(events) { return Array.isArray(events) ? events : []; }
 // After the loop a newline is emitted, then a "Failed tests:" block if needed.
 
 export function dot({ root, events }) {
+  // Node uses process.stdout.columns ?? 20, clamped to minimum 20.
+  const COLS = 20;
+  const rows  = [];
+  let   line  = '';
+  let   col   = 0;
+  const failed = [];
+
+  function addChar(ch, failData) {
+    line += ch;
+    if (failData) failed.push(failData);
+    if (++col >= COLS) { rows.push(line); line = ''; col = 0; }
+  }
+
+  // Prefer event stream (matches Node's own ordering precisely); fall back to
+  // tree traversal when events aren't wired through.
+  const evts = evtList(events);
+  if (evts.length) {
+    for (const { type, data } of evts) {
+      if (type === 'test:pass') addChar(CLR.green('.'), null);
+      if (type === 'test:fail') addChar(CLR.red('X'), data);
+    }
+  } else {
+    (function walk(node) {
+      for (const c of node.children) {
+        if (!c.isSuite && !c._isSuite) {
+          if      (c.result === 'pass') addChar(CLR.green('.'), null);
+          else if (c.result === 'fail') addChar(CLR.red('X'),   c);
+        }
+        walk(c);
+      }
+    })(root);
+  }
+
+  if (line) rows.push(line);
+  rows.push(''); // trailing newline after the dot grid
+
+  if (failed.length) {
+    rows.push('');
+    rows.push(`${CLR.red('Failed tests:')}${CLR.white('')}`);
+    rows.push('');
+    for (const data of failed) {
+      // data may be a raw event payload or a tree node — normalise both.
+      const name = data.name ?? data.data?.name ?? '(unknown)';
+      const err  = data.details?.error ?? data.error;
+      rows.push(`${SYM.fail}${name}`);
+      if (err) {
+        rows.push(`  ${err.name ?? 'Error'}: ${err.message ?? err}`);
+        if (err.stack) {
+          for (const f of err.stack.split('\n').filter(l => /^\s+at /.test(l)).slice(0, 3))
+            rows.push(`    ${f.trim()}`);
+        }
+      }
+    }
+  }
+
+  return rows.join('\n');
+}
+
+export function dot2({ root, events }) {
   const COLS = 20; // Node uses terminal width, fallback 20
   const rows = [];
   let line = '';
