@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill";
 
+
+import { primordialsShimPlugin } from './primordials-shim-plugin.js';
 import { minify } from "terser";
 import { builtinModules } from 'module';
 
@@ -268,7 +270,12 @@ async function bundleToString(entry) {
       write: false,
       external: [], 
       treeShaking:true,
-      plugins: [nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
+      banner: {
+       // Ensures globalThis.__primordials__ exists before any module runs,
+       // in case a file is evaluated before the synthetic module is imported.
+       js: `globalThis.__primordials__ = globalThis.__primordials__ || {};`,
+     },
+      plugins: [primordialsShimPlugin(), nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
       //modules: { fs: false, path: true, /* only what's needed */ },  
        overrides: {
