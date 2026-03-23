@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill";
 
 import { minify } from "terser";
+import { builtinModules } from 'module';
 
 export function nodeGitHubPlugin() {
   return {
@@ -12,16 +13,22 @@ export function nodeGitHubPlugin() {
     setup(build) {
       const GH_BASE = 'https://github.com/nodejs/node/blob/main/';
       const RAW_BASE = 'https://raw.githubusercontent.com/nodejs/node/main/';
+      const nodeBuiltins = new Set(builtinModules);
       const cache = new Map();
 
       build.onResolve({ filter: /.*/, namespace: 'node-gh' }, args => {
+        // 1. If it's a standard Node.js builtin (fs, path, etc.), let it be external
+        if (nodeBuiltins.has(args.path) || args.path.startsWith('node:')) {
+          return { path: args.path, external: true };
+        }
+
         let finalPath = args.path;
 
-        // Handle internal/ and v8/ mappings used in Node core
+        // 2. Map internal/ and v8/ to the lib directory in GitHub
         if (args.path.startsWith('internal/') || args.path.startsWith('v8/')) {
           finalPath = `${GH_BASE}lib/${args.path}.js`;
         } 
-        // Handle relative imports (e.g., ./utils)
+        // 3. Resolve relative paths within the GitHub repo
         else if (args.path.startsWith('.')) {
           finalPath = new URL(args.path, args.importer).href;
           if (!finalPath.endsWith('.js')) finalPath += '.js';
@@ -33,15 +40,17 @@ export function nodeGitHubPlugin() {
         };
       });
 
-      // Initial entry point resolution
+      // Entry point resolution
       build.onResolve({ filter: /github\.com\/nodejs\/node/ }, args => {
-        return {
-          path: args.path,
-          namespace: 'node-gh',
-        };
+        return { path: args.path, namespace: 'node-gh' };
       });
 
       build.onLoad({ filter: /.*/, namespace: 'node-gh' }, async (args) => {
+        // If it managed to get here but isn't a URL, it's an error
+        if (!args.path.startsWith('http')) {
+          return { errors: [{ text: `Invalid path in node-gh namespace: ${args.path}` }] };
+        }
+
         const rawUrl = args.path.replace(GH_BASE, RAW_BASE);
         
         if (cache.has(rawUrl)) {
@@ -53,7 +62,11 @@ export function nodeGitHubPlugin() {
           cache.set(rawUrl, contents);
           return { contents, loader: 'js' };
         } catch (err) {
-          return { errors: [{ text: `Failed to fetch ${rawUrl}: ${err.message}` }] };
+          // Handle 404s for deps like undici/amaro which are complex sub-repos
+          return { 
+            contents: `/* Failed to fetch ${rawUrl} */\nmodule.exports = {};`, 
+            loader: 'js' 
+          };
         }
       });
     },
