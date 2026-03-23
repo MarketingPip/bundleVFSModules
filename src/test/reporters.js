@@ -140,7 +140,7 @@ export function dot({ root, events }) {
     rows.push('');
 
     for (const f of failures) {
-      const name = f.name ?? '(unknown)';
+      const name = f.name ?? f.data?.name ?? '(unknown)';
       const err = f.details?.error ?? f.error;
 
       rows.push(`${SYM.fail}${name}`);
