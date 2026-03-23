@@ -246,7 +246,7 @@ async function bundleToString(entry) {
       write: false,
       external: [], 
       treeShaking:true,
-      plugins: [nodeGitHubBabelPlugin(), nodeModulesPolyfillPlugin({
+      plugins: [nodeGitHubCjsToEsmPlugin(), nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
       //modules: { fs: false, path: true, /* only what's needed */ },  
       globals: {
