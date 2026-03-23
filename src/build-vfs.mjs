@@ -14,19 +14,34 @@ export function nodeGitHubPlugin() {
       const RAW_BASE = 'https://raw.githubusercontent.com/nodejs/node/main/';
       const cache = new Map();
 
-      // 1. Resolve: Catch the initial GitHub URL and any relative paths from it
-      build.onResolve({ filter: /github\.com\/nodejs\/node/ }, args => {
+      build.onResolve({ filter: /.*/, namespace: 'node-gh' }, args => {
+        let finalPath = args.path;
+
+        // Handle internal/ and v8/ mappings used in Node core
+        if (args.path.startsWith('internal/') || args.path.startsWith('v8/')) {
+          finalPath = `${GH_BASE}lib/${args.path}.js`;
+        } 
+        // Handle relative imports (e.g., ./utils)
+        else if (args.path.startsWith('.')) {
+          finalPath = new URL(args.path, args.importer).href;
+          if (!finalPath.endsWith('.js')) finalPath += '.js';
+        }
+
         return {
-          path: args.path.startsWith('http') 
-            ? args.path 
-            : new URL(args.path, args.importer).href,
+          path: finalPath,
           namespace: 'node-gh',
         };
       });
 
-      // 2. Load: Fetch the content from the raw CDN
+      // Initial entry point resolution
+      build.onResolve({ filter: /github\.com\/nodejs\/node/ }, args => {
+        return {
+          path: args.path,
+          namespace: 'node-gh',
+        };
+      });
+
       build.onLoad({ filter: /.*/, namespace: 'node-gh' }, async (args) => {
-        // Convert UI URL to Raw URL
         const rawUrl = args.path.replace(GH_BASE, RAW_BASE);
         
         if (cache.has(rawUrl)) {
