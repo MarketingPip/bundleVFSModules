@@ -1,5 +1,4 @@
 import primordials from "./per_context/primordials.js"; // using plugin namespace
-globalThis.primordials = primordials;
 import * as b from "https://github.com/nodejs/node/blob/main/lib/internal/errors.js"; // using plugin namespace
 
 export * from "https://github.com/nodejs/node/blob/main/lib/internal/errors.js"; // named exports
