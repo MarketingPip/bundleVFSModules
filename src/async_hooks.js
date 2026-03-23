@@ -1,5 +1,15 @@
 'use strict';
 
+import { codes } from './internals/errors';
+
+const {
+  ERR_ASYNC_CALLBACK,
+  ERR_ASYNC_TYPE,
+  ERR_INVALID_ASYNC_ID,
+  ERR_INVALID_ARG_TYPE,
+  ERR_INVALID_ARG_VALUE,
+} = codes;
+
 // --- Internal state ---
 let asyncIdCounter = 1;
 const asyncResourceMap = new Map();
@@ -8,13 +18,7 @@ const asyncHooks = [];
 
 function generateAsyncId() { return asyncIdCounter++; }
 
-// --- Error placeholders (replace with actual if desired) ---
-class ERR_ASYNC_CALLBACK extends Error {
-  constructor(field) { super(`Invalid async callback for ${field}`); }
-}
-class ERR_INVALID_ARG_TYPE extends Error {
-  constructor(name, expected, actual) { super(`Invalid argument type for ${name}: expected ${expected}, got ${typeof actual}`); }
-}
+
 
 // --- AsyncResource Class ---
 export class AsyncResource {
