@@ -1,1 +1,1 @@
-import "https://esm.sh/gh/nodejs/node/lib/internal/errors.js"
+import "https://github.com/nodejs/node/blob/main/lib/internal/errors.js"
