@@ -3,87 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill";
-
-
-import { primordialsShimPlugin } from './primordials-shim-plugin.js';
+ 
 import { minify } from "terser";
 import { builtinModules } from 'module';
-
  
-import { cjsToEsm } from 'cjstoesm';
 import fetch from 'node-fetch';
-
-export function nodeGitHubCjsToEsmPlugin() {
-  return {
-    name: 'node-github-cjs-to-esm',
-    setup(build) {
-      const GH_BASE = 'https://github.com/nodejs/node/blob/main/';
-      const RAW_BASE = 'https://raw.githubusercontent.com/nodejs/node/main/';
-      const nodeBuiltins = new Set(builtinModules);
-      const cache = new Map();
-
-      // Resolve imports
-      build.onResolve({ filter: /.*/, namespace: 'node-gh' }, args => {
-        // 1. Node built-ins stay external
-        if (nodeBuiltins.has(args.path) || args.path.startsWith('node:')) {
-          return { path: args.path, external: true };
-        }
-
-        let finalPath = args.path;
-
-        // 2. Map internal/ and v8/ to GitHub lib directory
-        if (args.path.startsWith('internal/') || args.path.startsWith('v8/')) {
-          finalPath = `${GH_BASE}lib/${args.path}.js`;
-        } 
-        // 3. Resolve relative paths
-        else if (args.path.startsWith('.')) {
-          finalPath = new URL(args.path, args.importer).href;
-          if (!finalPath.endsWith('.js')) finalPath += '.js';
-        }
-
-        return { path: finalPath, namespace: 'node-gh' };
-      });
-
-      // Entry-point resolution for GitHub URLs
-      build.onResolve({ filter: /github\.com\/nodejs\/node/ }, args => {
-        return { path: args.path, namespace: 'node-gh' };
-      });
-
-      // Load and transform CJS → ESM
-      build.onLoad({ filter: /.*/, namespace: 'node-gh' }, async args => {
-        if (!args.path.startsWith('http')) {
-          return { errors: [{ text: `Invalid path in node-gh namespace: ${args.path}` }] };
-        }
-
-        const rawUrl = args.path.replace(GH_BASE, RAW_BASE);
-
-        if (cache.has(rawUrl)) {
-          return { contents: cache.get(rawUrl), loader: 'js' };
-        }
-
-        try {
-          const response = await fetch(rawUrl);
-          if (!response.ok) throw new Error(`Failed to fetch ${rawUrl}`);
-          const rawCode = await response.text();
-
-          // Convert CommonJS to ESM
-          const transformed = cjsToEsm(rawCode);
-
-          // Shim require
-          const finalCode = `import { createRequire } from 'module';\nconst require = createRequire(import.meta.url);\n${transformed.code}`;
-
-          cache.set(rawUrl, finalCode);
-          return { contents: finalCode, loader: 'js' };
-        } catch (err) {
-          console.error(`CJS→ESM Transform Error for ${args.path}:`, err);
-          const fallback = `/* Failed to fetch ${rawUrl} */\nexport default {};`;
-          cache.set(rawUrl, fallback);
-          return { contents: fallback, loader: 'js' };
-        }
-      });
-    },
-  };
-}
+ 
 export function nodeGitHubPlugin() {
   return {
     name: 'node-github-resolver',
@@ -275,7 +200,7 @@ async function bundleToString(entry) {
        // in case a file is evaluated before the synthetic module is imported.
        js: `globalThis.__primordials__ = globalThis.__primordials__ || {};`,
      },
-      plugins: [primordialsShimPlugin(), nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
+      plugins: [nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
       //modules: { fs: false, path: true, /* only what's needed */ },  
        overrides: {
