@@ -7,25 +7,25 @@ import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill
 import { minify } from "terser";
 import { builtinModules } from 'module';
 
-import babel from '@babel/core';
  
+import { cjsToEsm } from 'cjstoesm';
+import fetch from 'node-fetch';
 
-export function nodeGitHubBabelPlugin() {
+export function nodeGitHubCjsToEsmPlugin() {
   return {
-    name: 'node-github-babel-resolver',
+    name: 'node-github-cjs-to-esm',
     setup(build) {
       const GH_BASE = 'https://github.com/nodejs/node/blob/main/';
       const RAW_BASE = 'https://raw.githubusercontent.com/nodejs/node/main/';
       const nodeBuiltins = new Set(builtinModules);
 
+      // Resolve imports
       build.onResolve({ filter: /.*/, namespace: 'node-gh' }, args => {
-        // Externalize standard built-ins
         if (nodeBuiltins.has(args.path) || args.path.startsWith('node:')) {
           return { path: args.path, external: true };
         }
 
         let finalPath = args.path;
-        // Map internal paths to GitHub lib directory
         if (args.path.startsWith('internal/') || args.path.startsWith('v8/')) {
           finalPath = `${GH_BASE}lib/${args.path}.js`;
         } else if (args.path.startsWith('.')) {
@@ -36,36 +36,24 @@ export function nodeGitHubBabelPlugin() {
         return { path: finalPath, namespace: 'node-gh' };
       });
 
-      build.onLoad({ filter: /.*/, namespace: 'node-gh' }, async (args) => {
+      // Load and transform
+      build.onLoad({ filter: /.*/, namespace: 'node-gh' }, async args => {
         const rawUrl = args.path.replace(GH_BASE, RAW_BASE);
-        
         try {
-          const rawCode = await fetchWithRetry(rawUrl);
+          const response = await fetch(rawUrl);
+          if (!response.ok) throw new Error(`Failed to fetch ${rawUrl}`);
+          const rawCode = await response.text();
 
-          // Use Babel to transform CJS to ESM
-          const { code } = await babel.transformAsync(rawCode, {
-            plugins: [
-              // This plugin turns module.exports/require into ESM
-              ['@babel/plugin-transform-modules-commonjs', {
-                strictMode: false,
-                allowTopLevelThis: true,
-              }]
-            ],
-            sourceMaps: false,
-            compact: false,
-          });
+          // Convert CommonJS to ESM using cjstoesm
+          const transformed = cjsToEsm(rawCode);
 
-          // Inject a CJS 'require' shim so internal requires still work 
-          // even after the file itself is converted to an ES Module
-          const shimmedCode = `
-            import { createRequire } from 'module';
-            const require = createRequire(import.meta.url);
-            ${code}
-          `;
+          // Add shim for 'require' if still needed
+          const finalCode = `import { createRequire } from 'module';\nconst require = createRequire(import.meta.url);\n${transformed.code}`;
 
-          return { contents: shimmedCode, loader: 'js' };
+          return { contents: finalCode, loader: 'js' };
         } catch (err) {
-          return { contents: `export default {}; // Failed: ${err.message}`, loader: 'js' };
+          console.error(`CJS→ESM Transform Error for ${args.path}:`, err);
+          return { contents: `export default {};`, loader: 'js' };
         }
       });
     },
