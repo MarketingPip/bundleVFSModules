@@ -6,6 +6,59 @@ import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill
 
 import { minify } from "terser";
 
+export function nodeGitHubPlugin() {
+  return {
+    name: 'node-github-resolver',
+    setup(build) {
+      const GH_BASE = 'https://github.com/nodejs/node/blob/main/';
+      const RAW_BASE = 'https://raw.githubusercontent.com/nodejs/node/main/';
+      const cache = new Map();
+
+      // 1. Resolve: Catch the initial GitHub URL and any relative paths from it
+      build.onResolve({ filter: /github\.com\/nodejs\/node/ }, args => {
+        return {
+          path: args.path.startsWith('http') 
+            ? args.path 
+            : new URL(args.path, args.importer).href,
+          namespace: 'node-gh',
+        };
+      });
+
+      // 2. Load: Fetch the content from the raw CDN
+      build.onLoad({ filter: /.*/, namespace: 'node-gh' }, async (args) => {
+        // Convert UI URL to Raw URL
+        const rawUrl = args.path.replace(GH_BASE, RAW_BASE);
+        
+        if (cache.has(rawUrl)) {
+          return { contents: cache.get(rawUrl), loader: 'js' };
+        }
+
+        try {
+          const contents = await fetchWithRetry(rawUrl);
+          cache.set(rawUrl, contents);
+          return { contents, loader: 'js' };
+        } catch (err) {
+          return { errors: [{ text: `Failed to fetch ${rawUrl}: ${err.message}` }] };
+        }
+      });
+    },
+  };
+}
+
+async function fetchWithRetry(url, retries = 3, delay = 500) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.text();
+    } catch (err) {
+      if (i === retries - 1) throw err;
+      await new Promise(r => setTimeout(r, delay));
+      delay *= 2;
+    }
+  }
+}
+
 export function esmShPlugin() {
   const cache = new Map();
 
@@ -111,7 +164,7 @@ async function bundleToString(entry) {
       minify: true, // esbuild's minifier is extremely fast and reliable
       write: false,
       external: [], 
-      plugins: [nodeModulesPolyfillPlugin({
+      plugins: [nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
       //modules: { fs: false, path: true, /* only what's needed */ },  
       globals: {
