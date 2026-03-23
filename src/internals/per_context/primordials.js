@@ -1,5 +1,4 @@
 'use strict';
-if(!globalThis.primordials){
 /* eslint-disable node-core/prefer-primordials */
 
 // This file subclasses and stores the JS builtins that come from the VM
@@ -839,4 +838,4 @@ export const {
 } = primordials;
 
 export default primordials;
-}
+
