@@ -192,6 +192,7 @@ async function bundleToString(entry) {
       minify: true, // esbuild's minifier is extremely fast and reliable
       write: false,
       external: [], 
+      treeshake:true,
       plugins: [nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
       //modules: { fs: false, path: true, /* only what's needed */ },  
