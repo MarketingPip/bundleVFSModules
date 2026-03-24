@@ -1,4 +1,6 @@
 // todo write acorn patch for globalthis _RUNTIME_ - grabb all host / config.
+import {stdin} from "./internals/stdin.js"
+
 export const process = (function () {
   let _intervalId = null;
   const listeners = Object.create(null);
@@ -435,5 +437,7 @@ export const setgid             = (...a) => process.setgid(...a);
 export const setegid            = (...a) => process.setegid(...a);
 export const getgroups          = (...a) => process.getgroups(...a);
 export const setgroups          = (...a) => process.setgroups(...a);
+
+export stdin;
 
 export default process;
