@@ -43,7 +43,7 @@ import { hkdf } from '@noble/hashes/hkdf.js';
 import { pbkdf2, pbkdf2Async } from '@noble/hashes/pbkdf2.js';
 import { scrypt, scryptAsync } from '@noble/hashes/scrypt.js';
 import { argon2d, argon2i, argon2id } from '@noble/hashes/argon2.js';
-import * as webcrypto from '@noble/hashes/webcrypto.js';
+import * as _webcrypto from '@noble/hashes/webcrypto.js';
 import * as utils from '@noble/hashes/utils.js';
 const { bytesToHex, concatBytes, equalBytes, hexToBytes } = utils;
 
@@ -123,7 +123,7 @@ export const constants = {
 
 // ─── WebCrypto bridge ──────────────────────────────────────────────────────────
 
-export const webcrypto = globalThis.crypto;
+export const webcrypto = _webcrypto;
 export const subtle_ = subtle;
 
 export function getRandomValues(arr) {
