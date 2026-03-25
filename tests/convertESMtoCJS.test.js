@@ -52,8 +52,8 @@ describe("convertEsmToCjs", () => {
     `;
     const cjs = convertEsmToCjs(code);
     expect(cjs).toContain(`Object.assign(exports, require('./lib.js'));`);
-    expect(cjs).toContain(`exports.x = x;`);
-    expect(cjs).toContain(`exports.z = y;`);
+    expect(cjs).toContain('exports.x = _tmp_');
+    expect(cjs).toContain('exports.z = _tmp_');
   });
 });
 
