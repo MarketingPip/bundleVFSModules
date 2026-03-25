@@ -55,9 +55,7 @@ import { aes_128_gcm, aes_256_gcm, aes_128_cbc, aes_256_cbc, aes_128_ctr, aes_25
 import forge from 'node-forge';
 
 // ─── @noble/curves ────────────────────────────────────────────────────────────
-import { p256 } from '@noble/curves/p256.js';
-import { p384 } from '@noble/curves/p384.js';
-import { p521 } from '@noble/curves/p521.js';
+import { p256, p384, p521 } from "@noble/curves/nist.js";
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { ed448 } from '@noble/curves/ed448.js';
