@@ -195,11 +195,6 @@ async function bundleToString(entry) {
       write: false,
       external: [], 
       treeShaking:true,
-      banner: {
-       // Ensures globalThis.__primordials__ exists before any module runs,
-       // in case a file is evaluated before the synthetic module is imported.
-       js: `globalThis.__primordials__ = globalThis.__primordials__ || {};`,
-     },
       plugins: [nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
       //modules: { fs: false, path: true, /* only what's needed */ },  
