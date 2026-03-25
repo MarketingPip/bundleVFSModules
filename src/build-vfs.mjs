@@ -203,9 +203,6 @@ async function bundleToString(entry) {
       plugins: [nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
       //modules: { fs: false, path: true, /* only what's needed */ },  
-       overrides: {
-   				primordials: './internals/per_context/primordials.js',
-   			},
       globals: {
         Buffer: true, // can also be 'global', 'process'
       },
