@@ -49,7 +49,30 @@ const { bytesToHex, concatBytes, equalBytes, hexToBytes } = utils;
 
 // ─── @noble/ciphers ───────────────────────────────────────────────────────────
 import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
-import { aes_128_gcm, aes_256_gcm, aes_128_cbc, aes_256_cbc, aes_128_ctr, aes_256_ctr } from '@noble/ciphers/aes.js';
+
+// ─── AES wrappers to match old named imports ──────────────────────────────
+import { gcm, cbc, ctr } from '@noble/ciphers/utils.js';
+
+// helper factory
+function aesFactory(modeFunc, keyLength) {
+  return (key, nonce) => {
+    if (key.length !== keyLength / 8) {
+      throw new Error(`Key must be ${keyLength}-bit (${keyLength / 8} bytes)`);
+    }
+    return modeFunc(key, nonce);
+  };
+}
+
+// 128-bit variants
+export const aes_128_gcm = aesFactory(gcm, 128);
+export const aes_128_cbc = aesFactory(cbc, 128);
+export const aes_128_ctr = aesFactory(ctr, 128);
+
+// 256-bit variants
+export const aes_256_gcm = aesFactory(gcm, 256);
+export const aes_256_cbc = aesFactory(cbc, 256);
+export const aes_256_ctr = aesFactory(ctr, 256);
+
 
 // ─── node-forge (RSA PEM/DER/PKCS#1/PKCS#8/SPKI + X.509) ────────────────────
 import forge from 'node-forge';
