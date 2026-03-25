@@ -8,6 +8,13 @@ export function convertEsmToCjs(code) {
   const ast = parse(code, { ecmaVersion: 2022, sourceType: "module" });
   const s = new MagicString(code);
 
+  // Pre-scan: detect if there are BOTH a default export and named exports
+  const hasDefault = ast.body.some(n => n.type === "ExportDefaultDeclaration");
+  const hasNamed = ast.body.some(
+    n => n.type === "ExportNamedDeclaration" && (n.declaration || n.specifiers.length)
+  );
+  const mixed = hasDefault && hasNamed;
+
   ancestor(ast, {
     // 1. Convert import statements
     ImportDeclaration(node) {
@@ -15,7 +22,6 @@ export function convertEsmToCjs(code) {
       const specifiers = node.specifiers;
 
       if (specifiers.length === 0) {
-        // Bare import: import 'setup.js' -> require('setup.js');
         s.overwrite(node.start, node.end, `require(${source});`);
       } else {
         const parts = specifiers.map((spec) => {
@@ -23,9 +29,8 @@ export function convertEsmToCjs(code) {
             spec.type === "ImportDefaultSpecifier" ||
             spec.type === "ImportNamespaceSpecifier"
           ) {
-            return spec.local.name; // import x from 'y' || import * as x from 'y'
+            return spec.local.name;
           } else {
-            // Named import { a as b } -> { a: b }
             return spec.imported.name === spec.local.name
               ? spec.local.name
               : `${spec.imported.name}: ${spec.local.name}`;
@@ -36,50 +41,43 @@ export function convertEsmToCjs(code) {
           (s) => s.type === "ImportSpecifier"
         );
         const importStr = isDestructured ? `{ ${parts.join(", ")} }` : parts[0];
-        s.overwrite(
-          node.start,
-          node.end,
-          `const ${importStr} = require(${source});`
-        );
+        s.overwrite(node.start, node.end, `const ${importStr} = require(${source});`);
       }
     },
 
     // 2. Convert default export
     ExportDefaultDeclaration(node) {
-      if (node.declaration.id) {
-        // Named function/class: export default function foo() {} -> module.exports = foo
-        s.remove(node.start, node.declaration.start);
-        s.appendLeft(
-          node.end,
-          `\nmodule.exports = ${node.declaration.id.name};`
-        );
+      if (mixed) {
+        // In mixed mode, emit exports.default = ... instead of module.exports =
+        if (node.declaration.id) {
+          s.remove(node.start, node.declaration.start);
+          s.appendLeft(node.end, `\nexports.default = ${node.declaration.id.name};`);
+        } else {
+          s.overwrite(node.start, node.declaration.start, "exports.default = ");
+        }
       } else {
-        // Anonymous default: export default 42 -> module.exports = 42
-        s.overwrite(node.start, node.declaration.start, "module.exports = ");
+        if (node.declaration.id) {
+          s.remove(node.start, node.declaration.start);
+          s.appendLeft(node.end, `\nmodule.exports = ${node.declaration.id.name};`);
+        } else {
+          s.overwrite(node.start, node.declaration.start, "module.exports = ");
+        }
       }
     },
 
     // 3. Convert named exports
     ExportNamedDeclaration(node) {
       if (node.declaration) {
-        // Handle variables, functions, classes
         s.remove(node.start, node.declaration.start);
 
         if (node.declaration.type === "VariableDeclaration") {
           node.declaration.declarations.forEach((decl) => {
-            s.appendRight(
-              node.end,
-              `\nexports.${decl.id.name} = ${decl.id.name};`
-            );
+            s.appendRight(node.end, `\nexports.${decl.id.name} = ${decl.id.name};`);
           });
         } else if (node.declaration.id) {
-          s.appendRight(
-            node.end,
-            `\nexports.${node.declaration.id.name} = ${node.declaration.id.name};`
-          );
+          s.appendRight(node.end, `\nexports.${node.declaration.id.name} = ${node.declaration.id.name};`);
         }
       } else if (node.specifiers.length && node.source) {
-        // import the module first
         const temp = `_tmp_${Math.random().toString(36).slice(2, 8)}`;
         const imports = `const ${temp} = require(${node.source.raw});\n`;
         const exportsStr = node.specifiers
@@ -93,7 +91,7 @@ export function convertEsmToCjs(code) {
       }
     },
 
-    // 4. Export all (catch re-exports)
+    // 4. Export all
     ExportAllDeclaration(node) {
       s.overwrite(
         node.start,
