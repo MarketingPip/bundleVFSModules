@@ -1,4 +1,4 @@
-import globals from "https://esm.sh/globals";
+/* import globals from "https://esm.sh/globals";
 
  
 // const browserOnly = Object.getOwnPropertyNames(globalThis).sort();
@@ -37,3 +37,4 @@ export function REMOVE_BROWSER_APIS(){
     }
   }
 }
+*/
