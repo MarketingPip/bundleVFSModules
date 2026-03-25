@@ -102,48 +102,37 @@ function getTable(...args) {
 
 /* ---------------- stealth console.table ---------------- */
 
-const originalConsoleTable = globalThis.console.table;
+export function patchConsoleTable() {
+  const originalConsoleTable = globalThis.console.table;
+  const originalDescriptor =
+    Object.getOwnPropertyDescriptor(console, "table");
 
-const originalDescriptor =
-  Object.getOwnPropertyDescriptor(console, "table");
-
-/* patched function */
-
-function table(...args) {
-  const str = getTable(...args);
-  return originalConsoleTable.call(console, str);
-}
-
-/* preserve metadata */
-
-Object.defineProperty(table, "name", {
-  value: "table"
-});
-
-Object.defineProperty(table, "length", {
-  value: 0
-});
-
-/* native toString spoof */
-
-const nativeString = "function table() { [native code] }";
-
-table.toString = () => nativeString;
-
-const originalFnToString = Function.prototype.toString;
-
-Function.prototype.toString = function () {
-  if (this === table || this === console.table) {
-    return nativeString;
+  function table(...args) {
+    const str = getTable(...args);
+    return originalConsoleTable.call(console, str);
   }
-  return originalFnToString.call(this);
-};
 
-/* install patch while preserving descriptor */
+  Object.defineProperty(table, "name", { value: "table" });
+  Object.defineProperty(table, "length", { value: 0 });
 
-globalThis.console.table = table;
-        
-Object.defineProperty(console, "table", {
-  ...originalDescriptor,
-  value: table
-});
+  const nativeString = "function table() { [native code] }";
+  table.toString = () => nativeString;
+
+  const originalFnToString = Function.prototype.toString;
+  Function.prototype.toString = function () {
+    if (this === table || this === console.table) return nativeString;
+    return originalFnToString.call(this);
+  };
+
+  globalThis.console.table = table;
+  Object.defineProperty(console, "table", {
+    ...originalDescriptor,
+    value: table,
+  });
+
+  return () => {
+    // Optional: restore original console.table
+    Object.defineProperty(console, "table", originalDescriptor);
+    Function.prototype.toString = originalFnToString;
+  };
+}
