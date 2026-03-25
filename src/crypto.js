@@ -64,14 +64,14 @@ function aesFactory(modeFunc, keyLength) {
 }
 
 // 128-bit variants
-export const aes_128_gcm = aesFactory(gcm, 128);
-export const aes_128_cbc = aesFactory(cbc, 128);
-export const aes_128_ctr = aesFactory(ctr, 128);
+const aes_128_gcm = aesFactory(gcm, 128);
+const aes_128_cbc = aesFactory(cbc, 128);
+const aes_128_ctr = aesFactory(ctr, 128);
 
 // 256-bit variants
-export const aes_256_gcm = aesFactory(gcm, 256);
-export const aes_256_cbc = aesFactory(cbc, 256);
-export const aes_256_ctr = aesFactory(ctr, 256);
+const aes_256_gcm = aesFactory(gcm, 256);
+const aes_256_cbc = aesFactory(cbc, 256);
+const aes_256_ctr = aesFactory(ctr, 256);
 
 
 // ─── node-forge (RSA PEM/DER/PKCS#1/PKCS#8/SPKI + X.509) ────────────────────
