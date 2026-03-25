@@ -31,34 +31,33 @@ import { Buffer } from 'buffer';
 import { EventEmitter } from 'events';
 
 // ─── @noble/hashes ────────────────────────────────────────────────────────────
-import { sha1 }        from '@noble/hashes/sha1';
-import { sha224, sha256, sha384, sha512, sha512_224, sha512_256 } from '@noble/hashes/sha2';
-import { sha3_224, sha3_256, sha3_384, sha3_512, keccak_256, shake128, shake256 } from '@noble/hashes/sha3';
-import { blake2b }     from '@noble/hashes/blake2b';
-import { blake2s }     from '@noble/hashes/blake2s';
-import { blake3 }      from '@noble/hashes/blake3';
-import { md5 }         from '@noble/hashes/md5';
-import { hmac }        from '@noble/hashes/hmac';
-import { pbkdf2, pbkdf2Async }   from '@noble/hashes/pbkdf2';
-import { scrypt, scryptAsync }   from '@noble/hashes/scrypt';
-import { hkdf }                  from '@noble/hashes/hkdf';
-import { createHash as nobleCreateHash, createHmac as nobleCreateHmac } from '@noble/hashes/utils';
+import { sha1 }        from '@noble/hashes/sha1.js';
+import { sha224, sha256, sha384, sha512, sha512_224, sha512_256 } from '@noble/hashes/sha2.js';
+import { sha3_224, sha3_256, sha3_384, sha3_512, keccak_256, shake128, shake256 } from '@noble/hashes/sha3.js';
+import { blake2b }     from '@noble/hashes/blake2b.js';
+import { blake2s }     from '@noble/hashes/blake2s.js';
+import { blake3 }      from '@noble/hashes/blake3.js';
+import { md5 }         from '@noble/hashes/md5.js';
+import { hmac }        from '@noble/hashes/hmac.js';
+import { pbkdf2, pbkdf2Async }   from '@noble/hashes/pbkdf2.js';
+import { scrypt, scryptAsync }   from '@noble/hashes/scrypt.js';
+import { hkdf }                  from '@noble/hashes/hkdf.js';
+import { createHash as nobleCreateHash, createHmac as nobleCreateHmac } from '@noble/hashes/utils.js';
 
 // ─── @noble/ciphers ───────────────────────────────────────────────────────────
-import { chacha20poly1305 } from '@noble/ciphers/chacha';
-import { aes_128_gcm, aes_256_gcm, aes_128_cbc, aes_256_cbc, aes_128_ctr, aes_256_ctr } from '@noble/ciphers/aes';
+import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { aes_128_gcm, aes_256_gcm, aes_128_cbc, aes_256_cbc, aes_128_ctr, aes_256_ctr } from '@noble/ciphers/aes.js';
 
 // ─── node-forge (RSA PEM/DER/PKCS#1/PKCS#8/SPKI + X.509) ────────────────────
 import forge from 'node-forge';
 
 // ─── @noble/curves ────────────────────────────────────────────────────────────
-import { p256 }    from '@noble/curves/p256';
-import { p384 }    from '@noble/curves/p384';
-import { p521 }    from '@noble/curves/p521';
-import { secp256k1 } from '@noble/curves/secp256k1';
-import { ed25519 } from '@noble/curves/ed25519';
-import { ed448 }   from '@noble/curves/ed448';
-
+import { p256 }    from '@noble/curves/p256.js';
+import { p384 }    from '@noble/curves/p384.js';
+import { p521 }    from '@noble/curves/p521.js';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { ed448 }   from '@noble/curves/ed448.js';
 // ─── Internal helpers ──────────────────────────────────────────────────────────
 
 const subtle = globalThis.crypto?.subtle;
