@@ -1,6 +1,10 @@
 // todo write acorn patch for globalthis _RUNTIME_ - grabb all host / config.
 import {stdin} from "./internals/stdin.js"
-import {stdout} from "./internals/stdout.js"
+ 
+import makeShim from './internals/stdout.js';
+const stdout = makeShim('stdout');
+const stderr = makeShim('stderr');
+
 export const process = (function () {
   let _intervalId = null;
   const listeners = Object.create(null);
@@ -374,6 +378,7 @@ export const process = (function () {
 
   processBase.stdin = stdin;
   processBase.stdout = stdout;
+   processBase.stdout = stderr;
   const processFinal = Object.create({}, { [Symbol.toStringTag]: { value: "Process", enumerable: false } });
   Object.assign(processFinal, processBase);
 
@@ -441,5 +446,7 @@ export const getgroups          = (...a) => process.getgroups(...a);
 export const setgroups          = (...a) => process.setgroups(...a);
 
 export stdin;
+export stderr;
+export stdout;
 
 export default process;
