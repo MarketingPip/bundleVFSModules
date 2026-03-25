@@ -51,7 +51,7 @@ const { bytesToHex, concatBytes, equalBytes, hexToBytes } = utils;
 import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
 
 // ─── AES wrappers to match old named imports ──────────────────────────────
-import { gcm, cbc, ctr } from '@noble/ciphers/utils.js';
+import { gcm, ctr, cbc } from "@noble/ciphers/aes.js";
 
 // helper factory
 function aesFactory(modeFunc, keyLength) {
