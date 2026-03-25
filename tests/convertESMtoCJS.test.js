@@ -1,7 +1,7 @@
  
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 
-
+import { convertEsmToCjs, convertCjsToEsm } from '../src/runtime/transformModules.js';
 
 
 describe("convertEsmToCjs", () => {
