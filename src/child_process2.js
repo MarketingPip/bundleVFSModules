@@ -44,17 +44,25 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
                         if (e.data.type === 'PARENT_CHILD_EXEC_RESPONSE') {
                             const { stdout, stderr, exitCode } = e.data.payload;
                             
-                            if (stdout) {
-                               console.log(stdout)
-                            }
-                            if (stderr) {
-                                console.log(stderr)
-                            }
-
-
-                            child.emit('exit', exitCode);
-                            
-                            if (cb) cb(exitCode !== 0 ? new Error('Failed') : null, stdout, stderr);
+                           // 1. Handle Streams
+                                   if (stdout) child.stdout.push(stdout);
+                                   if (stderr) child.stderr.push(stderr);
+                           
+                                   child.stdout.push(null);
+                                   child.stderr.push(null);
+                           
+                                   // 2. Construct the Error object if exitCode is non-zero
+                                   let execError = null;
+                                   if (exitCode !== 0) {
+                                       // Match Node.js error properties
+                                       execError = new Error(`Command failed: ${command}\n${stderr}`);
+                                       execError.code = exitCode;
+                                       execError.killed = false;
+                                       execError.signal = null;
+                                       execError.cmd = command;
+                                       
+                                       child.emit('error', execError);
+                                   }
      
                             window.removeEventListener('message', handler);
                         }
@@ -66,8 +74,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
                 // Internal Test within Iframe
                 console.log("Iframe Loaded. Running exec...");
-                exec("ls -la", (err, stdout) => {
-                    console.log("Iframe callback received stdout length:", stdout.length);
+                exec("ls", (err, stdout) => {
+                    console.log(err.message);
                 });
 
                 // Test an error case
