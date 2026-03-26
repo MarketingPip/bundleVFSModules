@@ -1,165 +1,245 @@
 /**
- * Browser-compatible child_process shim
- * This version doesn't use just-bash and throws errors for commands
- * Most CLI tools (like Convex CLI) don't actually need shell execution
+ * Browser-compatible child_process shim (pure JS)
+ * Delegates exec/spawn to the parent frame via postMessage.
+ * Matches Node.js child_process API surface.
  */
 
-import { EventEmitter } from "./events"
-import { Readable, Writable } from "./stream"
+import { EventEmitter } from './events';
+import { Readable, Writable } from './stream';
 
-/**
- * Initialize child_process - no-op in browser version
- */
-export function initChildProcess() {
-  // No-op - just-bash not used in browser version
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+let _reqCounter = 0;
+function makeRequestId() {
+  return `cp_${Date.now()}_${++_reqCounter}`;
 }
 
-/**
- * Execute a command in a shell
- */
-export function exec(command, optionsOrCallback, callback) {
-  let cb
+const DEFAULT_TIMEOUT = 0;
 
-  if (typeof optionsOrCallback === "function") {
-    cb = optionsOrCallback
-  } else {
-    cb = callback
-  }
+function postToParent(type, requestId, payload, timeoutMs, signal) {
+  return new Promise((resolve, reject) => {
+    let tid;
 
-  const child = new ChildProcess()
+    const cleanup = () => {
+      window.removeEventListener('message', handler);
+      if (tid !== undefined) clearTimeout(tid);
+    };
 
-  // Execute asynchronously - emit error
-  setTimeout(() => {
-    const error = new Error(
-      `exec is not supported in browser environment: ${command}`
-    )
-    child.emit("error", error)
-    if (cb) cb(error, "", "")
-  }, 0)
+    const handler = (e) => {
+      if (
+        e.data?.requestId !== requestId ||
+        e.data?.type !== 'PARENT_CHILD_EXEC_RESPONSE'
+      ) return;
+      cleanup();
+      resolve(e.data.payload);
+    };
 
-  return child
+    window.addEventListener('message', handler);
+
+    if (timeoutMs > 0) {
+      tid = setTimeout(() => {
+        cleanup();
+        reject(Object.assign(new Error('Process timed out'), { code: 'ETIMEDOUT' }));
+      }, timeoutMs);
+    }
+
+    signal.addEventListener('abort', () => {
+      cleanup();
+      reject(Object.assign(new Error('Process killed'), { code: 'SIGTERM' }));
+    }, { once: true });
+
+    parent.postMessage({ type, requestId, payload }, '*');
+  });
 }
 
-/**
- * Execute a command synchronously
- */
-export function execSync(command, options) {
-  throw new Error(
-    `execSync is not supported in browser environment: ${command}`
-  )
-}
+// ─── ChildProcess ─────────────────────────────────────────────────────────────
 
-/**
- * Spawn a new process
- */
-export function spawn(command, args, options) {
-  const child = new ChildProcess()
-
-  // Execute asynchronously - emit error
-  setTimeout(() => {
-    const error = new Error(
-      `spawn is not supported in browser environment: ${command}`
-    )
-    child.emit("error", error)
-  }, 0)
-
-  return child
-}
-
-/**
- * Spawn a new process synchronously
- */
-export function spawnSync(command, args, options) {
-  throw new Error(
-    `spawnSync is not supported in browser environment: ${command}`
-  )
-}
-
-/**
- * Execute a file
- */
-export function execFile(file, args, options, callback) {
-  let cb
-
-  if (typeof args === "function") {
-    cb = args
-  } else if (typeof options === "function") {
-    cb = options
-  } else {
-    cb = callback
-  }
-
-  const child = new ChildProcess()
-
-  setTimeout(() => {
-    const error = new Error(
-      `execFile is not supported in browser environment: ${file}`
-    )
-    child.emit("error", error)
-    if (cb) cb(error, "", "")
-  }, 0)
-
-  return child
-}
-
-/**
- * Fork is not supported in browser
- */
-export function fork() {
-  throw new Error("fork is not supported in browser environment")
-}
-
-/**
- * ChildProcess class
- */
 export class ChildProcess extends EventEmitter {
-  connected = false
-  killed = false
-  exitCode = null
-  signalCode = null
-  spawnargs = []
-  spawnfile = ""
-
   constructor() {
-    super()
-    this.pid = Math.floor(Math.random() * 10000) + 1000
-    this.stdin = new Writable()
-    this.stdout = new Readable()
-    this.stderr = new Readable()
+    super();
+    this.pid        = Math.floor(Math.random() * 32768) + 1024;
+    this.connected  = false;
+    this.killed     = false;
+    this.exitCode   = null;
+    this.signalCode = null;
+    this.spawnargs  = [];
+    this.spawnfile  = '';
+    this.stdin      = new Writable({ write(_c, _e, cb) { cb(); } });
+    this.stdout     = new Readable({ read() {} });
+    this.stderr     = new Readable({ read() {} });
+    this._ac        = new AbortController();
   }
 
-  kill(signal) {
-    this.killed = true
-    this.emit("exit", null, signal || "SIGTERM")
-    return true
+  _finalise(stdout, stderr, code, sig) {
+    if (stdout) this.stdout.push(stdout, 'utf8');
+    if (stderr) this.stderr.push(stderr, 'utf8');
+    this.stdout.push(null);
+    this.stderr.push(null);
+    this.exitCode   = code;
+    this.signalCode = sig;
+    this.emit('exit', code, sig);
+    this.emit('close', code, sig);
+  }
+
+  kill(signal = 'SIGTERM') {
+    if (this.killed) return false;
+    this.killed = true;
+    this._ac.abort();
+    this.emit('exit', null, signal);
+    this.emit('close', null, signal);
+    return true;
   }
 
   disconnect() {
-    this.connected = false
+    this.connected = false;
+    this.emit('disconnect');
   }
 
-  send(message, callback) {
-    // IPC not supported
-    if (callback) callback(new Error("IPC not supported"))
-    return false
+  send(_msg, callback) {
+    const err = new Error('IPC not supported in this environment.');
+    if (callback) callback(err);
+    else this.emit('error', err);
+    return false;
   }
 
-  ref() {
-    return this
-  }
-
-  unref() {
-    return this
-  }
+  ref()   { return this; }
+  unref() { return this; }
 }
+
+// ─── exec ─────────────────────────────────────────────────────────────────────
+
+export function exec(command, optionsOrCb, callback) {
+  const cb   = typeof optionsOrCb === 'function' ? optionsOrCb : callback;
+  const opts = (typeof optionsOrCb === 'object' && optionsOrCb !== null) ? optionsOrCb : {};
+
+  const child      = new ChildProcess();
+  child.spawnfile  = '/bin/sh';
+  child.spawnargs  = ['/bin/sh', '-c', command];
+
+  postToParent(
+    'PARENT_EXEC_REQUEST',
+    makeRequestId(),
+    { command, options: opts },
+    opts.timeout ?? DEFAULT_TIMEOUT,
+    child._ac.signal,
+  )
+    .then(({ stdout, stderr, exitCode, signal }) => {
+      let execError = null;
+
+      if ((exitCode !== null && exitCode !== 0) || signal) {
+        execError          = new Error(`Command failed: ${command}\n${stderr ?? ''}`);
+        execError.code     = exitCode ?? undefined;
+        execError.killed   = child.killed;
+        execError.signal   = signal ?? null;
+        execError.cmd      = command;
+        child.emit('error', execError);
+      }
+
+      child._finalise(stdout ?? '', stderr ?? '', exitCode ?? null, signal ?? null);
+      cb?.(execError, stdout ?? '', stderr ?? '');
+    })
+    .catch(err => {
+      const wrapped = err instanceof Error ? err : new Error(String(err));
+      child.emit('error', wrapped);
+      child._finalise('', wrapped.message, 1, null);
+      cb?.(wrapped, '', wrapped.message);
+    });
+
+  return child;
+}
+
+// ─── execFile ────────────────────────────────────────────────────────────────
+
+export function execFile(file, argsOrOptsOrCb, optsOrCb, callback) {
+  let args = [], opts = {}, cb;
+
+  if (Array.isArray(argsOrOptsOrCb)) {
+    args = argsOrOptsOrCb;
+    if (typeof optsOrCb === 'function') cb = optsOrCb;
+    else { opts = optsOrCb ?? {}; cb = callback; }
+  } else if (typeof argsOrOptsOrCb === 'function') {
+    cb = argsOrOptsOrCb;
+  } else if (argsOrOptsOrCb) {
+    opts = argsOrOptsOrCb;
+    cb = typeof optsOrCb === 'function' ? optsOrCb : callback;
+  }
+
+  return exec([file, ...args].join(' '), opts, cb);
+}
+
+// ─── spawn ────────────────────────────────────────────────────────────────────
+
+export function spawn(command, args = [], options = {}) {
+  const child      = new ChildProcess();
+  child.spawnfile  = command;
+  child.spawnargs  = [command, ...args];
+
+  Promise.resolve().then(() => child.emit('spawn'));
+
+  postToParent(
+    'PARENT_SPAWN_REQUEST',
+    makeRequestId(),
+    { command, args, options },
+    options.timeout ?? DEFAULT_TIMEOUT,
+    child._ac.signal,
+  )
+    .then(({ stdout, stderr, exitCode, signal }) => {
+      if ((exitCode !== null && exitCode !== 0) || signal) {
+        const err    = new Error(`spawn ${command} failed`);
+        err.code     = exitCode ?? undefined;
+        err.killed   = child.killed;
+        child.emit('error', err);
+      }
+      child._finalise(stdout ?? '', stderr ?? '', exitCode ?? null, signal ?? null);
+    })
+    .catch(err => {
+      const wrapped = err instanceof Error ? err : new Error(String(err));
+      child.emit('error', wrapped);
+      child._finalise('', wrapped.message, 1, null);
+    });
+
+  return child;
+}
+
+// ─── fork / *Sync ─────────────────────────────────────────────────────────────
+
+export function fork() {
+  throw Object.assign(
+    new Error('fork is not supported in the browser child_process shim'),
+    { code: 'ERR_NOT_IMPLEMENTED' },
+  );
+}
+
+export function execSync(command) {
+  throw Object.assign(
+    new Error(`execSync is not supported in this environment: ${command}`),
+    { code: 'ERR_NOT_IMPLEMENTED' },
+  );
+}
+
+export function spawnSync(command) {
+  throw Object.assign(
+    new Error(`spawnSync is not supported in this environment: ${command}`),
+    { code: 'ERR_NOT_IMPLEMENTED' },
+  );
+}
+
+export function execFileSync(file) {
+  throw Object.assign(
+    new Error(`execFileSync is not supported in this environment: ${file}`),
+    { code: 'ERR_NOT_IMPLEMENTED' },
+  );
+}
+
+// ─── Default export ───────────────────────────────────────────────────────────
 
 export default {
+  ChildProcess,
   exec,
-  execSync,
   execFile,
+  execFileSync,
+  execSync,
+  fork,
   spawn,
   spawnSync,
-  fork,
-  ChildProcess,
-  initChildProcess
-}
+};
