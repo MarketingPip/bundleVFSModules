@@ -24,7 +24,7 @@
  * _, _error magic variables, Recoverable multi-line accumulation.
  */
 
-import { Interface } from './readline-polyfill.js';
+import { Interface } from './readline';
 import vm from './vm';
 import { inspect } from './util';
 
