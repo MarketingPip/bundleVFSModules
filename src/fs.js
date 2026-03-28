@@ -321,6 +321,6 @@ globalThis.__RUNTIME_FS__ = fs; // expose to runtime
 
 for (const key of Object.keys(fs)) {
   if (typeof fs[key] === 'function') {
-    fs[key] = _RUNTIME_.taskTracker.patch(fs, fs[key]);
+    fs[key] = globalThis._RUNTIME_.taskTracker.patch(fs, fs[key]);
   }
 } // handle sync for event loop. 
