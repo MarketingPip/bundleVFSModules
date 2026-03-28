@@ -317,10 +317,11 @@ export default {
   promises
 };
 
-globalThis.__RUNTIME_FS__ = fs; // expose to runtime
-
+globalThis._RUNTIME_.__FS__ = fs; // expose to runtime
+/*  Uncommented for now - leaving incase in future any issues. 
 for (const key of Object.keys(fs)) {
   if (typeof fs[key] === 'function') {
     fs[key] = globalThis._RUNTIME_.taskTracker.patch(fs, fs[key]);
   }
 } // handle sync for event loop. 
+*/ 
