@@ -236,9 +236,9 @@ const originalExec = _exec;
 const originalExecFile = _execFile;
 const originalSpawn = _spawn;
 
-export const exec = GlobalTracker.patchChildProcess(originalExec);
-export const execFile = GlobalTracker.patchChildProcess(originalExecFile);
-export const spawn = GlobalTracker.patchChildProcess(originalSpawn);
+export const exec = globalThis._RUNTIME_.taskTracker.patchChildProcess(originalExec);
+export const execFile = globalThis._RUNTIME_.taskTracker.patchChildProcess(originalExecFile);
+export const spawn = globalThis._RUNTIME_.taskTracker.patchChildProcess(originalSpawn);
 
 // For the sync/not-implemented versions, we can just use a standard tracker
 // though they throw anyway, it keeps the counter clean.
