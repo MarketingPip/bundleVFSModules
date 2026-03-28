@@ -1,37 +1,26 @@
-// npm install events readable-stream
 
-/*!
- * repl-web — node:repl for browsers & bundlers
- * MIT License.
- * Node.js parity: node:repl @ Node 0.1.91+
- * Dependencies: readline shim, vm shim, util shim, fs shim (optional)
- * Limitations:
- *   - History is in-memory only (no .node_repl_history persistence)
- *   - .save/.load map to VFS via fs shim; silently fail if unavailable
- *   - No inspector/debugger protocol (kContextId is a stub)
- *   - breakEvalOnSigint is accepted but inert
- *   - domain option throws (removed in Node 24, mirrored here)
- *   - No SIGINT watchdog (breakEvalOnSigint is accepted but inert)
- *   - breakEvalOnSigint is accepted but inert
- *   - No ANSI completion preview (terminal preview: false always)
- *   - domain option throws (removed in Node 24, mirrored here)
- *   - toDynamicImport() hint on static-import-in-REPL error is best-effort
-
+ /*!
+  * repl-web — node:repl for browsers & bundlers
+  * Limitations:
+  *   - History is in-memory only (no .node_repl_history persistence)
+  *   - History is in-memory only (no .node_repl_history persistence)
+  *   - .save/.load map to VFS via fs shim; silently fail if unavailable
+  *   - .save/.load map to VFS via fs shim; silently fail if unavailable
+  *   - No inspector/debugger protocol (kContextId is a stub)
+  *   - breakEvalOnSigint accepted but inert (no SIGINT watchdog)
+  *   - breakEvalOnSigint is accepted but inert
+  *   - domain option throws (removed in Node 24)
+  *   - domain option throws (removed in Node 24, mirrored here)
+  *   - No SIGINT watchdog (breakEvalOnSigint is accepted but inert)
+ 
+  *   - breakEvalOnSigint is accepted but inert
+  *   - No ANSI completion preview (terminal preview: false always)
+  *   - domain option throws (removed in Node 24, mirrored here)
+  *   - toDynamicImport() hint on static-import-in-REPL error is best-effort
 */
- 
- 
-/**
-import { Interface } from 'readline';
- * @packageDocumentation
-import vm from 'vm';
- * Drop-in implementation of `node:repl` for browser / almostnode environments.
-import { inspect } from 'util';
- * REPLServer extends readline.Interface and evaluates input via the vm shim.
- * Supports: top-level await, custom eval, custom writer, context isolation,
- * defineCommand, .break/.clear/.exit/.help/.save/.load/.editor,
- * _, _error magic variables, Recoverable multi-line accumulation.
- */
 
+ 
+ 
 import { Interface } from './readline';
 import vm from './vm';
 import { inspect } from './util';
@@ -44,48 +33,36 @@ export const REPL_MODE_STRICT  = Symbol('repl.strict');
 
 const kBufferedCommand = Symbol('bufferedCommand');
 const kLoading         = Symbol('loading');
-const kContextId       = Symbol('contextId'); // inspector stub
+const kContextId       = Symbol('contextId'); // inspector stub — no-op
 
 // ---------------------------------------------------------------------------
-// NullStream — a minimal Readable/Writable stub for headless use
-// Used when no input/output streams are supplied.
+// NullStream
+// Satisfies readline Interface's input/output contract when no streams given.
 // ---------------------------------------------------------------------------
 
 class NullStream {
   constructor() {
-    this._listeners = Object.create(null);
-    this.isTTY      = false;
-    this.readable   = true;
-    this.writable   = true;
+    this._ev = Object.create(null);
+    this.isTTY    = false;
+    this.readable = true;
+    this.writable = true;
   }
-  write()      { return true; }
-  read()       { return null; }
-  resume()     { return this; }
-  pause()      { return this; }
-  pipe(dest)   { return dest; }
-  unpipe()     { return this; }
-  setEncoding(){ return this; }
-  setRawMode() { return this; }
-  on(ev, fn)   { (this._listeners[ev] ||= []).push(fn); return this; }
-  off(ev, fn)  {
-    if (this._listeners[ev])
-      this._listeners[ev] = this._listeners[ev].filter(f => f !== fn);
-    return this;
-  }
-  once(ev, fn) {
-    const wrap = (...a) => { this.off(ev, wrap); fn(...a); };
-    return this.on(ev, wrap);
-  }
-  emit(ev, ...a) {
-    for (const fn of (this._listeners[ev] || [])) fn(...a);
-    return true;
-  }
+  write()       { return true; }
+  read()        { return null; }
+  resume()      { return this; }
+  pause()       { return this; }
+  setEncoding() { return this; }
+  setRawMode()  { return this; }
+  pipe(d)       { return d; }
+  unpipe()      { return this; }
+  on(ev, fn)    { (this._ev[ev] ||= []).push(fn); return this; }
+  once(ev, fn)  { const w = (...a) => { this.off(ev, w); fn(...a); }; return this.on(ev, w); }
+  off(ev, fn)   { if (this._ev[ev]) this._ev[ev] = this._ev[ev].filter(f => f !== fn); return this; }
   removeListener(ev, fn) { return this.off(ev, fn); }
   removeAllListeners(ev) {
-    if (ev) this._listeners[ev] = [];
-    else    this._listeners = Object.create(null);
-    return this;
+    if (ev) delete this._ev[ev]; else this._ev = Object.create(null); return this;
   }
+  emit(ev, ...a) { for (const fn of (this._ev[ev] || [])) fn(...a); return true; }
 }
 
 // ---------------------------------------------------------------------------
@@ -93,7 +70,7 @@ class NullStream {
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap a SyntaxError to signal the REPL should prompt for more input.
+ * Wraps a SyntaxError to signal the REPL should buffer and prompt for more.
  * @example
  *   if (isRecoverable(e)) return cb(new repl.Recoverable(e));
  */
@@ -103,16 +80,11 @@ export class Recoverable extends SyntaxError {
 }
 
 // ---------------------------------------------------------------------------
-// isRecoverableError
+// Helpers
 // ---------------------------------------------------------------------------
 
 const RECOVERABLE_RE = /^(Unexpected end of input|Unexpected token)/;
 
-/**
- * @param {unknown} err
- * @param {string}  [code]
- * @returns {boolean}
- */
 function isRecoverableError(err, code) {
   if (!(err instanceof SyntaxError)) return false;
   if (RECOVERABLE_RE.test(err.message)) return true;
@@ -123,14 +95,6 @@ function isRecoverableError(err, code) {
   return false;
 }
 
-// ---------------------------------------------------------------------------
-// toDynamicImport — hint shown when static import is used inside the REPL
-// ---------------------------------------------------------------------------
-
-/**
- * @param {string} line
- * @returns {string}
- */
 function toDynamicImport(line) {
   if (!line) return '';
   const m = line.match(/^\s*import\s+(\S+)\s+from\s+(['"`][^'"`]+['"`])/);
@@ -140,21 +104,13 @@ function toDynamicImport(line) {
   return `await import(/* ${line.trim()} */);`;
 }
 
-// ---------------------------------------------------------------------------
-// processTopLevelAwait — wraps code in async IIFE when await is present
-// ---------------------------------------------------------------------------
-
 const HAS_AWAIT = /(?:^|[^.\w$])await[\s(]/;
 
-/**
- * @param {string} code
- * @returns {string|null} wrapped code, or null if no top-level await found
- */
 function processTopLevelAwait(code) {
   if (!HAS_AWAIT.test(code)) return null;
-  try { new Function(`return (async () => {\n${code}\n})()`); } // eslint-disable-line no-new-func
+  try { new Function(`return (async()=>{\n${code}\n})()`); } // eslint-disable-line no-new-func
   catch (e) { if (e instanceof SyntaxError) return null; }
-  return `(async () => {\n${code}\n})()`;
+  return `(async()=>{\n${code}\n})()`;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,27 +124,9 @@ writer.options = { ...inspect.defaultOptions, showProxy: true, colors: false };
 // REPLServer
 // ---------------------------------------------------------------------------
 
-/**
- * Read-Eval-Print-Loop server, extending readline.Interface.
- *
- * @extends {Interface}
- *
- * @example
- * import { start } from 'repl';
- * const r = start('> ');
- * r.context.myVar = 42;
- */
 export class REPLServer extends Interface {
-  /**
-   * @param {string|object} prompt
-   * @param {object}   [stream]
-   * @param {Function} [eval_]
-   * @param {boolean}  [useGlobal]
-   * @param {boolean}  [ignoreUndefined]
-   * @param {symbol}   [replMode]
-   */
   constructor(prompt, stream, eval_, useGlobal, ignoreUndefined, replMode) {
-    // ---- Normalise arguments ---------------------------------------------
+    // ── Normalise options ────────────────────────────────────────────────
     let options;
     if (prompt !== null && typeof prompt === 'object') {
       options         = { ...prompt };
@@ -202,48 +140,45 @@ export class REPLServer extends Interface {
       options = {};
     }
 
-    if (options.domain !== undefined) {
-      throw new TypeError(
-        'options.domain is no longer supported (removed in Node 24)');
-    }
+    if (options.domain !== undefined)
+      throw new TypeError('options.domain is no longer supported (removed in Node 24)');
 
-    // ---- Resolve input / output streams ----------------------------------
-    // Priority: explicit options.input/output → stream.stdin/stdout → NullStream
+    // ── Resolve streams ──────────────────────────────────────────────────
+    // Never pass null/undefined to Interface — fall back to NullStream.
     let input  = options.input;
     let output = options.output;
 
     if (!input || !output) {
       const s = stream
-        || (typeof process !== 'undefined' && process && process.stdin ? process : null);
-      input  = input  || (s && (s.stdin  || s.input))  || new NullStream();
-      output = output || (s && (s.stdout || s.output)) || new NullStream();
+        || (typeof process !== 'undefined' && process?.stdin ? process : null);
+      input  = input  || s?.stdin  || s?.input  || new NullStream();
+      output = output || s?.stdout || s?.output || new NullStream();
     }
 
-    const terminal = options.terminal !== undefined
+    const promptStr = typeof prompt === 'string' ? prompt : '> ';
+    const terminal  = options.terminal !== undefined
       ? !!options.terminal
       : !!(output.isTTY);
 
-    // ---- Super (readline.Interface) --------------------------------------
-    super({
-      input,
-      output,
-      terminal,
-      prompt:              typeof prompt === 'string' ? prompt : '> ',
-      historySize:         options.historySize ?? 30,
-      removeHistoryDuplicates: true,
-    });
+    // ── Super: only pass what our readline Interface actually accepts ─────
+    super({ input, output, terminal, prompt: promptStr });
 
-    // ---- Store resolved streams for our own _write helper ----------------
-    this._output = output;
+    // ── Store refs directly — don't rely on super's private #output ──────
+    this._input    = input;
+    this._output   = output;
+    this._terminal = terminal;
 
-    // ---- Public properties -----------------------------------------------
-    this.useColors       = !!(options.useColors ?? terminal);
-    this.useGlobal       = !!useGlobal;
-    this.ignoreUndefined = !!ignoreUndefined;
-    this.replMode        = replMode || REPL_MODE_SLOPPY;
-    this.writer          = options.writer || writer;
-    this.editorMode      = false;
-    this.commands        = Object.create(null);
+    // ── Public properties ────────────────────────────────────────────────
+    this._initialPrompt    = promptStr;
+    this.useColors         = !!(options.useColors ?? terminal);
+    this.useGlobal         = !!useGlobal;
+    this.ignoreUndefined   = !!ignoreUndefined;
+    this.replMode          = replMode || REPL_MODE_SLOPPY;
+    this.writer            = options.writer || writer;
+    this.editorMode        = false;
+    this.commands          = Object.create(null);
+    this.breakEvalOnSigint = !!options.breakEvalOnSigint; // accepted, inert
+    this[kContextId]       = undefined;
 
     this.underscoreAssigned    = false;
     this.underscoreErrAssigned = false;
@@ -251,39 +186,38 @@ export class REPLServer extends Interface {
     this.lastError             = undefined;
     this.lines                 = [];
     this.lines.level           = [];
-    this.breakEvalOnSigint     = !!options.breakEvalOnSigint; // accepted, inert
-    this[kContextId]           = undefined;
-    this._initialPrompt        = typeof prompt === 'string' ? prompt : '> ';
 
-    // ---- Writer colour ---------------------------------------------------
     if (this.writer === writer) writer.options.colors = this.useColors;
 
-    // ---- Internal state --------------------------------------------------
     this[kBufferedCommand] = '';
     this[kLoading]         = false;
 
-    // ---- Eval ------------------------------------------------------------
     this.eval = typeof eval_ === 'function'
       ? eval_
       : this._defaultEval.bind(this);
 
-    // ---- Context ---------------------------------------------------------
+    // ── Context ──────────────────────────────────────────────────────────
     this.resetContext();
 
-    // ---- Default commands ------------------------------------------------
+    // ── Commands ─────────────────────────────────────────────────────────
     this._defineDefaultCommands();
 
-    // ---- Wire readline events --------------------------------------------
+    // ── Wire readline 'line' event ────────────────────────────────────────
+    // Use Interface's public .on() so we go through its internal #ev table,
+    // NOT through NullStream / input directly.
     this.on('line',  (cmd) => this._onLine(cmd));
     this.on('close', ()    => this.emit('exit'));
 
-    // ---- Initial prompt --------------------------------------------------
-    this.displayPrompt();
+    // ── Defer initial prompt until after constructor returns ─────────────
+    // Critical: if we call displayPrompt() synchronously here, Interface.write()
+    // will re-emit 'line' with the prompt string before the constructor exits,
+    // causing _onLine → eval → crash.
+    Promise.resolve().then(() => {
+      if (!this.closed) this.displayPrompt();
+    });
   }
 
-  // -------------------------------------------------------------------------
-  // Context
-  // -------------------------------------------------------------------------
+  // ── Context ─────────────────────────────────────────────────────────────
 
   createContext() {
     let context;
@@ -292,7 +226,6 @@ export class REPLServer extends Interface {
       context = globalThis;
     } else {
       context = vm.createContext(Object.create(null));
-      // Seed with standard browser / Node globals
       const GLOBALS = [
         'Object','Function','Array','Number','Boolean','String','Symbol',
         'BigInt','Math','Date','RegExp','Error','EvalError','RangeError',
@@ -320,7 +253,6 @@ export class REPLServer extends Interface {
       context.global = context;
     }
 
-    // _ and _error magic
     Object.defineProperty(context, '_', {
       configurable: true,
       get: () => this.last,
@@ -356,42 +288,34 @@ export class REPLServer extends Interface {
     this.lines.level           = [];
   }
 
-  // -------------------------------------------------------------------------
-  // Default eval
-  // -------------------------------------------------------------------------
+  // ── Default eval ─────────────────────────────────────────────────────────
 
   async _defaultEval(code, context, file, cb) {
     const input = code;
-    let err     = null;
-    let result;
+    let err = null, result;
 
-    // Wrap bare object literals: { a: 1 } → ({ a: 1 })
+    // Wrap bare object literals so { a:1 } isn't parsed as a block
     let wrappedCmd = false;
-    if (/^\s*\{/.test(code) && /\}\s*\n$/.test(code)) {
+    if (/^\s*\{/.test(code) && /\}\s*\n?$/.test(code.trimEnd())) {
       const candidate = `(${code.trim()})`;
       try { new Function(candidate); code = candidate; wrappedCmd = true; } // eslint-disable-line no-new-func
       catch (_) { code = input; wrappedCmd = false; }
     }
 
-    // Strict mode prefix
-    if (this.replMode === REPL_MODE_STRICT && code.trim() !== '') {
+    if (this.replMode === REPL_MODE_STRICT && code.trim() !== '')
       code = `'use strict'; void 0;\n${code}`;
-    }
 
-    // Empty line
     if (code.trim() === '') return cb(null);
 
-    // Top-level await
     let awaitPromise = false;
     const wrapped = processTopLevelAwait(code);
     if (wrapped) { code = wrapped; wrappedCmd = true; awaitPromise = true; }
 
-    // Execute via vm shim
-    try {
-      const runFn = this.useGlobal
-        ? (c) => vm.runInThisContext(c, { filename: file })
-        : (c) => vm.runInContext(c, this.context, { filename: file });
+    const runFn = this.useGlobal
+      ? (c) => vm.runInThisContext(c, { filename: file })
+      : (c) => vm.runInContext(c, this.context, { filename: file });
 
+    try {
       const raw = runFn(code);
 
       if (awaitPromise) {
@@ -400,34 +324,27 @@ export class REPLServer extends Interface {
           if (result && typeof result.then === 'function') result = await result;
         } catch (e) { err = e; }
       } else {
-        // SyncPromise — .value is populated synchronously for pure-sync code
-        result = (raw && typeof raw === 'object' && 'value' in raw)
-          ? raw.value : raw;
-        if (raw && raw.syncError) err = raw.syncError;
+        // SyncPromise: .value is populated synchronously for pure-sync code
+        result = (raw && typeof raw === 'object' && 'value' in raw) ? raw.value : raw;
+        if (raw?.syncError) err = raw.syncError;
       }
     } catch (e) {
       err = e;
       // Retry without wrapper on SyntaxError
       if (wrappedCmd && e instanceof SyntaxError) {
-        code = input;
         try {
-          const r2 = this.useGlobal
-            ? vm.runInThisContext(code, { filename: file })
-            : vm.runInContext(code, this.context, { filename: file });
+          const r2 = runFn(input);
           err    = null;
           result = (r2 && typeof r2 === 'object' && 'value' in r2) ? r2.value : r2;
-          if (r2 && r2.syncError) err = r2.syncError;
+          if (r2?.syncError) err = r2.syncError;
         } catch (e2) { err = e2; }
       }
     }
 
     if (err) {
-      // Static import hint
-      if (err instanceof SyntaxError &&
-          err.message.includes('Cannot use import statement')) {
+      if (err instanceof SyntaxError && err.message.includes('Cannot use import statement')) {
         const lastLine = this.lines[this.lines.length - 1] || '';
-        err.message =
-          'Cannot use import statement inside the Node.js REPL, ' +
+        err.message = 'Cannot use import statement inside the Node.js REPL, ' +
           'alternatively use dynamic import: ' + toDynamicImport(lastLine);
       }
       return cb(isRecoverableError(err, input) ? new Recoverable(err) : err);
@@ -436,9 +353,7 @@ export class REPLServer extends Interface {
     cb(null, result);
   }
 
-  // -------------------------------------------------------------------------
-  // Line handler
-  // -------------------------------------------------------------------------
+  // ── Line handler ─────────────────────────────────────────────────────────
 
   _onLine(cmd) {
     cmd = cmd || '';
@@ -452,10 +367,7 @@ export class REPLServer extends Interface {
     const trimmed = cmd.trim();
 
     // Dot-commands
-    if (trimmed &&
-        trimmed[0] === '.' &&
-        trimmed[1] !== '.' &&
-        isNaN(parseFloat(trimmed))) {
+    if (trimmed && trimmed[0] === '.' && trimmed[1] !== '.' && isNaN(parseFloat(trimmed))) {
       const m = trimmed.match(/^\.([^\s]+)\s*(.*)?$/);
       if (m) {
         const [, keyword, rest = ''] = m;
@@ -477,33 +389,25 @@ export class REPLServer extends Interface {
   }
 
   _finish(e, ret, cmd = '') {
-    // npm hint
     if (e && !this[kBufferedCommand] &&
         typeof cmd === 'string' && cmd.trimStart().startsWith('npm ') &&
         !(e instanceof Recoverable)) {
-      this._write(
-        'npm should be run outside of the Node.js REPL, in your normal shell.\n' +
-        '(Press Ctrl+D to exit.)\n');
+      this._write('npm should be run outside of the Node.js REPL, in your normal shell.\n(Press Ctrl+D to exit.)\n');
       this.displayPrompt();
       return;
     }
 
-    // Recoverable — accumulate and re-prompt
     if (e instanceof Recoverable) {
       this[kBufferedCommand] += (cmd || '') + '\n';
       this.displayPrompt();
       return;
     }
 
-    if (e) {
-      this._handleError(e.err || e);
-      return;
-    }
+    if (e) { this._handleError(e.err || e); return; }
 
     this.clearBufferedCommand();
 
-    if (arguments.length >= 2 &&
-        (!this.ignoreUndefined || ret !== undefined)) {
+    if (arguments.length >= 2 && (!this.ignoreUndefined || ret !== undefined)) {
       if (!this.underscoreAssigned) this.last = ret;
       this._write(this.writer(ret) + '\n');
     }
@@ -511,17 +415,12 @@ export class REPLServer extends Interface {
     if (!this.closed) this.displayPrompt();
   }
 
-  // -------------------------------------------------------------------------
-  // Error display
-  // -------------------------------------------------------------------------
+  // ── Error display ────────────────────────────────────────────────────────
 
   _handleError(e) {
     if (!this.underscoreErrAssigned) this.lastError = e;
 
-    let errStack = (typeof e === 'object' && e !== null && e.stack)
-      ? this.writer(e)
-      : this.writer(e);
-
+    let errStack = this.writer(e);
     if (errStack[0] === '[' && errStack[errStack.length - 1] === ']')
       errStack = errStack.slice(1, -1);
 
@@ -541,9 +440,7 @@ export class REPLServer extends Interface {
     if (!this.closed) this.displayPrompt();
   }
 
-  // -------------------------------------------------------------------------
-  // Command dispatch
-  // -------------------------------------------------------------------------
+  // ── Command dispatch ─────────────────────────────────────────────────────
 
   _parseREPLKeyword(keyword, rest) {
     const cmd = this.commands[keyword];
@@ -566,10 +463,7 @@ export class REPLServer extends Interface {
       },
     });
 
-    this.defineCommand('exit', {
-      help: 'Exit the REPL',
-      action() { this.close(); },
-    });
+    this.defineCommand('exit',  { help: 'Exit the REPL', action() { this.close(); } });
 
     this.defineCommand('help', {
       help: 'Print this help message',
@@ -590,10 +484,8 @@ export class REPLServer extends Interface {
       help: 'Save all evaluated commands in this REPL session to a file',
       action(file) {
         if (!file) { this._write('Missing filename\n'); this.displayPrompt(); return; }
-        try {
-          _tryRequireFs().writeFileSync(file, this.lines.join('\n'));
-          this._write(`Session saved to: ${file}\n`);
-        } catch (_) { this._write(`Failed to save: ${file}\n`); }
+        try { _tryRequireFs().writeFileSync(file, this.lines.join('\n')); this._write(`Session saved to: ${file}\n`); }
+        catch (_) { this._write(`Failed to save: ${file}\n`); }
         this.displayPrompt();
       },
     });
@@ -624,12 +516,11 @@ export class REPLServer extends Interface {
     });
   }
 
-  // -------------------------------------------------------------------------
-  // Editor mode
-  // -------------------------------------------------------------------------
+  // ── Editor mode ──────────────────────────────────────────────────────────
 
   _turnOnEditorMode() {
     this.editorMode = true;
+    // Call Interface's setPrompt directly — don't overwrite _initialPrompt
     Interface.prototype.setPrompt.call(this, '');
   }
 
@@ -638,12 +529,11 @@ export class REPLServer extends Interface {
     this.setPrompt(this._initialPrompt);
   }
 
-  // -------------------------------------------------------------------------
-  // Public API
-  // -------------------------------------------------------------------------
+  // ── Public API ───────────────────────────────────────────────────────────
 
   displayPrompt(preserveCursor) {
     const p = this[kBufferedCommand].length ? '|' : this._initialPrompt;
+    // Use Interface.prototype.setPrompt directly so we don't stomp _initialPrompt
     Interface.prototype.setPrompt.call(this, p);
     this.prompt(preserveCursor);
   }
@@ -653,14 +543,11 @@ export class REPLServer extends Interface {
     Interface.prototype.setPrompt.call(this, prompt);
   }
 
-  clearBufferedCommand() {
-    this[kBufferedCommand] = '';
-  }
+  clearBufferedCommand() { this[kBufferedCommand] = ''; }
 
   defineCommand(keyword, cmd) {
     if (typeof cmd === 'function') cmd = { action: cmd };
-    if (typeof cmd.action !== 'function')
-      throw new TypeError('cmd.action must be a function');
+    if (typeof cmd.action !== 'function') throw new TypeError('cmd.action must be a function');
     this.commands[keyword] = cmd;
   }
 
@@ -668,24 +555,17 @@ export class REPLServer extends Interface {
     const callback = (typeof historyConfig === 'object' && historyConfig !== null)
       ? (historyConfig.onHistoryFileLoaded || cb)
       : cb;
-    if (typeof callback === 'function')
-      Promise.resolve().then(() => callback(null, this));
+    if (typeof callback === 'function') Promise.resolve().then(() => callback(null, this));
   }
 
-  // -------------------------------------------------------------------------
-  // Internal helpers
-  // -------------------------------------------------------------------------
+  // ── Internal helpers ─────────────────────────────────────────────────────
 
   /**
-   * Write to output, bypassing readline's prompt redraw.
-   * Uses the stored _output reference so it works even if readline
-   * hasn't wired everything yet.
-   * @param {string} str
+   * Write directly to the output stream, bypassing Interface.write()
+   * which would re-emit a 'line' event and cause re-entrant eval loops.
    */
   _write(str) {
-    // Prefer the output stream readline was constructed with
-    const out = this._output || (this.output);
-    if (out && typeof out.write === 'function') out.write(str);
+    this._output?.write?.(str);
   }
 
   _memoryUpdate(cmd) {
@@ -696,16 +576,13 @@ export class REPLServer extends Interface {
       this.lines.push('');
     }
     if (!cmd) { this.lines.level = []; return; }
-
     let depth = 0;
     for (const ch of cmd) {
       if (ch === '{' || ch === '(') depth++;
       else if (ch === '}' || ch === ')') depth--;
     }
-    if (depth > 0)
-      this.lines.level.push({ line: this.lines.length - 1, depth });
-    else if (depth < 0 && this.lines.level.length)
-      this.lines.level.pop();
+    if (depth > 0)      this.lines.level.push({ line: this.lines.length - 1, depth });
+    else if (depth < 0 && this.lines.level.length) this.lines.level.pop();
   }
 }
 
@@ -724,13 +601,13 @@ function _tryRequireFs() {
 
 /**
  * Creates and starts a REPLServer.
- *
  * @param {string|object} [options='> ']
  * @returns {REPLServer}
  *
  * @example
  * import { start } from 'repl';
  * const r = start({ prompt: '> ', useColors: true });
+ * r.context.hello = 'world';
  */
 export function start(options = '> ') {
   return new REPLServer(options);
@@ -749,51 +626,46 @@ export const builtinModules = [
   'worker_threads','zlib',
 ];
 
-/**
- * @param {string} src
- * @returns {boolean}
- */
 export function isValidSyntax(src) {
   try { new Function(src); return true; } // eslint-disable-line no-new-func
   catch (_) { return false; }
 }
 
 export default {
-  start,
-  writer,
-  REPLServer,
-  Recoverable,
-  REPL_MODE_SLOPPY,
-  REPL_MODE_STRICT,
-  builtinModules,
-  isValidSyntax,
+  start, writer, REPLServer, Recoverable,
+  REPL_MODE_SLOPPY, REPL_MODE_STRICT,
+  builtinModules, isValidSyntax,
 };
 
 // ---------------------------------------------------------------------------
 // --- Usage ---
 // ---------------------------------------------------------------------------
 //
-// // 1. No streams needed — works headless (NullStream) or with xterm.js
+// // 1. Basic — no streams needed, NullStream used automatically
 // import { start } from 'repl';
-// const r = start({ prompt: '> ', input: xtermInput, output: xtermOutput });
+// const r = start({ prompt: '> ' });
 // r.context.hello = 'world';
 //
-// // 2. Zero-arg start — uses NullStream, useful for programmatic driving
-// const r = start();
-// r.eval('1 + 1', r.context, 'test', (err, val) => console.log(val)); // 2
+// // 2. With xterm.js or any duplex stream
+// const r = start({ prompt: '> ', input: xtermInput, output: xtermOutput });
 //
 // // 3. Custom dot-command
 // r.defineCommand('sayhi', {
 //   help: 'Say hello',
 //   action() {
-//     this._write('Hi there 👋\n');
+//     this._write('Hi there 👋\n');  // use _write, not console.log, for REPL output
 //     this.displayPrompt();
 //   },
 // });
 //
-// // 4. Top-level await (automatic)
-// // User types: const res = await fetch('https://api.example.com/data')
-// // Works — detected and wrapped in async IIFE transparently.
+// // 4. Top-level await — works transparently
+// // User types: const data = await fetch('/api').then(r => r.json())
 //
-// // 5. reset event — re-seed context after .clear
-// r.on('reset', (ctx) => { ctx.myLib = myLib; });
+// // 5. Multi-line accumulation — automatic via Recoverable
+// // User types:
+// //   > function add(a, b) {
+// //   |   return a + b
+// //   | }
+// //
+// // 6. reset event — re-seed context after .clear
+// r.on('reset', ctx => { ctx.myLib = myLib; });
