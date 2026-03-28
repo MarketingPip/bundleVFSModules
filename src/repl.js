@@ -12,9 +12,9 @@
  *   - domain option throws (removed in Node 24)
  */
 
-import { Interface } from 'readline';
-import vm from 'vm';
-import { inspect } from 'util';
+import { Interface } from './readline';
+import vm from './vm';
+import { inspect } from './util';
 
 // ---------------------------------------------------------------------------
 // Constants
