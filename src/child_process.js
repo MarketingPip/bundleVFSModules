@@ -108,7 +108,7 @@ export class ChildProcess extends EventEmitter {
 
 // ─── exec ─────────────────────────────────────────────────────────────────────
 
-export function exec(command, optionsOrCb, callback) {
+function _exec(command, optionsOrCb, callback) {
   const cb   = typeof optionsOrCb === 'function' ? optionsOrCb : callback;
   const opts = (typeof optionsOrCb === 'object' && optionsOrCb !== null) ? optionsOrCb : {};
 
@@ -150,7 +150,7 @@ export function exec(command, optionsOrCb, callback) {
 
 // ─── execFile ────────────────────────────────────────────────────────────────
 
-export function execFile(file, argsOrOptsOrCb, optsOrCb, callback) {
+function _execFile(file, argsOrOptsOrCb, optsOrCb, callback) {
   let args = [], opts = {}, cb;
 
   if (Array.isArray(argsOrOptsOrCb)) {
@@ -169,7 +169,7 @@ export function execFile(file, argsOrOptsOrCb, optsOrCb, callback) {
 
 // ─── spawn ────────────────────────────────────────────────────────────────────
 
-export function spawn(command, args = [], options = {}) {
+function _spawn(command, args = [], options = {}) {
   const child      = new ChildProcess();
   child.spawnfile  = command;
   child.spawnargs  = [command, ...args];
@@ -230,6 +230,28 @@ export function execFileSync(file) {
     { code: 'ERR_NOT_IMPLEMENTED' },
   );
 }
+
+
+const originalExec = _exec;
+const originalExecFile = _execFile;
+const originalSpawn = _spawn;
+
+export const exec = GlobalTracker.patchChildProcess(originalExec);
+export const execFile = GlobalTracker.patchChildProcess(originalExecFile);
+export const spawn = GlobalTracker.patchChildProcess(originalSpawn);
+
+// For the sync/not-implemented versions, we can just use a standard tracker
+// though they throw anyway, it keeps the counter clean.
+const standardTrack = (fn) => (...args) => {
+  globalThis._RUNTIME_.taskTracker.start();
+  try { return fn(...args); }
+  finally { GlobalTracker.stop(); }
+};
+
+
+export const execSync = standardTrack(execSync_orig);
+export const spawnSync = standardTrack(spawnSync_orig);
+export const execFileSync = standardTrack(execFileSync_orig);
 
 // ─── Default export ───────────────────────────────────────────────────────────
 
