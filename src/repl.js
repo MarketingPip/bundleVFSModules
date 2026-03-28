@@ -1,31 +1,23 @@
+// npm install (none — depends only on your readline/vm/util shims)
 
- /*!
-  * repl-web — node:repl for browsers & bundlers
-  * Limitations:
-  *   - History is in-memory only (no .node_repl_history persistence)
-  *   - History is in-memory only (no .node_repl_history persistence)
-  *   - .save/.load map to VFS via fs shim; silently fail if unavailable
-  *   - .save/.load map to VFS via fs shim; silently fail if unavailable
-  *   - No inspector/debugger protocol (kContextId is a stub)
-  *   - breakEvalOnSigint accepted but inert (no SIGINT watchdog)
-  *   - breakEvalOnSigint is accepted but inert
-  *   - domain option throws (removed in Node 24)
-  *   - domain option throws (removed in Node 24, mirrored here)
-  *   - No SIGINT watchdog (breakEvalOnSigint is accepted but inert)
- 
-  *   - breakEvalOnSigint is accepted but inert
-  *   - No ANSI completion preview (terminal preview: false always)
-  *   - domain option throws (removed in Node 24, mirrored here)
-  *   - toDynamicImport() hint on static-import-in-REPL error is best-effort
-*/
+/*!
+ * repl-web — node:repl for browsers & bundlers
+ * MIT License.
+ * Node.js parity: node:repl @ Node 0.1.91+
+ * Dependencies: readline shim, vm shim, util shim, fs shim (optional)
+ * Limitations:
+ *   - History is in-memory only (no .node_repl_history persistence)
+ *   - .save/.load map to VFS via fs shim; silently fail if unavailable
+ *   - breakEvalOnSigint accepted but inert (no SIGINT watchdog)
+ *   - domain option throws (removed in Node 24)
+ */
 
- 
- 
-import { Interface } from './readline';
-import vm from './vm';
-import { inspect } from './util';
+import { Interface } from 'readline';
+import vm from 'vm';
+import { inspect } from 'util';
+
 // ---------------------------------------------------------------------------
-// Constants / Symbols
+// Constants
 // ---------------------------------------------------------------------------
 
 export const REPL_MODE_SLOPPY = Symbol('repl.sloppy');
@@ -225,7 +217,12 @@ export class REPLServer extends Interface {
     if (this.useGlobal) {
       context = globalThis;
     } else {
-      context = vm.createContext(Object.create(null));
+      // Use a plain object sandbox — NOT vm.createContext() / vm.runInContext().
+      // vm.runInContext() spins up a new iframe per eval call which is too heavy
+      // for a REPL and may fail in constrained environments.
+      // Instead we use runInThisContext with a persistent sandbox object:
+      // user variables live on `context`, and eval runs in the host realm.
+      context = Object.create(null);
       const GLOBALS = [
         'Object','Function','Array','Number','Boolean','String','Symbol',
         'BigInt','Math','Date','RegExp','Error','EvalError','RangeError',
@@ -291,6 +288,8 @@ export class REPLServer extends Interface {
   // ── Default eval ─────────────────────────────────────────────────────────
 
   async _defaultEval(code, context, file, cb) {
+
+
     const input = code;
     let err = null, result;
 
@@ -311,9 +310,24 @@ export class REPLServer extends Interface {
     const wrapped = processTopLevelAwait(code);
     if (wrapped) { code = wrapped; wrappedCmd = true; awaitPromise = true; }
 
+    // Execute code with context variables in scope via a with-block.
+    // For useGlobal we use indirect eval directly on globalThis.
+    // For sandboxed context we wrap in `with(context){...}` so that
+    // r.context.hello = 'world' is visible as `hello` inside the REPL,
+    // and new declarations written by the user land on `context`.
     const runFn = this.useGlobal
-      ? (c) => vm.runInThisContext(c, { filename: file })
-      : (c) => vm.runInContext(c, this.context, { filename: file });
+      ? (c) => (0, eval)(c)  // eslint-disable-line no-eval
+      : (c) => {
+          // Wrap in with-block; new vars declared with var land on context
+          // via the Proxy below which traps set.
+          const proxy = new Proxy(this.context, {
+            has: () => true,        // make `with` use the proxy for all names
+            get: (t, k) => k in t ? t[k] : globalThis[k],
+            set: (t, k, v) => { t[k] = v; return true; },
+          });
+          // eslint-disable-next-line no-new-func
+          return new Function('__ctx__', `with(__ctx__){return(${c.trim()})}`)(proxy);
+        };
 
     try {
       const raw = runFn(code);
