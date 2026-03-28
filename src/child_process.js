@@ -248,11 +248,11 @@ const standardTrack = (fn) => (...args) => {
   finally { GlobalTracker.stop(); }
 };
 
-
+/*
 export const execSync = standardTrack(execSync_orig);
 export const spawnSync = standardTrack(spawnSync_orig);
 export const execFileSync = standardTrack(execFileSync_orig);
-
+*/ 
 // ─── Default export ───────────────────────────────────────────────────────────
 
 export default {
