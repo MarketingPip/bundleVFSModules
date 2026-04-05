@@ -1,3 +1,22 @@
+import globals from "https://esm.sh/globals";
+
+/**
+ * Get globals that exist only in browser or only in Node
+ * @returns {{browserOnly: string[], nodeOnly: string[]}}
+ */
+export function getEnvironmentOnlyGlobals() {
+  const browserKeys = new Set(Object.keys(globals.browser));
+  const nodeKeys = new Set(Object.keys(globals.node));
+
+  const browserOnly = [...browserKeys].filter((key) => !nodeKeys.has(key));
+  const nodeOnly = [...nodeKeys].filter((key) => !browserKeys.has(key));
+
+  return { browserOnly, nodeOnly };
+}
+
+const { browserOnly, nodeOnly } = getEnvironmentOnlyGlobals();
+
+
 /* import globals from "https://esm.sh/globals";
 
  
