@@ -279,7 +279,7 @@ const BUNDLED_MODULES = {
   punycode: "punycode.js",
   timers: "timers.js",
   timers_promises: "timers/promises.js",
-
+  console: "console.js",
  // RUNTIME_CLI_TABLE: "specials/cli_table.js",
   RUNTIME_BUNDLER: "specials/bundler.js",
   worker_threads: "worker_threads.js",
