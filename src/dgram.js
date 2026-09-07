@@ -367,7 +367,13 @@ function _createSocketHandle(address, port, addressType, fd, flags) {
   return handle;
 }
 
-module.exports = {
+export {
+  kStateSymbol,
+  _createSocketHandle,
+  newHandle,
+};
+
+export default {
   kStateSymbol,
   _createSocketHandle,
   newHandle,
