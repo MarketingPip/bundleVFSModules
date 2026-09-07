@@ -6,8 +6,13 @@
 
 const {
   FunctionPrototypeBind,
+  Symbol: PrimordialSymbol,
+} = globalThis.primordials || {
+  FunctionPrototypeBind: Function.prototype.bind,
   Symbol,
-} = primordials || { FunctionPrototypeBind: Function.prototype.bind, Symbol };
+};
+
+
 
 const { codes: {
   ERR_SOCKET_BAD_TYPE,
@@ -278,7 +283,7 @@ const { UDP } = (() => {
 // Node.js internal/dgram logic (preserved structurally)
 // ---------------------------------------------------------------------------
 
-const kStateSymbol = Symbol('state symbol');
+const kStateSymbol = PrimordialSymbol('state symbol');
 let dns;  // Lazy load for startup performance.
 
 function lookup4(lookup, address, callback) {
