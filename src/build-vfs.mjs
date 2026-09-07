@@ -225,64 +225,105 @@ async function bundleToString(entry) {
 // Modules that should be bundled
 const BUNDLED_MODULES = {
   buffer: "buffer.js",
+  // Cluster
+  cluster: "cluster.js",
+  // FS
   fs: "fs.js",
   fs_promises: "fs/promises.js",
+  // Path
   path: "path.js",
   path_posix: "path/posix.js",
   path_win32: "path/win32.js",
+  // Assert
   assert: "assert.js",
   assert_strict: "assert/strict.js",
+  // OS
   os: "os.js",
+  // Util
   util: "util.js",
   util_types: "util/types.js",
+  // Sys
   sys: "sys.js",
+  // Async Hooks
   async_hooks: "async_hooks.js",
   url: "url.js",
+  // Readline
   readline: "readline.js",
   readline_promises: "readline/promises.js",
+  // HTTP
   http: "http.js",
   https: "https.js",
   http2: "http2.js",
+  // Stream
   stream: "stream.js",
   stream_promises: "stream/promises.js",
   stream_web: "stream/web.js",
   stream_consumers: "stream/consumers.js",
+  // Crypto
   crypto: "crypto.js",
+  // Net
   net: "net.js",
+  // Events
   events: "events.js",
+  // Inspector
   inspector: "inspector.js",
+  // v8
   v8: "v8.js",
+  // TTY
   tty: "tty.js",
+  // TLS
   tls: "tls.js",
+  // Dgram
   dgram: "dgram.js",
+  // Diagnostics
   diagnostics_channel: "diagnostics_channel.js",
-  inspector: "inspector.js",
+  // REPL
   repl: "repl.js",
+  // Module
   module: "module.js",
+  // WS
   ws: "ws.js",
+  // DNS
   dns: "dns.js",
   dns_promises: "dns/promises.js",
+  // Constants
   constants: "constants.js",
+  // Query String
   querystring: "querystring.js",
+  // VM
   vm: "vm.js",
+  // String Decoder
   string_decoder: "string_decoder.js",
   //serialize_js: "serialize_js.js",
+  // Test
   test: "test.js",
   test_reporters: "test/reporters.js",
+  // Perf Hooks
   perf_hooks: "perf_hooks.js",
+  // Zlib
   zlib: "zlib.js",
+  // Sea
   sea: "sea.js",
+  // Trace Events
   trace: "trace_events.js",
+  // Wasi
   wasi: "wasi.js",
-  
+   // Process
+  process: "process.js",
+  // Child Process
   child_process: "child_process.js",
+  // Puny Code
   punycode: "punycode.js",
+  // Timers
   timers: "timers.js",
   timers_promises: "timers/promises.js",
-  console: "console.js",
+  // Console
+  console: "console.js", 
+  // Worker Threads
+  worker_threads: "worker_threads.js",
+  // Specials
  // RUNTIME_CLI_TABLE: "specials/cli_table.js",
   RUNTIME_BUNDLER: "specials/bundler.js",
-  worker_threads: "worker_threads.js",
   RUNTIME_NODE_GLOBALS: "globals.js",
   
   
