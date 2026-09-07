@@ -5,6 +5,23 @@ import makeShim from './internals/stdout.js';
 const _stdout = makeShim('stdout');
 const _stderr = makeShim('stderr');
 
+
+/** Resolved global scope — avoids typeof window checks. */
+const scope =
+  (typeof global !== 'undefined' && global) ||
+  (typeof self   !== 'undefined' && self)   ||
+  globalThis;
+
+// ---------------------------------------------------------------------------
+// !! Capture native functions at module evaluation time !!
+//
+// This MUST happen before any export is defined. Bundlers (webpack, esbuild,
+// Rollup) can replace globalThis.setTimeout with our own export after the
+// module loads. If we looked up scope.setTimeout at call time we'd recurse
+// infinitely. Capturing here freezes the native reference permanently.
+// ---------------------------------------------------------------------------
+ 
+
 export const process = (function () {
   let _intervalId = null;
   const listeners = Object.create(null);
@@ -437,9 +454,9 @@ export const release                     = process.release;
 export const pid                         = process.pid;
 export const ppid                        = process.ppid;
 export const title                       = process.title;
-export const stdin                       = process.stdin;
-export const stdout                      = process.stdout;
-export const stderr                      = process.stderr;
+export const stdin                       = scope.process.stdin.bind(scope);
+export const stdout                      = scope.process.stdout.bind(scope);
+export const stderr                      = scope.process.stderr.bind(scope);
 
 // Methods
 export const cwd                = (...a) => process.cwd(...a);
