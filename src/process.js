@@ -387,8 +387,8 @@ export const process = (function () {
   processFinal.traceDeprecation     = false;
   processFinal.traceProcessWarnings = false;
 
-  Object.defineProperty(window,     "process", { value: processFinal, writable: false, configurable: false, enumerable: true });
-  Object.defineProperty(globalThis, "process", { value: processFinal, writable: false, configurable: false, enumerable: true });
+  // Object.defineProperty(window,     "process", { value: processFinal, writable: false, configurable: false, enumerable: true });
+ // Object.defineProperty(globalThis, "process", { value: processFinal, writable: false, configurable: false, enumerable: true });
 
   return processFinal;
 })();
