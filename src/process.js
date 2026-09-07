@@ -445,6 +445,5 @@ export const setegid            = (...a) => process.setegid(...a);
 export const getgroups          = (...a) => process.getgroups(...a);
 export const setgroups          = (...a) => process.setgroups(...a);
 
-export {stdin, stderr, stdout};
-
+ 
 export default process;
