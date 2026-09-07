@@ -387,6 +387,33 @@ export const process = (function () {
   processFinal.traceDeprecation     = false;
   processFinal.traceProcessWarnings = false;
 
+ if (typeof globalThis !== "undefined") {
+   try {
+     Object.defineProperty(globalThis, "process", {
+       value: processFinal,
+       writable: true,
+       configurable: true,
+       enumerable: true,
+     });
+   } catch {
+     // Host already owns a non-configurable process property.
+   }
+ }
+ 
+ if (typeof window !== "undefined" && window !== globalThis) {
+   try {
+     Object.defineProperty(window, "process", {
+       value: processFinal,
+       writable: true,
+       configurable: true,
+       enumerable: true,
+     });
+   } catch {
+     // Host already owns a non-configurable process property.
+   }
+ }
+
+ 
   // Object.defineProperty(window,     "process", { value: processFinal, writable: false, configurable: false, enumerable: true });
  // Object.defineProperty(globalThis, "process", { value: processFinal, writable: false, configurable: false, enumerable: true });
 
