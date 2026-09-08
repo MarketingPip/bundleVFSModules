@@ -454,9 +454,9 @@ export const release                     = process.release;
 export const pid                         = process.pid;
 export const ppid                        = process.ppid;
 export const title                       = process.title;
-export const stdin                       = scope.process.stdin.bind(scope);
-export const stdout                      = scope.process.stdout.bind(scope);
-export const stderr                      = scope.process.stderr.bind(scope);
+export const stdin                       = scope.process.stdin;
+export const stdout                      = scope.process.stdout;
+export const stderr                      = scope.process.stderr;
 
 // Methods
 export const cwd                = (...a) => process.cwd(...a);
