@@ -278,7 +278,7 @@ class Interface {
    * @param {Function} [cb]
    * @returns {this | Promise<string>}
    */
-  question(query, optionsOrCb, cb) {
+question(query, optionsOrCb, cb) {
     if (this.#closed) {
       return typeof cb === 'function' || typeof optionsOrCb === 'function'
         ? void 0
@@ -296,7 +296,14 @@ class Interface {
     if (this.#output?.write) this.#output.write(query);
     const signal = opts.signal;
 
+    // --- Callback Version ---
     if (typeof callback === 'function') {
+      // If data was already pushed and queued, consume it immediately!
+      if (this.#lineQueue.length > 0) {
+        callback(this.#lineQueue.shift());
+        return this;
+      }
+
       let called = false;
       const onLine = answer => {
         if (called) return; called = true;
@@ -311,7 +318,14 @@ class Interface {
       return this;
     }
 
+    // --- Promise Version ---
     return new Promise((resolve, reject) => {
+      // If data was already pushed and queued, resolve immediately!
+      if (this.#lineQueue.length > 0) {
+        resolve(this.#lineQueue.shift());
+        return;
+      }
+
       let settled = false;
       const onLine = answer => {
         if (settled) return; settled = true;
