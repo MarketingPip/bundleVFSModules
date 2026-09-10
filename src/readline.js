@@ -69,6 +69,7 @@ class Interface {
     this.#boundOnInputClose   = ()    => { if (!this.#closed) this.close(); };
 
     input?.on('data',  this.#boundHandleChunk);
+    input?.on('end',    this.#boundOnInputClose);
     input?.on('close', this.#boundOnInputClose);
   }
 
@@ -183,12 +184,13 @@ class Interface {
     this.#closed = true;
     // Remove only the handler this interface attached — leave other listeners alone.
     this.#input?.removeListener?.('data', this.#boundHandleChunk);
+    this.#input?.removeListener?.('end', this.#boundOnInputClose);   // <-- Add this
     this.#input?.removeListener?.('close', this.#boundOnInputClose);
+    
     if (this.#lineBuffer.length) this.#flushLine();
     this.#_emit('close');
     return this;
   }
-
   write(data /*, key */) {
     if (this.#closed) return this;
     if (typeof data === 'string' && data.length)
