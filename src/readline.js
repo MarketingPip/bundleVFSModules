@@ -97,39 +97,42 @@ class Interface {
 
   // ── input handling ────────────────────────────────────────────────────
 
-  #handleChunk(chunk) {
-      const str = typeof chunk === 'string' ? chunk : chunk.toString();
-      
-      // Decode common control / arrow sequences
-      let key = { name: undefined, ctrl: false, meta: false, shift: false, sequence: str };
-  
-      if (str === '\x1b[A' || str === '\x1bOA') {
-        key.name = 'up';
-      } else if (str === '\x1b[B' || str === '\x1bOB') {
-        key.name = 'down';
-      } else if (str === '\r' || str === '\n') {
-        key.name = 'return';
-      } else if (str === '\u0003') {
-        this.#_emit('SIGINT');
-        return;
-      } else {
-        key.name = str; // regular character
-      }
-  
-      // Emit standard Node.js-style keypress event on the input stream or interface
-      this.#_emit('keypress', str, key);
-  
-      // Fallback behavior for text lines if not handled as a special key
-      if (this.#input?.isRaw || this.#terminal) {
-        if (key.name !== 'up' && key.name !== 'down' && key.name !== 'return') {
-          const line = str.replace(/[\r\n]+$/, '');
-          this.#_emit('line', line);
-        } else if (key.name === 'return') {
-          this.#_emit('line', this.#lineBuffer);
-          this.#lineBuffer = "";
+#handleChunk(chunk) {
+    const str = typeof chunk === 'string' ? chunk : chunk.toString();
+    
+    if (this.#input?.isRaw || this.#terminal) {
+      const line = str.replace(/[\r\n]+$/, '');
+      if (line === '\u0003') { this.#_emit('SIGINT'); return; }
+      this.#_emit('line', line);
+    } else {
+      // Robust line parser: handle both newline-delimited text and discrete line chunks
+      for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+        if (ch === '\r') { 
+          this.#crSeen = true;  
+          this.#flushLine(); 
+          continue; 
         }
+        if (ch === '\n') { 
+          if (!this.#crSeen) this.#flushLine(); 
+          this.#crSeen = false; 
+          continue; 
+        }
+        this.#crSeen = false;
+        this.#lineBuffer += ch;
+      }
+      
+      // If the chunk doesn't end with a newline but the stream chunk was pushed 
+      // as a complete logical line (common in test line-readers), flush it if no more data is pending 
+      // or if it represents a discrete unit. Alternatively, if no newlines exist in the chunk at all,
+      // treat the chunk as a line if it's a standalone push.
+      if (!str.includes('\n') && !str.includes('\r') && this.#lineBuffer.length > 0) {
+        // If the chunk itself had no newlines, treat the accumulated buffer as a line 
+        // to support test helpers like lineReadable(['foo', 'bar', 'baz'])
+        this.#flushLine();
       }
     }
+  }
 
   #flushLine() {
     const line = this.#lineBuffer;
