@@ -97,21 +97,38 @@ class Interface {
   // ── input handling ────────────────────────────────────────────────────
 
   #handleChunk(chunk) {
-    const str = typeof chunk === 'string' ? chunk : chunk.toString();
-    if (this.#input?.isRaw || this.#terminal) {
-      const line = str.replace(/[\r\n]+$/, '');
-      if (line === '\u0003') { this.#_emit('SIGINT'); return; }
-      this.#_emit('line', line);
-    } else {
-      for (let i = 0; i < str.length; i++) {
-        const ch = str[i];
-        if (ch === '\r') { this.#crSeen = true;  this.#flushLine(); continue; }
-        if (ch === '\n') { if (!this.#crSeen) this.#flushLine(); this.#crSeen = false; continue; }
-        this.#crSeen = false;
-        this.#lineBuffer += ch;
+      const str = typeof chunk === 'string' ? chunk : chunk.toString();
+      
+      // Decode common control / arrow sequences
+      let key = { name: undefined, ctrl: false, meta: false, shift: false, sequence: str };
+  
+      if (str === '\x1b[A' || str === '\x1bOA') {
+        key.name = 'up';
+      } else if (str === '\x1b[B' || str === '\x1bOB') {
+        key.name = 'down';
+      } else if (str === '\r' || str === '\n') {
+        key.name = 'return';
+      } else if (str === '\u0003') {
+        this.#_emit('SIGINT');
+        return;
+      } else {
+        key.name = str; // regular character
+      }
+  
+      // Emit standard Node.js-style keypress event on the input stream or interface
+      this.#_emit('keypress', str, key);
+  
+      // Fallback behavior for text lines if not handled as a special key
+      if (this.#input?.isRaw || this.#terminal) {
+        if (key.name !== 'up' && key.name !== 'down' && key.name !== 'return') {
+          const line = str.replace(/[\r\n]+$/, '');
+          this.#_emit('line', line);
+        } else if (key.name === 'return') {
+          this.#_emit('line', this.#lineBuffer);
+          this.#lineBuffer = "";
+        }
       }
     }
-  }
 
   #flushLine() {
     const line = this.#lineBuffer;
