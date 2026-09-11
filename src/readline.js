@@ -134,23 +134,32 @@ class Interface {
  * call delivers) when in raw/terminal mode. Only resolves a line on Enter.
  */
 #handleKeySequence(seq) {
+  // Ctrl+C
   if (seq === '\u0003') { this.#_emit('SIGINT'); return; }
 
+  // Enter / Return (\r, \n, or \r\n as one chunk)
   if (seq === '\r' || seq === '\n' || seq === '\r\n') {
-    this.#flushLine();   // no echo
+    this.#output?.write?.('\n');
+    this.#flushLine();
     return;
   }
 
+  // Backspace / Delete
   if (seq === '\x7f' || seq === '\b') {
     if (this.#lineBuffer.length > 0) {
       this.#lineBuffer = this.#lineBuffer.slice(0, -1);
+      this.#output?.write?.('\b \b'); // erase the char visually
     }
-    return;   // no echo
+    return;
   }
 
-  if (seq.startsWith('\x1b')) return; // escape sequences never echo or get buffered
+  // Escape sequences (arrows, home/end, etc.) — don't add to the line buffer.
+  // Extend here later if you want left/right to move an internal cursor.
+  if (seq.startsWith('\x1b')) return;
 
-  this.#lineBuffer += seq;   // no echo
+  // Anything else: treat as literal text to append (covers pasted/multi-char chunks too)
+  this.#lineBuffer += seq;
+  this.#output?.write?.(seq); // echo
 }
 
   #flushLine() {
