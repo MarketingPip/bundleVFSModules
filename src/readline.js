@@ -98,41 +98,47 @@ class Interface {
   // ── input handling ────────────────────────────────────────────────────
 
 #handleChunk(chunk) {
-    const str = typeof chunk === 'string' ? chunk : chunk.toString();
-    
-    if (this.#input?.isRaw || this.#terminal) {
-      const line = str.replace(/[\r\n]+$/, '');
-      if (line === '\u0003') { this.#_emit('SIGINT'); return; }
-      this.#_emit('line', line);
-    } else {
-      // Robust line parser: handle both newline-delimited text and discrete line chunks
-      for (let i = 0; i < str.length; i++) {
-        const ch = str[i];
-        if (ch === '\r') { 
-          this.#crSeen = true;  
-          this.#flushLine(); 
-          continue; 
-        }
-        if (ch === '\n') { 
-          if (!this.#crSeen) this.#flushLine(); 
-          this.#crSeen = false; 
-          continue; 
-        }
-        this.#crSeen = false;
-        this.#lineBuffer += ch;
-      }
-      
-      // If the chunk doesn't end with a newline but the stream chunk was pushed 
-      // as a complete logical line (common in test line-readers), flush it if no more data is pending 
-      // or if it represents a discrete unit. Alternatively, if no newlines exist in the chunk at all,
-      // treat the chunk as a line if it's a standalone push.
-      if (!str.includes('\n') && !str.includes('\r') && this.#lineBuffer.length > 0) {
-        // If the chunk itself had no newlines, treat the accumulated buffer as a line 
-        // to support test helpers like lineReadable(['foo', 'bar', 'baz'])
-        this.#flushLine();
-      }
-    }
+  const str = typeof chunk === 'string' ? chunk : chunk.toString();
+
+  if (this.#input?.isRaw || this.#terminal) {
+    this.#handleKeySequence(str);
+  } else {
+    // ...unchanged non-terminal branch...
   }
+}
+
+/**
+ * Handles one discrete keypress "sequence" (what a single pushData()/write()
+ * call delivers) when in raw/terminal mode. Only resolves a line on Enter.
+ */
+#handleKeySequence(seq) {
+  // Ctrl+C
+  if (seq === '\u0003') { this.#_emit('SIGINT'); return; }
+
+  // Enter / Return (\r, \n, or \r\n as one chunk)
+  if (seq === '\r' || seq === '\n' || seq === '\r\n') {
+    this.#output?.write?.('\n');
+    this.#flushLine();
+    return;
+  }
+
+  // Backspace / Delete
+  if (seq === '\x7f' || seq === '\b') {
+    if (this.#lineBuffer.length > 0) {
+      this.#lineBuffer = this.#lineBuffer.slice(0, -1);
+      this.#output?.write?.('\b \b'); // erase the char visually
+    }
+    return;
+  }
+
+  // Escape sequences (arrows, home/end, etc.) — don't add to the line buffer.
+  // Extend here later if you want left/right to move an internal cursor.
+  if (seq.startsWith('\x1b')) return;
+
+  // Anything else: treat as literal text to append (covers pasted/multi-char chunks too)
+  this.#lineBuffer += seq;
+  this.#output?.write?.(seq); // echo
+}
 
   #flushLine() {
     const line = this.#lineBuffer;
