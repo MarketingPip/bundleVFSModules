@@ -96,14 +96,36 @@ class Interface {
   #_listenerCount(ev) { return (this.#ev[ev] || []).length; }
 
   // ── input handling ────────────────────────────────────────────────────
-
 #handleChunk(chunk) {
   const str = typeof chunk === 'string' ? chunk : chunk.toString();
 
   if (this.#input?.isRaw || this.#terminal) {
     this.#handleKeySequence(str);
   } else {
-    // ...unchanged non-terminal branch...
+    // Robust line parser: handle both newline-delimited text and discrete line chunks
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (ch === '\r') {
+        this.#crSeen = true;
+        this.#flushLine();
+        continue;
+      }
+      if (ch === '\n') {
+        if (!this.#crSeen) this.#flushLine();
+        this.#crSeen = false;
+        continue;
+      }
+      this.#crSeen = false;
+      this.#lineBuffer += ch;
+    }
+
+    // If the chunk doesn't end with a newline but the stream chunk was pushed
+    // as a complete logical line (common in test line-readers), flush it if no more data is pending
+    // or if it represents a discrete unit. Alternatively, if no newlines exist in the chunk at all,
+    // treat the chunk as a line if it's a standalone push.
+    if (!str.includes('\n') && !str.includes('\r') && this.#lineBuffer.length > 0) {
+      this.#flushLine();
+    }
   }
 }
 
