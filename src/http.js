@@ -267,6 +267,8 @@ export class ServerResponse extends Writable {
   }
 }
 
+
+
 /**
  * HTTP Server (Node.js compatible)
  */
@@ -927,26 +929,51 @@ export function _createClientRequest(
   return req
 }
 
-const serverRegistry = new Map()
+/**
+ * Global handleRequest entry point for the runtime bridge.
+ * Routes the request to the server listening on the specified port,
+ * or falls back to the first active server in the registry.
+ */
+async function handleRequest(port, method, url, headers, body) {
+  let server = serverRegistry.get(port);
+  
+  // Fallback: if no exact port match, grab the first available server
+  if (!server && serverRegistry.size > 0) {
+    server = serverRegistry.values().next().value;
+  }
 
-let _waitForServersPromise = null
-let _waitForServersResolve = null
+  if (!server) {
+    throw new Error(`No active HTTP server found for port ${port}`);
+  }
+
+  return await server.handleRequest(method, url, headers, body);
+}
+
+const serverRegistry = new Map();
+
+let _waitForServersPromise = null;
+let _waitForServersResolve = null;
 
 function _waitForAllServers() {
   if (serverRegistry.size === 0) {
-    return Promise.resolve()
+    return Promise.resolve();
   }
 
   if (_waitForServersPromise) {
-    return _waitForServersPromise
+    return _waitForServersPromise;
   }
 
   _waitForServersPromise = new Promise(resolve => {
-    _waitForServersResolve = resolve
-  })
+    _waitForServersResolve = resolve;
+  });
 
-  return _waitForServersPromise
+  return _waitForServersPromise;
 }
+
+globalThis.__httpServerRunTime = {
+  waitForAllServers: _waitForAllServers,
+  handleRequest: handleRequest
+};
 
 globalThis.__httpServerRunTime = {
   waitForAllServers: _waitForAllServers,
