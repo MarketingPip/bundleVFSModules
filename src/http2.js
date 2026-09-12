@@ -334,6 +334,52 @@ export function getUnpackedSettings(_buf) {
 
 export const sensitiveHeaders = Symbol("sensitiveHeaders")
 
+
+/* ------------------------------------------------------------------ */
+/* Global Runtime Bridge (for global handleRequest)                  */
+/* ------------------------------------------------------------------ */
+
+const serverRegistry = new Map()
+
+async function handleRequest(port, method, url, headers = {}, body) {
+  let server = serverRegistry.get(port);
+
+  // Fallback: if no exact port match, grab the first available server
+  if (!server && serverRegistry.size > 0) {
+    server = serverRegistry.values().next().value;
+  }
+
+  if (!server) {
+    throw new Error(`No active HTTP/2 server found for port ${port}`);
+  }
+
+  // Delegate to the server instance's handleRequest which includes our connection log
+  return await server.handleRequest(method, url, headers, body);
+}
+
+let _waitForServersPromise = null;
+
+function _waitForAllServers() {
+  if (serverRegistry.size === 0) {
+    return Promise.resolve();
+  }
+
+  if (_waitForServersPromise) {
+    return _waitForServersPromise;
+  }
+
+  _waitForServersPromise = new Promise(resolve => {
+    // resolve when servers are registered or available
+  });
+
+  return _waitForServersPromise;
+}
+
+globalThis.__http2ServerRunTime = {
+  waitForAllServers: _waitForAllServers,
+  handleRequest: handleRequest
+};
+
 /* ------------------------------------------------------------------ */
 /* Default export                                                     */
 /* ------------------------------------------------------------------ */
