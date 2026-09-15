@@ -69,7 +69,6 @@ class Interface {
     this.#boundOnInputClose   = ()    => { if (!this.#closed) this.close(); };
 
     input?.on('data',  this.#boundHandleChunk);
-    input?.on('end',    this.#boundOnInputClose);
     input?.on('close', this.#boundOnInputClose);
   }
 
@@ -96,59 +95,22 @@ class Interface {
   #_listenerCount(ev) { return (this.#ev[ev] || []).length; }
 
   // ── input handling ────────────────────────────────────────────────────
-#handleChunk(chunk) {
-    const str = typeof chunk === 'string' ? chunk : chunk.toString();
 
+  #handleChunk(chunk) {
+    const str = typeof chunk === 'string' ? chunk : chunk.toString();
     if (this.#input?.isRaw || this.#terminal) {
-      this.#handleKeySequence(str);
+      const line = str.replace(/[\r\n]+$/, '');
+      if (line === '\u0003') { this.#_emit('SIGINT'); return; }
+      this.#_emit('line', line);
     } else {
       for (let i = 0; i < str.length; i++) {
         const ch = str[i];
-        if (ch === '\r') {
-          this.#crSeen = true;
-          this.#flushLine();
-          continue;
-        }
-        if (ch === '\n') {
-          if (!this.#crSeen) this.#flushLine();
-          this.#crSeen = false;
-          continue;
-        }
+        if (ch === '\r') { this.#crSeen = true;  this.#flushLine(); continue; }
+        if (ch === '\n') { if (!this.#crSeen) this.#flushLine(); this.#crSeen = false; continue; }
         this.#crSeen = false;
         this.#lineBuffer += ch;
       }
-
-      if (!str.includes('\n') && !str.includes('\r') && this.#lineBuffer.length > 0) {
-        this.#flushLine();
-      }
     }
-  }
-
-/**
- * Handles one discrete keypress "sequence" (what a single pushData()/write()
- * call delivers) when in raw/terminal mode. Only resolves a line on Enter.
- */
-#handleKeySequence(seq) {
-    if (seq === '\u0003') { this.#_emit('SIGINT'); return; }
-
-    if (seq === '\r' || seq === '\n' || seq === '\r\n') {
-      this.#output?.write?.('\n');
-      this.#flushLine();
-      return;
-    }
-
-    if (seq === '\x7f' || seq === '\b') {
-      if (this.#lineBuffer.length > 0) {
-        this.#lineBuffer = this.#lineBuffer.slice(0, -1);
-        this.#output?.write?.('\b \b');
-      }
-      return;
-    }
-
-    if (seq.startsWith('\x1b')) return;
-
-    this.#lineBuffer += seq;
-    this.#output?.write?.(seq);
   }
 
   #flushLine() {
@@ -199,21 +161,17 @@ class Interface {
     return this;
   }
 
-close() {
+  close() {
     if (this.#closed) return this;
     this.#closed = true;
+    // Remove only the handler this interface attached — leave other listeners alone.
     this.#input?.removeListener?.('data', this.#boundHandleChunk);
-    this.#input?.removeListener?.('end', this.#boundOnInputClose);
     this.#input?.removeListener?.('close', this.#boundOnInputClose);
-    
-    if (this.#lineBuffer.length) {
-      const line = this.#lineBuffer;
-      this.#lineBuffer = "";
-      this.#lineQueue.push(line);
-    }
+    if (this.#lineBuffer.length) this.#flushLine();
     this.#_emit('close');
     return this;
   }
+
   write(data /*, key */) {
     if (this.#closed) return this;
     if (typeof data === 'string' && data.length)
@@ -301,7 +259,7 @@ close() {
    * @param {Function} [cb]
    * @returns {this | Promise<string>}
    */
-question(query, optionsOrCb, cb) {
+  question(query, optionsOrCb, cb) {
     if (this.#closed) {
       return typeof cb === 'function' || typeof optionsOrCb === 'function'
         ? void 0
@@ -319,20 +277,7 @@ question(query, optionsOrCb, cb) {
     if (this.#output?.write) this.#output.write(query);
     const signal = opts.signal;
 
-    // Helper to handle immediate queue consumption safely
-    const handleResolve = (resolveOrCb, isPromise = false) => {
-      if (this.#lineQueue.length > 0) {
-        const val = this.#lineQueue.shift();
-        if (isPromise) resolveOrCb(val);
-        else resolveOrCb(val);
-        return true;
-      }
-      return false;
-    };
-
     if (typeof callback === 'function') {
-      if (handleResolve(callback, false)) return this;
-
       let called = false;
       const onLine = answer => {
         if (called) return; called = true;
@@ -348,11 +293,6 @@ question(query, optionsOrCb, cb) {
     }
 
     return new Promise((resolve, reject) => {
-      if (this.#lineQueue.length > 0) {
-        resolve(this.#lineQueue.shift());
-        return;
-      }
-
       let settled = false;
       const onLine = answer => {
         if (settled) return; settled = true;
