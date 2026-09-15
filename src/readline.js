@@ -97,70 +97,59 @@ class Interface {
 
   // ── input handling ────────────────────────────────────────────────────
 #handleChunk(chunk) {
-  const str = typeof chunk === 'string' ? chunk : chunk.toString();
+    const str = typeof chunk === 'string' ? chunk : chunk.toString();
 
-  if (this.#input?.isRaw || this.#terminal) {
-    this.#handleKeySequence(str);
-  } else {
-    // Robust line parser: handle both newline-delimited text and discrete line chunks
-    for (let i = 0; i < str.length; i++) {
-      const ch = str[i];
-      if (ch === '\r') {
-        this.#crSeen = true;
-        this.#flushLine();
-        continue;
-      }
-      if (ch === '\n') {
-        if (!this.#crSeen) this.#flushLine();
+    if (this.#input?.isRaw || this.#terminal) {
+      this.#handleKeySequence(str);
+    } else {
+      for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+        if (ch === '\r') {
+          this.#crSeen = true;
+          this.#flushLine();
+          continue;
+        }
+        if (ch === '\n') {
+          if (!this.#crSeen) this.#flushLine();
+          this.#crSeen = false;
+          continue;
+        }
         this.#crSeen = false;
-        continue;
+        this.#lineBuffer += ch;
       }
-      this.#crSeen = false;
-      this.#lineBuffer += ch;
-    }
 
-    // If the chunk doesn't end with a newline but the stream chunk was pushed
-    // as a complete logical line (common in test line-readers), flush it if no more data is pending
-    // or if it represents a discrete unit. Alternatively, if no newlines exist in the chunk at all,
-    // treat the chunk as a line if it's a standalone push.
-    if (!str.includes('\n') && !str.includes('\r') && this.#lineBuffer.length > 0) {
-      this.#flushLine();
+      if (!str.includes('\n') && !str.includes('\r') && this.#lineBuffer.length > 0) {
+        this.#flushLine();
+      }
     }
   }
-}
 
 /**
  * Handles one discrete keypress "sequence" (what a single pushData()/write()
  * call delivers) when in raw/terminal mode. Only resolves a line on Enter.
  */
 #handleKeySequence(seq) {
-  // Ctrl+C
-  if (seq === '\u0003') { this.#_emit('SIGINT'); return; }
+    if (seq === '\u0003') { this.#_emit('SIGINT'); return; }
 
-  // Enter / Return (\r, \n, or \r\n as one chunk)
-  if (seq === '\r' || seq === '\n' || seq === '\r\n') {
-    this.#output?.write?.('\n');
-    this.#flushLine();
-    return;
-  }
-
-  // Backspace / Delete
-  if (seq === '\x7f' || seq === '\b') {
-    if (this.#lineBuffer.length > 0) {
-      this.#lineBuffer = this.#lineBuffer.slice(0, -1);
-      this.#output?.write?.('\b \b'); // erase the char visually
+    if (seq === '\r' || seq === '\n' || seq === '\r\n') {
+      this.#output?.write?.('\n');
+      this.#flushLine();
+      return;
     }
-    return;
+
+    if (seq === '\x7f' || seq === '\b') {
+      if (this.#lineBuffer.length > 0) {
+        this.#lineBuffer = this.#lineBuffer.slice(0, -1);
+        this.#output?.write?.('\b \b');
+      }
+      return;
+    }
+
+    if (seq.startsWith('\x1b')) return;
+
+    this.#lineBuffer += seq;
+    this.#output?.write?.(seq);
   }
-
-  // Escape sequences (arrows, home/end, etc.) — don't add to the line buffer.
-  // Extend here later if you want left/right to move an internal cursor.
-  if (seq.startsWith('\x1b')) return;
-
-  // Anything else: treat as literal text to append (covers pasted/multi-char chunks too)
-  this.#lineBuffer += seq;
-  this.#output?.write?.(seq); // echo
-}
 
   #flushLine() {
     const line = this.#lineBuffer;
@@ -210,15 +199,18 @@ class Interface {
     return this;
   }
 
-  close() {
+close() {
     if (this.#closed) return this;
     this.#closed = true;
-    // Remove only the handler this interface attached — leave other listeners alone.
     this.#input?.removeListener?.('data', this.#boundHandleChunk);
-    this.#input?.removeListener?.('end', this.#boundOnInputClose);   // <-- Add this
+    this.#input?.removeListener?.('end', this.#boundOnInputClose);
     this.#input?.removeListener?.('close', this.#boundOnInputClose);
     
-    if (this.#lineBuffer.length) this.#flushLine();
+    if (this.#lineBuffer.length) {
+      const line = this.#lineBuffer;
+      this.#lineBuffer = "";
+      this.#lineQueue.push(line);
+    }
     this.#_emit('close');
     return this;
   }
@@ -327,13 +319,19 @@ question(query, optionsOrCb, cb) {
     if (this.#output?.write) this.#output.write(query);
     const signal = opts.signal;
 
-    // --- Callback Version ---
-    if (typeof callback === 'function') {
-      // If data was already pushed and queued, consume it immediately!
+    // Helper to handle immediate queue consumption safely
+    const handleResolve = (resolveOrCb, isPromise = false) => {
       if (this.#lineQueue.length > 0) {
-        callback(this.#lineQueue.shift());
-        return this;
+        const val = this.#lineQueue.shift();
+        if (isPromise) resolveOrCb(val);
+        else resolveOrCb(val);
+        return true;
       }
+      return false;
+    };
+
+    if (typeof callback === 'function') {
+      if (handleResolve(callback, false)) return this;
 
       let called = false;
       const onLine = answer => {
@@ -349,9 +347,7 @@ question(query, optionsOrCb, cb) {
       return this;
     }
 
-    // --- Promise Version ---
     return new Promise((resolve, reject) => {
-      // If data was already pushed and queued, resolve immediately!
       if (this.#lineQueue.length > 0) {
         resolve(this.#lineQueue.shift());
         return;
