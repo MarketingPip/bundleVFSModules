@@ -162,7 +162,7 @@ export class Http2ServerResponse extends EventEmitter {
 /* Server                                                             */
 /* ------------------------------------------------------------------ */
 
-const serverRegistry = new Map()
+// const serverRegistry = new Map()
 
 export function createServer(options, onRequestHandler) {
   if (typeof options === "function") {
