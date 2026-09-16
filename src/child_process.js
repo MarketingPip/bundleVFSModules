@@ -16,137 +16,6 @@ import { Readable, Writable } from './stream';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-// ─── Stream Listener Helper for Spawn ─────────────────────────────────────
-
-function listenToParentStream(
-  type,
-  requestId,
-  payload,
-  child,
-  timeoutMs = DEFAULT_TIMEOUT,
-  signal = null,
-) {
-  let tid;
-  let settled = false;
-
-  const cleanup = () => {
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('message', handler);
-    }
-
-    if (tid !== undefined) {
-      clearTimeout(tid);
-      tid = undefined;
-    }
-
-    if (signal) {
-      signal.removeEventListener('abort', onAbort);
-    }
-  };
-
-  const handler = (event) => {
-    const data = event?.data;
-    if (data?.requestId !== requestId) return;
-
-    // 1. Live chunk arriving incrementally
-    if (data.type === 'PARENT_SPAWN_DATA') {
-      const { stream, chunk } = data.payload || {};
-      if (stream === 'stderr') {
-        child._pushStderr(chunk);
-      } else {
-        child._pushStdout(chunk);
-      }
-      return;
-    }
-
-    // 2. Process closed / finished
-    if (data.type === 'PARENT_SPAWN_CLOSE') {
-      if (settled) return;
-      settled = true;
-      cleanup();
-
-      if (child._finalised) return;
-
-      const { exitCode = 0, signal: sig = null } = data.payload || {};
-
-      if ((exitCode !== null && exitCode !== 0) || sig) {
-        const err = new Error(`spawn ${payload.command} failed`);
-        err.code = exitCode ?? undefined;
-        err.killed = child.killed;
-        err.signal = sig;
-        child.emit('error', err);
-      }
-
-      child._finalise('', '', exitCode, sig);
-    }
-  };
-
-  const onAbort = () => {
-    if (settled) return;
-    settled = true;
-    cleanup();
-
-    const err = Object.assign(new Error('Process killed'), {
-      code: 'SIGTERM',
-      signal: 'SIGTERM',
-      killed: true,
-    });
-    child.killed = true;
-
-    if (!child._finalised) {
-      child.emit('error', err);
-      child._finalise('', '', null, 'SIGTERM');
-    }
-  };
-
-  if (typeof window === 'undefined') {
-    const err = Object.assign(new Error('child_process requires a window environment'), { code: 'ERR_NO_WINDOW' });
-    child.emit('error', err);
-    child._finalise('', '', 1, null);
-    return;
-  }
-
-  window.addEventListener('message', handler);
-
-  if (timeoutMs > 0) {
-    tid = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-
-      const err = Object.assign(new Error('Process timed out'), {
-        code: 'ETIMEDOUT',
-        signal: 'SIGTERM',
-      });
-      child.killed = true;
-
-      if (!child._finalised) {
-        child.emit('error', err);
-        child._finalise('', '', null, 'SIGTERM');
-      }
-    }, Math.max(0, Number(timeoutMs) || 0));
-  }
-
-  if (signal) {
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener('abort', onAbort, { once: true });
-  }
-
-  const target = globalThis.parent;
-  if (!target || typeof target.postMessage !== 'function') {
-    const err = Object.assign(new Error('Parent frame messaging is unavailable'), { code: 'ERR_NO_PARENT' });
-    child.emit('error', err);
-    child._finalise('', '', 1, null);
-    return;
-  }
-
-  target.postMessage({ type, requestId, payload }, '*');
-}
-
-
 let _reqCounter = 0;
 
 function makeRequestId() {
@@ -721,7 +590,6 @@ function _execFile(
 
 // ─── spawn ─────────────────────────────────────────────────────────────────
 
-
 function _spawn(
   command,
   args = [],
@@ -743,7 +611,7 @@ function _spawn(
 
   const requestId = makeRequestId();
 
-  listenToParentStream(
+  postToParent(
     'PARENT_SPAWN_REQUEST',
     requestId,
     {
@@ -751,10 +619,71 @@ function _spawn(
       args,
       options,
     },
-    child,
     options.timeout ?? DEFAULT_TIMEOUT,
     child._ac.signal,
-  );
+  )
+    .then((result = {}) => {
+      /*
+       * kill() may have won the race.
+       */
+      if (child._finalised) {
+        return;
+      }
+
+      const stdout = result.stdout ?? '';
+      const stderr = result.stderr ?? '';
+      const exitCode = result.exitCode ?? 0;
+      const signal = result.signal ?? null;
+
+      if (
+        (exitCode !== null && exitCode !== 0) ||
+        signal
+      ) {
+        const err = new Error(
+          `spawn ${command} failed`,
+        );
+
+        err.code = exitCode ?? undefined;
+        err.killed = child.killed;
+        err.signal = signal;
+
+        child.emit('error', err);
+      }
+
+      child._finalise(
+        stdout,
+        stderr,
+        exitCode,
+        signal,
+      );
+    })
+    .catch((err) => {
+      /*
+       * If kill() already finalized the child, there is nothing left
+       * for the rejected request to do.
+       */
+      if (child._finalised) {
+        return;
+      }
+
+      const wrapped =
+        err instanceof Error
+          ? err
+          : new Error(String(err));
+
+      if (wrapped.code === 'ETIMEDOUT') {
+        child.killed = true;
+      }
+
+      child.emit('error', wrapped);
+
+      child._finalise(
+        '',
+        wrapped.message,
+        wrapped.code === 'ETIMEDOUT' ? null : 1,
+        wrapped.signal ?? null,
+      );
+    });
 
   return child;
 }
