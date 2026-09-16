@@ -8,7 +8,7 @@ if (!globalThis._RUNTIME_.__FS__) {
 
 // ── INJECT FILES FROM JSON OBJECT HERE ──────────────────────────────────
   // Example JSON structure where keys are absolute file paths and values are file contents
-  const myFiles = globalThis._RUNTIME_?.fs || {};
+  const myFiles = globalThis._RUNTIME_?.__USER_FILES__ || {};
 
   // Populates the memory volume with your JSON structure
   vol.fromJSON(myFiles);
