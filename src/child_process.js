@@ -16,9 +16,9 @@ import { Readable, Writable } from './stream';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  // ─── Stream Listener Helper for Spawn ─────────────────────────────────────
+// ─── Stream Listener Helper for Spawn ─────────────────────────────────────
 
-function listenToParentStreams(
+function listenToParentStream(
   type,
   requestId,
   payload,
@@ -743,7 +743,7 @@ function _spawn(
 
   const requestId = makeRequestId();
 
-  listenToParentStreams(
+  listenToParentStream(
     'PARENT_SPAWN_REQUEST',
     requestId,
     {
