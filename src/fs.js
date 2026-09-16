@@ -5,6 +5,16 @@ import { createFsFromVolume } from "memfs";
 if (!globalThis._RUNTIME_.__FS__) {
 
   const fs = createFsFromVolume(vol);
+
+// ── INJECT FILES FROM JSON OBJECT HERE ──────────────────────────────────
+  // Example JSON structure where keys are absolute file paths and values are file contents
+  const myFiles = globalThis._RUNTIME_?.fs || {};
+
+  // Populates the memory volume with your JSON structure
+  vol.fromJSON(myFiles);
+  // ────────────────────────────────────────────────────────────────────────
+
+  
   fs.promises = memPromises;
   fs.constants = memConstants;
   fs._vol = vol;
