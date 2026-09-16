@@ -16,7 +16,7 @@ import { Readable, Writable } from './stream';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-// ─── Stream Listener Helper for Spawn ─────────────────────────────────────
+  // ─── Stream Listener Helper for Spawn ─────────────────────────────────────
 
 function listenToParentStream(
   type,
