@@ -25,7 +25,7 @@ const scope =
 
 const process = globalThis._RUNTIME_.process; // todo remove from scope and update bottom 
 
-console.log(process)
+
 const process2 = (function () {
   let _intervalId = null;
   const listeners = Object.create(null);
