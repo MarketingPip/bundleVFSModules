@@ -241,46 +241,45 @@ export const process = (function () {
     // ── Properties ──────────────────────────────────────────────────────────
     exitCode:  0,
     exiting:   false,
-
     /** @since Node.js v0.1.104 */
-    title: globalThis._RUNTIME_?.process?.title || "Node",
+    title: globalThis._RUNTIME_?.globals?.process?.title || "Node",
 
     /** CPU architecture string. @since Node.js v0.5.0 */
-    arch: globalThis._RUNTIME_?.process?.arch || "x64",
+    arch: globalThis._RUNTIME_?.globals?.process?.arch || "x64",
 
     /**
      * Set of flags allowed in NODE_OPTIONS.
      * Returns an empty Set in this shim — no Node env to inspect.
      * @since Node.js v10.10.0
      */
-    allowedNodeEnvironmentFlags: globalThis._RUNTIME_?.process?.allowedNodeEnvironmentFlags || new Set(),
+    allowedNodeEnvironmentFlags: globalThis._RUNTIME_?.globals?.process?.allowedNodeEnvironmentFlags || new Set(),
 
     /** Command-line arguments. @since Node.js v0.1.27 */
-    argv: globalThis._RUNTIME_?.process?.argv || [],
+    argv: globalThis._RUNTIME_?.globals?.process?.argv || [],
 
     /** Original argv[0]. @since Node.js v6.4.0 */
-    argv0: globalThis._RUNTIME_?.process?.argv0 || "",
+    argv0: globalThis._RUNTIME_?.globals?.process?.argv0 || "",
 
     /** Environment variables. @since Node.js v0.1.27 */
-    env: globalThis._RUNTIME_?.process?.env || {},
+    env: globalThis._RUNTIME_?.globals?.process?.env || {},
 
     /** Node.js exec arguments. @since Node.js v0.7.7 */
-    execArgv: globalThis._RUNTIME_?.process?.execArgv || [],
+    execArgv: globalThis._RUNTIME_?.globals?.process?.execArgv || [],
 
     /** Path to the Node executable. @since Node.js v0.1.100 */
-    execPath: globalThis._RUNTIME_?.process?.execPath || "",
+    execPath: globalThis._RUNTIME_?.globals?.process?.execPath || "",
 
     /** OS platform string. @since Node.js v0.1.16 */
-    platform: globalThis._RUNTIME_?.process?.platform || "browser",
+    platform: globalThis._RUNTIME_?.globals?.process?.platform || "browser",
 
     /** Node.js version string. @since Node.js v0.1.3 */
-    version: globalThis._RUNTIME_?.process?.version || "v0.0.0-shim",
+    version: globalThis._RUNTIME_?.globals?.process?.version || "v0.0.0-shim",
 
     /**
      * Node.js and dependency version info.
      * @since Node.js v0.2.0
      */
-    versions: globalThis._RUNTIME_?.process?.versions || {
+    versions: globalThis._RUNTIME_?.globals?.process?.versions || {
       node: "0.0.0-shim", v8: "", uv: "", zlib: "", brotli: "",
       ares: "", modules: "", nghttp2: "", napi: "", llhttp: "",
       openssl: "", cldr: "", icu: "", tz: "", unicode: "",
@@ -290,7 +289,7 @@ export const process = (function () {
      * Node.js release metadata.
      * @since Node.js v3.0.0
      */
-    release: globalThis._RUNTIME_?.process?.release || {
+    release: globalThis._RUNTIME_?.globals?.process?.release || {
       name: "node",
       sourceUrl: "",
       headersUrl: "",
@@ -298,8 +297,8 @@ export const process = (function () {
       lts: false,
     },
 
-    pid:  globalThis._RUNTIME_?.process?.pid  || 1,
-    ppid: globalThis._RUNTIME_?.process?.ppid || 0,
+    pid:  globalThis._RUNTIME_?.globals?.process?.pid  || 1,
+    ppid: globalThis._RUNTIME_?.globals?.process?.ppid || 0,
 
     // ── Streams ──────────────────────────────────────────────────────────────
     /** Readable stream noop (no TTY in browser). @since Node.js v0.1.3 */
