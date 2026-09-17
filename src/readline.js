@@ -44,8 +44,8 @@ class Interface {
   #lineDone = false;
 
   constructor(options = {}) {
-    const input  = options.input  || (typeof process !== 'undefined' ? process.stdin  : null) || noopStream;
-    const output = options.output || (typeof process !== 'undefined' ? process.stdout : null) || noopStream;
+    const input  = options.input  || (typeof globalThis.process !== 'undefined' ? globalThis.process.stdin  : null) || noopStream;
+    const output = options.output || (typeof globalThis.process !== 'undefined' ? globalThis.process.stdout : null) || noopStream;
     const terminal = options.terminal != null ? !!options.terminal : !!(output?.isTTY);
 
     this.input   = input;
