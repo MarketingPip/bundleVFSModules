@@ -3,16 +3,11 @@
  * readline shim for browser / edge / bundler environments.
  * Mirrors the Node.js `readline` module API surface.
  *
- * Named exports match Node's public API:
- *   createInterface, emitKeypressEvents,
- *   cursorTo, moveCursor, clearLine, clearScreenDown,
- *   Interface, Readline, promises
- *
  * @module readline
  * @since Node.js v0.1.98
  */
 
-// ─── Safe Noop Stream Fallback (prevents 'in' operator crashes on undefined) ──
+// ─── Safe Noop Stream Fallback ───────────────────────────────────────────────
 const noopStream = {
   write: () => {},
   on: () => {},
@@ -28,14 +23,11 @@ const noopStream = {
 
 // ─── Interface class ────────────────────────────────────────────────────────
 
-/**
- * The readline Interface class.  Instances are created via `createInterface`.
- * Exposed as both `Interface` and `Readline` to match Node's exports.
- * @since Node.js v0.1.98
- */
 class Interface {
-  #input;
-  #output;
+  // Public properties matching Node.js readline API surface
+  input;
+  output;
+  
   #terminal;
   #promptStr;
   #closed = false;
@@ -56,8 +48,8 @@ class Interface {
     const output = options.output || (typeof process !== 'undefined' ? process.stdout : null) || noopStream;
     const terminal = options.terminal != null ? !!options.terminal : !!(output?.isTTY);
 
-    this.#input    = input;
-    this.#output   = output;
+    this.input   = input;
+    this.output  = output;
     this.#terminal = terminal;
     this.#promptStr = options.prompt ?? (terminal ? '> ' : '');
 
@@ -82,8 +74,8 @@ class Interface {
     this.#boundHandleChunk    = chunk => this.#handleChunk(chunk);
     this.#boundOnInputClose   = ()    => { if (!this.#closed) this.close(); };
 
-    input?.on('data',  this.#boundHandleChunk);
-    input?.on('close', this.#boundOnInputClose);
+    this.input?.on?.('data',  this.#boundHandleChunk);
+    this.input?.on?.('close', this.#boundOnInputClose);
   }
 
   // ── private event helpers ──────────────────────────────────────────────
@@ -112,7 +104,7 @@ class Interface {
 
   #handleChunk(chunk) {
     const str = typeof chunk === 'string' ? chunk : chunk.toString();
-    if (this.#input?.isRaw || this.#terminal) {
+    if (this.input?.isRaw || this.#terminal) {
       const line = str.replace(/[\r\n]+$/, '');
       if (line === '\u0003') { this.#_emit('SIGINT'); return; }
       this.#_emit('line', line);
@@ -160,17 +152,17 @@ class Interface {
   setPrompt(str)         { this.#promptStr = str; return this; }
   getPrompt()            { return this.#promptStr; }
   prompt(/*preserveCursor*/) {
-    if (this.#output?.write) this.#output.write(this.#promptStr);
+    if (this.output?.write) this.output.write(this.#promptStr);
     return this;
   }
 
   pause() {
-    this.#input?.pause?.();
+    this.input?.pause?.();
     this.#_emit('pause');
     return this;
   }
   resume() {
-    this.#input?.resume?.();
+    this.input?.resume?.();
     this.#_emit('resume');
     return this;
   }
@@ -178,8 +170,8 @@ class Interface {
   close() {
     if (this.#closed) return this;
     this.#closed = true;
-    this.#input?.removeListener?.('data', this.#boundHandleChunk);
-    this.#input?.removeListener?.('close', this.#boundOnInputClose);
+    this.input?.removeListener?.('data', this.#boundHandleChunk);
+    this.input?.removeListener?.('close', this.#boundOnInputClose);
     if (this.#lineBuffer.length) this.#flushLine();
     this.#_emit('close');
     return this;
@@ -192,66 +184,35 @@ class Interface {
     return this;
   }
 
-  // ── cursor / screen helpers (also available as module-level functions) ──
+  // ── cursor / screen helpers ──────────────────────────────────────────
 
-  /**
-   * Returns the real position of the cursor in relation to the input prompt + string.
-   * @returns {{ rows: number, cols: number }}
-   * @since Node.js v13.5.0 / v12.16.0
-   */
   getCursorPos() {
-    const columns = this.#output?.columns || 80;
+    const columns = this.output?.columns || 80;
     const totalLength = this.#promptStr.length + this.#lineBuffer.length;
     const rows = Math.floor(totalLength / columns);
     const cols = totalLength % columns;
     return { rows, cols };
   }
 
-  /**
-   * Move cursor to absolute position.
-   * @param {number} x  @param {number} [y]  @param {Function} [cb]
-   * @returns {this}
-   * @since Node.js v0.7.7
-   */
   cursorTo(x, y, cb) {
-    if (this.#output) cursorTo(this.#output, x, y, cb);
+    if (this.output) cursorTo(this.output, x, y, cb);
     return this;
   }
 
-  /**
-   * Move cursor relative to current position.
-   * @param {number} dx  @param {number} dy  @param {Function} [cb]
-   * @returns {this}
-   * @since Node.js v0.7.7
-   */
   moveCursor(dx, dy, cb) {
-    if (this.#output) moveCursor(this.#output, dx, dy, cb);
+    if (this.output) moveCursor(this.output, dx, dy, cb);
     return this;
   }
 
-  /**
-   * Clear current line in the given direction.
-   * @param {-1|0|1} dir  @param {Function} [cb]
-   * @returns {this}
-   * @since Node.js v0.7.7
-   */
   clearLine(dir, cb) {
-    if (this.#output) clearLine(this.#output, dir, cb);
+    if (this.output) clearLine(this.output, dir, cb);
     return this;
   }
 
-  /**
-   * Clear from current cursor position to end of screen.
-   * @param {Function} [cb]
-   * @returns {this}
-   * @since Node.js v0.7.7
-   */
   clearScreenDown(cb) {
-    if (this.#output) clearScreenDown(this.#output, cb);
+    if (this.output) clearScreenDown(this.output, cb);
     return this;
   }
-
-  // ── rollback / commit (Node v21.7+) ──────────────────────────────────
 
   rollback() {
     this.#pendingOps = [];
@@ -266,12 +227,6 @@ class Interface {
     return this;
   }
 
-  /**
-   * @param {string} query
-   * @param {{ signal?: AbortSignal } | Function} [optionsOrCb]
-   * @param {Function} [cb]
-   * @returns {this | Promise<string>}
-   */
   question(query, optionsOrCb, cb) {
     if (this.#closed) {
       return typeof cb === 'function' || typeof optionsOrCb === 'function'
@@ -287,7 +242,7 @@ class Interface {
       callback = cb;
     }
 
-    if (this.#output?.write) this.#output.write(query);
+    if (this.output?.write) this.output.write(query);
     const signal = opts.signal;
 
     if (typeof callback === 'function') {
@@ -323,8 +278,6 @@ class Interface {
     });
   }
 
-  // ── async iterator ────────────────────────────────────────────────────
-
   [Symbol.asyncIterator]() {
     const self = this;
     return {
@@ -342,11 +295,8 @@ class Interface {
   }
 }
 
-// ─── Readline (alias added in Node v17) ─────────────────────────────────────
-
+// ─── Module exports & Helpers (same as before) ──────────────────────────────
 const Readline = Interface;
-
-// ─── Top-level functions ─────────────────────────────────────────────────────
 
 function createInterface(options = {}) {
   return new Interface(options);
@@ -390,15 +340,11 @@ function clearScreenDown(stream, cb) {
   return true;
 }
 
-// ─── promises sub-namespace ──────────────────────────────────────────────────
-
 const promises = {
   Interface,
   Readline,
   createInterface,
 };
-
-// ─── globalThis registration ─────────────────────────────────────────────────
 
 globalThis.readline = {
   createInterface,
@@ -412,22 +358,6 @@ globalThis.readline = {
   promises,
 };
 
-// ─── Exports ─────────────────────────────────────────────────────────────────
-
-
-const readlineShim = {
-  createInterface,
-  emitKeypressEvents,
-  cursorTo,
-  moveCursor,
-  clearLine,
-  clearScreenDown,
-  Interface,
-  Readline,
-  promises,
-};
-
-// Support both named imports and default/star imports (* as readline)
 export {
   createInterface,
   emitKeypressEvents,
@@ -440,4 +370,14 @@ export {
   promises,
 };
 
-export default readlineShim;
+export default {
+  createInterface,
+  emitKeypressEvents,
+  cursorTo,
+  moveCursor,
+  clearLine,
+  clearScreenDown,
+  Interface,
+  Readline,
+  promises,
+};
