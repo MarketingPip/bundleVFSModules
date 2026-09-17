@@ -326,7 +326,7 @@ const BUNDLED_MODULES = {
   // Specials
  // RUNTIME_CLI_TABLE: "specials/cli_table.js",
   RUNTIME_BUNDLER: "specials/bundler.js",
-  RUNTIME_NODE_GLOBALS: "globals.js",
+  RUNTIME_NODE_GLOBALS: "node_globals.js",
   
   
  // buffer: "buffer.js",
