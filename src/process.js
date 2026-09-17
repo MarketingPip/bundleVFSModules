@@ -25,7 +25,7 @@ const scope =
 
 const process = globalThis._RUNTIME_.process; // todo remove from scope and update bottom 
 
-
+console.log(process)
 const process2 = (function () {
   let _intervalId = null;
   const listeners = Object.create(null);
@@ -457,9 +457,9 @@ export const release                     = process.release;
 export const pid                         = process.pid;
 export const ppid                        = process.ppid;
 export const title                       = process.title;
-export const stdin                       = process.stdin;
-export const stdout                      = process.stdout;
-export const stderr                      = process.stderr;
+export const stdin                       = process2.stdin;
+export const stdout                      = process2.stdout;
+export const stderr                      = process2.stderr;
 
 // Methods
 export const cwd                = (...a) => process.cwd(...a);
@@ -471,16 +471,16 @@ export const memoryUsage        = (...a) => process.memoryUsage(...a);
 export const cpuUsage           = (...a) => process.cpuUsage(...a);
 export const kill               = (...a) => process.kill(...a);
 export const nextTick           = (...a) => process.nextTick(...a);
-export const on                 = (...a) => process.on(...a);
-export const off                = (...a) => process.off(...a);
-export const once               = (...a) => process.once(...a);
-export const addListener        = (...a) => process.addListener(...a);
-export const removeListener     = (...a) => process.removeListener(...a);
-export const prependListener    = (...a) => process.prependListener(...a);
-export const prependOnceListener= (...a) => process.prependOnceListener(...a);
-export const emit               = (...a) => process.emit(...a);
-export const listenerCount      = (...a) => process.listenerCount(...a);
-export const emitWarning        = (...a) => process.emitWarning(...a);
+export const on                 = (...a) => process2.on(...a);
+export const off                = (...a) => process2.off(...a);
+export const once               = (...a) => process2.once(...a);
+export const addListener        = (...a) => process2.addListener(...a);
+export const removeListener     = (...a) => process2.removeListener(...a);
+export const prependListener    = (...a) => process2.prependListener(...a);
+export const prependOnceListener= (...a) => process2.prependOnceListener(...a);
+export const emit               = (...a) => process2.emit(...a);
+export const listenerCount      = (...a) => process2.listenerCount(...a);
+export const emitWarning        = (...a) => process2.emitWarning(...a);
 export const getuid             = (...a) => process.getuid(...a);
 export const geteuid            = (...a) => process.geteuid(...a);
 export const setuid             = (...a) => process.setuid(...a);
