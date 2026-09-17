@@ -16,11 +16,7 @@ function stripVTControlCharacters(str) {
   return str.replace(ansiRegex, '');
 }
 
-// 2. Apply it as a polyfill to the native util module if it's missing
-if (util && typeof util.stripVTControlCharacters !== 'function') {
-  util.stripVTControlCharacters = stripVTControlCharacters;
-}
-
+ 
 export { stripVTControlCharacters };
 
 // Export the namespace as default
