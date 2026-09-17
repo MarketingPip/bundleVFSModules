@@ -414,6 +414,20 @@ globalThis.readline = {
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
+
+const readlineShim = {
+  createInterface,
+  emitKeypressEvents,
+  cursorTo,
+  moveCursor,
+  clearLine,
+  clearScreenDown,
+  Interface,
+  Readline,
+  promises,
+};
+
+// Support both named imports and default/star imports (* as readline)
 export {
   createInterface,
   emitKeypressEvents,
@@ -426,14 +440,4 @@ export {
   promises,
 };
 
-export default {
-  createInterface,
-  emitKeypressEvents,
-  cursorTo,
-  moveCursor,
-  clearLine,
-  clearScreenDown,
-  Interface,
-  Readline,
-  promises,
-};
+export default readlineShim;
