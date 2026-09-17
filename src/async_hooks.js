@@ -1,6 +1,7 @@
 'use strict';
 
-export {AsyncLocalStorage} from "als-browser";
+import { AsyncLocalStorage } from "als-browser";
+export { AsyncLocalStorage };
 
 // --- Internal state ---
 let asyncIdCounter = 1;
@@ -10,7 +11,7 @@ const asyncHooks = [];
 
 function generateAsyncId() { return asyncIdCounter++; }
 
-// --- Error placeholders (replace with actual if desired) ---
+// --- Error placeholders ---
 class ERR_ASYNC_CALLBACK extends Error {
   constructor(field) { super(`Invalid async callback for ${field}`); }
 }
@@ -41,8 +42,11 @@ export class AsyncResource {
     // Emit 'before' hooks
     asyncHooks.forEach(h => { if (h.enabled && h.before) h.before(this._asyncId); });
 
+    // Bridge: Bind execution function with AsyncLocalStorage context frame
+    const boundFn = AsyncLocalStorage.bind ? AsyncLocalStorage.bind(fn) : fn;
+
     try {
-      return fn.apply(thisArg, args);
+      return boundFn.apply(thisArg, args);
     } finally {
       // Emit 'after' hooks
       asyncHooks.forEach(h => { if (h.enabled && h.after) h.after(this._asyncId); });
@@ -61,7 +65,7 @@ export class AsyncResource {
   static bind(fn, type = fn.name || 'bound-anonymous-fn', thisArg) {
     const resource = new AsyncResource(type);
     return function(...args) {
-      return resource.runInAsyncScope(fn, thisArg, ...args);
+      return resource.runInAsyncScope(() => fn.apply(thisArg, args), null);
     };
   }
 }
@@ -125,9 +129,10 @@ export const asyncWrapProviders = Object.freeze({
 const nativeSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (callback, delay, ...args) => {
   const resource = new AsyncResource('Timeout');
+  const wrapped = AsyncLocalStorage.bind ? AsyncLocalStorage.bind(callback) : callback;
   return nativeSetTimeout(() => {
     resource.runInAsyncScope(() => {
-      callback(...args);
+      wrapped(...args);
       resource.emitDestroy();
     });
   }, delay);
@@ -138,9 +143,10 @@ if (typeof globalThis.setImmediate === 'function') {
   const nativeSetImmediate = globalThis.setImmediate;
   globalThis.setImmediate = (callback, ...args) => {
     const resource = new AsyncResource('Immediate');
+    const wrapped = AsyncLocalStorage.bind ? AsyncLocalStorage.bind(callback) : callback;
     return nativeSetImmediate(() => {
       resource.runInAsyncScope(() => {
-        callback(...args);
+        wrapped(...args);
         resource.emitDestroy();
       });
     });
@@ -152,9 +158,10 @@ if (typeof process !== 'undefined' && typeof process.nextTick === 'function') {
   const nativeNextTick = process.nextTick;
   process.nextTick = (callback, ...args) => {
     const resource = new AsyncResource('TickObject');
+    const wrapped = AsyncLocalStorage.bind ? AsyncLocalStorage.bind(callback) : callback;
     return nativeNextTick(() => {
       resource.runInAsyncScope(() => {
-        callback(...args);
+        wrapped(...args);
         resource.emitDestroy();
       });
     });
@@ -172,25 +179,27 @@ globalThis.Promise = class AsyncHookPromise extends NativePromise {
     });
 
     const resource = new AsyncResource('PROMISE');
+    const safeResolve = AsyncLocalStorage.bind ? AsyncLocalStorage.bind(resolveFn) : resolveFn;
+    const safeReject = AsyncLocalStorage.bind ? AsyncLocalStorage.bind(rejectFn) : rejectFn;
 
     try {
       executor(
         (value) => {
           resource.runInAsyncScope(() => {
-            resolveFn(value);
+            safeResolve(value);
             resource.emitDestroy();
           });
         },
         (reason) => {
           resource.runInAsyncScope(() => {
-            rejectFn(reason);
+            safeReject(reason);
             resource.emitDestroy();
           });
         }
       );
     } catch (err) {
       resource.runInAsyncScope(() => {
-        rejectFn(err);
+        safeReject(err);
         resource.emitDestroy();
       });
     }
