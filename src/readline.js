@@ -12,6 +12,20 @@
  * @since Node.js v0.1.98
  */
 
+// ─── Safe Noop Stream Fallback (prevents 'in' operator crashes on undefined) ──
+const noopStream = {
+  write: () => {},
+  on: () => {},
+  once: () => {},
+  off: () => {},
+  removeListener: () => {},
+  pause: () => {},
+  resume: () => {},
+  isTTY: false,
+  columns: 80,
+  rows: 24,
+};
+
 // ─── Interface class ────────────────────────────────────────────────────────
 
 /**
@@ -38,8 +52,8 @@ class Interface {
   #lineDone = false;
 
   constructor(options = {}) {
-    const input  = options.input  || (typeof process !== 'undefined' ? process.stdin  : null);
-    const output = options.output || (typeof process !== 'undefined' ? process.stdout : null);
+    const input  = options.input  || (typeof process !== 'undefined' ? process.stdin  : null) || noopStream;
+    const output = options.output || (typeof process !== 'undefined' ? process.stdout : null) || noopStream;
     const terminal = options.terminal != null ? !!options.terminal : !!(output?.isTTY);
 
     this.#input    = input;
@@ -164,7 +178,6 @@ class Interface {
   close() {
     if (this.#closed) return this;
     this.#closed = true;
-    // Remove only the handler this interface attached — leave other listeners alone.
     this.#input?.removeListener?.('data', this.#boundHandleChunk);
     this.#input?.removeListener?.('close', this.#boundOnInputClose);
     if (this.#lineBuffer.length) this.#flushLine();
@@ -240,22 +253,11 @@ class Interface {
 
   // ── rollback / commit (Node v21.7+) ──────────────────────────────────
 
-  /**
-   * Begins buffering cursor/line operations for atomic application.
-   * Returns `this` for chaining.
-   * @since Node.js v21.7.0 / v20.13.0
-   */
   rollback() {
     this.#pendingOps = [];
     return this;
   }
 
-  /**
-   * Flushes all operations buffered since the last `rollback()` call.
-   * If no `rollback()` was called this is a no-op.
-   * Returns `this` for chaining.
-   * @since Node.js v21.7.0 / v20.13.0
-   */
   commit() {
     if (this.#pendingOps) {
       for (const op of this.#pendingOps) op();
@@ -263,8 +265,6 @@ class Interface {
     }
     return this;
   }
-
-  
 
   /**
    * @param {string} query
@@ -344,110 +344,61 @@ class Interface {
 
 // ─── Readline (alias added in Node v17) ─────────────────────────────────────
 
-/**
- * Alias for `Interface`, introduced as a named export in Node.js v17.0.0.
- * @since Node.js v17.0.0
- */
 const Readline = Interface;
 
 // ─── Top-level functions ─────────────────────────────────────────────────────
 
-/**
- * @param {object} [options]
- * @returns {Interface}
- * @since Node.js v0.1.98
- */
 function createInterface(options = {}) {
   return new Interface(options);
 }
 
-/**
- * Enables keypress event emission on a stream.
- * No-ops in non-Node environments (TTY keypress is unavailable in browsers).
- * @param {object} stream
- * @since Node.js v0.7.7
- */
 function emitKeypressEvents(stream) {
   if (!stream || stream._keypressAttached) return;
   stream._keypressAttached = true;
 }
 
-/**
- * @param {object} stream
- * @param {number} x
- * @param {number} [y]
- * @param {Function} [cb]
- * @returns {boolean}
- * @since Node.js v0.7.7
- */
 function cursorTo(stream, x, y, cb) {
-  if (y == null) stream.write(`\u001b[${x + 1}G`);
-  else           stream.write(`\u001b[${y + 1};${x + 1}H`);
+  const target = stream || noopStream;
+  if (y == null) target.write(`\u001b[${x + 1}G`);
+  else           target.write(`\u001b[${y + 1};${x + 1}H`);
   cb?.();
   return true;
 }
 
-/**
- * @param {object} stream
- * @param {number} dx
- * @param {number} dy
- * @param {Function} [cb]
- * @returns {boolean}
- * @since Node.js v0.7.7
- */
 function moveCursor(stream, dx, dy, cb) {
-  if (dx > 0) stream.write(`\u001b[${dx}C`);
-  if (dx < 0) stream.write(`\u001b[${-dx}D`);
-  if (dy > 0) stream.write(`\u001b[${dy}B`);
-  if (dy < 0) stream.write(`\u001b[${-dy}A`);
+  const target = stream || noopStream;
+  if (dx > 0) target.write(`\u001b[${dx}C`);
+  if (dx < 0) target.write(`\u001b[${-dx}D`);
+  if (dy > 0) target.write(`\u001b[${dy}B`);
+  if (dy < 0) target.write(`\u001b[${-dy}A`);
   cb?.();
   return true;
 }
 
-/**
- * @param {object} stream
- * @param {-1|0|1} dir
- * @param {Function} [cb]
- * @returns {boolean}
- * @since Node.js v0.7.7
- */
 function clearLine(stream, dir, cb) {
+  const target = stream || noopStream;
   const code = dir === 0 ? 2 : dir === -1 ? 1 : 0;
-  stream.write(`\u001b[${code}K`);
+  target.write(`\u001b[${code}K`);
   cb?.();
   return true;
 }
 
-/**
- * @param {object} stream
- * @param {Function} [cb]
- * @returns {boolean}
- * @since Node.js v0.7.7
- */
 function clearScreenDown(stream, cb) {
-  stream.write('\u001b[0J');
+  const target = stream || noopStream;
+  target.write('\u001b[0J');
   cb?.();
   return true;
 }
 
 // ─── promises sub-namespace ──────────────────────────────────────────────────
 
-/**
- * Promise-based readline API (`readline/promises` or `readline.promises`).
- *
- * The `Interface` here is identical to the top-level one — Node's
- * `readline/promises` Interface just returns Promises from `question`
- * (which this implementation already does when no callback is supplied).
- *
- * @since Node.js v17.0.0
- */
 const promises = {
   Interface,
   Readline,
   createInterface,
 };
 
-// ─── globalThis registration (optional, matches original shim behaviour) ─────
+// ─── globalThis registration ─────────────────────────────────────────────────
 
 globalThis.readline = {
   createInterface,
