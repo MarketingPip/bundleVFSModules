@@ -23,7 +23,7 @@ const scope =
 
 
 
-const process = scope.process; // todo remove from scope and update bottom 
+const process = globalThis._RUNTIME_.process; // todo remove from scope and update bottom 
 
 
 const process2 = (function () {
