@@ -182,6 +182,19 @@ class Interface {
   // ── cursor / screen helpers (also available as module-level functions) ──
 
   /**
+   * Returns the real position of the cursor in relation to the input prompt + string.
+   * @returns {{ rows: number, cols: number }}
+   * @since Node.js v13.5.0 / v12.16.0
+   */
+  getCursorPos() {
+    const columns = this.#output?.columns || 80;
+    const totalLength = this.#promptStr.length + this.#lineBuffer.length;
+    const rows = Math.floor(totalLength / columns);
+    const cols = totalLength % columns;
+    return { rows, cols };
+  }
+
+  /**
    * Move cursor to absolute position.
    * @param {number} x  @param {number} [y]  @param {Function} [cb]
    * @returns {this}
