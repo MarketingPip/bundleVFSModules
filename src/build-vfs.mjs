@@ -246,6 +246,8 @@ const BUNDLED_MODULES = {
   sys: "sys.js",
   // Async Hooks
   async_hooks: "async_hooks.js",
+   // Async Context
+  async_context: "async_context.js",
   url: "url.js",
   // Readline
   readline: "readline.js",
