@@ -1,5 +1,7 @@
 'use strict';
 
+export {AsyncLocalStorage} from "als-browser";
+
 // --- Internal state ---
 let asyncIdCounter = 1;
 const asyncResourceMap = new Map();
