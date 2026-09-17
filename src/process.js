@@ -20,9 +20,13 @@ const scope =
 // module loads. If we looked up scope.setTimeout at call time we'd recurse
 // infinitely. Capturing here freezes the native reference permanently.
 // ---------------------------------------------------------------------------
- 
 
-export const process = (function () {
+
+
+const process = scope.process; // todo remove from scope and update bottom 
+
+
+const process2 = (function () {
   let _intervalId = null;
   const listeners = Object.create(null);
   let traceWarningHelperShown = false;
