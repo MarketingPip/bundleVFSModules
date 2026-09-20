@@ -77,41 +77,20 @@ export class IncomingMessage extends Readable {
     msg.method = method
     msg.url = url
   
-    // Lowercase header names, like Node does
-    msg.headers = {}
-    for (const [k, v] of Object.entries(headers || {})) {
-      msg.headers[k.toLowerCase()] = v
+    for (const [key, value] of Object.entries(headers || {})) {
+      const lower = key.toLowerCase()
+      const val = Array.isArray(value) ? value.join(", ") : String(value)
+  
+      msg.rawHeaders.push(key, val)              // original casing, like Node
+      msg.headers[lower] =
+        lower in msg.headers && lower !== "set-cookie"
+          ? `${msg.headers[lower]}, ${val}`      // Node joins duplicates with ", "
+          : val
     }
   
-    // Normalize body into a Buffer (or null)
-    let payload = null
-    if (body != null) {
-      if (typeof body === "string") {
-        payload = Buffer.from(body)
-      } else if (ArrayBuffer.isView(body)) {
-        payload = Buffer.from(body.buffer, body.byteOffset, body.byteLength)
-      } else if (body instanceof ArrayBuffer) {
-        payload = Buffer.from(new Uint8Array(body))
-      } else if (typeof body === "object" && Object.keys(body).length > 0) {
-        // Plain object -> JSON body
-        payload = Buffer.from(JSON.stringify(body))
-        if (!msg.headers["content-type"]) {
-          msg.headers["content-type"] = "application/json"
-        }
-      }
-      // empty {} is treated as "no body"
-    }
-  
-    if (payload && !msg.headers["content-length"]) {
-      msg.headers["content-length"] = String(payload.length)
-    }
-  
-    for (const [key, value] of Object.entries(msg.headers)) {
-      msg.rawHeaders.push(key, value)
-    }
-  
-    if (payload && payload.length) {
-      msg._setBody(payload)
+    // A non-object-mode Readable can only push string/Buffer/Uint8Array
+    if (body && (typeof body === "string" || ArrayBuffer.isView(body))) {
+      msg._setBody(body)
     } else {
       msg.push(null)
       msg.complete = true
