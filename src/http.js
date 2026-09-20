@@ -330,6 +330,7 @@ export class Server extends EventEmitter {
       const addr = self._netServer.address()
       if (addr) {
         _registerServer(addr.port, self)
+        emitEvent("serverListening", { port: addr.port });
       }
       if (originalCb) originalCb()
     }
@@ -409,7 +410,6 @@ export class Server extends EventEmitter {
  * Create an HTTP server
  */
 export function createServer(requestListener) {
-  emitEvent("createServer", null);
   return new Server(requestListener)
 }
 
