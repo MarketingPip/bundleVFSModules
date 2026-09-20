@@ -1,18 +1,16 @@
 // buffer-shim.js
 
-import * as bufferModule from 'buffer';
+import * as buffer from 'buffer';
 
-// Handle various bundler export patterns for the 'buffer' package
-const bufferExport = bufferModule.Buffer || bufferModule.default?.Buffer || bufferModule;
+// Core exports from your polyfill
 const {
-  SlowBuffer = bufferExport.SlowBuffer,
-  INSPECT_MAX_BYTES = bufferExport.INSPECT_MAX_BYTES,
-  kMaxLength = bufferExport.kMaxLength,
-} = bufferExport;
+  Buffer,
+  SlowBuffer,
+  INSPECT_MAX_BYTES,
+  kMaxLength,
+} = buffer;
 
-const Buffer = bufferExport;
-
-// --- Missing pieces (polyfills / fallfalls) ---
+// --- Missing pieces (polyfills / fallbacks) ---
 
 // Node-style constants
 const constants = {
@@ -21,55 +19,6 @@ const constants = {
 };
 
 const kStringMaxLength = kMaxLength;
-
-/**
- * Determines the actual byte length of a string or buffer-like object.
- * Mimics Buffer.byteLength() in Node.js.
- * @param {string | ArrayBuffer | ArrayBufferView | Buffer} stringOrBuffer 
- * @param {string} [encoding='utf8'] 
- * @returns {number}
- */
-function byteLength(stringOrBuffer, encoding = 'utf8') {
-  if (typeof stringOrBuffer === 'string') {
-    if (encoding === 'hex') {
-      return Math.ceil(stringOrBuffer.length / 2);
-    }
-    if (encoding === 'base64' || encoding === 'base64url') {
-      // Rough approximation or use Buffer if available
-      return Buffer.byteLength ? Buffer.byteLength(stringOrBuffer, encoding) : Math.floor((stringOrBuffer.length * 3) / 4);
-    }
-    // For utf8 and other standard string encodings, TextEncoder handles exact byte length
-    return new TextEncoder().encode(stringOrBuffer).length;
-  }
-
-  if (Buffer.isBuffer(stringOrBuffer)) {
-    return stringOrBuffer.length;
-  }
-
-  if (stringOrBuffer instanceof ArrayBuffer) {
-    return stringOrBuffer.byteLength;
-  }
-
-  if (ArrayBuffer.isView(stringOrBuffer)) {
-    return stringOrBuffer.byteLength;
-  }
-
-  // Fallback conversion attempt
-  return Buffer.from(stringOrBuffer).length;
-}
-
-// Attach byteLength directly to the Buffer constructor to mirror Node.js API
-if (!Buffer.byteLength) {
-  Buffer.byteLength = byteLength;
-}
-
-
-// Ensure Buffer.isBuffer is robustly available
-if (typeof Buffer.isBuffer !== 'function') {
-  Buffer.isBuffer = function(b) {
-    return b != null && (b._isBuffer === true || (b instanceof Uint8Array && b.constructor?.name === 'Buffer') || typeof b.readUInt8 === 'function');
-  };
-} 
 
 // Encoding helpers (basic approximations)
 
@@ -80,6 +29,7 @@ function isUtf8(input) {
   
   try {
     // 'fatal: true' makes it throw on invalid sequences.
+    // We don't actually need the string, so we use a small overhead approach.
     new TextDecoder('utf-8', { fatal: true }).decode(buf);
     return true;
   } catch {
@@ -91,6 +41,8 @@ function isUtf8(input) {
 function isAscii(input) {
   const buf = Buffer.isBuffer(input) ? input : Buffer.from(input);
   
+  // For very large buffers, checking 7-bit compliance in a loop is slow.
+  // This uses a typed array check which V8 can often vectorize.
   for (let i = 0; i < buf.length; i++) {
     if (buf[i] > 0x7f) return false;
   }
@@ -98,8 +50,14 @@ function isAscii(input) {
 }
 
 function transcode(source, fromEnc, toEnc) {
+  // 1. Create a buffer from the source using the 'from' encoding
   const buf = Buffer.isBuffer(source) ? source : Buffer.from(source, fromEnc);
+  
+  // 2. Node's transcode returns a NEW buffer. 
+  // We simulate this by converting to the target encoding string and back to a buffer.
   const encodedString = buf.toString(toEnc);
+  
+  // Important: We return a buffer containing the raw bytes of that encoded string
   return Buffer.from(encodedString); 
 }
 
@@ -131,7 +89,6 @@ export {
   transcode,
   INSPECT_MAX_BYTES,
   resolveObjectURL,
-  byteLength,
 };
 
 // Default export (must mirror named exports)
@@ -150,5 +107,4 @@ export default {
   transcode,
   INSPECT_MAX_BYTES,
   resolveObjectURL,
-  byteLength,
 };
