@@ -973,15 +973,10 @@ function _waitForAllServers() {
   return _waitForServersPromise;
 }
 
-globalThis.__httpServerRunTime = {
+globalThis?._RUNTIME_?.__httpServerRunTime = {
   waitForAllServers: _waitForAllServers,
   handleRequest: handleRequest
 };
-
-globalThis.__httpServerRunTime = {
-  waitForAllServers: _waitForAllServers,
-  handleRequest
-}
 
 
 let onServerListenCallback = null
