@@ -344,6 +344,7 @@ export class Server extends EventEmitter {
     const addr = this._netServer.address()
     if (addr) {
       _unregisterServer(addr.port)
+      emitEvent("serverClosed", { port: addr.port });
     }
     this._netServer.close(callback)
     return this
