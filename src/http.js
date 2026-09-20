@@ -22,6 +22,8 @@ const _BrowserWebSocket =
     ? globalThis.WebSocket
     : null
 
+const emitEvent = globalThis?._RUNTIME_?.emit;
+
 /**
  * Incoming HTTP request (Node.js compatible)
  */
@@ -407,6 +409,7 @@ export class Server extends EventEmitter {
  * Create an HTTP server
  */
 export function createServer(requestListener) {
+  emitEvent("createServer", null);
   return new Server(requestListener)
 }
 
