@@ -974,12 +974,16 @@ function _waitForAllServers() {
   return _waitForServersPromise;
 }
 
-if(globalThis._RUNTIME_?.__httpServerRunTime){
-    globalThis._RUNTIME_.__httpServerRunTime = {
-    waitForAllServers: _waitForAllServers,
-    handleRequest: handleRequest
-  };
+
+// Ensure globalThis._RUNTIME_ exists before attaching runtime methods
+if (typeof globalThis._RUNTIME_ !== "object" || globalThis._RUNTIME_ === null) {
+  globalThis._RUNTIME_ = {};
 }
+
+globalThis._RUNTIME_.__httpServerRunTime = {
+  waitForAllServers: _waitForAllServers,
+  handleRequest: handleRequest
+};
 
 let onServerListenCallback = null
 let onServerCloseCallback = null
