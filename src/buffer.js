@@ -61,6 +61,14 @@ if (!Buffer.byteLength) {
   Buffer.byteLength = byteLength;
 }
 
+
+// Ensure Buffer.isBuffer is robustly available
+if (typeof Buffer.isBuffer !== 'function') {
+  Buffer.isBuffer = function(b) {
+    return b != null && b._isBuffer === true || (b instanceof Uint8Array && b.constructor?.name === 'Buffer');
+  };
+} 
+
 // Encoding helpers (basic approximations)
 
 // Optimized isUtf8 using TextDecoder
