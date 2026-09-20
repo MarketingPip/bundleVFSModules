@@ -39,11 +39,11 @@ describe('HTTP Shim', () => {
 
   describe('IncomingMessage', () => {
     test('should initialize from request data', (done) => {
-      const msg = IncomingMessage.fromRequest('POST', '/test', { 'Content-Type': 'text/plain' }, 'hello');
+      const msg = IncomingMessage.fromRequest('POST', '/test', { 'content-type': 'text/plain' }, 'hello');
       
       expect(msg.method).toBe('POST');
       expect(msg.url).toBe('/test');
-      expect(msg.headers['Content-Type']).toBe('text/plain');
+      expect(msg.headers['content-type']).toBe('text/plain');
 
       msg.on('data', (chunk) => {
         expect(chunk.toString()).toBe('hello');
