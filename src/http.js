@@ -974,7 +974,7 @@ function _waitForAllServers() {
   return _waitForServersPromise;
 }
 
-if(globalThis._RUNTIME_.__httpServerRunTime){
+if(globalThis._RUNTIME_?.__httpServerRunTime){
     globalThis._RUNTIME_.__httpServerRunTime = {
     waitForAllServers: _waitForAllServers,
     handleRequest: handleRequest
