@@ -1,14 +1,16 @@
 // buffer-shim.js
 
-import * as buffer from 'buffer';
+import * as bufferModule from 'buffer';
 
-// Core exports from your polyfill
+// Handle various bundler export patterns for the 'buffer' package
+const bufferExport = bufferModule.Buffer || bufferModule.default?.Buffer || bufferModule;
 const {
-  Buffer,
-  SlowBuffer,
-  INSPECT_MAX_BYTES,
-  kMaxLength,
-} = buffer;
+  SlowBuffer = bufferExport.SlowBuffer,
+  INSPECT_MAX_BYTES = bufferExport.INSPECT_MAX_BYTES,
+  kMaxLength = bufferExport.kMaxLength,
+} = bufferModule;
+
+const Buffer = bufferExport;
 
 // --- Missing pieces (polyfills / fallfalls) ---
 
@@ -65,7 +67,7 @@ if (!Buffer.byteLength) {
 // Ensure Buffer.isBuffer is robustly available
 if (typeof Buffer.isBuffer !== 'function') {
   Buffer.isBuffer = function(b) {
-    return b != null && b._isBuffer === true || (b instanceof Uint8Array && b.constructor?.name === 'Buffer');
+    return b != null && (b._isBuffer === true || (b instanceof Uint8Array && b.constructor?.name === 'Buffer') || typeof b.readUInt8 === 'function');
   };
 } 
 
