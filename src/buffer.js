@@ -8,7 +8,7 @@ const {
   SlowBuffer = bufferExport.SlowBuffer,
   INSPECT_MAX_BYTES = bufferExport.INSPECT_MAX_BYTES,
   kMaxLength = bufferExport.kMaxLength,
-} = bufferModule;
+} = bufferExport;
 
 const Buffer = bufferExport;
 
