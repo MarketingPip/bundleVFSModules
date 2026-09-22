@@ -1,29 +1,35 @@
-// npm install timers-browserify setimmediate
-
 /*!
- * timers-web — node:timers for browsers & bundlers
- * MIT License. Adapted from timers-browserify (MIT, J. Buchanan)
- * Node.js parity: node:timers @ Node 0.0.1+
- * Dependencies: timers-browserify, setimmediate
- * Limitations:
- *   - .ref() / .unref() are no-ops (no Node event loop integration).
- *   - enroll / unenroll / active are legacy idle-timer helpers; included for
- *     ecosystem compat but rarely needed in new code.
+ * timers — node:timers for Node.js, browsers & bundlers.
+ *
+ * Faithful to Node.js v24.20.0 lib/timers.js behavior, dependency-free ESM.
+ *
+ * Strategy: the native timer functions are captured at module-evaluation
+ * time (so bundlers that replace globalThis.setTimeout cannot cause
+ * recursion). Where the host returns real timer objects (Node.js), the
+ * Timeout/Immediate wrappers delegate ref/unref/hasRef/refresh/dispose to
+ * them, giving exact event-loop semantics. Where the host returns numeric
+ * ids (browsers), the wrappers keep the classic no-op ref/unref behavior and
+ * Node's delay-clamping rules are applied manually.
+ *
+ * Browser-safe: no node: imports, no process/Buffer use on the hot path.
+ * `process.emitWarning` is used only when present (delay-overflow warnings).
  */
 
 /**
  * @packageDocumentation
- * Drop-in replacement for `node:timers` in browser/bundler environments.
- * Wraps native browser timer APIs with Node.js-compatible Timeout objects
- * that expose `.close()`, `.ref()`, and `.unref()`.
+ * Drop-in replacement for `node:timers` in browser/bundler environments,
+ * with full Node.js v24.20.0 API parity when running under Node.js.
  */
 
-import 'setimmediate'; // installs setImmediate / clearImmediate onto globalThis
+import {
+  validateFunction,
+} from './timers/errors.js';
+import * as promisesNamespace from './timers/promises.js';
 
 /** Resolved global scope — avoids typeof window checks. */
 const scope =
   (typeof global !== 'undefined' && global) ||
-  (typeof self   !== 'undefined' && self)   ||
+  (typeof self !== 'undefined' && self) ||
   globalThis;
 
 // ---------------------------------------------------------------------------
@@ -34,122 +40,300 @@ const scope =
 // module loads. If we looked up scope.setTimeout at call time we'd recurse
 // infinitely. Capturing here freezes the native reference permanently.
 // ---------------------------------------------------------------------------
-const _setTimeout    = scope.setTimeout.bind(scope);
-const _clearTimeout  = scope.clearTimeout.bind(scope);
-const _setInterval   = scope.setInterval.bind(scope);
+const _setTimeout = scope.setTimeout.bind(scope);
+const _clearTimeout = scope.clearTimeout.bind(scope);
+const _setInterval = scope.setInterval.bind(scope);
 const _clearInterval = scope.clearInterval.bind(scope);
-const _setImmediate  = (scope.setImmediate  ?? globalThis.setImmediate).bind(scope);
-const _clearImmediate= (scope.clearImmediate ?? globalThis.clearImmediate).bind(scope);
 
-// ---------------------------------------------------------------------------
-// Timeout — wraps a native timer handle with the Node.js Timeout interface
-// ---------------------------------------------------------------------------
-
-/**
- * Node-compatible timer handle.
- * @param {ReturnType<typeof setTimeout>} id  - Native browser timer id.
- * @param {(id: any) => void} clearFn         - Captured native clear function.
- */
-function Timeout(id, clearFn) {
-  this._id      = id;
-  this._clearFn = clearFn;
+// setImmediate: native when present; MessageChannel fallback otherwise
+// (browsers without setImmediate). The fallback is unref-style: ids are
+// numeric and ref()/unref() are no-ops, matching timers-browserify behavior.
+let _setImmediate;
+let _clearImmediate;
+if (typeof scope.setImmediate === 'function' && typeof scope.clearImmediate === 'function') {
+  _setImmediate = scope.setImmediate.bind(scope);
+  _clearImmediate = scope.clearImmediate.bind(scope);
+} else if (typeof MessageChannel !== 'undefined') {
+  let nextImmediateId = 1;
+  const pendingImmediates = new Map();
+  const channel = new MessageChannel();
+  // Assigning onmessage implicitly starts the port.
+  channel.port1.onmessage = (event) => {
+    const id = event.data;
+    const entry = pendingImmediates.get(id);
+    if (entry !== undefined) {
+      pendingImmediates.delete(id);
+      entry.fn(...entry.args);
+    }
+  };
+  _setImmediate = (fn, ...args) => {
+    const id = nextImmediateId++;
+    pendingImmediates.set(id, { fn, args });
+    channel.port2.postMessage(id);
+    return id;
+  };
+  _clearImmediate = (id) => {
+    pendingImmediates.delete(id);
+  };
+} else {
+  // Last resort (very old browsers): macrotask fallback.
+  _setImmediate = (fn, ...args) => _setTimeout(fn, 0, ...args);
+  _clearImmediate = (id) => _clearTimeout(id);
 }
 
-/** No-ops — Node uses these to manage event-loop ref counts. */
-Timeout.prototype.ref   = function () { return this; };
-Timeout.prototype.unref = function () { return this; };
+// Detect whether native timers return real timer objects (Node.js) or
+// numeric ids (browsers). Behavior-based so it also works under
+// Deno/Bun/workers without user-agent sniffing.
+const HAS_OBJECT_TIMER_HANDLES = (() => {
+  try {
+    const probe = _setTimeout(() => {}, 0);
+    _clearTimeout(probe);
+    return typeof probe === 'object' && probe !== null;
+  } catch {
+    return false;
+  }
+})();
 
-/** Returns the underlying numeric timer id (matches Node ≥ 14.9 behaviour). */
-Timeout.prototype[Symbol.toPrimitive] = function () { return this._id; };
+const TIMEOUT_MAX = 2 ** 31 - 1;
 
-/**
- * Cancels the timer. Equivalent to clearTimeout / clearInterval.
- * Uses the captured native clear function — never our own exported wrapper.
- * @returns {void}
- */
-Timeout.prototype.close = function () {
-  this._clearFn(this._id);
-};
+// Once-per-process warning flags, mirroring Node's internal/timers.js.
+let warnedNaNTimeout = false;
+let warnedNegativeTimeout = false;
 
-/** @param {ReturnType<typeof setImmediate>} id */
-function Immediate(id) {
-  this._id = id;
+function emitTimerWarning(message, name) {
+  if (
+    typeof process !== 'undefined' &&
+    typeof process.emitWarning === 'function'
+  ) {
+    process.emitWarning(message, name);
+  } else if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+    console.warn(`${name}: ${message}`);
+  }
 }
-Immediate.prototype.ref   = function () { return this; };
-Immediate.prototype.unref = function () { return this; };
-Immediate.prototype.close = function () { _clearImmediate(this._id); };
+
+// Node's Timeout constructor delay handling (lib/internal/timers.js).
+// Only needed where the host does not do it natively (browsers). Under
+// Node.js the native timer applies these exact rules itself, so the raw
+// value is passed through untouched.
+function normalizeDelay(after) {
+  if (after === undefined) return 1;
+  after *= 1; // Coalesce to number or NaN
+  if (!(after >= 1 && after <= TIMEOUT_MAX)) {
+    if (after > TIMEOUT_MAX) {
+      emitTimerWarning(
+        `${after} does not fit into a 32-bit signed integer.\nTimeout duration was set to 1.`,
+        'TimeoutOverflowWarning',
+      );
+    } else if (after < 0 && !warnedNegativeTimeout) {
+      warnedNegativeTimeout = true;
+      emitTimerWarning(
+        `${after} is a negative number.\nTimeout duration was set to 1.`,
+        'TimeoutNegativeWarning',
+      );
+    } else if (Number.isNaN(after) && !warnedNaNTimeout) {
+      warnedNaNTimeout = true;
+      emitTimerWarning(
+        `${after} is not a number.\nTimeout duration was set to 1.`,
+        'TimeoutNaNWarning',
+      );
+    }
+    after = 1; // Schedule on next tick, follows browser behavior
+  }
+  return after;
+}
+
+// ---------------------------------------------------------------------------
+// Timeout — Node-compatible timer handle.
+//
+// Wraps the host's native timer. Under Node.js the native Timeout is kept
+// and ref/unref/hasRef/refresh/close/dispose delegate to it, so event-loop
+// semantics (including unref letting the process exit) are exact. The
+// wrapper additionally exposes `_id` and a numeric Symbol.toPrimitive, which
+// the browser/bundler ecosystem relies on.
+// ---------------------------------------------------------------------------
+class Timeout {
+  constructor(native) {
+    this._native = native;
+    // Mirror Node: coercing a Timeout to a primitive yields its numeric id
+    // (and registers it for clearTimeout(id) lookups).
+    this._id =
+      typeof native === 'object' && native !== null ? Number(native) : native;
+  }
+
+  ref() {
+    if (this._native !== null && typeof this._native === 'object') {
+      this._native.ref();
+    }
+    return this;
+  }
+
+  unref() {
+    if (this._native !== null && typeof this._native === 'object') {
+      this._native.unref();
+    }
+    return this;
+  }
+
+  hasRef() {
+    if (this._native !== null && typeof this._native === 'object') {
+      return this._native.hasRef();
+    }
+    return true;
+  }
+
+  refresh() {
+    if (this._native !== null && typeof this._native === 'object') {
+      this._native.refresh();
+    }
+    return this;
+  }
+
+  close() {
+    if (this._native !== null && typeof this._native === 'object') {
+      this._native.close();
+    } else {
+      _clearTimeout(this._id);
+    }
+  }
+
+  [Symbol.dispose]() {
+    this.close();
+  }
+
+  [Symbol.toPrimitive]() {
+    return this._id;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Immediate — Node-compatible immediate handle. Same delegation strategy as
+// Timeout. Node's Immediate has no close(); we add one for ecosystem compat
+// (the pre-existing public API of this module).
+// ---------------------------------------------------------------------------
+class Immediate {
+  constructor(native) {
+    this._native = native;
+    this._id = native;
+  }
+
+  ref() {
+    if (this._native !== null && typeof this._native === 'object') {
+      this._native.ref();
+    }
+    return this;
+  }
+
+  unref() {
+    if (this._native !== null && typeof this._native === 'object') {
+      this._native.unref();
+    }
+    return this;
+  }
+
+  hasRef() {
+    if (this._native !== null && typeof this._native === 'object') {
+      return this._native.hasRef();
+    }
+    return true;
+  }
+
+  close() {
+    _clearImmediate(this._native);
+  }
+
+  [Symbol.dispose]() {
+    this.close();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Core timer exports
 // ---------------------------------------------------------------------------
 
 /**
- * Schedules `fn` to run after at least `delay` ms.
- * @param {(...args: any[]) => void} fn
- * @param {number} [delay=0]
- * @param {...any} args - Forwarded to fn when it fires.
- * @returns {Timeout}
- *
- * @example
- * const t = setTimeout(() => console.log('hi'), 500);
- * t.close(); // cancel
+ * Schedules `callback` to run after at least `delay` ms.
+ * Mirrors Node v24 lib/timers.js setTimeout (incl. callback validation;
+ * delay clamping/warnings are applied by the native timer under Node.js and
+ * by normalizeDelay() in browsers).
  */
-export function setTimeout(fn, delay, ...args) {
+export function setTimeout(callback, after, ...args) {
+  validateFunction(callback, 'callback');
+  if (!HAS_OBJECT_TIMER_HANDLES) after = normalizeDelay(after);
   // Use _setTimeout — the reference captured at module load, never our own export.
-  return new Timeout(_setTimeout(fn, delay, ...args), _clearTimeout);
+  return new Timeout(_setTimeout(callback, after, ...args));
 }
 
 /**
- * Schedules `fn` to run repeatedly every `delay` ms.
- * @param {(...args: any[]) => void} fn
- * @param {number} [delay=0]
- * @param {...any} args
- * @returns {Timeout}
- *
- * @example
- * const iv = setInterval(() => console.log('tick'), 1000);
- * setTimeout(() => iv.close(), 3500); // stop after ~3 ticks
+ * Schedules `callback` to run repeatedly every `delay` ms.
  */
-export function setInterval(fn, delay, ...args) {
-  return new Timeout(_setInterval(fn, delay, ...args), _clearInterval);
+export function setInterval(callback, after, ...args) {
+  validateFunction(callback, 'callback');
+  if (!HAS_OBJECT_TIMER_HANDLES) after = normalizeDelay(after);
+  return new Timeout(_setInterval(callback, after, ...args));
 }
 
 /**
- * Cancels a Timeout or raw native handle.
- * @param {Timeout | number | undefined} timeout
+ * Cancels a timeout/interval. Accepts our Timeout wrappers, native timer
+ * objects, and numeric/string ids (Node resolves those via its id registry).
+ * Never throws for nullish or foreign values.
  */
-export function clearTimeout(timeout) {
-  if (!timeout) return;
-  if (typeof timeout.close === 'function') timeout.close();
-  else _clearTimeout(timeout);
+export function clearTimeout(timer) {
+  if (timer === undefined || timer === null) return;
+  if (timer instanceof Timeout) {
+    timer.close();
+    return;
+  }
+  _clearTimeout(timer);
 }
 
-/** Alias — clearInterval and clearTimeout are interchangeable in browsers. */
-export { clearTimeout as clearInterval };
+/**
+ * Cancels an interval. Interchangeable with clearTimeout per the HTML spec.
+ */
+export function clearInterval(timer) {
+  clearTimeout(timer);
+}
 
 /**
- * Schedules `fn` to run after the current poll phase (before I/O callbacks).
- * @param {(...args: any[]) => void} fn
- * @param {...any} args
- * @returns {Immediate}
- *
- * @example
- * const im = setImmediate(() => console.log('immediate'));
- * clearImmediate(im);
+ * Schedules `callback` to run after I/O callbacks (before timers).
  */
-export function setImmediate(fn, ...args) {
-  return new Immediate(_setImmediate(fn, ...args));
+export function setImmediate(callback, ...args) {
+  validateFunction(callback, 'callback');
+  return new Immediate(_setImmediate(callback, ...args));
 }
 
 /**
  * Cancels an Immediate handle.
- * @param {Immediate | any} immediate
  */
 export function clearImmediate(immediate) {
-  if (!immediate) return;
-  if (typeof immediate.close === 'function') immediate.close();
-  else _clearImmediate(immediate);
+  if (immediate === undefined || immediate === null) return;
+  if (immediate instanceof Immediate) {
+    immediate.close();
+    return;
+  }
+  _clearImmediate(immediate);
 }
+
+// Node exposes the promise variants as `timers.promises` (lazy getter in
+// Node; here the module namespace, which is reference-identical to
+// `import 'timers/promises'` / `require('timers/promises')`).
+export { promisesNamespace as promises };
+
+// util.promisify hooks, mirroring Node's customPromisify definitions.
+const customPromisify = Symbol.for('nodejs.util.promisify.custom');
+Object.defineProperty(setTimeout, customPromisify, {
+  __proto__: null,
+  enumerable: true,
+  get() {
+    return promisesNamespace.setTimeout;
+  },
+});
+Object.defineProperty(setImmediate, customPromisify, {
+  __proto__: null,
+  enumerable: true,
+  get() {
+    return promisesNamespace.setImmediate;
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Legacy idle-timeout helpers (node ecosystem compat)
@@ -157,8 +341,6 @@ export function clearImmediate(immediate) {
 
 /**
  * Prepares an object for idle-timeout tracking without starting the timer.
- * @param {{ _idleTimeoutId?: any; _idleTimeout?: number }} item
- * @param {number} msecs
  */
 export function enroll(item, msecs) {
   _clearTimeout(item._idleTimeoutId);
@@ -167,7 +349,6 @@ export function enroll(item, msecs) {
 
 /**
  * Cancels and removes an enrolled idle timer.
- * @param {{ _idleTimeoutId?: any; _idleTimeout?: number }} item
  */
 export function unenroll(item) {
   _clearTimeout(item._idleTimeoutId);
@@ -177,7 +358,6 @@ export function unenroll(item) {
 /**
  * Starts (or restarts) the idle timer for an enrolled object.
  * Calls `item._onTimeout()` when the timer fires.
- * @param {{ _idleTimeoutId?: any; _idleTimeout?: number; _onTimeout?: () => void }} item
  */
 export function active(item) {
   _clearTimeout(item._idleTimeoutId);
@@ -193,29 +373,15 @@ export function active(item) {
 export { active as _unrefActive };
 
 export default {
-  setTimeout, clearTimeout,
-  setInterval, clearInterval,
-  setImmediate, clearImmediate,
-  enroll, unenroll, active, _unrefActive: active,
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  setImmediate,
+  clearImmediate,
+  enroll,
+  unenroll,
+  active,
+  _unrefActive: active,
+  promises: promisesNamespace,
 };
-
-// ---------------------------------------------------------------------------
-// Usage
-// ---------------------------------------------------------------------------
-//
-// import timers from './timers';
-//
-// // setTimeout / clearTimeout
-// const t = timers.setTimeout(() => console.log('fired'), 500);
-// t.close(); // cancel before firing — no handle leak
-//
-// // setInterval
-// const iv = timers.setInterval(() => console.log('tick'), 1_000);
-// timers.setTimeout(() => iv.close(), 3_500); // stop after ~3 ticks
-//
-// // setImmediate
-// const im = timers.setImmediate(() => console.log('next iteration'));
-// timers.clearImmediate(im); // cancel if not yet fired
-//
-// // Edge: extra args forwarded to callback
-// timers.setTimeout((a, b) => console.log(a + b), 100, 1, 2); // logs 3
