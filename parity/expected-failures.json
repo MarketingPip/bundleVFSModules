@@ -1,1 +1,14 @@
-{}
+{
+  "test-path-basename.js": "custom win32.basename('a','a') returns 'a', Node returns '' (ext-equals-basename edge)",
+  "test-path-glob.js": "polyfill lacks Node 22+ path.glob / path.matchesGlob APIs",
+  "test-path-join.js": "custom win32.join mishandles root edges: join('/','.') and '..' above root",
+  "test-path-makelong.js": "polyfill lacks path.toNamespacedPath",
+  "test-path-normalize.js": "custom win32.normalize device-path edge (trailing dot on \\\\?\\ style paths)",
+  "test-path-parse-format.js": "error-code parity: polyfill throws TypeError without Node's ERR_INVALID_ARG_TYPE code",
+  "test-path-posix-exists.js": "harness ESM-interop artifact: require('path/posix') yields an ESM namespace, not reference-equal to path.posix (identical under pure-ESM bundler usage)",
+  "test-path-relative.js": "custom win32.relative: cross-drive-letter returns relative instead of absolute target; drive-letter case bugs",
+  "test-path-resolve.js": "custom win32.resolve: drive-letter case not preserved, drive-relative '\\\\e.exe' mishandled (extends documented no-drive-tracking limitation)",
+  "test-path-win32-exists.js": "harness ESM-interop artifact: require('path/win32') yields an ESM namespace, not reference-equal to path.win32 (identical under pure-ESM bundler usage)",
+  "test-path.js": "error-code parity: polyfill throws TypeError without Node's ERR_INVALID_ARG_TYPE code",
+  "test-path-dirname.js": "custom win32.dirname('////') returns '//', Node returns '/' (multi-slash root collapse)"
+}
