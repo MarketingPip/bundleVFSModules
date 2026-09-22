@@ -256,11 +256,25 @@ const BUNDLED_MODULES = {
   http: "http.js",
   https: "https.js",
   http2: "http2.js",
+  // HTTP internals (node:_http_*)
+  _http_agent: "_http_agent.js",
+  _http_client: "_http_client.js",
+  _http_common: "_http_common.js",
+  _http_incoming: "_http_incoming.js",
+  _http_outgoing: "_http_outgoing.js",
+  _http_server: "_http_server.js",
   // Stream
   stream: "stream.js",
   stream_promises: "stream/promises.js",
   stream_web: "stream/web.js",
   stream_consumers: "stream/consumers.js",
+  // Stream internals (node:_stream_*)
+  _stream_duplex: "_stream_duplex.js",
+  _stream_passthrough: "_stream_passthrough.js",
+  _stream_readable: "_readable_stream.js",
+  _stream_transform: "_stream_transform.js",
+  _stream_wrap: "_stream_wrap.js",
+  _stream_writable: "_stream_writeable.js",
   // Crypto
   crypto: "crypto.js",
   // Net
@@ -275,6 +289,9 @@ const BUNDLED_MODULES = {
   tty: "tty.js",
   // TLS
   tls: "tls.js",
+  // TLS internals (node:_tls_*)
+  _tls_common: "_tls_common.js",
+  _tls_wrap: "_tls_wrap.js",
   // Dgram
   dgram: "dgram.js",
   // Diagnostics

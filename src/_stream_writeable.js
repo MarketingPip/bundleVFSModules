@@ -1,22 +1,11 @@
-import { Writable } from 'readable-stream';
-
-// In Node, WritableState is an internal class used for managing 
-// the state of the stream. We export it for compatibility.
-const WritableState = Writable.WritableState || class {};
-
-/**
- * Converts a Web WritableStream to a Node Writable stream
- */
-function fromWeb(webStream, options) {
-  return Writable.fromWeb(webStream, options);
-}
-
-/**
- * Converts a Node Writable stream to a Web WritableStream
- */
-function toWeb(nodeStream) {
-  return Writable.toWeb(nodeStream);
-}
-
-export { Writable, WritableState, fromWeb, toWeb };
+// node:_stream_writable — Node internal module (module.exports = Writable).
+// Thin re-export of the stream port's Writable class, which carries the same
+// statics as Node's internal (WritableState, fromWeb, toWeb).
+// Dependency-free ESM, browser-safe. No _RUNTIME_ access needed.
+//
+// NOTE: the file keeps Node's historical "writeable" spelling; the bundle key
+// is `_stream_writable` (see BUNDLED_MODULES in src/build-vfs.mjs), matching
+// the runtime's builtin-module key normalization.
+import { Writable } from './stream.js';
 export default Writable;
+export { Writable };
