@@ -1,4 +1,4 @@
-import { Buffer } from 'buffer';
+import { Buffer } from '../src/stream/buffer.js';
 import { 
   arrayBuffer, 
   blob, 
