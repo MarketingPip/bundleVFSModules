@@ -248,6 +248,8 @@ const BUNDLED_MODULES = {
   async_hooks: "async_hooks.js",
    // Async Context
   async_context: "async_context.js",
+  // Domain
+  domain: "domain.js",
   url: "url.js",
   // Readline
   readline: "readline.js",
