@@ -1,9 +1,9 @@
-// Import path from path-browserify
+// Import path from path-browserify (POSIX-only implementation)
 import path from "path-browserify";
-import win32 from './path/win32.js'; // Optional: custom win32 implementation
+import win32Impl from './path/win32.js'; // Custom win32 implementation (path-browserify has none — its win32 is null)
 
 // ---------------------------------------------------------------------------
-// Named exports — every member of the POSIX API
+// Named exports — every member of the POSIX API, plus win32
 // ---------------------------------------------------------------------------
 
 export const {
@@ -20,8 +20,11 @@ export const {
   format,
   parse,
   posix,       // self-referential, preserved for parity
-  win32: win32Alias = win32, // alias to win32 import or path.win32
 } = path;
+
+// win32 always uses our custom implementation: path-browserify exposes no
+// win32 (its `win32` property is null), so there is nothing to fall back to.
+export const win32 = win32Impl;
 
 // ---------------------------------------------------------------------------
 // Default export
@@ -41,5 +44,5 @@ export default {
   format,
   parse,
   posix,       // self-referential, preserved for parity
-  win32: win32Alias,  // alias to win32
+  win32: win32Impl,
 };

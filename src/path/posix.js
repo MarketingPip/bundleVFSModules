@@ -16,7 +16,7 @@
  * implementation (POSIX), so this module is a clean re-export of `./path`.
  */
 
-import path from '../path';
+import path from '../path.js';
 
 // ---------------------------------------------------------------------------
 // Named exports — every member of the POSIX API

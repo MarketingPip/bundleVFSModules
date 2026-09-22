@@ -23,9 +23,11 @@
  */
 
 // path-browserify exposes only posix; win32 must be implemented here.
-// We import path solely for the fallback win32 alias it provides, but
-// we override every method with correct win32 semantics below.
-import {posix} from '../path';
+// We import posix directly from path-browserify (not via ../path.js) to
+// avoid a circular import: ../path.js itself imports this win32 module,
+// so reading its exports at module-evaluation time would hit TDZ.
+import pathBrowserify from 'path-browserify';
+const { posix } = pathBrowserify;
 
 // ---------------------------------------------------------------------------
 // Constants
