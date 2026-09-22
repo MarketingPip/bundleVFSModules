@@ -1,25 +1,420 @@
 /**
- * Browser-compatible child_process shim (pure JS)
+ * Browser-compatible child_process shim — port of Node v24.20.0 lib/child_process.js
  *
- * Delegates exec/spawn to the parent frame via postMessage.
- * Provides a Node.js-compatible API surface where possible.
+ * Argument validation, error codes/messages, option normalization, return
+ * shapes, and event names match Node v24.20.0. Real subprocesses are
+ * impossible in a browser, so execution degrades gracefully:
  *
- * Important:
+ * ─── Host postMessage protocol (RUNTIME INTEGRATION — do not change) ────────
+ * Async spawn/exec/execFile delegate to the parent frame:
+ *
+ *   parent.postMessage({ type, requestId, payload }, '*')
+ *
+ *   type:    'PARENT_EXEC_REQUEST' | 'PARENT_SPAWN_REQUEST'
+ *   requestId: `cp_${Date.now()}_${n}` (unique per call)
+ *   PARENT_EXEC_REQUEST  payload: { command: string, options }
+ *   PARENT_SPAWN_REQUEST payload: { command: string, args: string[], options }
+ *
+ * The shim listens for window 'message' events and accepts the response whose
+ *   data = { type: 'PARENT_CHILD_EXEC_RESPONSE', requestId, payload }
+ * matches the request. `payload` is `{ stdout, stderr, exitCode, signal }`.
+ *
+ * Timeout (options.timeout ms) rejects the request with ETIMEDOUT
+ * ('Process timed out'); aborting the child's AbortController rejects with
+ * 'Process killed' (code SIGTERM, killed: true). Without a `window`, or
+ * without a parent frame that implements postMessage, the request rejects
+ * (ERR_NO_WINDOW / ERR_NO_PARENT) and the child emits 'error' and finalizes
+ * with exit code 1 — honest degradation, never a synchronous throw.
+ *
+ * ─── What works where ───────────────────────────────────────────────────────
+ * - Jared's runtime (iframe inside the CodeSandbox host): the host parent
+ *   frame implements the protocol, so spawn/exec/execFile really run and
+ *   stream stdout/stderr/exitCode back through PARENT_CHILD_EXEC_RESPONSE.
+ * - Standalone browser (no implementing parent): validation, shapes, events,
+ *   kill/timeout/abort semantics all work; execution requests fail closed
+ *   with ERR_NO_PARENT and the child finalizes with code 1.
+ * - Sync APIs (execSync/spawnSync/execFileSync) and fork(): a real
+ *   subprocess can never exist here. They validate arguments exactly like
+ *   Node, then return honest noops: fork() returns a live-but-idle
+ *   ChildProcess with a closed IPC channel; the *Sync functions return
+ *   empty success-shaped results.
+ *
+ * Lifecycle invariants (preserved from the original shim):
  * - A child can only be finalized once.
  * - stdout/stderr are ended exactly once.
  * - kill() and parent responses cannot finalize the same child twice.
  * - Output arriving after finalization is ignored.
  */
 
-import { EventEmitter } from './events';
-import { Readable, Writable } from './stream';
+import { EventEmitter } from './events.js';
+import { Readable, Writable } from './stream.js';
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Validation (message shapes ported from Node's internal/errors.js) ──────
+
+const kTypes = [
+  'string',
+  'function',
+  'number',
+  'object',
+  // Accept 'Function' and 'Object' as alternative to the lower cased version.
+  'Function',
+  'Object',
+  'boolean',
+  'bigint',
+  'symbol',
+];
+
+const classRegExp = /^[A-Z][a-zA-Z0-9]*$/;
+
+function formatList(array, type = 'and') {
+  switch (array.length) {
+    case 0: return '';
+    case 1: return `${array[0]}`;
+    case 2: return `${array[0]} ${type} ${array[1]}`;
+    case 3: return `${array[0]}, ${array[1]}, ${type} ${array[2]}`;
+    default:
+      return `${array.slice(0, -1).join(', ')}, ${type} ${array[array.length - 1]}`;
+  }
+}
+
+/**
+ * Minimal util.inspect for error messages: single-quoted strings with
+ * control characters escaped the way Node renders them.
+ */
+function inspectValue(value) {
+  if (typeof value === 'string') {
+    const escaped = value.replace(/[\0-\x1f\x7f'\\]/g, (ch) => {
+      switch (ch) {
+        case '\0': return '\\x00';
+        case '\n': return '\\n';
+        case '\r': return '\\r';
+        case '\t': return '\\t';
+        case '\'': return '\\\'';
+        case '\\': return '\\\\';
+        default: {
+          const code = ch.charCodeAt(0).toString(16).padStart(2, '0');
+          return `\\x${code}`;
+        }
+      }
+    });
+    const short = escaped.length > 128 ? `${escaped.slice(0, 128)}...` : escaped;
+    return `'${short}'`;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' ||
+      typeof value === 'bigint' || value === null || value === undefined) {
+    return String(value);
+  }
+  // Node's util.inspect renders Buffers as `<Buffer 61 00 62>`.
+  const Buf = globalThis.Buffer;
+  if (Buf && value instanceof Buf) {
+    const hex = Array.from(value, (b) => b.toString(16).padStart(2, '0')).join(' ');
+    return `<Buffer ${hex.length > 120 ? `${hex.slice(0, 120)}...` : hex}>`;
+  }
+  if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(value) &&
+      !(value instanceof DataView)) {
+    const name = value.constructor ? value.constructor.name : 'TypedArray';
+    return `${name}(${value.length}) [ ${Array.from(value).join(', ')} ]`;
+  }
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function determineSpecificType(value) {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  const type = typeof value;
+  switch (type) {
+    case 'bigint': return `type bigint (${value}n)`;
+    case 'number':
+      if (value === 0) return 1 / value === -Infinity ? 'type number (-0)' : 'type number (0)';
+      if (value !== value) return 'type number (NaN)';
+      if (value === Infinity) return 'type number (Infinity)';
+      if (value === -Infinity) return 'type number (-Infinity)';
+      return `type number (${value})`;
+    case 'boolean': return value ? 'type boolean (true)' : 'type boolean (false)';
+    case 'symbol': return `type symbol (${String(value)})`;
+    case 'function': return `function ${value.name}`;
+    case 'object':
+      if (value.constructor && 'name' in value.constructor) {
+        return `an instance of ${value.constructor.name}`;
+      }
+      return `${inspectValue(value)}`;
+    case 'string': {
+      let v = value;
+      if (v.length > 28) v = `${v.slice(0, 25)}...`;
+      if (!v.includes("'")) return `type string ('${v}')`;
+      return `type string (${JSON.stringify(v)})`;
+    }
+    default: return `${type}`;
+  }
+}
+
+function errInvalidArgType(name, expected, actual) {
+  if (!Array.isArray(expected)) expected = [expected];
+  let msg = 'The ';
+  const type = name.includes('.') ? 'property' : 'argument';
+  msg += `"${name}" ${type} must be `;
+
+  const types = [];
+  const instances = [];
+  const other = [];
+
+  for (const value of expected) {
+    if (kTypes.includes(value)) {
+      types.push(value.toLowerCase());
+    } else if (classRegExp.test(value)) {
+      instances.push(value);
+    } else {
+      other.push(value);
+    }
+  }
+
+  // Special handle `object` in case other instances are allowed to outline
+  // the differences between each other.
+  if (instances.length > 0) {
+    const pos = types.indexOf('object');
+    if (pos !== -1) {
+      types.splice(pos, 1);
+      instances.push('Object');
+    }
+  }
+
+  if (types.length > 0) {
+    msg += `${types.length > 1 ? 'one of type' : 'of type'} ${formatList(types, 'or')}`;
+    if (instances.length > 0 || other.length > 0) msg += ' or ';
+  }
+
+  if (instances.length > 0) {
+    msg += `an instance of ${formatList(instances, 'or')}`;
+    if (other.length > 0) msg += ' or ';
+  }
+
+  if (other.length > 0) {
+    if (other.length > 1) {
+      msg += `one of ${formatList(other, 'or')}`;
+    } else {
+      if (other[0].toLowerCase() !== other[0]) msg += 'an ';
+      msg += `${other[0]}`;
+    }
+  }
+
+  msg += `. Received ${determineSpecificType(actual)}`;
+  return Object.assign(new TypeError(msg), { code: 'ERR_INVALID_ARG_TYPE' });
+}
+
+function errInvalidArgValue(name, value, reason = 'is invalid') {
+  const type = name.includes('.') ? 'property' : 'argument';
+  const msg = `The ${type} '${name}' ${reason}. Received ${inspectValue(value)}`;
+  return Object.assign(new TypeError(msg), { code: 'ERR_INVALID_ARG_VALUE' });
+}
+
+function errOutOfRange(name, range, value) {
+  const msg = `The value of "${name}" is out of range. It must be ${range}. Received ${inspectValue(value)}`;
+  return Object.assign(new RangeError(msg), { code: 'ERR_OUT_OF_RANGE' });
+}
+
+function errUnknownSignal(signal) {
+  const msg = `Unknown signal: ${String(signal)}`;
+  return Object.assign(new TypeError(msg), { code: 'ERR_UNKNOWN_SIGNAL' });
+}
+
+function errStdioMaxBuffer(which) {
+  const msg = `${which} maxBuffer length exceeded`;
+  return Object.assign(new Error(msg), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
+}
+
+function validateString(value, name) {
+  if (typeof value !== 'string') throw errInvalidArgType(name, 'string', value);
+}
+
+function validateFunction(value, name) {
+  if (typeof value !== 'function') throw errInvalidArgType(name, 'Function', value);
+}
+
+function validateObject(value, name) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw errInvalidArgType(name, 'Object', value);
+  }
+}
+
+function validateArray(value, name) {
+  if (!Array.isArray(value)) throw errInvalidArgType(name, 'Array', value);
+}
+
+function validateBoolean(value, name) {
+  if (typeof value !== 'boolean') throw errInvalidArgType(name, 'boolean', value);
+}
+
+function validateAbortSignal(signal, name) {
+  if (signal !== undefined &&
+      (signal === null || typeof signal !== 'object' || !('aborted' in signal))) {
+    throw errInvalidArgType(name, 'AbortSignal', signal);
+  }
+}
+
+/**
+ * Node's validateArgumentNullCheck: only strings are inspected, anything
+ * else passes through untouched.
+ */
+function validateStringNullBytes(value, name) {
+  if (typeof value === 'string' && value.includes('\0')) {
+    throw errInvalidArgValue(name, value, 'must be a string without null bytes');
+  }
+}
+
+function isInt32(value) {
+  return Number.isInteger(value) && value >= -2147483648 && value <= 2147483647;
+}
+
+function validateTimeout(timeout) {
+  if (timeout != null && !(Number.isInteger(timeout) && timeout >= 0)) {
+    throw errOutOfRange('timeout', 'an unsigned integer', timeout);
+  }
+}
+
+function validateMaxBuffer(maxBuffer) {
+  if (maxBuffer != null && !(typeof maxBuffer === 'number' && maxBuffer >= 0)) {
+    throw errOutOfRange('options.maxBuffer', 'a positive number', maxBuffer);
+  }
+}
+
+/**
+ * Accepts a string path, Buffer/Uint8Array, or file: URL — like Node's
+ * getValidatedPath (internal/fs/utils.js). Null-byte rejection uses Node's
+ * exact reason phrase; a non-file: URL throws ERR_INVALID_URL_SCHEME.
+ */
+function getValidatedPath(p, prop) {
+  if (typeof p === 'string') {
+    if (p.includes('\0')) {
+      throw errInvalidArgValue(
+        prop, p, 'must be a string, Uint8Array, or URL without null bytes');
+    }
+    return p;
+  }
+  if (typeof URL !== 'undefined' && p instanceof URL) {
+    if (p.protocol !== 'file:') {
+      const err = new TypeError('The URL must be of scheme file');
+      err.code = 'ERR_INVALID_URL_SCHEME';
+      throw err;
+    }
+    let decoded;
+    try {
+      decoded = decodeURIComponent(p.pathname);
+    } catch {
+      decoded = p.pathname;
+    }
+    // Node validates the decoded path for null bytes.
+    if (decoded.includes('\0')) {
+      throw errInvalidArgValue(
+        prop, decoded, 'must be a string, Uint8Array, or URL without null bytes');
+    }
+    return decoded;
+  }
+  const Buf = globalThis.Buffer;
+  const isBytes = (Buf && p instanceof Buf) ||
+    (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(p));
+  if (isBytes) {
+    const bytes = Buf && p instanceof Buf ? Uint8Array.from(p) : p;
+    // Node's validatePath rejects raw zero bytes in Uint8Arrays too.
+    for (let i = 0; i < bytes.length; i++) {
+      if (bytes[i] === 0) {
+        throw errInvalidArgValue(
+          prop, p, 'must be a string, Uint8Array, or URL without null bytes');
+      }
+    }
+    return new TextDecoder().decode(bytes);
+  }
+  throw errInvalidArgType(prop, ['string', 'Buffer', 'URL'], p);
+}
+
+// ─── Signals (port of Node's convertToValidSignal) ──────────────────────────
+
+const SIGNALS = {
+  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5,
+  SIGABRT: 6, SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10,
+  SIGSEGV: 11, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15,
+  SIGSTKFLT: 16, SIGCHLD: 17, SIGCONT: 18, SIGSTOP: 19, SIGTSTP: 20,
+  SIGTTIN: 21, SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24, SIGXFSZ: 25,
+  SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGPWR: 30,
+  SIGSYS: 31,
+};
+const SIGNAL_NUMBERS = new Set(Object.values(SIGNALS));
+const SIGNAL_NAMES = {};
+for (const [name, num] of Object.entries(SIGNALS)) SIGNAL_NAMES[num] = name;
+
+function convertToValidSignal(signal) {
+  if (typeof signal === 'number' && SIGNAL_NUMBERS.has(signal)) return signal;
+  if (typeof signal === 'string') {
+    const num = SIGNALS[signal.toUpperCase()];
+    if (num !== undefined) return num;
+  }
+  throw errUnknownSignal(signal);
+}
+
+function sanitizeKillSignal(killSignal) {
+  if (typeof killSignal === 'string' || typeof killSignal === 'number') {
+    return convertToValidSignal(killSignal);
+  } else if (killSignal != null) {
+    throw errInvalidArgType('options.killSignal', ['string', 'number'], killSignal);
+  }
+  return undefined;
+}
+
+function signalNameOf(sig) {
+  if (typeof sig === 'number') return SIGNAL_NAMES[sig] ?? String(sig);
+  return sig;
+}
+
+class AbortError extends Error {
+  constructor(cause) {
+    super('This operation was aborted');
+    this.name = 'AbortError';
+    this.code = 'ABORT_ERR';
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+// ─── Encoding ───────────────────────────────────────────────────────────────
+
+const MAX_BUFFER = 1024 * 1024;
+
+const VALID_ENCODINGS = new Set([
+  'utf8', 'utf-8', 'ascii', 'latin1', 'binary', 'base64', 'base64url',
+  'hex', 'ucs2', 'ucs-2', 'utf16le', 'utf-16le',
+]);
+
+/**
+ * Like Node's execFile encoding resolution: 'buffer'/null/invalid →
+ * Buffer output, otherwise the named string encoding.
+ */
+function resolveEncoding(encoding) {
+  if (encoding !== 'buffer' && typeof encoding === 'string' &&
+      VALID_ENCODINGS.has(encoding.toLowerCase())) {
+    return encoding;
+  }
+  return null;
+}
+
+function toOutput(text, encoding) {
+  if (encoding) return text;
+  const Buf = globalThis.Buffer;
+  if (Buf && typeof Buf.from === 'function') return Buf.from(text, 'utf8');
+  return new TextEncoder().encode(text);
+}
+
+// ─── Runtime helpers ────────────────────────────────────────────────────────
 
 let _reqCounter = 0;
 
 function makeRequestId() {
   return `cp_${Date.now()}_${++_reqCounter}`;
+}
+
+function makeFakePid() {
+  return Math.floor(Math.random() * 32768) + 1024;
 }
 
 const DEFAULT_TIMEOUT = 0;
@@ -34,6 +429,11 @@ function getTaskTracker() {
 
 /**
  * Send a child-process request to the parent frame.
+ *
+ * HOST PROTOCOL — preserved verbatim. The parent frame must reply with a
+ * window 'message' event whose data is
+ *   { type: 'PARENT_CHILD_EXEC_RESPONSE', requestId, payload }
+ * where payload is `{ stdout, stderr, exitCode, signal }`.
  *
  * The AbortSignal is optional. This is important because a kill() can happen
  * before the parent responds.
@@ -168,7 +568,7 @@ export class ChildProcess extends EventEmitter {
   constructor() {
     super();
 
-    this.pid = Math.floor(Math.random() * 32768) + 1024;
+    this.pid = makeFakePid();
 
     this.connected = false;
     this.killed = false;
@@ -176,8 +576,8 @@ export class ChildProcess extends EventEmitter {
     this.exitCode = null;
     this.signalCode = null;
 
+    this.spawnfile = null;
     this.spawnargs = [];
-    this.spawnfile = '';
 
     this.stdin = new Writable({
       write(_chunk, _encoding, callback) {
@@ -193,7 +593,14 @@ export class ChildProcess extends EventEmitter {
       read() {},
     });
 
+    // Node exposes the stdio trio as an array as well.
+    this.stdio = [this.stdin, this.stdout, this.stderr];
+
     this._ac = new AbortController();
+
+    // NOTE: `send` and `disconnect` are NOT installed here. In Node they
+    // exist only on children with an IPC channel (fork()); plain spawn()
+    // children have them `undefined`.
 
     // ── Lifecycle state ──────────────────────────────────────────────────
 
@@ -360,85 +767,367 @@ export class ChildProcess extends EventEmitter {
 
   kill(signal = 'SIGTERM') {
     /*
-     * A child that has already exited cannot be killed again.
+     * The signal is validated even when the child is already dead, and
+     * signal 0 ("test for existence") never terminates the child — both
+     * match Node. Like Node, exit/close are delivered asynchronously, so a
+     * second kill() before finalization still returns true.
      */
-    if (this.killed || this._finalised) {
+    const sig = signal === 0 ? 0 : convertToValidSignal(signal);
+
+    if (this._finalised) {
       return false;
     }
 
     this.killed = true;
 
-    /*
-     * _finalise() owns exit/close and stream EOF.
-     * Do NOT emit exit/close directly here.
-     */
-    this._finalise('', '', null, signal);
+    if (sig !== 0) {
+      const sigName = signalNameOf(sig);
+      /*
+       * _finalise() owns exit/close and stream EOF.
+       * Do NOT emit exit/close directly here.
+       */
+      queueMicrotask(() => {
+        this._finalise('', '', null, sigName);
+      });
+    }
 
     return true;
   }
 
-  disconnect() {
-    if (!this.connected) {
-      return;
-    }
-
-    this.connected = false;
-    this.emit('disconnect');
+  ref() {
+    // Node's ref()/unref() return undefined.
   }
 
-  send(_message, callback) {
-    const err = Object.assign(
-      new Error('IPC not supported in this environment.'),
-      { code: 'ERR_IPC_CHANNEL_CLOSED' },
-    );
+  unref() {
+    // Node's ref()/unref() return undefined.
+  }
+}
+
+/**
+ * Install the IPC surface on fork()ed children only — matching Node, where
+ * plain spawn() children have `send`/`disconnect` undefined.
+ */
+function installIPC(target) {
+  target.connected = true;
+
+  target.send = function send(message, sendHandle, options, callback) {
+    if (typeof sendHandle === 'function') {
+      callback = sendHandle;
+      sendHandle = undefined;
+      options = undefined;
+    } else if (typeof options === 'function') {
+      callback = options;
+      options = undefined;
+    }
+
+    // There is no real IPC channel in the browser; report it honestly.
+    const err = Object.assign(new Error('Channel closed'), {
+      code: 'ERR_IPC_CHANNEL_CLOSED',
+    });
 
     if (typeof callback === 'function') {
       callback(err);
     } else {
-      this.emit('error', err);
+      target.emit('error', err);
     }
 
     return false;
+  };
+
+  target.disconnect = function disconnect() {
+    if (!target.connected) {
+      target.emit(
+        'error',
+        Object.assign(new Error('IPC channel is already disconnected'), {
+          code: 'ERR_IPC_DISCONNECTED',
+        }),
+      );
+      return;
+    }
+
+    target.connected = false;
+    queueMicrotask(() => target.emit('disconnect'));
+  };
+}
+
+// ─── Argument normalization (ports of Node's normalize* helpers) ───────────
+
+function normalizeExecArgs(command, options, callback) {
+  validateString(command, 'command');
+  validateStringNullBytes(command, 'command');
+
+  if (typeof options === 'function') {
+    callback = options;
+    options = undefined;
   }
 
-  ref() {
-    return this;
+  // Make a shallow copy so we don't clobber the user's options object.
+  // NOTE: spreading a non-object (e.g. a string) is intentional — Node does
+  // exactly this, so exec(cmd, 'str', cb) keeps working.
+  options = { __proto__: null, ...options };
+  options.shell = typeof options.shell === 'string' ? options.shell : true;
+
+  return { file: command, options, callback };
+}
+
+function normalizeExecFileArgs(file, args, options, callback) {
+  if (Array.isArray(args)) {
+    args = args.slice();
+  } else if (args != null && typeof args === 'object') {
+    callback = options;
+    options = args;
+    args = null;
+  } else if (typeof args === 'function') {
+    callback = args;
+    options = null;
+    args = null;
   }
 
-  unref() {
-    return this;
+  args ??= [];
+
+  if (typeof options === 'function') {
+    callback = options;
+  } else if (options != null) {
+    validateObject(options, 'options');
+  }
+
+  options ??= {};
+
+  if (callback != null) {
+    validateFunction(callback, 'callback');
+  }
+
+  // Validate argv0, if present.
+  if (options.argv0 != null) {
+    validateString(options.argv0, 'options.argv0');
+    validateStringNullBytes(options.argv0, 'options.argv0');
+  }
+
+  return { file, args, options, callback };
+}
+
+function normalizeSpawnArguments(file, args, options) {
+  validateString(file, 'file');
+  validateStringNullBytes(file, 'file');
+
+  if (file.length === 0) {
+    throw errInvalidArgValue('file', file, 'cannot be empty');
+  }
+
+  if (Array.isArray(args)) {
+    args = args.slice();
+  } else if (args == null) {
+    args = [];
+  } else if (typeof args !== 'object') {
+    throw errInvalidArgType('args', 'Object', args);
+  } else {
+    options = args;
+    args = [];
+  }
+
+  for (let i = 0; i < args.length; ++i) {
+    if (typeof args[i] === 'string') {
+      validateStringNullBytes(args[i], `args[${i}]`);
+    }
+  }
+
+  if (options === undefined) {
+    options = {};
+  } else {
+    validateObject(options, 'options');
+  }
+
+  options = { __proto__: null, ...options };
+  let cwd = options.cwd;
+
+  // Validate the cwd, if present.
+  if (cwd != null) {
+    cwd = getValidatedPath(cwd, 'options.cwd');
+  }
+
+  // Validate detached, if present.
+  if (options.detached != null && typeof options.detached !== 'boolean') {
+    throw errInvalidArgType('options.detached', 'boolean', options.detached);
+  }
+
+  // Validate the uid, if present.
+  if (options.uid != null && !isInt32(options.uid)) {
+    throw errInvalidArgType('options.uid', 'int32', options.uid);
+  }
+
+  // Validate the gid, if present.
+  if (options.gid != null && !isInt32(options.gid)) {
+    throw errInvalidArgType('options.gid', 'int32', options.gid);
+  }
+
+  // Validate the shell, if present.
+  if (options.shell != null &&
+      typeof options.shell !== 'boolean' &&
+      typeof options.shell !== 'string') {
+    throw errInvalidArgType('options.shell', ['boolean', 'string'], options.shell);
+  }
+
+  // Validate argv0, if present.
+  if (options.argv0 != null) {
+    validateString(options.argv0, 'options.argv0');
+    validateStringNullBytes(options.argv0, 'options.argv0');
+  }
+
+  // Validate windowsHide, if present.
+  if (options.windowsHide != null && typeof options.windowsHide !== 'boolean') {
+    throw errInvalidArgType('options.windowsHide', 'boolean', options.windowsHide);
+  }
+
+  // Validate windowsVerbatimArguments, if present.
+  if (options.windowsVerbatimArguments != null &&
+      typeof options.windowsVerbatimArguments !== 'boolean') {
+    throw errInvalidArgType(
+      'options.windowsVerbatimArguments', 'boolean', options.windowsVerbatimArguments);
+  }
+
+  // Validate stdio strings, if present. (Full stdio descriptor validation is
+  // native-only; the parent host interprets the value.)
+  if (typeof options.stdio === 'string' &&
+      !['pipe', 'ignore', 'inherit'].includes(options.stdio)) {
+    throw errInvalidArgValue('stdio', options.stdio);
+  }
+
+  if (options.shell) {
+    if (typeof options.shell === 'string') {
+      validateStringNullBytes(options.shell, 'options.shell');
+    }
+    const command = args.length > 0 ? `${file} ${args.join(' ')}` : file;
+    if (typeof options.shell === 'string') {
+      file = options.shell;
+    } else {
+      file = '/bin/sh';
+    }
+    args = ['-c', command];
+  }
+
+  const spawnargs = [
+    typeof options.argv0 === 'string' ? options.argv0 : file,
+    ...args,
+  ];
+
+  // Validate env keys/values for null bytes last, like Node (the property
+  // name embeds the raw key: `options.env['KEY']`).
+  const env = options.env;
+  if (env !== null && env !== undefined && typeof env === 'object') {
+    for (const key in env) {
+      const value = env[key];
+      if (value !== undefined) {
+        validateStringNullBytes(key, `options.env['${key}']`);
+        validateStringNullBytes(value, `options.env['${key}']`);
+      }
+    }
+  }
+
+  return {
+    // Make a shallow copy so we don't clobber the user's options object.
+    __proto__: null,
+    ...options,
+    args,
+    cwd,
+    detached: !!options.detached,
+    file,
+    spawnargs,
+    windowsHide: !!options.windowsHide,
+    windowsVerbatimArguments: !!options.windowsVerbatimArguments,
+  };
+}
+
+/**
+ * Node's execFile() delegates to spawn() with a fixed subset of options —
+ * and coerces windowsHide/windowsVerbatimArguments with !! first, so bad
+ * values there never reach validation. This mirrors that subset exactly.
+ */
+function validateSpawnSubset(file, args, opts) {
+  const spawnNorm = normalizeSpawnArguments(file, args, {
+    cwd: opts.cwd,
+    env: opts.env,
+    gid: opts.gid,
+    shell: opts.shell,
+    signal: opts.signal,
+    uid: opts.uid,
+    windowsHide: !!opts.windowsHide,
+    windowsVerbatimArguments: !!opts.windowsVerbatimArguments,
+  });
+  validateTimeout(spawnNorm.timeout);
+  validateAbortSignal(spawnNorm.signal, 'options.signal');
+  sanitizeKillSignal(spawnNorm.killSignal);
+}
+
+/**
+ * Shared option validation for the exec family (Node validates these in
+ * execFile before spawning).
+ */
+function validateExecOptions(options, callback) {
+  // Validate the timeout, if present.
+  validateTimeout(options.timeout);
+
+  // Validate maxBuffer, if present.
+  validateMaxBuffer(options.maxBuffer);
+
+  // Validate and translate the kill signal, if present.
+  options.killSignal = sanitizeKillSignal(options.killSignal);
+
+  validateAbortSignal(options.signal, 'options.signal');
+
+  if (callback != null) {
+    validateFunction(callback, 'callback');
   }
 }
 
-// ─── exec ───────────────────────────────────────────────────────────────────
+/*
+ * Preserve arguments as safely as possible.
+ *
+ * This shim ultimately delegates to a shell/parent runtime, so quote
+ * arguments rather than simply joining them. (Host protocol: execFile is
+ * delivered as PARENT_EXEC_REQUEST with a single shell command string.)
+ */
+function quoteArg(value) {
+  const string = String(value);
 
-function _exec(command, optionsOrCallback, callback) {
-  const cb =
-    typeof optionsOrCallback === 'function'
-      ? optionsOrCallback
-      : callback;
+  if (string === '') {
+    return "''";
+  }
 
-  const opts =
-    optionsOrCallback &&
-    typeof optionsOrCallback === 'object'
-      ? optionsOrCallback
-      : {};
+  return `'${string.replace(/'/g, `'\\''`)}'`;
+}
 
+// ─── exec core (shared by exec/execFile, host protocol preserved) ───────────
+
+function execCore(command, options, callback) {
   const child = new ChildProcess();
 
   child.spawnfile = '/bin/sh';
   child.spawnargs = ['/bin/sh', '-c', command];
 
+  /*
+   * Node emits 'spawn' asynchronously after the child has been created.
+   */
+  queueMicrotask(() => {
+    if (!child._finalised) {
+      child.emit('spawn');
+    }
+  });
+
   const requestId = makeRequestId();
+  const encoding = resolveEncoding(options.encoding);
+  const maxBuffer = options.maxBuffer ?? MAX_BUFFER;
+  const killSignal = options.killSignal;
+
+  wireAbortSignal(options.signal, child, killSignal);
 
   postToParent(
     'PARENT_EXEC_REQUEST',
     requestId,
     {
       command,
-      options: opts,
+      options,
     },
-    opts.timeout ?? DEFAULT_TIMEOUT,
+    options.timeout ?? DEFAULT_TIMEOUT,
     child._ac.signal,
   )
     .then((result = {}) => {
@@ -449,16 +1138,36 @@ function _exec(command, optionsOrCallback, callback) {
         return;
       }
 
-      const stdout = result.stdout ?? '';
-      const stderr = result.stderr ?? '';
+      let stdout = result.stdout ?? '';
+      let stderr = result.stderr ?? '';
+      if (typeof stdout !== 'string') stdout = String(stdout);
+      if (typeof stderr !== 'string') stderr = String(stderr);
       const exitCode = result.exitCode ?? 0;
       const signal = result.signal ?? null;
 
       let execError = null;
+      let finalCode = exitCode;
+      let finalSignal = signal;
+
+      // Node truncates output, kills the child, and reports
+      // ERR_CHILD_PROCESS_STDIO_MAXBUFFER when maxBuffer is exceeded.
+      if (stdout.length > maxBuffer) {
+        stdout = stdout.slice(0, maxBuffer);
+        execError = errStdioMaxBuffer('stdout');
+        child.killed = true;
+        finalCode = null;
+        finalSignal = signalNameOf(killSignal ?? 'SIGTERM');
+      } else if (stderr.length > maxBuffer) {
+        stderr = stderr.slice(0, maxBuffer);
+        execError = errStdioMaxBuffer('stderr');
+        child.killed = true;
+        finalCode = null;
+        finalSignal = signalNameOf(killSignal ?? 'SIGTERM');
+      }
 
       if (
-        (exitCode !== null && exitCode !== 0) ||
-        signal
+        !execError &&
+        ((exitCode !== null && exitCode !== 0) || signal)
       ) {
         execError = new Error(
           `Command failed: ${command}\n${stderr}`,
@@ -469,20 +1178,19 @@ function _exec(command, optionsOrCallback, callback) {
         execError.signal = signal;
         execError.cmd = command;
 
-        child.emit('error', execError);
+        // NOTE: Node does NOT emit 'error' on the child for a failed
+        // command — the error goes to the callback only.
       }
 
-      child._finalise(
-        stdout,
-        stderr,
-        exitCode,
-        signal,
-      );
+      const out = toOutput(stdout, encoding);
+      const errOut = toOutput(stderr, encoding);
 
-      cb?.(
+      child._finalise(out, errOut, finalCode, finalSignal);
+
+      callback?.(
         execError,
-        stdout,
-        stderr,
+        out,
+        errOut,
       );
     })
     .catch((err) => {
@@ -503,9 +1211,6 @@ function _exec(command, optionsOrCallback, callback) {
         child.killed = true;
       }
 
-      /*
-       * Don't emit error twice if this is an expected abort.
-       */
       child.emit('error', wrapped);
 
       child._finalise(
@@ -515,95 +1220,122 @@ function _exec(command, optionsOrCallback, callback) {
         wrapped.signal ?? null,
       );
 
-      cb?.(
+      callback?.(
         wrapped,
-        '',
-        wrapped.message,
+        toOutput('', encoding),
+        toOutput(wrapped.message, encoding),
       );
     });
 
   return child;
 }
 
-// ─── execFile ───────────────────────────────────────────────────────────────
-
-function _execFile(
-  file,
-  argsOrOptionsOrCallback,
-  optionsOrCallback,
-  callback,
-) {
-  let args = [];
-  let opts = {};
-  let cb;
-
-  if (Array.isArray(argsOrOptionsOrCallback)) {
-    args = argsOrOptionsOrCallback;
-
-    if (typeof optionsOrCallback === 'function') {
-      cb = optionsOrCallback;
-    } else {
-      opts = optionsOrCallback ?? {};
-      cb = callback;
-    }
-  } else if (
-    typeof argsOrOptionsOrCallback === 'function'
-  ) {
-    cb = argsOrOptionsOrCallback;
-  } else if (
-    argsOrOptionsOrCallback &&
-    typeof argsOrOptionsOrCallback === 'object'
-  ) {
-    opts = argsOrOptionsOrCallback;
-
-    cb =
-      typeof optionsOrCallback === 'function'
-        ? optionsOrCallback
-        : callback;
+/**
+ * Wire an options.signal AbortSignal to the child, like Node's spawn():
+ * aborting kills the child with killSignal and emits an AbortError.
+ */
+function wireAbortSignal(signal, child, killSignal) {
+  if (signal == null) {
+    return;
   }
 
-  /*
-   * Preserve arguments as safely as possible.
-   *
-   * This shim ultimately delegates to a shell/parent runtime, so quote
-   * arguments rather than simply joining them.
-   */
-  const quoteArg = (value) => {
-    const string = String(value);
-
-    if (string === '') {
-      return "''";
+  const onAbort = () => {
+    if (child._finalised) {
+      return;
     }
-
-    return `'${string.replace(/'/g, `'\\''`)}'`;
+    try {
+      if (child.kill(killSignal === undefined ? 'SIGTERM' : killSignal)) {
+        child.emit('error', new AbortError(signal.reason));
+      }
+    } catch (err) {
+      child.emit('error', err);
+    }
   };
 
-  const command = [
-    file,
-    ...args,
-  ]
-    .map(quoteArg)
-    .join(' ');
-
-  return _exec(command, opts, cb);
+  if (signal.aborted) {
+    queueMicrotask(onAbort);
+  } else if (typeof signal.addEventListener === 'function') {
+    signal.addEventListener('abort', onAbort, { once: true });
+    child.once('exit', () => {
+      signal.removeEventListener('abort', onAbort);
+    });
+  }
 }
 
-// ─── spawn ─────────────────────────────────────────────────────────────────
+// ─── exec ───────────────────────────────────────────────────────────────────
 
-function _spawn(
-  command,
-  args = [],
-  options = {},
-) {
+function _exec(command, options, callback) {
+  // Node's exec() is execFile() with a forced shell: exec() normalizes its
+  // own args, then calls execFile(file, options-spread, callback), so the
+  // options object lands in execFile's `args` position and is re-normalized
+  // there (this is where argv0/callback validation happens, and why
+  // exec(cmd, 'str', cb) does not throw). Replicate the delegation exactly.
+  const norm = normalizeExecArgs(command, options, callback);
+  const fileNorm = normalizeExecFileArgs(norm.file, norm.options, norm.callback);
+
+  const opts = {
+    __proto__: null,
+    encoding: 'utf8',
+    timeout: 0,
+    maxBuffer: MAX_BUFFER,
+    killSignal: 'SIGTERM',
+    ...fileNorm.options,
+  };
+  validateExecOptions(opts, fileNorm.callback);
+
+  // Node's execFile() delegates to spawn(): spawn-level validation applies
+  // to the forwarded subset of options.
+  validateSpawnSubset(norm.file, [], opts);
+
+  return execCore(norm.file, opts, fileNorm.callback);
+}
+
+// ─── execFile ───────────────────────────────────────────────────────────────
+
+function _execFile(file, args, options, callback) {
+  const norm = normalizeExecFileArgs(file, args, options, callback);
+
+  const opts = {
+    __proto__: null,
+    encoding: 'utf8',
+    timeout: 0,
+    maxBuffer: MAX_BUFFER,
+    killSignal: 'SIGTERM',
+    cwd: null,
+    env: null,
+    shell: false,
+    ...norm.options,
+  };
+  validateExecOptions(opts, norm.callback);
+
+  // Node's execFile() delegates to spawn(): spawn-level validation applies
+  // to the file, args, and the forwarded subset of options. (Validation
+  // only — the shim still delivers execFile as PARENT_EXEC_REQUEST with a
+  // single shell-quoted command string, per the host protocol.)
+  validateSpawnSubset(norm.file, norm.args, opts);
+
+  const command = [norm.file, ...norm.args].map(quoteArg).join(' ');
+
+  return execCore(command, opts, norm.callback);
+}
+
+// ─── spawn ──────────────────────────────────────────────────────────────────
+
+function _spawn(file, args, options) {
+  const norm = normalizeSpawnArguments(file, args, options);
+  validateTimeout(norm.timeout);
+  validateAbortSignal(norm.signal, 'options.signal');
+  const killSignal = sanitizeKillSignal(norm.killSignal);
+
   const child = new ChildProcess();
 
-  child.spawnfile = command;
-  child.spawnargs = [command, ...args];
+  child.spawnfile = norm.file;
+  child.spawnargs = norm.spawnargs;
 
   /*
    * Node emits 'spawn' asynchronously after the child has been created.
    */
-  Promise.resolve().then(() => {
+  queueMicrotask(() => {
     if (!child._finalised) {
       child.emit('spawn');
     }
@@ -611,15 +1343,17 @@ function _spawn(
 
   const requestId = makeRequestId();
 
+  wireAbortSignal(norm.signal, child, killSignal);
+
   postToParent(
     'PARENT_SPAWN_REQUEST',
     requestId,
     {
-      command,
-      args,
-      options,
+      command: norm.file,
+      args: norm.args,
+      options: norm,
     },
-    options.timeout ?? DEFAULT_TIMEOUT,
+    norm.timeout ?? DEFAULT_TIMEOUT,
     child._ac.signal,
   )
     .then((result = {}) => {
@@ -640,7 +1374,7 @@ function _spawn(
         signal
       ) {
         const err = new Error(
-          `spawn ${command} failed`,
+          `spawn ${norm.file} failed`,
         );
 
         err.code = exitCode ?? undefined;
@@ -688,50 +1422,177 @@ function _spawn(
   return child;
 }
 
-// ─── fork / *Sync ───────────────────────────────────────────────────────────
+// ─── fork ───────────────────────────────────────────────────────────────────
 
-export function fork() {
-  throw Object.assign(
-    new Error(
-      'fork is not supported in the browser child_process shim',
-    ),
-    {
-      code: 'ERR_NOT_IMPLEMENTED',
-    },
-  );
+/**
+ * Browser noop: a real Node subprocess can never exist here.
+ *
+ * Validates arguments exactly like Node, then returns a live-but-idle
+ * ChildProcess with the IPC surface installed (connected: true,
+ * send()/disconnect() present — unlike plain spawn() children). send()
+ * reports ERR_IPC_CHANNEL_CLOSED because there is no real channel; the
+ * child never exits on its own — kill() it when done.
+ */
+/**
+ * Node's fork() defaults execPath/execArgv from the current process.
+ * In Jared's sandbox those come from the runtime config (`_RUNTIME_.process`);
+ * under real Node (parity tests) from the global process.
+ */
+function defaultExecPath() {
+  const rt = getRuntime();
+  const fromRuntime = rt && rt.process ? rt.process.execPath : undefined;
+  if (typeof fromRuntime === 'string' && fromRuntime) return fromRuntime;
+  const gp = typeof globalThis.process === 'object' && globalThis.process !== null
+    ? globalThis.process.execPath
+    : undefined;
+  if (typeof gp === 'string' && gp) return gp;
+  return 'node';
 }
 
-export function execSync(command) {
-  throw Object.assign(
-    new Error(
-      `execSync is not supported in this environment: ${command}`,
-    ),
-    {
-      code: 'ERR_NOT_IMPLEMENTED',
-    },
-  );
+function defaultExecArgv() {
+  const rt = getRuntime();
+  const fromRuntime = rt && rt.process ? rt.process.execArgv : undefined;
+  if (Array.isArray(fromRuntime)) return fromRuntime;
+  const gp = typeof globalThis.process === 'object' && globalThis.process !== null
+    ? globalThis.process.execArgv
+    : undefined;
+  if (Array.isArray(gp)) return gp;
+  return [];
 }
 
-export function spawnSync(command) {
-  throw Object.assign(
-    new Error(
-      `spawnSync is not supported in this environment: ${command}`,
-    ),
-    {
-      code: 'ERR_NOT_IMPLEMENTED',
-    },
-  );
+export function fork(modulePath, args, options) {
+  modulePath = getValidatedPath(modulePath, 'modulePath');
+
+  // Get options and args arguments.
+  if (args == null) {
+    args = [];
+  } else if (typeof args === 'object' && !Array.isArray(args)) {
+    options = args;
+    args = [];
+  } else {
+    validateArray(args, 'args');
+  }
+
+  if (options != null) {
+    validateObject(options, 'options');
+  }
+  options = { __proto__: null, ...options, shell: false };
+
+  // Node: `options.execPath ||= process.execPath`, then null-byte check.
+  const execPath = options.execPath || defaultExecPath();
+  validateStringNullBytes(execPath, 'options.execPath');
+  // fork() delegates to spawn(execPath, ...), whose file must be a string.
+  validateString(execPath, 'file');
+
+  // Node: `execArgv = options.execArgv || process.execArgv`, null-checked
+  // with `options.execArgv[i]` positions.
+  const execArgv = options.execArgv || defaultExecArgv();
+  for (let i = 0; i < execArgv.length; ++i) {
+    validateStringNullBytes(execArgv[i], `options.execArgv[${i}]`);
+  }
+
+  // Node's fork() delegates to spawn(execPath, [...execArgv, modulePath,
+  // ...args], options): spawn-level validation (file/args null bytes with
+  // `args[i]` positions, cwd/env/uid/gid/shell/argv0) applies exactly.
+  const norm = normalizeSpawnArguments(
+    execPath, [...execArgv, modulePath, ...args], options);
+
+  const child = new ChildProcess();
+  child.spawnfile = norm.file;
+  child.spawnargs = norm.spawnargs;
+  installIPC(child);
+
+  queueMicrotask(() => {
+    if (!child._finalised) {
+      child.emit('spawn');
+    }
+  });
+
+  return child;
 }
 
-export function execFileSync(file) {
-  throw Object.assign(
-    new Error(
-      `execFileSync is not supported in this environment: ${file}`,
-    ),
-    {
-      code: 'ERR_NOT_IMPLEMENTED',
-    },
-  );
+// ─── Sync noops ─────────────────────────────────────────────────────────────
+
+/**
+ * Browser noop: synchronous subprocesses are impossible (postMessage is
+ * async). Arguments are validated exactly like Node; the result shape
+ * matches Node's SpawnSyncReturns (`{ status, signal, output, pid, stdout,
+ * stderr }` — no `error` key on success).
+ */
+export function spawnSync(file, args, options) {
+  const norm = normalizeSpawnArguments(file, args, options);
+
+  // Validate the timeout, if present.
+  validateTimeout(norm.timeout);
+
+  // Validate maxBuffer, if present.
+  const maxBuffer = norm.maxBuffer ?? MAX_BUFFER;
+  validateMaxBuffer(maxBuffer);
+
+  // Validate and translate the kill signal, if present.
+  sanitizeKillSignal(norm.killSignal);
+
+  validateAbortSignal(norm.signal, 'options.signal');
+
+  const encoding = resolveEncoding(norm.encoding ?? 'buffer');
+  const stdout = toOutput('', encoding);
+  const stderr = toOutput('', encoding);
+
+  return {
+    status: 0,
+    signal: null,
+    output: [null, stdout, stderr],
+    pid: makeFakePid(),
+    stdout,
+    stderr,
+  };
+}
+
+/**
+ * Browser noop: validates like Node, returns the empty stdout.
+ * (Node's execSync throws checkExecSyncError on failure; the noop never
+ * runs anything, so it returns empty output.)
+ */
+export function execSync(command, options) {
+  const norm = normalizeExecArgs(command, options, null);
+  return spawnSync(norm.file, norm.options).stdout;
+}
+
+/**
+ * Browser noop: validates like Node, returns the empty stdout.
+ */
+export function execFileSync(file, args, options) {
+  const norm = normalizeExecFileArgs(file, args, options);
+  return spawnSync(norm.file, norm.args, norm.options).stdout;
+}
+
+// ─── promisify.custom ───────────────────────────────────────────────────────
+
+const kPromisifyCustom = Symbol.for('nodejs.util.promisify.custom');
+
+function customPromiseExecFunction(orig, name) {
+  const fn = function (...args) {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+
+    promise.child = orig(...args, (err, stdout, stderr) => {
+      if (err !== null && err !== undefined) {
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+
+    return promise;
+  };
+  Object.defineProperty(fn, 'name', { value: name, configurable: true });
+  return fn;
 }
 
 // ─── Task tracker integration ───────────────────────────────────────────────
@@ -757,33 +1618,20 @@ export const exec = patchChildProcess(originalExec);
 export const execFile = patchChildProcess(originalExecFile);
 export const spawn = patchChildProcess(originalSpawn);
 
-// ─── Standard tracker ───────────────────────────────────────────────────────
-
-const standardTrack = (fn) => (...args) => {
-  const tracker = getTaskTracker();
-
-  if (!tracker) {
-    return fn(...args);
-  }
-
-  tracker.start();
-
-  try {
-    return fn(...args);
-  } finally {
-    tracker.stop();
-  }
-};
-
-/*
- * Sync APIs intentionally remain unsupported.
- *
- * If they are enabled later:
- *
- * export const execSyncTracked = standardTrack(execSync);
- * export const spawnSyncTracked = standardTrack(spawnSync);
- * export const execFileSyncTracked = standardTrack(execFileSync);
- */
+Object.defineProperty(exec, kPromisifyCustom, {
+  __proto__: null,
+  enumerable: false,
+  configurable: true,
+  writable: true,
+  value: customPromiseExecFunction(exec, 'exec'),
+});
+Object.defineProperty(execFile, kPromisifyCustom, {
+  __proto__: null,
+  enumerable: false,
+  configurable: true,
+  writable: true,
+  value: customPromiseExecFunction(execFile, 'execFile'),
+});
 
 // ─── Default export ─────────────────────────────────────────────────────────
 
