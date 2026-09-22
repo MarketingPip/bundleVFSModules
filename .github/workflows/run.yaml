@@ -38,3 +38,29 @@ jobs:
           git add dist/*.js
           git diff --cached --exit-code || git commit -m "chore: regenerate vfs.js"
           git push
+
+  parity:
+    name: Parity (Node official tests)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          # The vendored suite in parity/node-test comes from Node v24.20.0;
+          # pin the exact release so the test harness matches it.
+          node-version: 24.20.0
+
+      - name: Run official parity tests
+        run: |
+          set -euo pipefail
+          # Modules at 100% official parity with an empty
+          # parity/expected-failures.json.
+          for module in path punycode querystring string_decoder events assert; do
+            echo "::group::parity: ${module}"
+            node parity/run.mjs "${module}"
+            echo "::endgroup::"
+          done
