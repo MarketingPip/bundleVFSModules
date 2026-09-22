@@ -1,481 +1,681 @@
-/*!
- * util/types — browser-compatible implementation of node:util.types
- * MIT License.
- * Node.js parity: node:util.types @ Node 22+ (v25 API surface)
- * Dependencies: esm.sh/util (base shim — we override incorrect/missing methods)
- *
- * Limitations:
- *   isExternal               → always false (requires V8 C++ binding)
- *   isProxy                  → always false (requires V8 binding; no JS workaround exists)
- *   isKeyObject              → always false (requires node:crypto internal binding)
- *   isCryptoKey              → uses SubtleCrypto CryptoKey check via duck-typing / brand check
- *   isModuleNamespaceObject  → heuristic only (@@toStringTag === 'Module' + Object.isSealed)
- *   isWebAssemblyCompiledModule → always false (deprecated in Node 14, removed in v22)
- *
- * Canonical spec reference:
- *   https://nodejs.org/api/util.html#utiltypes
- *   Source: lib/internal/util/types.js + internalBinding('types')
- */
+// src/util/types.js — browser-native port of node:util/types (Node v24.20.0).
+//
+// Pure, dependency-free ESM. Every predicate is implemented with native
+// brand checks (internal-slot-requiring prototype methods/getters,
+// ArrayBuffer.isView, structuredClone) so behaviour matches Node's V8
+// `internalBinding('types')` checks — including cross-realm objects,
+// subclasses, prototype-tampered ("stealthy") objects, and detached buffers.
+//
+// No imports, no `globalThis._RUNTIME_` access, no `window`/`document`:
+// this module loads standalone in a browser, a worker, or under Node.
+//
+// Known platform gaps (honest stubs, never throws):
+//   isProxy      → always false. Proxies are undetectable from pure JS.
+//                  (Node: true for Proxy objects.)
+//   isExternal   → always false. Externals only exist via C++ bindings.
+//   isKeyObject  → always false. KeyObjects only exist via node:crypto internals.
+//
+// Heuristic approximations (match Node except under deliberate spoofing):
+//   isMapIterator / isSetIterator / isModuleNamespaceObject
+//     → @@toStringTag checks; a plain object with a forged
+//        Symbol.toStringTag would fool these (Node returns false).
+//   isPromise    → instanceof, else tag + thenable check; a forged
+//        { [Symbol.toStringTag]: 'Promise', then() {} } would fool it.
+//   isCryptoKey  → WebIDL 'type' getter brand check (cross-realm safe).
+//   isNativeError → structuredClone brand check (an instanceof fast path is
+//        deliberately NOT used: Object.create(Error.prototype) passes
+//        instanceof but Node reports false); matches Node on every probed
+//        case (subclasses, cross-realm, proto-swapped, deleted stack,
+//        DOMException, AggregateError) except errors carrying non-cloneable
+//        own data (e.g. a function-valued `cause`), which report false.
+//   Typed-array kind (isUint8Array & co.)
+//     → prototype-identity fast path, verified by slot-measured element
+//        size; cross-realm via the foreign prototype's own @@toStringTag;
+//        prototype-tampered ("stealthy") objects via structuredClone.
+//        Residual: deliberately re-prototyping a typed array to a DIFFERENT
+//        kind's prototype with the SAME element size (e.g. Int8Array →
+//        Uint8Array.prototype) is undetectable read-only and misreports;
+//        needs structuredClone (present in all real browsers) to detect,
+//        and even then only when the size check raises doubt.
+//        Proto-tampered typed arrays report false where structuredClone is
+//        unavailable (non-browser edge; browsers all have it).
+//
+// Node.js parity: node:util/types @ v24.20.0 — 43 named exports, no default
+// export in Node. This shim additionally exports a default `types` namespace
+// object for test-suite ergonomics (harmless extra).
 
-import { types as nodeTypes } from "util";
+// ─── Internal helpers ───────────────────────────────────────────────────────
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+const objectToString = Object.prototype.toString;
 
-/** @param {unknown} val @returns {string} */
-const getTag = (val) => Object.prototype.toString.call(val);
+/** @param {unknown} v @returns {string} toString tag, '' if unreadable (e.g. revoked Proxy) */
+function getTag(v) {
+  try {
+    return objectToString.call(v);
+  } catch {
+    return '';
+  }
+}
+
+/** @param {unknown} v @returns {boolean} */
+function isObjectLike(v) {
+  return v !== null && (typeof v === 'object' || typeof v === 'function');
+}
+
+// ─── ArrayBuffers ───────────────────────────────────────────────────────────
+// ArrayBuffer.prototype.byteLength's getter requires the [[ArrayBufferData]]
+// slot and rejects SharedArrayBuffers; SharedArrayBuffer.prototype.byteLength
+// requires the slot and accepts both. Together they brand-check precisely.
+
+const arrayBufferByteLength = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  'byteLength',
+).get;
+const sharedArrayBufferByteLength =
+  typeof SharedArrayBuffer === 'function'
+    ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength')
+        .get
+    : null;
+
+/** @param {unknown} v @returns {boolean} */
+export function isArrayBuffer(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    arrayBufferByteLength.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isSharedArrayBuffer(v) {
+  if (sharedArrayBufferByteLength === null || !isObjectLike(v)) return false;
+  if (isArrayBuffer(v)) return false;
+  try {
+    sharedArrayBufferByteLength.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isAnyArrayBuffer(v) {
+  return isArrayBuffer(v) || isSharedArrayBuffer(v);
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isArrayBufferView(v) {
+  try {
+    return ArrayBuffer.isView(v);
+  } catch {
+    return false;
+  }
+}
+
+// ─── Typed arrays ───────────────────────────────────────────────────────────
+// The %TypedArray%.prototype 'length' getter requires the [[TypedArrayName]]
+// slot, so it brand-checks real typed arrays (any realm, any prototype,
+// detached) and rejects DataViews and fakes. The concrete kind is found by
+// walking the prototype chain for a known concrete prototype (covers
+// subclasses and instance-level @@toStringTag overrides); when the chain was
+// tampered with or the object is cross-realm, structuredClone materialises a
+// fresh current-realm typed array of the same kind.
+
+const typedArrayProto = Object.getPrototypeOf(Uint8Array.prototype);
+const typedArrayLength = Object.getOwnPropertyDescriptor(
+  typedArrayProto,
+  'length',
+).get;
+const typedArrayByteLength = Object.getOwnPropertyDescriptor(
+  typedArrayProto,
+  'byteLength',
+).get;
+
+const KIND_BY_PROTO = new Map();
+const KIND_NAMES = new Set();
+const BYTES_PER_ELEMENT = new Map();
+for (const name of [
+  'Int8Array',
+  'Uint8Array',
+  'Uint8ClampedArray',
+  'Int16Array',
+  'Uint16Array',
+  'Int32Array',
+  'Uint32Array',
+  'Float16Array',
+  'Float32Array',
+  'Float64Array',
+  'BigInt64Array',
+  'BigUint64Array',
+]) {
+  const Ctor = globalThis[name];
+  if (typeof Ctor === 'function') {
+    KIND_BY_PROTO.set(Ctor.prototype, name);
+    KIND_NAMES.add(name);
+    BYTES_PER_ELEMENT.set(name, Ctor.BYTES_PER_ELEMENT);
+  }
+}
+
+/** @param {unknown} v @returns {boolean} */
+function hasTypedArraySlot(v) {
+  try {
+    typedArrayLength.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @param {unknown} v @returns {string|undefined} e.g. 'Uint8Array' */
+function typedArrayKind(v) {
+  if (!isObjectLike(v)) return undefined;
+  let len;
+  try {
+    len = typedArrayLength.call(v); // internal-slot check
+  } catch {
+    return undefined;
+  }
+  let candidate;
+  try {
+    for (
+      let p = Object.getPrototypeOf(v);
+      p !== null;
+      p = Object.getPrototypeOf(p)
+    ) {
+      const k = KIND_BY_PROTO.get(p);
+      if (k !== undefined) {
+        candidate = k;
+        break;
+      }
+      // Cross-realm: the foreign concrete prototype carries its own
+      // @@toStringTag naming the kind.
+      if (
+        Object.prototype.hasOwnProperty.call(p, Symbol.toStringTag) &&
+        KIND_NAMES.has(p[Symbol.toStringTag])
+      ) {
+        candidate = p[Symbol.toStringTag];
+        break;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  if (candidate !== undefined && len > 0) {
+    // Sanity: the candidate kind's element size must match the
+    // slot-measured size, otherwise the prototype chain was tampered with
+    // (e.g. an Int8Array re-prototyped to Uint16Array.prototype).
+    let byteLen;
+    try {
+      byteLen = typedArrayByteLength.call(v);
+    } catch {
+      return undefined;
+    }
+    if (byteLen / len !== BYTES_PER_ELEMENT.get(candidate)) {
+      candidate = undefined;
+    }
+  }
+  if (candidate === undefined) {
+    // Prototype tampered with ("stealthy") or otherwise unrecognised:
+    // re-materialise via structuredClone, whose result carries the true kind
+    // on a freshly minted (hence genuine) prototype. Identified by
+    // constructor NAME, not identity — see isNativeError.
+    if (typeof structuredClone === 'function') {
+      try {
+        const p = Object.getPrototypeOf(structuredClone(v));
+        const n = p?.constructor?.name;
+        if (KIND_NAMES.has(n)) return n;
+      } catch {
+        // Detached-and-tampered or otherwise uncloneable: unknown.
+      }
+    }
+    return undefined;
+  }
+  return candidate;
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isTypedArray(v) {
+  return isObjectLike(v) && hasTypedArraySlot(v);
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isUint8Array(v) {
+  return typedArrayKind(v) === 'Uint8Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isUint8ClampedArray(v) {
+  return typedArrayKind(v) === 'Uint8ClampedArray';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isUint16Array(v) {
+  return typedArrayKind(v) === 'Uint16Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isUint32Array(v) {
+  return typedArrayKind(v) === 'Uint32Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isInt8Array(v) {
+  return typedArrayKind(v) === 'Int8Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isInt16Array(v) {
+  return typedArrayKind(v) === 'Int16Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isInt32Array(v) {
+  return typedArrayKind(v) === 'Int32Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isFloat16Array(v) {
+  return typedArrayKind(v) === 'Float16Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isFloat32Array(v) {
+  return typedArrayKind(v) === 'Float32Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isFloat64Array(v) {
+  return typedArrayKind(v) === 'Float64Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isBigInt64Array(v) {
+  return typedArrayKind(v) === 'BigInt64Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isBigUint64Array(v) {
+  return typedArrayKind(v) === 'BigUint64Array';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isDataView(v) {
+  try {
+    return isObjectLike(v) && ArrayBuffer.isView(v) && !hasTypedArraySlot(v);
+  } catch {
+    return false;
+  }
+}
+
+// ─── Collections ────────────────────────────────────────────────────────────
+// Prototype-method brand checks: they require the internal slot, so they are
+// cross-realm safe and reject fakes. (Proxies forward to their target —
+// undetectable from pure JS; see isProxy.)
+
+export function isMap(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    Map.prototype.has.call(v, undefined);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isSet(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    Set.prototype.has.call(v, undefined);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isWeakMap(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    WeakMap.prototype.has.call(v, undefined);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isWeakSet(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    WeakSet.prototype.has.call(v, undefined);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Iterator prototypes are not exposed as globals; capture them once.
+// %MapIteratorPrototype%.next would brand-check but consumes the iterator,
+// so identity (same realm) + @@toStringTag (cross-realm) is used instead.
+const mapIteratorProto = Object.getPrototypeOf(new Map().keys());
+const setIteratorProto = Object.getPrototypeOf(new Set().keys());
+
+/** @param {unknown} v @returns {boolean} */
+export function isMapIterator(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    if (mapIteratorProto.isPrototypeOf(v)) return true;
+  } catch {
+    return false;
+  }
+  return getTag(v) === '[object Map Iterator]';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isSetIterator(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    if (setIteratorProto.isPrototypeOf(v)) return true;
+  } catch {
+    return false;
+  }
+  return getTag(v) === '[object Set Iterator]';
+}
+
+// ─── Boxed primitives ───────────────────────────────────────────────────────
+// The wrapper prototype's valueOf requires the internal slot, so this is
+// cross-realm safe and rejects forged @@toStringTags.
+
+export function isNumberObject(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    Number.prototype.valueOf.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isStringObject(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    String.prototype.valueOf.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isBooleanObject(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    Boolean.prototype.valueOf.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isBigIntObject(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    BigInt.prototype.valueOf.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isSymbolObject(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    Symbol.prototype.valueOf.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isBoxedPrimitive(v) {
+  return (
+    isNumberObject(v) ||
+    isStringObject(v) ||
+    isBooleanObject(v) ||
+    isBigIntObject(v) ||
+    isSymbolObject(v)
+  );
+}
+
+// ─── Date / RegExp ──────────────────────────────────────────────────────────
+// Slot-requiring accessors: side-effect free (unlike exec/test, which move
+// lastIndex) and cross-realm safe.
+
+const regexpSourceGetter = Object.getOwnPropertyDescriptor(
+  RegExp.prototype,
+  'source',
+).get;
+
+/** @param {unknown} v @returns {boolean} */
+export function isDate(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    Date.prototype.getTime.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isRegExp(v) {
+  if (!isObjectLike(v)) return false;
+  try {
+    regexpSourceGetter.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Functions / promises ───────────────────────────────────────────────────
+
+/** @param {unknown} v @returns {boolean} */
+export function isAsyncFunction(v) {
+  if (typeof v !== 'function') return false;
+  const tag = getTag(v);
+  // Node also reports true for async generator functions.
+  return tag === '[object AsyncFunction]' || tag === '[object AsyncGeneratorFunction]';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isGeneratorFunction(v) {
+  if (typeof v !== 'function') return false;
+  const tag = getTag(v);
+  // Node also reports true for async generator functions.
+  return tag === '[object GeneratorFunction]' || tag === '[object AsyncGeneratorFunction]';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isGeneratorObject(v) {
+  if (!isObjectLike(v)) return false;
+  const tag = getTag(v);
+  // Node also reports true for async generator objects.
+  return tag === '[object Generator]' || tag === '[object AsyncGenerator]';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isPromise(v) {
+  try {
+    if (!isObjectLike(v)) return false;
+    if (v instanceof Promise) return true;
+    // Cross-realm promise: the tag is driven by the internal slot.
+    return getTag(v) === '[object Promise]' && typeof v.then === 'function';
+  } catch {
+    return false;
+  }
+}
+
+// ─── Errors ─────────────────────────────────────────────────────────────────
+// V8 marks genuine error objects internally (survives prototype swaps and
+// `delete err.stack`; lost through proxies). structuredClone preserves that
+// brand while reducing fakes and tag-forgeries to plain objects.
+
+/** @param {unknown} v @returns {boolean} */
+export function isNativeError(v) {
+  try {
+    if (!isObjectLike(v)) return false;
+    const tag = getTag(v);
+    const looksErr =
+      tag === '[object Error]' || tag === '[object DOMException]';
+    if (typeof structuredClone === 'function') {
+      // structuredClone preserves V8's internal error brand (survives
+      // prototype swaps; lost through proxies) while reducing fakes and
+      // tag-forgeries to plain objects. Note: `instanceof Error` alone is
+      // NOT sufficient — Object.create(Error.prototype) passes instanceof
+      // but Node reports false.
+      //
+      // The clone is identified by its prototype's constructor NAME, not
+      // instanceof: under test runners (or cross-realm hosts) structuredClone
+      // may deserialize with a different realm's Error.prototype, where
+      // instanceof would wrongly fail. The clone is freshly minted by the
+      // serializer, so its prototype is always genuine.
+      if (!looksErr) return false;
+      // Walk the clone's prototype chain for a genuine Error/DOMException
+      // prototype (identified by constructor name — see above). This accepts
+      // specific subtypes (TypeError, RangeError, …), whose clones keep their
+      // concrete prototype, while rejecting plain-object clones of fakes.
+      for (
+        let p = Object.getPrototypeOf(structuredClone(v));
+        p !== null;
+        p = Object.getPrototypeOf(p)
+      ) {
+        const n = p.constructor?.name;
+        if (n === 'Error' || n === 'DOMException') return true;
+      }
+      return false;
+    }
+    // No structuredClone: instanceof + tag (rejects
+    // Object.create(Error.prototype), whose tag is '[object Object]').
+    return (
+      looksErr &&
+      (v instanceof Error ||
+        (typeof DOMException !== 'undefined' && v instanceof DOMException))
+    );
+  } catch {
+    return false;
+  }
+}
+
+// ─── Misc builtins ──────────────────────────────────────────────────────────
+
+/** @param {unknown} v @returns {boolean} */
+export function isArgumentsObject(v) {
+  return isObjectLike(v) && getTag(v) === '[object Arguments]';
+}
+
+/** @param {unknown} v @returns {boolean} */
+export function isModuleNamespaceObject(v) {
+  return isObjectLike(v) && getTag(v) === '[object Module]';
+}
+
+// WebIDL 'type' getter brand-checks genuine CryptoKeys (cross-realm safe).
+const cryptoKeyTypeGetter =
+  typeof CryptoKey !== 'undefined'
+    ? Object.getOwnPropertyDescriptor(CryptoKey.prototype, 'type')?.get
+    : undefined;
+
+/** @param {unknown} v @returns {boolean} */
+export function isCryptoKey(v) {
+  if (!isObjectLike(v) || typeof cryptoKeyTypeGetter !== 'function') {
+    return false;
+  }
+  try {
+    cryptoKeyTypeGetter.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Honest platform gaps ───────────────────────────────────────────────────
 
 /**
- * Safe TypedArray brand-check — mirrors Node's
- * TypedArrayPrototypeGetSymbolToStringTag. Rejects DataView and plain objects
- * with a spoofed @@toStringTag by requiring ArrayBuffer.isView AND not DataView.
- * @param {unknown} v
- * @returns {string|undefined}
+ * Always false: proxies are undetectable from pure JS.
+ * (Node returns true for Proxy objects.)
+ * @param {unknown} _v
+ * @returns {boolean}
  */
-const getTypedArrayTag = (v) => {
-  if (v === null || typeof v !== 'object') return undefined;
-  if (!ArrayBuffer.isView(v) || v instanceof DataView) return undefined;
-  return v[Symbol.toStringTag];
-};
+export function isProxy(_v) {
+  return false;
+}
 
-// ─── Spec-compliant overrides / additions ─────────────────────────────────────
-// We spread nodeTypes first so that any methods the esm.sh shim already gets
-// right (isMap, isSet, isRegExp, isDate, isPromise, …) are kept unchanged.
-// We only override or add where the shim is wrong, missing, or non-spec.
+/**
+ * Always false: externals only exist via C++ bindings.
+ * @param {unknown} _v
+ * @returns {boolean}
+ */
+export function isExternal(_v) {
+  return false;
+}
 
-export const types = {
-  ...nodeTypes,
+/**
+ * Always false: KeyObjects only exist via node:crypto internals.
+ * @param {unknown} _v
+ * @returns {boolean}
+ */
+export function isKeyObject(_v) {
+  return false;
+}
 
-  // ── Typed arrays ───────────────────────────────────────────────────────────
-  // Node uses TypedArrayPrototypeGetSymbolToStringTag (our getTypedArrayTag).
-  // The esm.sh shim uses instanceof which fails across realms; ours is correct.
+// ─── Namespace ──────────────────────────────────────────────────────────────
+// Node's node:util/types has no default export; this shim adds one for
+// test-suite ergonomics (harmless extra).
 
-  /**
-   * Returns `true` if the value is any TypedArray instance.
-   * Mirrors: `TypedArrayPrototypeGetSymbolToStringTag(v) !== undefined`
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isTypedArray(new Uint8Array())  // true
-   * @example types.isTypedArray(new DataView(new ArrayBuffer(1)))  // false
-   */
-  isTypedArray: (v) => getTypedArrayTag(v) !== undefined,
-
-  /**
-   * Returns `true` if the value is a `Uint8Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isUint8Array(new Uint8Array())  // true
-   */
-  isUint8Array: (v) => getTypedArrayTag(v) === 'Uint8Array',
-
-  /**
-   * Returns `true` if the value is a `Uint8ClampedArray` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isUint8ClampedArray: (v) => getTypedArrayTag(v) === 'Uint8ClampedArray',
-
-  /**
-   * Returns `true` if the value is a `Uint16Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isUint16Array: (v) => getTypedArrayTag(v) === 'Uint16Array',
-
-  /**
-   * Returns `true` if the value is a `Uint32Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isUint32Array: (v) => getTypedArrayTag(v) === 'Uint32Array',
-
-  /**
-   * Returns `true` if the value is an `Int8Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isInt8Array: (v) => getTypedArrayTag(v) === 'Int8Array',
-
-  /**
-   * Returns `true` if the value is an `Int16Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isInt16Array: (v) => getTypedArrayTag(v) === 'Int16Array',
-
-  /**
-   * Returns `true` if the value is an `Int32Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isInt32Array: (v) => getTypedArrayTag(v) === 'Int32Array',
-
-  /**
-   * Returns `true` if the value is a `Float16Array` instance.
-   * Added in Node 22 / V8 (TC39 Float16Array proposal, Stage 4).
-   * Returns `false` on engines that do not yet support Float16Array.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isFloat16Array: (v) => getTypedArrayTag(v) === 'Float16Array',
-
-  /**
-   * Returns `true` if the value is a `Float32Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isFloat32Array: (v) => getTypedArrayTag(v) === 'Float32Array',
-
-  /**
-   * Returns `true` if the value is a `Float64Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isFloat64Array: (v) => getTypedArrayTag(v) === 'Float64Array',
-
-  /**
-   * Returns `true` if the value is a `BigInt64Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isBigInt64Array: (v) => getTypedArrayTag(v) === 'BigInt64Array',
-
-  /**
-   * Returns `true` if the value is a `BigUint64Array` instance.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isBigUint64Array: (v) => getTypedArrayTag(v) === 'BigUint64Array',
-
-  // ── Buffers / views ────────────────────────────────────────────────────────
-
-  /**
-   * Returns `true` for any `ArrayBuffer` view — both TypedArrays and `DataView`.
-   * Mirrors Node's `ArrayBufferIsView` which is literally `ArrayBuffer.isView`.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isArrayBufferView(new Uint8Array())   // true
-   * @example types.isArrayBufferView(new DataView(...))  // true
-   * @example types.isArrayBufferView([])                 // false
-   */
-  isArrayBufferView: (v) => ArrayBuffer.isView(v),
-
-  /**
-   * Returns `true` for `ArrayBuffer` but NOT `SharedArrayBuffer`.
-   * Node spec explicitly separates the two; the esm.sh shim conflates them.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isArrayBuffer(new ArrayBuffer(8))         // true
-   * @example types.isArrayBuffer(new SharedArrayBuffer(8))   // false
-   */
-  isArrayBuffer: (v) =>
-    v instanceof ArrayBuffer && !(v instanceof SharedArrayBuffer),
-
-  /**
-   * Returns `true` for `SharedArrayBuffer` only (not plain `ArrayBuffer`).
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isSharedArrayBuffer: (v) =>
-    typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer,
-
-  /**
-   * Returns `true` for either `ArrayBuffer` or `SharedArrayBuffer`.
-   * In V8's memory model `SharedArrayBuffer` extends `ArrayBuffer`; this
-   * mirrors `util.types.isAnyArrayBuffer` which accepts both.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isAnyArrayBuffer: (v) =>
-    v instanceof ArrayBuffer ||
-    (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer),
-
-  /**
-   * Returns `true` if the value is a `DataView`.
-   * A `DataView` satisfies `ArrayBuffer.isView` but is NOT a TypedArray.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isDataView(new DataView(new ArrayBuffer(1)))  // true
-   * @example types.isDataView(new Uint8Array())                  // false
-   */
-  isDataView: (v) => ArrayBuffer.isView(v) && v instanceof DataView,
-
-  // ── Boxed primitives ───────────────────────────────────────────────────────
-  // Node checks the internal [[Class]] via Object.prototype.toString, not
-  // instanceof. The esm.sh shim omits BigInt boxed objects entirely.
-
-  /**
-   * Returns `true` if the value is a boxed `Number` object (`new Number(...)`).
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isNumberObject(new Number(42))  // true
-   * @example types.isNumberObject(42)              // false
-   */
-  isNumberObject: (v) =>
-    typeof v === 'object' && v !== null && getTag(v) === '[object Number]',
-
-  /**
-   * Returns `true` if the value is a boxed `String` object (`new String(...)`).
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isStringObject: (v) =>
-    typeof v === 'object' && v !== null && getTag(v) === '[object String]',
-
-  /**
-   * Returns `true` if the value is a boxed `Boolean` object (`new Boolean(...)`).
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isBooleanObject: (v) =>
-    typeof v === 'object' && v !== null && getTag(v) === '[object Boolean]',
-
-  /**
-   * Returns `true` if the value is a boxed `BigInt` object (`Object(42n)`).
-   * Missing from the esm.sh shim entirely — added here for Node 22 parity.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isBigIntObject(Object(42n))  // true
-   * @example types.isBigIntObject(42n)          // false
-   */
-  isBigIntObject: (v) =>
-    typeof v === 'object' && v !== null && getTag(v) === '[object BigInt]',
-
-  /**
-   * Returns `true` if the value is a boxed `Symbol` object (`Object(Symbol())`).
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isSymbolObject: (v) =>
-    typeof v === 'object' && v !== null && getTag(v) === '[object Symbol]',
-
-  /**
-   * Returns `true` if the value is any boxed primitive wrapper object.
-   * Covers: `Boolean`, `Number`, `String`, `Symbol`, and `BigInt` wrappers.
-   * The esm.sh shim misses `BigInt` — fixed here.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isBoxedPrimitive(new Boolean(false))  // true
-   * @example types.isBoxedPrimitive(false)               // false
-   */
-  isBoxedPrimitive: (v) => {
-    if (v === null || typeof v !== 'object') return false;
-    const t = getTag(v);
-    return t === '[object Boolean]' || t === '[object Number]' ||
-           t === '[object String]'  || t === '[object Symbol]' ||
-           t === '[object BigInt]';
-  },
-
-  // ── NativeError ────────────────────────────────────────────────────────────
-
-  /**
-   * Returns `true` if the value is a native ECMAScript `Error` instance.
-   * Unlike a simple `instanceof Error`, this rejects plain objects whose
-   * `@@toStringTag` has been spoofed — matching Node's V8 binding behaviour.
-   * Accepts all seven built-in error constructors plus direct `Error` instances.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isNativeError(new TypeError('x'))  // true
-   * @example types.isNativeError({ name: 'Error' })   // false — plain object
-   */
-  isNativeError: (v) =>
-    v instanceof Error && (
-      Object.getPrototypeOf(v) === Error.prototype ||
-      v instanceof EvalError      || v instanceof RangeError     ||
-      v instanceof ReferenceError || v instanceof SyntaxError    ||
-      v instanceof TypeError      || v instanceof URIError
-    ),
-
-  // ── Function shapes ────────────────────────────────────────────────────────
-
-  /**
-   * Returns `true` if the value is a native async function.
-   * Note: async functions transpiled by Babel / TypeScript return `false`.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isAsyncFunction(async () => {})  // true
-   * @example types.isAsyncFunction(() => {})        // false
-   */
-  isAsyncFunction: (v) =>
-    typeof v === 'function' && v.constructor?.name === 'AsyncFunction',
-
-  /**
-   * Returns `true` if the value is a native generator function.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isGeneratorFunction(function*(){})  // true
-   */
-  isGeneratorFunction: (v) =>
-    typeof v === 'function' && v.constructor?.name === 'GeneratorFunction',
-
-  /**
-   * Returns `true` if the value is a generator object (the iterator returned
-   * by calling a generator function).
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example const gen = (function*(){})(); types.isGeneratorObject(gen)  // true
-   */
-  isGeneratorObject: (v) =>
-    v !== null && typeof v === 'object' && getTag(v) === '[object Generator]',
-
-  // ── Iterators ──────────────────────────────────────────────────────────────
-
-  /**
-   * Returns `true` if the value is a `Map` iterator
-   * (e.g. returned by `map.entries()`, `map.keys()`, `map.values()`).
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isMapIterator: (v) =>
-    v !== null && typeof v === 'object' && getTag(v) === '[object Map Iterator]',
-
-  /**
-   * Returns `true` if the value is a `Set` iterator
-   * (e.g. returned by `set.values()`, `set.entries()`).
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isSetIterator: (v) =>
-    v !== null && typeof v === 'object' && getTag(v) === '[object Set Iterator]',
-
-  // ── Arguments object ───────────────────────────────────────────────────────
-
-  /**
-   * Returns `true` if the value is an `arguments` object created inside a
-   * non-arrow function. Node uses an internal V8 check; we replicate via
-   * `Object.prototype.toString` which returns `[object Arguments]`.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example function f() { return types.isArgumentsObject(arguments); } f()  // true
-   * @example types.isArgumentsObject([])  // false
-   */
-  isArgumentsObject: (v) => getTag(v) === '[object Arguments]',
-
-  // ── WeakRef ────────────────────────────────────────────────────────────────
-
-  /**
-   * Returns `true` if the value is a `WeakRef` instance (ES2021 / Node 14.6+).
-   * Missing from the esm.sh shim — added here for Node 22 parity.
-   * @param {unknown} v
-   * @returns {boolean}
-   * @example types.isWeakRef(new WeakRef({}))  // true
-   */
-  isWeakRef: (v) =>
-    v !== null && typeof v === 'object' && getTag(v) === '[object WeakRef]',
-
-  // ── CryptoKey ──────────────────────────────────────────────────────────────
-
-  /**
-   * Returns `true` if the value is a Web Crypto API `CryptoKey`.
-   * Node delegates to an OpenSSL internal binding; we use `instanceof
-   * globalThis.CryptoKey` which is available in all modern browsers and
-   * Node ≥ 15 with the global Web Crypto API enabled.
-   * Falls back to `() => false` on environments without `CryptoKey`.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isCryptoKey: typeof globalThis.CryptoKey !== 'undefined'
-    ? (v) => v instanceof globalThis.CryptoKey
-    : () => false,
-
-  // ── V8-internal stubs ──────────────────────────────────────────────────────
-
-  /**
-   * Returns `true` if the value is an external value created with
-   * `napi_create_external` / `v8::External`. Requires a V8 C++ binding.
-   * Always returns `false` in browser / bundler environments.
-   * @param {unknown} _v
-   * @returns {false}
-   */
-  isExternal: (_v) => false,
-
-  /**
-   * Returns `true` if the value is a `Proxy`. Requires the V8 internal
-   * `v8::Value::IsProxy` binding — there is no JavaScript reflection API
-   * that can detect a Proxy without cooperation from the proxy itself.
-   * Always returns `false` in browser / bundler environments.
-   * @param {unknown} _v
-   * @returns {false}
-   */
-  isProxy: (_v) => false,
-
-  /**
-   * Returns `true` if the value is a Node.js `KeyObject` from `node:crypto`.
-   * Requires the OpenSSL internal binding. Always returns `false` in browser /
-   * bundler environments.
-   * @param {unknown} _v
-   * @returns {false}
-   */
-  isKeyObject: (_v) => false,
-
-  // ── Module namespace ───────────────────────────────────────────────────────
-
-  /**
-   * Returns `true` if the value is a module namespace object
-   * (`import * as ns from '...'`). Node uses an internal V8 flag.
-   * Heuristic: the object must be sealed AND have `@@toStringTag === 'Module'`.
-   * May produce false positives for hand-crafted objects — unavoidable in JS.
-   * @param {unknown} v
-   * @returns {boolean}
-   */
-  isModuleNamespaceObject: (v) =>
-    v !== null && typeof v === 'object' &&
-    v[Symbol.toStringTag] === 'Module' && Object.isSealed(v),
-
-  // ── Deprecated ─────────────────────────────────────────────────────────────
-
-  /**
-   * @deprecated Deprecated in Node 14, removed in Node 22.
-   * Retained as a no-op stub for backward compatibility with older code that
-   * checks for `WebAssembly.Module` instances via `util.types`.
-   * Use `value instanceof WebAssembly.Module` directly instead.
-   * @param {unknown} _v
-   * @returns {false}
-   */
-  isWebAssemblyCompiledModule: (_v) => false,
-};
-
-// ─── Named exports (the full Node 22 util.types surface) ─────────────────────
-
-export const {
-  // TypedArrays
-  isTypedArray,
-  isUint8Array, isUint8ClampedArray, isUint16Array, isUint32Array,
-  isInt8Array, isInt16Array, isInt32Array,
-  isFloat16Array, isFloat32Array, isFloat64Array,
-  isBigInt64Array, isBigUint64Array,
-
-  // Buffers / views
-  isArrayBuffer, isSharedArrayBuffer, isAnyArrayBuffer,
-  isArrayBufferView, isDataView,
-
-  // Boxed primitives
-  isNumberObject, isStringObject, isBooleanObject,
-  isBigIntObject, isSymbolObject, isBoxedPrimitive,
-
-  // Error
-  isNativeError,
-
-  // Collections
-  isMap, isSet, isWeakMap, isWeakSet, isWeakRef,
-  isMapIterator, isSetIterator,
-
-  // Functions / async / generators
-  isAsyncFunction, isGeneratorFunction, isGeneratorObject,
-
-  // Other built-ins
-  isArgumentsObject, isDate, isRegExp, isPromise,
-
-  // Crypto (Node 15+)
-  isCryptoKey, isKeyObject,
-
-  // V8-only stubs
-  isExternal, isProxy,
-
-  // Module
+const types = {
+  isAnyArrayBuffer,
+  isArgumentsObject,
+  isArrayBuffer,
+  isArrayBufferView,
+  isAsyncFunction,
+  isBigInt64Array,
+  isBigIntObject,
+  isBigUint64Array,
+  isBooleanObject,
+  isBoxedPrimitive,
+  isCryptoKey,
+  isDataView,
+  isDate,
+  isExternal,
+  isFloat16Array,
+  isFloat32Array,
+  isFloat64Array,
+  isGeneratorFunction,
+  isGeneratorObject,
+  isInt16Array,
+  isInt32Array,
+  isInt8Array,
+  isKeyObject,
+  isMap,
+  isMapIterator,
   isModuleNamespaceObject,
-
-  // Deprecated
-  isWebAssemblyCompiledModule,
-} = types;
+  isNativeError,
+  isNumberObject,
+  isPromise,
+  isProxy,
+  isRegExp,
+  isSet,
+  isSetIterator,
+  isSharedArrayBuffer,
+  isStringObject,
+  isSymbolObject,
+  isTypedArray,
+  isUint16Array,
+  isUint32Array,
+  isUint8Array,
+  isUint8ClampedArray,
+  isWeakMap,
+  isWeakSet,
+};
 
 export default types;
