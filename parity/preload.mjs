@@ -37,11 +37,14 @@ Module._load = function (request, parent, isMain) {
     // (require() of an ESM file would otherwise hand back the module
     // namespace object, breaking reference equality.)
     const bare = request.startsWith('node:') ? request.slice(5) : request;
-    if (target && (bare === target || bare === `${target}/posix` || bare === `${target}/win32`)) {
+    if (target && (bare === target || bare === `${target}/posix` || bare === `${target}/win32` || bare === `${target}/strict`)) {
       const ns = origLoad.call(this, polyfillPath(target), parent, isMain);
       if (bare === `${target}/posix`) return ns.posix;
       if (bare === `${target}/win32`) return ns.win32;
-      return ns.default ?? ns;
+      const def = ns.default ?? ns;
+      // Node: require('assert/strict') === require('assert').strict.
+      if (bare === `${target}/strict`) return def.strict;
+      return def;
     }
     const poly = polyfillPath(request);
     if (poly) request = poly;
