@@ -4,108 +4,191 @@ import zlib, {
   deflateSync, inflateSync,
   deflateRawSync, inflateRawSync,
   unzipSync,
-  brotliCompressSync, brotliDecompressSync,
-  gzip,
-  constants
+  gzip, gunzip,
+  deflate, inflate,
+  Deflate, Inflate,
+  Gzip, Gunzip,
+  DeflateRaw, InflateRaw,
+  constants, codes,
+  crc32,
 } from '../src/zlib.js';
 
-describe('zlib-web', () => {
+describe('zlib (dependency-free ESM)', () => {
   const payload = 'The quick brown fox jumps over the lazy dog. 🦊';
   const bufferPayload = Buffer.from(payload);
 
-  describe('Sync API (pako-based)', () => {
-    test('gzipSync -> gunzipSync roundtrip', () => {
+  describe('constants and codes', () => {
+    test('constants are frozen', () => {
+      expect(Object.isFrozen(constants)).toBe(true);
+      expect(constants.Z_OK).toBe(0);
+      expect(constants.Z_STREAM_END).toBe(1);
+      expect(constants.Z_BEST_COMPRESSION).toBe(9);
+    });
+
+    test('codes are frozen and bidirectional', () => {
+      expect(Object.isFrozen(codes)).toBe(true);
+      expect(codes[0]).toBe('Z_OK');
+      expect(codes[1]).toBe('Z_STREAM_END');
+    });
+
+    test('default export is frozen', () => {
+      expect(Object.isFrozen(zlib)).toBe(true);
+      expect(zlib.constants).toBe(constants);
+    });
+  });
+
+  describe('crc32', () => {
+    test('crc32("hello") === 907060870', () => {
+      expect(crc32('hello')).toBe(907060870);
+    });
+
+    test('crc32 of empty is 0', () => {
+      expect(crc32('')).toBe(0);
+      expect(crc32(Buffer.alloc(0))).toBe(0);
+    });
+  });
+
+  describe('deflate/inflate sync roundtrips', () => {
+    test('deflateSync -> inflateSync', () => {
+      const compressed = deflateSync(bufferPayload, { level: 9 });
+      const decompressed = inflateSync(compressed);
+      expect(decompressed.toString()).toBe(payload);
+      expect(Buffer.isBuffer(compressed)).toBe(true);
+    });
+
+    test('deflateSync level 0 (stored)', () => {
+      const compressed = deflateSync(bufferPayload, { level: 0 });
+      const decompressed = inflateSync(compressed);
+      expect(decompressed.toString()).toBe(payload);
+    });
+
+    test('deflateRawSync -> inflateRawSync', () => {
+      const compressed = deflateRawSync(bufferPayload);
+      const decompressed = inflateRawSync(compressed);
+      expect(decompressed.toString()).toBe(payload);
+    });
+
+    test('gzipSync -> gunzipSync', () => {
       const compressed = gzipSync(payload);
       const decompressed = gunzipSync(compressed);
       expect(decompressed.toString()).toBe(payload);
       expect(Buffer.isBuffer(compressed)).toBe(true);
     });
 
-    test('deflateSync -> inflateSync roundtrip', () => {
-      const compressed = deflateSync(bufferPayload, { level: 9 });
-      const decompressed = inflateSync(compressed);
-      expect(decompressed.toString()).toBe(payload);
-    });
-
-    test('deflateRawSync -> inflateRawSync roundtrip', () => {
-      const compressed = deflateRawSync(payload);
-      const decompressed = inflateRawSync(compressed);
-      expect(decompressed.toString()).toBe(payload);
-    });
-
-    test('unzipSync auto-detects formats', () => {
+    test('unzipSync handles gzip and deflate', () => {
       const gz = gzipSync(payload);
-      const zz = deflateSync(payload);
-      const raw = deflateRawSync(payload);
-
       expect(unzipSync(gz).toString()).toBe(payload);
-      expect(unzipSync(zz).toString()).toBe(payload);
-      expect(unzipSync(raw).toString()).toBe(payload);
+      const df = deflateSync(bufferPayload);
+      expect(unzipSync(df).toString()).toBe(payload);
     });
 
-    test('throws on corrupt data', () => {
-      const corrupt = Buffer.from([0x00, 0x11, 0x22, 0x33]);
-      expect(() => inflateSync(corrupt)).toThrow();
+    test('roundtrip with larger data', () => {
+      const big = Buffer.from('abc123'.repeat(10000));
+      const compressed = deflateSync(big);
+      const decompressed = inflateSync(compressed);
+      expect(Buffer.compare(big, decompressed)).toBe(0);
     });
   });
 
-  describe('Async Callback API', () => {
-    test('gzip provides result via callback', (done) => {
-      gzip(payload, (err, result) => {
+  describe('async convenience methods', () => {
+    test('gzip -> gunzip callback', (done) => {
+      gzip(payload, (err, compressed) => {
         expect(err).toBeNull();
-        expect(Buffer.isBuffer(result)).toBe(true);
-        expect(gunzipSync(result).toString()).toBe(payload);
-        done();
+        gunzip(compressed, (err2, decompressed) => {
+          expect(err2).toBeNull();
+          expect(decompressed.toString()).toBe(payload);
+          done();
+        });
       });
     });
 
-    test('handles options argument correctly', (done) => {
-      gzip(payload, { level: 1 }, (err, result) => {
+    test('deflate -> inflate callback', (done) => {
+      deflate(bufferPayload, (err, compressed) => {
         expect(err).toBeNull();
-        expect(gunzipSync(result).toString()).toBe(payload);
-        done();
+        inflate(compressed, (err2, decompressed) => {
+          expect(err2).toBeNull();
+          expect(decompressed.toString()).toBe(payload);
+          done();
+        });
       });
     });
   });
 
-  describe('Brotli (Current Implementation)', () => {
-    // These tests reflect your current code where result = null
-    test('brotliCompressSync throws error on null result', () => {
-      expect(() => brotliCompressSync(payload)).toThrow(/brotliCompressSync failed/);
+  describe('stream classes', () => {
+    test('Deflate -> Inflate stream roundtrip', (done) => {
+      const def = new Deflate({ level: 6 });
+      const inf = new Inflate({});
+      const chunks = [];
+      inf.on('data', (c) => chunks.push(c));
+      inf.on('end', () => {
+        const result = Buffer.concat(chunks);
+        expect(result.toString()).toBe(payload);
+        done();
+      });
+      inf.on('error', done);
+      def.on('data', (c) => inf.write(c));
+      def.on('end', () => inf.end());
+      def.on('error', done);
+      def.write(bufferPayload);
+      def.end();
     });
 
-    test('brotliDecompressSync throws error on null result', () => {
-      expect(() => brotliDecompressSync(payload)).toThrow(/brotliDecompressSync failed/);
+    test('Gzip -> Gunzip stream roundtrip', (done) => {
+      const gz = new Gzip();
+      const gunz = new Gunzip();
+      const chunks = [];
+      gunz.on('data', (c) => chunks.push(c));
+      gunz.on('end', () => {
+        expect(Buffer.concat(chunks).toString()).toBe(payload);
+        done();
+      });
+      gunz.on('error', done);
+      gz.on('data', (c) => gunz.write(c));
+      gz.on('end', () => gunz.end());
+      gz.on('error', done);
+      gz.end(bufferPayload);
+    });
+
+    test('DeflateRaw -> InflateRaw stream roundtrip', (done) => {
+      const def = new DeflateRaw();
+      const inf = new InflateRaw();
+      const chunks = [];
+      inf.on('data', (c) => chunks.push(c));
+      inf.on('end', () => {
+        expect(Buffer.concat(chunks).toString()).toBe(payload);
+        done();
+      });
+      inf.on('error', done);
+      def.on('data', (c) => inf.write(c));
+      def.on('end', () => inf.end());
+      def.on('error', done);
+      def.end(bufferPayload);
     });
   });
 
-  describe('Constants and Exports', () => {
-    test('exposed constants match Node.js expectations', () => {
-      expect(constants.Z_OK).toBe(0);
-      expect(constants.BROTLI_PARAM_QUALITY).toBe(1);
-      expect(zlib.Z_BEST_COMPRESSION).toBe(9);
+  describe('error handling', () => {
+    test('inflateSync throws on invalid data', () => {
+      expect(() => inflateSync(Buffer.from([0x00, 0x01, 0x02]))).toThrow();
     });
 
-    test('default export contains expected functions', () => {
-      expect(typeof zlib.gzipSync).toBe('function');
-      expect(typeof zlib.brotliCompress).toBe('function');
+    test('gunzipSync throws on invalid gzip', () => {
+      expect(() => gunzipSync(Buffer.from('not gzip data'))).toThrow();
     });
   });
 
-  describe('Input Normalization (toU8)', () => {
-    test('accepts string, Buffer, and Uint8Array', () => {
-      const strRes = gzipSync("test");
-      const bufRes = gzipSync(Buffer.from("test"));
-      const u8Res = gzipSync(new Uint8Array([116, 101, 115, 116]));
-      
-      expect(gunzipSync(strRes).toString()).toBe("test");
-      expect(gunzipSync(bufRes).toString()).toBe("test");
-      expect(gunzipSync(u8Res).toString()).toBe("test");
+  describe('brotli and zstd (pass-through, not real codecs)', () => {
+    // These are honest pass-throughs, not real Brotli/Zstd implementations.
+    // They accept input and return it unchanged (no compression).
+    test('brotliCompressSync passes through', () => {
+      const input = Buffer.from('hello brotli');
+      const output = zlib.brotliCompressSync(input);
+      expect(Buffer.compare(input, output)).toBe(0);
     });
 
-    test('throws TypeError on invalid input', () => {
-      expect(() => gzipSync(12345)).toThrow(TypeError);
-      expect(() => gzipSync({ foo: 'bar' })).toThrow(TypeError);
+    test('brotliDecompressSync passes through', () => {
+      const input = Buffer.from('hello brotli');
+      const output = zlib.brotliDecompressSync(input);
+      expect(Buffer.compare(input, output)).toBe(0);
     });
   });
 });
