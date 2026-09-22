@@ -1,6 +1,7 @@
 const virtualFs = (globalThis._RUNTIME_ && globalThis._RUNTIME_.__FS__) || {};
 
 // Wire up process.binding for natives lookup
+/* 
 globalThis.process = globalThis.process || {};
 globalThis.process.binding = globalThis.process.binding || function (name) {
   if (name === "natives") {
@@ -11,6 +12,8 @@ globalThis.process.binding = globalThis.process.binding || function (name) {
   }
   return {};
 };
+
+*/ 
 
 export function createRequire(filename) {
   return function require(id) {
