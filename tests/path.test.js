@@ -3,6 +3,15 @@
 // adjust path if needed
 import * as win32 from '../src/path/win32.js';
 
+// Node-faithful: with no absolute segment, win32.resolve() anchors at the
+// process cwd (converted to win32 separators) — the old 'C:\' implied-root
+// fallback was removed when the implementation was ported from Node v24.
+// (BS avoids backslash-literal escaping confusion in this expectation.)
+const BS = String.fromCharCode(92);
+// win32.resolve('', 'foo') → '\' + cwd with win32 separators + '\foo'
+// (the cwd's leading '/' is consumed as the root separator).
+const cwdAsWin = process.cwd().split('/').join(BS);
+
 describe('win32 path implementation', () => {
 
   // -------------------------------------------------------------------------
@@ -13,7 +22,7 @@ describe('win32 path implementation', () => {
       [['C:\\foo', 'bar'], 'C:\\foo\\bar'],
       [['C:\\foo', '..\\bar'], 'C:\\bar'],
       [['C:\\foo', 'C:\\bar'], 'C:\\bar'],
-      [['', 'foo'], 'C:\\foo'],
+      [['', 'foo'], cwdAsWin + BS + 'foo'],
     ])('resolve(%o)', (args, expected) => {
       expect(win32.resolve(...args)).toBe(expected);
     });
