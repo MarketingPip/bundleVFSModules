@@ -259,8 +259,17 @@ function fallbackGetCppHeapStatistics(type = 'detailed') {
   if (type !== 'brief' && type !== 'detailed') {
     throw invalidArgValue('type', "one of: 'brief', 'detailed'", type);
   }
-  // There is no C++ heap outside V8; report zeros honestly.
-  return { total_allocated_size: 0, used_size: 0, detail_level: type };
+  // There is no C++ heap outside V8; report zeros honestly, using the
+  // exact v24 key set (committed/resident/used_size_bytes, space_statistics,
+  // type_names, detail_level).
+  return {
+    committed_size_bytes: 0,
+    resident_size_bytes: 0,
+    used_size_bytes: 0,
+    space_statistics: [],
+    type_names: [],
+    detail_level: type,
+  };
 }
 
 function fallbackSetFlagsFromString(flags) {
@@ -277,8 +286,9 @@ function fallbackCachedDataVersionTag() {
 
 function fallbackGetHeapSnapshot() {
   // Node returns a Readable stream of the heap snapshot; without V8 there
-  // is nothing to snapshot.
-  return null;
+  // is nothing to snapshot, so this fails loudly instead of returning null
+  // (real Node never returns null here).
+  throw unsupported('v8.getHeapSnapshot()');
 }
 
 function fallbackWriteHeapSnapshot(filename) {
@@ -414,13 +424,44 @@ function fallbackQueryObjects() {
   throw unsupported('v8.queryObjects()');
 }
 
-const fallbackPromiseHooks = {
-  onInit: () => ({ stop: () => {} }),
-  onSettled: () => ({ stop: () => {} }),
-  onBefore: () => ({ stop: () => {} }),
-  onAfter: () => ({ stop: () => {} }),
-  createHook: () => ({ enable: () => {}, disable: () => {} }),
-};
+// Minimal browser emulation of v8.promiseHooks. Real Node returns a plain
+// stop *function* from onInit/onSettled/onBefore/onAfter/createHook (there
+// is no `.stop`/`.enable`/`.disable` handle object). The fallback keeps a
+// small callback registry so the return shape and stop semantics match;
+// without V8 promise-lifecycle hooks the callbacks simply never fire.
+function makeFallbackPromiseHooks() {
+  const kinds = ['init', 'settled', 'before', 'after'];
+  const registry = { init: new Set(), settled: new Set(), before: new Set(), after: new Set() };
+  const checkFn = (name, value) => {
+    if (typeof value !== 'function') throw invalidArgType(name, 'function', value);
+  };
+  const hooks = {};
+  for (const kind of kinds) {
+    const method = `on${kind[0].toUpperCase()}${kind.slice(1)}`;
+    hooks[method] = (cb) => {
+      checkFn(kind, cb);
+      registry[kind].add(cb);
+      return () => { registry[kind].delete(cb); };
+    };
+  }
+  hooks.createHook = (callbacks) => {
+    if (callbacks === null || typeof callbacks !== 'object') {
+      throw invalidArgType('callbacks', 'object', callbacks);
+    }
+    const stoppers = [];
+    for (const kind of kinds) {
+      if (callbacks[kind] !== undefined) {
+        checkFn(kind, callbacks[kind]);
+        registry[kind].add(callbacks[kind]);
+        stoppers.push(() => { registry[kind].delete(callbacks[kind]); });
+      }
+    }
+    return () => { for (const stop of stoppers) stop(); };
+  };
+  return hooks;
+}
+
+const fallbackPromiseHooks = makeFallbackPromiseHooks();
 
 const fallbackStartupSnapshot = {
   addSerializeCallback: () => { throw notBuildingSnapshot(); },
