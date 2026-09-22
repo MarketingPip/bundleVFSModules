@@ -1,42 +1,86 @@
-/**
- * https shim - Bridges http logic with tls stubs
- */
-import http from "./http";
-import tls from "./tls";
-import { EventEmitter } from "./events";
+// src/https.js — port of node:https (Node v24.20.0) for the browser runtime.
+//
+// Browser strategy: TLS is owned by the browser/fetch stack, so the https
+// client reuses the http fetch bridge with https: defaults, and the https
+// server reuses the virtual http server registry (same __httpServerRunTime).
+// TLS options (key/cert/ca/rejectUnauthorized/...) are accepted and ignored:
+// browsers do not let pages configure TLS.
 
-export class Server extends http.Server {
+import http from './http.js';
+import { Agent as HttpAgent, _createClientRequest } from './http.js';
+
+// ---------------------------------------------------------------------------
+// Runtime bridge (guarded: rewritten to the sandbox scope at load time,
+// undefined under real Node / direct import).
+// ---------------------------------------------------------------------------
+const RT = (typeof globalThis._RUNTIME_ !== "undefined")
+  ? globalThis._RUNTIME_
+  : undefined;
+void RT;
+
+class HttpsServerBase extends http.Server {
   constructor(options, requestListener) {
-    // In a real shim, we'd pass the secure context, 
-    // but here we just initialize the base http server
+    // options may carry key/cert/ca/etc.; the virtual server ignores them.
     super(options, requestListener);
+    this._tlsOptions = options && typeof options === 'object' ? options : {};
+  }
+
+  setSecureContext(options) {
+    if (options && typeof options === 'object') {
+      this._tlsOptions = { ...this._tlsOptions, ...options };
+    }
   }
 }
 
+/**
+ * Node's https.Server is also callable without `new`
+ * (lib/https.js: `if (!(this instanceof Server)) return new Server(...)`).
+ */
+export function Server(...args) {
+  return Reflect.construct(HttpsServerBase, args, new.target ?? Server);
+}
+Object.setPrototypeOf(Server, HttpsServerBase);
+Server.prototype = HttpsServerBase.prototype;
+
 export function createServer(options, requestListener) {
+  if (typeof options === 'function') {
+    requestListener = options;
+    options = {};
+  }
   return new Server(options, requestListener);
 }
 
-export function request(url, options, callback) {
-  // Force the protocol to https and use the http.request logic
-  // Our http shim uses fetch() under the hood, so it handles SSL via the browser
-  const config = typeof url === 'string' ? new URL(url) : url;
-  return http.request(config, options, callback);
+class HttpsAgentBase extends HttpAgent {
+  constructor(options) {
+    super({
+      __proto__: null,
+      ...(options || {}),
+      defaultPort: options?.defaultPort ?? 443,
+      protocol: options?.protocol ?? 'https:',
+    });
+    this.maxCachedSessions = options?.maxCachedSessions ?? 100;
+  }
 }
 
-export function get(url, options, callback) {
-  const req = request(url, options, callback);
+/** Node's https.Agent is callable without `new` as well. */
+export function Agent(...args) {
+  return Reflect.construct(HttpsAgentBase, args, new.target ?? Agent);
+}
+Object.setPrototypeOf(Agent, HttpsAgentBase);
+Agent.prototype = HttpsAgentBase.prototype;
+
+export const globalAgent = new Agent({ keepAlive: true, scheduling: 'lifo', timeout: 5000 });
+
+export function request(urlOrOptions, optionsOrCallback, callback) {
+  return _createClientRequest(
+    urlOrOptions, optionsOrCallback, callback, 'https:', globalAgent);
+}
+
+export function get(urlOrOptions, optionsOrCallback, callback) {
+  const req = request(urlOrOptions, optionsOrCallback, callback);
   req.end();
   return req;
 }
-
-// Reuse Agent but with TLS defaults
-export class Agent extends http.Agent {
-  defaultPort = 443;
-  protocol = 'https:';
-}
-
-export const globalAgent = new Agent();
 
 export default {
   Server,
@@ -45,6 +89,4 @@ export default {
   get,
   Agent,
   globalAgent,
-  // Expose TLS constants that https users expect
-  SupportedProtocols: ['h2', 'http/1.1']
 };
