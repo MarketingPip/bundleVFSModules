@@ -23,9 +23,12 @@ const expectedPath = path.join(repoRoot, 'parity', 'expected-failures.json');
 const reportPath = path.join(repoRoot, 'parity', 'report.json');
 
 const target = process.argv[2] || process.env.PARITY_TARGET || 'path';
+// Node names some test files with hyphens (test-string-decoder.js) while the
+// builtin uses an underscore; also pick up .mjs tests (e.g. events).
+const filePrefix = `test-${target.replace(/_/g, '-')}`;
 const files = fs
   .readdirSync(testsDir)
-  .filter((f) => f.startsWith(`test-${target}`) && f.endsWith('.js'))
+  .filter((f) => f.startsWith(filePrefix) && (f.endsWith('.js') || f.endsWith('.mjs')))
   .sort();
 
 if (files.length === 0) {

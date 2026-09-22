@@ -32,9 +32,31 @@ measure real API parity — instead of only hand-written unit tests.
 npm run parity -- path        # or: node parity/run.mjs path
 ```
 
-Current scoreboard for `path`: **5/17** Node test files pass.
-See `parity/expected-failures.json` for the categorized known failures and
+`run.mjs` matches `test-<module>*.js` (and `*.mjs`) files; `_` in the module
+name maps to `-` in test file names, so `node parity/run.mjs string_decoder`
+picks up `test-string-decoder*.js`.
+
+## Scoreboard
+
+| Module | Official tests (Node v24.20.0) | Repo tests | Differential vs real Node builtin |
+| --- | --- | --- | --- |
+| `path` | 17/17 | 36/36 | 264/264 checks |
+| `punycode` | 1/1 | — | 174/174 checks |
+| `querystring` | 4/4 | — | 338/338 checks |
+| `string_decoder` | 3/3 | — | 16,880 checks, 0 failures |
+| `events` | 9/9 | — | 19/19 checks |
+| `assert` | 19/19 | 80/80 | 35-op battery, 0 failures |
+
+Target state: every completed module has zero entries in
+`parity/expected-failures.json` (currently empty). See
 `parity/report.json` for the last full run.
+
+## CI
+
+`.github/workflows/run.yaml` runs the parity suites for every completed
+module (`path`, `punycode`, `querystring`, `string_decoder`, `events`,
+`assert`) on push to `main` and on pull requests, pinned to Node 24.20.0
+to match the vendored suite. Any new failure fails the job.
 
 ## Adding a module
 
