@@ -2971,12 +2971,12 @@ child.on('error', (err) => {
            // this.sandbox.trueCode = "sd" 
             //data.line = d
             
-              data.reason = `${data.reason || data.error || data.message}`
+              data.reason = `${data.stack || data.reason || data.error || data.message}`
             
           }else{
             
               const codeThatThrewError = this.code.split('\n')[Number(data.line) - 1] || '';
-             data.reason = `${data.reason || data.error || data.message}\nat line ${line}, column ${data.column} \n \n →    ${line}| ${codeThatThrewError}`
+             data.reason = `${data.stack || data.reason || data.error || data.message}\nat line ${line}, column ${data.column} \n \n →    ${line}| ${codeThatThrewError}`
           }
         
          
@@ -2999,7 +2999,11 @@ child.on('error', (err) => {
         if (this.config.captureWindowErrors && !this.resolved) {
           this.resolved = true;
           this.cleanup();
-          reject(new Error(data.message || 'Window error'));
+          // Preserve the iframe's real stack — callers see where it threw,
+          // not just the parent-side Error construction site.
+          const err = new Error(data.message || 'Window error');
+          if (data.stack) err.stack = String(data.stack);
+          reject(err);
         }
       } else if (data.type === 'unhandled_promise_rejection') {
         if (this.config.capturePromiseRejections && !this.resolved) {
@@ -3020,7 +3024,10 @@ child.on('error', (err) => {
         
           this.cleanup();
           
-          reject(new Error(data.reason || 'Unhandled promise rejection'));
+          // Preserve the iframe's real stack, not just the mapped message.
+          const rejectionError = new Error(data.reason || 'Unhandled promise rejection');
+          if (data.stack) rejectionError.stack = String(data.stack);
+          reject(rejectionError);
         }
       }
     };
@@ -3313,6 +3320,23 @@ _parseExposedMethods(code, interopVar) {
 // 3. Mask the `toString` so the user can't inspect your tracking logic.
 //
 // **Would you like me to update the `SandboxRuntime` class to wrap everything in this secure "Private Closure" structure?**
+
+
+// Parse one V8 stack-frame line into {file, line, column}.
+// Handles "at fn (https://host/app.js:10:15)", "at async fn (...)", and
+// "at https://host/app.js:10:15". Anchored at the end so URL schemes
+// (https://...) are never mistaken for the line/column separators.
+// Defined once at module scope and exported for unit tests; the sandbox
+// template below inlines it via ${__parseStackLocation.toString()} so the
+// iframe gets the identical implementation (single source of truth).
+export function __parseStackLocation(frame) {
+  let s = String(frame || '').trim().replace(/^at\s+(async\s+)?/, '');
+  const open = s.lastIndexOf('(');
+  if (open !== -1 && s.endsWith(')')) s = s.slice(open + 1, -1);
+  const m = s.match(/^(.*):(\d+):(\d+)$/);
+  if (!m) return null;
+  return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
+}
 
 
 class SandboxRuntime {
@@ -5516,20 +5540,24 @@ function waitForAllXhrs() {
   });
 }
 
+// __parseStackLocation is defined once at module scope (exported for
+// unit tests) and inlined here so the iframe runs the identical code.
+${__parseStackLocation.toString()}
+
 // Enhanced error handling with stack traces
 window.onerror = function(message, source, lineno, colno, error) {
   const errorMsg = error ? (error.stack || error.message || message) : message;
   console.error('Uncaught error:', errorMsg);
-  
+
   window.parent.postMessage({
     type: 'window_error',
-    message: errorMsg,
+    message: error ? (error.message || String(message)) : String(message),
     source,
     lineno,
     colno,
-    stack: error?.stack
+    stack: error?.stack || null
   }, '*');
-  
+
   return true;
 };
 
@@ -5544,26 +5572,25 @@ window.onunhandledrejection = function (event) {
   }
 
   const stack = reason.stack || '';
-  const message = reason.stack || String(reason);
-console.log(stack)
-  // Try extracting first stack frame (where it happened)
-  let location = null;
-  const stackLines = stack.split('\\n');
+  const message = reason.message || String(reason);
 
-  if (stackLines.length > 1) {
-    // Example stack line:
-    // at myFunction (http://localhost:3000/app.js:10:15)
-    const match = stackLines[1].match(/\\(?(.+:\\d+:\\d+)\\)?$/);
-    if (match) location = match[1];
+  // Extract the first stack frame (where it happened) with a parser that
+  // understands URLs — no naive split(':').
+  let loc = null;
+  const stackLines = stack.split('\\n');
+  for (let i = 1; i < stackLines.length; i++) {
+    loc = __parseStackLocation(stackLines[i]);
+    if (loc) break;
   }
 
 window.parent.postMessage({
     type: 'unhandled_promise_rejection',
-    reason: \`Uncaught (in promise) Error: \${message}\`,
-    file: location?.split(':')[0]?.trim()?.replace("at","")?.trim() || null,
-    line: location?.split(':')[1] || null,
-    column: location?.split(':')[2] || null,
-    location:location?.trim()
+    reason: \`Uncaught (in promise) \${reason.name || 'Error'}: \${message}\`,
+    stack: stack || null,
+    file: loc?.file || null,
+    line: loc?.line ?? null,
+    column: loc?.column ?? null,
+    location: loc ? \`\${loc.file}:\${loc.line}:\${loc.column}\` : null
   }, '*');
 
   event.preventDefault();
@@ -5853,24 +5880,27 @@ ${code}\n})();
    // const stack = reason.stack || '';
  // const message = reason.message || String(reason);
 
-  // Try extracting first stack frame (where it happened)
+  // Extract the first stack frame (where it happened) with a parser that
+  // understands URLs — no naive split(':').
   let location = null;
+  let loc = null;
   const stackLines = err.stack.split('\\n');
 
-  if (stackLines.length > 1) {
-    // Example stack line:
-    // at myFunction (http://localhost:3000/app.js:10:15)
-    const match = stackLines[1].match(/\\(?(.+:\\d+:\\d+)\\)?$/);
-    if (match) location = match[1];
+  for (let i = 1; i < stackLines.length; i++) {
+    loc = __parseStackLocation(stackLines[i]);
+    if (loc) {
+      location = \`\${loc.file}:\${loc.line}:\${loc.column}\`;
+      break;
+    }
   }
-    
-    window.parent.postMessage({ 
-      type: 'function_error', 
+
+    window.parent.postMessage({
+      type: 'function_error',
       error: err.message || String(err),
       stack: err.stack,
       location,
-      line: location?.split(':')[1] || null,
-      column: location?.split(':')[2] || null,
+      line: loc?.line ?? null,
+      column: loc?.column ?? null,
       logs: logs,
       executionTime: parseFloat(executionTime)
     }, '*');
@@ -7006,6 +7036,10 @@ function tryResolveFileOrPackage(basePath, vfs) {
                         const loc = err?.loc;
         const message = err?.message;
                           console.log(err)
+        // If code generation itself failed (e.g. a syntax error in the user's
+        // code), runtimeCode was never assigned — skip the source-mapping and
+        // reject with the original error instead of crashing here.
+        if (runtimeCode) {
         const line = runtimeCode.slice(0, runtimeCode.indexOf("//__$PROVIDED_RUNTIME_CODE__/")).split("\n").length;
 
          
@@ -7037,6 +7071,7 @@ function tryResolveFileOrPackage(basePath, vfs) {
                   
                 err = formatErrors(code, err)
                 }
+        } // end if (runtimeCode)
         context.cleanup();
         this.emit('execution:error', { id: executionId, error: err.message });
         reject(err);
