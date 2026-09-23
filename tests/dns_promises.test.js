@@ -1,5 +1,7 @@
 import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import http from 'node:http';
+import dnsPacket from 'dns-packet';
+import { toRcode } from 'dns-packet/rcodes.js';
 
 import * as dnsPromisesNS from '../src/dns/promises.js';
 import {
@@ -27,16 +29,16 @@ import {
   setDefaultResultOrder,
 } from '../src/dns/promises.js';
 
-// Deterministic stub DoH server shared with the callback-API suite.
+// Deterministic stub DoH server (RFC 8484 wire format, like the callback suite).
 const STUB_ANSWERS = {
-  'A|stub.test': { Status: 0, Answer: [
-    { name: 'stub.test', type: 1, TTL: 100, data: '93.184.216.34' },
-  ] },
-  'MX|stub.test': { Status: 0, Answer: [
-    { name: 'stub.test', type: 15, TTL: 300, data: '5 mail.stub.test.' },
-  ] },
-  'A|gone.stub.test': { Status: 3 },
-  'A|empty.stub.test': { Status: 0 },
+  'A|stub.test': [
+    { name: 'stub.test', type: 'A', ttl: 100, data: '93.184.216.34' },
+  ],
+  'MX|stub.test': [
+    { name: 'stub.test', type: 'MX', ttl: 300, data: { preference: 5, exchange: 'mail.stub.test.' } },
+  ],
+  'A|gone.stub.test': { rcode: 'NXDOMAIN' },
+  'A|empty.stub.test': { rcode: 'NOERROR', answers: [] },
 };
 
 let stubServer;
@@ -47,10 +49,28 @@ describe('dns/promises', () => {
     await new Promise((resolveStart) => {
       stubServer = http.createServer((req, res) => {
         const u = new URL(req.url, 'http://x');
-        const key = `${u.searchParams.get('type')}|${u.searchParams.get('name')}`;
-        if (u.searchParams.get('name') === 'hang.stub.test') return; // hang → cancel
-        res.setHeader('content-type', 'application/dns-json');
-        res.end(JSON.stringify(STUB_ANSWERS[key] || { Status: 3 }));
+        let query;
+        try {
+          query = dnsPacket.decode(Buffer.from(
+            (u.searchParams.get('dns') || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64'));
+        } catch {
+          res.statusCode = 400;
+          res.end();
+          return;
+        }
+        const q = (query.questions && query.questions[0]) || {};
+        if (q.name === 'hang.stub.test') return; // hang → cancel
+        const key = `${q.type}|${q.name}`;
+        const spec = STUB_ANSWERS[key] || { rcode: 'NXDOMAIN' };
+        const wire = dnsPacket.encode({
+          type: 'response',
+          id: query.id,
+          flags: toRcode(spec.rcode || 'NOERROR'),
+          questions: query.questions,
+          answers: Array.isArray(spec) ? spec : (spec.answers || []),
+        });
+        res.setHeader('content-type', 'application/dns-message');
+        res.end(wire);
       });
       stubServer.listen(0, '127.0.0.1', () => {
         stubBase = `http://127.0.0.1:${stubServer.address().port}/dns-query`;
@@ -61,7 +81,7 @@ describe('dns/promises', () => {
   });
 
   afterAll(async () => {
-    setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve']);
+    setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']);
     await new Promise((r) => stubServer.close(r));
   });
 
@@ -154,10 +174,10 @@ describe('dns/promises', () => {
     // module-level setServers (mirrors Node: instances use system DNS).
     expect(r.getServers()).toEqual([
       'https://cloudflare-dns.com/dns-query',
-      'https://dns.google/resolve',
+      'https://dns.google/dns-query',
     ]);
-    r.setServers(['https://dns.google/resolve']);
-    expect(r.getServers()).toEqual(['https://dns.google/resolve']);
+    r.setServers(['https://dns.google/dns-query']);
+    expect(r.getServers()).toEqual(['https://dns.google/dns-query']);
 
     const r2 = new Resolver();
     r2.setServers([stubBase]);
@@ -169,8 +189,8 @@ describe('dns/promises', () => {
   test('setServers keeps callback and promises APIs in sync', () => {
     const prev = getServers();
     try {
-      setServers(['https://dns.google/resolve']);
-      expect(getServers()).toEqual(['https://dns.google/resolve']);
+      setServers(['https://dns.google/dns-query']);
+      expect(getServers()).toEqual(['https://dns.google/dns-query']);
     } finally {
       setServers(prev);
     }
@@ -198,7 +218,7 @@ describe('dns/promises', () => {
 
   test('live: resolve4 + resolveTxt + reverse', async () => {
     const prev = getServers();
-    setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve']);
+    setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']);
     try {
       const ips = await resolve4('example.com');
       expect(ips.length).toBeGreaterThan(0);
