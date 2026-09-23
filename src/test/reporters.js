@@ -46,16 +46,39 @@ function countAll(root) {
     for (const c of node.children) {
       if (!c.isSuite && !c._isSuite) {
         tests++;
-        if      (c.result === 'pass') pass++;
-        else if (c.result === 'fail') fail++;
-        else if (c.result === 'skip') skip++;
-        else if (c.result === 'todo') todo++;
+        const oc = outcomeOf(c);
+        if      (oc === 'pass') pass++;
+        else if (oc === 'fail') fail++;
+        else if (oc === 'skip') skip++;
+        else if (oc === 'todo') todo++;
       }
       walk(c);
     }
   }
   walk(root);
   return { tests, pass, fail, skip, todo, cancelled };
+}
+
+/**
+ * Node-shaped test outcome. Real node:test reports skipped/todo tests as
+ * PASSES carrying `skip`/`todo` flags (the test:pass event has skip/todo
+ * fields) — there are no separate result states. `node.skip`/`node.todo`
+ * hold the reason string or `true`.
+ */
+function outcomeOf(node) {
+  if (!node || node.isSuite || node._isSuite) return null;
+  if (node.result === 'fail') return 'fail';
+  if (node.skip !== undefined) return 'skip';
+  if (node.todo !== undefined) return 'todo';
+  return 'pass';
+}
+
+function skipReason(node) {
+  return typeof node.skip === 'string' && node.skip ? node.skip : '';
+}
+
+function todoReason(node) {
+  return typeof node.todo === 'string' && node.todo ? node.todo : '';
 }
 
 /** Round to 3 decimal places, matching Node's NumberPrototypeToFixed(..., 3). */
@@ -77,13 +100,42 @@ function totalMs(root) {
 /** Flatten events array; accepts undefined gracefully. */
 function evtList(events) { return Array.isArray(events) ? events : []; }
 
+/**
+ * Consume an async iterable of { type, data } test events (the stream run()
+ * produces) and recover the result tree: every event's data.node carries
+ * parent links, so the <root> node is reachable from any event.
+ * Returns { root, events } for the tree-walk renderers below.
+ */
+async function _collectRoot(source) {
+  const events = [];
+  if (source && typeof source[Symbol.asyncIterator] === 'function') {
+    for await (const e of source) events.push(e);
+  } else if (Array.isArray(source)) {
+    events.push(...source);
+  }
+  let root = null;
+  for (const e of events) {
+    let n = e?.data?.node;
+    while (n?.parent) n = n.parent;
+    if (n) { root = n; break; }
+  }
+  // No events (or no node links): an empty tree the renderers can walk.
+  if (!root) root = { name: '<root>', children: [] };
+  return { root, events };
+}
+
 // ─── DOT reporter ─────────────────────────────────────────────────────────────
 // Matches: node --test --test-reporter=dot
 //
 // Outputs one coloured character per leaf test result, wrapping at COLS.
 // After the loop a newline is emitted, then a "Failed tests:" block if needed.
+//
+// Node's reporter API: an async generator transforming the event stream.
+export async function* dot(source) {
+  yield _renderDot(await _collectRoot(source));
+}
 
-export function dot({ root, events }) {
+function _renderDot({ root, events }) {
   // Node uses process.stdout.columns ?? 20, clamped to minimum 20.
   const COLS = 20;
   const rows  = [];
@@ -142,98 +194,18 @@ export function dot({ root, events }) {
   return rows.join('\n');
 }
 
-export function dot2({ root, events }) {
-  const COLS = 20; // Node uses terminal width, fallback 20
-  const rows = [];
-  let line = '';
-  let col = 0;
-
-  const failures = [];
-
-  function pushChar(ch) {
-    line += ch;
-    col++;
-
-    if (col >= COLS) {
-      rows.push(line);
-      line = '';
-      col = 0;
-    }
-  }
-
-  for (const evt of evtList(events)) {
-    const { type, data } = evt;
-    const result = data?.result;
-
-    // Handle pass
-    if (type === 'test:pass' && result !== 'skip' && result !== 'todo') {
-      pushChar(CLR.green('.'));
-      continue;
-    }
-
-    // Handle fail
-    if (type === 'test:fail') {
-      pushChar(CLR.red('X'));
-      failures.push(data);
-      continue;
-    }
-
-    // Explicitly ignore skip/todo
-    if (
-      type === 'test:skip' ||
-      type === 'test:todo' ||
-      result === 'skip' ||
-      result === 'todo'
-    ) {
-      continue;
-    }
-  }
-
-  if (line) rows.push(line);
-  rows.push(''); // newline after grid
-
-  // ─── Failure details (matches Node structure) ───
-  if (failures.length) {
-    rows.push('');
-    rows.push(CLR.red('Failed tests:'));
-    rows.push('');
-
-    for (const f of failures) {
-      const name = f.name ?? f.data?.name ?? '(unknown)';
-      const err = f.details?.error ?? f.error;
-
-      rows.push(`${SYM.fail}${name}`);
-
-      if (err) {
-        const msg = err.message ?? String(err);
-        rows.push(`  ${err.name ?? 'Error'}: ${msg}`);
-
-        if (err.stack) {
-          const frames = err.stack
-            .split('\n')
-            .filter(l => /^\s+at /.test(l))
-            .slice(0, 3);
-
-          for (const frame of frames) {
-            rows.push(`    ${frame.trim()}`);
-          }
-        }
-      }
-
-      rows.push('');
-    }
-  }
-
-  return rows.join('\n');
-}
-
 // ─── SPEC reporter ────────────────────────────────────────────────────────────
 // Matches: node --test --test-reporter=spec
 //
 // Hierarchical human-readable output with Unicode symbols and ANSI colours.
 // Mirrors SpecReporter (internal/test_runner/reporter/spec.js).
+//
+// Node's reporter API: an async generator transforming the event stream.
+export async function* spec(source) {
+  yield _renderSpec(await _collectRoot(source));
+}
 
-export function spec({ root, events }) {
+function _renderSpec({ root, events }) {
   const rows        = [];
   const failedNodes = [];
 
@@ -266,17 +238,6 @@ export function spec({ root, events }) {
   }
 }
   
-  function formatError2(node, depth) {
-    const err = node.error;
-    if (!err) return;
-    const pad = indent(depth + 1);
-    rows.push(`${pad}${CLR.red(err.message ?? String(err))}`);
-    if (err.stack) {
-      for (const f of err.stack.split('\n').filter(l => /^\s+at /.test(l)).slice(0, 5))
-        rows.push(`${pad}  ${f.trim()}`);
-    }
-  }
-
   function renderNode(node, depth) {
     const pad = indent(depth);
     const isSuite = node.isSuite || node._isSuite;
@@ -295,7 +256,7 @@ export function spec({ root, events }) {
       rows.push(`${pad}${sym}${node.name} ${CLR.gray(`(${ms(dur)}ms)`)}`);
       rows.push('');
     } else {
-      switch (node.result) {
+      switch (outcomeOf(node)) {
         case 'pass':
           rows.push(`${pad}${CLR.green(SYM.pass)}${node.name} ${CLR.gray(`(${ms(node.duration)}ms)`)}`);
           break;
@@ -307,15 +268,13 @@ export function spec({ root, events }) {
           break;
 
         case 'skip': {
-          const reason = typeof node.opts?.skip === 'string' && node.opts.skip
-            ? ` # SKIP ${node.opts.skip}` : ' # SKIP';
+          const reason = skipReason(node) ? ` # SKIP ${skipReason(node)}` : ' # SKIP';
           rows.push(`${pad}${CLR.gray(`- ${node.name}${reason} (${ms(node.duration)}ms)`)}`);
           break;
         }
 
         case 'todo': {
-          const reason = typeof node.opts?.todo === 'string' && node.opts.todo
-            ? ` ${node.opts.todo}` : '';
+          const reason = todoReason(node) ? ` ${todoReason(node)}` : '';
           rows.push(`${pad}${CLR.gray(`# TODO ${node.name}${reason} (${ms(node.duration)}ms)`)}`);
           break;
         }
@@ -365,8 +324,13 @@ export function spec({ root, events }) {
 // TAP version 13. Counters are LOCAL per nesting level (not global).
 // Each suite produces a nested "# Subtest:" block with its own 1..N plan.
 // The top-level plan appears after all tests.
+//
+// Node's reporter API: an async generator transforming the event stream.
+export async function* tap(source) {
+  yield _renderTap(await _collectRoot(source));
+}
 
-export function tap({ root, events }) {
+function _renderTap({ root, events }) {
   const rows = ['TAP version 13'];
 
   // Escape special TAP characters — mirrors tapEscape() in Node's reporter.
@@ -399,25 +363,38 @@ export function tap({ root, events }) {
       rows.push(`${innerPad}1..${local}`);
 
       const dur = nodeDuration(node);
-      rows.push(`${pad}ok ${localNum} - ${tapEsc(node.name)}`);
+      const suiteDirective =
+        node.skip !== undefined
+          ? ` # SKIP${skipReason(node) ? ' ' + tapEsc(skipReason(node)) : ''}`
+        : node.todo !== undefined
+          ? ` # TODO${todoReason(node) ? ' ' + tapEsc(todoReason(node)) : ''}`
+        : '';
+      rows.push(`${pad}ok ${localNum} - ${tapEsc(node.name)}${suiteDirective}`);
       rows.push(yamlBlock({ duration_ms: ms(dur) }, depth * 4 + 2));
     } else {
-      const ok = node.result === 'fail' ? 'not ok' : 'ok';
+      const oc = outcomeOf(node);
+      const ok = oc === 'fail' ? 'not ok' : 'ok';
+
+      // # EXPECTED FAILURE — mirrors node's expectFailure TAP directive.
+      const expectedFailure = node._expectedFailure === true ||
+        node.error?.failureType === 'expectedFailure';
 
       const directive =
-        node.result === 'skip'
-          ? ` # SKIP${typeof node.opts?.skip === 'string' && node.opts.skip ? ' ' + tapEsc(node.opts.skip) : ''}`
-        : node.result === 'todo'
-          ? ` # TODO${typeof node.opts?.todo === 'string' && node.opts.todo ? ' ' + tapEsc(node.opts.todo) : ''}`
+        node.skip !== undefined
+          ? ` # SKIP${skipReason(node) ? ' ' + tapEsc(skipReason(node)) : ''}`
+        : node.todo !== undefined
+          ? ` # TODO${todoReason(node) ? ' ' + tapEsc(todoReason(node)) : ''}`
+        : expectedFailure
+          ? ' # EXPECTED FAILURE'
         : '';
 
       rows.push(`${pad}${ok} ${localNum} - ${tapEsc(node.name)}${directive}`);
 
       // YAML detail block — matches reportDetails() structure.
       const meta = { duration_ms: ms(node.duration ?? 0) };
-      if (node.result === 'fail' && node.error) {
+      if (oc === 'fail' && node.error) {
         const err = node.error;
-        meta.failureType = 'testCodeFailure';
+        meta.failureType = err.failureType ?? 'testCodeFailure';
         // Node wraps the message in single quotes in the YAML output.
         meta.error    = `'${String(err.message ?? '').replace(/'/g, "\\'")}'`;
         meta.code     = err.code  ?? 'ERR_TEST_FAILURE';
@@ -459,8 +436,13 @@ export function tap({ root, events }) {
 // Mirrors junitReporter (internal/test_runner/reporter/junit.js).
 // Suites → <testsuite>, leaf tests → <testcase>, errors → <failure>,
 // skip/todo → <skipped>.
+//
+// Node's reporter API: an async generator transforming the event stream.
+export async function* junit(source) {
+  yield _renderJunit(await _collectRoot(source));
+}
 
-export function junit({ root, events }) {
+function _renderJunit({ root, events }) {
   function escAttr(s) {
     return String(s ?? '')
       .replace(/&(?!#\d{1,7};)/g, '&amp;')
@@ -488,7 +470,7 @@ export function junit({ root, events }) {
     const cases    = children.filter(c => !c.isSuite && !c._isSuite);
     const nested   = children.filter(c =>  c.isSuite ||  c._isSuite);
     const failures = cases.filter(c => c.result === 'fail').length;
-    const skipped  = cases.filter(c => c.result === 'skip' || c.result === 'todo').length;
+    const skipped  = cases.filter(c => { const oc = outcomeOf(c); return oc === 'skip' || oc === 'todo'; }).length;
     const dur      = (nodeDuration(node) / 1000).toFixed(6);
 
     out.push(
@@ -519,20 +501,22 @@ export function junit({ root, events }) {
 
     const isLeaf = !node.children?.length;
 
-    if (isLeaf && node.result === 'pass') {
+    const oc = outcomeOf(node);
+
+    if (isLeaf && oc === 'pass') {
       out.push(`${t}<testcase ${attrs}/>`);
       return;
     }
 
     out.push(`${t}<testcase ${attrs}>`);
 
-    if (node.result === 'skip') {
-      const msg = typeof node.opts?.skip === 'string' ? node.opts.skip : 'skipped';
+    if (oc === 'skip') {
+      const msg = skipReason(node) || 'skipped';
       out.push(`${t}\t<skipped type="skipped" message="${escAttr(msg)}"/>`);
-    } else if (node.result === 'todo') {
-      const msg = typeof node.opts?.todo === 'string' ? node.opts.todo : 'todo';
+    } else if (oc === 'todo') {
+      const msg = todoReason(node) || 'todo';
       out.push(`${t}\t<skipped type="todo" message="${escAttr(msg)}"/>`);
-    } else if (node.result === 'fail' && node.error) {
+    } else if (oc === 'fail' && node.error) {
       const err  = node.error;
       const type = escAttr(err.failureType ?? err.code ?? 'Error');
       const msg  = escAttr(err.message ?? '');
@@ -554,7 +538,7 @@ export function junit({ root, events }) {
   // this matches Node's behaviour where all events share a common ancestor.
   if (topTests.length) {
     const failures = topTests.filter(c => c.result === 'fail').length;
-    const skipped  = topTests.filter(c => c.result === 'skip' || c.result === 'todo').length;
+    const skipped  = topTests.filter(c => { const oc = outcomeOf(c); return oc === 'skip' || oc === 'todo'; }).length;
     const dur      = (topTests.reduce((a, c) => a + nodeDuration(c), 0) / 1000).toFixed(6);
     out.push(
       `\t<testsuite name="root"` +
@@ -580,8 +564,13 @@ export function junit({ root, events }) {
 // Requires a `test:coverage` event in the events array (produced by
 // `node --experimental-test-coverage`). Returns an empty string when no
 // coverage data is present — the browser runner may not generate it.
+//
+// Node's reporter API: an async generator transforming the event stream.
+export async function* lcov(source) {
+  yield _renderLcov(await _collectRoot(source));
+}
 
-export function lcov({ root, events }) {
+function _renderLcov({ root, events }) {
   const coverageEvt = evtList(events).find(e => e.type === 'test:coverage');
   if (!coverageEvt) return ''; // no coverage data — mirrors Node's silent no-op
 
@@ -638,3 +627,6 @@ export function lcov({ root, events }) {
 
   return out;
 }
+
+// Default export — mirrors Node's ESM `export default { dot, spec, tap, junit, lcov }`.
+export default { dot, spec, tap, junit, lcov };
