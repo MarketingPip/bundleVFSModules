@@ -1,14 +1,16 @@
 // node:_tls_common — Node internal TLS helpers.
 //
-// INTERIM minimal stub. The browser has no raw-TLS API, so SecureContext is
-// an opaque handle and translatePeerCertificate passes certificates through
-// unchanged. The tls worker (Wave C) will make this consistent with the tls
-// port; until then the export shapes match real node:_tls_common
-// (SecureContext, createSecureContext, translatePeerCertificate).
+// The browser has no raw-TLS API, so SecureContext is an opaque handle
+// (created from the options object, configured by noops) and
+// translatePeerCertificate passes certificates through unchanged.
+// Export shapes match real node:_tls_common:
+// { SecureContext, createSecureContext, translatePeerCertificate }.
+// node:tls re-exports SecureContext/createSecureContext from here so the two
+// modules stay consistent.
 // Dependency-free ESM, browser-safe. No _RUNTIME_ access needed.
 export class SecureContext {
   constructor(options = {}) {
-    this.options = options;
+    this.options = { ...options };
     this.context = {};
   }
   setCert(_cert) {}
