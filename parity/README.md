@@ -46,6 +46,7 @@ picks up `test-string-decoder*.js`.
 | `string_decoder` | 3/3 | — | 16,880 checks, 0 failures |
 | `events` | 9/9 | — | 19/19 checks |
 | `assert` | 19/19 | 80/80 | 35-op battery, 0 failures |
+| `stream` (`stream/consumers`, `stream/promises`, `stream/web`) | 237/237 | 66/66 | 25/25 checks |
 
 Target state: every completed module has zero entries in
 `parity/expected-failures.json` (currently empty). See
