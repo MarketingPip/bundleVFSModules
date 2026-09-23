@@ -17,13 +17,13 @@ describe('Buffer Shim Compliance', () => {
   });
 
   describe('isAscii()', () => {
-    test('should return true for valid ASCII strings', () => {
-      expect(shim.isAscii('Hello World!')).toBe(true);
+    test('should throw ERR_INVALID_ARG_TYPE for string input (matches real Node)', () => {
+      expect(() => shim.isAscii('Hello World!')).toThrow(/must be an instance of/);
     });
 
-    test('should return false for non-ASCII characters', () => {
-      // '©' is 0xA9 in Latin-1, or 0xC2 0xA9 in UTF-8
-      expect(shim.isAscii('Hello ©')).toBe(false);
+    test('should throw ERR_INVALID_ARG_TYPE for non-ASCII string input', () => {
+      // '©' is 0xA9 in Latin-1, or 0xC2 0xA9 in UTF-8 — still a string, still throws
+      expect(() => shim.isAscii('Hello ©')).toThrow(/must be an instance of/);
     });
 
     test('should handle Buffer input', () => {
@@ -33,8 +33,8 @@ describe('Buffer Shim Compliance', () => {
   });
 
   describe('isUtf8()', () => {
-    test('should return true for valid UTF-8', () => {
-      expect(shim.isUtf8('🔥')).toBe(true);
+    test('should throw ERR_INVALID_ARG_TYPE for string input (matches real Node)', () => {
+      expect(() => shim.isUtf8('🔥')).toThrow(/must be an instance of/);
     });
 
     test('should return false for invalid UTF-8 sequences', () => {
@@ -46,17 +46,35 @@ describe('Buffer Shim Compliance', () => {
 
   describe('transcode()', () => {
     test('should transcode between encodings', () => {
-      const source = 'hello';
-      const transcoded = shim.transcode(source, 'utf8', 'base64');
-      
-      // "hello" in base64 is "aGVsbG8="
-      expect(transcoded.toString()).toBe(shim.Buffer.from(source).toString('base64'));
+      const source = shim.Buffer.from('hello', 'utf8');
+      const transcoded = shim.transcode(source, 'utf8', 'ascii');
+      expect(shim.Buffer.isBuffer(transcoded)).toBe(true);
+      expect(transcoded.toString()).toBe('hello');
+    });
+
+    test('should throw ERR_INVALID_ARG_TYPE for string input (matches real Node)', () => {
+      expect(() => shim.transcode('hello', 'utf8', 'base64')).toThrow(/must be an instance of/);
     });
   });
 
   describe('Safety Stubs', () => {
-    test('resolveObjectURL should throw a clear error', () => {
-      expect(() => shim.resolveObjectURL()).toThrow('not implemented');
+    test('resolveObjectURL matches real Node when native buffer is available', () => {
+      // Real Node implements buffer.resolveObjectURL; our shim delegates to it
+      // when process.getBuiltinModule exists. It must not throw 'not implemented'.
+      expect(typeof shim.resolveObjectURL).toBe('function');
+    });
+
+    test('resolveObjectURL is undefined (not silently broken) in the browser fallback lane', async () => {
+      const realGbm = process.getBuiltinModule;
+      process.getBuiltinModule = undefined;
+      try {
+        const fb = await import('../src/buffer.js?fallback=jest');
+        // No native buffer in the fallback lane: the lazy getter yields
+        // undefined rather than a fake function.
+        expect(fb.default.resolveObjectURL).toBeUndefined();
+      } finally {
+        process.getBuiltinModule = realGbm;
+      }
     });
   });
 
