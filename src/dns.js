@@ -1,8 +1,21 @@
 // src/dns.js — port of node:dns for the browser runtime.
 //
-// Strategy: DNS-over-HTTPS (DoH) JSON API via fetch(). The sandbox CSP
+// Strategy: DNS-over-HTTPS (DoH) via fetch(). The sandbox CSP
 // (`connect-src *`) permits real outbound HTTPS, so every resolve* query,
 // reverse() and lookup() work in the browser with zero native delegation.
+//
+// Transport details:
+// - RFC 8484 wire format (application/dns-message) over fetch(). The DNS
+//   codec itself is dns-packet (maintained, MIT) — it encodes queries and
+//   decodes responses, replacing ~150 lines of hand-rolled DoH-JSON string
+//   parsing. The fetch() transport stays hand-written: it is the only
+//   network primitive the sandbox guarantees.
+// - dohjs was evaluated and deliberately NOT adopted: its transport is
+//   Node-https-based (not fetch, so not browser-suitable without fragile
+//   indirection), its only unique helper is a 10-line query builder, and it
+//   is GPL-3.0+ licensed — incompatible with this project's MIT shims.
+//   dns-packet is the maintained protocol implementation dohjs itself
+//   depends on, so adopting dns-packet captures the real value.
 //
 // Honest gaps vs node:dns (documented, not faked):
 // - lookup() in Node is getaddrinfo-based: it honors /etc/hosts, mDNS, search
@@ -16,8 +29,12 @@
 // - dns.resolveAny() is ENOTIMP in real Node too (c-ares deprecated ANY
 //   queries); the shim mirrors that.
 // - No DNSSEC validation.
+// - resolveTlsa().data is a Uint8Array; real Node surfaces an ArrayBuffer.
 
 'use strict';
+
+import dnsPacket from 'dns-packet';
+import { Buffer } from './buffer.js';
 
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import). The dns shim needs no
@@ -261,13 +278,8 @@ function ipToArpa(ip) {
 
 const DEFAULT_DOH_SERVERS = [
   'https://cloudflare-dns.com/dns-query',
-  'https://dns.google/resolve',
+  'https://dns.google/dns-query',
 ];
-
-const RR_TYPE_NUM = {
-  A: 1, AAAA: 28, CNAME: 5, MX: 15, NS: 2, TXT: 16, SRV: 33,
-  SOA: 6, PTR: 12, CAA: 257, NAPTR: 35, TLSA: 52, ANY: 255,
-};
 
 const VALID_RRTYPES = ['A', 'AAAA', 'ANY', 'CAA', 'CNAME', 'MX', 'NAPTR', 'NS', 'PTR', 'SOA', 'SRV', 'TLSA', 'TXT'];
 
@@ -341,29 +353,57 @@ function usableDohServers(servers) {
   return usable.length ? usable : DEFAULT_DOH_SERVERS.slice();
 }
 
-// DoH JSON status codes (RFC 8484): 0 NOERROR, 1 FORMERR, 2 SERVFAIL,
-// 3 NXDOMAIN, 4 NOTIMP, 5 REFUSED.
-function statusToCode(status) {
-  switch (status) {
-    case 3: return NOTFOUND;   // ENOTFOUND
-    case 2: return SERVFAIL;    // ESERVFAIL
-    case 1: return FORMERR;     // EFORMERR
-    case 4: return NOTIMP;      // ENOTIMP
-    case 5: return REFUSED;     // EREFUSED
-    default: return BADRESP;    // EBADRESP
+// DoH rcode strings (dns-packet decodes the numeric RCODE to a name):
+// NOERROR, FORMERR, SERVFAIL, NXDOMAIN, NOTIMP, REFUSED, ...
+function rcodeToCode(rcode) {
+  switch (rcode) {
+    case 'NXDOMAIN': return NOTFOUND;   // ENOTFOUND
+    case 'SERVFAIL': return SERVFAIL;   // ESERVFAIL
+    case 'FORMERR': return FORMERR;     // EFORMERR
+    case 'NOTIMP': return NOTIMP;       // ENOTIMP
+    case 'REFUSED': return REFUSED;     // EREFUSED
+    default: return BADRESP;            // EBADRESP
   }
 }
 
+function base64UrlEncode(bytes) {
+  // DNS wire packets are small; a binary-string pass through btoa is fine.
+  // btoa exists in every browser and in Node 16+, so the transport needs no
+  // Buffer global here.
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
 async function dohFetchOne(base, name, type, signal) {
+  // RFC 8484 §4.1 GET: ?dns=<base64url(wire)>, Accept: application/dns-message.
+  // The DNS ID is 0 per the RFC's cache-friendliness guidance; dns-packet
+  // builds the query (recursion desired, like any stub resolver).
+  const wire = dnsPacket.encode({
+    type: 'query',
+    id: 0,
+    flags: dnsPacket.RECURSION_DESIRED,
+    questions: [{ type, name }],
+  });
   const sep = base.includes('?') ? '&' : '?';
-  const url = `${base}${sep}name=${encodeURIComponent(name)}&type=${type}`;
-  const res = await fetch(url, { headers: { accept: 'application/dns-json' }, signal });
+  const url = `${base}${sep}dns=${base64UrlEncode(wire)}`;
+  const res = await fetch(url, { headers: { accept: 'application/dns-message' }, signal });
   if (!res.ok) {
     const err = new Error(`DoH request failed: ${res.status}`);
     err.code = CONNREFUSED; // ECONNREFUSED
     throw err;
   }
-  return res.json();
+  const raw = await res.arrayBuffer();
+  let body;
+  try {
+    body = dnsPacket.decode(Buffer.from(raw));
+  } catch {
+    const e = new Error('bad DoH response'); e.code = BADRESP; throw e;
+  }
+  if (!body || body.type !== 'response' || !Array.isArray(body.answers)) {
+    const e = new Error('bad DoH response'); e.code = BADRESP; throw e;
+  }
+  return body;
 }
 
 // Query every configured DoH server in order; the first NOERROR answer wins.
@@ -390,11 +430,8 @@ async function dohQuery(servers, name, type, { signal, timeoutMs } = {}) {
     for (const base of usableDohServers(servers)) {
       try {
         const body = await dohFetchOne(base, name, type, effSignal);
-        if (typeof body !== 'object' || body === null || typeof body.Status !== 'number') {
-          const e = new Error('bad DoH response'); e.code = BADRESP; throw e;
-        }
-        if (body.Status === 0 || body.Status === 3) return body; // NOERROR or NXDOMAIN: terminal
-        lastErr = dnsError(SYSCALL_FOR_TYPE[type] || 'query', statusToCode(body.Status), name);
+        if (body.rcode === 'NOERROR' || body.rcode === 'NXDOMAIN') return body; // terminal
+        lastErr = dnsError(SYSCALL_FOR_TYPE[type] || 'query', rcodeToCode(body.rcode), name);
         // SERVFAIL etc: try the next server.
       } catch (e) {
         if (timedOut) {
@@ -428,108 +465,91 @@ function stripDot(s) {
 }
 
 // ---------------------------------------------------------------------------
-// DoH answer → Node record shapes
+// Wire answer → Node record shapes.
+//
+// dns-packet decodes rdata into structured values; this maps them onto the
+// exact shapes Node returns. Field names were verified against
+// nodejs/node v24.20.0 src/cares_wrap.cc (Parse*Reply templates).
 // ---------------------------------------------------------------------------
 
-function parseTxtData(data) {
-  // One TXT rdata string: `"chunk1" "chunk2"` or bare text.
-  const out = [];
-  const re = /"((?:[^"\\]|\\.)*)"|(\S+)/g;
-  let m;
-  let any = false;
-  while ((m = re.exec(data)) !== null) {
-    any = true;
-    if (m[1] !== undefined) out.push(m[1].replace(/\\(.)/g, '$1'));
-    else out.push(m[2]);
-  }
-  if (!any) out.push('');
-  return out;
-}
-
-function parseQuotedList(s) {
-  // `"a" "b" "c"` → ['a','b','c']
-  const out = [];
-  const re = /"((?:[^"\\]|\\.)*)"/g;
-  let m;
-  while ((m = re.exec(s)) !== null) out.push(m[1].replace(/\\(.)/g, '$1'));
-  return out;
-}
-
-function parseRecord(type, data) {
-  const d = String(data);
+function mapRecord(type, data) {
+  if (data === null || data === undefined) return null;
   switch (type) {
     case 'A':
     case 'AAAA':
-      return isIPv4(d) || d.includes(':') ? d : null;
+      // dns-packet: address string.
+      return typeof data === 'string' ? data : null;
     case 'CNAME':
     case 'NS':
     case 'PTR':
-      return stripDot(d);
-    case 'MX': {
-      const m = /^(\d+)\s+(\S+)\s*$/.exec(d);
-      return m ? { priority: Number(m[1]), exchange: stripDot(m[2]) } : null;
-    }
+      // dns-packet: target name string (may carry a trailing dot).
+      return typeof data === 'string' ? stripDot(data) : null;
+    case 'MX':
+      // dns-packet: { preference, exchange } → Node { priority, exchange }.
+      return typeof data.exchange === 'string'
+        ? { priority: data.preference, exchange: stripDot(data.exchange) }
+        : null;
     case 'TXT':
-      return parseTxtData(d);
-    case 'SRV': {
-      const m = /^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(d);
-      return m ? { priority: Number(m[1]), weight: Number(m[2]), port: Number(m[3]), name: stripDot(m[4]) } : null;
-    }
-    case 'SOA': {
-      const p = d.trim().split(/\s+/);
-      if (p.length < 7) return null;
-      return {
-        nsname: stripDot(p[0]),
-        hostmaster: stripDot(p[1]),
-        serial: Number(p[2]),
-        refresh: Number(p[3]),
-        retry: Number(p[4]),
-        expire: Number(p[5]),
-        minimum: Number(p[6]),
-      };
-    }
-    case 'CAA': {
-      const m = /^(\d+)\s+([A-Za-z0-9]+)\s+"((?:[^"\\]|\\.)*)"\s*$/.exec(d);
-      if (!m) return null;
-      const flags = Number(m[1]);
-      return { critical: (flags & 128) ? 128 : 0, [m[2]]: m[3].replace(/\\(.)/g, '$1') };
-    }
-    case 'NAPTR': {
-      const m = /^(\d+)\s+(\d+)\s+"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"\s+(\S+)\s*$/.exec(d);
-      // Fallback: tolerate unquoted trailing replacement.
-      const m2 = m || /^(\d+)\s+(\d+)\s+"([^"]*)"\s+"([^"]*)"\s+"([^"]*)"\s+(\S+)\s*$/.exec(d);
-      if (!m2) return null;
-      const unq = (s) => s.replace(/\\(.)/g, '$1');
-      return {
-        flags: unq(m2[3]),
-        service: unq(m2[4]),
-        regexp: unq(m2[5]),
-        replacement: stripDot(unq(m2[6])),
-        order: Number(m2[1]),
-        preference: Number(m2[2]),
-      };
-    }
-    case 'TLSA': {
-      const m = /^(\d+)\s+(\d+)\s+(\d+)\s+([0-9a-fA-F]+)\s*$/.exec(d);
-      if (!m) return null;
-      const hex = m[4];
-      const bytes = new Uint8Array(hex.length / 2);
-      for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-      return { usage: Number(m[1]), selector: Number(m[2]), matchingType: Number(m[3]), data: bytes };
-    }
+      // dns-packet: Buffer[] of character-strings → Node string[].
+      return Array.isArray(data)
+        ? data.map((chunk) => Buffer.from(chunk).toString())
+        : null;
+    case 'SRV':
+      // dns-packet: { priority, weight, port, target } → Node { ..., name }.
+      return typeof data.target === 'string'
+        ? {
+            priority: data.priority, weight: data.weight,
+            port: data.port, name: stripDot(data.target),
+          }
+        : null;
+    case 'SOA':
+      // dns-packet: { mname, rname, ..., minimum } → Node { nsname,
+      // hostmaster, ..., minttl }.
+      return typeof data.mname === 'string'
+        ? {
+            nsname: stripDot(data.mname),
+            hostmaster: stripDot(data.rname),
+            serial: data.serial, refresh: data.refresh, retry: data.retry,
+            expire: data.expire, minttl: data.minimum,
+          }
+        : null;
+    case 'CAA':
+      // dns-packet: { flags, tag, value } → Node { critical, [tag]: value }.
+      return typeof data.tag === 'string'
+        ? { critical: (data.flags & 128) ? 128 : 0, [data.tag]: String(data.value) }
+        : null;
+    case 'NAPTR':
+      // dns-packet: { ..., services, ... } → Node { ..., service, ... }.
+      return typeof data === 'object'
+        ? {
+            flags: String(data.flags), service: String(data.services),
+            regexp: String(data.regexp),
+            replacement: stripDot(String(data.replacement)),
+            order: data.order, preference: data.preference,
+          }
+        : null;
+    case 'TLSA':
+      // dns-packet: { usage, selector, matchingType, certificate } → Node
+      // { certUsage, selector, match, data }. (Node's data is an ArrayBuffer;
+      // we hand back a Uint8Array, which is friendlier in the sandbox.)
+      return data.certificate
+        ? {
+            certUsage: data.usage, selector: data.selector,
+            match: data.matchingType, data: new Uint8Array(data.certificate),
+          }
+        : null;
     default:
       return null;
   }
 }
 
 function answersWithTtl(body, name, type) {
-  const num = RR_TYPE_NUM[type];
   const out = [];
-  for (const a of (body && body.Answer) || []) {
-    if (a.type !== num) continue;
+  for (const a of (body && body.answers) || []) {
+    if (a.type !== type) continue;
     if (!sameDnsName(a.name, name)) continue;
-    const rec = parseRecord(type, a.data);
-    if (rec !== null && rec !== undefined) out.push({ value: rec, ttl: a.TTL });
+    const rec = mapRecord(type, a.data);
+    if (rec !== null && rec !== undefined) out.push({ value: rec, ttl: a.ttl });
   }
   return out;
 }
@@ -551,7 +571,7 @@ async function queryWithCname(servers, name, type, opts) {
         body, finalName: current,
       };
     }
-    if (body.Status !== 0) return { records: [], ttls: [], body, finalName: current };
+    if (body.rcode !== 'NOERROR') return { records: [], ttls: [], body, finalName: current };
     const cnames = answersFor(body, current, 'CNAME');
     if (!cnames.length) return { records: [], ttls: [], body, finalName: current };
     current = cnames[0];
@@ -567,8 +587,8 @@ async function queryWithCname(servers, name, type, opts) {
 
 function throwForStatus(body, syscall, hostname) {
   // NOERROR with no usable answers → ENODATA; NXDOMAIN → ENOTFOUND; else mapped.
-  if (body.Status === 0) throw dnsError(syscall, NODATA, hostname);
-  throw dnsError(syscall, statusToCode(body.Status), hostname);
+  if (body.rcode === 'NOERROR') throw dnsError(syscall, NODATA, hostname);
+  throw dnsError(syscall, rcodeToCode(body.rcode), hostname);
 }
 
 function mapTransportError(e, syscall, hostname, { forLookup, signal } = {}) {

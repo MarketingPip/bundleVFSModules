@@ -1,5 +1,7 @@
 import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import http from 'node:http';
+import dnsPacket from 'dns-packet';
+import { toRcode } from 'dns-packet/rcodes.js';
 
 import dnsDefault, {
   lookup,
@@ -31,78 +33,106 @@ import dnsDefault, {
 import * as dnsPromisesNs from '../src/dns/promises.js';
 
 // ---------------------------------------------------------------------------
-// Deterministic stub DoH server (no network needed; exact parser assertions)
+// Deterministic stub DoH server (no network needed; exact parser assertions).
+// Speaks RFC 8484 wire format: ?dns=<base64url> in, application/dns-message
+// out, decoded/encoded with dns-packet — the same codec as the shim.
 // ---------------------------------------------------------------------------
 
 const STUB_ANSWERS = {
-  'A|stub.test': { Status: 0, Answer: [
-    { name: 'stub.test', type: 1, TTL: 100, data: '93.184.216.34' },
-    { name: 'stub.test', type: 1, TTL: 200, data: '93.184.216.35' },
-  ] },
-  'AAAA|stub.test': { Status: 0, Answer: [
-    { name: 'stub.test', type: 28, TTL: 100, data: '2606:2800:220:1:248:1893:25c8:1946' },
-  ] },
-  'MX|stub.test': { Status: 0, Answer: [
-    { name: 'stub.test', type: 15, TTL: 300, data: '10 mail.stub.test.' },
-  ] },
-  'TXT|stub.test': { Status: 0, Answer: [
-    { name: 'stub.test', type: 16, TTL: 300, data: '"hello" "world"' },
-    { name: 'stub.test', type: 16, TTL: 300, data: 'bare-text' },
-  ] },
-  'SRV|_srv.stub.test': { Status: 0, Answer: [
-    { name: '_srv.stub.test', type: 33, TTL: 300, data: '10 20 5060 sip.stub.test.' },
-  ] },
-  'SOA|stub.test': { Status: 0, Answer: [
-    { name: 'stub.test', type: 6, TTL: 300, data: 'ns1.stub.test. hostmaster.stub.test. 2024010101 7200 3600 1209600 300' },
-  ] },
-  'CAA|stub.test': { Status: 0, Answer: [
-    { name: 'stub.test', type: 257, TTL: 300, data: '0 issue "letsencrypt.org"' },
-  ] },
-  'NAPTR|stub.test': { Status: 0, Answer: [
-    { name: 'stub.test', type: 35, TTL: 300, data: '10 100 "s" "SIP+D2U" "" _sip._udp.stub.test.' },
-  ] },
-  'TLSA|_443._tcp.stub.test': { Status: 0, Answer: [
-    { name: '_443._tcp.stub.test', type: 52, TTL: 300, data: '3 1 1 d2abde240d7cd3ee6b4b28c54df034b396c997a2d3f' },
-  ] },
-  'PTR|34.216.184.93.in-addr.arpa': { Status: 0, Answer: [
-    { name: '34.216.184.93.in-addr.arpa', type: 12, TTL: 300, data: 'host.stub.test.' },
-  ] },
-  'CNAME|alias.stub.test': { Status: 0, Answer: [
-    { name: 'alias.stub.test', type: 5, TTL: 300, data: 'stub.test.' },
-  ] },
+  'A|stub.test': [
+    { name: 'stub.test', type: 'A', ttl: 100, data: '93.184.216.34' },
+    { name: 'stub.test', type: 'A', ttl: 200, data: '93.184.216.35' },
+  ],
+  'AAAA|stub.test': [
+    { name: 'stub.test', type: 'AAAA', ttl: 100, data: '2606:2800:220:1:248:1893:25c8:1946' },
+  ],
+  'MX|stub.test': [
+    { name: 'stub.test', type: 'MX', ttl: 300, data: { preference: 10, exchange: 'mail.stub.test.' } },
+  ],
+  'TXT|stub.test': [
+    { name: 'stub.test', type: 'TXT', ttl: 300, data: [Buffer.from('hello'), Buffer.from('world')] },
+    { name: 'stub.test', type: 'TXT', ttl: 300, data: [Buffer.from('bare-text')] },
+  ],
+  'SRV|_srv.stub.test': [
+    { name: '_srv.stub.test', type: 'SRV', ttl: 300, data: { priority: 10, weight: 20, port: 5060, target: 'sip.stub.test.' } },
+  ],
+  'SOA|stub.test': [
+    { name: 'stub.test', type: 'SOA', ttl: 300, data: { mname: 'ns1.stub.test.', rname: 'hostmaster.stub.test.', serial: 2024010101, refresh: 7200, retry: 3600, expire: 1209600, minimum: 300 } },
+  ],
+  'CAA|stub.test': [
+    { name: 'stub.test', type: 'CAA', ttl: 300, data: { flags: 0, tag: 'issue', value: 'letsencrypt.org' } },
+  ],
+  'NAPTR|stub.test': [
+    { name: 'stub.test', type: 'NAPTR', ttl: 300, data: { order: 10, preference: 100, flags: 's', services: 'SIP+D2U', regexp: '', replacement: '_sip._udp.stub.test.' } },
+  ],
+  'TLSA|_443._tcp.stub.test': [
+    { name: '_443._tcp.stub.test', type: 'TLSA', ttl: 300, data: { usage: 3, selector: 1, matchingType: 1, certificate: Buffer.from('d2abde240d7cd3ee6b4b28c54df034b396c997a2d3f', 'hex') } },
+  ],
+  'PTR|34.216.184.93.in-addr.arpa': [
+    { name: '34.216.184.93.in-addr.arpa', type: 'PTR', ttl: 300, data: 'host.stub.test.' },
+  ],
+  'CNAME|alias.stub.test': [
+    { name: 'alias.stub.test', type: 'CNAME', ttl: 300, data: 'stub.test.' },
+  ],
   // CNAME chain: A query returns only a CNAME; resolver must follow it.
-  'A|cname-chain.stub.test': { Status: 0, Answer: [
-    { name: 'cname-chain.stub.test', type: 5, TTL: 300, data: 'stub.test.' },
-  ] },
-  'A|gone.stub.test': { Status: 3 },          // NXDOMAIN → ENOTFOUND
-  'A|empty.stub.test': { Status: 0 },          // NOERROR, no answers → ENODATA
-  'A|fail.stub.test': { Status: 2 },           // SERVFAIL → ESERVFAIL
-  'A|slow.stub.test': { Status: 0, Answer: [
-    { name: 'slow.stub.test', type: 1, TTL: 100, data: '93.184.216.34' },
-    { name: 'slow.stub.test', type: 1, TTL: 100, data: '93.184.216.35' },
-  ] },
+  'A|cname-chain.stub.test': [
+    { name: 'cname-chain.stub.test', type: 'CNAME', ttl: 300, data: 'stub.test.' },
+  ],
+  'A|gone.stub.test': { rcode: 'NXDOMAIN' },   // NXDOMAIN → ENOTFOUND
+  'A|empty.stub.test': { rcode: 'NOERROR', answers: [] }, // NOERROR, no answers → ENODATA
+  'A|fail.stub.test': { rcode: 'SERVFAIL' },   // SERVFAIL → ESERVFAIL
+  'A|slow.stub.test': [
+    { name: 'slow.stub.test', type: 'A', ttl: 100, data: '93.184.216.34' },
+    { name: 'slow.stub.test', type: 'A', ttl: 100, data: '93.184.216.35' },
+  ],
 };
+
+function base64UrlDecode(s) {
+  return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
 
 let stubServer;
 let stubBase;
+
+function stubResponse(query, spec) {
+  const rcode = spec.rcode || 'NOERROR';
+  const answers = Array.isArray(spec) ? spec : (spec.answers || []);
+  return dnsPacket.encode({
+    type: 'response',
+    id: query.id,
+    flags: toRcode(rcode),
+    questions: query.questions,
+    answers,
+  });
+}
 
 function startStub() {
   return new Promise((resolveStart) => {
     stubServer = http.createServer((req, res) => {
       const u = new URL(req.url, 'http://x');
-      const name = u.searchParams.get('name') || '';
-      const type = u.searchParams.get('type') || '';
-      if (name === 'hang.stub.test') return; // never respond → timeout/cancel
-      if (name === 'slow.stub.test') { // respond after a beat → lets tests observe in-flight state
-        setTimeout(() => {
-          res.setHeader('content-type', 'application/dns-json');
-          res.end(JSON.stringify(STUB_ANSWERS['A|slow.stub.test']));
-        }, 150);
+      let query;
+      try {
+        query = dnsPacket.decode(base64UrlDecode(u.searchParams.get('dns') || ''));
+      } catch {
+        res.statusCode = 400;
+        res.end();
         return;
       }
-      const body = STUB_ANSWERS[`${type}|${name}`] || { Status: 3 };
-      res.setHeader('content-type', 'application/dns-json');
-      res.end(JSON.stringify(body));
+      const q = (query.questions && query.questions[0]) || {};
+      const name = q.name || '';
+      const type = q.type || '';
+      const respond = () => {
+        const spec = STUB_ANSWERS[`${type}|${name}`];
+        const wire = stubResponse(query, spec === undefined ? { rcode: 'NXDOMAIN' } : spec);
+        res.setHeader('content-type', 'application/dns-message');
+        res.end(wire);
+      };
+      if (name === 'hang.stub.test') return; // never respond → timeout/cancel
+      if (name === 'slow.stub.test') { // respond after a beat → lets tests observe in-flight state
+        setTimeout(respond, 150);
+        return;
+      }
+      respond();
     });
     stubServer.listen(0, '127.0.0.1', () => {
       stubBase = `http://127.0.0.1:${stubServer.address().port}/dns-query`;
@@ -159,8 +189,8 @@ describe('dns (DoH shim)', () => {
   test('setServers/getServers round-trip', () => {
     const prev = getServers();
     try {
-      setServers(['https://dns.google/resolve']);
-      expect(getServers()).toEqual(['https://dns.google/resolve']);
+      setServers(['https://dns.google/dns-query']);
+      expect(getServers()).toEqual(['https://dns.google/dns-query']);
       setServers(['8.8.8.8', '1.1.1.1:53']); // default port 53 is normalized away
       expect(getServers()).toEqual(['8.8.8.8', '1.1.1.1']);
       setServers(['4.4.4.4:5353', '[2001:db8::1]:5353']); // non-default ports kept
@@ -283,7 +313,7 @@ describe('dns (DoH shim)', () => {
   describe('lookup()', () => {
     const prev = () => getServers();
     beforeAll(() => setServers([stubBase]));
-    afterAll(() => setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve']));
+    afterAll(() => setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']));
 
     test('resolves A and AAAA with all:true', async () => {
       const recs = await cbPromise(lookup, 'stub.test', { all: true }).then(([r]) => r);
@@ -405,7 +435,7 @@ describe('dns (DoH shim)', () => {
   // ------------------------------------------------------------------
   describe('resolve* record shapes', () => {
     beforeAll(() => setServers([stubBase]));
-    afterAll(() => setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve']));
+    afterAll(() => setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']));
 
     test('resolve4', async () => {
       expect(await cbPromise(resolve4, 'stub.test').then(([r]) => r))
@@ -448,7 +478,7 @@ describe('dns (DoH shim)', () => {
         refresh: 7200,
         retry: 3600,
         expire: 1209600,
-        minimum: 300,
+        minttl: 300, // real Node calls this minttl (cares_wrap.cc), not minimum
       });
     });
 
@@ -468,9 +498,10 @@ describe('dns (DoH shim)', () => {
 
     test('resolveTlsa', async () => {
       const [rec] = await cbPromise(resolveTlsa, '_443._tcp.stub.test').then(([r]) => r);
-      expect(rec.usage).toBe(3);
+      // Field names match real Node v24 (cares_wrap.cc ParseTlsaReply).
+      expect(rec.certUsage).toBe(3);
       expect(rec.selector).toBe(1);
-      expect(rec.matchingType).toBe(1);
+      expect(rec.match).toBe(1);
       expect(rec.data).toBeInstanceOf(Uint8Array);
       expect(rec.data.length).toBe(21);
     });
@@ -561,7 +592,7 @@ describe('dns (DoH shim)', () => {
   // ------------------------------------------------------------------
   describe('reverse / lookupService', () => {
     beforeAll(() => setServers([stubBase]));
-    afterAll(() => setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve']));
+    afterAll(() => setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']));
 
     test('reverse resolves PTR via stub', async () => {
       expect(await cbPromise(reverse, '93.184.216.34').then(([r]) => r))
@@ -673,8 +704,8 @@ describe('dns (DoH shim)', () => {
     test('getServers/setServers scoped per instance', () => {
       const r = new Resolver();
       expect(r.getServers().length).toBeGreaterThan(0);
-      r.setServers(['https://dns.google/resolve']);
-      expect(r.getServers()).toEqual(['https://dns.google/resolve']);
+      r.setServers(['https://dns.google/dns-query']);
+      expect(r.getServers()).toEqual(['https://dns.google/dns-query']);
       expect(() => r.setServers(['bogus'])).toThrow(
         expect.objectContaining({ code: 'ERR_INVALID_IP_ADDRESS' }));
       // module-level servers untouched
@@ -778,7 +809,7 @@ describe('dns (DoH shim)', () => {
         refresh: expect.any(Number),
         retry: expect.any(Number),
         expire: expect.any(Number),
-        minimum: expect.any(Number),
+        minttl: expect.any(Number),
       });
     });
 
