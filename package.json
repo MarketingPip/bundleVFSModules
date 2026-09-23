@@ -10,6 +10,7 @@
     "build_fixture": "node -e \"const m = require('module').builtinModules; console.log(JSON.stringify([...m, ...m.filter(x => !x.startsWith('node:')).map(x => 'node:'+x)]))\" > ./lib/builtin-modules.json"
   },
   "dependencies": {
+    "@noble/hashes": "^2.4.0",
     "memfs": "^3.4.0",
     "esbuild": "^0.22.0",
     "esbuild-plugins-node-modules-polyfill": "^1.8.1"
