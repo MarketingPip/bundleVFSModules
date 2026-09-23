@@ -1,26 +1,28 @@
-// src/zlib.js — Browser-first, dependency-free port of Node.js zlib.
+// src/zlib.js — Browser-first port of Node.js zlib (Node v24 API surface).
 //
 // Implements the Node v24 zlib API surface (deflate/inflate/gzip/gunzip,
-// deflateRaw/inflateRaw/unzip, Brotli and Zstd facades, crc32) on top of a
-// self-contained pure-JavaScript DEFLATE codec and a minimal stream
-// implementation. No npm imports, no native delegation: the same code runs
-// in the browser sandbox and under Node.
+// deflateRaw/inflateRaw/unzip, Brotli and Zstd facades, crc32) on top of the
+// maintained `pako` package (a faithful JavaScript port of zlib) and a
+// minimal stream implementation. No native delegation: the same code runs in
+// the browser sandbox and under Node.
 //
 // Fidelity notes:
-// - Level-0 (stored) deflate reproduces zlib's exact block emission rules,
-//   including the pending-buffer path and the BFINAL=0-then-empty-final-block
-//   sequence at Z_FINISH.
-// - Levels 1-9 produce valid (fixed-Huffman) deflate streams. They are not
-//   bit-identical to zlib's output, but round-trip correctly and are decoded
-//   by the bundled inflate as well as by native implementations.
-// - Inflate decodes stored/fixed/dynamic blocks and the zlib/gzip wrappers,
-//   with Node-compatible error codes/messages, dictionary handling,
-//   concatenated gzip members and trailing-garbage rules.
+// - DEFLATE/inflate/gzip/gunzip/deflateRaw/inflateRaw/unzip are byte-
+//   compatible with native zlib via pako, including compression levels,
+//   strategies, dictionaries, concatenated gzip members and trailing-
+//   garbage rules.
+// - `params()` (mid-stream level/strategy changes) is emulated by stitching
+//   a fresh raw phase seeded with recent history; the wrapper trailer is
+//   computed over the full input, so the byte-exact framing Node emits is
+//   preserved.
 // - Brotli and Zstd codecs are honest pass-through stubs: option validation,
 //   constants and stream plumbing match Node, but no actual Brotli/Zstd
-//   coding is performed (documented gap).
+//   coding is performed (documented gap; the `brotli` npm package was
+//   evaluated and rejected — its encoder silently fails on some inputs).
 // - Stream semantics are provided by a minimal built-in Transform
 //   implementation (no node:stream import, so this stays browser-loadable).
+
+import { Deflate as PakoDeflate, Inflate as PakoInflate } from 'pako';
 
 // ---------------------------------------------------------------------------
 // Constants (verbatim from Node v24)
@@ -335,6 +337,12 @@ class ERR_BUFFER_TOO_LARGE extends Error {
     this.code = 'ERR_BUFFER_TOO_LARGE';
   }
 }
+class ERR_ZLIB_INITIALIZATION_FAILED extends Error {
+  constructor() {
+    super('Initialization failed');
+    this.code = 'ERR_ZLIB_INITIALIZATION_FAILED';
+  }
+}
 class ERR_TRAILING_JUNK_AFTER_STREAM_END extends Error {
   constructor() {
     super('Trailing junk after stream end');
@@ -347,8 +355,9 @@ class ERR_TRAILING_JUNK_AFTER_STREAM_END extends Error {
 // ---------------------------------------------------------------------------
 
 function checkRangesOrGetDefault(value, name, min, max, def) {
-  if (value === undefined) return def;
-  if (typeof value !== 'number' || Number.isNaN(value)) {
+  // Real Node treats NaN like "not provided" for these numeric options.
+  if (value === undefined || (typeof value === 'number' && Number.isNaN(value))) return def;
+  if (typeof value !== 'number') {
     throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
   }
   if (!Number.isFinite(value)) {
@@ -470,8 +479,31 @@ function normalizeBaseOptions(opts, mode, defaults) {
 const zlibDefaultOpts = { flush: Z_NO_FLUSH, finishFlush: Z_FINISH, fullFlush: Z_FULL_FLUSH };
 
 // ---------------------------------------------------------------------------
-// INFLATE — pure-JavaScript DEFLATE decoder
+// DEFLATE / inflate engines backed by the maintained `pako` package
 // ---------------------------------------------------------------------------
+//
+// `pako` is a faithful JavaScript port of zlib, so compressed output is now
+// byte-compatible with native zlib (the previous hand-rolled codec emitted
+// fixed-Huffman approximations for levels 1-9). Both engines implement the
+// internal contract used by ZlibBase:
+//
+//   {
+//     reset(),
+//     setParams?(level, strategy),              // deflate only
+//     write(chunk, flushFlag) -> { output, finished, consumed, trailing }
+//   }
+//
+// `trailing` is true when unconsumed bytes remain after a completed stream;
+// ZlibBase turns that into ERR_TRAILING_JUNK_AFTER_STREAM_END when
+// `rejectGarbageAfterEnd` is set, and otherwise ends the stream cleanly.
+//
+// Brotli note: the `brotli` npm package was evaluated for this port (it is
+// already in the CI install list and the pre-reland shim used it). It does
+// bundle and run in the browser lane, but its asm.js encoder silently
+// returns null for qualities 4-8 on binary input (e.g. JPEGs), it has no
+// streaming or dictionary support, and invalid-input detection is
+// unreliable. Adopting it would replace an honest stub with a subtly broken
+// encoder, so Brotli remains an honest pass-through stub (documented gap).
 
 function dataError(message) {
   return zlibError('Z_DATA_ERROR', Z_DATA_ERROR, message);
@@ -480,978 +512,367 @@ function bufError(message) {
   return zlibError('Z_BUF_ERROR', Z_BUF_ERROR, message);
 }
 
-// Incremental bit reader over a list of input chunks.
-class BitStream {
-  constructor() {
-    this.chunks = [];
-    this.ci = 0;
-    this.off = 0;
-    this.bitbuf = 0;
-    this.bitcnt = 0;
-    this.consumed = 0;
-  }
-  append(chunk) {
-    if (chunk && chunk.length) {
-      this.chunks.push(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
-    }
-  }
-  avail() {
-    let n = 0;
-    for (let i = this.ci; i < this.chunks.length; i++) {
-      n += this.chunks[i].length - (i === this.ci ? this.off : 0);
-    }
-    return n;
-  }
-  need(n) {
-    while (this.bitcnt < n) {
-      if (this.ci >= this.chunks.length) return false;
-      const c = this.chunks[this.ci];
-      if (this.off >= c.length) { this.ci++; this.off = 0; continue; }
-      this.bitbuf |= c[this.off++] << this.bitcnt;
-      this.consumed++;
-      this.bitcnt += 8;
-    }
-    return true;
-  }
-  get(n) {
-    const v = this.bitbuf & ((1 << n) - 1);
-    this.bitbuf >>>= n;
-    this.bitcnt -= n;
-    return v;
-  }
-  align() {
-    const skip = this.bitcnt & 7;
-    this.bitbuf >>>= skip;
-    this.bitcnt -= skip;
-  }
-  // Byte-aligned read of exactly n bytes; null when not enough input.
-  readBytes(n) {
-    this.align();
-    if (this.avail() < n) return null;
-    const out = new Uint8Array(n);
-    let o = 0;
-    while (o < n) {
-      if (this.ci >= this.chunks.length) return null;
-      const c = this.chunks[this.ci];
-      const take = Math.min(n - o, c.length - this.off);
-      out.set(c.subarray(this.off, this.off + take), o);
-      this.off += take;
-      this.consumed += take;
-      o += take;
-      if (this.off >= c.length) { this.ci++; this.off = 0; }
-    }
-    return out;
-  }
-  // Byte-aligned read of up to n bytes; null when no input at all.
-  readAvailable(n) {
-    this.align();
-    const a = this.avail();
-    if (a === 0) return null;
-    return this.readBytes(Math.min(n, a));
-  }
-  // Discard up to n bytes, tracking remainder. Returns remaining count.
-  skip(n, state) {
-    this.align();
-    const a = this.avail();
-    const take = Math.min(n, a);
-    let left = take;
-    while (left > 0) {
-      const c = this.chunks[this.ci];
-      const t = Math.min(left, c.length - this.off);
-      this.off += t;
-      this.consumed += t;
-      left -= t;
-      if (this.off >= c.length) { this.ci++; this.off = 0; }
-    }
-    return n - take;
-  }
-  peekByte() {
-    if (!this.need(8)) return -1;
-    return this.bitbuf & 0xff;
-  }
-  // Look at the next n bytes without consuming (requires byte alignment).
-  peekBytes(n) {
-    if (this.bitcnt !== 0) return null;
-    if (this.avail() < n) return null;
-    const out = new Uint8Array(n);
-    let o = 0;
-    let ci = this.ci;
-    let off = this.off;
-    while (o < n) {
-      const c = this.chunks[ci];
-      const take = Math.min(n - o, c.length - off);
-      out.set(c.subarray(off, off + take), o);
-      off += take;
-      o += take;
-      if (off >= c.length) { ci++; off = 0; }
-    }
-    return out;
-  }
-  // Bytes not yet consumed (for trailing-garbage detection).
-  remaining() {
-    return this.avail() + (this.bitcnt > 0 ? 1 : 0);
-  }
-  gc() {
-    if (this.ci > 8) {
-      this.chunks.splice(0, this.ci);
-      this.ci = 0;
-    }
-  }
+const PAKO_CHUNK_SIZE = 16384;
+const PAKO_EMPTY = Buffer.alloc(0);
+
+function pakoStatusName(status) {
+  return codes[status] || 'Z_STREAM_ERROR';
 }
 
-// Canonical Huffman decoder built from code lengths.
-function buildHuffman(lengths) {
-  const n = lengths.length;
-  let maxLen = 0;
-  for (let i = 0; i < n; i++) if (lengths[i] > maxLen) maxLen = lengths[i];
-  if (maxLen === 0) return null;
-  if (maxLen > 15) throw dataError('invalid code lengths set');
-  const count = new Array(maxLen + 1).fill(0);
-  for (let i = 0; i < n; i++) if (lengths[i]) count[lengths[i]]++;
-  let left = 1;
-  for (let len = 1; len <= maxLen; len++) {
-    left <<= 1;
-    left -= count[len];
-    if (left < 0) throw dataError('invalid code lengths set');
-  }
-  const first = new Array(maxLen + 1).fill(0);
-  const base = new Array(maxLen + 1).fill(0);
-  const symbols = [];
-  let code = 0;
-  let idx = 0;
-  for (let len = 1; len <= maxLen; len++) {
-    first[len] = code;
-    base[len] = idx;
-    for (let s = 0; s < n; s++) if (lengths[s] === len) { symbols.push(s); idx++; }
-    code = (code + count[len]) << 1;
-  }
-  return { count, first, base, symbols, maxLen };
-}
+// ---------------------------------------------------------------------------
+// Inflate (decompression) via pako
+// ---------------------------------------------------------------------------
 
-// Decode one symbol. `st` is {code, len} preserved across suspends.
-// Returns the symbol, or -1 when more input is needed.
-function decodeSymbol(h, br, st) {
-  while (true) {
-    if (st.len > h.maxLen) throw dataError('invalid code');
-    if (!br.need(1)) return -1;
-    st.code |= br.get(1);
-    const len = st.len;
-    if (h.count[len] !== 0) {
-      const f = h.first[len];
-      if (st.code >= f && st.code < f + h.count[len]) {
-        const sym = h.symbols[h.base[len] + (st.code - f)];
-        st.code = 0;
-        st.len = 1;
-        return sym;
-      }
-    }
-    st.code <<= 1;
-    st.len++;
-  }
-}
-
-// Fixed Huffman tables (BTYPE=01).
-const FIXED_LIT = buildHuffman(
-  Array.from({ length: 288 }, (_, i) => (i < 144 ? 8 : i < 256 ? 9 : i < 280 ? 7 : 8)),
-);
-const FIXED_DIST = buildHuffman(new Array(32).fill(5));
-
-const LBASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
-const LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
-const DBASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
-const DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
-const CL_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
-
-// Incremental inflate engine. Feed input via write(); each call returns the
-// newly produced output bytes. Throws Node-shaped errors on corrupt input.
-class InflateEngine {
+class PakoInflateEngine {
   constructor({ windowBits, dictionary, wrapper }) {
     // wrapper: 'zlib' | 'raw' | 'gzip' | 'unzip'
     this.wrapper = wrapper;
-    this.windowBits = windowBits;
-    this.dictionary = dictionary ? toBytes(dictionary) : undefined;
+    this.windowBits = windowBits >>> 0;
+    this.dictionary = dictionary ? toBytes(dictionary) : null;
     this.reset();
-    if (this.dictionary && wrapper === 'raw') this.seedWindow(this.dictionary);
   }
+
+  _newInflator() {
+    const opts = { chunkSize: PAKO_CHUNK_SIZE };
+    if (this.dictionary && this.wrapper !== 'gzip') opts.dictionary = this.dictionary;
+    if (this.wrapper === 'raw') {
+      opts.raw = true;
+      opts.windowBits = this.windowBits || 15;
+    } else if (this.wrapper === 'zlib') {
+      // zlib wrapper only: a gzip stream here is a data error, like Node.
+      opts.windowBits = this.windowBits || 15;
+    } else if (this.wrapper === 'gzip') {
+      // gzip wrapper only: a zlib stream here is a data error, like Node.
+      opts.windowBits = (this.windowBits || 15) + 16;
+    } else {
+      // unzip: auto-detect zlib or gzip members.
+      opts.windowBits = 47;
+    }
+    const inf = new PakoInflate(opts);
+    inf._collected = [];
+    inf.onData = (chunk) => { inf._collected.push(Buffer.from(chunk)); };
+    return inf;
+  }
+
   reset() {
-    this.br = new BitStream();
-    this.out = [];
-    this.window = new Uint8Array(32768);
-    this.wpos = 0;
-    this.whave = 0;
-    this.adler = 1;
-    this.crcState = 0xffffffff;
-    this.totalOut = 0;
-    this.memberOut = 0;
+    this._inf = this._newInflator();
     this.finished = false;
+    this.trailingGarbage = false;
     this.error = null;
-    this.state = this.wrapper === 'unzip' ? 'HEAD' :
-      this.wrapper === 'gzip' ? 'GH' :
-      this.wrapper === 'zlib' ? 'ZH' : 'BI';
-    this.bfinal = 0;
-    this.litHuff = null;
-    this.distHuff = null;
-    this.huffState = { code: 0, len: 1 };
-    this.ddNeed = 'lit';
-    this.ddExt = 0;
-    this.pendingLen = 0;
-    this.pendingDist = 0;
-    this.storedLen = 0;
-    this.dl = null;
-    this.skipLeft = 0;
-    this.gzipFlags = 0;
+    // Multi-member tracking: pako chains gzip members within a single push,
+    // but ends its stream (strm.state === null) when a member completes at
+    // a push boundary. _memberEnded signals that the next write starts a new
+    // member and needs a fresh inflator; _memberWasGzip records whether the
+    // completed member was gzip (for unzip's "stop after first zlib stream"
+    // rule).
+    this._memberEnded = false;
+    this._memberWasGzip = null;
     return this;
   }
-  resetForNextMember() {
-    this.wpos = 0;
-    this.whave = 0;
-    this.crcState = 0xffffffff;
-    this.memberOut = 0;
-    this.bfinal = 0;
-    this.litHuff = null;
-    this.distHuff = null;
-    this.huffState = { code: 0, len: 1 };
-    this.ddNeed = 'lit';
+
+  _drain() {
+    const out = this._inf._collected;
+    this._inf._collected = [];
+    if (out.length === 0) return PAKO_EMPTY;
+    return out.length === 1 ? out[0] : Buffer.concat(out);
   }
-  seedWindow(dict) {
-    const n = Math.min(dict.length, 32768);
-    const start = dict.length - n;
-    for (let i = 0; i < n; i++) this.window[i] = dict[start + i];
-    this.wpos = n & 32767;
-    this.whave = n;
+
+  _statusError(status, msg) {
+    const name = pakoStatusName(status);
+    let message = String(msg || '');
+    // Node reports truncated input as 'unexpected end of file'.
+    if (status === Z_BUF_ERROR) message = 'unexpected end of file';
+    if (!message) message = name;
+    return zlibError(name, status, message);
   }
-  emitByte(b) {
-    this.out.push(b);
-    this.window[this.wpos] = b;
-    this.wpos = (this.wpos + 1) & 32767;
-    if (this.whave < 32768) this.whave++;
-    // incremental checksums
-    let s1 = this.adler & 0xffff;
-    let s2 = (this.adler >>> 16) & 0xffff;
-    s1 += b; if (s1 >= 65521) s1 -= 65521;
-    s2 += s1; if (s2 >= 65521) s2 -= 65521;
-    this.adler = (s2 << 16) | s1;
-    this.crcState = (CRC_TABLE[(this.crcState ^ b) & 0xff] ^ (this.crcState >>> 8)) >>> 0;
-    this.totalOut++;
-    this.memberOut++;
+
+  _sniffMember(bytes) {
+    // Record whether the member about to be decoded is gzip (1f 8b magic).
+    // A single leading 0x1f byte suffices: 0x1f is not a valid zlib CMF.
+    if (bytes.length === 0 || this._memberWasGzip !== null) return;
+    this._memberWasGzip = bytes[0] === 0x1f && (bytes.length < 2 || bytes[1] === 0x8b);
   }
-  emitBytes(bytes) {
-    for (let i = 0; i < bytes.length; i++) this.emitByte(bytes[i]);
-  }
-  copyMatch(len, dist) {
-    if (dist < 1 || dist > this.whave) throw dataError('invalid distance too far back');
-    for (let i = 0; i < len; i++) {
-      const b = this.window[(this.wpos - dist) & 32767];
-      this.emitByte(b);
-    }
-  }
-  // Returns { output: Buffer, finished, error, consumed }
-  write(chunk, isFinal) {
+
+  write(chunk, flushFlag) {
     if (this.error) throw this.error;
-    if (chunk && chunk.length) {
-      const b = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk.buffer || chunk, chunk.byteOffset || 0, chunk.length);
-      this.br.append(b);
-    }
-    const consumedBefore = this.br.consumed;
-    this._isFinal = !!isFinal;
-    try {
-      this.pump();
-    } catch (e) {
-      this.error = e;
-      throw e;
-    } finally {
-      this._isFinal = false;
-    }
-    const output = Buffer.from(this.out);
-    this.out = [];
-    if (this.finished) {
-      // Trailing input after stream end (zlib/raw only; gzip handles members).
-      if ((this.wrapper === 'zlib' || this.wrapper === 'raw') && this.br.remaining() > 0) {
-        this.trailingGarbage = true;
+    // pako's Inflate only emits decoded output when pushed with a real flush
+    // mode; Z_NO_FLUSH buffers internally. Real zlib (and Node) deliver
+    // decoded bytes as soon as they are available, so translate "no flush"
+    // into Z_SYNC_FLUSH here. Z_FINISH still completes the stream.
+    const mode = flushFlag === Z_FINISH ? true : (flushFlag || Z_SYNC_FLUSH);
+    const isFinal = mode === true;
+    let bytes = chunk;
+    if (!bytes || bytes.length === 0) bytes = PAKO_EMPTY;
+
+    // A previous gzip member completed on an earlier write; the next bytes
+    // start a new member (pako will not continue an ended stream).
+    if (this._memberEnded) {
+      if (bytes.length === 0) {
+        if (isFinal) {
+          this._memberEnded = false;
+          this.finished = true;
+          return { output: PAKO_EMPTY, finished: true, consumed: 0, trailing: false };
+        }
+        return { output: PAKO_EMPTY, finished: false, consumed: 0, trailing: false };
       }
-    } else if (isFinal && !this.error) {
-      const err = bufError('unexpected end of file');
+      const wasGzip = this._memberWasGzip;
+      this._memberEnded = false;
+      this._memberWasGzip = null;
+      const startNew = this.wrapper === 'gzip' || (this.wrapper === 'unzip' && wasGzip);
+      if (startNew) {
+        this._inf = this._newInflator();
+        this.finished = false;
+        this.trailingGarbage = false;
+      } else {
+        // zlib/raw, or unzip after a zlib member: bytes after stream end
+        // are trailing garbage, never a new stream.
+        this.finished = true;
+        this.trailingGarbage = true;
+        return { output: PAKO_EMPTY, finished: true, consumed: bytes.length, trailing: true };
+      }
+    }
+
+    if (this.finished) {
+      if (bytes.length === 0) {
+        return { output: PAKO_EMPTY, finished: true, consumed: 0, trailing: false };
+      }
+      if (this.wrapper === 'gzip' || this.wrapper === 'unzip') {
+        // A previous stream completed on an earlier write; start the next
+        // one. (Members completed within a single push are already chained
+        // internally by pako.)
+        this._inf = this._newInflator();
+        this.finished = false;
+        this.trailingGarbage = false;
+      } else {
+        // zlib/raw: bytes after stream end are trailing garbage, never a
+        // new stream.
+        this.trailingGarbage = true;
+        return { output: PAKO_EMPTY, finished: true, consumed: bytes.length, trailing: true };
+      }
+    }
+
+    const inf = this._inf;
+    this._sniffMember(bytes);
+    const ok = inf.push(bytes, mode);
+    const output = this._drain();
+
+    if (ok) {
+      // pako reports "not finished" even when a member completed exactly at
+      // this push boundary; detect it via the cleared stream state.
+      if (inf.strm.state === null) {
+        if (this.wrapper === 'zlib' || this.wrapper === 'raw') {
+          this.finished = true;
+        } else {
+          this._memberEnded = true;
+        }
+      }
+      return { output, finished: this.finished, consumed: bytes.length, trailing: false };
+    }
+
+    const status = inf.err;
+    if (status === Z_NEED_DICT) {
+      this.error = dataError(this.dictionary ? 'Bad dictionary' : 'Missing dictionary');
+      throw this.error;
+    }
+    if (status !== Z_OK) {
+      this.error = this._statusError(status, inf.msg);
+      throw this.error;
+    }
+
+    // Clean stream end. pako chains gzip members internally, so any input
+    // left here was not consumed by a completed member.
+    this.finished = true;
+    const remaining = inf.strm ? inf.strm.avail_in : 0;
+    let trailing = false;
+    if (remaining > 0 && this.wrapper !== 'gzip') {
+      // For gzip, pako stops before zero padding bytes, which Node ignores.
+      // For zlib/raw/unzip, leftover bytes are trailing garbage.
+      this.trailingGarbage = true;
+      trailing = true;
+    }
+    return { output, finished: true, consumed: bytes.length, trailing };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Deflate (compression) via pako
+// ---------------------------------------------------------------------------
+
+class PakoDeflateEngine {
+  constructor({ level, windowBits, strategy, dictionary, wrapper }) {
+    // wrapper: 'zlib' | 'raw' | 'gzip'
+    //
+    // Wrapper framing (headers/trailers) is managed manually so that byte
+    // emission timing matches native zlib exactly (e.g. the zlib header is
+    // emitted on the first write, before pako produces any output). pako
+    // itself always runs in raw mode; the header bytes are captured from a
+    // throwaway pako stream with identical options, guaranteeing framing
+    // stays bit-for-bit compatible with zlib.
+    this.wrapper = wrapper;
+    this.level = level;
+    this.strategy = strategy;
+    this.windowBits = windowBits >>> 0;
+    this.dictionary = dictionary ? toBytes(dictionary) : null;
+    this.reset();
+  }
+
+  _wrapperHeader() {
+    if (this.wrapper === 'raw') return PAKO_EMPTY;
+    const opts = {
+      level: this.level,
+      strategy: this.strategy,
+      chunkSize: 64,
+      windowBits: this.windowBits || 15,
+    };
+    if (this.wrapper === 'gzip') {
+      opts.gzip = true;
+    } else if (this.dictionary) {
+      // zlib wrapper with dictionary: header carries the FDICT flag and the
+      // dictionary Adler32. (For gzip, real Node writes no header flag even
+      // when a dictionary primes the compressor.)
+      opts.dictionary = this.dictionary;
+    }
+    const t = new PakoDeflate(opts);
+    const chunks = [];
+    t.onData = (c) => chunks.push(Buffer.from(c));
+    t.push(PAKO_EMPTY, true);
+    if (t.err) return PAKO_EMPTY;
+    const full = Buffer.concat(chunks);
+    if (this.wrapper === 'gzip') return full.subarray(0, 10);
+    return full.subarray(0, this.dictionary ? 6 : 2);
+  }
+
+  _makePhase({ level, strategy, dictionary }) {
+    // Always raw: the wrapper header/trailer are handled manually above.
+    // Note: for gzip, the dictionary is deliberately NOT passed to the
+    // compressor — real Node accepts the option but it has no effect on
+    // gzip output (no FDICT flag exists in the gzip format).
+    const opts = {
+      level,
+      strategy,
+      chunkSize: PAKO_CHUNK_SIZE,
+      raw: true,
+      windowBits: this.windowBits || 15,
+    };
+    if (this.wrapper !== 'gzip' && dictionary && dictionary.length) {
+      opts.dictionary = dictionary;
+    }
+    const p = new PakoDeflate(opts);
+    p._collected = [];
+    p.onData = (chunk) => { p._collected.push(Buffer.from(chunk)); };
+    return p;
+  }
+
+  reset() {
+    this._header = this._wrapperHeader();
+    this._headerEmitted = false;
+    this._phase = this._makePhase({
+      level: this.level,
+      strategy: this.strategy,
+      dictionary: this.dictionary,
+    });
+    this._hist = [];
+    this._histLen = 0;
+    this._adler = 1;
+    this._crc = 0;
+    this._totalIn = 0;
+    this.finished = false;
+    this.error = null;
+    return this;
+  }
+
+  setParams(level, strategy) {
+    // pako exposes no deflateParams(). Emulate Node by abandoning the
+    // current phase (ZlibBase already issued a Z_SYNC_FLUSH, so its output
+    // is complete) and continuing the stream as a fresh raw phase seeded
+    // with the recent input history. The wrapper header/trailer are manual,
+    // so phases stitch seamlessly.
+    const hist = this._recentHistory();
+    this._phase = this._makePhase({ level, strategy, dictionary: hist });
+    this.level = level;
+    this.strategy = strategy;
+  }
+
+  _recentHistory() {
+    if (this._histLen === 0) return null;
+    const all = Buffer.concat(this._hist);
+    return all.length > 32768 ? all.subarray(all.length - 32768) : all;
+  }
+
+  _noteInput(bytes) {
+    if (bytes.length === 0) return;
+    this._adler = adler32(bytes, this._adler);
+    this._crc = crc32(bytes, this._crc);
+    this._totalIn = (this._totalIn + bytes.length) >>> 0;
+    this._hist.push(bytes);
+    this._histLen += bytes.length;
+    while (this._histLen > 32768 && this._hist.length > 0) {
+      const old = this._hist.shift();
+      this._histLen -= old.length;
+    }
+  }
+
+  _drainPhase() {
+    const out = this._phase._collected;
+    this._phase._collected = [];
+    if (out.length === 0) return PAKO_EMPTY;
+    return out.length === 1 ? out[0] : Buffer.concat(out);
+  }
+
+  _trailer() {
+    if (this.wrapper === 'gzip') {
+      const t = Buffer.alloc(8);
+      t.writeUInt32LE(this._crc >>> 0, 0);
+      t.writeUInt32LE(this._totalIn >>> 0, 4);
+      return t;
+    }
+    if (this.wrapper === 'zlib') {
+      const t = Buffer.alloc(4);
+      t.writeUInt32BE(this._adler >>> 0, 0);
+      return t;
+    }
+    return PAKO_EMPTY; // raw: no trailer
+  }
+
+  write(chunk, flushFlag) {
+    if (this.error) throw this.error;
+    if (this.finished) throw zlibError('Z_STREAM_ERROR', Z_STREAM_ERROR, 'write after finish');
+    let bytes = chunk;
+    if (!bytes || bytes.length === 0) bytes = PAKO_EMPTY;
+    this._noteInput(bytes);
+    const p = this._phase;
+    let ok = false;
+    try {
+      ok = p.push(bytes, flushFlag);
+    } catch (err) {
       this.error = err;
       throw err;
     }
-    this.br.gc();
-    return {
-      output,
-      finished: this.finished,
-      trailing: !!this.trailingGarbage,
-      consumed: this.br.consumed - consumedBefore,
-    };
-  }
-  pump() {
-    const br = this.br;
-    let guard = 0;
-    while (true) {
-      if (++guard > 100000000) throw dataError('invalid stored block lengths');
-      switch (this.state) {
-        case 'DONE':
-          return;
-        case 'HEAD': {
-          const pb = br.peekBytes(2);
-          if (!pb) return;
-          if (pb[0] === 0x1f && pb[1] === 0x8b) { this.wrapper = 'gzip'; this.state = 'GH'; }
-          else { this.wrapper = 'zlib'; this.state = 'ZH'; }
-          continue;
-        }
-        case 'ZH': {
-          const hdr = br.readBytes(2);
-          if (!hdr) return;
-          const cmf = hdr[0];
-          const flg = hdr[1];
-          if (((cmf << 8) | flg) % 31 !== 0) throw dataError('incorrect header check');
-          if ((cmf & 0x0f) !== 8) throw dataError('unknown compression method');
-          if ((cmf >> 4) > 7) throw dataError('unknown compression method');
-          if (this.windowBits !== 0 && (cmf >> 4) + 8 > this.windowBits) {
-            throw dataError('invalid window size');
-          }
-          if (flg & 0x20) this.state = 'ZD';
-          else this.state = 'BI';
-          continue;
-        }
-        case 'ZD': {
-          const id = br.readBytes(4);
-          if (!id) return;
-          const dictId = (((id[0] << 24) | (id[1] << 16) | (id[2] << 8) | id[3]) >>> 0);
-          if (!this.dictionary) {
-            throw zlibError('Z_NEED_DICT', Z_NEED_DICT, 'Missing dictionary');
-          }
-          if (adler32(this.dictionary) !== dictId) {
-            throw zlibError('Z_NEED_DICT', Z_NEED_DICT, 'Bad dictionary');
-          }
-          this.seedWindow(this.dictionary);
-          this.state = 'BI';
-          continue;
-        }
-        case 'GH': {
-          const h = br.readBytes(10);
-          if (!h) return;
-          if (h[0] !== 0x1f || h[1] !== 0x8b) throw dataError('incorrect header check');
-          if (h[2] !== 8) throw dataError('unknown compression method');
-          this.gzipFlags = h[3];
-          this.state = 'GX';
-          continue;
-        }
-        case 'GX': {
-          if (this.gzipFlags & 0x04) {
-            const xl = br.readBytes(2);
-            if (!xl) return;
-            this.skipLeft = xl[0] | (xl[1] << 8);
-            this.state = 'GXS';
-          } else this.state = 'GN';
-          continue;
-        }
-        case 'GXS': {
-          if (this.skipLeft > 0) {
-            this.skipLeft = br.skip(this.skipLeft);
-            if (this.skipLeft > 0) return;
-          }
-          this.state = 'GN';
-          continue;
-        }
-        case 'GN': {
-          if (this.gzipFlags & 0x08) {
-            // null-terminated original file name
-            while (true) {
-              if (!br.need(8)) return;
-              if (br.get(8) === 0) break;
-            }
-          }
-          this.state = 'GC';
-          continue;
-        }
-        case 'GC': {
-          if (this.gzipFlags & 0x10) {
-            while (true) {
-              if (!br.need(8)) return;
-              if (br.get(8) === 0) break;
-            }
-          }
-          this.state = 'GHCRC';
-          continue;
-        }
-        case 'GHCRC': {
-          if (this.gzipFlags & 0x02) {
-            if (!br.readBytes(2)) return;
-          }
-          this.state = 'BI';
-          continue;
-        }
-        case 'BI': {
-          if (!br.need(3)) return;
-          this.bfinal = br.get(1);
-          const btype = br.get(2);
-          if (btype === 3) throw dataError('invalid block type');
-          this.huffState.code = 0;
-          this.huffState.len = 1;
-          this.ddNeed = 'lit';
-          if (btype === 0) { br.align(); this.state = 'SL'; }
-          else if (btype === 1) {
-            this.litHuff = FIXED_LIT;
-            this.distHuff = FIXED_DIST;
-            this.state = 'DD';
-          } else this.state = 'DH';
-          continue;
-        }
-        case 'SL': {
-          const len = br.readBytes(4);
-          if (!len) return;
-          const LEN = len[0] | (len[1] << 8);
-          const NLEN = len[2] | (len[3] << 8);
-          if ((LEN ^ 0xffff) !== NLEN) throw dataError('invalid stored block lengths');
-          this.storedLen = LEN;
-          this.state = 'SD';
-          continue;
-        }
-        case 'SD': {
-          if (this.storedLen === 0) { this.state = 'BNEXT'; continue; }
-          const chunk = br.readAvailable(this.storedLen);
-          if (!chunk) return;
-          this.emitBytes(chunk);
-          this.storedLen -= chunk.length;
-          continue;
-        }
-        case 'DH': {
-          if (!br.need(14)) return;
-          const hlit = br.get(5) + 257;
-          const hdist = br.get(5) + 1;
-          const hclen = br.get(4) + 4;
-          this.dl = {
-            hlit, hdist, hclen,
-            clHuff: null,
-            clLens: new Array(19).fill(0),
-            clPos: 0,
-            lens: new Array(hlit + hdist).fill(0),
-            pos: 0, prev: 0, needRepeat: 0,
-          };
-          this.state = 'DL';
-          continue;
-        }
-        case 'DL': {
-          const dl = this.dl;
-          if (!dl.clHuff) {
-            // Read code lengths incrementally (3 bits at a time to avoid bitbuf overflow).
-            while (dl.clPos < dl.hclen) {
-              if (!br.need(3)) return;
-              dl.clLens[CL_ORDER[dl.clPos]] = br.get(3);
-              dl.clPos++;
-            }
-            dl.clHuff = buildHuffman(dl.clLens);
-            if (!dl.clHuff) throw dataError('invalid code lengths set');
-          }
-          let progressed = false;
-          while (dl.pos < dl.hlit + dl.hdist) {
-            if (dl.needRepeat) {
-              const rep = dl.needRepeat;
-              const bits = rep === 16 ? 2 : rep === 17 ? 3 : 7;
-              if (!br.need(bits)) break;
-              const n = br.get(bits) + (rep === 18 ? 11 : 3);
-              if (dl.pos + n > dl.hlit + dl.hdist) throw dataError('invalid code lengths set');
-              const val = rep === 16 ? dl.prev : 0;
-              for (let i = 0; i < n; i++) dl.lens[dl.pos++] = val;
-              if (rep !== 16) dl.prev = 0;
-              dl.needRepeat = 0;
-              progressed = true;
-              continue;
-            }
-            const sym = decodeSymbol(dl.clHuff, br, this.huffState);
-            if (sym < 0) break;
-            if (sym < 16) { dl.lens[dl.pos++] = sym; dl.prev = sym; }
-            else {
-              if (sym === 16 && dl.pos === 0) throw dataError('invalid code lengths set');
-              dl.needRepeat = sym;
-            }
-            progressed = true;
-          }
-          if (dl.pos < dl.hlit + dl.hdist) {
-            if (!progressed) return;
-            continue;
-          }
-          if (dl.lens[256] === 0) throw dataError('invalid code lengths set');
-          this.litHuff = buildHuffman(dl.lens.slice(0, dl.hlit));
-          this.distHuff = buildHuffman(dl.lens.slice(dl.hlit));
-          if (!this.litHuff) throw dataError('invalid code lengths set');
-          // dist table may legitimately be empty (1 code); use a dummy that errors on use
-          this.ddNeed = 'lit';
-          this.state = 'DD';
-          continue;
-        }
-        case 'DD': {
-          let advanced = true;
-          while (advanced) {
-            advanced = false;
-            if (this.ddNeed === 'lit') {
-              const sym = decodeSymbol(this.litHuff, br, this.huffState);
-              if (sym < 0) return;
-              advanced = true;
-              if (sym < 256) { this.emitByte(sym); continue; }
-              if (sym === 256) { this.state = 'BNEXT'; break; }
-              const li = sym - 257;
-              this.pendingLen = LBASE[li];
-              this.ddExt = LEXT[li];
-              this.ddNeed = this.ddExt ? 'lenext' : 'dist';
-              continue;
-            }
-            if (this.ddNeed === 'lenext') {
-              if (!br.need(this.ddExt)) return;
-              this.pendingLen += br.get(this.ddExt);
-              this.ddNeed = 'dist';
-              advanced = true;
-              continue;
-            }
-            if (this.ddNeed === 'dist') {
-              if (!this.distHuff) throw dataError('invalid code');
-              const sym = decodeSymbol(this.distHuff, br, this.huffState);
-              if (sym < 0) return;
-              if (sym > 29) throw dataError('invalid distance code');
-              this.pendingDist = DBASE[sym];
-              this.ddExt = DEXT[sym];
-              this.ddNeed = this.ddExt ? 'distext' : 'match';
-              advanced = true;
-              continue;
-            }
-            if (this.ddNeed === 'distext') {
-              if (!br.need(this.ddExt)) return;
-              this.pendingDist += br.get(this.ddExt);
-              this.ddNeed = 'match';
-              advanced = true;
-              continue;
-            }
-            if (this.ddNeed === 'match') {
-              this.copyMatch(this.pendingLen, this.pendingDist);
-              this.ddNeed = 'lit';
-              advanced = true;
-              continue;
-            }
-          }
-          if (this.state === 'DD') return;
-          continue;
-        }
-        case 'BNEXT': {
-          if (this.bfinal) {
-            if (this.wrapper === 'zlib') this.state = 'ZA';
-            else if (this.wrapper === 'gzip') { br.align(); this.state = 'GT'; }
-            else { this.finished = true; this.state = 'DONE'; }
-          } else {
-            this.state = 'BI';
-          }
-          continue;
-        }
-        case 'ZA': {
-          const a = br.readBytes(4);
-          if (!a) return;
-          const expect = (((a[0] << 24) | (a[1] << 16) | (a[2] << 8) | a[3]) >>> 0);
-          if (expect !== (this.adler >>> 0)) throw dataError('incorrect data check');
-          this.finished = true;
-          this.state = 'DONE';
-          continue;
-        }
-        case 'GT': {
-          const t = br.readBytes(8);
-          if (!t) return;
-          const crcExpect = ((t[0] | (t[1] << 8) | (t[2] << 16) | (t[3] << 24)) >>> 0);
-          const isizeExpect = ((t[4] | (t[5] << 8) | (t[6] << 16) | (t[7] << 24)) >>> 0);
-          if (crcExpect !== ((this.crcState ^ 0xffffffff) >>> 0)) throw dataError('incorrect data check');
-          if (isizeExpect !== (this.memberOut >>> 0)) throw dataError('incorrect length check');
-          this.state = 'GNEXT';
-          continue;
-        }
-        case 'GNEXT': {
-          br.gc();
-          if (br.remaining() === 0) {
-            if (this._isFinal) {
-              this.finished = true;
-              this.state = 'DONE';
-            }
-            // Otherwise wait: another member may arrive in a later write.
-            return;
-          }
-          const pb = br.peekBytes(1);
-          if (!pb) return;
-          if (pb[0] === 0x00) {
-            // Trailing zero padding is ignored.
-            this.finished = true;
-            this.state = 'DONE';
-            continue;
-          }
-          this.resetForNextMember();
-          this.state = 'GH';
-          continue;
-        }
-        default:
-          throw dataError('invalid state');
+    if (!ok || p.err) {
+      const status = p.err || Z_STREAM_ERROR;
+      this.error = zlibError(pakoStatusName(status), status, String(p.msg || 'deflate error'));
+      throw this.error;
+    }
+    let output = this._drainPhase();
+    if (!this._headerEmitted) {
+      // Native zlib emits the wrapper header on the very first write, even
+      // before any compressed output exists.
+      this._headerEmitted = true;
+      if (this._header.length > 0) {
+        output = output.length > 0 ? Buffer.concat([this._header, output]) : this._header;
       }
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// DEFLATE — pure-JavaScript DEFLATE encoder
-// ---------------------------------------------------------------------------
-
-class BitWriter {
-  constructor() {
-    this.out = [];
-    this.bitbuf = 0;
-    this.bitcnt = 0;
-  }
-  bits(value, n) {
-    this.bitbuf |= (value << this.bitcnt) >>> 0;
-    this.bitcnt += n;
-    while (this.bitcnt >= 8) {
-      this.out.push(this.bitbuf & 0xff);
-      this.bitbuf >>>= 8;
-      this.bitcnt -= 8;
-    }
-  }
-  align() {
-    if (this.bitcnt > 0) {
-      this.out.push(this.bitbuf & 0xff);
-      this.bitbuf = 0;
-      this.bitcnt = 0;
-    }
-  }
-  bytes(arr) {
-    this.align();
-    for (let i = 0; i < arr.length; i++) this.out.push(arr[i] & 0xff);
-  }
-  u16le(v) {
-    this.bytes([(v & 0xff), (v >>> 8) & 0xff]);
-  }
-  u32le(v) {
-    this.bytes([(v & 0xff), (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff]);
-  }
-  u32be(v) {
-    this.bytes([(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff]);
-  }
-}
-
-// Fixed-Huffman encode tables (RFC 1951 §3.2.6).
-// Codes are bit-reversed for LSB-first writing (Huffman codes are packed MSB-first).
-function reverseBits(code, len) {
-  let rev = 0;
-  for (let i = 0; i < len; i++) {
-    rev = (rev << 1) | ((code >> i) & 1);
-  }
-  return rev;
-}
-const FIXED_LIT_CODE = new Array(288);
-const FIXED_LIT_LEN = new Array(288);
-for (let i = 0; i < 144; i++) { FIXED_LIT_CODE[i] = reverseBits(0x30 + i, 8); FIXED_LIT_LEN[i] = 8; }
-for (let i = 144; i < 256; i++) { FIXED_LIT_CODE[i] = reverseBits(0x190 + (i - 144), 9); FIXED_LIT_LEN[i] = 9; }
-for (let i = 256; i < 280; i++) { FIXED_LIT_CODE[i] = reverseBits(i - 256, 7); FIXED_LIT_LEN[i] = 7; }
-for (let i = 280; i < 288; i++) { FIXED_LIT_CODE[i] = reverseBits(0xc0 + (i - 280), 8); FIXED_LIT_LEN[i] = 8; }
-// Fixed distance codes (5 bits, MSB-first).
-const FIXED_DIST_CODE = new Array(32);
-for (let i = 0; i < 32; i++) FIXED_DIST_CODE[i] = reverseBits(i, 5);
-
-function lengthCode(len) {
-  for (let i = 0; i < 29; i++) {
-    const base = LBASE[i];
-    const ext = LEXT[i];
-    if (len >= base && len < base + (1 << ext)) return [257 + i, ext, len - base];
-  }
-  return [285, 0, 0];
-}
-
-function distCode(dist) {
-  for (let i = 0; i < 30; i++) {
-    const base = DBASE[i];
-    const ext = DEXT[i];
-    if (dist >= base && dist < base + (1 << ext)) return [i, ext, dist - base];
-  }
-  return [29, 13, 0];
-}
-
-class DeflateEngine {
-  constructor({ level, windowBits, strategy, dictionary, wrapper }) {
-    this.level = level === Z_DEFAULT_COMPRESSION ? 6 : level;
-    this.windowBits = windowBits;
-    this.strategy = strategy;
-    this.wrapper = wrapper; // 'zlib' | 'raw' | 'gzip'
-    this.dictionary = dictionary ? toBytes(dictionary) : undefined;
-    this.bw = new BitWriter();
-    this.reset();
-  }
-  reset() {
-    this.pending = [];
-    this.hist = [];
-    this.hash = new Map();
-    this.finished = false;
-    this.adler = 1;
-    this.crcState = 0xffffffff;
-    this.totalIn = 0;
-    this.headerDone = false;
-    this.bw = new BitWriter();
-    if (this.dictionary) {
-      const n = Math.min(this.dictionary.length, 32768);
-      for (let i = this.dictionary.length - n; i < this.dictionary.length; i++) {
-        this.hist.push(this.dictionary[i]);
-      }
-      // Prime the hash with dictionary positions.
-      for (let i = 0; i + 3 <= n; i++) {
-        const p = this.hist.length - n + i;
-        const h = ((this.hist[p] << 10) ^ (this.hist[p + 1] << 5) ^ this.hist[p + 2]) & 32767;
-        let chain = this.hash.get(h);
-        if (!chain) { chain = []; this.hash.set(h, chain); }
-        chain.push(p);
-      }
-    }
-    return this;
-  }
-  setParams(level, strategy) {
-    this.level = level === Z_DEFAULT_COMPRESSION ? 6 : level;
-    this.strategy = strategy;
-  }
-  updateChecksums(bytes) {
-    let s1 = this.adler & 0xffff;
-    let s2 = (this.adler >>> 16) & 0xffff;
-    let crc = this.crcState;
-    for (let i = 0; i < bytes.length; i++) {
-      const b = bytes[i];
-      s1 += b; if (s1 >= 65521) s1 -= 65521;
-      s2 += s1; if (s2 >= 65521) s2 -= 65521;
-      crc = (CRC_TABLE[(crc ^ b) & 0xff] ^ (crc >>> 8)) >>> 0;
-    }
-    this.adler = ((s2 << 16) | s1) >>> 0;
-    this.crcState = crc;
-    this.totalIn += bytes.length;
-  }
-  writeHeader() {
-    const bw = this.bw;
-    if (this.wrapper === 'zlib') {
-      const flevel = this.level <= 1 ? 0 : this.level <= 5 ? 1 : this.level <= 6 ? 2 : 3;
-      let flg = flevel << 6;
-      if (this.dictionary) flg |= 0x20;
-      const cmf = 0x78;
-      flg |= (31 - (((cmf << 8) | flg) % 31)) % 31;
-      bw.bytes([cmf, flg]);
-      if (this.dictionary) bw.u32be(adler32(this.dictionary));
-    } else if (this.wrapper === 'gzip') {
-      const xfl = this.level === 9 ? 2 : this.level <= 1 ? 4 : 0;
-      bw.bytes([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, xfl, 0x03]);
-    }
-    this.headerDone = true;
-  }
-  writeTrailer() {
-    const bw = this.bw;
-    bw.align();
-    if (this.wrapper === 'zlib') bw.u32be(this.adler);
-    else if (this.wrapper === 'gzip') {
-      bw.u32le((this.crcState ^ 0xffffffff) >>> 0);
-      bw.u32le(this.totalIn >>> 0);
-    }
-  }
-  // Stored (level-0) block emission with zlib's exact rules.
-  storedBlock(data, bfinal) {
-    const bw = this.bw;
-    bw.bits(bfinal ? 1 : 0, 1);
-    bw.bits(0, 2); // BTYPE=00
-    bw.align();
-    const len = data.length;
-    bw.u16le(len);
-    bw.u16le(len ^ 0xffff);
-    bw.bytes(data);
-  }
-  deflateStored(flushFlag) {
-    // Observable rules derived from zlib's deflate_stored:
-    // - Z_NO_FLUSH: buffer; emit BFINAL=0 blocks while >= 32768 pending.
-    // - SYNC/FULL_FLUSH: emit all pending as BFINAL=0, then empty stored block.
-    // - FINISH: emit all pending (last data block BFINAL=1); empty BFINAL=1
-    //   block when nothing was pending.
-    const MIN_BLOCK = 32768;
-    const MAX_STORED = 65531; // pending_buf_size - 5
-    if (flushFlag === Z_NO_FLUSH) {
-      while (this.pending.length >= MIN_BLOCK) {
-        const n = Math.min(this.pending.length, MAX_STORED);
-        this.storedBlock(this.pending.slice(0, n), false);
-        this.pending = this.pending.slice(n);
-      }
-      return;
-    }
-    if (flushFlag === Z_SYNC_FLUSH || flushFlag === Z_FULL_FLUSH || flushFlag === Z_PARTIAL_FLUSH || flushFlag === Z_BLOCK) {
-      while (this.pending.length > 0) {
-        const n = Math.min(this.pending.length, MAX_STORED);
-        const last = n === this.pending.length;
-        // Sync flush: data blocks are BFINAL=0, then an empty stored block.
-        this.storedBlock(this.pending.slice(0, n), false);
-        this.pending = this.pending.slice(n);
-      }
-      this.storedBlock([], false); // empty stored block
-      return;
     }
     if (flushFlag === Z_FINISH) {
-      if (this.pending.length === 0) {
-        this.storedBlock([], true);
-      } else {
-        while (this.pending.length > 0) {
-          const n = Math.min(this.pending.length, MAX_STORED);
-          const last = n === this.pending.length;
-          this.storedBlock(this.pending.slice(0, n), last);
-          this.pending = this.pending.slice(n);
-        }
-      }
-      this.writeTrailer();
       this.finished = true;
-    }
-  }
-  getHistByte(p) {
-    return this.hist[p];
-  }
-  lz77(data) {
-    const strategy = this.strategy;
-    const level = this.level;
-    const symbols = [];
-    const n = data.length;
-    const basePos = this.hist.length;
-    const maxChain = [0, 2, 4, 8, 16, 32, 64, 128, 256, 512][level] || 32;
-    const niceLen = [0, 8, 16, 32, 32, 64, 128, 128, 258, 258][level] || 32;
-    const useMatches = strategy !== Z_HUFFMAN_ONLY && level > 0;
-    let i = 0;
-    const getByte = (p) => (p < basePos ? this.hist[p] : data[p - basePos]);
-    while (i < n) {
-      let bestLen = 0;
-      let bestDist = 0;
-      if (useMatches && i + 3 <= n) {
-        const h = ((data[i] << 10) ^ (data[i + 1] << 5) ^ data[i + 2]) & 32767;
-        const chain = this.hash.get(h);
-        if (chain) {
-          const absPos = basePos + i;
-          let searched = 0;
-          for (let ci = chain.length - 1; ci >= 0 && searched < maxChain; ci--, searched++) {
-            const p = chain[ci];
-            const dist = absPos - p;
-            if (dist < 1 || dist > 32768) continue;
-            if (strategy === Z_RLE && dist !== 1) continue;
-            if (getByte(p) !== data[i]) continue;
-            let len = 1;
-            const maxLen = Math.min(258, n - i);
-            while (len < maxLen && getByte(p + len) === data[i + len]) len++;
-            if (len >= 3 && len > bestLen) {
-              bestLen = len;
-              bestDist = dist;
-              if (len >= niceLen) break;
-            }
-          }
-        }
-      }
-      if (bestLen >= 3) {
-        symbols.push({ len: bestLen, dist: bestDist });
-        for (let k = 0; k < bestLen; k++) {
-          if (i + k + 3 <= n) {
-            const h = ((data[i + k] << 10) ^ (data[i + k + 1] << 5) ^ data[i + k + 2]) & 32767;
-            let chain = this.hash.get(h);
-            if (!chain) { chain = []; this.hash.set(h, chain); }
-            chain.push(basePos + i + k);
-          }
-        }
-        i += bestLen;
-      } else {
-        symbols.push(data[i]);
-        if (i + 3 <= n) {
-          const h = ((data[i] << 10) ^ (data[i + 1] << 5) ^ data[i + 2]) & 32767;
-          let chain = this.hash.get(h);
-          if (!chain) { chain = []; this.hash.set(h, chain); }
-          chain.push(basePos + i);
-        }
-        i++;
+      const trailer = this._trailer();
+      if (trailer.length > 0) {
+        output = output.length > 0 ? Buffer.concat([output, trailer]) : trailer;
       }
     }
-    for (let k = 0; k < n; k++) this.hist.push(data[k]);
-    // Bound memory: keep at most 1M history bytes.
-    if (this.hist.length > 1048576) {
-      const drop = this.hist.length - 1048576;
-      this.hist.splice(0, drop);
-      // Hash positions are now stale; rebuild lazily by clearing.
-      this.hash.clear();
-    }
-    return symbols;
-  }
-  writeFixedBlock(symbols, bfinal) {
-    const bw = this.bw;
-    bw.bits(bfinal ? 1 : 0, 1);
-    bw.bits(1, 2); // BTYPE=01 fixed Huffman
-    for (const s of symbols) {
-      if (typeof s === 'number') {
-        bw.bits(FIXED_LIT_CODE[s], FIXED_LIT_LEN[s]);
-      } else {
-        const [lc, lext, lval] = lengthCode(s.len);
-        bw.bits(FIXED_LIT_CODE[lc], FIXED_LIT_LEN[lc]);
-        if (lext) bw.bits(lval, lext);
-        const [dc, dext, dval] = distCode(s.dist);
-        bw.bits(FIXED_DIST_CODE[dc], 5);
-        if (dext) bw.bits(dval, dext);
-      }
-    }
-    bw.bits(FIXED_LIT_CODE[256], FIXED_LIT_LEN[256]); // end of block
-  }
-  deflateCompressed(flushFlag) {
-    const NO_FLUSH_THRESHOLD = 32768;
-    const emitBlock = (bfinal) => {
-      if (this.pending.length === 0) return false;
-      // Split very large buffers to keep blocks sane.
-      let offset = 0;
-      let first = true;
-      while (offset < this.pending.length) {
-        const chunk = this.pending.slice(offset, offset + 32768);
-        const isLast = offset + 32768 >= this.pending.length;
-        const symbols = this.lz77(chunk);
-        this.writeFixedBlock(symbols, bfinal && isLast);
-        offset += 32768;
-        first = false;
-      }
-      this.pending = [];
-      return true;
-    };
-    if (flushFlag === Z_NO_FLUSH) {
-      while (this.pending.length >= NO_FLUSH_THRESHOLD) {
-        const chunk = this.pending.slice(0, 32768);
-        this.pending = this.pending.slice(32768);
-        const symbols = this.lz77(chunk);
-        this.writeFixedBlock(symbols, false);
-      }
-      return;
-    }
-    if (flushFlag === Z_SYNC_FLUSH || flushFlag === Z_FULL_FLUSH || flushFlag === Z_PARTIAL_FLUSH || flushFlag === Z_BLOCK) {
-      emitBlock(false);
-      this.bw.align();
-      this.storedBlock([], false); // empty stored block
-      if (flushFlag === Z_FULL_FLUSH) this.hash.clear();
-      return;
-    }
-    if (flushFlag === Z_FINISH) {
-      if (this.pending.length === 0) {
-        // Emit an empty fixed block with BFINAL=1.
-        this.writeFixedBlock([], true);
-      } else {
-        emitBlock(true);
-      }
-      this.bw.align();
-      this.writeTrailer();
-      this.finished = true;
-    }
-  }
-  write(chunk, flushFlag) {
-    if (this.finished) {
-      throw zlibError('Z_STREAM_ERROR', -2, 'write after finish');
-    }
-    const bytes = chunk ? (chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk.buffer || chunk, chunk.byteOffset || 0, chunk.length)) : new Uint8Array(0);
-    if (bytes.length) {
-      const arr = Array.from(bytes);
-      for (let i = 0; i < arr.length; i++) this.pending.push(arr[i]);
-      this.updateChecksums(bytes);
-    }
-    if (!this.headerDone) this.writeHeader();
-    if (this.level === 0) this.deflateStored(flushFlag);
-    else this.deflateCompressed(flushFlag);
-    const output = Buffer.from(this.bw.out);
-    this.bw.out = [];
     return { output, finished: this.finished, consumed: bytes.length, trailing: false };
   }
 }
+
 
 // ---------------------------------------------------------------------------
 // Minimal stream implementation (browser-safe; no node:stream import)
@@ -1801,19 +1222,19 @@ class ZlibBase extends MiniTransform {
   _createEngine(mode, zopts) {
     switch (mode) {
       case MODE_DEFLATE:
-        return new DeflateEngine({ wrapper: 'zlib', ...zopts });
+        return new PakoDeflateEngine({ wrapper: 'zlib', ...zopts });
       case MODE_DEFLATERAW:
-        return new DeflateEngine({ wrapper: 'raw', ...zopts });
+        return new PakoDeflateEngine({ wrapper: 'raw', ...zopts });
       case MODE_GZIP:
-        return new DeflateEngine({ wrapper: 'gzip', ...zopts });
+        return new PakoDeflateEngine({ wrapper: 'gzip', ...zopts });
       case MODE_INFLATE:
-        return new InflateEngine({ wrapper: 'zlib', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
+        return new PakoInflateEngine({ wrapper: 'zlib', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
       case MODE_INFLATERAW:
-        return new InflateEngine({ wrapper: 'raw', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
+        return new PakoInflateEngine({ wrapper: 'raw', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
       case MODE_GUNZIP:
-        return new InflateEngine({ wrapper: 'gzip', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
+        return new PakoInflateEngine({ wrapper: 'gzip', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
       case MODE_UNZIP:
-        return new InflateEngine({ wrapper: 'unzip', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
+        return new PakoInflateEngine({ wrapper: 'unzip', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
       default:
         // Brotli / Zstd: honest pass-through fallback (no codec available).
         return new PassThroughEngine();
@@ -1948,6 +1369,11 @@ function validateBrotliOptions(options) {
     const value = params[key];
     if (!Number.isInteger(value)) {
       throw new ERR_INVALID_ARG_TYPE(`options.params.${key}`, 'integer', value);
+    }
+    // BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING is a boolean flag; real
+    // Node rejects any other integer with ERR_ZLIB_INITIALIZATION_FAILED.
+    if (numKey === 4 && value !== 0 && value !== 1) {
+      throw new ERR_ZLIB_INITIALIZATION_FAILED();
     }
   }
 }

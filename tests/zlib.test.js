@@ -13,7 +13,7 @@ import zlib, {
   crc32,
 } from '../src/zlib.js';
 
-describe('zlib (dependency-free ESM)', () => {
+describe('zlib (pako-backed ESM)', () => {
   const payload = 'The quick brown fox jumps over the lazy dog. 🦊';
   const bufferPayload = Buffer.from(payload);
 
@@ -189,6 +189,142 @@ describe('zlib (dependency-free ESM)', () => {
       const input = Buffer.from('hello brotli');
       const output = zlib.brotliDecompressSync(input);
       expect(Buffer.compare(input, output)).toBe(0);
+    });
+  });
+
+  describe('pako-backed codec behavior', () => {
+    const text = 'Pack my box with five dozen liquor jugs! '.repeat(200);
+    const data = Buffer.from(text);
+
+    test('compression levels all round-trip; higher levels compress better', () => {
+      const sizes = [];
+      for (const level of [0, 1, 6, 9]) {
+        const c = deflateSync(data, { level });
+        expect(inflateSync(c).toString()).toBe(text);
+        sizes.push(c.length);
+      }
+      expect(sizes[0]).toBeGreaterThan(sizes[3]); // stored >> best
+      expect(sizes[3]).toBeLessThanOrEqual(sizes[1]);
+    });
+
+    test('deflate strategies all round-trip', () => {
+      for (const strategy of [
+        constants.Z_DEFAULT_STRATEGY,
+        constants.Z_FILTERED,
+        constants.Z_HUFFMAN_ONLY,
+        constants.Z_RLE,
+        constants.Z_FIXED,
+      ]) {
+        const c = deflateSync(data, { strategy });
+        expect(inflateSync(c).toString()).toBe(text);
+      }
+    });
+
+    test('gunzipSync decodes concatenated gzip members', () => {
+      const cat = Buffer.concat([gzipSync('one '), gzipSync('two '), gzipSync('three')]);
+      expect(gunzipSync(cat).toString()).toBe('one two three');
+      expect(unzipSync(cat).toString()).toBe('one two three');
+    });
+
+    test('unzipSync stops after the first zlib stream', () => {
+      const cat = Buffer.concat([deflateSync('first'), deflateSync('second')]);
+      expect(unzipSync(cat).toString()).toBe('first');
+    });
+
+    test('gunzipSync ignores zero padding but rejects junk', () => {
+      const gz = gzipSync('padded');
+      const padded = Buffer.concat([gz, Buffer.alloc(16)]);
+      expect(gunzipSync(padded).toString()).toBe('padded');
+      const junky = Buffer.concat([gz, Buffer.from([0x1f, 0x8b, 0x00])]);
+      expect(() => gunzipSync(junky)).toThrow();
+    });
+
+    test('dictionary round-trip and Node-shaped dictionary errors', () => {
+      const dict = Buffer.from('common prefix data ');
+      const c = deflateSync('common prefix data hello', { dictionary: dict });
+      expect(inflateSync(c, { dictionary: dict }).toString()).toBe('common prefix data hello');
+      expect(() => inflateSync(c)).toThrow(/Missing dictionary/);
+      expect(() => inflateSync(c, { dictionary: Buffer.from('wrong') })).toThrow(/Bad dictionary/);
+    });
+
+    test('empty and truncated input report Z_BUF_ERROR', () => {
+      for (const bad of [Buffer.alloc(0), gzipSync('x').subarray(0, 10)]) {
+        try {
+          gunzipSync(bad);
+          throw new Error('should have thrown');
+        } catch (err) {
+          expect(err.code).toBe('Z_BUF_ERROR');
+          expect(err.message).toMatch(/unexpected end of file/);
+        }
+      }
+    });
+
+    test('inflateSync rejects gzip data; gunzipSync rejects zlib data', () => {
+      expect(() => inflateSync(gzipSync('x'))).toThrow();
+      expect(() => gunzipSync(deflateSync('x'))).toThrow();
+    });
+
+    test('stream flush emits incremental output', (done) => {
+      const def = new Deflate({ level: 6 });
+      const inf = new Inflate({});
+      const chunks = [];
+      let sawDataBeforeEnd = false;
+      def.on('data', (c) => inf.write(c));
+      def.on('end', () => inf.end());
+      inf.on('data', (c) => chunks.push(c));
+      inf.on('end', () => {
+        expect(Buffer.concat(chunks).toString()).toBe('flush me');
+        expect(sawDataBeforeEnd).toBe(true);
+        done();
+      });
+      inf.on('error', done);
+      def.on('error', done);
+      def.write(Buffer.from('flush '));
+      def.flush(() => {
+        // data flushed mid-stream must already be decodable
+        setImmediate(() => {
+          sawDataBeforeEnd = chunks.length > 0;
+          def.end(Buffer.from('me'));
+        });
+      });
+    });
+
+    test('params() mid-stream level change stays decodable', (done) => {
+      const def = new Deflate({ level: 1 });
+      const inf = new Inflate({});
+      const chunks = [];
+      def.on('data', (c) => inf.write(c));
+      def.on('end', () => inf.end());
+      inf.on('data', (c) => chunks.push(c));
+      inf.on('end', () => {
+        expect(Buffer.concat(chunks).toString()).toBe('aaaabbbb');
+        done();
+      });
+      inf.on('error', done);
+      def.on('error', done);
+      def.write(Buffer.from('aaaa'));
+      def.params(9, constants.Z_DEFAULT_STRATEGY, () => {
+        def.end(Buffer.from('bbbb'));
+      });
+    });
+  });
+
+  describe('browser lane', () => {
+    test('no native delegation: works with process.getBuiltinModule disabled', async () => {
+      const orig = process.getBuiltinModule;
+      process.getBuiltinModule = () => { throw new Error('no builtins in browser'); };
+      try {
+        // fresh import proves module init needs no builtins either
+        const fresh = await import(`../src/zlib.js?browser-lane=${Date.now()}`);
+        const c = fresh.deflateSync('browser lane');
+        expect(fresh.inflateSync(c).toString()).toBe('browser lane');
+        const g = fresh.gzipSync('browser lane');
+        expect(fresh.gunzipSync(g).toString()).toBe('browser lane');
+        const r = fresh.deflateRawSync('browser lane');
+        expect(fresh.inflateRawSync(r).toString()).toBe('browser lane');
+      } finally {
+        process.getBuiltinModule = orig;
+      }
     });
   });
 });
