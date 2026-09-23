@@ -1,0 +1,2 @@
+var e=class{constructor(e={}){this.options={...e},this.context={}}setCert(e){}setKey(e,t){}addCACert(e){}};function t(t){return new e(t)}function r(e){if(null!=e)return e}var a={SecureContext:e,createSecureContext:t,translatePeerCertificate:r};export{e as SecureContext,t as createSecureContext,a as default,r as translatePeerCertificate};
+/*! For license information please see _tls_common.js.LEGAL.txt */
