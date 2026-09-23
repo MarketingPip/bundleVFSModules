@@ -28,6 +28,9 @@
 
 import { Buffer } from 'buffer';
 import process from 'process';
+import * as types from './util/types.js';
+
+export { types };
 
 // ---------------------------------------------------------------------------
 // internal/errors-lite
@@ -100,69 +103,18 @@ const F = Object.getPrototypeOf(function () {});
  */
 function isFunctionType(v) { return typeof v === 'function'; }
 
-const types = {
-  isArrayBuffer: (v) => objectToString(v) === '[object ArrayBuffer]',
-  isSharedArrayBuffer: (v) => typeof SharedArrayBuffer !== 'undefined' && objectToString(v) === '[object SharedArrayBuffer]',
-  isAnyArrayBuffer: (v) => types.isArrayBuffer(v) || types.isSharedArrayBuffer(v),
-  isArrayBufferView: (v) => ArrayBuffer.isView(v),
-  isTypedArray: (v) => ArrayBuffer.isView(v) && !(v instanceof DataView),
-  isDataView: (v) => v instanceof DataView,
-  isMap: (v) => objectToString(v) === '[object Map]',
-  isSet: (v) => objectToString(v) === '[object Set]',
-  isWeakMap: (v) => objectToString(v) === '[object WeakMap]',
-  isWeakSet: (v) => objectToString(v) === '[object WeakSet]',
-  isWeakRef: (v) => typeof WeakRef !== 'undefined' && v instanceof WeakRef,
-  isDate: (v) => objectToString(v) === '[object Date]',
-  isRegExp: (v) => objectToString(v) === '[object RegExp]',
-  isPromise: (v) => objectToString(v) === '[object Promise]',
-  isProxy: () => false, // undetectable in pure JS — documented limitation
-  isExternal: () => false, // no native external objects in browsers
-  isKeyObject: () => false,
-  isCryptoKey: (v) => typeof globalThis.CryptoKey === 'function' && v instanceof globalThis.CryptoKey,
-  isNumberObject: (v) => isObjectLike(v) && objectToString(v) === '[object Number]',
-  isStringObject: (v) => isObjectLike(v) && objectToString(v) === '[object String]',
-  isBooleanObject: (v) => isObjectLike(v) && objectToString(v) === '[object Boolean]',
-  isSymbolObject: (v) => isObjectLike(v) && objectToString(v) === '[object Symbol]',
-  isBigIntObject: (v) => isObjectLike(v) && objectToString(v) === '[object BigInt]',
-  isBoxedPrimitive(v) {
-    return types.isNumberObject(v) || types.isStringObject(v) || types.isBooleanObject(v) ||
-           types.isSymbolObject(v) || types.isBigIntObject(v);
-  },
-  isFunction: isFunctionType,
-  isGeneratorFunction(v) {
-    if (!isFunctionType(v)) return false;
-    const proto = Object.getPrototypeOf(v);
-    if (proto === GF || proto === null) return true;
-    const tag = v[Symbol.toStringTag];
-    return tag === 'GeneratorFunction';
-  },
-  isAsyncFunction(v) {
-    if (!isFunctionType(v)) return false;
-    const proto = Object.getPrototypeOf(v);
-    if (proto === AF || proto === null) return true;
-    return v[Symbol.toStringTag] === 'AsyncFunction';
-  },
-  isAsyncGeneratorFunction(v) {
-    if (!isFunctionType(v)) return false;
-    const proto = Object.getPrototypeOf(v);
-    if (proto === AGF || proto === null) return true;
-    return v[Symbol.toStringTag] === 'AsyncGeneratorFunction';
-  },
-  isGeneratorObject(v) {
-    if (v === null || typeof v !== 'object') return false;
-    return objectToString(v) === '[object Generator]' ||
-           (typeof v.next === 'function' && typeof v.throw === 'function' && isFunction(v[Symbol.iterator]));
-  },
-  isArgumentsObject(v) { return objectToString(v) === '[object Arguments]'; },
-  isNativeError(v) {
-    return v !== null && typeof v === 'object' &&
-           (objectToString(v) === '[object Error]' || v instanceof Error);
-  },
-  isModuleNamespaceObject(v) { return objectToString(v) === '[object Module]'; },
-  // Convenience non-Node alias kept internal; Node exposes isAbortSignal via types? No — not in Node.
-};
+// Local helper (not part of Node's util.types): real Node's inspect uses an
+// internal isAsyncGeneratorFunction check for function prefixes.
+function isAsyncGeneratorFunctionLocal(v) {
+  if (!isFunctionType(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  if (proto === AGF || proto === null) return true;
+  return v[Symbol.toStringTag] === 'AsyncGeneratorFunction';
+}
 
-export { types };
+// Note: `types` is imported from './util/types.js' at the top of this file
+// (the verified 43-predicate port) and re-exported, so `require('util').types
+// is reference-identical to `require('util/types')`, exactly like real Node.
 
 // ---------------------------------------------------------------------------
 // toUSVString
@@ -568,7 +520,7 @@ function formatProperty(ctx, value, recurseTimes, key, isArray) {
   if (isArray && /^\d+$/.test(key)) return str;
   const name = /^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key)
     ? ctx.stylize(key, 'name')
-    : quoteString(key);
+    : ctx.stylize(quoteString(key), 'string');
   return `${name}: ${str}`;
 }
 
@@ -812,7 +764,7 @@ function formatValue(ctx, value, recurseTimes, level = 0) {
     braces = ['[', ']'];
   } else if (typeof value === 'function') {
     if (isClass(value)) return finish(`[class${value.name ? ' ' + value.name : ''}]`);
-    const prefix = types.isAsyncGeneratorFunction(value) ? 'AsyncGeneratorFunction'
+    const prefix = isAsyncGeneratorFunctionLocal(value) ? 'AsyncGeneratorFunction'
       : types.isGeneratorFunction(value) ? 'GeneratorFunction'
       : types.isAsyncFunction(value) ? 'AsyncFunction'
       : 'Function';
