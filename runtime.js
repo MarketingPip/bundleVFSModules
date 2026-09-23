@@ -3322,6 +3322,23 @@ _parseExposedMethods(code, interopVar) {
 // **Would you like me to update the `SandboxRuntime` class to wrap everything in this secure "Private Closure" structure?**
 
 
+// Parse one V8 stack-frame line into {file, line, column}.
+// Handles "at fn (https://host/app.js:10:15)", "at async fn (...)", and
+// "at https://host/app.js:10:15". Anchored at the end so URL schemes
+// (https://...) are never mistaken for the line/column separators.
+// Defined once at module scope and exported for unit tests; the sandbox
+// template below inlines it via ${__parseStackLocation.toString()} so the
+// iframe gets the identical implementation (single source of truth).
+export function __parseStackLocation(frame) {
+  let s = String(frame || '').trim().replace(/^at\s+(async\s+)?/, '');
+  const open = s.lastIndexOf('(');
+  if (open !== -1 && s.endsWith(')')) s = s.slice(open + 1, -1);
+  const m = s.match(/^(.*):(\d+):(\d+)$/);
+  if (!m) return null;
+  return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
+}
+
+
 class SandboxRuntime {
   static generate(code, config = {}) {
      
@@ -5523,18 +5540,9 @@ function waitForAllXhrs() {
   });
 }
 
-// Parse one V8 stack-frame line into {file, line, column}.
-// Handles "at fn (https://host/app.js:10:15)", "at async fn (...)", and
-// "at https://host/app.js:10:15". Anchored at the end so URL schemes
-// (https://...) are never mistaken for the line/column separators.
-function __parseStackLocation(frame) {
-  let s = String(frame || '').trim().replace(/^at\s+(async\s+)?/, '');
-  const open = s.lastIndexOf('(');
-  if (open !== -1 && s.endsWith(')')) s = s.slice(open + 1, -1);
-  const m = s.match(/^(.*):(\\d+):(\\d+)$/);
-  if (!m) return null;
-  return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
-}
+// __parseStackLocation is defined once at module scope (exported for
+// unit tests) and inlined here so the iframe runs the identical code.
+${__parseStackLocation.toString()}
 
 // Enhanced error handling with stack traces
 window.onerror = function(message, source, lineno, colno, error) {
