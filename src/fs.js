@@ -1,2080 +1,2232 @@
-// src/fs.js — browser-native port of node:fs (Node v24.20.0 surface).
+// src/fs.js — memfs-backed node:fs for the browser runtime.
 //
-// Dependency-free ESM. The filesystem is an in-memory virtual volume owned by
-// this module and published (when a host runtime is present) as
-// `globalThis._RUNTIME_.__FS__` — the singleton the runtime reads for cwd
-// checks, import.meta resolution and end-of-run FS serialisation
-// (`__FS__._vol.toJSON()` + `__FS__.readFileSync(path)`).
+// The filesystem engine is memfs (an in-memory Node fs implementation,
+// declared in package.json dependencies). This module wraps it in a
+// Node.js v24-shaped façade: Node-shaped Stats/Dirent, numeric errno +
+// syscall enrichment, error-message parity, and the runtime integration
+// contract below.
 //
-// The volume is seeded from `globalThis._RUNTIME_.__USER_FILES__`
-// (`{ path: contents }`) when present.
-//
-// Outside a host runtime (parity tests, direct import) the module works
-// standalone: no Node builtins are used for the implementation itself.
+// Runtime contract (see AGENTS.md "The _RUNTIME_ contract"):
+// - Reference the host only through the exact expression
+//   `globalThis._RUNTIME_` (the runtime AST-rewrites that MemberExpression
+//   per sandbox); guard with `typeof globalThis._RUNTIME_ !== "undefined"`
+//   so the module also loads standalone (tests, direct import).
+// - Publish/reuse the singleton `globalThis._RUNTIME_.__FS__`.
+// - `__FS__._vol` is the actual memfs Volume (the runtime calls
+//   `_vol.toJSON()` and `readFileSync()` on it).
+// - The volume is seeded from `globalThis._RUNTIME_.__USER_FILES__`
+//   (flat `{ "/path": contents }`).
+// - Every operation emits `emitMe('fs', ...)` for runtime observability.
+// - Read/write streams use the project's local stream implementation
+//   (src/stream.js), never memfs's.
 
-import * as _constants from './constants.js';
+import { Volume, createFsFromVolume } from 'memfs';
 import { Readable, Writable } from './stream.js';
-import { EventEmitter } from './events.js';
 
-// ── 1. Runtime bridge (guarded) ──────────────────────────────────────────────
-const RT = (typeof globalThis._RUNTIME_ !== 'undefined' && globalThis._RUNTIME_ !== null)
-  ? globalThis._RUNTIME_
-  : undefined;
-
-function emitFs(...args) {
-  if (typeof globalThis.emitMe === 'function') {
-    try { globalThis.emitMe('fs', ...args); } catch { /* observability only */ }
-  }
-}
-
-// ── 2. Browser-safe globals ──────────────────────────────────────────────────
-const _Buffer = typeof globalThis.Buffer !== 'undefined' ? globalThis.Buffer : undefined;
-const _TextEncoder = typeof globalThis.TextEncoder !== 'undefined' ? globalThis.TextEncoder : undefined;
-const _TextDecoder = typeof globalThis.TextDecoder !== 'undefined' ? globalThis.TextDecoder : undefined;
-
-function bytesFromString(s) {
-  if (_TextEncoder) return _TextEncoder.prototype.encode.call(new _TextEncoder(), s);
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
-  return out;
-}
-function stringFromBytes(u8) {
-  if (_TextDecoder) return _TextDecoder.prototype.decode.call(new _TextDecoder(), u8);
-  let s = '';
-  for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
-  return s;
-}
-function toBuffer(u8) {
-  if (_Buffer) return _Buffer.from(u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength));
-  return u8.slice();
-}
-function isUint8Array(v) {
-  return v instanceof Uint8Array || (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(v));
-}
-
-// ── 3. Minimal posix path helpers (self-contained; no cross-builtin import) ──
-const CHAR_DOT = 46, CHAR_SLASH = 47;
-function isAbsolute(p) { return p.length > 0 && p.charCodeAt(0) === CHAR_SLASH; }
-function normalizeString(path, allowAboveRoot) {
-  let res = '', lastSlash = -1, dots = 0, code = 0;
-  for (let i = 0; i <= path.length; ++i) {
-    if (i < path.length) code = path.charCodeAt(i);
-    else if (code === CHAR_SLASH) break;
-    else code = CHAR_SLASH;
-    if (code === CHAR_SLASH) {
-      if (lastSlash === i - 1 || dots === 1) { /* noop */ }
-      else if (dots === 2) {
-        if (res.length < 2 || res.charCodeAt(res.length - 1) !== CHAR_DOT ||
-            res.charCodeAt(res.length - 2) !== CHAR_DOT) {
-          if (res.length > 2) {
-            const lastSlashIndex = res.lastIndexOf('/');
-            if (lastSlashIndex === -1) { res = ''; }
-            else res = res.slice(0, lastSlashIndex);
-          } else if (res.length !== 0) res = '';
-          if (allowAboveRoot) res += res.length > 0 ? '/..' : '..';
-        } else if (allowAboveRoot) res += res.length > 0 ? '/..' : '..';
-      } else {
-        if (res.length > 0) res += '/' + path.slice(lastSlash + 1, i);
-        else res = path.slice(lastSlash + 1, i);
-      }
-      lastSlash = i; dots = 0;
-    } else if (code === CHAR_DOT && dots !== -1) ++dots;
-    else dots = -1;
-  }
-  return res;
-}
-function normalize(p) {
-  if (p.length === 0) return '.';
-  const isAbs = isAbsolute(p);
-  const trailing = p.charCodeAt(p.length - 1) === CHAR_SLASH;
-  let out = normalizeString(p, !isAbs);
-  if (out.length === 0) {
-    if (isAbs) return '/';
-    return trailing ? './' : '.';
-  }
-  if (trailing) out += '/';
-  return isAbs ? '/' + out : out;
-}
-function join(...parts) {
-  if (parts.length === 0) return '.';
-  let joined;
-  for (const p of parts) {
-    if (typeof p !== 'string') throw makeArgTypeError('path', 'string', p);
-    if (p.length > 0) joined = joined === undefined ? p : joined + '/' + p;
-  }
-  if (joined === undefined) return '.';
-  return normalize(joined);
-}
-function defaultCwd() {
+// Browser-safe nextTick (process.nextTick under Node, queueMicrotask otherwise).
+function nextTick(fn, ...args) {
   try {
-    if (typeof process !== 'undefined' && process && typeof process.cwd === 'function') {
-      const c = process.cwd();
-      if (typeof c === 'string' && c.length) return c.replace(/\\/g, '/');
+    if (typeof process !== 'undefined' && typeof process.nextTick === 'function') {
+      process.nextTick(fn, ...args);
+      return;
     }
   } catch { /* ignore */ }
-  if (RT && RT.process && typeof RT.process.cwd === 'function') {
-    try { return String(RT.process.cwd()); } catch { /* ignore */ }
-  }
-  return '/';
-}
-function resolve(...parts) {
-  let resolvedPath = '', resolvedAbsolute = false;
-  for (let i = parts.length - 1; i >= 0 && !resolvedAbsolute; i--) {
-    const p = parts[i];
-    if (typeof p !== 'string') throw makeArgTypeError('path', 'string', p);
-    if (p.length === 0) continue;
-    resolvedPath = p + '/' + resolvedPath;
-    resolvedAbsolute = isAbsolute(p);
-  }
-  if (!resolvedAbsolute) {
-    resolvedPath = defaultCwd() + '/' + resolvedPath;
-    resolvedAbsolute = true;
-  }
-  resolvedPath = normalizeString(resolvedPath, !resolvedAbsolute);
-  if (resolvedAbsolute) return '/' + resolvedPath;
-  return resolvedPath.length > 0 ? resolvedPath : '.';
-}
-function dirname(p) {
-  if (p.length === 0) return '.';
-  const hasRoot = isAbsolute(p);
-  let end = -1, matchedSlash = true;
-  for (let i = p.length - 1; i >= 1; --i) {
-    if (p.charCodeAt(i) === CHAR_SLASH) {
-      if (!matchedSlash) { end = i; break; }
-    } else matchedSlash = false;
-  }
-  if (end === -1) return hasRoot ? '/' : '.';
-  if (hasRoot && end === 1) return '//';
-  return p.slice(0, end);
-}
-function basename(p, ext) {
-  let start = 0, end = -1, matchedSlash = true;
-  if (ext !== undefined && typeof ext !== 'string') throw makeArgTypeError('ext', 'string', ext);
-  for (let i = p.length - 1; i >= 0; --i) {
-    if (p.charCodeAt(i) === CHAR_SLASH) {
-      if (!matchedSlash) { start = i + 1; break; }
-    } else if (end === -1) { matchedSlash = false; end = i + 1; }
-  }
-  if (end === -1) return '';
-  let base = p.slice(start, end);
-  if (ext && base.endsWith(ext)) base = base.slice(0, base.length - ext.length);
-  return base;
-}
-function relative(from, to) {
-  const f = resolve(from), t = resolve(to);
-  if (f === t) return '';
-  const fParts = f.split('/').filter(Boolean), tParts = t.split('/').filter(Boolean);
-  let i = 0;
-  while (i < fParts.length && i < tParts.length && fParts[i] === tParts[i]) i++;
-  const up = fParts.length - i;
-  return [...Array(up).fill('..'), ...tParts.slice(i)].join('/') || '.';
+  if (typeof queueMicrotask === 'function') queueMicrotask(() => fn(...args));
+  else setTimeout(() => fn(...args), 0);
 }
 
-// ── 4. Node-style errors ─────────────────────────────────────────────────────
-const ERRNO = {
-  EPERM: -1, ENOENT: -2, EIO: -5, ENXIO: -6, EAGAIN: -11, EACCES: -13,
-  EEXIST: -17, EXDEV: -18, ENOTDIR: -20, EISDIR: -21, EINVAL: -22,
-  ENFILE: -23, EMFILE: -24, EFBIG: -27, ENOSPC: -28, EROFS: -30,
-  EMLINK: -31, EPIPE: -32, ENAMETOOLONG: -36, ENOSYS: -38, ENOTEMPTY: -39,
-  ELOOP: -40, EOVERFLOW: -75, EOPNOTSUPP: -95,
+// ── 1. Runtime bridge (guarded) ─────────────────────────────────────────────
+// Always spell the host reference exactly `globalThis._RUNTIME_`.
+function getRuntime() {
+  return (typeof globalThis._RUNTIME_ !== "undefined") ? globalThis._RUNTIME_ : undefined;
+}
+function emitFs(...args) {
+  if (typeof globalThis.emitMe === 'function') {
+    try { globalThis.emitMe(...args); } catch { /* observability only */ }
+  }
+}
+
+// ── 2. Error infrastructure ─────────────────────────────────────────────────
+// Numeric errno values (negative, as in process.binding('uv')).
+const ERRNO_BY_CODE = {
+  EPERM: -1, ENOENT: -2, ESRCH: -3, EINTR: -4, EIO: -5, ENXIO: -6,
+  EBADF: -9, EAGAIN: -11, ENOMEM: -12, EACCES: -13, EFAULT: -14,
+  EBUSY: -16, EEXIST: -17, EXDEV: -18, ENODEV: -19, ENOTDIR: -20,
+  EISDIR: -21, EINVAL: -22, ENFILE: -23, EMFILE: -24, ETXTBSY: -26,
+  EFBIG: -27, ENOSPC: -28, ESPIPE: -29, EROFS: -30, EMLINK: -31,
+  EPIPE: -32, EDOM: -33, ERANGE: -34, ENOLCK: -37, ENOSYS: -38,
+  ELOOP: -40, ENODATA: -61, ETIME: -62, ENOTEMPTY: -66, EOVERFLOW: -75,
+  EOPNOTSUPP: -95,
+  // Node JS-level fs errors that still carry errno/syscall:
+  ERR_FS_EISDIR: 21, ERR_FS_CP_EINVAL: 22, ERR_FS_CP_NON_DIR_TO_DIR: 22,
+  ERR_FS_CP_DIR_TO_NON_DIR: 22,
 };
-const ERRMSG = {
-  EPERM: 'operation not permitted', ENOENT: 'no such file or directory',
-  EIO: 'input/output error', ENXIO: 'no such device or address',
-  EACCES: 'permission denied', EEXIST: 'file already exists',
-  EXDEV: 'cross-device link not permitted', ENOTDIR: 'not a directory',
-  EISDIR: 'illegal operation on a directory', EINVAL: 'invalid argument',
-  ENFILE: 'file table overflow', EMFILE: 'too many open files',
-  EFBIG: 'file too large', ENOSPC: 'no space left on device',
-  EROFS: 'read-only file system', ENAMETOOLONG: 'file name too long',
-  ENOSYS: 'function not implemented', ENOTEMPTY: 'directory not empty',
-  ELOOP: 'too many symbolic links encountered', EOPNOTSUPP: 'operation not supported',
+
+// syscall probe results against real Node v24.20.0.
+const SYSCALL_BY_METHOD = {
+  readFile: 'open', writeFile: 'open', appendFile: 'open',
+  stat: 'stat', lstat: 'lstat', fstat: 'fstat',
+  readdir: 'scandir', mkdir: 'mkdir', unlink: 'unlink', rename: 'rename',
+  copyFile: 'copyfile', rmdir: 'rmdir', realpath: 'realpath',
+  readlink: 'readlink', access: 'access', open: 'open', opendir: 'opendir',
+  rm: 'rm', cp: 'lstat', lutimes: 'lutime', mkdtemp: 'mkdtemp',
+  statfs: 'statfs', chmod: 'chmod', lchmod: 'chmod', utimes: 'utime',
+  futimes: 'futime', truncate: 'open', ftruncate: 'ftruncate',
+  close: 'close', read: 'read', write: 'write', fsync: 'fsync',
+  fdatasync: 'fdatasync', link: 'link', symlink: 'symlink',
+  chown: 'chown', lchown: 'lchown', fchmod: 'fchmod', fchown: 'fchown',
 };
-function fsError(code, syscall, path, detail) {
-  const msg = detail || ERRMSG[code] || 'unknown error';
-  const err = new Error(`${code}: ${msg}, ${syscall}${path !== undefined ? ` '${path}'` : ''}`);
+
+function makeFsError(code, syscall, path, message) {
+  const err = new Error(`${code}: ${message}, ${syscall}${path !== undefined ? ` '${path}'` : ''}`);
   err.code = code;
-  err.errno = ERRNO[code];
+  // errno is filled by enrichErr from ERRNO_BY_CODE; JS validation errors
+  // (ERR_*) carry no errno in real Node, so no default is set here.
   err.syscall = syscall;
   if (path !== undefined) err.path = path;
   return err;
 }
-function fsError2(code, syscall, srcPath, destPath) {
-  const err = new Error(`${code}: ${ERRMSG[code] || 'unknown error'}, ${syscall} '${srcPath}' -> '${destPath}'`);
-  err.code = code;
-  err.errno = ERRNO[code];
-  err.syscall = syscall;
-  return err;
-}
-const IS_DARWIN = typeof process !== 'undefined' && process && process.platform === 'darwin';
-function currentUmask() {
-  try {
-    if (typeof process !== 'undefined' && process && typeof process.umask === 'function') {
-      return process.umask() & 0o777;
-    }
-  } catch { /* fall through to the default */ }
-  return 0o022;
-}
-// Like the kernel: permission bits requested at creation time are masked
-// by the process umask (open(2)/mkdir(2) semantics).
-const applyUmask = (mode) => (mode & 0o7777) & ~currentUmask();
-function makeArgTypeError(argName, expected, received) {
-  let receivedStr;
-  if (received === undefined) receivedStr = 'undefined';
-  else if (received === null) receivedStr = 'null';
-  else if (typeof received === 'object' && received.constructor && received.constructor.name) {
-    receivedStr = `an instance of ${received.constructor.name}`;
-  } else receivedStr = `type ${typeof received}`;
-  const msg = `The "${argName}" argument must be of type ${expected}. Received ${receivedStr}`;
-  const err = new TypeError(msg);
+
+function errInvalidArgType(name, expected, received) {
+  const what = received === undefined ? 'undefined'
+    : received === null ? 'null'
+    : `type ${typeof received}`;
+  const err = new TypeError(`The "${name}" argument must be of type ${expected}. Received ${what}`);
   err.code = 'ERR_INVALID_ARG_TYPE';
   return err;
 }
-function makeArgValueError(argName, reason, received) {
-  const err = new TypeError(
-    `The argument '${argName}' ${reason}. Received ${JSON.stringify(String(received)).slice(0, 60)}`);
-  err.code = 'ERR_INVALID_ARG_VALUE';
-  return err;
-}
-function makeOutOfRangeError(name, range, received) {
-  const err = new RangeError(
-    `The value of "${name}" is out of range. It must be ${range}. Received ${received}`);
-  err.code = 'ERR_OUT_OF_RANGE';
-  return err;
-}
-// Node's rm/cp raise ERR_FS_EISDIR (not EISDIR) for directory mishandling.
-function eisdirError(kind, path) {
-  let err;
-  if (kind === 'rm') {
-    err = new Error(`Path is a directory: rm returned EISDIR (is a directory) ${path}`);
-    err.errno = ERRNO.EISDIR; err.syscall = 'rm'; err.path = path;
-  } else {
-    err = new Error(`Recursive option not enabled, cannot copy a directory: ${path}/`);
+
+// JS-level validation errors carry no syscall/errno in real Node.
+const NO_ENRICH_CODES = new Set([
+  'ERR_INVALID_ARG_TYPE', 'ERR_OUT_OF_RANGE', 'ERR_DIR_CLOSED',
+  'ERR_INVALID_ARG_VALUE', 'ERR_INVALID_OPT_VALUE',
+]);
+
+function enrichErr(err, methodName) {
+  if (err && typeof err === 'object' && err.code) {
+    // memfs reports unknown encodings as ERR_INVALID_OPT_VALUE_ENCODING;
+    // real Node uses ERR_INVALID_ARG_VALUE here.
+    if (err.code === 'ERR_INVALID_OPT_VALUE_ENCODING') {
+      try { err.code = 'ERR_INVALID_ARG_VALUE'; } catch { /* ignore */ }
+    }
+    if (NO_ENRICH_CODES.has(err.code)) return err;
+    if (!err.syscall) {
+      const base = methodName.endsWith('Sync') ? methodName.slice(0, -4) : methodName;
+      try { err.syscall = SYSCALL_BY_METHOD[base] || methodName; } catch { /* ignore */ }
+    }
+    if (err.errno === undefined && ERRNO_BY_CODE[err.code] !== undefined) {
+      try { err.errno = ERRNO_BY_CODE[err.code]; } catch { /* ignore */ }
+    }
   }
-  err.code = 'ERR_FS_EISDIR';
   return err;
-}
-function validatedLength(len) {
-  if (typeof len !== 'number' || !Number.isInteger(len)) throw makeOutOfRangeError('len', 'an integer', len);
-  return Math.max(0, len); // Node clamps negative lengths to 0 (no throw)
 }
 
-// ── 5. constants (reuse the constants port; values verified vs node:fs) ──────
-// Node's fs.constants has a null prototype and exactly the 56 fs-specific
-// keys below (no errno/SSL/signal constants — those live on os.constants).
-const _FS_CONSTANT_NAMES = [
-  'COPYFILE_EXCL', 'COPYFILE_FICLONE', 'COPYFILE_FICLONE_FORCE', 'F_OK',
-  'O_APPEND', 'O_CREAT', 'O_DIRECT', 'O_DIRECTORY', 'O_DSYNC', 'O_EXCL',
-  'O_NOATIME', 'O_NOCTTY', 'O_NOFOLLOW', 'O_NONBLOCK', 'O_RDONLY', 'O_RDWR',
-  'O_SYNC', 'O_TRUNC', 'O_WRONLY', 'R_OK',
-  'S_IFBLK', 'S_IFCHR', 'S_IFDIR', 'S_IFIFO', 'S_IFLNK', 'S_IFMT', 'S_IFREG',
-  'S_IFSOCK', 'S_IRGRP', 'S_IROTH', 'S_IRUSR', 'S_IRWXG', 'S_IRWXO', 'S_IRWXU',
-  'S_IWGRP', 'S_IWOTH', 'S_IWUSR', 'S_IXGRP', 'S_IXOTH', 'S_IXUSR',
-  'UV_DIRENT_BLOCK', 'UV_DIRENT_CHAR', 'UV_DIRENT_DIR', 'UV_DIRENT_FIFO',
-  'UV_DIRENT_FILE', 'UV_DIRENT_LINK', 'UV_DIRENT_SOCKET', 'UV_DIRENT_UNKNOWN',
-  'UV_FS_COPYFILE_EXCL', 'UV_FS_COPYFILE_FICLONE', 'UV_FS_COPYFILE_FICLONE_FORCE',
-  'UV_FS_O_FILEMAP', 'UV_FS_SYMLINK_DIR', 'UV_FS_SYMLINK_JUNCTION',
-  'W_OK', 'X_OK',
-];
-const constants = Object.create(null);
-for (const k of _FS_CONSTANT_NAMES) {
-  if (_constants[k] !== undefined) constants[k] = _constants[k];
+// ── 3. Path helpers ─────────────────────────────────────────────────────────
+function isUint8ArrayLike(v) {
+  return typeof Uint8Array !== 'undefined' && v instanceof Uint8Array;
 }
-
-// ── 6. Path argument handling ────────────────────────────────────────────────
-function getValidatedPath(p, propName = 'path') {
-  if (typeof p === 'string') {
-    if (p.length === 0) throw makeArgValueError(propName, 'must not be empty', p);
-    return p;
-  }
-  if (isUint8Array(p)) return stringFromBytes(p);
-  if (typeof URL !== 'undefined' && p instanceof URL) {
-    if (p.protocol !== 'file:') throw makeArgValueError(propName, 'must be a file: URL', p);
-    return decodeURIComponent(p.pathname);
-  }
-  throw makeArgTypeError(propName, ['string', 'Buffer', 'URL'], p);
-}
-function assertEncoding(enc) {
-  if (enc === undefined || enc === null || enc === 'buffer') return;
-  const ok = (_Buffer && _Buffer.isEncoding(enc)) ||
-    ['utf8', 'utf-8', 'utf16le', 'utf-16le', 'latin1', 'binary', 'base64', 'base64url', 'hex', 'ascii', 'ucs2', 'ucs-2'].includes(String(enc).toLowerCase());
-  if (!ok) {
-    // Node reports a bad encoding name as ERR_INVALID_ARG_VALUE.
-    const received = typeof enc === 'string' && enc.length > 128 ? enc.slice(0, 128) + '...' : enc;
-    const err = new TypeError(`The argument 'encoding' is invalid encoding. Received '${received}'`);
-    err.code = 'ERR_INVALID_ARG_VALUE';
+function validatePath(p, name = 'path') {
+  if (typeof p !== 'string' && !isUint8ArrayLike(p)) {
+    // Match Node's exact message format.
+    let received;
+    if (p === null) received = 'null';
+    else if (p === undefined) received = 'undefined';
+    else if (typeof p === 'object') {
+      received = `an instance of ${p.constructor ? p.constructor.name : 'Object'}`;
+    } else {
+      received = `type ${typeof p} (${String(p)})`;
+    }
+    const err = new TypeError(
+      `The "${name}" argument must be of type string or an instance of Buffer or URL. Received ${received}`);
+    err.code = 'ERR_INVALID_ARG_TYPE';
     throw err;
   }
 }
-function decodeBytes(u8, encoding) {
-  if (encoding === undefined || encoding === null || encoding === 'buffer') return toBuffer(u8);
-  const enc = String(encoding).toLowerCase();
-  if (enc === 'utf8' || enc === 'utf-8') return stringFromBytes(u8);
-  if (_Buffer) return _Buffer.from(u8).toString(encoding);
-  return stringFromBytes(u8);
-}
-function encodeData(data, encoding) {
-  if (typeof data === 'string') return bytesFromString(data);
-  if (isUint8Array(data)) return data.slice ? data.slice() : new Uint8Array(data);
-  if (typeof ArrayBuffer !== 'undefined') {
-    if (data instanceof ArrayBuffer) return new Uint8Array(data);
-    if (data instanceof DataView) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    if (typeof SharedArrayBuffer !== 'undefined' && data instanceof SharedArrayBuffer) {
-      return new Uint8Array(data);
-    }
+function toPathString(p) {
+  if (typeof p === 'string') return p;
+  if (isUint8ArrayLike(p)) {
+    if (typeof Buffer !== 'undefined' && Buffer.isBuffer(p)) return p.toString('utf8');
+    if (typeof TextDecoder !== 'undefined') return new TextDecoder().decode(p);
+    let s = '';
+    for (let i = 0; i < p.length; i++) s += String.fromCharCode(p[i]);
+    return s;
   }
-  throw makeArgTypeError('data', ['string', 'Buffer', 'TypedArray', 'DataView'], data);
+  return String(p);
 }
-
-// ── 7. VFS node model ────────────────────────────────────────────────────────
-const S_IFMT = 0o170000, S_IFREG = 0o100000, S_IFDIR = 0o040000, S_IFLNK = 0o120000;
-let nextIno = 1;
-function nowMs() { return Date.now(); }
-
-class VNode {
-  constructor(kind, mode) {
-    this.kind = kind; // 'file' | 'dir' | 'symlink'
-    this.ino = nextIno++;
-    this.mode = mode;
-    this.uid = 0; this.gid = 0; this.nlink = kind === 'dir' ? 2 : 1;
-    this.rdev = 0;
-    const t = nowMs();
-    this.atimeMs = t; this.mtimeMs = t; this.ctimeMs = t; this.birthtimeMs = t;
-    if (kind === 'file') this.data = new Uint8Array(0);
-    else if (kind === 'dir') this.children = new Map();
-    else this.linkpath = '';
-  }
+function posixDirname(p) {
+  const i = p.lastIndexOf('/');
+  if (i <= 0) return '/';
+  return p.slice(0, i);
+}
+function posixResolve(cwd, p) {
+  if (p.startsWith('/')) return p;
+  return (cwd + '/' + p).replace(/\/+/g, '/');
 }
 
-const MAX_SYMLINKS = 40;
-
-class Volume {
-  constructor() {
-    this.root = new VNode('dir', S_IFDIR | 0o777);
-    this.cwd = defaultCwd();
-    this.fdCounter = 100;
-    this.fds = new Map();
-  }
-
-  // Resolve `p` to { parent, name, node, path }. Follows symlinks unless
-  // `noFollowFinal`. Throws Node-style errors with the given syscall name.
-  lookup(p, syscall, { noFollowFinal = false } = {}) {
-    const abs = resolve(this.cwd, p);
-    const parts = abs.split('/').filter(s => s.length > 0);
-    let node = this.root, parent = null, name = '', linkCount = 0;
-    // Walk `segs` below the volume root, following any symlinks met.
-    // A missing final segment resolves to { parent, name, node: undefined }
-    // (creation-style); a missing non-final segment throws ENOENT.
-    const walk = (segs, trail) => {
-      let n = this.root, tr = [], par = null, nm = '';
-      for (let j = 0; j < segs.length; j++) {
-        const seg = segs[j];
-        const isLast = j === segs.length - 1;
-        if (n.kind !== 'dir') throw fsError('ENOTDIR', syscall, p);
-        const child = n.children.get(seg);
-        if (!child) {
-          if (isLast) return { parent: n, name: seg, node: undefined, trail: tr };
-          throw fsError('ENOENT', syscall, p);
-        }
-        if (child.kind === 'symlink') {
-          return follow(child, segs.slice(j + 1), tr);
-        }
-        if (!isLast && child.kind !== 'dir') throw fsError('ENOTDIR', syscall, p);
-        par = n; nm = seg; n = child; tr.push(seg);
-      }
-      return { parent: par, name: nm, node: n, trail: tr };
-    };
-    const follow = (n, fromParts, trail) => {
-      // Resolve symlink node `n` (whose containing dir is `trail`), then
-      // continue with the remaining path parts below the target.
-      while (n.kind === 'symlink') {
-        if (++linkCount > MAX_SYMLINKS) throw fsError('ELOOP', syscall, p);
-        const target = n.linkpath;
-        const base = isAbsolute(target) ? target : '/' + trail.join('/');
-        const resolved = normalize(isAbsolute(target) ? target : base + '/' + target);
-        const all = resolved.split('/').filter(s => s.length > 0).concat(fromParts);
-        const r = walk(all, []);
-        if (r.node && r.node.kind === 'symlink') {
-          // Defensive: walk() already follows symlinks via follow(),
-          // so this only triggers for a symlink returned as a final
-          // unresolved node; loop around to resolve it.
-          return follow(r.node, [], r.trail);
-        }
-        return r;
-      }
-      return { parent: null, name: '', node: n, trail };
-    };
-    const traversed = [];
-    for (let i = 0; i < parts.length; i++) {
-      const seg = parts[i];
-      const isLast = i === parts.length - 1;
-      if (node.kind !== 'dir') throw fsError('ENOTDIR', syscall, p);
-      const child = node.children.get(seg);
-      if (!child) {
-        if (isLast) return { parent: node, name: seg, node: undefined, path: abs };
-        throw fsError('ENOENT', syscall, p);
-      }
-      if (child.kind === 'symlink' && (!isLast || !noFollowFinal)) {
-        // The symlink target walk consumes the remaining path parts.
-        const r = follow(child, parts.slice(i + 1), traversed);
-        return { parent: r.parent, name: r.name, node: r.node, path: abs };
-      }
-      if (!isLast && child.kind !== 'dir') throw fsError('ENOTDIR', syscall, p);
-      parent = node; name = seg; node = child; traversed.push(seg);
+// ── 4. Volume creation + seeding ────────────────────────────────────────────
+function getUmask() {
+  try {
+    if (typeof process !== 'undefined' && typeof process.umask === 'function') {
+      return process.umask();
     }
-    return { parent, name, node, path: abs };
-  }
+  } catch { /* ignore */ }
+  const rt = getRuntime();
+  try {
+    if (rt && rt.process && typeof rt.process.umask === 'function') return rt.process.umask();
+  } catch { /* ignore */ }
+  return 0o022;
+}
 
-  statNode(node, bigint) {
-    const size = node.kind === 'file' ? node.data.length
-      : node.kind === 'symlink' ? bytesFromString(node.linkpath).length : 0;
-    const mk = bigint ? (v) => BigInt(v) : (v) => v;
-    const st = new Stats();
-    st.dev = mk(1); st.ino = mk(node.ino); st.mode = mk(node.mode);
-    st.nlink = mk(node.nlink); st.uid = mk(node.uid); st.gid = mk(node.gid);
-    st.rdev = mk(node.rdev); st.size = mk(size); st.blksize = mk(4096);
-    st.blocks = mk(Math.ceil(size / 512));
-    if (bigint) {
-      st.atimeNs = BigInt(Math.round(node.atimeMs * 1e6));
-      st.mtimeNs = BigInt(Math.round(node.mtimeMs * 1e6));
-      st.ctimeNs = BigInt(Math.round(node.ctimeMs * 1e6));
-      st.birthtimeNs = BigInt(Math.round(node.birthtimeMs * 1e6));
-    }
-    st.atimeMs = mk(node.atimeMs); st.mtimeMs = mk(node.mtimeMs);
-    st.ctimeMs = mk(node.ctimeMs); st.birthtimeMs = mk(node.birthtimeMs);
-    return st;
-  }
-
-  mkdirp(abs, mode, syscall, path) {
-    const parts = abs.split('/').filter(Boolean);
-    let node = this.root;
-    for (const seg of parts) {
-      let child = node.children.get(seg);
-      if (!child) {
-        child = new VNode('dir', S_IFDIR | applyUmask(mode));
-        node.children.set(seg, child);
-        node.mtimeMs = node.ctimeMs = nowMs();
-      } else if (child.kind !== 'dir') {
-        throw fsError('ENOTDIR', syscall, path);
-      }
-      node = child;
-    }
-    return node;
-  }
-
-  // Serialisation view for the host runtime: { absPath: contents }.
-  toJSON() {
-    const out = {};
-    const walk = (node, prefix) => {
-      for (const [name, child] of node.children) {
-        const p = prefix + '/' + name;
-        if (child.kind === 'dir') walk(child, p);
-        else if (child.kind === 'file') out[p] = toBuffer(child.data);
-      }
-    };
-    walk(this.root, '');
-    return out;
-  }
-
-  fromJSON(files) {
-    for (const p of Object.keys(files)) {
-      const abs = isAbsolute(p) ? normalize(p) : '/' + normalize(p);
-      const dir = dirname(abs);
-      if (dir !== '/') this.mkdirp(dir, 0o777, 'open', p);
-      const data = typeof files[p] === 'string' ? bytesFromString(files[p])
-        : isUint8Array(files[p]) ? files[p].slice()
-        : Array.isArray(files[p]) ? Uint8Array.from(files[p])
-        : bytesFromString(String(files[p]));
-      const { parent, name, node } = this.lookup(abs, 'open');
-      const file = new VNode('file', S_IFREG | 0o666);
-      file.data = data;
-      if (node) { parent.children.set(name, file); }
-      else parent.children.set(name, file);
-    }
+function seedVolume(vol, files) {
+  if (!files || typeof files !== 'object') return;
+  for (const rawPath of Object.keys(files)) {
+    const p = toPathString(rawPath);
+    const data = files[rawPath];
+    try {
+      const dir = posixDirname(p);
+      if (dir !== '/') vol.mkdirSync(dir, { recursive: true });
+      vol.writeFileSync(p, data);
+    } catch { /* best-effort seeding */ }
   }
 }
 
-// ── 8. Stats / Dirent / StatFs ───────────────────────────────────────────────
+function createVolume() {
+  const vol = new Volume();
+  // Real Node returns 0 for reads positioned at/beyond EOF; memfs throws
+  // ERR_OUT_OF_RANGE. Short-circuit here (no cursor is touched, so this is
+  // safe at the volume level for every read path).
+  const origReadBase = vol.readBase.bind(vol);
+  vol.readBase = function (fd, buffer, offset, length, position) {
+    if (typeof position === 'number' && position >= 0) {
+      try {
+        if (position >= vol.fstatSync(fd).size) return 0;
+      } catch { /* fall through; orig throws the real error */ }
+    }
+    return origReadBase(fd, buffer, offset, length, position);
+  };
+  const rt = getRuntime();
+  if (rt && rt.__USER_FILES__) seedVolume(vol, rt.__USER_FILES__);
+  return vol;
+}
+
+// memfs hardcodes default creation modes; real Node applies the process
+// umask. Wrap open/openSync/mkdir/mkdirSync so modes respect the umask.
+function applyUmask(mode) {
+  if (mode === undefined || mode === null) return mode;
+  const m = Number(mode);
+  if (!Number.isInteger(m)) return mode;
+  return m & ~getUmask();
+}
+
+// ── 5. Node-shaped Stats ────────────────────────────────────────────────────
+// Enumerable own keys exactly as in real Node:
+//   dev,mode,nlink,uid,gid,rdev,blksize,ino,size,blocks,
+//   atimeMs,mtimeMs,ctimeMs,birthtimeMs (+ *Ns for bigint).
+// Date fields are prototype getters, not own enumerable properties.
+const STAT_KEYS = ['dev', 'mode', 'nlink', 'uid', 'gid', 'rdev', 'blksize',
+  'ino', 'size', 'blocks', 'atimeMs', 'mtimeMs', 'ctimeMs', 'birthtimeMs'];
+const BIGINT_NS_KEYS = ['atimeNs', 'mtimeNs', 'ctimeNs', 'birthtimeNs'];
+
+const S_IFMT = 0o170000, S_IFREG = 0o100000, S_IFDIR = 0o040000,
+  S_IFLNK = 0o120000, S_IFBLK = 0o060000, S_IFCHR = 0o020000,
+  S_IFIFO = 0o010000, S_IFSOCK = 0o140000;
+
 class Stats {
-  constructor() {
-    // Property order matches Node's Stats: dev,mode,nlink,uid,gid,rdev,
-    // blksize,ino,size,blocks,atimeMs,mtimeMs,ctimeMs,birthtimeMs.
-    // atime/mtime/ctime/birthtime are prototype getters (not own keys).
-    this.dev = 0; this.mode = 0; this.nlink = 0; this.uid = 0; this.gid = 0;
-    this.rdev = 0; this.blksize = 4096; this.ino = 0; this.size = 0;
-    this.blocks = 0;
-    this.atimeMs = 0; this.mtimeMs = 0; this.ctimeMs = 0; this.birthtimeMs = 0;
+  constructor(m, bigint = false) {
+    const asNum = (v) => typeof v === 'bigint' ? Number(v) : Number(v);
+    const num = (v) => bigint ? BigInt(Math.trunc(asNum(v) || 0)) : (asNum(v) || 0);
+    this.dev = num(m.dev || 0);
+    this.mode = num(m.mode || 0);
+    this.nlink = num(m.nlink || 0);
+    this.uid = num(m.uid || 0);
+    this.gid = num(m.gid || 0);
+    this.rdev = num(m.rdev || 0);
+    this.blksize = num(m.blksize || 4096);
+    this.ino = num(m.ino || 0);
+    this.size = num(m.size || 0);
+    this.blocks = num(m.blocks || 0);
+    const ms = (v) => asNum(v) || 0;
+    const atimeMs = ms(m.atimeMs), mtimeMs = ms(m.mtimeMs),
+      ctimeMs = ms(m.ctimeMs), birthtimeMs = ms(m.birthtimeMs);
+    this.atimeMs = bigint ? BigInt(Math.trunc(atimeMs)) : atimeMs;
+    this.mtimeMs = bigint ? BigInt(Math.trunc(mtimeMs)) : mtimeMs;
+    this.ctimeMs = bigint ? BigInt(Math.trunc(ctimeMs)) : ctimeMs;
+    this.birthtimeMs = bigint ? BigInt(Math.trunc(birthtimeMs)) : birthtimeMs;
+    if (bigint) {
+      const ns = (v) => BigInt(Math.trunc(v * 1e6));
+      this.atimeNs = ns(atimeMs); this.mtimeNs = ns(mtimeMs);
+      this.ctimeNs = ns(ctimeMs); this.birthtimeNs = ns(birthtimeMs);
+    }
+    // Backing millisecond values for the prototype Date getters.
+    Object.defineProperties(this, {
+      _atimeMs: { value: atimeMs }, _mtimeMs: { value: mtimeMs },
+      _ctimeMs: { value: ctimeMs }, _birthtimeMs: { value: birthtimeMs },
+    });
   }
-  _checkModeProperty(property) { return (this.mode & S_IFMT) === property; }
-  isDirectory() { return this._checkModeProperty(S_IFDIR); }
-  isFile() { return this._checkModeProperty(S_IFREG); }
-  isBlockDevice() { return this._checkModeProperty(0o060000); }
-  isCharacterDevice() { return this._checkModeProperty(0o020000); }
-  isSymbolicLink() { return this._checkModeProperty(S_IFLNK); }
-  isFIFO() { return this._checkModeProperty(0o010000); }
-  isSocket() { return this._checkModeProperty(0o140000); }
+  get atime() { return new Date(this._atimeMs); }
+  get mtime() { return new Date(this._mtimeMs); }
+  get ctime() { return new Date(this._ctimeMs); }
+  get birthtime() { return new Date(this._birthtimeMs); }
+  isFile() { return (Number(this.mode) & S_IFMT) === S_IFREG; }
+  isDirectory() { return (Number(this.mode) & S_IFMT) === S_IFDIR; }
+  isSymbolicLink() { return (Number(this.mode) & S_IFMT) === S_IFLNK; }
+  isBlockDevice() { return (Number(this.mode) & S_IFMT) === S_IFBLK; }
+  isCharacterDevice() { return (Number(this.mode) & S_IFMT) === S_IFCHR; }
+  isFIFO() { return (Number(this.mode) & S_IFMT) === S_IFIFO; }
+  isSocket() { return (Number(this.mode) & S_IFMT) === S_IFSOCK; }
 }
-// Date views are prototype accessors in Node, not own enumerable keys.
-for (const [key, ms] of [['atime', 'atimeMs'], ['mtime', 'mtimeMs'], ['ctime', 'ctimeMs'], ['birthtime', 'birthtimeMs']]) {
-  Object.defineProperty(Stats.prototype, key, {
-    get() { return new Date(Number(this[ms])); },
-    enumerable: false, configurable: true,
-  });
+
+function toStats(m, options) {
+  const bigint = !!(options && (options.bigint || options === true));
+  return new Stats(m, bigint);
 }
+
+// ── 6. Node-shaped Dirent ───────────────────────────────────────────────────
+// Enumerable own keys: name, parentPath only.
 class Dirent {
-  constructor(name, node, parentPath) {
+  constructor(name, parentPath, mode) {
     this.name = name;
     this.parentPath = parentPath;
-    // Internal slots are non-enumerable, like Node's Dirent.
-    Object.defineProperties(this, {
-      _mode: { value: node.mode, enumerable: false, writable: true },
-      _kind: { value: node.kind, enumerable: false, writable: true },
-    });
+    // Non-enumerable: real Node Dirent exposes only name/parentPath.
+    Object.defineProperty(this, '_mode', { value: mode, enumerable: false });
   }
-  _checkModeProperty(property) { return (this._mode & S_IFMT) === property; }
-  isDirectory() { return this._checkModeProperty(S_IFDIR); }
-  isFile() { return this._checkModeProperty(S_IFREG); }
-  isBlockDevice() { return this._checkModeProperty(0o060000); }
-  isCharacterDevice() { return this._checkModeProperty(0o020000); }
-  isSymbolicLink() { return this._checkModeProperty(S_IFLNK); }
-  isFIFO() { return this._checkModeProperty(0o010000); }
-  isSocket() { return this._checkModeProperty(0o140000); }
-}
-class StatFs {
-  constructor() {
-    this.type = 0; this.bsize = 4096; this.frsize = 4096; this.blocks = 1024 * 1024;
-    this.bfree = 1024 * 1024; this.bavail = 1024 * 1024;
-    this.files = 1024 * 1024; this.ffree = 1024 * 1024;
-  }
-}
-class Dir {
-  constructor(vol, abs, node) {
-    // No own enumerable keys, like Node's Dir (`path` stays readable).
-    Object.defineProperties(this, {
-      _vol: { value: vol, enumerable: false, writable: true },
-      path: { value: abs, enumerable: false, writable: true },
-      _entries: { value: [...node.children.keys()].sort(), enumerable: false, writable: true },
-      _idx: { value: 0, enumerable: false, writable: true },
-      _closed: { value: false, enumerable: false, writable: true },
-    });
-  }
-  _assertOpen() { if (this._closed) throw fsError('EBADF', 'readdir', this.path); }
-  readSync() {
-    this._assertOpen();
-    if (this._idx >= this._entries.length) return null;
-    const name = this._entries[this._idx++];
-    const node = this._vol.lookup(this.path + '/' + name, 'readdir').node;
-    return new Dirent(name, node, this.path);
-  }
-  async read() { return this.readSync(); }
-  closeSync() { this._closed = true; }
-  async close() { this.closeSync(); }
-  async *[Symbol.asyncIterator]() {
-    let d;
-    while ((d = this.readSync()) !== null) yield d;
-  }
+  isFile() { return (this._mode & S_IFMT) === S_IFREG; }
+  isDirectory() { return (this._mode & S_IFMT) === S_IFDIR; }
+  isSymbolicLink() { return (this._mode & S_IFMT) === S_IFLNK; }
+  isBlockDevice() { return (this._mode & S_IFMT) === S_IFBLK; }
+  isCharacterDevice() { return (this._mode & S_IFMT) === S_IFCHR; }
+  isFIFO() { return (this._mode & S_IFMT) === S_IFIFO; }
+  isSocket() { return (this._mode & S_IFMT) === S_IFSOCK; }
 }
 
-// ── 9. Flags, modes, fd table ────────────────────────────────────────────────
-function parseFileFlags(flag) {
-  if (typeof flag === 'number') {
-    const O = constants;
-    const f = { read: false, write: false, create: false, exclusive: false, truncate: false, append: false };
-    const acc = flag & 3;
-    if (acc === O.O_RDONLY) f.read = true;
-    else if (acc === O.O_WRONLY) f.write = true;
-    else if (acc === O.O_RDWR) { f.read = true; f.write = true; }
-    else throw makeArgValueError('flags', 'must be a valid open flag', flag);
-    if (flag & O.O_CREAT) f.create = true;
-    if (flag & O.O_EXCL) f.exclusive = true;
-    if (flag & O.O_TRUNC) f.truncate = true;
-    if (flag & O.O_APPEND) f.append = true;
-    return f;
+// ── 7. API builder ──────────────────────────────────────────────────────────
+function buildApi(vol) {
+  const fs = createFsFromVolume(vol);
+
+  // ── fd helpers ──
+  function fdEntry(fd) {
+    return vol.fds ? vol.fds[fd] : undefined;
   }
-  if (typeof flag !== 'string') throw makeArgTypeError('flags', ['string', 'number'], flag);
-  const f = { read: false, write: false, create: false, exclusive: false, truncate: false, append: false };
-  switch (flag) {
-    case 'r': f.read = true; break;
-    case 'rs': case 'sr': f.read = true; break;
-    case 'r+': case 'rs+': case 'sr+': f.read = true; f.write = true; break;
-    case 'w': f.write = true; f.create = true; f.truncate = true; break;
-    case 'wx': case 'xw': f.write = true; f.create = true; f.truncate = true; f.exclusive = true; break;
-    case 'w+': f.read = true; f.write = true; f.create = true; f.truncate = true; break;
-    case 'wx+': case 'xw+': f.read = true; f.write = true; f.create = true; f.truncate = true; f.exclusive = true; break;
-    case 'a': f.write = true; f.create = true; f.append = true; break;
-    case 'ax': case 'xa': f.write = true; f.create = true; f.append = true; f.exclusive = true; break;
-    case 'a+': f.read = true; f.write = true; f.create = true; f.append = true; break;
-    case 'ax+': case 'xa+': f.read = true; f.write = true; f.create = true; f.append = true; f.exclusive = true; break;
-    default: {
-      const err = new TypeError(`Unknown file open flag: '${flag}'`);
-      err.code = 'ERR_INVALID_ARG_VALUE';
+  function getPosition(fd) {
+    const f = fdEntry(fd);
+    return f ? f.position : undefined;
+  }
+  function setPosition(fd, pos) {
+    const f = fdEntry(fd);
+    if (f && typeof pos === 'number') f.position = pos;
+  }
+  function checkFdReadable(fd, syscallName) {
+    const f = fdEntry(fd);
+    if (!f) {
+      const err = makeFsError('EBADF', syscallName, undefined, 'bad file descriptor');
+      err.errno = -9;
+      throw err;
+    }
+    // O_RDONLY=0, O_RDWR=2 are readable; O_WRONLY=1, O_APPEND-only are not.
+    const accmode = f.flags & 3;
+    if (accmode === 1) {
+      const err = makeFsError('EBADF', syscallName, undefined, 'bad file descriptor');
+      err.errno = -9;
       throw err;
     }
   }
-  return f;
-}
-function parseMode(mode, def) {
-  if (mode === undefined) return def;
-  if (typeof mode === 'string') {
-    if (!/^[0-7]+$/.test(mode)) throw makeArgValueError('mode', 'must be a valid octal string', mode);
-    return parseInt(mode, 8);
-  }
-  if (typeof mode !== 'number' || !Number.isInteger(mode)) throw makeArgTypeError('mode', ['string', 'integer'], mode);
-  return mode;
-}
-function applyMode(node, mode, syscall, path) {
-  const m = parseMode(mode, 0o666);
-  node.mode = (node.mode & S_IFMT) | (m & 0o7777);
-  node.ctimeMs = nowMs();
-}
-function toUnixTimestamp(t, name = 'time') {
-  if (typeof t === 'number') {
-    if (!Number.isFinite(t)) throw makeArgValueError(name, 'must be finite', t);
-    return t;
-  }
-  if (typeof t === 'string') {
-    const n = Number(t);
-    if (!Number.isFinite(n) || t.trim() === '') throw makeArgValueError(name, 'must be numeric', t);
-    return n;
-  }
-  if (t instanceof Date) return t.getTime() / 1000;
-  throw makeArgTypeError(name, ['number', 'string', 'Date'], t);
-}
-const RANDOM_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-function randomChars(n) {
-  let s = '';
-  const rnd = (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.getRandomValues)
-    ? globalThis.crypto.getRandomValues(new Uint8Array(n))
-    : null;
-  for (let i = 0; i < n; i++) {
-    const v = rnd ? rnd[i] : Math.floor(Math.random() * 256);
-    s += RANDOM_CHARS[v % 62];
-  }
-  return s;
-}
-
-// The API is built per-volume so the singleton owns exactly one volume.
-function buildApi(vol) {
-  function getFd(fd, syscall) {
-    if (typeof fd !== 'number' || !Number.isInteger(fd)) throw makeArgTypeError('fd', 'integer', fd);
-    const h = vol.fds.get(fd);
-    if (!h) throw fsError('EBADF', syscall, undefined, 'bad file descriptor');
-    return h;
+  function checkFdWritable(fd, syscallName) {
+    const f = fdEntry(fd);
+    if (!f) {
+      const err = makeFsError('EBADF', syscallName, undefined, 'bad file descriptor');
+      err.errno = -9;
+      throw err;
+    }
+    const accmode = f.flags & 3;
+    if (accmode === 0) {
+      const err = makeFsError('EBADF', syscallName, undefined, 'bad file descriptor');
+      err.errno = -9;
+      throw err;
+    }
   }
 
-  // ── 10. Synchronous API ──────────────────────────────────────────────────
-  function accessSync(p, mode = constants.F_OK) {
-    const path = getValidatedPath(p);
-    if (typeof mode !== 'number' || !Number.isInteger(mode)) throw makeArgTypeError('mode', 'integer', mode);
-    const { node } = vol.lookup(path, 'access');
-    if (!node) throw fsError('ENOENT', 'access', path);
-    if (mode === constants.F_OK) return undefined;
-    const m = node.mode;
-    if ((mode & constants.R_OK) && !(m & 0o444)) throw fsError('EACCES', 'access', path);
-    if ((mode & constants.W_OK) && !(m & 0o222)) throw fsError('EACCES', 'access', path);
-    if ((mode & constants.X_OK) && !(m & 0o111)) throw fsError('EACCES', 'access', path);
-    return undefined;
+  // Normalize raw ArrayBuffer/DataView inputs for read/write data args.
+  function normalizeDataArg(data) {
+    if (typeof ArrayBuffer !== 'undefined' && data instanceof ArrayBuffer) {
+      return new Uint8Array(data);
+    }
+    if (typeof DataView !== 'undefined' && data instanceof DataView) {
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+    return data;
   }
-  function existsSync(p) {
+  // Validate write data like real Node (string | Buffer | TypedArray | DataView).
+  function validateDataArg(data, name) {
+    if (typeof data === 'string') return;
+    if (typeof Buffer !== 'undefined' && Buffer.isBuffer(data)) return;
+    if (typeof ArrayBuffer !== 'undefined' && (
+      data instanceof ArrayBuffer || ArrayBuffer.isView(data))) return;
+    // Blob is allowed in real Node's writeFile.
+    if (typeof Blob !== 'undefined' && data instanceof Blob) return;
+    throw errInvalidArgType(name || 'data',
+      ['string', 'Buffer', 'TypedArray', 'DataView'], data);
+  }
+
+  // ── generic wrappers ──
+  function wrapSync(name, impl, validatePathFirst) {
+    const orig = fs[name];
+    fs[name] = function (...args) {
+      let result;
+      try {
+        if (validatePathFirst) validatePath(args[0]);
+        result = (impl || orig).apply(this, args);
+      } catch (e) { throw enrichErr(e, name); }
+      emitFs('fs', name, ...args, result);
+      return result;
+    };
+  }
+  // Node callback result arity (number of args after err) per function.
+  // memfs sometimes passes extra undefined/null args; trim to match Node.
+  const cbResultArity = {
+    close: 0, unlink: 0, mkdir: 1, rmdir: 0, rm: 0, rename: 0,
+    link: 0, symlink: 0, chmod: 0, fchmod: 0, lchmod: 0,
+    chown: 0, fchown: 0, lchown: 0, utimes: 0, futimes: 0, lutimes: 0,
+    fsync: 0, fdatasync: 0, truncate: 0, ftruncate: 0,
+    write: 2, // (bytesWritten, buffer)
+    read: 2,  // (bytesRead, buffer)
+    readv: 2, writev: 2,
+    open: 1, opendir: 1, mkdtemp: 1,
+    readdir: 1, readFile: 1, appendFile: 0, writeFile: 0, copyFile: 0, cp: 0,
+    stat: 1, lstat: 1, fstat: 1, statfs: 1,
+    readlink: 1, realpath: 1, access: 0, exists: 1,
+    mkdtempDisposable: 1,
+  };
+  function wrapCb(name, impl, validatePathFirst) {
+    const orig = fs[name];
+    const arity = cbResultArity[name];
+    fs[name] = function (...args) {
+      const last = args[args.length - 1];
+      if (typeof last !== 'function') throw errInvalidArgType('cb', 'function', last);
+      const userCb = last;
+      args[args.length - 1] = function (err, ...rest) {
+        if (err) err = enrichErr(err, name);
+        const trimmed = arity !== undefined ? rest.slice(0, arity) : rest;
+        emitFs('fs', name, ...args.slice(0, -1), trimmed[0]);
+        userCb(err, ...trimmed);
+      };
+      try {
+        if (validatePathFirst) validatePath(args[0]);
+        return (impl || orig).apply(this, args);
+      } catch (e) { throw enrichErr(e, name); }
+    };
+  }
+  function wrapPromise(p, name, impl) {
+    const orig = (impl ? null : p[name]);
+    p[name] = function (...args) {
+      let result;
+      try {
+        result = (impl || orig).apply(this, args);
+      } catch (e) { return Promise.reject(enrichErr(e, name)); }
+      return Promise.resolve(result).then(
+        (val) => { emitFs('fs', `promises.${name}`, ...args, val); return val; },
+        (err) => { emitFs('fs', `promises.${name}`, ...args, undefined); throw enrichErr(err, name); }
+      );
+    };
+  }
+
+  // ── stat/lstat/fstat → NodeStats ──
+  for (const name of ['statSync', 'lstatSync']) {
+    const orig = fs[name];
+    fs[name] = function (p, options) {
+      validatePath(p);
+      let m;
+      try {
+        m = orig.call(this, toPathString(p), options);
+      } catch (e) { throw enrichErr(e, name); }
+      const st = toStats(m, options);
+      emitFs('fs', name, p, st);
+      return st;
+    };
+  }
+  {
+    const orig = fs.fstatSync;
+    fs.fstatSync = function (fd, options) {
+      let m;
+      try {
+        m = orig.call(this, fd, options);
+      } catch (e) { throw enrichErr(e, 'fstatSync'); }
+      const st = toStats(m, options);
+      emitFs('fs', 'fstatSync', fd, st);
+      return st;
+    };
+  }
+  for (const name of ['stat', 'lstat']) {
+    const orig = fs[name];
+    fs[name] = function (p, options, callback) {
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      validatePath(p);
+      orig.call(this, toPathString(p), options, (err, m) => {
+        if (err) return callback(enrichErr(err, name));
+        const st = toStats(m, options);
+        emitFs('fs', name, p, st);
+        callback(null, st);
+      });
+    };
+  }
+  {
+    const orig = fs.fstat;
+    fs.fstat = function (fd, options, callback) {
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      orig.call(this, fd, options, (err, m) => {
+        if (err) return callback(enrichErr(err, 'fstat'));
+        const st = toStats(m, options);
+        emitFs('fs', 'fstat', fd, st);
+        callback(null, st);
+      });
+    };
+  }
+
+  // ── readdir/readdirSync: Dirent shape + recursive ──
+  function readdirImpl(p, options, wantDirent) {
+    const names = vol.readdirSync(p);
+    if (options && options.recursive) {
+      const out = [];
+      const walk = (dir, rel) => {
+        for (const name of vol.readdirSync(dir)) {
+          const full = dir + '/' + name;
+          const rp = rel ? rel + '/' + name : name;
+          let st;
+          try { st = vol.lstatSync(full); } catch { continue; }
+          if (wantDirent) out.push(new Dirent(name, dir, st.mode));
+          else out.push(rp);
+          if (st.isDirectory()) walk(full, rp);
+        }
+      };
+      walk(p, '');
+      return out;
+    }
+    if (wantDirent) {
+      return names.map((name) => {
+        let mode = 0;
+        try { mode = vol.lstatSync(p + '/' + name).mode; } catch { /* ignore */ }
+        return new Dirent(name, p, mode);
+      });
+    }
+    return names;
+  }
+  {
+    const orig = fs.readdirSync;
+    fs.readdirSync = function (p, options) {
+      validatePath(p);
+      const ps = toPathString(p);
+      let result;
+      try {
+        if (options && (options.withFileTypes || options.recursive)) {
+          result = readdirImpl(ps, options, !!(options.withFileTypes));
+        } else {
+          result = orig.call(this, ps, options);
+        }
+      } catch (e) { throw enrichErr(e, 'readdirSync'); }
+      emitFs('fs', 'readdirSync', p, result);
+      return result;
+    };
+  }
+  {
+    const orig = fs.readdir;
+    fs.readdir = function (p, options, callback) {
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      validatePath(p);
+      const ps = toPathString(p);
+      const done = (err, result) => {
+        if (err) return callback(enrichErr(err, 'readdir'));
+        emitFs('fs', 'readdir', p, result);
+        callback(null, result);
+      };
+      if (options && (options.withFileTypes || options.recursive)) {
+        try {
+          done(null, readdirImpl(ps, options, !!(options.withFileTypes)));
+        } catch (e) { done(e); }
+        return;
+      }
+      orig.call(this, ps, options, (err, result) => {
+        if (err) return done(err);
+        done(null, result);
+      });
+    };
+  }
+
+  // ── readSync/read: EBADF on wrong-direction fd, cursor preservation ──
+  function parseReadArgs(args) {
+    // readSync(fd, buffer, offset, length, position) or readSync(fd, options)
+    const [fd, bufferOrOptions, offset, length, position] = args;
+    if (bufferOrOptions && typeof bufferOrOptions === 'object' &&
+        !(bufferOrOptions instanceof Uint8Array) && !ArrayBuffer.isView(bufferOrOptions)) {
+      const o = bufferOrOptions;
+      return { fd, buffer: o.buffer, offset: o.offset || 0, length: o.length, position: o.position, opts: true };
+    }
+    return { fd, buffer: bufferOrOptions, offset, length, position };
+  }
+  {
+    const orig = fs.readSync;
+    fs.readSync = function (...args) {
+      const { fd, buffer, offset, length, position } = parseReadArgs(args);
+      checkFdReadable(fd, 'read');
+      let buf = buffer;
+      if (!(buf instanceof Uint8Array) && !ArrayBuffer.isView(buf)) {
+        // allocate like Node does when buffer is omitted
+        const len = typeof length === 'number' ? length : 16384;
+        buf = typeof Buffer !== 'undefined' ? Buffer.alloc(len) : new Uint8Array(len);
+      }
+      const off = offset || 0;
+      const len = length === undefined || length === null ? buf.byteLength - off : length;
+      const savedPos = typeof position === 'number' ? getPosition(fd) : undefined;
+      let n;
+      try {
+        n = orig.call(this, fd, buf, off, len, position === undefined ? null : position);
+      } catch (e) { throw enrichErr(e, 'readSync'); }
+      finally {
+        if (savedPos !== undefined) setPosition(fd, savedPos);
+      }
+      const result = args.length === 2 || (args[1] && typeof args[1] === 'object' && !(args[1] instanceof Uint8Array) && !ArrayBuffer.isView(args[1]))
+        ? { bytesRead: n, buffer: buf }
+        : n;
+      emitFs('fs', 'readSync', fd, result);
+      return result;
+    };
+  }
+  {
+    const orig = fs.read;
+    fs.read = function (...args) {
+      const callback = args[args.length - 1];
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      const { fd, buffer, offset, length, position } = parseReadArgs(args.slice(0, -1));
+      let buf = buffer;
+      if (!(buf instanceof Uint8Array) && !ArrayBuffer.isView(buf)) {
+        const len = typeof length === 'number' ? length : 16384;
+        buf = typeof Buffer !== 'undefined' ? Buffer.alloc(len) : new Uint8Array(len);
+      }
+      const off = offset || 0;
+      const len = length === undefined || length === null ? buf.byteLength - off : length;
+      try {
+        checkFdReadable(fd, 'read');
+      } catch (e) { nextTick(callback, enrichErr(e, 'read')); return; }
+      const savedPos = typeof position === 'number' ? getPosition(fd) : undefined;
+      const cb = (err, bytesRead, b) => {
+        if (savedPos !== undefined) setPosition(fd, savedPos);
+        if (err) return callback(enrichErr(err, 'read'));
+        emitFs('fs', 'read', fd, bytesRead);
+        callback(null, bytesRead, b || buf);
+      };
+      try {
+        return orig.call(this, fd, buf, off, len, position === undefined ? null : position, cb);
+      } catch (e) { throw enrichErr(e, 'read'); }
+    };
+  }
+
+  // ── writeSync/write: EBADF on wrong-direction fd, cursor preservation ──
+  {
+    const orig = fs.writeSync;
+    fs.writeSync = function (fd, data, ...rest) {
+      checkFdWritable(fd, 'write');
+      validateDataArg(data, 'buffer');
+      data = normalizeDataArg(data);
+      // writeSync(fd, string[, position[, encoding]]) or writeSync(fd, buffer, offset, length, position)
+      let position;
+      if (typeof data === 'string') {
+        position = rest[0];
+      } else {
+        position = rest[2];
+      }
+      const savedPos = typeof position === 'number' ? getPosition(fd) : undefined;
+      let n;
+      try {
+        n = orig.call(this, fd, data, ...rest);
+      } catch (e) { throw enrichErr(e, 'writeSync'); }
+      finally {
+        if (savedPos !== undefined) setPosition(fd, savedPos);
+      }
+      emitFs('fs', 'writeSync', fd, n);
+      return n;
+    };
+  }
+  {
+    const orig = fs.write;
+    fs.write = function (fd, data, ...rest) {
+      const callback = rest[rest.length - 1];
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      const args = rest.slice(0, -1);
+      try {
+        checkFdWritable(fd, 'write');
+        validateDataArg(data, 'buffer');
+      } catch (e) {
+        nextTick(callback, enrichErr(e, 'write'));
+        return;
+      }
+      data = normalizeDataArg(data);
+      let position;
+      if (typeof data === 'string') position = args[0];
+      else position = args[2];
+      const savedPos = typeof position === 'number' ? getPosition(fd) : undefined;
+      const cb = (err, written, d) => {
+        if (savedPos !== undefined) setPosition(fd, savedPos);
+        if (err) return callback(enrichErr(err, 'write'));
+        emitFs('fs', 'write', fd, written);
+        callback(null, written, d);
+      };
+      try {
+        return orig.call(this, fd, data, ...args, cb);
+      } catch (e) { throw enrichErr(e, 'write'); }
+    };
+  }
+
+  // ── readv/writev (+Sync) ──
+  function readvSyncImpl(fd, buffers, position) {
+    checkFdReadable(fd, 'readv');
+    if (!Array.isArray(buffers)) throw errInvalidArgType('buffers', 'Array', buffers);
+    const savedPos = typeof position === 'number' ? getPosition(fd) : undefined;
+    let total = 0;
     try {
-      if (typeof p !== 'string' && !isUint8Array(p) && !(typeof URL !== 'undefined' && p instanceof URL)) return false;
-      accessSync(p);
+      for (const b of buffers) {
+        const buf = b instanceof Uint8Array || ArrayBuffer.isView(b) ? b
+          : (typeof Buffer !== 'undefined' ? Buffer.alloc(0) : new Uint8Array(0));
+        const n = vol.readSync(fd, buf, 0, buf.byteLength,
+          typeof position === 'number' ? position + total : null);
+        total += n;
+        if (n < buf.byteLength) break;
+      }
+    } finally {
+      if (savedPos !== undefined) setPosition(fd, savedPos);
+    }
+    return total;
+  }
+  function writevSyncImpl(fd, buffers, position) {
+    checkFdWritable(fd, 'writev');
+    if (!Array.isArray(buffers)) throw errInvalidArgType('buffers', 'Array', buffers);
+    const savedPos = typeof position === 'number' ? getPosition(fd) : undefined;
+    let total = 0;
+    try {
+      for (const b of buffers) {
+        const buf = normalizeDataArg(b);
+        const n = vol.writeSync(fd, buf, 0, buf.byteLength,
+          typeof position === 'number' ? position + total : null);
+        total += n;
+        if (n < buf.byteLength) break;
+      }
+    } finally {
+      if (savedPos !== undefined) setPosition(fd, savedPos);
+    }
+    return total;
+  }
+  fs.readvSync = function (fd, buffers, position) {
+    let result;
+    try { result = readvSyncImpl(fd, buffers, position); }
+    catch (e) { throw enrichErr(e, 'readvSync'); }
+    emitFs('fs', 'readvSync', fd, result);
+    return result;
+  };
+  fs.writevSync = function (fd, buffers, position) {
+    let result;
+    try { result = writevSyncImpl(fd, buffers, position); }
+    catch (e) { throw enrichErr(e, 'writevSync'); }
+    emitFs('fs', 'writevSync', fd, result);
+    return result;
+  };
+  fs.readv = function (fd, buffers, position, callback) {
+    if (typeof position === 'function') { callback = position; position = undefined; }
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    const run = () => {
+      try {
+        const bytesRead = readvSyncImpl(fd, buffers, position);
+        emitFs('fs', 'readv', fd, bytesRead);
+        callback(null, bytesRead, buffers);
+      } catch (e) { callback(enrichErr(e, 'readv')); }
+    };
+    nextTick(run);
+  };
+  fs.writev = function (fd, buffers, position, callback) {
+    if (typeof position === 'function') { callback = position; position = undefined; }
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    const run = () => {
+      try {
+        const bytesWritten = writevSyncImpl(fd, buffers, position);
+        emitFs('fs', 'writev', fd, bytesWritten);
+        callback(null, bytesWritten, buffers);
+      } catch (e) { callback(enrichErr(e, 'writev')); }
+    };
+    nextTick(run);
+  };
+
+  // ── access/accessSync: mode validation + permission enforcement ──
+  function accessCheck(path, mode) {
+    validatePath(path);
+    if (mode === undefined || mode === null) mode = fs.constants.F_OK;
+    if (typeof mode !== 'number' || !Number.isInteger(mode)) {
+      // Real Node's message for a bad access mode.
+      const err = new Error('mode must be int32 or null/undefined');
+      err.code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
+    }
+    const p = toPathString(path);
+    const st = vol.statSync(p); // throws ENOENT
+    const m = st.mode;
+    const fail = () => { throw enrichErr(makeFsError('EACCES', 'access', p, 'permission denied'), 'access'); };
+    if ((mode & fs.constants.W_OK) && !(m & 0o222)) fail();
+    if ((mode & fs.constants.R_OK) && !(m & 0o444)) fail();
+    if ((mode & fs.constants.X_OK) && !(m & 0o111)) fail();
+  }
+  fs.accessSync = function (path, mode) {
+    try { accessCheck(path, mode); }
+    catch (e) { throw enrichErr(e, 'accessSync'); }
+    emitFs('fs', 'accessSync', path, undefined);
+  };
+  fs.access = function (path, mode, callback) {
+    if (typeof mode === 'function') { callback = mode; mode = undefined; }
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    nextTick(() => {
+      try {
+        accessCheck(path, mode);
+        emitFs('fs', 'access', path, undefined);
+        callback(null);
+      } catch (e) { callback(enrichErr(e, 'access')); }
+    });
+  };
+
+  // ── mkdir/mkdirSync: recursive on existing file → EEXIST; umask ──
+  function mkdirImpl(p, options) {
+    const opts = typeof options === 'number' ? { mode: options } : (options || {});
+    if (opts.mode !== undefined) opts.mode = applyUmask(opts.mode);
+    if (opts.recursive) {
+      // Real Node: recursive mkdir on an existing *file* reports EEXIST.
+      let st = null;
+      try { st = vol.statSync(p); } catch { /* ignore */ }
+      if (st && !st.isDirectory()) {
+        throw enrichErr(makeFsError('EEXIST', 'mkdir', p, 'file already exists'), 'mkdir');
+      }
+    }
+    return vol.mkdirSync(p, opts);
+  }
+  {
+    const orig = fs.mkdir;
+    fs.mkdirSync = function (p, options) {
+      validatePath(p);
+      let result;
+      try { result = mkdirImpl(toPathString(p), options); }
+      catch (e) { throw enrichErr(e, 'mkdirSync'); }
+      emitFs('fs', 'mkdirSync', p, result);
+      return result;
+    };
+    fs.mkdir = function (p, options, callback) {
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      validatePath(p);
+      nextTick(() => {
+        try {
+          const result = mkdirImpl(toPathString(p), options);
+          emitFs('fs', 'mkdir', p, result);
+          callback(null, options && options.recursive ? result : undefined);
+        } catch (e) { callback(enrichErr(e, 'mkdir')); }
+      });
+    };
+  }
+
+  // ── rename/renameSync: enforce dir/file type rules (memfs is lax) ──
+  function renameTypeError(code, message, src, dest) {
+    const err = new Error(`${code}: ${message}, rename '${src}' -> '${dest}'`);
+    err.code = code;
+    err.errno = ERRNO_BY_CODE[code];
+    err.syscall = 'rename';
+    err.path = src;
+    return err;
+  }
+  function checkRename(oldPath, newPath) {
+    const src = toPathString(oldPath), dest = toPathString(newPath);
+    let srcSt = null, destSt = null;
+    try { srcSt = vol.statSync(src); } catch { /* ignore */ }
+    try { destSt = vol.statSync(dest); } catch { /* ignore */ }
+    if (srcSt && destSt) {
+      if (srcSt.isDirectory() && !destSt.isDirectory()) {
+        throw renameTypeError('ENOTDIR', 'not a directory', src, dest);
+      }
+      if (!srcSt.isDirectory() && destSt.isDirectory()) {
+        throw renameTypeError('EISDIR', 'illegal operation on a directory', src, dest);
+      }
+    }
+  }
+  {
+    const origSync = fs.renameSync, origCb = fs.rename;
+    fs.renameSync = function (oldPath, newPath) {
+      validatePath(oldPath); validatePath(newPath, 'newPath');
+      try {
+        checkRename(oldPath, newPath);
+        origSync.call(this, toPathString(oldPath), toPathString(newPath));
+      } catch (e) { throw enrichErr(e, 'renameSync'); }
+      emitFs('fs', 'renameSync', oldPath, undefined);
+    };
+    fs.rename = function (oldPath, newPath, callback) {
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      validatePath(oldPath); validatePath(newPath, 'newPath');
+      nextTick(() => {
+        try {
+          checkRename(oldPath, newPath);
+          origCb.call(this, toPathString(oldPath), toPathString(newPath), (err) => {
+            if (err) return callback(enrichErr(err, 'rename'));
+            emitFs('fs', 'rename', oldPath, undefined);
+            callback(null);
+          });
+        } catch (e) { callback(enrichErr(e, 'rename')); }
+      });
+    };
+  }
+
+  // ── unlink/rm: directory errors ──
+  function checkUnlink(p, syscallName) {
+    const ps = toPathString(p);
+    let st = null;
+    try { st = vol.statSync(ps); } catch { /* ignore */ }
+    if (st && st.isDirectory()) {
+      throw enrichErr(makeFsError('EISDIR', syscallName, ps, 'illegal operation on a directory'), syscallName);
+    }
+  }
+  function checkRm(p, options, syscallName) {
+    const ps = toPathString(p);
+    const opts = options || {};
+    let st = null;
+    try { st = vol.statSync(ps); } catch { /* ignore */ }
+    if (st && st.isDirectory() && !opts.recursive && !opts.force) {
+      // Real Node message shape (no code prefix, no quotes, no syscall).
+      const err = new Error(`Path is a directory: rm returned EISDIR (is a directory) ${ps}`);
+      err.code = 'ERR_FS_EISDIR';
+      err.errno = 21;
+      err.syscall = syscallName;
+      err.path = ps;
+      throw err;
+    }
+  }
+  {
+    const origSync = fs.unlinkSync, origCb = fs.unlink;
+    fs.unlinkSync = function (p) {
+      validatePath(p);
+      try {
+        checkUnlink(p, 'unlink');
+        origSync.call(this, toPathString(p));
+      } catch (e) { throw enrichErr(e, 'unlinkSync'); }
+      emitFs('fs', 'unlinkSync', p, undefined);
+    };
+    fs.unlink = function (p, callback) {
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      validatePath(p);
+      nextTick(() => {
+        try {
+          checkUnlink(p, 'unlink');
+          origCb.call(this, toPathString(p), (err) => {
+            if (err) return callback(enrichErr(err, 'unlink'));
+            emitFs('fs', 'unlink', p, undefined);
+            callback(null);
+          });
+        } catch (e) { callback(enrichErr(e, 'unlink')); }
+      });
+    };
+  }
+  for (const [syncName, cbName] of [['rmSync', 'rm'], ['rmdirSync', 'rmdir']]) {
+    const origSync = fs[syncName], origCb = fs[cbName];
+    fs[syncName] = function (p, options) {
+      validatePath(p);
+      try {
+        checkRm(p, options, syncName.replace('Sync', ''));
+        origSync.call(this, toPathString(p), options);
+      } catch (e) { throw enrichErr(e, syncName); }
+      emitFs('fs', syncName, p, undefined);
+    };
+    fs[cbName] = function (p, options, callback) {
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      validatePath(p);
+      nextTick(() => {
+        try {
+          checkRm(p, options, cbName);
+          origCb.call(this, toPathString(p), options, (err) => {
+            if (err) return callback(enrichErr(err, cbName));
+            emitFs('fs', cbName, p, undefined);
+            callback(null);
+          });
+        } catch (e) { callback(enrichErr(e, cbName)); }
+      });
+    };
+  }
+
+  // ── truncate: negative → 0; fractional/NaN → ERR_OUT_OF_RANGE ──
+  function normalizeTruncateLen(len) {
+    if (len === undefined || len === null) return 0;
+    const n = Number(len);
+    if (!Number.isInteger(n)) {
+      const err = new RangeError(`The value of "len" is out of range. It must be an integer. Received ${len}`);
+      err.code = 'ERR_OUT_OF_RANGE';
+      throw err;
+    }
+    return n < 0 ? 0 : n;
+  }
+  {
+    const origSync = fs.truncateSync, origCb = fs.truncate;
+    const origFSync = fs.ftruncateSync, origF = fs.ftruncate;
+    fs.truncateSync = function (p, len) {
+      validatePath(p);
+      let result;
+      try { result = origSync.call(this, toPathString(p), normalizeTruncateLen(len)); }
+      catch (e) { throw enrichErr(e, 'truncateSync'); }
+      emitFs('fs', 'truncateSync', p, result);
+      return result;
+    };
+    fs.truncate = function (p, len, callback) {
+      if (typeof len === 'function') { callback = len; len = undefined; }
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      validatePath(p);
+      let norm;
+      try { norm = normalizeTruncateLen(len); }
+      catch (e) { nextTick(callback, enrichErr(e, 'truncate')); return; }
+      origCb.call(this, toPathString(p), norm, (err) => {
+        if (err) return callback(enrichErr(err, 'truncate'));
+        emitFs('fs', 'truncate', p, undefined);
+        callback(null);
+      });
+    };
+    fs.ftruncateSync = function (fd, len) {
+      let result;
+      try { result = origFSync.call(this, fd, normalizeTruncateLen(len)); }
+      catch (e) { throw enrichErr(e, 'ftruncateSync'); }
+      emitFs('fs', 'ftruncateSync', fd, result);
+      return result;
+    };
+    fs.ftruncate = function (fd, len, callback) {
+      if (typeof len === 'function') { callback = len; len = undefined; }
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      let norm;
+      try { norm = normalizeTruncateLen(len); }
+      catch (e) { nextTick(callback, enrichErr(e, 'ftruncate')); return; }
+      origF.call(this, fd, norm, (err) => {
+        if (err) return callback(enrichErr(err, 'ftruncate'));
+        emitFs('fs', 'ftruncate', fd, undefined);
+        callback(null);
+      });
+    };
+  }
+
+  // ── open/openSync: umask on creation mode ──
+  {
+    const origSync = fs.openSync, origCb = fs.open;
+    fs.openSync = function (p, flags, mode) {
+      validatePath(p);
+      let fd;
+      try { fd = origSync.call(this, toPathString(p), flags, applyUmask(mode)); }
+      catch (e) { throw enrichErr(e, 'openSync'); }
+      emitFs('fs', 'openSync', p, fd);
+      return fd;
+    };
+    fs.open = function (p, flags, mode, callback) {
+      if (typeof mode === 'function') { callback = mode; mode = undefined; }
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      validatePath(p);
+      origCb.call(this, toPathString(p), flags, applyUmask(mode), (err, fd) => {
+        if (err) return callback(enrichErr(err, 'open'));
+        emitFs('fs', 'open', p, fd);
+        callback(null, fd);
+      });
+    };
+  }
+  wrapSync('closeSync');
+  wrapCb('close');
+
+  // ── exists/existsSync: false for invalid paths (never throws) ──
+  fs.existsSync = function (p) {
+    try {
+      if (typeof p !== 'string' && !isUint8ArrayLike(p)) return false;
+      vol.statSync(toPathString(p));
       return true;
     } catch { return false; }
+  };
+  fs.exists = function (p, callback) {
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    nextTick(() => callback(null, fs.existsSync(p)));
+  };
+
+  // ── copyFile: delegate + enrich ──
+  wrapSync('copyFileSync', null, true);
+  wrapCb('copyFile', null, true);
+
+  // ── cp/cpSync ──
+  function cpCheckRange(options) {
+    const mode = options && options.mode;
+    if (mode !== undefined && mode !== null) {
+      const m = Number(mode);
+      if (!Number.isInteger(m) || m < 0 || m > 7) {
+        const err = new RangeError(`The value of "mode" is out of range. It must be >= 0 && <= 7. Received ${mode}`);
+        err.code = 'ERR_OUT_OF_RANGE';
+        throw err;
+      }
+    }
   }
-  function statSync(p, options) {
-    const path = getValidatedPath(p);
+  function cpImpl(src, dest, options) {
     const opts = options || {};
-    if (options !== undefined && (typeof options !== 'object' || options === null)) throw makeArgTypeError('options', 'object', options);
-    try {
-      const { node } = vol.lookup(path, 'stat');
-      if (!node) throw fsError('ENOENT', 'stat', path);
-      return vol.statNode(node, !!opts.bigint);
-    } catch (e) {
-      if (e.code === 'ENOENT' && opts.throwIfNoEntry === false) return undefined;
-      throw e;
+    cpCheckRange(opts);
+    const s = toPathString(src), d = toPathString(dest);
+    let srcLstat = null;
+    try { srcLstat = vol.lstatSync(s); } catch (e) {
+      throw enrichErr(e, 'cp');
     }
-  }
-  function lstatSync(p, options) {
-    const path = getValidatedPath(p);
-    const opts = options || {};
-    if (options !== undefined && (typeof options !== 'object' || options === null)) throw makeArgTypeError('options', 'object', options);
-    try {
-      const { node } = vol.lookup(path, 'lstat', { noFollowFinal: true });
-      if (!node) throw fsError('ENOENT', 'lstat', path);
-      return vol.statNode(node, !!opts.bigint);
-    } catch (e) {
-      if (e.code === 'ENOENT' && opts.throwIfNoEntry === false) return undefined;
-      throw e;
-    }
-  }
-  function fstatSync(fd, options) {
-    const opts = options || {};
-    if (options !== undefined && (typeof options !== 'object' || options === null)) throw makeArgTypeError('options', 'object', options);
-    return vol.statNode(getFd(fd, 'fstat').node, !!opts.bigint);
-  }
-  function statfsSync(p) {
-    const path = getValidatedPath(p);
-    const { node } = vol.lookup(path, 'statfs');
-    if (!node) throw fsError('ENOENT', 'statfs', path);
-    return new StatFs();
-  }
+    const deref = !!opts.dereference;
+    const srcIsDir = srcLstat.isSymbolicLink() && !deref ? false
+      : (() => { try { return vol.statSync(s).isDirectory(); } catch { return srcLstat.isDirectory(); } })();
+    let destSt = null;
+    try { destSt = vol.statSync(d); } catch { /* ignore */ }
 
-  function readFileSync(p, options) {
-    let encoding, flag = 'r';
-    if (typeof options === 'string') encoding = options;
-    else if (options !== undefined && options !== null) {
-      if (typeof options !== 'object') throw makeArgTypeError('options', ['string', 'object'], options);
-      encoding = options.encoding; if (options.flag !== undefined) flag = options.flag;
+    if (s === d) {
+      const err = makeFsError('ERR_FS_CP_EINVAL', 'cp', s, 'Invalid src or dest: cp returned EINVAL');
+      err.errno = 22;
+      throw err;
     }
-    if (encoding !== undefined && encoding !== null) assertEncoding(encoding);
-    let data, node;
-    if (typeof p === 'number') {
-      const h = getFd(p, 'read');
-      if (h.node.kind !== 'file') throw fsError('EISDIR', 'read', h.path);
-      if (!h.readable) throw fsError('EBADF', 'read', h.path, 'bad file descriptor');
-      data = h.node.data.slice(h.position);
-      h.position = h.node.data.length;
-      h.node.atimeMs = nowMs();
-    } else {
-      const path = getValidatedPath(p);
-      parseFileFlags(flag); // validate
-      const r = vol.lookup(path, 'open');
-      node = r.node;
-      if (!node) throw fsError('ENOENT', 'open', path);
-      if (node.kind === 'dir') throw fsError('EISDIR', 'read', path);
-      data = node.data;
-      node.atimeMs = nowMs();
-    }
-    return decodeBytes(data, encoding === undefined ? null : encoding);
-  }
-
-  function writeFileSync(file, data, options) {
-    let encoding = 'utf8', mode = 0o666, flag = 'w';
-    if (typeof options === 'string') encoding = options;
-    else if (options !== undefined && options !== null) {
-      if (typeof options !== 'object') throw makeArgTypeError('options', ['string', 'object'], options);
-      if (options.encoding !== undefined) encoding = options.encoding;
-      if (options.mode !== undefined) mode = parseMode(options.mode, 0o666);
-      if (options.flag !== undefined) flag = options.flag;
-    }
-    assertEncoding(encoding);
-    let bytes = typeof data === 'string' && encoding && String(encoding).toLowerCase() !== 'utf8' && String(encoding).toLowerCase() !== 'utf-8'
-      ? (_Buffer ? _Buffer.from(data, encoding) : bytesFromString(data))
-      : encodeData(data, encoding);
-    if (typeof file === 'number') {
-      const h = getFd(file, 'write');
-      if (h.node.kind !== 'file') throw fsError('EISDIR', 'write', h.path);
-      if (!h.writable) throw fsError('EBADF', 'write', h.path, 'bad file descriptor');
-      if (h.append) h.position = h.node.data.length;
-      const need = h.position + bytes.length;
-      if (need > h.node.data.length) {
-        const nd = new Uint8Array(need);
-        nd.set(h.node.data); h.node.data = nd;
+    if (srcIsDir) {
+      if (!opts.recursive) {
+        const err = makeFsError('ERR_FS_EISDIR', 'cp', s, 'Path is a directory: cp returned EISDIR');
+        err.errno = 21;
+        throw err;
       }
-      h.node.data.set(bytes, h.position);
-      h.position += bytes.length;
-      h.node.mtimeMs = h.node.ctimeMs = nowMs();
-      return undefined;
-    }
-    const path = getValidatedPath(file);
-    const fl = parseFileFlags(flag);
-    const { parent, name, node } = vol.lookup(path, 'open');
-    if (node && node.kind === 'dir') throw fsError('EISDIR', 'open', path);
-    if (!node) {
-      if (!parent) throw fsError('ENOENT', 'open', path);
-      const f = new VNode('file', S_IFREG | applyUmask(mode));
-      f.data = bytes;
-      parent.children.set(name, f);
-      parent.mtimeMs = parent.ctimeMs = nowMs();
-      return undefined;
-    }
-    if (fl.exclusive) throw fsError('EEXIST', 'open', path);
-    if (!fl.write && !fl.append) throw fsError('EBADF', 'write', path, 'bad file descriptor');
-    if (fl.append) {
-      const nd = new Uint8Array(node.data.length + bytes.length);
-      nd.set(node.data); nd.set(bytes, node.data.length);
-      node.data = nd;
-    } else if (!fl.truncate && fl.write) {
-      // e.g. 'r+': overwrite from position 0, preserving the tail.
-      const need = bytes.length;
-      if (need > node.data.length) {
-        const nd = new Uint8Array(need);
-        nd.set(node.data); node.data = nd;
+      if (destSt && !destSt.isDirectory()) {
+        const err = makeFsError('ERR_FS_CP_DIR_TO_NON_DIR', 'cp', s, 'Invalid src or dest: cp returned EINVAL');
+        err.errno = 22;
+        throw err;
       }
-      node.data.set(bytes, 0);
-    } else {
-      node.data = bytes;
-    }
-    node.mtimeMs = node.ctimeMs = nowMs();
-    return undefined;
-  }
-  function appendFileSync(file, data, options) {
-    let opts = {};
-    if (typeof options === 'string') opts = { encoding: options };
-    else if (options && typeof options === 'object') opts = { ...options };
-    opts.flag = 'a';
-    return writeFileSync(file, data, opts);
-  }
-
-  function mkdirSync(p, options) {
-    const path = getValidatedPath(p);
-    let recursive = false, mode = 0o777;
-    if (options !== undefined && options !== null) {
-      if (typeof options !== 'object') throw makeArgTypeError('options', 'object', options);
-      recursive = !!options.recursive;
-      if (options.mode !== undefined) mode = parseMode(options.mode, 0o777);
-    }
-    const abs = resolve(vol.cwd, path);
-    if (recursive) {
-      let existing = null, lookupErr = null;
-      try { existing = vol.lookup(abs, 'mkdir').node; }
-      catch (e) { if (e.code !== 'ENOENT') throw e; lookupErr = e; }
-      if (existing) {
-        if (existing.kind !== 'dir') throw fsError('EEXIST', 'mkdir', path);
-        return undefined;
+      // dest inside src?
+      if (d === s || d.startsWith(s + '/')) {
+        const err = makeFsError('ERR_FS_CP_EINVAL', 'cp', s, 'Invalid src or dest: cp returned EINVAL');
+        err.errno = 22;
+        throw err;
       }
-      vol.mkdirp(abs, mode, 'mkdir', path);
-      return undefined;
+    } else if (destSt && destSt.isDirectory()) {
+      const err = makeFsError('ERR_FS_CP_NON_DIR_TO_DIR', 'cp', s, 'Invalid src or dest: cp returned EINVAL');
+      err.errno = 22;
+      throw err;
     }
-    const { parent, name, node } = vol.lookup(abs, 'mkdir');
-    if (node) throw fsError('EEXIST', 'mkdir', path);
-    if (!parent) throw fsError('ENOENT', 'mkdir', path);
-    const d = new VNode('dir', S_IFDIR | applyUmask(mode));
-    parent.children.set(name, d);
-    parent.mtimeMs = parent.ctimeMs = nowMs();
-    return undefined;
-  }
-  function mkdtempSync(prefix, options) {
-    if (typeof prefix !== 'string') throw makeArgTypeError('prefix', 'string', prefix);
-    let encoding;
-    if (typeof options === 'string') encoding = options;
-    else if (options && typeof options === 'object') encoding = options.encoding;
-    if (encoding !== undefined) assertEncoding(encoding);
-    for (let i = 0; i < 10; i++) {
-      const candidate = prefix + randomChars(6);
-      try {
-        mkdirSync(candidate, { mode: 0o700 });
-        return encoding ? decodeBytes(bytesFromString(candidate), encoding) : candidate;
-      } catch (e) { if (e.code !== 'EEXIST') throw e; }
-    }
-    throw fsError('EEXIST', 'mkdtemp', prefix);
-  }
-  function mkdtempDisposableSync(prefix, options) {
-    const path = mkdtempSync(prefix, options);
-    const dirPath = typeof path === 'string' ? path : stringFromBytes(path);
-    return {
-      path,
-      [Symbol.dispose]() { rmSync(dirPath, { recursive: true, force: true }); },
-      async [Symbol.asyncDispose]() { rmSync(dirPath, { recursive: true, force: true }); },
-    };
-  }
 
-  function readdirSync(p, options) {
-    const path = getValidatedPath(p);
-    let encoding = 'utf8', withFileTypes = false, recursive = false;
-    if (typeof options === 'string') encoding = options;
-    else if (options && typeof options === 'object') {
-      if (options.encoding !== undefined) encoding = options.encoding;
-      withFileTypes = !!options.withFileTypes;
-      recursive = !!options.recursive;
-    }
-    if (encoding !== undefined && encoding !== null) assertEncoding(encoding);
-    const { node } = vol.lookup(path, 'scandir');
-    if (!node) throw fsError('ENOENT', 'scandir', path);
-    if (node.kind !== 'dir') throw fsError('ENOTDIR', 'scandir', path);
-    const out = [];
-    if (!recursive) {
-      for (const [name, child] of node.children) {
-        out.push(withFileTypes ? new Dirent(name, child, path)
-          : (encoding === 'buffer' ? toBuffer(bytesFromString(name)) : name));
-      }
-    } else {
-      const walk = (n, prefix) => {
-        for (const [name, child] of n.children) {
-          const rel = prefix ? prefix + '/' + name : name;
-          out.push(withFileTypes ? new Dirent(rel, child, path)
-            : (encoding === 'buffer' ? toBuffer(bytesFromString(rel)) : rel));
-          if (child.kind === 'dir') walk(child, rel);
-        }
-      };
-      walk(node, '');
-    }
-    return out;
-  }
-  function opendirSync(p, options) {
-    const path = getValidatedPath(p);
-    if (options !== undefined && (typeof options !== 'object' || options === null)) throw makeArgTypeError('options', 'object', options);
-    let node, abs;
-    try {
-      ({ node, path: abs } = vol.lookup(path, 'opendir'));
-    } catch (e) {
-      // Node's opendir errors carry no `path` property.
-      if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) throw fsError(e.code, 'opendir');
-      throw e;
-    }
-    if (!node) throw fsError('ENOENT', 'opendir');
-    if (node.kind !== 'dir') throw fsError('ENOTDIR', 'opendir');
-    return new Dir(vol, abs, node);
-  }
-
-  function unlinkSync(p) {
-    const path = getValidatedPath(p);
-    const { parent, name, node } = vol.lookup(path, 'unlink', { noFollowFinal: true });
-    if (!node) throw fsError('ENOENT', 'unlink', path);
-    if (node.kind === 'dir') throw fsError('EISDIR', 'unlink', path);
-    parent.children.delete(name);
-    parent.mtimeMs = parent.ctimeMs = nowMs();
-  }
-  function rmdirSync(p, options) {
-    const path = getValidatedPath(p);
-    if (options !== undefined && (typeof options !== 'object' || options === null)) throw makeArgTypeError('options', 'object', options);
-    const { parent, name, node } = vol.lookup(path, 'rmdir', { noFollowFinal: true });
-    if (!node) throw fsError('ENOENT', 'rmdir', path);
-    if (node.kind !== 'dir') throw fsError('ENOTDIR', 'rmdir', path);
-    if (node.children.size > 0) throw fsError('ENOTEMPTY', 'rmdir', path);
-    parent.children.delete(name);
-    parent.mtimeMs = parent.ctimeMs = nowMs();
-  }
-  function rmSync(p, options) {
-    const path = getValidatedPath(p);
-    const opts = options && typeof options === 'object' ? options : {};
-    if (options !== undefined && options !== null && typeof options !== 'object') throw makeArgTypeError('options', 'object', options);
-    const recursive = !!opts.recursive, force = !!opts.force;
-    let found;
-    try { found = vol.lookup(path, 'lstat', { noFollowFinal: true }); }
-    catch (e) { if (e.code === 'ENOENT' && force) return undefined; throw e; }
-    const { parent, name, node } = found;
-    if (!node) { if (force) return undefined; throw fsError('ENOENT', 'rm', path); }
-    if (node.kind === 'dir' && !recursive) throw eisdirError('rm', path);
-    if (node.kind === 'dir') {
-      if (node.children.size > 0 && !recursive) throw fsError('ENOTEMPTY', 'rm', path);
-    }
-    parent.children.delete(name);
-    parent.mtimeMs = parent.ctimeMs = nowMs();
-    return undefined;
-  }
-
-  function renameSync(oldPath, newPath) {
-    const src = getValidatedPath(oldPath, 'oldPath');
-    const dest = getValidatedPath(newPath, 'newPath');
-    const s = vol.lookup(src, 'rename', { noFollowFinal: true });
-    if (!s.node) throw fsError2('ENOENT', 'rename', src, dest);
-    const dAbs = resolve(vol.cwd, dest);
-    const d = vol.lookup(dAbs, 'rename', { noFollowFinal: true });
-    if (!d.parent) throw fsError2('ENOENT', 'rename', src, dest);
-    if (s.node.kind === 'dir') {
-      // Cannot move a directory into its own subtree.
-      if (dAbs === s.path || dAbs.startsWith(s.path + '/')) {
-        throw fsError2('EINVAL', 'rename', src, dest);
-      }
-      if (d.node) {
-        if (d.node.kind !== 'dir') throw fsError2('ENOTDIR', 'rename', src, dest);
-        if (d.node.children.size > 0) throw fsError2('ENOTEMPTY', 'rename', src, dest);
-      }
-    } else if (d.node && d.node.kind === 'dir') {
-      throw fsError2('EISDIR', 'rename', src, dest);
-    }
-    s.parent.children.delete(s.name);
-    s.parent.mtimeMs = s.parent.ctimeMs = nowMs();
-    d.parent.children.set(d.name, s.node);
-    d.parent.mtimeMs = d.parent.ctimeMs = nowMs();
-    s.node.ctimeMs = nowMs();
-    return undefined;
-  }
-
-  function copyFileSync(src, dest, mode = 0) {
-    const s = getValidatedPath(src, 'src');
-    const d = getValidatedPath(dest, 'dest');
-    if (typeof mode !== 'number' || !Number.isInteger(mode)) throw makeArgTypeError('mode', 'integer', mode);
-    const { node: sNode } = vol.lookup(s, 'copyfile');
-    if (!sNode) throw fsError2('ENOENT', 'copyfile', s, d);
-    if (sNode.kind === 'dir') throw fsError2('EISDIR', 'copyfile', s, d);
-    const dAbs = resolve(vol.cwd, d);
-    const { parent, name, node: dNode } = vol.lookup(dAbs, 'copyfile');
-    if (!parent) throw fsError2('ENOENT', 'copyfile', s, d);
-    if (dNode) {
-      if (mode & constants.COPYFILE_EXCL) throw fsError2('EEXIST', 'copyfile', s, d);
-      if (dNode.kind === 'dir') throw fsError2('EISDIR', 'copyfile', s, d);
-    }
-    const f = new VNode('file', (sNode.mode & S_IFMT) | (sNode.mode & 0o7777));
-    f.data = sNode.data.slice();
-    f.uid = sNode.uid; f.gid = sNode.gid;
-    parent.children.set(name, f);
-    parent.mtimeMs = parent.ctimeMs = nowMs();
-    return undefined;
-  }
-
-  function cpSync(src, dest, options) {
-    const s = getValidatedPath(src, 'src');
-    const d = getValidatedPath(dest, 'dest');
-    const opts = options && typeof options === 'object' ? options : {};
-    if (options !== undefined && options !== null && typeof options !== 'object') throw makeArgTypeError('options', 'object', options);
-    const dereference = !!opts.dereference;
-    const errorOnExist = !!opts.errorOnExist;
-    const force = opts.force !== undefined ? !!opts.force : true;
-    const recursive = !!opts.recursive;
-    const preserveTimestamps = !!opts.preserveTimestamps;
-    const verbatimSymlinks = !!opts.verbatimSymlinks;
     const filter = opts.filter;
-    const { node: sNode } = vol.lookup(s, 'cp', { noFollowFinal: !dereference });
-    if (!sNode) throw fsError('ENOENT', 'cp', s);
-    if (sNode.kind === 'dir' && !recursive) throw eisdirError('cp', s);
-    const copyOne = (sN, sP, dP, dParent, dName) => {
-      if (filter && !filter(sP, dP)) return;
-      let kind = sN.kind;
-      let targetNode = sN;
-      if (kind === 'symlink' && dereference) {
-        const r = vol.lookup(sP, 'cp');
-        if (!r.node) throw fsError('ENOENT', 'cp', sP);
-        targetNode = r.node; kind = targetNode.kind;
-      }
-      const existing = dParent.children.get(dName);
-      if (existing) {
-        if (errorOnExist) throw fsError('EEXIST', 'cp', dP);
-        if (!force) return;
-        // Type mismatches between src and dest.
-        if (existing.kind === 'dir' && kind !== 'dir') {
-          const err = new Error(`[ERR_FS_CP_NON_DIR_TO_DIR]: Cannot overwrite directory '${dP}' with non-directory '${sP}'`);
-          err.code = 'ERR_FS_CP_NON_DIR_TO_DIR'; throw err;
+    const doCopy = (from, to) => {
+      if (filter && !filter(from, to)) return;
+      let lst;
+      try { lst = vol.lstatSync(from); } catch { return; }
+      if (lst.isSymbolicLink() && !deref) {
+        const target = vol.readlinkSync(from);
+        const linkTarget = opts.verbatimSymlinks ? target
+          : (target.startsWith('/') ? target : posixResolve(posixDirname(from), target));
+        try { vol.symlinkSync(linkTarget, to); }
+        catch (e) {
+          if (opts.force !== false) { try { vol.unlinkSync(to); } catch {} vol.symlinkSync(linkTarget, to); }
+          else throw e;
         }
-        if (existing.kind !== 'dir' && kind === 'dir') {
-          const err = new Error(`[ERR_FS_CP_DIR_TO_NON_DIR]: Cannot overwrite non-directory '${dP}' with directory '${sP}'`);
-          err.code = 'ERR_FS_CP_DIR_TO_NON_DIR'; throw err;
-        }
-      }
-      if (kind === 'dir') {
-        if (!recursive) {
-          const err = new Error(`[ERR_FS_CP_DIR_TO_NON_DIR]: ${sP} is a directory (not copied)`);
-          err.code = 'ERR_FS_CP_DIR_TO_NON_DIR'; throw err;
-        }
-        let dNode = existing && existing.kind === 'dir' ? existing : null;
-        if (!dNode) {
-          dNode = new VNode('dir', S_IFDIR | (sN.mode & 0o7777));
-          dParent.children.set(dName, dNode);
-        }
-        for (const [name, child] of sN.children) copyOne(child, sP + '/' + name, dP + '/' + name, dNode, name);
-        if (preserveTimestamps) { dNode.atimeMs = sN.atimeMs; dNode.mtimeMs = sN.mtimeMs; }
         return;
       }
-      if (kind === 'symlink' && !dereference) {
-        const l = new VNode('symlink', S_IFLNK | 0o777);
-        l.linkpath = verbatimSymlinks ? sN.linkpath : sN.linkpath;
-        dParent.children.set(dName, l);
-        return;
+      const st = vol.statSync(from);
+      if (st.isDirectory()) {
+        try { vol.mkdirSync(to, { recursive: true }); } catch { /* ignore */ }
+        for (const name of vol.readdirSync(from)) {
+          doCopy(from + '/' + name, to + '/' + name);
+        }
+        // timestamps
+        try { vol.utimesSync(to, st.atime, st.mtime); } catch {}
+      } else {
+        const existsDest = (() => { try { vol.statSync(to); return true; } catch { return false; } })();
+        if (existsDest && opts.force === false && !opts.errorOnExist) return;
+        if (existsDest && opts.errorOnExist) {
+          throw enrichErr(makeFsError('EEXIST', 'cp', to, 'file already exists'), 'cp');
+        }
+        vol.copyFileSync(from, to);
+        const srcStat = vol.statSync(from);
+        try { vol.utimesSync(to, srcStat.atime, srcStat.mtime); } catch {}
+        if (opts.preserveTimestamps) {
+          try {
+            vol.utimesSync(to, srcStat.atime, srcStat.mtime);
+            vol.chmodSync(to, srcStat.mode);
+          } catch {}
+        }
       }
-      const f = new VNode('file', S_IFREG | (targetNode.mode & 0o7777));
-      f.data = targetNode.data.slice();
-      if (preserveTimestamps) { f.atimeMs = targetNode.atimeMs; f.mtimeMs = targetNode.mtimeMs; }
-      dParent.children.set(dName, f);
     };
-    const dAbs = resolve(vol.cwd, d);
-    const { parent, name, node: dNode } = vol.lookup(dAbs, 'cp', { noFollowFinal: true });
-    if (!parent) throw fsError('ENOENT', 'cp', d);
-    if (sNode.kind === 'dir') {
-      copyOne(sNode, s, dAbs, parent, name);
+
+    const finalDest = (srcIsDir || (destSt && destSt.isDirectory())) ? d : d;
+    if (srcIsDir) {
+      try { vol.mkdirSync(finalDest, { recursive: true }); } catch {}
+      for (const name of vol.readdirSync(s)) {
+        doCopy(s + '/' + name, finalDest + '/' + name);
+      }
     } else {
-      copyOne(sNode, s, dAbs, parent, name);
+      const target = (destSt && destSt.isDirectory()) ? finalDest + '/' + s.slice(s.lastIndexOf('/') + 1) : finalDest;
+      doCopy(s, target);
     }
-    parent.mtimeMs = parent.ctimeMs = nowMs();
-    return undefined;
   }
-
-  function symlinkSync(target, p, type) {
-    if (typeof target !== 'string' && !isUint8Array(target)) throw makeArgTypeError('target', ['string', 'Buffer'], target);
-    const path = getValidatedPath(p);
-    const t = typeof target === 'string' ? target : stringFromBytes(target);
-    if (type !== undefined && type !== null && !['dir', 'file', 'junction'].includes(type)) {
-      throw makeArgValueError('type', 'must be one of: dir, file, junction', type);
-    }
-    const abs = resolve(vol.cwd, path);
-    const { parent, name, node } = vol.lookup(abs, 'symlink', { noFollowFinal: true });
-    if (node) throw fsError2('EEXIST', 'symlink', t, path);
-    if (!parent) throw fsError2('ENOENT', 'symlink', t, path);
-    const l = new VNode('symlink', S_IFLNK | 0o777);
-    l.linkpath = t;
-    parent.children.set(name, l);
-    parent.mtimeMs = parent.ctimeMs = nowMs();
-    return undefined;
-  }
-  function readlinkSync(p, options) {
-    const path = getValidatedPath(p);
-    let encoding = 'utf8';
-    if (typeof options === 'string') encoding = options;
-    else if (options && typeof options === 'object' && options.encoding !== undefined) encoding = options.encoding;
-    if (encoding !== undefined && encoding !== null) assertEncoding(encoding);
-    const { node } = vol.lookup(path, 'readlink', { noFollowFinal: true });
-    if (!node) throw fsError('ENOENT', 'readlink', path);
-    if (node.kind !== 'symlink') throw fsError('EINVAL', 'readlink', path, 'invalid argument');
-    const bytes = bytesFromString(node.linkpath);
-    return encoding === 'buffer' ? toBuffer(bytes) : decodeBytes(bytes, encoding || 'utf8');
-  }
-  function realpathSync(p, options) {
-    const path = getValidatedPath(p);
-    if (options !== undefined && options !== null && typeof options !== 'object' && typeof options !== 'string') {
-      throw makeArgTypeError('options', ['string', 'object'], options);
-    }
-    let encoding = 'utf8';
-    if (typeof options === 'string') encoding = options;
-    else if (options && typeof options === 'object' && options.encoding !== undefined) encoding = options.encoding;
-    if (encoding !== undefined && encoding !== null) assertEncoding(encoding);
-    const abs = resolve(vol.cwd, path);
-    const parts = abs.split('/').filter(Boolean);
-    const SYSCALL = 'lstat';
-    let node = vol.root, trail = [], linkCount = 0;
-    const expand = (n, rest, tr) => {
-      while (n.kind === 'symlink') {
-        if (++linkCount > MAX_SYMLINKS) throw fsError('ELOOP', 'realpath', path);
-        const target = n.linkpath;
-        const base = isAbsolute(target) ? [] : tr.slice();
-        const segs = (isAbsolute(target) ? target : '/' + base.join('/') + '/' + target)
-          .split('/').filter(Boolean).concat(rest);
-        n = vol.root; tr = [];
-        for (let i = 0; i < segs.length; i++) {
-          const child = n.kind === 'dir' ? n.children.get(segs[i]) : undefined;
-          if (!child) throw fsError('ENOENT', SYSCALL, path);
-          if (child.kind === 'symlink') { const r = expand(child, segs.slice(i + 1), tr); n = r.n; tr = r.tr; break; }
-          if (child.kind !== 'dir' && i !== segs.length - 1) throw fsError('ENOTDIR', SYSCALL, path);
-          n = child; tr.push(segs[i]);
-        }
-        return { n, tr };
-      }
-      return { n, tr };
-    };
-    for (let i = 0; i < parts.length; i++) {
-      if (node.kind !== 'dir') throw fsError('ENOTDIR', SYSCALL, path);
-      const child = node.children.get(parts[i]);
-      if (!child) throw fsError('ENOENT', SYSCALL, path);
-      if (child.kind === 'symlink') {
-        const r = expand(child, parts.slice(i + 1), trail);
-        node = r.n; trail = r.tr; break;
-      }
-      node = child; trail.push(parts[i]);
-    }
-    const real = '/' + trail.join('/');
-    return encoding === 'buffer' ? toBuffer(bytesFromString(real)) : real;
-  }
-  function linkSync(existingPath, newPath) {
-    const src = getValidatedPath(existingPath, 'existingPath');
-    const dest = getValidatedPath(newPath, 'newPath');
-    const { node: sNode } = vol.lookup(src, 'link');
-    if (!sNode) throw fsError2('ENOENT', 'link', src, dest);
-    if (sNode.kind === 'dir') throw fsError2('EPERM', 'link', src, dest);
-    const dAbs = resolve(vol.cwd, dest);
-    const { parent, name, node } = vol.lookup(dAbs, 'link', { noFollowFinal: true });
-    if (node) throw fsError2('EEXIST', 'link', src, dest);
-    if (!parent) throw fsError2('ENOENT', 'link', src, dest);
-    sNode.nlink++;
-    parent.children.set(name, sNode);
-    parent.mtimeMs = parent.ctimeMs = nowMs();
-    return undefined;
-  }
-
-  function truncateSync(p, len = 0) {
-    len = validatedLength(len);
-    const path = getValidatedPath(p);
-    const { node } = vol.lookup(path, 'open');
-    if (!node) throw fsError('ENOENT', 'open', path);
-    if (node.kind === 'dir') throw fsError('EISDIR', 'truncate', path);
-    resizeNode(node, len);
-    return undefined;
-  }
-  function ftruncateSync(fd, len = 0) {
-    len = validatedLength(len);
-    const h = getFd(fd, 'ftruncate');
-    if (h.node.kind !== 'file') throw fsError('EINVAL', 'ftruncate', h.path, 'invalid argument');
-    if (!h.writable) throw fsError('EBADF', 'ftruncate', h.path, 'bad file descriptor');
-    resizeNode(h.node, len);
-    return undefined;
-  }
-  function resizeNode(node, len) {
-    if (len === node.data.length) return;
-    const nd = new Uint8Array(len);
-    nd.set(node.data.subarray(0, Math.min(len, node.data.length)));
-    node.data = nd;
-    node.mtimeMs = node.ctimeMs = nowMs();
-  }
-
-  function chmodSync(p, mode) { const path = getValidatedPath(p); const { node } = vol.lookup(path, 'chmod'); if (!node) throw fsError('ENOENT', 'chmod', path); applyMode(node, mode, 'chmod', path); }
-  function lchmodSync(p, mode) { const path = getValidatedPath(p); const { node } = vol.lookup(path, 'lchmod', { noFollowFinal: true }); if (!node) throw fsError('ENOENT', 'lchmod', path); applyMode(node, mode, 'lchmod', path); }
-  function fchmodSync(fd, mode) { applyMode(getFd(fd, 'fchmod').node, mode, 'fchmod'); }
-  function chownSync(p, uid, gid) {
-    const path = getValidatedPath(p);
-    if (!Number.isInteger(uid) || !Number.isInteger(gid)) throw makeArgTypeError(uid !== undefined && !Number.isInteger(uid) ? 'uid' : 'gid', 'integer', null);
-    const { node } = vol.lookup(path, 'chown');
-    if (!node) throw fsError('ENOENT', 'chown', path);
-    node.uid = uid >>> 0; node.gid = gid >>> 0; node.ctimeMs = nowMs();
-  }
-  function lchownSync(p, uid, gid) {
-    const path = getValidatedPath(p);
-    if (!Number.isInteger(uid) || !Number.isInteger(gid)) throw makeArgTypeError('uid', 'integer', uid);
-    const { node } = vol.lookup(path, 'lchown', { noFollowFinal: true });
-    if (!node) throw fsError('ENOENT', 'lchown', path);
-    node.uid = uid >>> 0; node.gid = gid >>> 0; node.ctimeMs = nowMs();
-  }
-  function fchownSync(fd, uid, gid) {
-    if (!Number.isInteger(uid) || !Number.isInteger(gid)) throw makeArgTypeError('uid', 'integer', uid);
-    const n = getFd(fd, 'fchown').node;
-    n.uid = uid >>> 0; n.gid = gid >>> 0; n.ctimeMs = nowMs();
-  }
-  function setTimes(node, atime, mtime, syscall, path) {
-    node.atimeMs = toUnixTimestamp(atime, 'atime') * 1000;
-    node.mtimeMs = toUnixTimestamp(mtime, 'mtime') * 1000;
-    node.ctimeMs = nowMs();
-  }
-  function utimesSync(p, atime, mtime) { const path = getValidatedPath(p); const { node } = vol.lookup(path, 'utime'); if (!node) throw fsError('ENOENT', 'utime', path); setTimes(node, atime, mtime, 'utime', path); }
-  function lutimesSync(p, atime, mtime) { const path = getValidatedPath(p); const { node } = vol.lookup(path, 'lutime', { noFollowFinal: true }); if (!node) throw fsError('ENOENT', 'lutime', path); setTimes(node, atime, mtime, 'lutime', path); }
-  function futimesSync(fd, atime, mtime) { setTimes(getFd(fd, 'futimes').node, atime, mtime, 'utime'); }
-
-  // ── open / read / write / close ──────────────────────────────────────────
-  function openSync(p, flags = 'r', mode = 0o666) {
-    const path = getValidatedPath(p);
-    const fl = parseFileFlags(flags);
-    const m = parseMode(mode, 0o666);
-    const abs = resolve(vol.cwd, path);
-    const { parent, name, node } = vol.lookup(abs, 'open');
-    if (!node) {
-      if (!fl.create) throw fsError('ENOENT', 'open', path);
-      if (!parent) throw fsError('ENOENT', 'open', path);
-      const f = new VNode('file', S_IFREG | applyUmask(m));
-      parent.children.set(name, f);
-      parent.mtimeMs = parent.ctimeMs = nowMs();
-      const fd = vol.fdCounter++;
-      vol.fds.set(fd, { node: f, path: abs, position: 0, readable: fl.read, writable: fl.write, append: fl.append });
-      return fd;
-    }
-    if (fl.exclusive) throw fsError('EEXIST', 'open', path);
-    if (node.kind === 'dir' && (fl.write || fl.truncate || fl.append)) throw fsError('EISDIR', 'open', path);
-    if (fl.truncate && node.kind === 'file') {
-      if (!fl.write && !fl.read) throw fsError('EACCES', 'open', path);
-      resizeNode(node, 0);
-    }
-    const fd = vol.fdCounter++;
-    vol.fds.set(fd, {
-      node, path: abs,
-      position: fl.append && node.kind === 'file' ? node.data.length : 0,
-      readable: fl.read, writable: fl.write, append: fl.append,
+  fs.cpSync = function (src, dest, options) {
+    validatePath(src); validatePath(dest, 'dest');
+    try { cpImpl(src, dest, options); }
+    catch (e) { throw enrichErr(e, 'cpSync'); }
+    emitFs('fs', 'cpSync', src, undefined);
+  };
+  fs.cp = function (src, dest, options, callback) {
+    if (typeof options === 'function') { callback = options; options = undefined; }
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    validatePath(src); validatePath(dest, 'dest');
+    nextTick(() => {
+      try {
+        cpImpl(src, dest, options);
+        emitFs('fs', 'cp', src, undefined);
+        callback(null);
+      } catch (e) { callback(enrichErr(e, 'cp')); }
     });
-    return fd;
-  }
-  function closeSync(fd) {
-    const h = getFd(fd, 'close');
-    vol.fds.delete(fd);
-    return undefined;
-  }
-  function checkRw(h, want, syscall) {
-    if (want === 'read' && !h.readable) throw fsError('EBADF', syscall, h.path, 'bad file descriptor');
-    if (want === 'write' && !h.writable) throw fsError('EBADF', syscall, h.path, 'bad file descriptor');
-    if (h.node.kind !== 'file') throw fsError(want === 'read' ? 'EISDIR' : 'EBADF', syscall, h.path, want === 'read' ? 'illegal operation on a directory' : 'bad file descriptor');
-  }
-  function readSync(fd, bufferOrOptions, offset, length, position) {
-    let buffer, off, len, pos;
-    if (bufferOrOptions && typeof bufferOrOptions === 'object' && !isUint8Array(bufferOrOptions)) {
-      const o = bufferOrOptions;
-      buffer = o.buffer; off = o.offset ?? 0; len = o.length ?? (buffer ? buffer.byteLength - off : 0); pos = o.position ?? null;
-    } else { buffer = bufferOrOptions; off = offset ?? 0; len = length ?? (buffer ? buffer.byteLength - off : 0); pos = position ?? null; }
-    const h = getFd(fd, 'read');
-    checkRw(h, 'read', 'read');
-    if (!isUint8Array(buffer)) throw makeArgTypeError('buffer', ['Buffer', 'TypedArray', 'DataView'], buffer);
-    if (!Number.isInteger(off) || off < 0) throw makeOutOfRangeError('offset', 'an integer >= 0', off);
-    if (!Number.isInteger(len) || len < 0) throw makeOutOfRangeError('length', 'an integer >= 0', len);
-    if (pos !== null && pos !== undefined && (!Number.isInteger(pos) || pos < 0)) throw makeOutOfRangeError('position', 'an integer >= 0 or null', pos);
-    if (off + len > buffer.byteLength) throw makeOutOfRangeError('length', `<= buffer.byteLength - offset`, len);
-    const at = (pos === null || pos === undefined) ? h.position : pos;
-    const avail = Math.max(0, h.node.data.length - at);
-    const n = Math.min(len, avail);
-    if (n > 0) buffer.set(h.node.data.subarray(at, at + n), off);
-    if (pos === null || pos === undefined) h.position = at + n;
-    h.node.atimeMs = nowMs();
-    return n;
-  }
-  function writeSync(fd, bufferOrString, offset, length, position) {
-    const h = getFd(fd, 'write');
-    checkRw(h, 'write', 'write');
-    let bytes, pos;
-    if (typeof bufferOrString === 'string') {
-      const enc = typeof length === 'string' ? length : (typeof offset === 'string' ? offset : 'utf8');
-      bytes = encodeData(bufferOrString, enc);
-      pos = typeof offset === 'number' ? offset : (typeof length === 'number' ? length : null);
-    } else {
-      if (!isUint8Array(bufferOrString)) throw makeArgTypeError('buffer', ['Buffer', 'TypedArray', 'DataView', 'string'], bufferOrString);
-      const off = offset ?? 0, len = length ?? (bufferOrString.byteLength - off);
-      if (!Number.isInteger(off) || off < 0) throw makeOutOfRangeError('offset', 'an integer >= 0', off);
-      if (!Number.isInteger(len) || len < 0) throw makeOutOfRangeError('length', 'an integer >= 0', len);
-      if (off + len > bufferOrString.byteLength) throw makeOutOfRangeError('length', '<= buffer.byteLength - offset', len);
-      bytes = bufferOrString.slice(off, off + len);
-      pos = position ?? null;
-    }
-    if (pos !== null && pos !== undefined && (!Number.isInteger(pos) || pos < 0)) throw makeOutOfRangeError('position', 'an integer >= 0 or null', pos);
-    let at = (pos === null || pos === undefined) ? h.position : pos;
-    if (h.append) at = h.node.data.length;
-    const need = at + bytes.length;
-    if (need > h.node.data.length) {
-      const nd = new Uint8Array(need);
-      nd.set(h.node.data); h.node.data = nd;
-    }
-    h.node.data.set(bytes, at);
-    if (pos === null || pos === undefined || h.append) h.position = at + bytes.length;
-    h.node.mtimeMs = h.node.ctimeMs = nowMs();
-    return bytes.length;
-  }
-  function readvSync(fd, buffers, position) {
-    if (!Array.isArray(buffers)) throw makeArgTypeError('buffers', 'Array', buffers);
-    let total = 0;
-    const pos = position ?? null;
-    for (const b of buffers) {
-      const n = readSync(fd, b, 0, b.byteLength, pos === null ? null : pos + total);
-      total += n;
-      if (n < b.byteLength) break;
-    }
-    return total;
-  }
-  function writevSync(fd, buffers, position) {
-    if (!Array.isArray(buffers)) throw makeArgTypeError('buffers', 'Array', buffers);
-    let total = 0;
-    const pos = position ?? null;
-    for (const b of buffers) {
-      const n = writeSync(fd, b, 0, b.byteLength, pos === null ? null : pos + total);
-      total += n;
-    }
-    return total;
-  }
-  function fsyncSync(fd) { getFd(fd, 'fsync'); return undefined; }
-  function fdatasyncSync(fd) { getFd(fd, 'fdatasync'); return undefined; }
+  };
 
-  // ── 11. glob ─────────────────────────────────────────────────────────────
-  function segmentToRegExp(seg) {
-    let re = '';
-    for (let i = 0; i < seg.length; i++) {
-      const c = seg[i];
-      if (c === '*') re += '[^/]*';
-      else if (c === '?') re += '[^/]';
-      else if (c === '[') {
-        const j = seg.indexOf(']', i + 1);
-        if (j === -1) re += '\\[';
-        else { re += seg.slice(i, j + 1); i = j; }
-      } else if ('.+^${}()|\\'.includes(c)) re += '\\' + c;
-      else re += c;
-    }
-    return new RegExp('^' + re + '$', 's');
+  // ── readFile/writeFile/appendFile: accept fd-or-path ──
+  function fileArg(p) {
+    if (typeof p === 'number') return p;
+    validatePath(p);
+    return toPathString(p);
   }
-  function sortedChildren(node) {
-    return [...node.children].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  }
-  function globSync(pattern, options) {
-    const patterns = Array.isArray(pattern) ? pattern.slice() : [pattern];
-    for (const p of patterns) if (typeof p !== 'string') throw makeArgTypeError('pattern', ['string', 'Array'], p);
-    let cwd = vol.cwd, withFileTypes = false, dot = false, exclude = null;
-    if (options !== undefined && options !== null) {
-      if (typeof options !== 'object') throw makeArgTypeError('options', 'object', options);
-      if (options.cwd !== undefined) cwd = resolve(vol.cwd, getValidatedPath(options.cwd, 'cwd'));
-      withFileTypes = !!options.withFileTypes;
-      dot = !!options.dot;
-      if (options.exclude !== undefined) {
-        exclude = (Array.isArray(options.exclude) ? options.exclude : [options.exclude]).map((e) => {
-          if (typeof e === 'function') return e;
-          if (typeof e !== 'string') throw makeArgTypeError('exclude', ['string', 'Array', 'Function'], e);
-          return e;
-        });
+  for (const [syncName, cbName] of [['readFileSync', 'readFile'], ['writeFileSync', 'writeFile'], ['appendFileSync', 'appendFile']]) {
+    const origSync = fs[syncName], origCb = fs[cbName];
+    fs[syncName] = function (p, ...rest) {
+      let data = rest[0];
+      if (syncName !== 'readFileSync') {
+        validateDataArg(data, 'data');
+        data = normalizeDataArg(data);
       }
-    }
-    // The cwd anchor is resolved lazily: absolute patterns anchor at the
-    // volume root and never consult it (matching Node, where an absolute
-    // pattern does not depend on process.cwd() existing).
-    let _cwdNode = null, _cwdResolved = false;
-    const getCwdNode = () => {
-      if (!_cwdResolved) {
-        _cwdResolved = true;
-        const { node } = vol.lookup(cwd, 'glob');
-        if (!node) throw fsError('ENOENT', 'glob', cwd);
-        if (node.kind !== 'dir') throw fsError('ENOTDIR', 'glob', cwd);
-        _cwdNode = node;
-      }
-      return _cwdNode;
+      let result;
+      try { result = origSync.call(this, fileArg(p), data, ...rest.slice(1)); }
+      catch (e) { throw enrichErr(e, syncName); }
+      emitFs('fs', syncName, p, result);
+      return result;
     };
-    const seen = new Set();
-    const out = [];
-    const pushMatch = (absolute, relPath, node) => {
-      const finalPath = absolute ? '/' + relPath : relPath;
-      if (!seen.has(finalPath) && !isExcluded(absolute, relPath)) {
-        seen.add(finalPath);
-        if (withFileTypes) {
-          // Like Node: Dirent.name is the basename, parentPath the dirname.
-          const slash = finalPath.lastIndexOf('/');
-          const name = slash < 0 ? finalPath : finalPath.slice(slash + 1);
-          const parentPath = slash <= 0 ? (absolute ? '/' : '.') : finalPath.slice(0, slash);
-          out.push(new Dirent(name, node, parentPath));
-        } else {
-          out.push(finalPath);
-        }
+    fs[cbName] = function (p, ...rest) {
+      const callback = rest[rest.length - 1];
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      const args = rest.slice(0, -1);
+      if (cbName !== 'readFile') {
+        // Real Node validates data synchronously (throws, not callback error).
+        validateDataArg(args[0], 'data');
+        args[0] = normalizeDataArg(args[0]);
       }
-    };
-    const isExcluded = (absolute, relPath) => {
-      if (!exclude) return false;
-      return exclude.some((e) => {
-        if (typeof e === 'function') { try { return !!e(absolute ? '/' + relPath : relPath); } catch { return false; } }
-        return minimatchOne(e, absolute);
+      let fp;
+      try { fp = fileArg(p); }
+      catch (e) { nextTick(callback, enrichErr(e, cbName)); return; }
+      origCb.call(this, fp, ...args, (err, result) => {
+        if (err) return callback(enrichErr(err, cbName));
+        emitFs('fs', cbName, p, result);
+        callback(null, result);
       });
     };
-    const matchHere = (absolute, node, parts, idx, relPath) => {
-      if (idx >= parts.length) {
-        pushMatch(absolute, relPath, node);
-        return;
-      }
-      const seg = parts[idx];
-      if (seg === '**') {
-        matchHere(absolute, node, parts, idx + 1, relPath);
-        if (node.kind === 'dir') {
-          for (const [name, child] of sortedChildren(node)) {
-            if (!dot && name.startsWith('.')) continue;
-            matchHere(absolute, child, parts, idx, relPath ? relPath + '/' + name : name);
-          }
-        }
-        return;
-      }
-      if (node.kind !== 'dir') return;
-      const re = segmentToRegExp(seg);
-      for (const [name, child] of sortedChildren(node)) {
-        if (!dot && name.startsWith('.')) continue;
-        if (re.test(name)) matchHere(absolute, child, parts, idx + 1, relPath ? relPath + '/' + name : name);
-      }
-    };
-    const minimatchOne = (pat, absolute) => {
-      const parts = pat.split('/').filter((s) => s.length > 0);
-      const base = absolute ? vol.root : getCwdNode();
-      const found = [];
-      const probe = (node, idx, rp) => {
-        if (idx >= parts.length) { found.push(true); return; }
-        const seg = parts[idx];
-        if (seg === '**') {
-          probe(node, idx + 1, rp);
-          if (node.kind === 'dir') {
-            for (const [name, child] of sortedChildren(node)) probe(child, idx, rp ? rp + '/' + name : name);
-          }
-          return;
-        }
-        if (node.kind !== 'dir') return;
-        const re = segmentToRegExp(seg);
-        for (const [name, child] of sortedChildren(node)) {
-          if (re.test(name)) probe(child, idx + 1, rp ? rp + '/' + name : name);
-        }
-      };
-      probe(base, 0, '');
-      return found.length > 0;
-    };
-    for (const pat of patterns) {
-      const absolute = isAbsolute(pat);
-      const parts = pat.split('/').filter((s) => s.length > 0);
-      matchHere(absolute, absolute ? vol.root : getCwdNode(), parts, 0, '');
-    }
-    return out;
   }
 
-  // ── 12. watch / watchFile ────────────────────────────────────────────────
-  class FSWatcher extends EventEmitter {
-    constructor(path) { super(); this._path = path; this._closed = false; }
-    close() { if (!this._closed) { this._closed = true; this.emit('close'); } }
-    ref() { return this; }
-    unref() { return this; }
+  // ── opendir/opendirSync + Dir (auto-close after for-await) ──
+  function dirClosedError() {
+    const err = new Error('Directory is closed');
+    err.code = 'ERR_DIR_CLOSED';
+    return err;
   }
-  function watch(p, options, listener) {
-    if (typeof options === 'function') { listener = options; options = {}; }
-    const path = getValidatedPath(p);
-    if (typeof options === 'string') {
-      assertEncoding(options);
-      options = { encoding: options };
+  class Dir {
+    constructor(path) {
+      this.path = path;
+      this._closed = false;
+      this._entries = null;
     }
-    if (options !== undefined && options !== null && typeof options !== 'object') throw makeArgTypeError('options', 'object', options);
-    if (listener !== undefined && typeof listener !== 'function') throw makeArgTypeError('listener', 'function', listener);
-    // Validate the path exists (Node throws ENOENT synchronously otherwise).
-    const { node } = vol.lookup(path, 'watch');
-    if (!node) throw fsError('ENOENT', 'watch', path);
-    const w = new FSWatcher(path);
-    if (listener) w.on('change', listener);
-    // NOTE: in-memory VFS — no OS notification source exists in the browser,
-    // so this watcher is a correctly-shaped noop. Use watchFile for polling.
+    _ensure() {
+      if (this._closed) throw dirClosedError();
+      if (!this._entries) {
+        const names = vol.readdirSync(this.path);
+        this._entries = names.map((name) => {
+          let mode = 0;
+          try { mode = vol.lstatSync(this.path + '/' + name).mode; } catch { /* ignore */ }
+          return new Dirent(name, this.path, mode);
+        });
+        this._index = 0;
+      }
+    }
+    readSync() {
+      this._ensure();
+      if (this._index >= this._entries.length) return null;
+      return this._entries[this._index++];
+    }
+    read(callback) {
+      if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+      nextTick(() => {
+        try { callback(null, this.readSync()); }
+        catch (e) { callback(e); }
+      });
+    }
+    closeSync() {
+      if (this._closed) throw dirClosedError();
+      this._closed = true;
+      emitFs('fs', 'Dir.closeSync', this.path, undefined);
+    }
+    close(callback) {
+      if (typeof callback !== 'function') return Promise.resolve().then(() => this.closeSync());
+      nextTick(() => {
+        try { this.closeSync(); callback(null); }
+        catch (e) { callback(e); }
+      });
+    }
+    async *[Symbol.asyncIterator]() {
+      try {
+        for (;;) {
+          const entry = this.readSync();
+          if (entry === null) break;
+          yield entry;
+        }
+      } finally {
+        // Real Node auto-closes the Dir when for-await completes.
+        if (!this._closed) this.closeSync();
+      }
+    }
+  }
+  fs.Dir = Dir;
+  fs.opendirSync = function (p, options) {
+    validatePath(p);
+    const ps = toPathString(p);
+    let dir;
+    try {
+      const st = vol.statSync(ps);
+      if (!st.isDirectory()) {
+        throw enrichErr(makeFsError('ENOTDIR', 'opendir', ps, 'not a directory'), 'opendirSync');
+      }
+      dir = new Dir(ps);
+    } catch (e) { throw enrichErr(e, 'opendirSync'); }
+    emitFs('fs', 'opendirSync', p, dir);
+    return dir;
+  };
+  fs.opendir = function (p, options, callback) {
+    if (typeof options === 'function') { callback = options; options = undefined; }
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    validatePath(p);
+    nextTick(() => {
+      try {
+        const dir = fs.opendirSync(p, options);
+        callback(null, dir);
+      } catch (e) { callback(enrichErr(e, 'opendir')); }
+    });
+  };
+
+  // ── glob/globSync ──
+  function globMatch(pattern, path) {
+    // Convert a glob pattern to a RegExp (supports *, **, ?).
+    let re = '';
+    let i = 0;
+    while (i < pattern.length) {
+      const c = pattern[i];
+      if (c === '*') {
+        if (pattern[i + 1] === '*') {
+          // **/ or /** or **
+          if (pattern[i + 2] === '/') { re += '(?:.*/)?'; i += 3; }
+          else { re += '.*'; i += 2; }
+        } else { re += '[^/]*'; i += 1; }
+      } else if (c === '?') { re += '[^/]'; i += 1; }
+      else if ('+^${}()|[]\\.'.includes(c)) { re += '\\' + c; i += 1; }
+      else { re += c; i += 1; }
+    }
+    return new RegExp('^' + re + '$').test(path);
+  }
+  function globImpl(patterns, options) {
+    const opts = options || {};
+    const cwd = opts.cwd ? toPathString(opts.cwd) : '/';
+    const pats = Array.isArray(patterns) ? patterns : [patterns];
+    const exclude = opts.exclude ? (Array.isArray(opts.exclude) ? opts.exclude : [opts.exclude]) : [];
+    const withFileTypes = !!opts.withFileTypes;
+    const results = [];
+    const seen = new Set();
+    // Collect all files/dirs under cwd.
+    const all = [];
+    const walk = (dir) => {
+      let names;
+      try { names = vol.readdirSync(dir); } catch { return; }
+      for (const name of names) {
+        const full = dir === '/' ? '/' + name : dir + '/' + name;
+        all.push(full);
+        let st;
+        try { st = vol.lstatSync(full); } catch { continue; }
+        if (st.isDirectory() && !st.isSymbolicLink()) walk(full);
+      }
+    };
+    walk(cwd);
+    for (let pat of pats) {
+      const p = toPathString(pat);
+      const absPat = p.startsWith('/') ? p : cwd + '/' + p;
+      for (const full of all) {
+        if (!globMatch(absPat, full)) continue;
+        if (exclude.some((e) => globMatch(toPathString(e).startsWith('/') ? toPathString(e) : cwd + '/' + toPathString(e), full))) continue;
+        // Relative patterns yield cwd-relative results; absolute yield absolute.
+        const out = p.startsWith('/') ? full : full.slice(cwd.length + 1);
+        if (seen.has(out)) continue;
+        seen.add(out);
+        if (withFileTypes) {
+          let mode = 0;
+          try { mode = vol.lstatSync(full).mode; } catch { /* ignore */ }
+          results.push(new Dirent(full.slice(full.lastIndexOf('/') + 1), full.slice(0, full.lastIndexOf('/') + 1).replace(/\/$/, '') || '/', mode));
+        } else {
+          results.push(out);
+        }
+      }
+    }
+    return results;
+  }
+  fs.globSync = function (patterns, options) {
+    let result;
+    try { result = globImpl(patterns, options); }
+    catch (e) { throw enrichErr(e, 'globSync'); }
+    emitFs('fs', 'globSync', patterns, result);
+    return result;
+  };
+  fs.glob = function (patterns, options, callback) {
+    if (typeof options === 'function') { callback = options; options = undefined; }
+    if (callback && typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    const run = () => {
+      try {
+        const result = globImpl(patterns, options);
+        emitFs('fs', 'glob', patterns, result);
+        if (callback) callback(null, result);
+        return result;
+      } catch (e) {
+        const err = enrichErr(e, 'glob');
+        if (callback) callback(err);
+        else throw err;
+      }
+    };
+    if (callback) { nextTick(run); return undefined; }
+    // No callback → return async iterator (real Node) — also usable as promise via then? No:
+    // real Node's glob without callback returns an AsyncIterable.
+    async function* gen() {
+      const result = globImpl(patterns, options);
+      for (const r of result) yield r;
+    }
+    return gen();
+  };
+
+  // ── lutimes/lutimesSync (via vol.getLink; memfs lacks these) ──
+  function toDate(v, name) {
+    if (v instanceof Date) return v;
+    if (typeof v === 'number' || typeof v === 'string') {
+      const d = new Date(typeof v === 'number' ? v * 1000 : v);
+      if (isNaN(d.getTime())) throw errInvalidArgType(name, 'Date', v);
+      return d;
+    }
+    throw errInvalidArgType(name, 'Date', v);
+  }
+  function lutimesImpl(p, atime, mtime) {
+    const ps = toPathString(p);
+    const at = toDate(atime, 'atime'), mt = toDate(mtime, 'mtime');
+    const steps = ps.split('/').filter(Boolean);
+    let link = null;
+    try { link = vol.getLink(steps); } catch { link = null; }
+    if (!link) {
+      // Match memfs/Node ENOENT shape for a missing path.
+      try { vol.lstatSync(ps); } catch (e) { throw e; }
+      throw enrichErr(makeFsError('ENOENT', 'lstat', ps, 'no such file or directory'), 'lutimes');
+    }
+    const node = link.getNode();
+    node.atime = at;
+    node.mtime = mt;
+  }
+  fs.lutimesSync = function (p, atime, mtime) {
+    validatePath(p);
+    try { lutimesImpl(p, atime, mtime); }
+    catch (e) { throw enrichErr(e, 'lutimesSync'); }
+    emitFs('fs', 'lutimesSync', p, undefined);
+  };
+  fs.lutimes = function (p, atime, mtime, callback) {
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    validatePath(p);
+    nextTick(() => {
+      try {
+        lutimesImpl(p, atime, mtime);
+        emitFs('fs', 'lutimes', p, undefined);
+        callback(null);
+      } catch (e) { callback(enrichErr(e, 'lutimes')); }
+    });
+  };
+
+  // ── statfs/statfsSync (memfs lacks these) ──
+  function statfsImpl(p) {
+    const ps = toPathString(p);
+    try { vol.statSync(ps); } catch (e) { throw e; }
+    return {
+      type: 0x65735546, // FUSE_SUPER_MAGIC-ish placeholder
+      bsize: 4096,
+      frsize: 4096,
+      blocks: 1024 * 1024,
+      bfree: 512 * 1024,
+      bavail: 512 * 1024,
+      files: 1024 * 1024,
+      ffree: 512 * 1024,
+    };
+  }
+  fs.statfsSync = function (p, options) {
+    validatePath(p);
+    let result;
+    try { result = statfsImpl(p); }
+    catch (e) { throw enrichErr(e, 'statfsSync'); }
+    emitFs('fs', 'statfsSync', p, result);
+    return result;
+  };
+  fs.statfs = function (p, options, callback) {
+    if (typeof options === 'function') { callback = options; options = undefined; }
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    validatePath(p);
+    nextTick(() => {
+      try {
+        const result = statfsImpl(p);
+        emitFs('fs', 'statfs', p, result);
+        callback(null, result);
+      } catch (e) { callback(enrichErr(e, 'statfs')); }
+    });
+  };
+
+  // ── mkdtemp/mkdtempSync + Disposable variants ──
+  function mkdtempImpl(prefix, options) {
+    const pre = toPathString(prefix);
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    for (let attempt = 0; attempt < 10; attempt++) {
+      let rand = '';
+      for (let i = 0; i < 6; i++) rand += chars[(Math.random() * chars.length) | 0];
+      const dir = pre + rand;
+      try {
+        vol.mkdirSync(dir);
+        return (options && options.encoding === 'buffer' && typeof Buffer !== 'undefined')
+          ? Buffer.from(dir) : dir;
+      } catch (e) {
+        if (e.code !== 'EEXIST') throw e;
+      }
+    }
+    throw enrichErr(makeFsError('EEXIST', 'mkdtemp', pre, 'file already exists'), 'mkdtemp');
+  }
+  fs.mkdtempSync = function (prefix, options) {
+    validatePath(prefix, 'prefix');
+    let result;
+    try { result = mkdtempImpl(prefix, options); }
+    catch (e) { throw enrichErr(e, 'mkdtempSync'); }
+    emitFs('fs', 'mkdtempSync', prefix, result);
+    return result;
+  };
+  fs.mkdtemp = function (prefix, options, callback) {
+    if (typeof options === 'function') { callback = options; options = undefined; }
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    validatePath(prefix, 'prefix');
+    nextTick(() => {
+      try {
+        const result = mkdtempImpl(prefix, options);
+        emitFs('fs', 'mkdtemp', prefix, result);
+        callback(null, result);
+      } catch (e) { callback(enrichErr(e, 'mkdtemp')); }
+    });
+  };
+  fs.mkdtempDisposableSync = function (prefix, options) {
+    const dir = fs.mkdtempSync(prefix, options);
+    return {
+      path: dir,
+      [Symbol.dispose]() { try { vol.rmSync(toPathString(dir), { recursive: true, force: true }); } catch {} },
+    };
+  };
+  fs.mkdtempDisposable = async function (prefix, options) {
+    const dir = await new Promise((resolve, reject) => {
+      fs.mkdtemp(prefix, options, (err, d) => err ? reject(err) : resolve(d));
+    });
+    return {
+      path: dir,
+      [Symbol.asyncDispose]() {
+        return new Promise((resolve) => {
+          fs.rm(toPathString(dir), { recursive: true, force: true }, () => resolve());
+        });
+      },
+    };
+  };
+
+  // ── openAsBlob ──
+  fs.openAsBlob = async function (p, options) {
+    validatePath(p);
+    const ps = toPathString(p);
+    let data;
+    try { data = vol.readFileSync(ps); }
+    catch (e) { throw enrichErr(e, 'openAsBlob'); }
+    emitFs('fs', 'openAsBlob', p, undefined);
+    const type = (options && options.type) || '';
+    if (typeof Blob !== 'undefined') return new Blob([data], { type });
+    // Minimal Blob fallback.
+    return { size: data.length, type, arrayBuffer: async () => data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength), text: async () => new TextDecoder().decode(data) };
+  };
+
+  // ── realpath/realpathSync + .native ──
+  function realpathImpl(p, options) {
+    const ps = toPathString(p);
+    let resolved;
+    try { resolved = vol.realpathSync(ps); }
+    catch (e) { throw e; }
+    if (options && options.encoding === 'buffer' && typeof Buffer !== 'undefined') {
+      return Buffer.from(resolved);
+    }
+    return resolved;
+  }
+  fs.realpathSync = function (p, options) {
+    validatePath(p);
+    let result;
+    try { result = realpathImpl(p, typeof options === 'string' ? { encoding: options } : options); }
+    catch (e) { throw enrichErr(e, 'realpathSync'); }
+    emitFs('fs', 'realpathSync', p, result);
+    return result;
+  };
+  fs.realpathSync.native = fs.realpathSync;
+  fs.realpath = function (p, options, callback) {
+    if (typeof options === 'function') { callback = options; options = undefined; }
+    if (typeof callback !== 'function') throw errInvalidArgType('cb', 'function', callback);
+    validatePath(p);
+    nextTick(() => {
+      try {
+        const result = realpathImpl(p, typeof options === 'string' ? { encoding: options } : options);
+        emitFs('fs', 'realpath', p, result);
+        callback(null, result);
+      } catch (e) { callback(enrichErr(e, 'realpath')); }
+    });
+  };
+  fs.realpath.native = fs.realpath;
+
+  // ── link/symlink/readlink: delegate + enrich/emit ──
+  wrapSync('linkSync', null, true); wrapCb('link', null, true);
+  wrapSync('symlinkSync', null, true); wrapCb('symlink', null, true);
+  wrapSync('readlinkSync', null, true); wrapCb('readlink', null, true);
+  wrapSync('chmodSync', null, true); wrapCb('chmod', null, true);
+  wrapSync('fchmodSync'); wrapCb('fchmod');
+  wrapSync('chownSync', null, true); wrapCb('chown', null, true);
+  wrapSync('fchownSync'); wrapCb('fchown');
+  wrapSync('lchownSync', null, true); wrapCb('lchown', null, true);
+  wrapSync('utimesSync', null, true); wrapCb('utimes', null, true);
+  wrapSync('futimesSync'); wrapCb('futimes');
+  wrapSync('fsyncSync'); wrapCb('fsync');
+  wrapSync('fdatasyncSync'); wrapCb('fdatasync');
+  // lchmod/lchmodSync are undefined on Linux (Node behavior).
+  try {
+    if (typeof process !== 'undefined' && process.platform === 'linux') {
+      fs.lchmod = undefined;
+      fs.lchmodSync = undefined;
+    } else {
+      wrapSync('lchmodSync'); wrapCb('lchmod');
+    }
+  } catch { /* ignore */ }
+
+  // ── watch/watchFile: add ref()/unref(), emit events ──
+  function patchWatcher(w, path) {
+    if (w && typeof w === 'object') {
+      if (typeof w.ref !== 'function') {
+        w.ref = function () { return w; };
+      }
+      if (typeof w.unref !== 'function') {
+        w.unref = function () { return w; };
+      }
+      const origClose = w.close ? w.close.bind(w) : null;
+      if (origClose) {
+        w.close = function (...args) {
+          emitFs('fs', 'watcher.close', path, undefined);
+          return origClose(...args);
+        };
+      }
+    }
     return w;
   }
-  const statWatchers = new Map(); // absPath -> { timer, listeners:Set, prev }
-  function watchFile(p, options, listener) {
-    if (typeof options === 'function') { listener = options; options = {}; }
-    const opts = options && typeof options === 'object' ? options : {};
-    if (options !== undefined && options !== null && typeof options !== 'object' && typeof options !== 'function') {
-      throw makeArgTypeError('options', 'object', options);
-    }
-    if (typeof listener !== 'function') throw makeArgTypeError('listener', 'function', listener);
-    const path = getValidatedPath(p);
-    const abs = resolve(vol.cwd, path);
-    const interval = opts.interval !== undefined ? opts.interval : 5007;
-    if (!Number.isInteger(interval) || interval < 0) throw makeOutOfRangeError('interval', 'an integer >= 0', interval);
-    const bigint = !!opts.bigint;
-    let entry = statWatchers.get(abs);
-    if (!entry) {
-      let prev = null;
-      try { prev = vol.statNode(vol.lookup(abs, 'stat').node, bigint); } catch { prev = null; }
-      entry = { listeners: new Set(), prev, timer: null };
-      entry.timer = setInterval(() => {
-        let curr = null;
-        try {
-          const { node } = vol.lookup(abs, 'stat');
-          if (node) curr = vol.statNode(node, bigint);
-        } catch { curr = null; }
-        const e = statWatchers.get(abs);
-        if (!e) return;
-        const changed = (a, b) =>
-          (a === null) !== (b === null) || (a && b && a.mtimeMs !== b.mtimeMs);
-        if (changed(e.prev, curr)) {
-          const pPrev = e.prev, pCurr = curr;
-          e.prev = curr;
-          for (const l of [...e.listeners]) { try { l(pCurr, pPrev); } catch { /* listener errors are swallowed */ } }
-        }
-      }, interval);
-      if (entry.timer.unref) entry.timer.unref();
-      statWatchers.set(abs, entry);
-    }
-    entry.listeners.add(listener);
-    return undefined;
-  }
-  function unwatchFile(p, listener) {
-    const path = getValidatedPath(p);
-    const abs = resolve(vol.cwd, path);
-    const entry = statWatchers.get(abs);
-    if (!entry) return undefined;
-    if (listener) entry.listeners.delete(listener);
-    else entry.listeners.clear();
-    if (entry.listeners.size === 0) {
-      clearInterval(entry.timer);
-      statWatchers.delete(abs);
-    }
-    return undefined;
-  }
-
-  // ── 13. Streams (built on the repo's stream port) ─────────────────────────
-  class ReadStreamBase extends Readable {
-    constructor(p, options = {}) {
-      if (typeof options === 'string') {
-        assertEncoding(options);
-        options = { encoding: options };
-      }
-      super({ highWaterMark: options.highWaterMark, autoDestroy: true, emitClose: true });
-      if (options.fd !== undefined && options.fd !== null) {
-        if (typeof options.fd !== 'number') throw makeArgTypeError('fd', 'number', options.fd);
-        this.fd = options.fd; this._ownsFd = false;
-        this.path = getFd(options.fd, 'read').path;
-      } else {
-        this.path = getValidatedPath(p);
-        this.fd = null; this._ownsFd = true;
-      }
-      this._flags = options.flags !== undefined ? options.flags : 'r';
-      this._mode = options.mode !== undefined ? parseMode(options.mode, 0o666) : 0o666;
-      this._autoClose = options.autoClose !== false;
-      this._pos = options.start !== undefined ? options.start : null;
-      this._end = options.end !== undefined ? options.end : null;
-      if (this._pos !== null && (!Number.isInteger(this._pos) || this._pos < 0)) throw makeOutOfRangeError('start', 'an integer >= 0', this._pos);
-      if (this._end !== null && (!Number.isInteger(this._end) || this._end < 0)) throw makeOutOfRangeError('end', 'an integer >= 0', this._end);
-      if (options.encoding) this.setEncoding(options.encoding);
-    }
-    _construct(cb) {
-      queueMicrotask(() => {
-        try {
-          if (this.fd === null) this.fd = openSync(this.path, this._flags, this._mode);
-          this.emit('open', this.fd);
-          cb();
-        } catch (e) { this.emit('error', e); cb(e); }
-      });
-    }
-    _read() {
-      queueMicrotask(() => {
-        try {
-          const h = getFd(this.fd, 'read');
-          const at = this._pos !== null ? this._pos : h.position;
-          const size = h.node.kind === 'file' ? h.node.data.length : 0;
-          const end = this._end !== null ? Math.min(this._end + 1, size) : size;
-          if (at >= end) { this.push(null); return; }
-          const chunk = h.node.data.subarray(at, Math.min(at + 64 * 1024, end));
-          if (this._pos !== null) this._pos += chunk.length; else h.position = at + chunk.length;
-          h.node.atimeMs = nowMs();
-          this.push(toBuffer(chunk));
-        } catch (e) { this.destroy(e); }
-      });
-    }
-    _destroy(err, cb) {
-      if (this._autoClose && this._ownsFd && this.fd !== null) {
-        try { closeSync(this.fd); } catch { /* ignore */ }
-        this.fd = null;
-      }
-      queueMicrotask(() => { this.emit('close'); cb(err); });
-    }
-  }
-  class WriteStreamBase extends Writable {
-    constructor(p, options = {}) {
-      if (typeof options === 'string') {
-        assertEncoding(options);
-        options = { encoding: options };
-      }
-      super({ highWaterMark: options.highWaterMark, autoDestroy: true, emitClose: true });
-      if (options.fd !== undefined && options.fd !== null) {
-        if (typeof options.fd !== 'number') throw makeArgTypeError('fd', 'number', options.fd);
-        this.fd = options.fd; this._ownsFd = false;
-        this.path = getFd(options.fd, 'write').path;
-      } else {
-        this.path = getValidatedPath(p);
-        this.fd = null; this._ownsFd = true;
-      }
-      this._flags = options.flags !== undefined ? options.flags : 'w';
-      this._mode = options.mode !== undefined ? parseMode(options.mode, 0o666) : 0o666;
-      this._autoClose = options.autoClose !== false;
-      this._pos = options.start !== undefined ? options.start : null;
-      if (this._pos !== null && (!Number.isInteger(this._pos) || this._pos < 0)) throw makeOutOfRangeError('start', 'an integer >= 0', this._pos);
-    }
-    _construct(cb) {
-      queueMicrotask(() => {
-        try {
-          if (this.fd === null) this.fd = openSync(this.path, this._flags, this._mode);
-          this.emit('open', this.fd);
-          cb();
-        } catch (e) { this.emit('error', e); cb(e); }
-      });
-    }
-    _write(chunk, encoding, cb) {
-      queueMicrotask(() => {
-        try {
-          const bytes = typeof chunk === 'string' ? encodeData(chunk, encoding) : new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-          const n = writeSync(this.fd, bytes, 0, bytes.length, this._pos);
-          if (this._pos !== null) this._pos += n;
-          cb();
-        } catch (e) { cb(e); }
-      });
-    }
-    _destroy(err, cb) {
-      if (this._autoClose && this._ownsFd && this.fd !== null) {
-        try { closeSync(this.fd); } catch { /* ignore */ }
-        this.fd = null;
-      }
-      queueMicrotask(() => { this.emit('close'); cb(err); });
-    }
-  }
-  // Node's fs.ReadStream / fs.WriteStream are callable without `new`.
-  function ReadStream(...args) { return new ReadStreamBase(...args); }
-  Object.setPrototypeOf(ReadStream, ReadStreamBase);
-  ReadStream.prototype = ReadStreamBase.prototype;
-  function WriteStream(...args) { return new WriteStreamBase(...args); }
-  Object.setPrototypeOf(WriteStream, WriteStreamBase);
-  WriteStream.prototype = WriteStreamBase.prototype;
-  function createReadStream(p, options) {
-    if (options !== undefined && (typeof options !== 'object' || options === null)) throw makeArgTypeError('options', 'object', options);
-    return new ReadStreamBase(p, options || {});
-  }
-  function createWriteStream(p, options) {
-    if (options !== undefined && (typeof options !== 'object' || options === null)) throw makeArgTypeError('options', 'object', options);
-    return new WriteStreamBase(p, options || {});
-  }
-  async function openAsBlob(p, options) {
-    const path = getValidatedPath(p);
-    if (options !== undefined && (typeof options !== 'object' || options === null)) throw makeArgTypeError('options', 'object', options);
-    const type = options && options.type !== undefined ? String(options.type) : '';
-    const data = readFileSync(path); // Uint8Array/Buffer
-    if (typeof globalThis.Blob === 'undefined') {
-      const err = new Error('Blob is not available in this environment');
-      err.code = 'ERR_NOT_SUPPORTED'; throw err;
-    }
-    return new globalThis.Blob([data], { type });
-  }
-
-  // ── 14. Callback API ─────────────────────────────────────────────────────
-  // AbortSignal support: async fs APIs honor an already-aborted `signal`
-  // option (callback gets AbortError, promises reject); sync APIs ignore it.
-  function makeAbortError() {
-    // Node's fs AbortError: name 'AbortError', code 'ABORT_ERR' (string).
-    const e = new Error('The operation was aborted');
-    e.name = 'AbortError';
-    e.code = 'ABORT_ERR';
-    return e;
-  }
-  function signalOf(args) {
-    for (const a of args) {
-      if (a && typeof a === 'object' && 'signal' in a) {
-        const s = a.signal;
-        if (s !== undefined && s !== null && typeof s === 'object' && typeof s.aborted === 'boolean') return s;
-      }
-    }
-    return undefined;
-  }
-  function throwIfAborted(args) {
-    const s = signalOf(args);
-    if (s && s.aborted) throw makeAbortError();
-  }
-  // Node's fs callbacks fire on the threadpool/poll phase — after nextTick.
-  // setImmediate gives that timing (so a nextTick(abort) still cancels).
-  const scheduleAsync = (typeof setImmediate !== 'undefined')
-    ? setImmediate
-    : (fn) => setTimeout(fn, 0);
-  function toCallback(syncFn, name, passThrough) {
-    return function (...args) {
-      const cb = args[args.length - 1];
-      if (typeof cb !== 'function') throw makeArgTypeError('cb', 'function', cb);
-      const syncArgs = args.slice(0, -1);
-      let result, err = null;
-      try {
-        throwIfAborted(syncArgs);
-        result = syncFn(...syncArgs);
-      }
-      catch (e) {
-        if (e && typeof e.code === 'string' && e.code.startsWith('ERR_')) throw e; // arg validation: sync throw
-        err = e;
-      }
-      // Emulate async cancellation: the VFS operation completes synchronously,
-      // but if the signal is aborted before the callback fires, Node would
-      // have cancelled the in-flight operation — report AbortError instead.
-      // (Checked when the callback fires, so a synchronous abort() after the
-      // call still cancels, matching Node.)
-      emitFs(name, ...syncArgs, err ? undefined : result);
-      const extra = passThrough ? passThrough(syncArgs, result, err) : [];
-      scheduleAsync(() => {
-        if (!err) {
-          const sig = signalOf(syncArgs);
-          if (sig && sig.aborted) err = makeAbortError();
-        }
-        // Match Node's callback arity: void ops get exactly (err).
-        if (err) cb(err);
-        else if (extra.length > 0) cb(null, result, ...extra);
-        else if (result !== undefined) cb(null, result);
-        else cb(null);
-      });
+  {
+    const orig = fs.watch;
+    fs.watch = function (p, options, listener) {
+      if (typeof options === 'function') { listener = options; options = undefined; }
+      validatePath(p);
+      const ps = toPathString(p);
+      let w;
+      try { w = orig.call(this, ps, options, listener); }
+      catch (e) { throw enrichErr(e, 'watch'); }
+      patchWatcher(w, ps);
+      emitFs('fs', 'watch', p, w);
+      return w;
     };
   }
-  const _readArgs = (syncArgs) => [syncArgs[1]];
-  const _writeArgs = (syncArgs) => [syncArgs[1]];
-  const cbApi = {
-    access: toCallback(accessSync, 'access'),
-    appendFile: toCallback(appendFileSync, 'appendFile'),
-    chmod: toCallback(chmodSync, 'chmod'),
-    chown: toCallback(chownSync, 'chown'),
-    close: toCallback(closeSync, 'close'),
-    copyFile: toCallback(copyFileSync, 'copyFile'),
-    cp: toCallback(cpSync, 'cp'),
-    fchmod: toCallback(fchmodSync, 'fchmod'),
-    fchown: toCallback(fchownSync, 'fchown'),
-    fdatasync: toCallback(fdatasyncSync, 'fdatasync'),
-    fstat: toCallback(fstatSync, 'fstat'),
-    fsync: toCallback(fsyncSync, 'fsync'),
-    ftruncate: toCallback(ftruncateSync, 'ftruncate'),
-    futimes: toCallback(futimesSync, 'futimes'),
-    glob: toCallback(globSync, 'glob'),
-    lchmod: toCallback(lchmodSync, 'lchmod'),
-    lchown: toCallback(lchownSync, 'lchown'),
-    link: toCallback(linkSync, 'link'),
-    lstat: toCallback(lstatSync, 'lstat'),
-    lutimes: toCallback(lutimesSync, 'lutimes'),
-    mkdir: toCallback(mkdirSync, 'mkdir'),
-    mkdtemp: toCallback(mkdtempSync, 'mkdtemp'),
-    open: toCallback(openSync, 'open'),
-    opendir: toCallback(opendirSync, 'opendir'),
-    readdir: toCallback(readdirSync, 'readdir'),
-    readFile: toCallback(readFileSync, 'readFile'),
-    readlink: toCallback(readlinkSync, 'readlink'),
-    realpath: toCallback(realpathSync, 'realpath'),
-    rename: toCallback(renameSync, 'rename'),
-    rm: toCallback(rmSync, 'rm'),
-    rmdir: toCallback(rmdirSync, 'rmdir'),
-    stat: toCallback(statSync, 'stat'),
-    statfs: toCallback(statfsSync, 'statfs'),
-    symlink: toCallback(symlinkSync, 'symlink'),
-    truncate: toCallback(truncateSync, 'truncate'),
-    unlink: toCallback(unlinkSync, 'unlink'),
-    utimes: toCallback(utimesSync, 'utimes'),
-    writeFile: toCallback(writeFileSync, 'writeFile'),
-    read: toCallback(readSync, 'read', _readArgs),
-    write: toCallback(writeSync, 'write', _writeArgs),
-    readv: toCallback(readvSync, 'readv', _readArgs),
-    writev: toCallback(writevSync, 'writev', _writeArgs),
-  };
-  // lchmod exists only on macOS in Node (undefined on Linux/Windows).
-  // Mirror that: leave the properties present-but-undefined off darwin.
-  if (!IS_DARWIN) {
-    cbApi.lchmod = undefined;
-  }
-  cbApi.realpath.native = cbApi.realpath;
-  function exists(p, callback) {
-    if (typeof callback !== 'function') throw makeArgTypeError('callback', 'function', callback);
-    queueMicrotask(() => callback(existsSync(p)));
-  }
-
-  // Async-iterator file watcher. Node returns a native async-iterator object
-  // (no own enumerable keys). This VFS has no OS notification source, so the
-  // honest noop is an iterator that completes immediately: watching yields
-  // no events. Use watchFile for polling instead.
-  class WatchAsyncIterator {
-    constructor(path) { this._path = path; this._error = null; }
-    [Symbol.asyncIterator]() { return this; }
-    next() {
-      if (this._error) return Promise.reject(this._error);
-      return Promise.resolve({ done: true, value: undefined });
-    }
-    return() { return Promise.resolve({ done: true, value: undefined }); }
-    throw(err) { return Promise.reject(err); }
-  }
-  const newWatchIterator = (path) => {
-    const it = new WatchAsyncIterator(path);
-    try {
-      const { node } = vol.lookup(path, 'watch');
-      if (!node) throw fsError('ENOENT', 'watch', path);
-    } catch (e) { it._error = e; }
-    return it;
-  };
-
-  // ── 15. promises API + FileHandle ────────────────────────────────────────
-  // fsPromises.readFile/writeFile/appendFile accept a FileHandle; unwrap to fd.
-  function unwrapHandle(f) {
-    if (typeof FileHandle !== 'undefined' && f instanceof FileHandle) {
-      if (f._closed) throw fsError('EBADF', 'filehandle', f._path, 'file closed');
-      return f._fd;
-    }
-    return f;
-  }
-  class FileHandle {
-    constructor(fd, path) {
-      this._fd = fd; this._path = path; this._closed = false;
-    }
-    get fd() { return this._fd; }
-    _assertOpen(op) {
-      if (this._closed) throw fsError('EBADF', op || 'filehandle', this._path, 'file closed');
-    }
-    async appendFile(data, options) { throwIfAborted([options]); this._assertOpen('appendFile'); return appendFileSync(this._fd, data, options); }
-    async chmod(mode) { this._assertOpen('chmod'); return fchmodSync(this._fd, mode); }
-    async chown(uid, gid) { this._assertOpen('chown'); return fchownSync(this._fd, uid, gid); }
-    async close() { if (!this._closed) { this._closed = true; closeSync(this._fd); } }
-    async datasync() { this._assertOpen('datasync'); return fdatasyncSync(this._fd); }
-    async sync() { this._assertOpen('sync'); return fsyncSync(this._fd); }
-    async stat(options) { this._assertOpen('stat'); return fstatSync(this._fd, options); }
-    async statfs() { this._assertOpen('statfs'); return statfsSync(this._path); }
-    async truncate(len) { this._assertOpen('truncate'); return ftruncateSync(this._fd, len); }
-    async utimes(atime, mtime) { this._assertOpen('utimes'); return futimesSync(this._fd, atime, mtime); }
-    async read(buffer, offset, length, position) {
-      this._assertOpen('read');
-      if (buffer === undefined || buffer === null) {
-        // Node allocates a fresh buffer when none is given.
-        buffer = _Buffer ? _Buffer.alloc(16384) : new Uint8Array(16384);
+  // watchFile: poll-based, safe replacement.
+  const _watchFileTimers = new Map();
+  fs.watchFile = function (p, options, listener) {
+    if (typeof options === 'function') { listener = options; options = undefined; }
+    if (typeof listener !== 'function') throw errInvalidArgType('listener', 'function', listener);
+    validatePath(p);
+    const ps = toPathString(p);
+    const interval = (options && options.interval) || 5007;
+    let prev = null;
+    try { prev = toStats(vol.statSync(ps)); } catch { /* ignore */ }
+    const timer = setInterval(() => {
+      let curr = null;
+      try { curr = toStats(vol.statSync(ps)); } catch { /* ignore */ }
+      const changed = (!prev && curr) || (prev && !curr) ||
+        (prev && curr && (prev.mtimeMs !== curr.mtimeMs || prev.size !== curr.size));
+      if (changed) {
+        try { listener(curr || prev, prev); } catch { /* ignore */ }
       }
-      const bytesRead = readSync(this._fd, buffer, offset, length, position);
+      prev = curr;
+    }, interval);
+    if (timer.unref) timer.unref();
+    const key = ps + '\x00' + interval;
+    if (!_watchFileTimers.has(key)) _watchFileTimers.set(key, new Set());
+    _watchFileTimers.get(key).add(timer);
+    const statWatcher = {
+      ref() { if (timer.ref) timer.ref(); return statWatcher; },
+      unref() { if (timer.unref) timer.unref(); return statWatcher; },
+    };
+    emitFs('fs', 'watchFile', p, statWatcher);
+    return statWatcher;
+  };
+  fs.unwatchFile = function (p, listener) {
+    validatePath(p);
+    const ps = toPathString(p);
+    for (const [key, timers] of _watchFileTimers) {
+      if (key.startsWith(ps + '\x00')) {
+        for (const t of timers) clearInterval(t);
+        _watchFileTimers.delete(key);
+      }
+    }
+    emitFs('fs', 'unwatchFile', p, undefined);
+  };
+
+  // ── createReadStream/createWriteStream (project's local stream impl) ──
+  class FsReadStream extends Readable {
+    constructor(path, options) {
+      super(options);
+      const opts = options || {};
+      this.path = toPathString(path);
+      this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
+      this.flags = opts.flags || 'r';
+      this.mode = opts.mode || 0o666;
+      this.start = opts.start;
+      this.end = opts.end;
+      this.autoClose = opts.autoClose !== false;
+      this._pos = this.start || 0;
+      this._opened = false;
+      emitFs('fs', 'createReadStream', this.path, this);
+      if (this.fd === null) {
+        try {
+          this.fd = vol.openSync(this.path, this.flags, this.mode);
+          this._opened = true;
+        } catch (e) {
+          nextTick(() => this.destroy(enrichErr(e, 'createReadStream')));
+          return;
+        }
+      }
+      nextTick(() => this.emit('open', this.fd));
+    }
+    _read(size) {
+      const doRead = () => {
+        let toRead = size || 16384;
+        if (this.end !== undefined) toRead = Math.min(toRead, this.end - this._pos + 1);
+        if (toRead <= 0) {
+          this.push(null);
+          this._cleanup();
+          return;
+        }
+        const buf = typeof Buffer !== 'undefined' ? Buffer.alloc(toRead) : new Uint8Array(toRead);
+        let n;
+        try {
+          n = vol.readSync(this.fd, buf, 0, toRead, this._pos);
+        } catch (e) {
+          this.destroy(enrichErr(e, 'read'));
+          return;
+        }
+        if (n === 0) {
+          this.push(null);
+          this._cleanup();
+          return;
+        }
+        this._pos += n;
+        this.push(buf.slice(0, n));
+      };
+      nextTick(doRead);
+    }
+    _cleanup() {
+      if (this.autoClose && this._opened && this.fd !== null) {
+        try { vol.closeSync(this.fd); } catch { /* ignore */ }
+        this.fd = null;
+      }
+    }
+    _destroy(err, callback) {
+      this._cleanup();
+      callback(err);
+    }
+  }
+  class FsWriteStream extends Writable {
+    constructor(path, options) {
+      super(options);
+      const opts = options || {};
+      this.path = toPathString(path);
+      this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
+      this.flags = opts.flags || 'w';
+      this.mode = opts.mode || 0o666;
+      this.start = opts.start;
+      this.autoClose = opts.autoClose !== false;
+      this._pos = this.start;
+      this._opened = false;
+      emitFs('fs', 'createWriteStream', this.path, this);
+      if (this.fd === null) {
+        try {
+          this.fd = vol.openSync(this.path, this.flags, this.mode);
+          this._opened = true;
+        } catch (e) {
+          nextTick(() => this.destroy(enrichErr(e, 'createWriteStream')));
+          return;
+        }
+      }
+      nextTick(() => this.emit('open', this.fd));
+    }
+    _write(chunk, encoding, callback) {
+      let data = chunk;
+      if (typeof data === 'string') {
+        data = typeof Buffer !== 'undefined' ? Buffer.from(data, encoding) : new TextEncoder().encode(data);
+      }
+      data = normalizeDataArg(data);
+      try {
+        const pos = this._pos === undefined || this._pos === null ? null : this._pos;
+        const n = vol.writeSync(this.fd, data, 0, data.byteLength, pos);
+        if (pos !== null && pos !== undefined) this._pos = pos + n;
+        emitFs('fs', 'writeStream.write', this.path, n);
+        callback(null);
+      } catch (e) {
+        callback(enrichErr(e, 'write'));
+      }
+    }
+    _final(callback) {
+      this._cleanup();
+      callback(null);
+    }
+    _cleanup() {
+      // A FileHandle-owned fd (or autoClose:false) is never closed by us.
+      if (this.autoClose && this._opened && this.fd !== null) {
+        try { vol.closeSync(this.fd); } catch { /* ignore */ }
+        this.fd = null;
+      }
+    }
+    _destroy(err, callback) {
+      this._cleanup();
+      callback(err);
+    }
+  }
+  fs.createReadStream = function (p, options) { return new FsReadStream(p, options); };
+  fs.createWriteStream = function (p, options) { return new FsWriteStream(p, options); };
+  fs.ReadStream = FsReadStream;
+  fs.WriteStream = FsWriteStream;
+  fs.FileReadStream = FsReadStream;
+  fs.FileWriteStream = FsWriteStream;
+
+  // ── FileHandle (internal; never exposed publicly) ──
+  const MemFileHandle = fs.promises.FileHandle;
+  class FileHandle extends MemFileHandle {
+    constructor(fd) {
+      super(fd);
+      this.fd = fd;
+    }
+    async stat(options) {
+      try {
+        const m = vol.fstatSync(this.fd);
+        const st = toStats(m, options);
+        emitFs('fs', 'promises.stat', this.fd, st);
+        return st;
+      } catch (e) { throw enrichErr(e, 'stat'); }
+    }
+    async read(arg1, arg2, arg3, arg4) {
+      // read([buffer[, offset[, length[, position]]]]) / read(options)
+      let buffer, offset = 0, length, position = null;
+      if (arg1 && typeof arg1 === 'object' && !(arg1 instanceof Uint8Array) && !ArrayBuffer.isView(arg1)) {
+        buffer = arg1.buffer; offset = arg1.offset || 0; length = arg1.length; position = arg1.position !== undefined ? arg1.position : null;
+      } else {
+        buffer = arg1; offset = arg2 || 0; length = arg3; position = arg4 !== undefined ? arg4 : null;
+      }
+      if (!(buffer instanceof Uint8Array) && !ArrayBuffer.isView(buffer)) {
+        const len = typeof length === 'number' ? length : 16384;
+        buffer = typeof Buffer !== 'undefined' ? Buffer.alloc(len) : new Uint8Array(len);
+      }
+      if (length === undefined || length === null) length = buffer.byteLength - offset;
+      checkFdReadable(this.fd, 'read');
+      const savedPos = typeof position === 'number' ? getPosition(this.fd) : undefined;
+      let bytesRead;
+      try {
+        bytesRead = vol.readSync(this.fd, buffer, offset, length, position);
+      } catch (e) { throw enrichErr(e, 'read'); }
+      finally {
+        if (savedPos !== undefined) setPosition(this.fd, savedPos);
+      }
+      emitFs('fs', 'promises.read', this.fd, bytesRead);
       return { bytesRead, buffer };
     }
-    async readv(buffers, position) {
-      this._assertOpen('readv');
-      const bytesRead = readvSync(this._fd, buffers, position);
-      return { bytesRead, buffers };
+    async write(arg1, arg2, arg3, arg4) {
+      // write(string[, position[, encoding]]) / write(buffer[, offset[, length[, position]]])
+      let data = arg1, position;
+      let offset = 0, length, encoding = 'utf8';
+      if (typeof data === 'string') {
+        position = arg2 !== undefined ? arg2 : null; encoding = arg3 || 'utf8';
+        data = typeof Buffer !== 'undefined' ? Buffer.from(data, encoding) : new TextEncoder().encode(data);
+      } else {
+        data = normalizeDataArg(data);
+        offset = arg2 || 0; length = arg3; position = arg4 !== undefined ? arg4 : null;
+      }
+      if (length === undefined || length === null) length = data.byteLength - offset;
+      checkFdWritable(this.fd, 'write');
+      const savedPos = typeof position === 'number' ? getPosition(this.fd) : undefined;
+      let bytesWritten;
+      try {
+        bytesWritten = vol.writeSync(this.fd, data, offset, length, position);
+      } catch (e) { throw enrichErr(e, 'write'); }
+      finally {
+        if (savedPos !== undefined) setPosition(this.fd, savedPos);
+      }
+      emitFs('fs', 'promises.write', this.fd, bytesWritten);
+      return { bytesWritten, buffer: data };
     }
-    async write(buffer, offset, length, position) {
-      this._assertOpen('write');
-      const bytesWritten = writeSync(this._fd, buffer, offset, length, position);
-      return { bytesWritten, buffer };
+    async readv(buffers, position) {
+      try {
+        const bytesRead = readvSyncImpl(this.fd, buffers, position === undefined ? null : position);
+        const result = { bytesRead, buffers };
+        emitFs('fs', 'promises.readv', this.fd, result);
+        return result;
+      } catch (e) { throw enrichErr(e, 'readv'); }
     }
     async writev(buffers, position) {
-      this._assertOpen('writev');
-      const bytesWritten = writevSync(this._fd, buffers, position);
-      return { bytesWritten, buffers };
+      try {
+        const bytesWritten = writevSyncImpl(this.fd, buffers, position === undefined ? null : position);
+        const result = { bytesWritten, buffers };
+        emitFs('fs', 'promises.writev', this.fd, result);
+        return result;
+      } catch (e) { throw enrichErr(e, 'writev'); }
     }
-    async readFile(options) { throwIfAborted([options]); this._assertOpen('readFile'); return readFileSync(this._fd, options); }
-    async writeFile(data, options) { throwIfAborted([options]); this._assertOpen('writeFile'); return writeFileSync(this._fd, data, options); }
-    createReadStream(options) { this._assertOpen('createReadStream'); return new ReadStreamBase(this._path, { ...(options || {}), fd: this._fd }); }
-    createWriteStream(options) { this._assertOpen('createWriteStream'); return new WriteStreamBase(this._path, { ...(options || {}), fd: this._fd }); }
-    readableWebStream(options) {
-      this._assertOpen('readableWebStream');
-      const handle = this;
-      let pos = 0;
+    async readFile(options) {
+      try {
+        const data = vol.readFileSync(this.fd, options);
+        emitFs('fs', 'promises.readFile', this.fd, data);
+        return data;
+      } catch (e) { throw enrichErr(e, 'readFile'); }
+    }
+    async writeFile(data, options) {
+      validateDataArg(data, 'data');
+      data = normalizeDataArg(data);
+      try {
+        // Write at position 0 and truncate, mirroring writeFile-on-fd.
+        vol.writeFileSync(this.fd, data, options);
+        emitFs('fs', 'promises.writeFile', this.fd, undefined);
+      } catch (e) { throw enrichErr(e, 'writeFile'); }
+    }
+    async appendFile(data, options) {
+      data = normalizeDataArg(data);
+      try {
+        const st = vol.fstatSync(this.fd);
+        vol.writeSync(this.fd, data, 0, data.byteLength, st.size);
+        emitFs('fs', 'promises.appendFile', this.fd, undefined);
+      } catch (e) { throw enrichErr(e, 'appendFile'); }
+    }
+    async truncate(len) {
+      try {
+        vol.ftruncateSync(this.fd, normalizeTruncateLen(len));
+        emitFs('fs', 'promises.truncate', this.fd, undefined);
+      } catch (e) { throw enrichErr(e, 'truncate'); }
+    }
+    async chmod(mode) {
+      try { vol.fchmodSync(this.fd, mode); emitFs('fs', 'promises.chmod', this.fd, undefined); }
+      catch (e) { throw enrichErr(e, 'chmod'); }
+    }
+    async chown(uid, gid) {
+      try { vol.fchownSync(this.fd, uid, gid); emitFs('fs', 'promises.chown', this.fd, undefined); }
+      catch (e) { throw enrichErr(e, 'chown'); }
+    }
+    async utimes(atime, mtime) {
+      try { vol.futimesSync(this.fd, toDate(atime, 'atime'), toDate(mtime, 'mtime')); emitFs('fs', 'promises.utimes', this.fd, undefined); }
+      catch (e) { throw enrichErr(e, 'utimes'); }
+    }
+    async datasync() {
+      try { vol.fdatasyncSync(this.fd); } catch (e) { throw enrichErr(e, 'datasync'); }
+    }
+    async sync() {
+      try { vol.fsyncSync(this.fd); } catch (e) { throw enrichErr(e, 'sync'); }
+    }
+    async close() {
+      try { vol.closeSync(this.fd); emitFs('fs', 'promises.close', this.fd, undefined); }
+      catch (e) { throw enrichErr(e, 'close'); }
+    }
+    async readableWebStream(options) {
+      const stream = this.createReadStream(options);
+      if (typeof Readable.toWeb === 'function') return Readable.toWeb(stream);
+      // Minimal WHATWG fallback.
+      const reader = stream[Symbol.asyncIterator]();
       return new ReadableStream({
         async pull(controller) {
-          const buf = new Uint8Array(64 * 1024);
-          const { bytesRead } = await handle.read(buf, 0, buf.length, pos);
-          if (bytesRead === 0) { controller.close(); return; }
-          pos += bytesRead;
-          controller.enqueue(buf.slice(0, bytesRead));
+          const { value, done } = await reader.next();
+          if (done) controller.close();
+          else controller.enqueue(value);
         },
-        async cancel() { /* no-op */ },
+        cancel() { stream.destroy(); },
       });
     }
-    async *readLines(options) {
-      this._assertOpen('readLines');
-      const data = await this.readFile('utf8');
-      const lines = data.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        if (i === lines.length - 1 && lines[i] === '') break;
-        yield lines[i].replace(/\r$/, '');
+    createReadStream(options) {
+      return new FsReadStream(null, { ...options, fd: this.fd, autoClose: false });
+    }
+    createWriteStream(options) {
+      return new FsWriteStream(null, { ...options, fd: this.fd, autoClose: false });
+    }
+    async *[Symbol.asyncIterator]() {
+      const stream = this.createReadStream();
+      try {
+        for await (const chunk of stream) yield chunk;
+      } finally {
+        stream.destroy();
       }
     }
-    [Symbol.asyncIterator]() { return this.readLines(); }
+    readLines(options) {
+      const stream = this.createReadStream(options);
+      // Line-splitting async iterator.
+      const self = this;
+      return (async function* () {
+        let leftover = '';
+        for await (const chunk of stream) {
+          const text = leftover + chunk.toString();
+          const lines = text.split('\n');
+          leftover = lines.pop();
+          for (const line of lines) yield line;
+        }
+        if (leftover) yield leftover;
+      })();
+    }
   }
-  const promisesApi = {
-    access: async (p, mode) => accessSync(p, mode),
-    appendFile: async (f, d, o) => appendFileSync(unwrapHandle(f), d, o),
-    chmod: async (p, m) => chmodSync(p, m),
-    chown: async (p, u, g) => chownSync(p, u, g),
-    copyFile: async (s, d, m) => copyFileSync(s, d, m),
-    cp: async (s, d, o) => cpSync(s, d, o),
-    glob: async (pat, o) => globSync(pat, o),
-    lchmod: async (p, m) => lchmodSync(p, m),
-    lchown: async (p, u, g) => lchownSync(p, u, g),
-    link: async (e, n) => linkSync(e, n),
-    lstat: async (p, o) => lstatSync(p, o),
-    lutimes: async (p, a, m) => lutimesSync(p, a, m),
-    mkdir: async (p, o) => mkdirSync(p, o),
-    mkdtemp: async (prefix, o) => mkdtempSync(prefix, o),
-    mkdtempDisposable: async (prefix, o) => mkdtempDisposableSync(prefix, o),
-    open: async (p, flags, mode) => new FileHandle(openSync(p, flags, mode), resolve(vol.cwd, getValidatedPath(p))),
-    opendir: async (p, o) => opendirSync(p, o),
-    readdir: async (p, o) => readdirSync(p, o),
-    readFile: async (p, o) => readFileSync(unwrapHandle(p), o),
-    readlink: async (p, o) => readlinkSync(p, o),
-    realpath: async (p, o) => realpathSync(p, o),
-    rename: async (o, n) => renameSync(o, n),
-    rm: async (p, o) => rmSync(p, o),
-    rmdir: async (p, o) => rmdirSync(p, o),
-    stat: async (p, o) => statSync(p, o),
-    statfs: async (p, o) => statfsSync(p, o),
-    symlink: async (t, p, ty) => symlinkSync(t, p, ty),
-    truncate: async (p, l) => truncateSync(p, l),
-    unlink: async (p) => unlinkSync(p),
-    utimes: async (p, a, m) => utimesSync(p, a, m),
-    writeFile: async (f, d, o) => writeFileSync(unwrapHandle(f), d, o),
-    watch: (p, o) => newWatchIterator(getValidatedPath(p)),
+
+  // ── promises assembly ──
+  const promises = {};
+  const definePromise = (name, fn) => {
+    promises[name] = function (...args) {
+      let result;
+      try { result = fn.apply(this, args); }
+      catch (e) { return Promise.reject(enrichErr(e, name)); }
+      return Promise.resolve(result).then(
+        (val) => { emitFs('fs', `promises.${name}`, ...args, val); return val; },
+        (err) => { emitFs('fs', `promises.${name}`, ...args, undefined); throw enrichErr(err, name); }
+      );
+    };
   };
-  promisesApi.constants = constants;
-  // Async fs APIs honor an already-aborted `signal` option (reject AbortError).
-  // A signal aborted after the call but before the promise settles also
-  // rejects: the VFS operation itself is synchronous, so this emulates the
-  // cancellation Node would have performed on the in-flight operation.
-  for (const k of Object.keys(promisesApi)) {
-    const fn = promisesApi[k];
-    if (typeof fn === 'function' && k !== 'watch') {
-      promisesApi[k] = async (...args) => {
-        throwIfAborted(args);
-        const result = await fn(...args);
-        throwIfAborted(args);
-        return result;
+
+  definePromise('access', (p, mode) => new Promise((resolve, reject) => {
+    fs.access(p, mode, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('open', (p, flags, mode) => new Promise((resolve, reject) => {
+    fs.open(p, flags, mode, (err, fd) => {
+      if (err) return reject(err);
+      resolve(new FileHandle(fd));
+    });
+  }));
+  definePromise('readFile', (p, options) => {
+    if (p instanceof FileHandle) return p.readFile(options);
+    return new Promise((resolve, reject) => {
+      fs.readFile(p, options, (err, data) => err ? reject(err) : resolve(data));
+    });
+  });
+  definePromise('writeFile', (p, data, options) => {
+    if (p instanceof FileHandle) return p.writeFile(data, options);
+    return new Promise((resolve, reject) => {
+      fs.writeFile(p, data, options, (err) => err ? reject(err) : resolve());
+    });
+  });
+  definePromise('appendFile', (p, data, options) => {
+    if (p instanceof FileHandle) {
+      // Append via handle: write at end.
+      return p.stat().then((st) => p.write(data, Number(st.size)).then(() => {}));
+    }
+    return new Promise((resolve, reject) => {
+      fs.appendFile(p, data, options, (err) => err ? reject(err) : resolve());
+    });
+  });
+  definePromise('truncate', (p, len) => new Promise((resolve, reject) => {
+    fs.truncate(p, len, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('copyFile', (src, dest, mode) => new Promise((resolve, reject) => {
+    fs.copyFile(src, dest, mode, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('rename', (a, b) => new Promise((resolve, reject) => {
+    fs.rename(a, b, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('unlink', (p) => new Promise((resolve, reject) => {
+    fs.unlink(p, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('mkdir', (p, options) => new Promise((resolve, reject) => {
+    fs.mkdir(p, options, (err, made) => err ? reject(err) : resolve(made));
+  }));
+  definePromise('mkdtemp', (prefix, options) => new Promise((resolve, reject) => {
+    fs.mkdtemp(prefix, options, (err, dir) => err ? reject(err) : resolve(dir));
+  }));
+  definePromise('mkdtempDisposable', (prefix, options) => fs.mkdtempDisposable(prefix, options));
+  definePromise('opendir', (p, options) => new Promise((resolve, reject) => {
+    fs.opendir(p, options, (err, dir) => {
+      if (err) return reject(err);
+      // Promise-flavoured Dir: read()/close() return promises.
+      dir.read = () => new Promise((res, rej) => {
+        nextTick(() => {
+          try { res(dir.readSync()); }
+          catch (e) { rej(enrichErr(e, 'opendir')); }
+        });
+      });
+      const origClose = dir.close.bind(dir);
+      dir.close = (cb) => {
+        if (typeof cb === 'function') return origClose(cb);
+        return new Promise((res, rej) => {
+          nextTick(() => {
+            try { dir.closeSync(); res(); }
+            catch (e) { rej(enrichErr(e, 'opendir')); }
+          });
+        });
+      };
+      resolve(dir);
+    });
+  }));
+  definePromise('readdir', (p, options) => new Promise((resolve, reject) => {
+    fs.readdir(p, options, (err, names) => err ? reject(err) : resolve(names));
+  }));
+  definePromise('rmdir', (p, options) => new Promise((resolve, reject) => {
+    fs.rmdir(p, options, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('rm', (p, options) => new Promise((resolve, reject) => {
+    fs.rm(p, options, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('stat', (p, options) => new Promise((resolve, reject) => {
+    fs.stat(p, options, (err, st) => err ? reject(err) : resolve(st));
+  }));
+  definePromise('lstat', (p, options) => new Promise((resolve, reject) => {
+    fs.lstat(p, options, (err, st) => err ? reject(err) : resolve(st));
+  }));
+  definePromise('link', (a, b) => new Promise((resolve, reject) => {
+    fs.link(a, b, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('symlink', (t, p, type) => new Promise((resolve, reject) => {
+    fs.symlink(t, p, type, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('readlink', (p, options) => new Promise((resolve, reject) => {
+    fs.readlink(p, options, (err, s) => err ? reject(err) : resolve(s));
+  }));
+  definePromise('realpath', (p, options) => new Promise((resolve, reject) => {
+    fs.realpath(p, options, (err, s) => err ? reject(err) : resolve(s));
+  }));
+  definePromise('chmod', (p, mode) => new Promise((resolve, reject) => {
+    fs.chmod(p, mode, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('chown', (p, uid, gid) => new Promise((resolve, reject) => {
+    fs.chown(p, uid, gid, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('lchown', (p, uid, gid) => new Promise((resolve, reject) => {
+    fs.lchown(p, uid, gid, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('utimes', (p, atime, mtime) => new Promise((resolve, reject) => {
+    fs.utimes(p, atime, mtime, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('lutimes', (p, atime, mtime) => new Promise((resolve, reject) => {
+    fs.lutimes(p, atime, mtime, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('cp', (src, dest, options) => new Promise((resolve, reject) => {
+    fs.cp(src, dest, options, (err) => err ? reject(err) : resolve());
+  }));
+  definePromise('statfs', (p, options) => new Promise((resolve, reject) => {
+    fs.statfs(p, options, (err, s) => err ? reject(err) : resolve(s));
+  }));
+  // glob returns an async iterable directly (Node's promises API).
+  promises.glob = function (patterns, options) {
+    const result = fs.glob(patterns, options);
+    // fs.glob without callback returns an async iterator; expose it directly.
+    if (result && typeof result[Symbol.asyncIterator] === 'function') return result;
+    // Sync-shaped fallback: wrap array results.
+    return (async function* () {
+      const arr = await result;
+      if (Array.isArray(arr)) for (const p of arr) yield p;
+    })();
+  };
+  // watch returns an async-iterable watcher in real Node's promises API.
+  promises.watch = function (p, options) {
+    // Validate `ignore` like real Node (throws on iteration start).
+    const ignore = options && options.ignore;
+    if (ignore !== undefined) {
+      const isValid = typeof ignore === 'string' || ignore instanceof RegExp;
+      if (!isValid) {
+        const err = errInvalidArgType('options.ignore', ['string', 'RegExp'], ignore);
+        return (async function* () { throw err; })();
+      }
+      if (ignore === '') {
+        const err = new TypeError('The "options.ignore" argument must not be empty');
+        err.code = 'ERR_INVALID_ARG_VALUE';
+        return (async function* () { throw err; })();
+      }
+    }
+    const w = fs.watch(p, options);
+    // Attach async iteration yielding { eventType, filename }.
+    if (!w[Symbol.asyncIterator]) {
+      w[Symbol.asyncIterator] = async function* () {
+        const queue = [];
+        let resolve;
+        const onEvent = (eventType, filename) => {
+          if (resolve) { const r = resolve; resolve = null; r({ eventType, filename }); }
+          else queue.push({ eventType, filename });
+        };
+        w.on('change', onEvent);
+        try {
+          for (;;) {
+            if (queue.length) yield queue.shift();
+            else yield await new Promise((res) => { resolve = res; });
+          }
+        } finally {
+          w.off('change', onEvent);
+        }
       };
     }
-  }
-
-  // ── 16. Assemble the fs-like object ──────────────────────────────────────
-  const api = {
-    ...cbApi,
-    exists,
-    accessSync, appendFileSync, chmodSync, chownSync, closeSync,
-    copyFileSync, cpSync, existsSync, fchmodSync, fchownSync,
-    fdatasyncSync, fstatSync, fsyncSync, ftruncateSync, futimesSync,
-    globSync, lchmodSync, lchownSync, linkSync, lstatSync, lutimesSync,
-    mkdirSync, mkdtempSync, mkdtempDisposableSync, openSync, opendirSync,
-    readdirSync, readFileSync, readlinkSync, realpathSync, renameSync,
-    rmSync, rmdirSync, statSync, statfsSync, symlinkSync, truncateSync,
-    unlinkSync, utimesSync, writeFileSync, readSync, writeSync,
-    readvSync, writevSync,
-    watch, watchFile, unwatchFile,
-    createReadStream, createWriteStream, openAsBlob,
-    ReadStream, WriteStream,
-    FileReadStream: ReadStream, FileWriteStream: WriteStream,
-    Utf8Stream: ReadStream,
-    Stats, Dirent, Dir,
-    constants,
-    promises: promisesApi,
-    _toUnixTimestamp: (t) => toUnixTimestamp(t),
-    _vol: vol,
+    return w;
   };
-  api.realpathSync.native = realpathSync;
-  if (!IS_DARWIN) {
-    api.lchmodSync = undefined;
-    api.promises.lchmod = undefined;
-  }
-  // Deprecated lazy getters (DEP0176): fs.F_OK etc. — getter-only, so
-  // assignment throws TypeError in strict mode, matching Node. The warning
-  // fires only once per process (Node dedupes by code).
-  let _dep0176Warned = false;
-  for (const k of ['F_OK', 'R_OK', 'W_OK', 'X_OK']) {
-    Object.defineProperty(api, k, {
-      get() {
-        if (!_dep0176Warned) {
-          _dep0176Warned = true;
-          if (typeof process !== 'undefined' && process && typeof process.emitWarning === 'function') {
-            try { process.emitWarning(`fs.${k} is deprecated, use fs.constants.${k} instead`, 'DeprecationWarning', 'DEP0176'); } catch { /* ignore */ }
-          }
-        }
-        return constants[k];
-      },
-      enumerable: false,
-      configurable: true,
-    });
-  }
-  return api;
+  // lchmod on Linux: present and rejects with ERR_METHOD_NOT_IMPLEMENTED.
+  promises.lchmod = function (p, mode) {
+    const err = new Error('Method not implemented');
+    err.code = 'ERR_METHOD_NOT_IMPLEMENTED';
+    return Promise.reject(err);
+  };
+  promises.constants = null; // set below after constants are attached
+  // FileHandle stays internal: never published on fs or fs.promises.
+
+  fs.promises = promises;
+  return fs;
 }
 
-// ── 17. Singleton + host-runtime publishing ────────────────────────────────
-let _standalone = null;
-// Under the official parity harness (PARITY_TARGET=fs), test files address
-// Node's scratch dir (parity/node-test/.tmp.N) through the shim, while
-// test/common creates it on the real fs. Mirror that empty scratch dir in
-// the VFS so tmpdir-based tests see the initial state they expect. This is
-// strictly a test-harness affordance: it never activates in the browser
-// (where PARITY_TARGET is unset) and performs no native delegation.
-function seedParityTmpdir(vol) {
-  try {
-    const env = (typeof process !== 'undefined' && process && process.env) || {};
-    if (env.PARITY_TARGET !== 'fs') return;
-    const here = (typeof import.meta !== 'undefined' && import.meta.url) || '';
-    if (!here.startsWith('file:')) return;
-    const id = env.TEST_THREAD_ID || env.TEST_SERIAL_ID || '0';
-    const tmpPath = decodeURIComponent(new URL('../parity/node-test/.tmp.' + id, here).pathname);
-    vol.mkdirp(tmpPath, 0o777, 'mkdir', tmpPath);
-  } catch { /* best effort; parity still reports real failures */ }
-}
-function getFs() {
-  const rt = (typeof globalThis._RUNTIME_ !== 'undefined' && globalThis._RUNTIME_ !== null)
-    ? globalThis._RUNTIME_
-    : undefined;
-  if (rt) {
-    if (!rt.__FS__) {
-      const vol = new Volume();
-      const seeds = rt.__USER_FILES__;
-      if (seeds && typeof seeds === 'object') {
-        try { vol.fromJSON(seeds); } catch { /* bad seed data must not break boot */ }
-      }
-      rt.__FS__ = buildApi(vol);
-    }
-    return rt.__FS__;
-  }
-  if (!_standalone) {
-    const vol = new Volume();
-    seedParityTmpdir(vol);
-    _standalone = buildApi(vol);
-  }
-  return _standalone;
+// ── 8. Singleton assembly ───────────────────────────────────────────────────
+import nodeConstants from './constants.js';
+
+function buildSingleton() {
+  const rt = getRuntime();
+  if (rt && rt.__FS__) return rt.__FS__;
+  const vol = createVolume();
+  const fs = buildApi(vol);
+  fs._vol = vol;
+  fs.constants = nodeConstants;
+  fs.promises.constants = nodeConstants;
+  if (rt) rt.__FS__ = fs;
+  return fs;
 }
 
-const _fs = getFs();
+const fs = buildSingleton();
 
-// ── 18. Exports (mirror node:fs public surface) ─────────────────────────────
-// The classes and constants below are declared at module scope and are the
-// canonical objects also installed on the api; export them directly.
-export { Stats, Dirent, Dir, constants };
+// ── 9. Exports ──────────────────────────────────────────────────────────────
+// Default export is the singleton (reused via __FS__ when a runtime exists).
+export default fs;
+
+// Named exports mirroring node:fs.
 export const {
-  access, appendFile, chmod, chown, close, copyFile, cp, exists,
-  fchmod, fchown, fdatasync, fstat, fsync, ftruncate, futimes,
-  glob, lchmod, lchown, link, lstat, lutimes, mkdir, mkdtemp,
-  open, opendir, readdir, readFile, readlink, realpath, rename,
-  rm, rmdir, stat, statfs, symlink, truncate, unlink, utimes,
-  writeFile, read, write, readv, writev,
-  accessSync, appendFileSync, chmodSync, chownSync, closeSync,
-  copyFileSync, cpSync, existsSync, fchmodSync, fchownSync,
-  fdatasyncSync, fstatSync, fsyncSync, ftruncateSync, futimesSync,
-  globSync, lchmodSync, lchownSync, linkSync, lstatSync, lutimesSync,
-  mkdirSync, mkdtempSync, mkdtempDisposableSync, openSync, opendirSync,
-  readdirSync, readFileSync, readlinkSync, realpathSync, renameSync,
-  rmSync, rmdirSync, statSync, statfsSync, symlinkSync, truncateSync,
-  unlinkSync, utimesSync, writeFileSync, readSync, writeSync,
-  readvSync, writevSync,
+  access, accessSync, appendFile, appendFileSync,
+  chmod, chmodSync, chown, chownSync,
+  close, closeSync, copyFile, copyFileSync, cp, cpSync,
+  createReadStream, createWriteStream,
+  exists, existsSync,
+  fchmod, fchmodSync, fchown, fchownSync, fdatasync, fdatasyncSync,
+  fstat, fstatSync, fsync, fsyncSync, ftruncate, ftruncateSync, futimes, futimesSync,
+  glob, globSync,
+  lchmod, lchmodSync, lchown, lchownSync, link, linkSync,
+  lstat, lstatSync, lutimes, lutimesSync,
+  mkdir, mkdirSync, mkdtemp, mkdtempSync, mkdtempDisposable, mkdtempDisposableSync,
+  open, openSync, openAsBlob, opendir, opendirSync,
+  read, readSync, readdir, readdirSync, readFile, readFileSync,
+  readlink, readlinkSync, readv, readvSync,
+  realpath, realpathSync, rename, renameSync, rm, rmSync, rmdir, rmdirSync,
+  stat, statSync, statfs, statfsSync,
+  symlink, symlinkSync, truncate, truncateSync,
+  unlink, unlinkSync, utimes, utimesSync,
   watch, watchFile, unwatchFile,
-  createReadStream, createWriteStream, openAsBlob,
-  ReadStream, WriteStream, FileReadStream, FileWriteStream, Utf8Stream,
-  promises,
-  _toUnixTimestamp,
-} = _fs;
-
-export default _fs;
+  write, writeSync, writeFile, writeFileSync, writev, writevSync,
+  Dir, ReadStream, WriteStream, FileReadStream, FileWriteStream,
+  promises, constants,
+} = fs;
