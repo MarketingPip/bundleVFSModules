@@ -2946,8 +2946,8 @@ child.on('error', (err) => {
          // Falls back to legacy line-offset math if no frames/registry.
          let mappedReason;
          if (data.frames && data.frames.length) {
-           const mapped = this._mapStackFrames(data.frames);
-           mappedReason = this._formatMappedError(data.errorName, data.error, mapped);
+           const mapped = this.sandbox._mapStackFrames(data.frames, this.code);
+           mappedReason = this.sandbox._formatMappedError(data.errorName, data.error, mapped);
          } else {
            // Legacy fallback (no structured frames)
            let line = this.code.slice(0, this.code.indexOf("//__$PROVIDED_RUNTIME_CODE__/")).split("\n").length;
@@ -2976,10 +2976,10 @@ child.on('error', (err) => {
           this.cleanup();
           // Map frames to original positions via the source-map registry.
           const mapped = data.frames && data.frames.length
-            ? this._mapStackFrames(data.frames)
+            ? this.sandbox._mapStackFrames(data.frames, this.code)
             : [];
           const mappedMsg = mapped.length
-            ? this._formatMappedError(data.errorName, data.message, mapped)
+            ? this.sandbox._formatMappedError(data.errorName, data.message, mapped)
             : (data.message || 'Window error');
           const err = new Error(mappedMsg);
           if (data.stack) err.stack = String(data.stack);
@@ -2992,10 +2992,10 @@ child.on('error', (err) => {
           
           // Map frames to original positions via the source-map registry.
           const mapped = data.frames && data.frames.length
-            ? this._mapStackFrames(data.frames)
+            ? this.sandbox._mapStackFrames(data.frames, this.code)
             : [];
           const mappedReason = mapped.length
-            ? this._formatMappedError(data.errorName, data.reason, mapped)
+            ? this.sandbox._formatMappedError(data.errorName, data.reason, mapped)
             : (data.reason || 'Unhandled promise rejection');
           
           const rejectionError = new Error(mappedReason);
@@ -3304,9 +3304,16 @@ _parseExposedMethods(code, interopVar) {
 // iframe gets the identical implementation (single source of truth).
 export function __parseStackLocation(frame) {
   let s = String(frame || '').trim().replace(/^at\s+(async\s+)?/, '');
+  // data: URLs embed the whole (encoded) module source, which may contain
+  // unencoded parens/quotes — match the URL as one unit before the generic
+  // paren-stripping below (whose lastIndexOf('(') would land inside the
+  // module source). Greedy: the only literal colons are the trailing
+  // :line:column (inner colons are %-encoded).
+  let m = s.match(/\(?(data:[^\s]*):(\d+):(\d+)\)?$/);
+  if (m) return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
   const open = s.lastIndexOf('(');
   if (open !== -1 && s.endsWith(')')) s = s.slice(open + 1, -1);
-  const m = s.match(/^(.*):(\d+):(\d+)$/);
+  m = s.match(/^(.*):(\d+):(\d+)$/);
   if (!m) return null;
   return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
 }
@@ -5525,7 +5532,7 @@ window.onerror = function(message, source, lineno, colno, error) {
   // Parse all frames for parent-side source-map mapping.
   const frames = [];
   if (error?.stack) {
-    for (const line of String(error.stack).split('\n')) {
+    for (const line of String(error.stack).split('\\n')) {
       const loc = __parseStackLocation(line);
       if (loc) frames.push(loc);
     }
@@ -5947,7 +5954,7 @@ for (const path in files) {
   }, '*');
  })();
 
-//# sourceURL=${config.fileName}
+//# sourceURL=sandbox://${config.uuid}/${config.fileName}
 `;
   }
 } 
@@ -6144,10 +6151,43 @@ if (this.iframeElement) {
    *   - internal=true for frames with no registry entry (runtime internals,
    *     esm.sh CDN modules, etc.) — shown collapsed or hidden.
    */
-  _mapStackFrames(frames) {
+  _mapStackFrames(frames, runtimeCode) {
     if (!Array.isArray(frames)) return [];
+    // Registry maps are relative to the transformed user snippet
+    // (mainTransform.code), but stack frames report lines in the full
+    // generated runtime. Subtract the boilerplate offset for main-entry
+    // frames so TraceMap lookups land on the snippet's line numbering.
+    // Imported-module frames (own data: URLs) already use snippet-relative
+    // lines, so the offset only applies to the main entry key.
+    const mainKey = `sandbox://${this.uuid}/${this.config && this.config.fileName}`;
+    let boilerplateOffset = 0;
+    if (typeof runtimeCode === 'string') {
+      const markerIdx = runtimeCode.indexOf('//__$PROVIDED_RUNTIME_CODE__/');
+      if (markerIdx !== -1) boilerplateOffset = runtimeCode.slice(0, markerIdx).split('\n').length;
+    }
     return frames.map((frame) => {
-      const entry = frame && frame.file ? this._sourceMapRegistry.get(frame.file) : null;
+      let entry = frame && frame.file ? this._sourceMapRegistry.get(frame.file) : null;
+      let entryKey = frame?.file || null;
+      if (!entry && typeof frame?.file === 'string' && frame.file.startsWith('data:')) {
+        // Imported modules execute from data: URLs whose sourceURL trailer
+        // names the module path (e.g. //# sourceURL=./helper.js). The
+        // registry is keyed sandbox://<uuid>/<modulePath>: match by suffix.
+        try {
+          const comma = frame.file.indexOf(',');
+          const decoded = decodeURIComponent(frame.file.slice(comma + 1));
+          const m = decoded.match(/\/\/# sourceURL=(\S+)\s*$/);
+          if (m) {
+            const want = m[1];
+            for (const k of this._sourceMapRegistry.keys()) {
+              if (k === want || k.endsWith('/' + want)) {
+                entryKey = k;
+                entry = this._sourceMapRegistry.get(k);
+                break;
+              }
+            }
+          }
+        } catch (e) { /* leave entry null -> internal frame */ }
+      }
       if (!entry || !entry.map) {
         return {
           file: frame?.file || null,
@@ -6161,8 +6201,9 @@ if (this.iframeElement) {
         // V8 stack columns are 1-based; trace-mapping expects 0-based
         // generated columns and returns 0-based original columns.
         const tracer = new TraceMap(entry.map);
+        const offset = frame.file === mainKey ? boilerplateOffset : 0;
         const pos = originalPositionFor(tracer, {
-          line: frame.line,
+          line: frame.line - offset,
           column: (frame.column || 1) - 1,
         });
         if (!pos || pos.line == null) {
@@ -6180,7 +6221,7 @@ if (this.iframeElement) {
           // Convert back to 1-based for display
           column: (pos.column ?? 0) + 1,
           internal: false,
-          source: frame.file,
+          source: entryKey,
         };
       } catch (err) {
         return {
