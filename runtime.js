@@ -191,6 +191,8 @@ const customAcorn = acorn.Parser.extend(importAssertions);
 // UTILITIES
 // ============================================================================
 import MagicString from "https://esm.sh/magic-string";
+import { TraceMap, originalPositionFor } from "https://esm.sh/@jridgewell/trace-mapping";
+import remapping from "https://esm.sh/@ampproject/remapping";
 
  //import {Buffer} from "https://esm.sh/buffer"
 
@@ -312,9 +314,10 @@ export function rehydrateVfs(deserializedFs, fs) {
 
  
  
-export function convertEsmToCjs(code) {
+export function convertEsmToCjs(code, options = {}) {
+  const { filename = 'input.js' } = options;
   const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: 'module' });
-  const s = new MagicString(code);
+  const s = new MagicString(code, { filename });
 
   walk.ancestor(ast, {
     // 1. Convert import statements
@@ -388,12 +391,15 @@ export function convertEsmToCjs(code) {
     }
   });
 
-  return s.toString().trim();
+  const outCode = s.toString();
+  const map = s.generateMap({ source: filename, hires: true, includeContent: true });
+  return { code: outCode, map };
 }
 
-export function convertCjsToEsm(code) {
+export function convertCjsToEsm(code, options = {}) {
+  const { filename = 'input.js' } = options;
   const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: 'script' });
-  const s = new MagicString(code);
+  const s = new MagicString(code, { filename });
 
   let lastModuleExport = null;
   const exportsProps = [];
@@ -447,7 +453,9 @@ export function convertCjsToEsm(code) {
     });
   }
 
-  return s.toString().trim().replace(/\n\s*\n/g, '\n'); // clean empty lines
+  const outCode = s.toString();
+  const map = s.generateMap({ source: filename, hires: true, includeContent: true });
+  return { code: outCode, map };
 }
 
 export function convertCjsToEsm_backup(code) {
@@ -768,6 +776,7 @@ export function replaceGlobalThisVar(code, variableName, opts = {}) {
   const {
     replacement,
     generateUnique = false,
+    filename = 'input.js',
   } = opts;
 
   // Generate unique replacement if requested
@@ -786,9 +795,9 @@ export function replaceGlobalThisVar(code, variableName, opts = {}) {
     locations: true, // useful for debugging
   });
 
-  const matches = [];
+  const s = new MagicString(code, { filename });
 
-  // Find matches
+  // Find matches and replace via MagicString (tracks source map)
   walk.simple(ast, {
     MemberExpression(node) {
       if (
@@ -797,30 +806,14 @@ export function replaceGlobalThisVar(code, variableName, opts = {}) {
         node.property.type === "Identifier" &&
         node.property.name === variableName
       ) {
-        matches.push(node);
+        s.overwrite(node.start, node.end, finalReplacement);
       }
     },
   });
 
-  // Apply replacements (from end → start)
-  let modifiedCode = code;
-
-  matches
-    .sort((a, b) => b.start - a.start)
-    .forEach((node) => {
-      modifiedCode =
-        modifiedCode.slice(0, node.start) +
-        finalReplacement +
-        modifiedCode.slice(node.end);
-    });
-
-  return modifiedCode;
-  
-  return {
-    code: modifiedCode,
-    replacements: matches.length,
-    replacement: finalReplacement,
-  };
+  const outCode = s.toString();
+  const map = s.generateMap({ source: filename, hires: true, includeContent: true });
+  return { code: outCode, map };
 }
 
 
@@ -830,7 +823,7 @@ export function replaceGlobalThisVar(code, variableName, opts = {}) {
  */
 export function transformImportsToLoadModule(sandboxUUID, code, entryPoint = null, parentEntryPoint = null) {
    
-  const s = new MagicString(code);
+  const s = new MagicString(code, { filename: entryPoint || 'input.js' });
   const ast = acorn.parse(code, { ecmaVersion: "latest", sourceType: "module", ranges: true });
 
   // --- Helper: attach parents for context ---
@@ -1043,7 +1036,9 @@ ImportExpression(node) {
     s.prepend(preambleParts.join("\n") + "\n\n");
   }
 //console.log(preambleParts.join("\n") + "\n\n")
-  return s.toString();
+  const outCode = s.toString();
+  const map = s.generateMap({ source: entryPoint || 'input.js', hires: true, includeContent: true });
+  return { code: outCode, map };
 }
  
 
@@ -2947,51 +2942,31 @@ child.on('error', (err) => {
       } else if (data.type === 'function_error') {
  
         
-         // TODO: HEAVY CLEANING / REWORK OF HANDLING RUNTIME ERRORS.
-        let line = this.code.slice(0, this.code.indexOf("//__$PROVIDED_RUNTIME_CODE__/")).split("\n").length;
-          line = data.line - line; // set the true line in rune time
-           
-         
-       
+         // Map frames to original positions via the source-map registry.
+         // Falls back to legacy line-offset math if no frames/registry.
+         let mappedReason;
+         if (data.frames && data.frames.length) {
+           const mapped = this.sandbox._mapStackFrames(data.frames, this.code);
+           mappedReason = this.sandbox._formatMappedError(data.errorName, data.error, mapped);
+         } else {
+           // Legacy fallback (no structured frames)
+           let line = this.code.slice(0, this.code.indexOf("//__$PROVIDED_RUNTIME_CODE__/")).split("\n").length;
+           line = data.line - line;
+           const isNegative = n => n < 0;
+           if (isNegative(line)) {
+             mappedReason = `${data.stack || data.reason || data.error || data.message}`;
+           } else {
+             const codeThatThrewError = this.code.split('\n')[Number(data.line) - 1] || '';
+             mappedReason = `${data.stack || data.reason || data.error || data.message}\nat line ${line}, column ${data.column} \n \n →    ${line}| ${codeThatThrewError}`;
+           }
+         }
         
-    
-          const isNegative = n => n < 0;
-       
-          if(isNegative(line)){
- 
-            ///line = 1;   
-            //this.code = this.sandbox.trueCode;
-            
-             /* TODO GET PROPER LINE (1 is NOT GOOD enough..): 
-        import {sqrts} from "https://esm.sh/mathjs"; * named export error
-        Should throw Uncaught SyntaxError: The requested module 'https://esm.sh/mathjs' does not provide an export named 'sqrts' at line:col
-        */ 
-           
-            //data.line = line;
-           // this.sandbox.trueCode = "sd" 
-            //data.line = d
-            
-              data.reason = `${data.reason || data.error || data.message}`
-            
-          }else{
-            
-              const codeThatThrewError = this.code.split('\n')[Number(data.line) - 1] || '';
-             data.reason = `${data.reason || data.error || data.message}\nat line ${line}, column ${data.column} \n \n →    ${line}| ${codeThatThrewError}`
-          }
-        
-         
-        
-      
-          
-         
-   
-          
         this.resolved = true;
         this.cleanup(); 
         resolve({
           success: false,
           error: data.error,
-          stack: data.reason,
+          stack: mappedReason,
           logs: data.logs,
           executionTime: data.executionTime
         });
@@ -2999,28 +2974,33 @@ child.on('error', (err) => {
         if (this.config.captureWindowErrors && !this.resolved) {
           this.resolved = true;
           this.cleanup();
-          reject(new Error(data.message || 'Window error'));
+          // Map frames to original positions via the source-map registry.
+          const mapped = data.frames && data.frames.length
+            ? this.sandbox._mapStackFrames(data.frames, this.code)
+            : [];
+          const mappedMsg = mapped.length
+            ? this.sandbox._formatMappedError(data.errorName, data.message, mapped)
+            : (data.message || 'Window error');
+          const err = new Error(mappedMsg);
+          if (data.stack) err.stack = String(data.stack);
+          reject(err);
         }
       } else if (data.type === 'unhandled_promise_rejection') {
         if (this.config.capturePromiseRejections && !this.resolved) {
-          // TODO: if in file (get code from VFS filename)
-           
-          if(this.config.fileName === data.file){
-            // error is in entry file. (need to add proper paths for this to truly work..) 
-            
-               let line = this.code.slice(0, this.code.indexOf("//__$PROVIDED_RUNTIME_CODE__/")).split("\n").length;
-          line = data.line - line; // set the true line in rune time
-          const codeThatThrewError = this.code.split('\n')[Number(data.line) - 1] || '';
-          data.reason = `${data.reason}\nat line ${line}, column ${data.column} \n \n →    ${line}| ${codeThatThrewError}`
-            
-          }
-          
-          // to do add vfs throws (possible dynamic urls - would require fetch of source code)
           this.resolved = true;
-        
           this.cleanup();
           
-          reject(new Error(data.reason || 'Unhandled promise rejection'));
+          // Map frames to original positions via the source-map registry.
+          const mapped = data.frames && data.frames.length
+            ? this.sandbox._mapStackFrames(data.frames, this.code)
+            : [];
+          const mappedReason = mapped.length
+            ? this.sandbox._formatMappedError(data.errorName, data.reason, mapped)
+            : (data.reason || 'Unhandled promise rejection');
+          
+          const rejectionError = new Error(mappedReason);
+          if (data.stack) rejectionError.stack = String(data.stack);
+          reject(rejectionError);
         }
       }
     };
@@ -3313,6 +3293,30 @@ _parseExposedMethods(code, interopVar) {
 // 3. Mask the `toString` so the user can't inspect your tracking logic.
 //
 // **Would you like me to update the `SandboxRuntime` class to wrap everything in this secure "Private Closure" structure?**
+
+
+// Parse one V8 stack-frame line into {file, line, column}.
+// Handles "at fn (https://host/app.js:10:15)", "at async fn (...)", and
+// "at https://host/app.js:10:15". Anchored at the end so URL schemes
+// (https://...) are never mistaken for the line/column separators.
+// Defined once at module scope and exported for unit tests; the sandbox
+// template below inlines it via ${__parseStackLocation.toString()} so the
+// iframe gets the identical implementation (single source of truth).
+export function __parseStackLocation(frame) {
+  let s = String(frame || '').trim().replace(/^at\s+(async\s+)?/, '');
+  // data: URLs embed the whole (encoded) module source, which may contain
+  // unencoded parens/quotes — match the URL as one unit before the generic
+  // paren-stripping below (whose lastIndexOf('(') would land inside the
+  // module source). Greedy: the only literal colons are the trailing
+  // :line:column (inner colons are %-encoded).
+  let m = s.match(/\(?(data:[^\s]*):(\d+):(\d+)\)?$/);
+  if (m) return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
+  const open = s.lastIndexOf('(');
+  if (open !== -1 && s.endsWith(')')) s = s.slice(open + 1, -1);
+  m = s.match(/^(.*):(\d+):(\d+)$/);
+  if (!m) return null;
+  return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
+}
 
 
 class SandboxRuntime {
@@ -5516,20 +5520,35 @@ function waitForAllXhrs() {
   });
 }
 
+// __parseStackLocation is defined once at module scope (exported for
+// unit tests) and inlined here so the iframe runs the identical code.
+${__parseStackLocation.toString()}
+
 // Enhanced error handling with stack traces
 window.onerror = function(message, source, lineno, colno, error) {
   const errorMsg = error ? (error.stack || error.message || message) : message;
   console.error('Uncaught error:', errorMsg);
-  
+
+  // Parse all frames for parent-side source-map mapping.
+  const frames = [];
+  if (error?.stack) {
+    for (const line of String(error.stack).split('\\n')) {
+      const loc = __parseStackLocation(line);
+      if (loc) frames.push(loc);
+    }
+  }
+
   window.parent.postMessage({
     type: 'window_error',
-    message: errorMsg,
+    message: error ? (error.message || String(message)) : String(message),
     source,
     lineno,
     colno,
-    stack: error?.stack
+    stack: error?.stack || null,
+    frames,
+    errorName: error?.name || 'Error'
   }, '*');
-  
+
   return true;
 };
 
@@ -5544,26 +5563,31 @@ window.onunhandledrejection = function (event) {
   }
 
   const stack = reason.stack || '';
-  const message = reason.stack || String(reason);
-console.log(stack)
-  // Try extracting first stack frame (where it happened)
-  let location = null;
-  const stackLines = stack.split('\\n');
+  const message = reason.message || String(reason);
 
-  if (stackLines.length > 1) {
-    // Example stack line:
-    // at myFunction (http://localhost:3000/app.js:10:15)
-    const match = stackLines[1].match(/\\(?(.+:\\d+:\\d+)\\)?$/);
-    if (match) location = match[1];
+  // Extract the first stack frame (where it happened) with a parser that
+  // understands URLs — no naive split(':').
+  let loc = null;
+  const frames = [];
+  const stackLines = stack.split('\\n');
+  for (let i = 1; i < stackLines.length; i++) {
+    const parsed = __parseStackLocation(stackLines[i]);
+    if (parsed) {
+      frames.push(parsed);
+      if (!loc) loc = parsed;
+    }
   }
 
 window.parent.postMessage({
     type: 'unhandled_promise_rejection',
-    reason: \`Uncaught (in promise) Error: \${message}\`,
-    file: location?.split(':')[0]?.trim()?.replace("at","")?.trim() || null,
-    line: location?.split(':')[1] || null,
-    column: location?.split(':')[2] || null,
-    location:location?.trim()
+    reason: \`Uncaught (in promise) \${reason.name || 'Error'}: \${message}\`,
+    stack: stack || null,
+    file: loc?.file || null,
+    line: loc?.line ?? null,
+    column: loc?.column ?? null,
+    location: loc ? \`\${loc.file}:\${loc.line}:\${loc.column}\` : null,
+    frames,
+    errorName: reason?.name || 'Error'
   }, '*');
 
   event.preventDefault();
@@ -5853,24 +5877,33 @@ ${code}\n})();
    // const stack = reason.stack || '';
  // const message = reason.message || String(reason);
 
-  // Try extracting first stack frame (where it happened)
+  // Extract the first stack frame (where it happened) with a parser that
+  // understands URLs — no naive split(':').
   let location = null;
+  let loc = null;
+  const frames = [];
   const stackLines = err.stack.split('\\n');
 
-  if (stackLines.length > 1) {
-    // Example stack line:
-    // at myFunction (http://localhost:3000/app.js:10:15)
-    const match = stackLines[1].match(/\\(?(.+:\\d+:\\d+)\\)?$/);
-    if (match) location = match[1];
+  for (let i = 1; i < stackLines.length; i++) {
+    const parsed = __parseStackLocation(stackLines[i]);
+    if (parsed) {
+      frames.push(parsed);
+      if (!loc) {
+        loc = parsed;
+        location = \`\${loc.file}:\${loc.line}:\${loc.column}\`;
+      }
+    }
   }
-    
-    window.parent.postMessage({ 
-      type: 'function_error', 
+
+    window.parent.postMessage({
+      type: 'function_error',
       error: err.message || String(err),
       stack: err.stack,
       location,
-      line: location?.split(':')[1] || null,
-      column: location?.split(':')[2] || null,
+      line: loc?.line ?? null,
+      column: loc?.column ?? null,
+      frames,
+      errorName: err?.name || 'Error',
       logs: logs,
       executionTime: parseFloat(executionTime)
     }, '*');
@@ -5921,7 +5954,7 @@ for (const path in files) {
   }, '*');
  })();
 
-//# sourceURL=${config.fileName}
+//# sourceURL=sandbox://${config.uuid}/${config.fileName}
 `;
   }
 } 
@@ -6016,6 +6049,9 @@ export class CodeSandbox extends EventEmitter {
       throw new Error("Sandbox is not running.")
     };
     this.interopHandlers = {};
+    // Registry for source maps: sourceURL -> { map, originalSource, filename }
+    // Populated by _build_file, used for parent-side error mapping.
+    this._sourceMapRegistry = new Map();
     this.iframeElement = null;
     this.beforeExecute = options?.beforeExecute || null; // array
     this.destroyIframe = true;
@@ -6104,6 +6140,139 @@ if (this.iframeElement) {
   unregisterInterop(name) {
     delete this.interopHandlers[name];
     return this;
+  }
+
+  /**
+   * Map structured stack frames (from the sandbox) back to original source
+   * positions using the _sourceMapRegistry populated by _build_file.
+   *
+   * Each frame: { file, line, column } (from __parseStackLocation).
+   * Returns: [{ file, line, column, internal, source }, ...]
+   *   - internal=true for frames with no registry entry (runtime internals,
+   *     esm.sh CDN modules, etc.) — shown collapsed or hidden.
+   */
+  _mapStackFrames(frames, runtimeCode) {
+    if (!Array.isArray(frames)) return [];
+    // Registry maps are relative to the transformed user snippet
+    // (mainTransform.code), but stack frames report lines in the full
+    // generated runtime. Subtract the boilerplate offset for main-entry
+    // frames so TraceMap lookups land on the snippet's line numbering.
+    // Imported-module frames (own data: URLs) already use snippet-relative
+    // lines, so the offset only applies to the main entry key.
+    const mainKey = `sandbox://${this.uuid}/${this.config && this.config.fileName}`;
+    let boilerplateOffset = 0;
+    if (typeof runtimeCode === 'string') {
+      const markerIdx = runtimeCode.indexOf('//__$PROVIDED_RUNTIME_CODE__/');
+      if (markerIdx !== -1) boilerplateOffset = runtimeCode.slice(0, markerIdx).split('\n').length;
+    }
+    return frames.map((frame) => {
+      let entry = frame && frame.file ? this._sourceMapRegistry.get(frame.file) : null;
+      let entryKey = frame?.file || null;
+      if (!entry && typeof frame?.file === 'string' && frame.file.startsWith('data:')) {
+        // Imported modules execute from data: URLs whose sourceURL trailer
+        // names the module path (e.g. //# sourceURL=./helper.js). The
+        // registry is keyed sandbox://<uuid>/<modulePath>: match by suffix.
+        try {
+          const comma = frame.file.indexOf(',');
+          const decoded = decodeURIComponent(frame.file.slice(comma + 1));
+          const m = decoded.match(/\/\/# sourceURL=(\S+)\s*$/);
+          if (m) {
+            const want = m[1];
+            for (const k of this._sourceMapRegistry.keys()) {
+              if (k === want || k.endsWith('/' + want)) {
+                entryKey = k;
+                entry = this._sourceMapRegistry.get(k);
+                break;
+              }
+            }
+          }
+        } catch (e) { /* leave entry null -> internal frame */ }
+      }
+      if (!entry || !entry.map) {
+        return {
+          file: frame?.file || null,
+          line: frame?.line ?? null,
+          column: frame?.column ?? null,
+          internal: true,
+          source: frame?.file || null,
+        };
+      }
+      try {
+        // V8 stack columns are 1-based; trace-mapping expects 0-based
+        // generated columns and returns 0-based original columns.
+        const tracer = new TraceMap(entry.map);
+        const offset = frame.file === mainKey ? boilerplateOffset : 0;
+        const pos = originalPositionFor(tracer, {
+          line: frame.line - offset,
+          column: (frame.column || 1) - 1,
+        });
+        if (!pos || pos.line == null) {
+          return {
+            file: entry.filename || frame.file,
+            line: null,
+            column: null,
+            internal: true,
+            source: frame.file,
+          };
+        }
+        return {
+          file: pos.source || entry.filename || frame.file,
+          line: pos.line,
+          // Convert back to 1-based for display
+          column: (pos.column ?? 0) + 1,
+          internal: false,
+          source: entryKey,
+        };
+      } catch (err) {
+        return {
+          file: entry.filename || frame?.file || null,
+          line: frame?.line ?? null,
+          column: frame?.column ?? null,
+          internal: true,
+          source: frame?.file || null,
+        };
+      }
+    });
+  }
+
+  /**
+   * Format a mapped error with original source context.
+   * Uses the originalSource stored in the registry to render the code frame.
+   */
+  _formatMappedError(errorName, message, mappedFrames) {
+    const lines = [`${errorName || 'Error'}: ${message || 'Unknown error'}`];
+
+    // Find the registry entry for the first non-internal frame to get source.
+    let contextRendered = false;
+    for (const frame of mappedFrames) {
+      if (frame.internal) continue;
+      const entry = this._sourceMapRegistry.get(frame.source);
+      const src = entry?.originalSource;
+      if (src && frame.line) {
+        const srcLines = src.split('\n');
+        const start = Math.max(0, frame.line - 3);
+        const end = Math.min(srcLines.length, frame.line + 2);
+        const context = srcLines.slice(start, end).map((l, idx) => {
+          const actualLine = start + idx + 1;
+          const marker = actualLine === frame.line ? '→' : ' ';
+          return `${marker} ${String(actualLine).padStart(4)} | ${l}`;
+        }).join('\n');
+        lines.push(`at (${frame.file}:${frame.line}:${frame.column})`);
+        lines.push('', context);
+        contextRendered = true;
+        break;
+      }
+    }
+
+    // Fallback: list mapped frames without source context
+    if (!contextRendered) {
+      for (const frame of mappedFrames.slice(0, 10)) {
+        if (frame.internal) continue;
+        lines.push(`at (${frame.file}:${frame.line}:${frame.column})`);
+      }
+    }
+
+    return lines.join('\n');
   }
   
 kill(reason = 'Process killed by user') {
@@ -6250,23 +6419,29 @@ function createFetchAdapter(fetchImpl) {
           this.registerInterop('_build_file', async (source, fileName, moduleType, entryPoint, parentEntryPoint, isNodeBuiltIn) => {
              
             const sourceModuleType = detectModuleSystem(source);
+            const originalSource = source;
+            
+            // Collect maps from each transform for composition.
+            // Each map goes from that transform's output back to its input.
+            const maps = [];
             
             if(moduleType === "import" && sourceModuleType.isCJS && !sourceModuleType.isESM){
-             source =  convertCjsToEsm(source)
+             const result = convertCjsToEsm(source, { filename: fileName });
+             source = result.code;
+             if (result.map) maps.push(result.map);
             } 
      
             if(moduleType === "require" && !sourceModuleType.isCJS && isNodeBuiltIn){
-             source =  convertEsmToCjs(source)
-              
-             
+             const result = convertEsmToCjs(source, { filename: fileName });
+             source = result.code;
+             if (result.map) maps.push(result.map);
             } 
             
             
             
              if(moduleType === "require" && !sourceModuleType.isCJS && !isNodeBuiltIn){
              source =  `throw new Error ("[ERR_REQUIRE_ESM]: Must use import to load ES Module: ... ${fileName}")`
-              
-            
+              // No map for synthetic error throw; position mapping not applicable.
             } 
             
             
@@ -6275,9 +6450,12 @@ function createFetchAdapter(fetchImpl) {
             
             // replace our special variable for runtime.
             if(isNodeBuiltIn){
-              source = replaceGlobalThisVar(source, "_RUNTIME_", {replacement:`globalThis._RUNTIME${this.uuid}_`})
-              
-           
+              const result = replaceGlobalThisVar(source, "_RUNTIME_", {
+                replacement: `globalThis._RUNTIME${this.uuid}_`,
+                filename: fileName,
+              });
+              source = result.code;
+              if (result.map) maps.push(result.map);
             }
             
            
@@ -6288,9 +6466,26 @@ function createFetchAdapter(fetchImpl) {
              // console.log(`Building ${fileName} for ${entryPoint} - for imported module: ${parentEntryPoint}`)
             }
              
-           const test =  transformImportsToLoadModule(this.uuid, source, fileName, entryPoint)
+           const importResult = transformImportsToLoadModule(this.uuid, source, fileName, entryPoint);
+           source = importResult.code;
+           if (importResult.map) maps.push(importResult.map);
          
-            return test 
+           // Compose all collected maps into a single map: final output -> original source.
+           if (maps.length > 0) {
+             try {
+               const composed = remapping(maps, () => null);
+               const sourceURL = `sandbox://${this.uuid}/${fileName}`;
+               this._sourceMapRegistry.set(sourceURL, {
+                 map: composed,
+                 originalSource,
+                 filename: fileName,
+               });
+             } catch (mapErr) {
+               console.warn('[source-map] Failed to compose maps for', fileName, mapErr);
+             }
+           }
+         
+            return source;
           })
  
        this.registerInterop('_getState', async () => {
@@ -6936,7 +7131,7 @@ function tryResolveFileOrPackage(basePath, vfs) {
     //  let transformedCode = code;
         // Generate runtime code
       
-        const custom = imports.map(i => transformImportsToLoadModule(this.uuid,i));
+        const custom = imports.map(i => transformImportsToLoadModule(this.uuid, i).code);
 
          
         
@@ -6962,7 +7157,18 @@ function tryResolveFileOrPackage(basePath, vfs) {
         }
         
         
-        runtimeCode = SandboxRuntime.generate(transformImportsToLoadModule(this.uuid, cleanedCode, this.config.fileName), {
+        // Transform the main entry code and capture its source map for error mapping.
+        const mainTransform = transformImportsToLoadModule(this.uuid, cleanedCode, this.config.fileName);
+        if (mainTransform.map) {
+          const sourceURL = `sandbox://${this.uuid}/${this.config.fileName}`;
+          this._sourceMapRegistry.set(sourceURL, {
+            map: mainTransform.map,
+            originalSource: cleanedCode,
+            filename: this.config.fileName,
+          });
+        }
+        
+        runtimeCode = SandboxRuntime.generate(mainTransform.code, {
           imports:custom,
           logNetworkRequests: this.config.logNetworkRequests,
           interopVariable:this.config.interopVariable,
@@ -7006,6 +7212,10 @@ function tryResolveFileOrPackage(basePath, vfs) {
                         const loc = err?.loc;
         const message = err?.message;
                           console.log(err)
+        // If code generation itself failed (e.g. a syntax error in the user's
+        // code), runtimeCode was never assigned — skip the source-mapping and
+        // reject with the original error instead of crashing here.
+        if (runtimeCode) {
         const line = runtimeCode.slice(0, runtimeCode.indexOf("//__$PROVIDED_RUNTIME_CODE__/")).split("\n").length;
 
          
@@ -7037,6 +7247,7 @@ function tryResolveFileOrPackage(basePath, vfs) {
                   
                 err = formatErrors(code, err)
                 }
+        } // end if (runtimeCode)
         context.cleanup();
         this.emit('execution:error', { id: executionId, error: err.message });
         reject(err);

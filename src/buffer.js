@@ -2681,8 +2681,8 @@ function SlowBuffer(size) {
   return createUnsafeBuffer(size);
 }
 
-Object.setPrototypeOf(SlowBuffer.prototype, Uint8Array.prototype);
-Object.setPrototypeOf(SlowBuffer, Uint8Array);
+Object.setPrototypeOf(SlowBuffer.prototype, Buffer.prototype);
+Object.setPrototypeOf(SlowBuffer, Buffer);
 
 function allocate(size) {
   if (size <= 0) {

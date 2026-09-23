@@ -1,6 +1,7 @@
 import { jest, describe, test, expect, beforeAll } from '@jest/globals';
 import { WASI } from '../src/wasi.js';
 import { WASI as NodeWASI } from 'wasi';
+import { wasi as wasiDefs } from '@bjorn3/browser_wasi_shim';
 
 const throwsCode = (fn) => {
   try {
@@ -375,6 +376,105 @@ describe('honest syscall behaviour', () => {
   test('sched_yield is a successful noop', () => {
     const wasi = new WASI({ version: 'preview1' });
     expect(wasi.wasiImport.sched_yield()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Filesystem engine: preopens are real virtual directories now, not stubs.
+// ---------------------------------------------------------------------------
+describe('preopen filesystem (shim engine)', () => {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  // fd rights sufficient for create/write/read/seek/tell on guest files
+  const RIGHTS_RW = wasiDefs.RIGHTS_FD_READ | wasiDefs.RIGHTS_FD_WRITE |
+    wasiDefs.RIGHTS_FD_SEEK | wasiDefs.RIGHTS_FD_TELL;
+
+  function setupPreopen() {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const wasi = new WASI({
+      version: 'preview1',
+      preopens: { '/sandbox': '/host/ignored-in-browser' },
+    });
+    wasi.finalizeBindings(mockInstance({ memory }));
+    return {
+      wasi,
+      v: new DataView(memory.buffer),
+      u8: new Uint8Array(memory.buffer),
+    };
+  }
+
+  function guestBytes(u8, ptr, str) {
+    u8.set(enc.encode(str), ptr);
+  }
+
+  test('preopen fd exposes the guest path via fd_prestat_dir_name', () => {
+    const { wasi, v, u8 } = setupPreopen();
+    expect(wasi.wasiImport.fd_prestat_get(3, 64)).toBe(0);
+    expect(wasi.wasiImport.fd_prestat_dir_name(3, 128, 32)).toBe(0);
+    expect(dec.decode(u8.slice(128, 128 + 8))).toBe('/sandbox');
+    // without a preopen there is no fd 3
+    const bare = new WASI({ version: 'preview1' });
+    bare.finalizeBindings(mockInstance({ memory: new WebAssembly.Memory({ initial: 1 }) }));
+    expect(bare.wasiImport.fd_prestat_get(3, 64)).toBe(8); // BADF
+  });
+
+  test('path_open + fd_write + fd_seek + fd_read round-trip a file', () => {
+    const { wasi, v, u8 } = setupPreopen();
+    guestBytes(u8, 64, 'hello.txt');
+    expect(wasi.wasiImport.path_open(3, 0, 64, 9, wasiDefs.OFLAGS_CREAT, RIGHTS_RW, 0, 0, 16)).toBe(0);
+    const fd = v.getUint32(16, true);
+    expect(fd).toBeGreaterThanOrEqual(3);
+
+    const msg = enc.encode('hi wasi fs\n');
+    u8.set(msg, 256);
+    v.setUint32(32, 256, true); // iov[0].buf
+    v.setUint32(36, msg.length, true); // iov[0].buf_len
+    expect(wasi.wasiImport.fd_write(fd, 32, 1, 48)).toBe(0);
+    expect(v.getUint32(48, true)).toBe(msg.length);
+
+    expect(wasi.wasiImport.fd_seek(fd, 0n, wasiDefs.WHENCE_SET, 56)).toBe(0);
+    expect(v.getBigUint64(56, true)).toBe(0n);
+
+    v.setUint32(320, 512, true); // iov[0].buf
+    v.setUint32(324, 64, true); // iov[0].buf_len
+    expect(wasi.wasiImport.fd_read(fd, 320, 1, 340)).toBe(0);
+    const nread = v.getUint32(340, true);
+    expect(nread).toBe(msg.length);
+    expect(dec.decode(u8.slice(512, 512 + nread))).toBe('hi wasi fs\n');
+  });
+
+  test('path_open without O_CREAT fails for a missing file', () => {
+    const { wasi, u8 } = setupPreopen();
+    guestBytes(u8, 64, 'nope.txt');
+    // 44 == __WASI_ERRNO_NOENT
+    expect(wasi.wasiImport.path_open(3, 0, 64, 8, 0, RIGHTS_RW, 0, 0, 16)).toBe(44);
+  });
+
+  test('fd_readdir lists files created in the preopen', () => {
+    const { wasi, v, u8 } = setupPreopen();
+    guestBytes(u8, 64, 'listed.txt');
+    expect(wasi.wasiImport.path_open(3, 0, 64, 10, wasiDefs.OFLAGS_CREAT, RIGHTS_RW, 0, 0, 16)).toBe(0);
+    expect(wasi.wasiImport.fd_readdir(3, 512, 512, 0n, 32)).toBe(0);
+    const used = v.getUint32(32, true);
+    expect(used).toBeGreaterThan(0);
+    expect(dec.decode(u8.slice(512, 512 + used))).toContain('listed.txt');
+  });
+
+  test('path_create_directory and path_filestat_get work on the preopen', () => {
+    const { wasi, v, u8 } = setupPreopen();
+    guestBytes(u8, 64, 'subdir');
+    expect(wasi.wasiImport.path_create_directory(3, 64, 6)).toBe(0);
+    guestBytes(u8, 64, 'sized.txt');
+    expect(wasi.wasiImport.path_open(3, 0, 64, 9, wasiDefs.OFLAGS_CREAT, RIGHTS_RW, 0, 0, 16)).toBe(0);
+    const msg = enc.encode('12345');
+    u8.set(msg, 256);
+    v.setUint32(32, 256, true);
+    v.setUint32(36, msg.length, true);
+    const fd = v.getUint32(16, true);
+    expect(wasi.wasiImport.fd_write(fd, 32, 1, 48)).toBe(0);
+    // filestat.st_size sits at +32 in the serialized Filestat struct
+    expect(wasi.wasiImport.path_filestat_get(3, 0, 64, 9, 128)).toBe(0);
+    expect(v.getBigUint64(128 + 32, true)).toBe(5n);
   });
 });
 
