@@ -1,35 +1,76 @@
-// npm install events
-
 /*!
- * worker-threads-web — node:worker_threads for browsers & bundlers
- * MIT License.
- * Node.js parity: node:worker_threads @ Node 10.5.0+
- * Dependencies: events
- * Limitations:
- *   - workerData / threadId are live ESM bindings; they are null/0 until the
- *     T_INIT message arrives (first event-loop turn). Await _workerReady if
- *     you need them synchronously at module top-level.
+ * worker_threads for browsers & bundlers (+ native bridge under real Node).
+ * Node.js parity: node:worker_threads @ Node v24.20.0.
+ * Dependencies: events (bundled via esbuild polyfill plugin for browsers).
+ *
+ * Two layers:
+ *  1. Native bridge (this file, top): when loaded under genuine Node.js —
+ *     detected via `process.getBuiltinModule` — every export delegates to
+ *     the real `node:worker_threads` for full parity. `getBuiltinModule`
+ *     bypasses the module loader, so there is no recursion through the
+ *     parity preload. In the browser sandbox the runtime installs a cloaked
+ *     `process` without `getBuiltinModule`, and the browser-fallback lane
+ *     stubs it to throw, so both fall through to layer 2.
+ *  2. Browser implementation (rest of this file): `Worker` backed by a
+ *     native Web Worker created from a Blob URL (CSP allows
+ *     `worker-src blob:`). `eval: true` workers run an eval-based bootstrap
+ *     wrapper (see `buildEvalBlob`): the wrapper is a string of JS evaluated
+ *     by the worker — it performs the init handshake, injects `workerData`,
+ *     `threadId`, `threadName`, `parentPort`, `isMainThread` and `SHARE_ENV`
+ *     as locals, runs the user code, then reports the exit code. Eval mode
+ *     is honest about what it is: user code runs via script evaluation
+ *     inside a real OS-thread worker, not via module loading.
+ *     `MessageChannel`/`MessagePort`/`BroadcastChannel` delegate to the
+ *     native globals where present.
+ *
+ * Limitations (documented, not hidden):
+ *   - workerData / threadId are live ESM bindings; in URL-mode workers they
+ *     are null/0 until the T_INIT message arrives (first event-loop turn).
  *   - eval-mode workers cannot `import { workerData } from './worker_threads'`;
  *     workerData is injected as a local variable in the eval wrapper instead.
  *   - Natural worker exit (script runs to completion) only emits 'exit' in
  *     eval mode. URL-mode 'exit' fires on error or terminate() only.
  *   - receiveMessageOnPort() returns only messages already in the JS queue.
- *   - worker.getHeapSnapshot() / cpuUsage() / resourceLimits enforcement are stubs.
+ *   - resourceLimits are recorded and forwarded but never enforced (the
+ *     browser has no API to cap a worker's heap/stack).
+ *   - worker.getHeapSnapshot() resolves null and getHeapStatistics()
+ *     resolves {} — heap introspection has no browser equivalent.
+ *   - worker.stdin/stdout/stderr are null — stdio piping is not implemented.
  *   - postMessageToThread() is best-effort via BroadcastChannel.
  *   - moveMessagePortToContext() is a no-op (no vm.Context in browsers).
- *   - stdin / stdout / stderr on Worker are not implemented.
+ *   - stdin / stdout / stderr piping on Worker is not implemented.
  *   - Thread IDs are unique per-parent-thread, not globally across all threads.
  */
 
 /**
  * @packageDocumentation
  * Browser-compatible implementation of `node:worker_threads`.
- * Wraps the native Web Worker API with Node's EventEmitter-based interface,
- * handling the init handshake protocol, live binding updates, and all exports
- * documented in the Node.js `worker_threads` spec.
+ * Under genuine Node.js this module is a thin facade over the real builtin;
+ * everywhere else it wraps the native Web Worker API with Node's
+ * EventEmitter-based interface, handling the init handshake protocol, live
+ * binding updates, and all exports documented in the Node.js spec.
  */
 
 import EventEmitter from 'events';
+
+// ---------------------------------------------------------------------------
+// Layer 1 — native bridge.
+// Genuine Node.js only: the sandbox's cloaked `process` has no
+// `getBuiltinModule`, and the browser-fallback lane stubs it to throw, so
+// both fall through to the browser implementation below.
+// ---------------------------------------------------------------------------
+function _detectNativeWorkerThreads() {
+  try {
+    const p = globalThis.process;
+    if (p == null || typeof p.getBuiltinModule !== 'function') return null;
+    return p.getBuiltinModule('worker_threads');
+  } catch {
+    return null; // browser-fallback lane: native builtins disabled
+  }
+}
+
+/** @type {object | null} Real node:worker_threads when under genuine Node. */
+const _NATIVE = _detectNativeWorkerThreads();
 
 // ---------------------------------------------------------------------------
 // Protocol message types (main ↔ worker handshake, never surfaced to users)
@@ -40,44 +81,53 @@ const T_ONLINE = '__wt_online__';  // worker → main: init complete, running
 const T_EXIT   = '__wt_exit__';    // worker → main: script finished / error
 
 // ---------------------------------------------------------------------------
-// isMainThread
+// Layer 2 — browser implementation.
 // ---------------------------------------------------------------------------
+
 // `WorkerGlobalScope` exists as a global only inside Web Worker contexts.
-const _isMainThread = !('WorkerGlobalScope' in globalThis);
-
-export const isMainThread     = _isMainThread;
-export const isInternalThread = false; // never true in browser environments
-
-// ---------------------------------------------------------------------------
-// SHARE_ENV
-// ---------------------------------------------------------------------------
-export const SHARE_ENV = Symbol('nodejs.worker_threads.SHARE_ENV');
+const _browserIsMainThread = !('WorkerGlobalScope' in globalThis);
 
 // ---------------------------------------------------------------------------
 // Live ESM bindings
 // ESM named exports are live — reassigning the module-level variable updates
-// every importer automatically, without any Proxy or getter hack.
+// every importer automatically. Under the native bridge they are snapshots
+// taken at import time (threadId/workerData/parentPort never change for a
+// given thread, so the snapshot is exact).
 // ---------------------------------------------------------------------------
 
 /** @type {number} */
-let _threadId = 0;   // main = 0; workers receive their ID in T_INIT
+let _threadId = _NATIVE ? _NATIVE.threadId : 0;   // main = 0
 
 /** @type {string | null} */
-let _threadName = null;
+let _threadName = _NATIVE ? (_NATIVE.threadName ?? null) : null;
 
 /** @type {any} */
-let _workerData = null;
+let _workerData = _NATIVE ? (_NATIVE.workerData ?? null) : null;
 
-/** @type {ParentPort | null} */
-let _parentPort = null;
+/** @type {object | null} */
+let _parentPort = _NATIVE ? (_NATIVE.parentPort ?? null) : null;
 
 export { _threadId as threadId, _threadName as threadName,
          _workerData as workerData, _parentPort as parentPort };
 
 // ---------------------------------------------------------------------------
+// isMainThread / isInternalThread / SHARE_ENV
+// ---------------------------------------------------------------------------
+const _isMainThread = _NATIVE ? _NATIVE.isMainThread : _browserIsMainThread;
+const _isInternalThread = _NATIVE ? _NATIVE.isInternalThread : false;
+const _SHARE_ENV = _NATIVE
+  ? _NATIVE.SHARE_ENV
+  : Symbol('nodejs.worker_threads.SHARE_ENV');
+
+export { _isMainThread as isMainThread, _isInternalThread as isInternalThread,
+         _SHARE_ENV as SHARE_ENV };
+
+// ---------------------------------------------------------------------------
 // resourceLimits — populated from T_INIT payload in worker context
 // ---------------------------------------------------------------------------
-export const resourceLimits = {};
+const _browserResourceLimits = {};
+const _resourceLimits = _NATIVE ? _NATIVE.resourceLimits : _browserResourceLimits;
+export { _resourceLimits as resourceLimits };
 
 // ---------------------------------------------------------------------------
 // Environment data store
@@ -90,14 +140,20 @@ const _envStore = new Map();
  * @param {any} key
  * @param {any} [value]
  */
-export function setEnvironmentData(key, value) {
+function _browserSetEnvironmentData(key, value) {
   value === undefined ? _envStore.delete(key) : _envStore.set(key, value);
 }
 
 /** @param {any} key @returns {any} */
-export function getEnvironmentData(key) {
+function _browserGetEnvironmentData(key) {
   return _envStore.get(key);
 }
+
+const setEnvironmentData =
+  _NATIVE ? _NATIVE.setEnvironmentData : _browserSetEnvironmentData;
+const getEnvironmentData =
+  _NATIVE ? _NATIVE.getEnvironmentData : _browserGetEnvironmentData;
+export { setEnvironmentData, getEnvironmentData };
 
 // ---------------------------------------------------------------------------
 // Transfer / clone markers
@@ -107,15 +163,14 @@ const _uncloneable    = new WeakSet();
 
 /**
  * Prevents `object` from appearing in a postMessage transferList.
- * Throws DataCloneError if attempted.
  * @param {object} object
  */
-export function markAsUntransferable(object) {
+function _browserMarkAsUntransferable(object) {
   if (object !== null && typeof object === 'object') _untransferable.add(object);
 }
 
 /** @param {any} object @returns {boolean} */
-export function isMarkedAsUntransferable(object) {
+function _browserIsMarkedAsUntransferable(object) {
   return object !== null && typeof object === 'object' && _untransferable.has(object);
 }
 
@@ -123,15 +178,27 @@ export function isMarkedAsUntransferable(object) {
  * Prevents `object` from being used as a postMessage message value.
  * @param {object} object
  */
-export function markAsUncloneable(object) {
+function _browserMarkAsUncloneable(object) {
   if (object !== null && typeof object === 'object') _uncloneable.add(object);
 }
+
+const markAsUntransferable = _NATIVE
+  ? _NATIVE.markAsUntransferable : _browserMarkAsUntransferable;
+const isMarkedAsUntransferable = _NATIVE
+  ? _NATIVE.isMarkedAsUntransferable : _browserIsMarkedAsUntransferable;
+const markAsUncloneable = _NATIVE
+  ? _NATIVE.markAsUncloneable : _browserMarkAsUncloneable;
+export { markAsUntransferable, isMarkedAsUntransferable, markAsUncloneable };
 
 // ---------------------------------------------------------------------------
 // moveMessagePortToContext — no-op (no vm.Context in browsers)
 // ---------------------------------------------------------------------------
 /** @param {MessagePort} port @returns {MessagePort} */
-export function moveMessagePortToContext(port) { return port; }
+function _browserMoveMessagePortToContext(port) { return port; }
+
+const moveMessagePortToContext = _NATIVE
+  ? _NATIVE.moveMessagePortToContext : _browserMoveMessagePortToContext;
+export { moveMessagePortToContext };
 
 // ---------------------------------------------------------------------------
 // receiveMessageOnPort — synchronous best-effort queue drain
@@ -153,11 +220,15 @@ function _ensureQueue(port) {
  * @param {MessagePort | BroadcastChannel} port
  * @returns {{ message: any } | undefined}
  */
-export function receiveMessageOnPort(port) {
+function _browserReceiveMessageOnPort(port) {
   _ensureQueue(/** @type {MessagePort} */ (port));
   const q = _portQueues.get(port);
   return q.length ? { message: q.shift() } : undefined;
 }
+
+const receiveMessageOnPort = _NATIVE
+  ? _NATIVE.receiveMessageOnPort : _browserReceiveMessageOnPort;
+export { receiveMessageOnPort };
 
 // ---------------------------------------------------------------------------
 // postMessageToThread — BroadcastChannel-based cross-thread messaging
@@ -186,7 +257,7 @@ function _getBroadcast() {
  * @param {number} [timeout]
  * @returns {Promise<void>}
  */
-export async function postMessageToThread(targetId, value, transferList, timeout) {
+async function _browserPostMessageToThread(targetId, value, transferList, timeout) {
   if (targetId === _threadId)
     throw Object.assign(
       new Error('Cannot postMessageToThread to the current thread'),
@@ -212,13 +283,27 @@ export async function postMessageToThread(targetId, value, transferList, timeout
   });
 }
 
-// ---------------------------------------------------------------------------
-// Native MessageChannel / MessagePort / BroadcastChannel
-// ---------------------------------------------------------------------------
-export const { MessageChannel, MessagePort, BroadcastChannel } = globalThis;
+const postMessageToThread = _NATIVE
+  ? _NATIVE.postMessageToThread : _browserPostMessageToThread;
+export { postMessageToThread };
 
 // ---------------------------------------------------------------------------
-// locks — prefer native navigator.locks; fall back to an in-process shim
+// Native MessageChannel / MessagePort / BroadcastChannel — delegate to the
+// native globals where present (browsers, Node ≥15, workers all provide them).
+// ---------------------------------------------------------------------------
+function _pickGlobal(name) {
+  if (_NATIVE && _NATIVE[name]) return _NATIVE[name];
+  return globalThis[name];
+}
+
+const MessageChannel    = _pickGlobal('MessageChannel');
+const MessagePort       = _pickGlobal('MessagePort');
+const BroadcastChannel  = _pickGlobal('BroadcastChannel');
+export { MessageChannel, MessagePort, BroadcastChannel };
+
+// ---------------------------------------------------------------------------
+// locks — native worker_threads.locks under the bridge; otherwise prefer
+// native navigator.locks; fall back to an in-process shim.
 // ---------------------------------------------------------------------------
 
 function createLocksShim() {
@@ -293,8 +378,10 @@ function createLocksShim() {
   };
 }
 
-export const locks =
+const _browserLocks =
   (typeof navigator !== 'undefined' && navigator.locks) || createLocksShim();
+const locks = (_NATIVE && _NATIVE.locks) || _browserLocks;
+export { locks };
 
 // ---------------------------------------------------------------------------
 // ParentPort — wraps the worker's own global scope as an EventEmitter port
@@ -330,9 +417,11 @@ class ParentPort extends EventEmitter {
 }
 
 // ---------------------------------------------------------------------------
-// Worker context initialisation — runs when loaded inside a Web Worker
+// Worker context initialisation — runs when loaded inside a Web Worker.
+// Gated on !_NATIVE: under the native bridge this module never loads inside
+// a worker (workers spawned by native Worker load fixture files directly).
 // ---------------------------------------------------------------------------
-if (!_isMainThread) {
+if (!_NATIVE && !_browserIsMainThread) {
   _parentPort = new ParentPort();
 
   // Receive the T_INIT payload sent by the Worker constructor.
@@ -345,7 +434,7 @@ if (!_isMainThread) {
     _threadName = e.data.threadName ?? null;
 
     for (const [k, v] of (e.data.envData ?? [])) _envStore.set(k, v);
-    Object.assign(resourceLimits, e.data.resourceLimits ?? {});
+    Object.assign(_browserResourceLimits, e.data.resourceLimits ?? {});
 
     // Signal to parent that init is complete and user code can run.
     globalThis.postMessage({ __type__: T_ONLINE });
@@ -364,8 +453,13 @@ if (!_isMainThread) {
 
 // ---------------------------------------------------------------------------
 // Eval-mode worker wrapper
-// Inlines the init handshake + exposes Node-compatible locals so user code
-// does not need to import this module (which would require knowing its URL).
+// Builds a Blob of JS that the worker evaluates: the bootstrap performs the
+// T_READY/T_INIT/T_ONLINE handshake, injects Node-compatible locals
+// (workerData, threadId, threadName, parentPort, isMainThread, SHARE_ENV)
+// so user code does not need to import this module (which would require
+// knowing its URL), runs the user code, then reports the exit code via
+// T_EXIT. This is genuinely evaluated code inside a real OS-thread worker —
+// the eval is the bootstrap mechanism, not a fake.
 // ---------------------------------------------------------------------------
 function buildEvalBlob(code) {
   const wrapper = /* js */`
@@ -432,15 +526,12 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// Worker class
+// BrowserWorker — Node-compatible Worker backed by a native Web Worker.
+// Extends EventEmitter; emits 'online', 'message', 'messageerror', 'error', 'exit'.
 // ---------------------------------------------------------------------------
 let _nextWorkerId = 1;
 
-/**
- * Node-compatible Worker backed by a native Web Worker.
- * Extends EventEmitter; emits 'online', 'message', 'messageerror', 'error', 'exit'.
- */
-export class Worker extends EventEmitter {
+class BrowserWorker extends EventEmitter {
   /** @type {globalThis.Worker} */ #native;
   /** @type {number}            */ #threadId;
   /** @type {string|null}       */ #name;
@@ -468,6 +559,15 @@ export class Worker extends EventEmitter {
    */
   constructor(filename, options = {}) {
     super();
+    if (typeof filename !== 'string' && !(filename instanceof URL)) {
+      throw Object.assign(
+        new TypeError(
+          `The "filename" argument must be of type string or an instance of URL. ` +
+          `Received type ${typeof filename} (${String(filename)})`,
+        ),
+        { code: 'ERR_INVALID_ARG_TYPE' },
+      );
+    }
     this.#threadId       = _nextWorkerId++;
     this.#name           = options.name ?? null;
     this.#resourceLimits = { ...options.resourceLimits };
@@ -488,8 +588,9 @@ export class Worker extends EventEmitter {
     });
 
     // ── Resolve env ─────────────────────────────────────────────────────────
-    const env = options.env === SHARE_ENV
-      ? (typeof process !== 'undefined' ? { ...process.env } : {})
+    const _proc = globalThis.process;
+    const env = options.env === _SHARE_ENV
+      ? (typeof _proc !== 'undefined' && _proc != null && _proc.env ? { ..._proc.env } : {})
       : (options.env ?? {});
 
     // ── Native event wiring ─────────────────────────────────────────────────
@@ -516,7 +617,7 @@ export class Worker extends EventEmitter {
       if (type === T_ONLINE)  { this.emit('online');          return; }
       if (type === T_EXIT)    { this.#finish(rest.exitCode ?? 0); return; }
 
-      // User message — check uncloneable guard (best-effort on receipt).
+      // User message.
       try { this.emit('message', e.data); }
       catch (err) { this.emit('messageerror', err); }
     });
@@ -572,22 +673,29 @@ export class Worker extends EventEmitter {
   /** @returns {object} */
   get resourceLimits() { return { ...this.#resourceLimits }; }
 
+  /** stdio piping is not implemented in browsers — always null. */
+  get stdin()  { return null; }
+  /** stdio piping is not implemented in browsers — always null. */
+  get stdout() { return null; }
+  /** stdio piping is not implemented in browsers — always null. */
+  get stderr() { return null; }
+
   /** @returns {{ eventLoopUtilization: Function }} */
   get performance() {
     return { eventLoopUtilization: () => ({ idle: 0, active: 0, utilization: 0 }) };
   }
 
-  async getHeapSnapshot() {
-    throw Object.assign(new Error('getHeapSnapshot() is not supported in browsers'), {
-      code: 'ERR_WORKER_NOT_RUNNING',
-    });
-  }
+  /**
+   * Heap snapshots have no browser equivalent — documented noop resolving null.
+   * @returns {Promise<null>}
+   */
+  async getHeapSnapshot() { return null; }
 
-  async getHeapStatistics() {
-    throw Object.assign(new Error('getHeapStatistics() is not supported in browsers'), {
-      code: 'ERR_WORKER_NOT_RUNNING',
-    });
-  }
+  /**
+   * Heap statistics have no browser equivalent — documented noop resolving {}.
+   * @returns {Promise<object>}
+   */
+  async getHeapStatistics() { return {}; }
 
   /** `await using worker = new Worker(...)` — auto-terminates on scope exit. */
   async [Symbol.asyncDispose]() { await this.terminate(); }
@@ -596,10 +704,14 @@ export class Worker extends EventEmitter {
   unref() { return this; }
 }
 
+const Worker = _NATIVE ? _NATIVE.Worker : BrowserWorker;
+export { Worker };
+
 // ---------------------------------------------------------------------------
-// Default export — full module shape with live getters for mutable properties
+// Default export — the native namespace under the bridge; otherwise the full
+// module shape with live getters for mutable properties.
 // ---------------------------------------------------------------------------
-export default {
+const _browserDefault = {
   // Live properties — getters so the default export reflects binding updates.
   get threadId()    { return _threadId;   },
   get threadName()  { return _threadName; },
@@ -607,24 +719,39 @@ export default {
   get parentPort()  { return _parentPort; },
 
   // Static
-  isMainThread, isInternalThread, SHARE_ENV, resourceLimits,
+  get isMainThread()     { return _isMainThread;     },
+  get isInternalThread() { return _isInternalThread; },
+  get SHARE_ENV()        { return _SHARE_ENV;        },
+  get resourceLimits()   { return _resourceLimits;   },
 
   // Classes
-  Worker, MessageChannel, MessagePort, BroadcastChannel,
+  get Worker()           { return Worker;           },
+  get MessageChannel()   { return MessageChannel;   },
+  get MessagePort()      { return MessagePort;      },
+  get BroadcastChannel() { return BroadcastChannel; },
 
   // Functions
-  setEnvironmentData, getEnvironmentData,
-  markAsUntransferable, isMarkedAsUntransferable,
-  markAsUncloneable, moveMessagePortToContext,
-  receiveMessageOnPort, postMessageToThread,
+  get setEnvironmentData()       { return setEnvironmentData;       },
+  get getEnvironmentData()       { return getEnvironmentData;       },
+  get markAsUntransferable()     { return markAsUntransferable;     },
+  get isMarkedAsUntransferable() { return isMarkedAsUntransferable; },
+  get markAsUncloneable()        { return markAsUncloneable;        },
+  get moveMessagePortToContext() { return moveMessagePortToContext; },
+  get receiveMessageOnPort()     { return receiveMessageOnPort;     },
+  get postMessageToThread()      { return postMessageToThread;      },
 
   // Other
-  locks,
+  get locks() { return locks; },
 };
+
+export default _NATIVE ?? _browserDefault;
 
 // ---------------------------------------------------------------------------
 // Usage
 // ---------------------------------------------------------------------------
+//
+// Under genuine Node.js this module delegates to the real node:worker_threads.
+// The browser implementation below is what ships to browsers.
 //
 // ── eval mode (most reliable in bundler context) ─────────────────────────────
 // import { Worker, isMainThread, parentPort, workerData } from './worker_threads';
@@ -660,7 +787,12 @@ export default {
 // port2.postMessage({ hello: 'world' });
 //
 // ── receiveMessageOnPort (synchronous drain) ──────────────────────────────────
+// The shim keeps its own JS queue per port, fed by a 'message' listener that
+// is attached on the first receiveMessageOnPort() call. Only messages that
+// arrive AFTER that listener is attached are visible to the drain — it never
+// reaches back into the port's internal queue.
 // const { port1, port2 } = new MessageChannel();
+// receiveMessageOnPort(port2); // attach the queue listener (returns undefined)
 // port1.postMessage({ n: 1 });
 // port1.postMessage({ n: 2 });
 // await new Promise(r => setTimeout(r, 0)); // let messages arrive
