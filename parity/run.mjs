@@ -41,10 +41,19 @@ const expected = fs.existsSync(expectedPath)
   : {};
 
 const results = [];
+// Node's test files declare required CLI flags via `// Flags: --foo --bar`
+// (usually in the first few lines). Parse and pass them to the child.
+function extractFlags(file) {
+  const head = fs.readFileSync(path.join(testsDir, file), 'utf8')
+    .split('\n', 20).join('\n');
+  const m = head.match(/^\/\/ Flags:\s*(.+)$/m);
+  return m ? m[1].trim().split(/\s+/) : [];
+}
 for (const file of files) {
+  const flags = extractFlags(file);
   const r = spawnSync(
     process.execPath,
-    ['--import', preload, path.join(testsDir, file)],
+    [...flags, '--import', preload, path.join(testsDir, file)],
     {
       env: { ...process.env, PARITY_TARGET: target },
       timeout: 30000,
