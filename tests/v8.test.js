@@ -1,4 +1,5 @@
-import { jest, describe, test, expect } from '@jest/globals';
+import { jest, describe, test, expect, afterEach } from '@jest/globals';
+import { unlinkSync } from 'node:fs';
 import v8, {
   getHeapStatistics,
   getHeapSpaceStatistics,
@@ -45,28 +46,32 @@ describe('v8 shim', () => {
   });
 
   describe('getHeapStatistics()', () => {
-    test('returns an object with all expected numeric keys', () => {
+    test('returns an object with the exact Node v24 numeric key set', () => {
       const stats = getHeapStatistics();
+      // Real Node has exactly these 14 keys — notably there is no
+      // `total_allocated_bytes` (removed long before v24).
       const expectedKeys = [
         'total_heap_size', 'total_heap_size_executable', 'total_physical_size',
         'total_available_size', 'used_heap_size', 'heap_size_limit',
         'malloced_memory', 'peak_malloced_memory', 'does_zap_garbage',
         'number_of_native_contexts', 'number_of_detached_contexts',
         'total_global_handles_size', 'used_global_handles_size',
-        'external_memory', 'total_allocated_bytes',
+        'external_memory',
       ];
+      expect(Object.keys(stats).sort()).toEqual([...expectedKeys].sort());
       for (const key of expectedKeys) {
-        expect(stats).toHaveProperty(key);
         expect(typeof stats[key]).toBe('number');
       }
     });
   });
 
   describe('getHeapSpaceStatistics()', () => {
-    test('returns an array of 9 space objects', () => {
+    test('returns a non-empty array of space objects', () => {
       const spaces = getHeapSpaceStatistics();
       expect(Array.isArray(spaces)).toBe(true);
-      expect(spaces).toHaveLength(9);
+      // The count is V8-version-dependent (13 in Node v24.20.0), so assert
+      // shape rather than an exact length.
+      expect(spaces.length).toBeGreaterThan(0);
     });
 
     test('each space has correct shape', () => {
@@ -101,28 +106,55 @@ describe('v8 shim', () => {
   });
 
   describe('getCppHeapStatistics()', () => {
-    test('returns object with total_allocated_size and used_size', () => {
+    test('returns object with the real v24 key set', () => {
       const stats = getCppHeapStatistics();
-      expect(typeof stats.total_allocated_size).toBe('number');
-      expect(typeof stats.used_size).toBe('number');
+      expect(typeof stats.committed_size_bytes).toBe('number');
+      expect(typeof stats.resident_size_bytes).toBe('number');
+      expect(typeof stats.used_size_bytes).toBe('number');
+      expect(Array.isArray(stats.space_statistics)).toBe(true);
+      expect(Array.isArray(stats.type_names)).toBe(true);
+      expect(stats.detail_level).toBe('detailed');
+    });
+
+    test("honours the 'brief' detail level", () => {
+      expect(getCppHeapStatistics('brief').detail_level).toBe('brief');
+    });
+
+    test('rejects an invalid detail level like Node', () => {
+      expect(() => getCppHeapStatistics('bogus')).toThrow(
+        expect.objectContaining({ code: 'ERR_INVALID_ARG_VALUE' }),
+      );
     });
   });
 
   describe('getHeapSnapshot()', () => {
-    test('returns null (no real V8 snapshot in browser)', () => {
-      expect(getHeapSnapshot()).toBeNull();
+    test('returns a readable stream of the snapshot (real Node behaviour)', () => {
+      const snapshot = getHeapSnapshot();
+      expect(typeof snapshot.pipe).toBe('function');
+      expect(typeof snapshot.read).toBe('function');
+      snapshot.destroy();
     });
   });
 
   describe('writeHeapSnapshot()', () => {
+    const created = [];
+    afterEach(() => {
+      for (const f of created.splice(0)) {
+        try { unlinkSync(f); } catch { /* already gone */ }
+      }
+    });
+
     test('returns provided filename when given', () => {
-      expect(writeHeapSnapshot('my.heapsnapshot')).toBe('my.heapsnapshot');
+      const name = `test-${Date.now()}.heapsnapshot`;
+      expect(writeHeapSnapshot(name)).toBe(name);
+      created.push(name);
     });
 
     test('returns a generated filename when called without arguments', () => {
       const result = writeHeapSnapshot();
       expect(typeof result).toBe('string');
       expect(result).toMatch(/\.heapsnapshot$/);
+      created.push(result);
     });
   });
 
@@ -173,15 +205,19 @@ describe('v8 shim', () => {
       expect(() => new Deserializer(Buffer.alloc(0))).not.toThrow();
     });
 
-    test('stub methods return expected types', () => {
+    test('readHeader() throws on invalid data (matches Node)', () => {
       const d = new Deserializer(Buffer.alloc(8));
+      expect(() => d.readHeader()).toThrow(/Unable to deserialize/);
+    });
+
+    test('reads back real Serializer output', () => {
+      const d = new Deserializer(serialize({ a: 1 }));
       expect(d.readHeader()).toBe(true);
-      expect(d.readValue()).toBeNull();
-      expect(typeof d.readUint32()).toBe('number');
-      expect(Array.isArray(d.readUint64())).toBe(true);
-      expect(typeof d.readDouble()).toBe('number');
-      expect(Buffer.isBuffer(d.readRawBytes(4))).toBe(true);
-      expect(typeof d.getWireFormatVersion()).toBe('number');
+      expect(d.readValue()).toEqual({ a: 1 });
+    });
+
+    test('getWireFormatVersion() returns a number', () => {
+      expect(typeof new Deserializer(serialize(1)).getWireFormatVersion()).toBe('number');
     });
   });
 
@@ -237,14 +273,17 @@ describe('v8 shim', () => {
       expect(typeof startupSnapshot.isBuildingSnapshot).toBe('function');
     });
 
-    test('isBuildingSnapshot() returns false', () => {
-      expect(startupSnapshot.isBuildingSnapshot()).toBe(false);
+    test('isBuildingSnapshot() is falsy (real Node returns 0)', () => {
+      expect(startupSnapshot.isBuildingSnapshot()).toBeFalsy();
     });
 
-    test('callbacks do not throw', () => {
-      expect(() => startupSnapshot.addSerializeCallback(() => {}, {})).not.toThrow();
-      expect(() => startupSnapshot.addDeserializeCallback(() => {}, {})).not.toThrow();
-      expect(() => startupSnapshot.setDeserializeMainFunction(() => {}, {})).not.toThrow();
+    test('callbacks throw when not building a snapshot (matches Node)', () => {
+      expect(() => startupSnapshot.addSerializeCallback(() => {}, {}))
+        .toThrow(/not building startup snapshot/);
+      expect(() => startupSnapshot.addDeserializeCallback(() => {}, {}))
+        .toThrow(/not building startup snapshot/);
+      expect(() => startupSnapshot.setDeserializeMainFunction(() => {}, {}))
+        .toThrow(/not building startup snapshot/);
     });
   });
 
@@ -257,20 +296,31 @@ describe('v8 shim', () => {
       expect(typeof promiseHooks.createHook).toBe('function');
     });
 
-    test('individual hooks return a disposable with stop()', () => {
+    test('individual hooks return a stop function (matches Node)', () => {
       for (const method of ['onInit', 'onSettled', 'onBefore', 'onAfter']) {
-        const hook = promiseHooks[method](() => {});
-        expect(typeof hook.stop).toBe('function');
-        expect(() => hook.stop()).not.toThrow();
+        const stop = promiseHooks[method](() => {});
+        expect(typeof stop).toBe('function');
+        expect(() => stop()).not.toThrow();
       }
     });
 
-    test('createHook() returns enable/disable handle', () => {
-      const handle = promiseHooks.createHook({ init: () => {} });
-      expect(typeof handle.enable).toBe('function');
-      expect(typeof handle.disable).toBe('function');
-      expect(() => handle.enable()).not.toThrow();
-      expect(() => handle.disable()).not.toThrow();
+    test('a registered init hook fires, then stops firing after stop()', async () => {
+      let calls = 0;
+      const stop = promiseHooks.onInit(() => { calls++; });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(calls).toBeGreaterThan(0);
+      stop();
+      const afterStop = calls;
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(calls).toBe(afterStop);
+    });
+
+    test('createHook() returns a stop function (matches Node)', () => {
+      const stop = promiseHooks.createHook({ init: () => {} });
+      expect(typeof stop).toBe('function');
+      expect(() => stop()).not.toThrow();
     });
   });
 });
