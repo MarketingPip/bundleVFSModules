@@ -7036,6 +7036,10 @@ function tryResolveFileOrPackage(basePath, vfs) {
                         const loc = err?.loc;
         const message = err?.message;
                           console.log(err)
+        // If code generation itself failed (e.g. a syntax error in the user's
+        // code), runtimeCode was never assigned — skip the source-mapping and
+        // reject with the original error instead of crashing here.
+        if (runtimeCode) {
         const line = runtimeCode.slice(0, runtimeCode.indexOf("//__$PROVIDED_RUNTIME_CODE__/")).split("\n").length;
 
          
@@ -7067,6 +7071,7 @@ function tryResolveFileOrPackage(basePath, vfs) {
                   
                 err = formatErrors(code, err)
                 }
+        } // end if (runtimeCode)
         context.cleanup();
         this.emit('execution:error', { id: executionId, error: err.message });
         reject(err);
