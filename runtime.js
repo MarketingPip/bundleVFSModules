@@ -3323,7 +3323,7 @@ class SandboxRuntime {
     return `
 
 
-globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}}; 
+globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}, __SEA_ASSETS__:${JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined)}};
 
 window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_
 
@@ -6042,7 +6042,11 @@ export class CodeSandbox extends EventEmitter {
       interopVariable: options.interopVariable || "interop", // string
       process: options?.process || PROCESS_OBJECT, // array
       fileName: options?.fileName || "index.js", // string, 
-      fs: options?.fs || {}
+      fs: options?.fs || {},
+      // Virtual node:sea asset store (mirrors `fs` -> __USER_FILES__).
+      // { [key]: string | Uint8Array | ArrayBuffer | { encoding: 'utf8'|'base64', data: string } }
+      // Normalized by normalizeSeaAssets() and published as __SEA_ASSETS__.
+      seaAssets: options?.seaAssets || {}
     };
 
  
@@ -6966,7 +6970,8 @@ function tryResolveFileOrPackage(basePath, vfs) {
           isTest:containsNodeTest(cleanedImports),
           fileName:this.config.fileName,
           uuid:this.uuid,
-          fs: flattenFileTree(this.config.fs)
+          fs: flattenFileTree(this.config.fs),
+          seaAssets: normalizeSeaAssets(this.config.seaAssets)
         });
      
    
@@ -8452,6 +8457,46 @@ function detectMimeType(uint8) {
 }
 
 // 2. Then declare your helper function and main function
+
+// Normalize the `seaAssets` sandbox option into a JSON-safe map for the
+// bootstrap object: { [key]: { encoding: 'utf8'|'base64', data: string } }.
+// Accepted value shapes (mirrors the leniency of `fs` -> __USER_FILES__):
+//   string                                   -> utf8 text
+//   Uint8Array / ArrayBuffer / SharedArrayBuffer -> base64 bytes
+//   { encoding: 'utf8'|'base64', data: string }  -> used as-is
+// Anything else (including empty keys) is dropped: a misconfigured asset
+// must never break sandbox bootstrap.
+function normalizeSeaAssets(assets) {
+  const out = {};
+  if (!assets || typeof assets !== 'object') return out;
+  const entries = typeof assets.entries === 'function' && assets instanceof Map
+    ? assets.entries()
+    : Object.entries(assets);
+  for (const [key, value] of entries) {
+    if (typeof key !== 'string' || key === '') continue;
+    if (typeof value === 'string') {
+      out[key] = { encoding: 'utf8', data: value };
+    } else if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(value)) {
+      out[key] = { encoding: 'base64', data: base64EncodeBytes(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) };
+    } else if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer)) {
+      out[key] = { encoding: 'base64', data: base64EncodeBytes(new Uint8Array(value)) };
+    } else if (value && typeof value === 'object' && typeof value.data === 'string' &&
+               (value.encoding === 'utf8' || value.encoding === 'base64')) {
+      out[key] = { encoding: value.encoding, data: value.data };
+    }
+  }
+  return out;
+}
+
+function base64EncodeBytes(bytes) {
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
 function flattenFileTree(obj, parentPath = '') {
   let flat = {};
   if (!obj || typeof obj !== 'object') return flat;

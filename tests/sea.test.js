@@ -1,15 +1,22 @@
-import { jest, describe, test, expect, beforeEach } from '@jest/globals';
+import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 
-// Repo tests for src/sea.js — the honest browser stub for node:sea.
+// Repo tests for src/sea.js — node:sea backed by a virtual asset store.
 //
-// A browser sandbox is NEVER a Single Executable Application binary, so the
-// stub reports isSea() === false and returns empty values (undefined / [])
-// instead of throwing ERR_NOT_IN_SINGLE_EXECUTABLE_APPLICATION the way real
-// Node does outside a SEA binary. Argument validation (ERR_INVALID_ARG_TYPE)
-// is preserved with Node-exact messages. Verified differentially against
-// real node:sea @ v24.20.0.
+// Without a host-provided store (no globalThis._RUNTIME_.__SEA_ASSETS__,
+// which is the case under plain Node / direct import) the module keeps the
+// honest empty behavior: isSea() === false and the getters return empty
+// values (undefined / []) instead of throwing
+// ERR_NOT_IN_SINGLE_EXECUTABLE_APPLICATION the way real Node does outside
+// a SEA binary. Argument validation (ERR_INVALID_ARG_TYPE) is preserved
+// with Node-exact messages. Verified differentially against real node:sea
+// @ v24.20.0.
+//
+// When the host runtime embeds assets (sandbox `seaAssets` option →
+// __SEA_ASSETS__, or direct host assignment), the getters serve real data:
+// isSea() === true and getAsset()/getRawAsset()/getAssetAsBlob()/
+// getAssetKeys() round-trip the embedded bytes.
 
-describe('sea stub (browser: never a SEA binary)', () => {
+describe('sea without a virtual asset store (absent __SEA_ASSETS__)', () => {
   let sea;
 
   beforeEach(async () => {
@@ -36,7 +43,7 @@ describe('sea stub (browser: never a SEA binary)', () => {
       }
     });
 
-    test('has no injectAsset escape hatch (sandbox can never be a SEA binary)', async () => {
+    test('has no injectAsset escape hatch (injection is host-side, not a module export)', async () => {
       const mod = await import('../src/sea.js');
       expect(mod.injectAsset).toBeUndefined();
       expect(mod.default.injectAsset).toBeUndefined();
@@ -145,6 +152,186 @@ describe('sea stub (browser: never a SEA binary)', () => {
       // mode getAssetAsBlob('x', 5) reaches the not-in-SEA error instead.
       expect(sea.getAssetAsBlob('x', 5)).toBeUndefined();
       expect(sea.getAssetAsBlob('x', 'text/plain')).toBeUndefined();
+    });
+  });
+});
+
+describe('sea with a virtual asset store (__SEA_ASSETS__ present)', () => {
+  let sea;
+
+  const CONFIG_TEXT = '{"name":"demo","n":42}';
+  const BINARY_BYTES = [0, 1, 2, 253, 254, 255];
+  const BINARY_B64 = Buffer.from(BINARY_BYTES).toString('base64');
+
+  function installStore(store) {
+    globalThis._RUNTIME_ = { __SEA_ASSETS__: store };
+  }
+
+  beforeEach(async () => {
+    jest.resetModules();
+    sea = await import('../src/sea.js');
+    installStore({
+      'config.json': { encoding: 'utf8', data: CONFIG_TEXT },
+      'logo.bin': { encoding: 'base64', data: BINARY_B64 },
+    });
+  });
+
+  afterEach(() => {
+    delete globalThis._RUNTIME_;
+  });
+
+  describe('isSea()', () => {
+    test('returns true when the store holds assets', () => {
+      expect(sea.isSea()).toBe(true);
+    });
+
+    test('returns false when the store is removed at runtime', () => {
+      delete globalThis._RUNTIME_;
+      expect(sea.isSea()).toBe(false);
+    });
+
+    test('returns false for a present-but-empty store', () => {
+      installStore({});
+      expect(sea.isSea()).toBe(false);
+      expect(sea.getAssetKeys()).toEqual([]);
+    });
+
+    test('returns false when __SEA_ASSETS__ is not an object', () => {
+      installStore('nope');
+      expect(sea.isSea()).toBe(false);
+    });
+  });
+
+  describe('getAssetKeys()', () => {
+    test('lists the embedded keys', () => {
+      expect(sea.getAssetKeys()).toEqual(['config.json', 'logo.bin']);
+    });
+
+    test('returns a fresh array each call', () => {
+      const a = sea.getAssetKeys();
+      a.push('mutated');
+      expect(sea.getAssetKeys()).toEqual(['config.json', 'logo.bin']);
+    });
+  });
+
+  describe('getAsset() round-trip', () => {
+    test('returns the raw bytes as a Uint8Array', () => {
+      const bytes = sea.getAsset('config.json');
+      expect(bytes).toBeInstanceOf(Uint8Array);
+      expect(new TextDecoder().decode(bytes)).toBe(CONFIG_TEXT);
+    });
+
+    test('returns binary assets byte-identical', () => {
+      expect(Array.from(sea.getAsset('logo.bin'))).toEqual(BINARY_BYTES);
+    });
+
+    test('returns a fresh copy on every call', () => {
+      const a = sea.getAsset('logo.bin');
+      a[0] = 99;
+      expect(Array.from(sea.getAsset('logo.bin'))).toEqual(BINARY_BYTES);
+    });
+
+    test('missing key returns undefined', () => {
+      expect(sea.getAsset('nope.txt')).toBeUndefined();
+    });
+
+    test('decodes with utf8 / utf-8', () => {
+      expect(sea.getAsset('config.json', 'utf8')).toBe(CONFIG_TEXT);
+      expect(sea.getAsset('config.json', 'utf-8')).toBe(CONFIG_TEXT);
+    });
+
+    test('decodes binary asset to base64 and hex', () => {
+      expect(sea.getAsset('logo.bin', 'base64')).toBe(BINARY_B64);
+      expect(sea.getAsset('logo.bin', 'hex')).toBe('000102fdfeff');
+    });
+
+    test('unknown encoding throws ERR_UNKNOWN_ENCODING', () => {
+      expect(() => sea.getAsset('logo.bin', 'rot13')).toThrow(
+        expect.objectContaining({ code: 'ERR_UNKNOWN_ENCODING', name: 'Error' }),
+      );
+      expect(() => sea.getAsset('logo.bin', 'rot13')).toThrow('Unknown encoding: rot13');
+    });
+  });
+
+  describe('getRawAsset()', () => {
+    test('returns an ArrayBuffer with the asset bytes', () => {
+      const ab = sea.getRawAsset('logo.bin');
+      expect(ab).toBeInstanceOf(ArrayBuffer);
+      expect(Array.from(new Uint8Array(ab))).toEqual(BINARY_BYTES);
+    });
+
+    test('returns a fresh copy each call', () => {
+      const ab = sea.getRawAsset('logo.bin');
+      new Uint8Array(ab)[0] = 99;
+      expect(Array.from(new Uint8Array(sea.getRawAsset('logo.bin')))).toEqual(BINARY_BYTES);
+    });
+
+    test('missing key returns undefined', () => {
+      expect(sea.getRawAsset('nope.txt')).toBeUndefined();
+    });
+  });
+
+  describe('getAssetAsBlob()', () => {
+    test('returns a Blob with the asset bytes', async () => {
+      const blob = sea.getAssetAsBlob('config.json');
+      expect(blob).toBeInstanceOf(Blob);
+      expect(await blob.text()).toBe(CONFIG_TEXT);
+    });
+
+    test('honors options.type without validating options', async () => {
+      const blob = sea.getAssetAsBlob('config.json', { type: 'application/json' });
+      expect(blob.type).toBe('application/json');
+      // Non-object options are ignored, not validated (matches real Node).
+      expect(sea.getAssetAsBlob('config.json', 5)).toBeInstanceOf(Blob);
+    });
+
+    test('missing key returns undefined', () => {
+      expect(sea.getAssetAsBlob('nope.txt')).toBeUndefined();
+    });
+  });
+
+  describe('lenient host-assigned entry shapes', () => {
+    test('plain string entries read as utf8', () => {
+      installStore({ 'note.txt': 'hello' });
+      expect(new TextDecoder().decode(sea.getAsset('note.txt'))).toBe('hello');
+      expect(sea.getAsset('note.txt', 'utf8')).toBe('hello');
+      expect(sea.getAssetKeys()).toEqual(['note.txt']);
+      expect(sea.isSea()).toBe(true);
+    });
+
+    test('Uint8Array entries read as raw bytes', () => {
+      installStore({ 'raw.bin': new Uint8Array(BINARY_BYTES) });
+      expect(Array.from(sea.getAsset('raw.bin'))).toEqual(BINARY_BYTES);
+    });
+
+    test('malformed entries read as undefined but keep their key listed', () => {
+      installStore({ 'bad.txt': { encoding: 'rot13', data: 'x' }, 'worse.txt': { nope: 1 } });
+      expect(sea.getAsset('bad.txt')).toBeUndefined();
+      expect(sea.getRawAsset('bad.txt')).toBeUndefined();
+      expect(sea.getAssetAsBlob('worse.txt')).toBeUndefined();
+      expect(sea.getAssetKeys()).toEqual(['bad.txt', 'worse.txt']);
+    });
+  });
+
+  describe('argument validation still enforced with a store present', () => {
+    test('invalid keys throw ERR_INVALID_ARG_TYPE', () => {
+      for (const bad of [1, null, undefined, {}, []]) {
+        expect(() => sea.getRawAsset(bad)).toThrow(
+          expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' }),
+        );
+        expect(() => sea.getAsset(bad)).toThrow(
+          expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' }),
+        );
+        expect(() => sea.getAssetAsBlob(bad)).toThrow(
+          expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' }),
+        );
+      }
+    });
+
+    test('invalid encoding throws ERR_INVALID_ARG_TYPE', () => {
+      expect(() => sea.getAsset('config.json', 5)).toThrow(
+        'The "encoding" argument must be of type string. Received type number (5)',
+      );
     });
   });
 });

@@ -66,7 +66,7 @@ score is taken on trust.
 | `constants` | 236/236 values | — | #23 | merged |
 | `util/types` | 2/2 | — | #26 | merged |
 | `v8` | 22/22 | 36/36 | #18 | open — tests land on merge |
-| `crypto` | 129/129 | 15/15 | #19 | open — tests land on merge |
+| `crypto` | 129/129 | 15/15 | #55 | merged |
 | `stream` (+`consumers`, `promises`, `web`, `_stream_*`) | 237/237 | 66/66 | #20 | open — tests land on merge |
 
 Notes:
@@ -89,13 +89,13 @@ documented limits — never silent data fabrication.
 | `domain` | 43/50 | 43/43 | #27 | merged | deprecated upstream (DEP0097) |
 | `readline` (+`promises`) | 21/22 | 64/64 | #29 | merged | 1 terminal edge case |
 | `vm` | 40/97 | 46/46 | #31 | merged | `eval`-based; weaker isolation than V8 contexts |
-| `zlib` | 25/65 | 20/20 | #48 | open (reland of #32, whose merge never landed on `main`) | brotli has no browser API; CompressionStream covers gzip/deflate |
+| `zlib` | 31/65 | 38/38 | #59 | merged | brotli has no browser API; CompressionStream covers gzip/deflate |
 | `process` | 81/97 | 47/47 | #33 | merged | mirrors `globalThis._RUNTIME_.process`; OS signals unavailable |
 | `child_process` | 7/112 | 47/47 | #34 | merged | no OS processes; worker/postMessage emulation |
 | `module` | 30/32 | 83/83 | #35 | merged | `runMain`/`_preloadModules` are noops |
 | `http` (+`https`, `_http_*`) | 460/743 · 20/67 | 65/65 | #36 | merged | fetch-backed; no raw TCP/TLS servers |
-| `dns` (+`promises`) | 10/31 | 93/93 | #37 | merged | DNS-over-HTTPS only; no raw UDP |
-| `fs` (+`promises`) | 95/349 | 95/95 | #38 | open | in-memory FS; no OS file descriptors |
+| `dns` (+`promises`) | 10/31 | 93/93 | #37, #58 | merged | DNS-over-HTTPS only; no raw UDP |
+| `fs` (+`promises`) | 111/349 | 87/87 | #60 | merged | in-memory FS; no OS file descriptors |
 | `net` | 69/156 | 77/77 | #39 | open | virtual in-process transport; no raw TCP |
 
 ### Wave C — browser-impossible APIs (in progress)
@@ -106,7 +106,7 @@ Policy: correct-shaped **noop stubs** (Jared's rule — never throw for
 browser-impossible APIs), with each gap documented in the module's PR.
 Scores land here as PRs merge.
 
-Merged: `sea` (#40), `wasi` (#41), `trace_events` (#44).
+Merged: `sea` (#40, #57), `wasi` (#41), `trace_events` (#44).
 
 ### Runtime
 

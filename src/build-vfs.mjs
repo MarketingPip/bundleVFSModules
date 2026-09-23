@@ -285,6 +285,7 @@ const BUNDLED_MODULES = {
   events: "events.js",
   // Inspector
   inspector: "inspector.js",
+  inspector_promises: "inspector/promises.js",
   // v8
   v8: "v8.js",
   // TTY
