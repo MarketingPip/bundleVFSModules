@@ -17,7 +17,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          # The jest suite differentially tests the shims against the real
+          # Node builtins (node:module, node:tls, node:constants, ...).
+          # Those surfaces are captured from Node v24.20.0, so the test
+          # runner must be that exact release — same pin as the parity job.
+          node-version: 24.20.0
 
 
       - name: Install dependencies
