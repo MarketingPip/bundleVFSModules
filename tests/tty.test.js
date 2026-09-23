@@ -496,7 +496,11 @@ describe('tty browser fallback (no native delegation)', () => {
   test('honest platform color values', () => {
     const w = new fb.WriteStream(1);
     expect(w.getColorDepth({})).toBe(1);
-    expect(w.hasColors()).toBe(false);
+    // hasColors() with no args reads the ambient process.env; pass an explicit
+    // empty env so this stays hermetic. CI runners export CI/GITHUB_ACTIONS,
+    // which the shared color-depth logic maps to 16m colors — a real browser
+    // has no env at all, so {} is the honest fallback input.
+    expect(w.hasColors(16, {})).toBe(false);
     w.destroy();
   });
 });

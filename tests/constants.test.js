@@ -8,9 +8,19 @@ const require = createRequire(import.meta.url);
 const real = require('node:constants');
 
 describe('constants — port of node:constants (values captured from Node v24.20.0)', () => {
+  // defaultCipherList is documented by Node as the *active* (runtime) cipher
+  // list — unlike defaultCoreCipherList (compile-time) its presence and value
+  // depend on the OpenSSL build and --tls-cipher-list, so a host may omit it
+  // even on the same Node version. Tolerate exactly that key; everything else
+  // must match the host builtin exactly.
+  const RUNTIME_DEPENDENT_KEYS = new Set(['defaultCipherList']);
+
   test('exports the same key set as the real builtin (236 keys + ESM default)', () => {
     const realKeys = Object.keys(real).sort();
-    const shimKeys = Object.keys(shimNs).filter(k => k !== 'default').sort();
+    const shimKeys = Object.keys(shimNs)
+      .filter((k) => k !== 'default')
+      .filter((k) => realKeys.includes(k) || !RUNTIME_DEPENDENT_KEYS.has(k))
+      .sort();
     expect(shimKeys).toEqual(realKeys);
     expect(Object.keys(shimNs)).toHaveLength(237); // 236 named + default
   });
@@ -53,6 +63,12 @@ describe('constants — port of node:constants (values captured from Node v24.20
     expect(typeof shimNs.defaultCipherList).toBe('string');
     expect(typeof shimNs.defaultCoreCipherList).toBe('string');
     expect(shimNs.defaultCipherList).toContain('TLS_AES_256_GCM_SHA384');
-    expect(shimNs.defaultCipherList).toBe(real.defaultCipherList);
+    // defaultCipherList is the *active* cipher list (Node docs): the host may
+    // omit it depending on its OpenSSL build, so compare values only when the
+    // host defines it. defaultCoreCipherList is compile-time and covered by the
+    // differential test above.
+    if (real.defaultCipherList !== undefined) {
+      expect(shimNs.defaultCipherList).toBe(real.defaultCipherList);
+    }
   });
 });
