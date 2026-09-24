@@ -422,6 +422,69 @@ describe('completion', () => {
   });
 });
 
+describe('history and completion methods', () => {
+  test('setupHistory exists and accepts the Node call shapes', async () => {
+    const t = makeRepl();
+    expect(typeof t.r.setupHistory).toBe('function');
+
+    // Bare callback as first arg: Node tolerates it (never fires, no throw).
+    let bareFired = false;
+    expect(() => t.r.setupHistory(() => { bareFired = true; })).not.toThrow();
+    await tick(50);
+    expect(bareFired).toBe(false);
+
+    // Options object + callback: callback fires.
+    const fired = await new Promise((resolve) => {
+      t.r.setupHistory({}, () => resolve(true));
+      setTimeout(() => resolve(false), 1000);
+    });
+    expect(fired).toBe(true);
+
+    // Back-compat string path + callback: accepted, callback fires.
+    const strFired = await new Promise((resolve) => {
+      t.r.setupHistory('/tmp/repl-history', () => resolve(true));
+      setTimeout(() => resolve(false), 1000);
+    });
+    expect(strFired).toBe(true);
+
+    expect(t.r.setupHistory(() => {})).toBeUndefined();
+    t.close();
+  });
+
+  test('complete delegates to the instance completer', async () => {
+    const t = makeRepl();
+    await t.write('var completeMeTarget = 1');
+    await t.waitFor(() => t.text().includes('undefined\n'));
+    const viaComplete = await new Promise((resolve, reject) => {
+      t.r.complete('completeMe', (err, res) => err ? reject(err) : resolve(res));
+    });
+    const viaCompleter = await new Promise((resolve, reject) => {
+      t.r.completer.call(t.r, 'completeMe', (err, res) =>
+        err ? reject(err) : resolve(res));
+    });
+    expect(viaComplete).toEqual(viaCompleter);
+    expect(viaComplete[0]).toContain('completeMeTarget');
+    t.close();
+  });
+
+  test('completeOnEditorMode collapses to the common prefix', async () => {
+    const t = makeRepl();
+    expect(typeof t.r.completeOnEditorMode).toBe('function');
+    const handler = t.r.completeOnEditorMode((err, res) => {
+      expect(err).toBeNull();
+      expect(res).toEqual([['ab'], 'ab']);
+    });
+    expect(typeof handler).toBe('function');
+    handler(null, [['abc', 'abd', 'abx'], 'ab']);
+    const errSeen = await new Promise((resolve) => {
+      const h2 = t.r.completeOnEditorMode((err) => resolve(err));
+      h2(new Error('boom'));
+    });
+    expect(errSeen.message).toBe('boom');
+    t.close();
+  });
+});
+
 describe('browser fallback (no runtime terminal)', () => {
   test('works with plain in-memory streams and no _RUNTIME_', async () => {
     expect(globalThis._RUNTIME_).toBeUndefined();
