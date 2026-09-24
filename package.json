@@ -7,17 +7,23 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "parity": "node parity/run.mjs",
     "build": "./src/build-vfs.mjs",
-    "build_fixture": "node -e \"const m = require('module').builtinModules; console.log(JSON.stringify([...m, ...m.filter(x => !x.startsWith('node:')).map(x => 'node:'+x)]))\" > ./lib/builtin-modules.json"
+    "build_fixture": "node -e \"const m = require('module').builtinModules; console.log(JSON.stringify([...m, ...m.filter(x => !x.startsWith('node:')).map(x => 'node:'+x)]))\" > ./lib/builtin-modules.json",
+    "build:sandbox": "node src/build-sandbox.mjs",
+    "check:sandbox": "node src/build-sandbox.mjs --check"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "^0.4.2",
     "@noble/hashes": "^2.4.0",
     "acorn-walk": "^8.3.5",
+    "als-browser": "^1.0.1",
     "dns-packet": "^5.6.1",
-    "esbuild": "^0.22.0",
-    "esbuild-plugins-node-modules-polyfill": "^1.8.1",
     "magic-string": "^1.4.1",
     "memfs": "^3.4.0",
-    "pako": "^3.0.2"
+    "pako": "^3.0.2",
+    "set-cookie-parser": "^3.1.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.22.0",
+    "esbuild-plugins-node-modules-polyfill": "^1.8.1"
   }
 }

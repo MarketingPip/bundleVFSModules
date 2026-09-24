@@ -1369,10 +1369,25 @@ async function execute(userCode, opts = {}) {
   const { root, events } = await run({ testOnly: opts.testOnly }).drain();
   const reporter = _resolveActiveReporter();
   // Reporters are async generators that transform the event stream.
+  // Backward-compat: the pre-10311ec interface was reporter({ root, events })
+  // returning a string. Support both.
   async function* _eventSource() { for (const e of events) yield e; }
   let output = '';
   try {
-    for await (const chunk of reporter(_eventSource())) output += chunk;
+    const result = reporter(_eventSource());
+    if (result && typeof result[Symbol.asyncIterator] === 'function') {
+      for await (const chunk of result) output += chunk;
+    } else if (result && typeof result[Symbol.iterator] === 'function') {
+      for (const chunk of result) output += chunk;
+    } else if (typeof result === 'string') {
+      output = result;
+    } else {
+      // Old interface: reporter({ root, events }) -> string
+      const legacy = reporter({ root, events });
+      if (typeof legacy === 'string') output = legacy;
+      else if (legacy && typeof legacy.then === 'function') output = String(await legacy);
+      else output = String(legacy ?? '');
+    }
   } catch (e) {
     throw Object.assign(e, { message: `[reporter:${reporter?.name ?? '?'}] ${e.message}` });
   }

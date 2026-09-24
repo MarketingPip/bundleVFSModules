@@ -1,8 +1,107 @@
 import * as acorn from "https://esm.sh/acorn";
+import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";
 import {importAssertions} from "https://esm.sh/acorn-import-assertions"
 import { escape, split, join } from "https://esm.sh/shellwords?target=node"; 
 import { v4 as uuid } from 'https://esm.sh/uuid';   
-import * as sandboxModules from "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@56191086/dist/vfs.js"  
+import { Terminal } from "https://esm.sh/xterm@5.3.0";
+// NOTE: The full vfs.js bundle (6.8MB) is NOT imported statically.
+// Built-in modules are loaded lazily on-demand via loadBuiltin() below,
+// fetching only the individual dist files needed (see dist/manifest.json).
+// This keeps initial load fast; modules are fetched when user code
+// actually require()s or import()s them.
+
+/**
+ * Lazy loader for Node.js built-in modules.
+ * Fetches individual dist files on-demand instead of the full 6.8MB bundle.
+ * Results are cached; subsequent loads for the same module return instantly.
+ */
+// NOTE: the virtual cookie jar (src/cookieJar.js) is inlined into the
+// generated sandbox by src/build-sandbox.mjs (see src/sandbox/cookie-entry.js),
+// not here — the sandbox needs it synchronously at init with no network fetch.
+const _builtinCache = new Map();
+const _builtinBaseUrl = "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/";
+// Maps Node.js specifiers to dist filenames (mirrors dist/manifest.json)
+const _builtinManifest = {
+  "assert": "assert.js", "assert/strict": "assert_strict.js",
+  "async_hooks": "async_hooks.js", "buffer": "buffer.js",
+  "child_process": "child_process.js", "cluster": "cluster.js",
+  "console": "console.js", "constants": "constants.js", "crypto": "crypto.js",
+  "dgram": "dgram.js", "diagnostics_channel": "diagnostics_channel.js",
+  "dns": "dns.js", "dns/promises": "dns_promises.js", "domain": "domain.js",
+  "events": "events.js", "fs": "fs.js", "fs/promises": "fs_promises.js",
+  "http": "http.js", "http2": "http2.js", "https": "https.js",
+  "inspector": "inspector.js", "module": "module.js", "net": "net.js",
+  "os": "os.js", "path": "path.js", "path/posix": "path.js", "path/win32": "path.js",
+  "perf_hooks": "perf_hooks.js", "process": "process.js", "punycode": "punycode.js",
+  "querystring": "querystring.js", "readline": "readline.js",
+  "readline/promises": "readline_promises.js", "repl": "repl.js",
+  "stream": "stream.js", "stream/consumers": "stream.js",
+  "stream/promises": "stream.js", "stream/web": "stream.js",
+  "string_decoder": "string_decoder.js", "test": "test.js", "timers": "timers.js",
+  "timers/promises": "timers_promises.js", "tls": "tls.js",
+  "trace_events": "trace_events.js", "tty": "tty.js", "url": "url.js",
+  "util": "util.js", "util/types": "util.js", "v8": "v8.js", "vm": "vm.js",
+  "wasi": "wasi.js", "worker_threads": "worker_threads.js", "zlib": "zlib.js",
+};
+
+async function loadBuiltin(specifier) {
+  // Normalize: strip "node:" prefix
+  let key = String(specifier).trim();
+  if (key.startsWith('node:')) key = key.slice(5);
+  
+  if (_builtinCache.has(key)) return _builtinCache.get(key);
+  
+  const file = _builtinManifest[key];
+  if (!file) {
+    // Unknown built-in: return empty module stub
+    return { default: {} };
+  }
+  
+  try {
+    const mod = await import(_builtinBaseUrl + file);
+    _builtinCache.set(key, mod);
+    return mod;
+  } catch (err) {
+    console.warn(`[loadBuiltin] Failed to load "${key}":`, err.message);
+    const stub = { default: {} };
+    _builtinCache.set(key, stub);
+    return stub;
+  }
+}
+// Expose for developers who want manual control
+globalThis.loadBuiltin = loadBuiltin;
+
+/**
+ * Fetch a built-in's published dist source as text, on demand.
+ *
+ * This is the lazy built-in loader for the sandbox interop path: only the
+ * requested module's dist file is fetched (never the whole bundle), and the
+ * result is cached per file. The source is returned as text because it must
+ * cross the postMessage interop boundary; `_build_file` rewrites it for the
+ * sandbox (import->loadModule, globalThis._RUNTIME_ scoping) before the
+ * iframe executes it via a data: URL.
+ *
+ * Unknown built-ins resolve to an empty stub, matching the documented
+ * contract ("Unknown builtins resolve to `export default {}`").
+ */
+const _builtinSourceCache = new Map();
+async function fetchBuiltinSource(specifier) {
+  let key = String(specifier).trim();
+  // Normalize: strip "node:" prefix; the iframe also rewrites "a/b" -> "a_b"
+  // and "RUNTIME:X" -> "RUNTIME_X", so accept both forms here.
+  if (key.startsWith('node:')) key = key.slice(5);
+  let file = _builtinManifest[key];
+  if (!file && key.includes('_')) file = _builtinManifest[key.split('_').join('/')];
+  if (!file && key.startsWith('RUNTIME_')) file = `${key}.js`;
+  if (!file) return `export default {}`;
+  if (_builtinSourceCache.has(file)) return _builtinSourceCache.get(file);
+  const url = _builtinBaseUrl + file;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`[ERR_BUILTIN_LOAD]: failed to fetch ${url}: HTTP ${res.status}`);
+  const text = await res.text();
+  _builtinSourceCache.set(file, text);
+  return text;
+}
  /* TODO :         
         
 Fix issues like:  
@@ -21,7 +120,24 @@ How to handle dynamic / variables (simulate evaluation) for ImportResolver
   
 // import {table} from "https://esm.sh/gh/MarketingPip/bundleVFSModules@main/src/cli_table.js"  
 
-function toNodeKeypress(element, callback) {
+/**
+ * toNodeKeypress - Helper for developers wiring up custom DOM input elements.
+ * 
+ * Converts DOM keydown/paste events on an HTML element into Node.js-style
+ * (sequence, key) callbacks, matching the shape of process.stdin 'keypress'
+ * events. Useful when building custom input UIs outside of xterm.js.
+ * 
+ * @param {HTMLElement} element - The DOM element to attach listeners to
+ * @param {Function} callback - Called as callback(sequence, key) where key
+ *   is { name, ctrl, meta, shift, sequence }
+ * @returns {{ stop: Function }} - Call .stop() to remove listeners
+ * 
+ * @example
+ *   toNodeKeypress(document.getElementById('myInput'), (sequence, key) => {
+ *     console.log('Key:', key.name, 'Ctrl:', key.ctrl);
+ *   });
+ */
+export function toNodeKeypress(element, callback) {
   if (!element || typeof callback !== "function") {
     throw new Error("Element and callback function are required");
   }
@@ -133,14 +249,34 @@ function mergeProcess(user = {}, defaults = {}) {
 }
  
 import _builtinModules from 'https://esm.sh/builtin-modules';
-  
-const builtinModules = [
- ..._builtinModules, 
-  ...["_http_agent","_http_client","_http_common","_http_incoming","_http_outgoing","_http_server","_stream_duplex","_stream_passthrough","_stream_readable","_stream_transform","_stream_wrap","_stream_writable","_tls_common","_tls_wrap","assert","assert/strict","async_hooks","buffer","child_process","cluster","console","constants","crypto","dgram","diagnostics_channel","dns","dns/promises","domain","events","fs","fs/promises","http","http2","https","inspector","inspector/promises","module","net","os","path","path/posix","path/win32","perf_hooks","process","punycode","querystring","readline","readline/promises","repl","stream","stream/consumers","stream/promises","stream/web","string_decoder","sys","timers","timers/promises","tls","trace_events","tty","url","util","util/types","v8","vm","wasi","worker_threads","zlib","node:sea","node:sqlite","node:test","node:test/reporters"]
-  
-  ]
 
-builtinModules.push("RUNTIME:NODE_GLOBALS")
+// Base list of Node.js built-ins, used when the esm.sh `builtin-modules`
+// import above fails or is slow. The iframe's loadModule() and the resolve
+// hook match specifiers exactly, so this list must contain every form user
+// code may use.
+const _baseBuiltins = ["_http_agent","_http_client","_http_common","_http_incoming","_http_outgoing","_http_server","_stream_duplex","_stream_passthrough","_stream_readable","_stream_transform","_stream_wrap","_stream_writable","_tls_common","_tls_wrap","assert","assert/strict","async_hooks","buffer","child_process","cluster","console","constants","crypto","dgram","diagnostics_channel","dns","dns/promises","domain","events","fs","fs/promises","http","http2","https","inspector","inspector/promises","module","net","os","path","path/posix","path/win32","perf_hooks","process","punycode","querystring","readline","readline/promises","repl","stream","stream/consumers","stream/promises","stream/web","string_decoder","sys","timers","timers/promises","tls","trace_events","tty","url","util","util/types","v8","vm","wasi","worker_threads","zlib","node:sea","node:sqlite","node:test","node:test/reporters"];
+// Defensive: the CDN may return an unexpected shape.
+const _esmBuiltins = Array.isArray(_builtinModules) ? _builtinModules
+  : (Array.isArray(_builtinModules?.default) ? _builtinModules.default : []);
+// Dedupe and include both bare ("fs") and "node:"-prefixed ("node:fs")
+// forms: user code uses both, and matching is exact.
+const _builtinNameSet = new Set();
+for (const name of [..._esmBuiltins, ..._baseBuiltins]) {
+  _builtinNameSet.add(name);
+  if (!name.startsWith('node:') && !name.startsWith('_')) _builtinNameSet.add('node:' + name);
+}
+_builtinNameSet.add('RUNTIME:NODE_GLOBALS');
+const builtinModules = [..._builtinNameSet];
+
+/**
+ * True for Node built-in specifiers in any form the sandbox may see:
+ * "fs", "node:fs", "node:timers/promises". Node built-ins are resolved
+ * lazily inside the sandbox via their separately published dist files
+ * (fetchBuiltinSource) — they must never be rewritten to a CDN URL.
+ */
+function isNodeBuiltinSpecifier(specifier) {
+  return builtinModules.includes(String(specifier).trim());
+}
  
  
 
@@ -962,7 +1098,7 @@ ImportExpression(node) {
     //if (enclosingFunc && enclosingFunc.async) functionsToMakeAsync.add(enclosingFunc);
 
     // Replace 'import' with 'loadModule'
-    s.overwrite(node.start, node.start + 6, `_RUNTIME${sandboxUUID}_.loadModule`);
+    s.overwrite(node.start, node.start + 6, `globalThis[Symbol.for("bvm.runtime.${sandboxUUID}")].loadModule`);
 
     // Append loader arguments inside parentheses
     s.appendLeft(
@@ -983,7 +1119,7 @@ ImportExpression(node) {
     if (enclosingFunc && !enclosingFunc.async) functionsToMakeAsync.add(enclosingFunc);
 
     // Replace the 'import' keyword with 'loadModule'
-    s.overwrite(node.start, node.start + 6, `_RUNTIME${sandboxUUID}_.loadModule`);
+    s.overwrite(node.start, node.start + 6, `globalThis[Symbol.for("bvm.runtime.${sandboxUUID}")].loadModule`);
 
     // Append the loader type as a second argument **inside the parentheses**
     // node.source.end points just after the string literal
@@ -1022,7 +1158,7 @@ ImportExpression(node) {
   for (const [modulePath, v] of liftedModules.entries()) {
     const type = moduleImportType.get(modulePath) || "import";
     preambleParts.push(
-      `const ${v} = await _RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
+      `const ${v} = await globalThis[Symbol.for("bvm.runtime.${sandboxUUID}")].loadModule(${JSON.stringify(
         modulePath
       )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`
     );
@@ -2273,6 +2409,14 @@ export class ImportResolver {
 
   let transformed = source;
 
+  // Node.js built-ins are resolved lazily inside the sandbox via their
+  // separately published dist files (fetchBuiltinSource / _dynamic_import).
+  // They must never be rewritten to a CDN URL.
+  if (isNodeBuiltinSpecifier(transformed)) {
+    this.cache.set(cacheKey, transformed);
+    return transformed;
+  }
+
   for (const rule of this.transformRules) {
     const testResult =
       typeof rule.test === 'function'
@@ -2520,6 +2664,8 @@ function buildHtmlString(csp, code, hasImports, iframe) {
   
   let modulePath = specifier;
   
+  // builtinModules is generated per execution from the live list (both bare
+  // and "node:"-prefixed forms), so no hardcoded fallback is needed here.
   const strippable_nodebuiltins = node_builtin.filter(m => m.includes('node:'))
   
   const isStrippable = strippable_nodebuiltins.includes(modulePath) || node_builtin.includes(modulePath);
@@ -2534,19 +2680,19 @@ function buildHtmlString(csp, code, hasImports, iframe) {
 
        if(isNodeBuiltIn){ 
         
-       let data =  await globalThis._RUNTIME_INTEROP.callParent(
+       let data =  await globalThis[Symbol.for("bvm.interop")].callParent(
           '_dynamic_import',
           modulePath,
           'import',
           '/',
           '/',
           true,
-          globalThis._RUNTIME${iframe.sandbox.uuid}_.cwd,
-          globalThis._RUNTIME${iframe.sandbox.uuid}_.__USER_FILES__   
+          globalThis[Symbol.for("bvm.runtime." + iframe.sandbox.uuid)].cwd,
+          globalThis[Symbol.for("bvm.runtime." + iframe.sandbox.uuid)].__USER_FILES__   
         );
         
         
-        data = await globalThis._RUNTIME_INTEROP.callParent(
+        data = await globalThis[Symbol.for("bvm.interop")].callParent(
           '_build_file',
           data,
           specifier,
@@ -2700,9 +2846,16 @@ function buildHtmlString(csp, code, hasImports, iframe) {
       
   // ── Server Shims ──────────────────────────────────────────────────────────────
         if (data.type === 'serverListening') {  
-           this.sandbox.emit('execution:server', {type:"open", port:data.port});
+           // emitMe serializes event payloads into data.message (JSON); other
+           // structured events (resource_timing, network_request) are parsed
+           // the same way. data.port is kept as a fallback.
+           let port = data.port;
+           if (port == null && typeof data.message === 'string') {
+             try { port = JSON.parse(data.message)?.port ?? null; } catch { /* keep null */ }
+           }
+           this.sandbox.emit('execution:server', {type:"open", port});
            this._serverRunning = true; 
-           this._serverPort = data.port;
+           this._serverPort = port;
         }
       
        if (data.type === 'serverClosed') {  
@@ -2951,10 +3104,18 @@ child.on('error', (err) => {
          } else {
            // Legacy fallback (no structured frames)
            let line = this.code.slice(0, this.code.indexOf("//__$PROVIDED_RUNTIME_CODE__/")).split("\n").length;
-           line = data.line - line;
+           // Guard: data.line may be undefined/NaN for errors without location
+           // info (e.g. RangeError: Maximum call stack size exceeded).
+           const dataLine = Number(data.line);
+           line = Number.isFinite(dataLine) ? dataLine - line : NaN;
            const isNegative = n => n < 0;
-           if (isNegative(line)) {
-             mappedReason = `${data.stack || data.reason || data.error || data.message}`;
+           if (!Number.isFinite(line) || isNegative(line)) {
+             // Error has no valid user-code line: either it's in the runtime
+             // preamble (negative) or has no location info (NaN). Mark
+             // preamble errors as RUNTIME ERROR so it's clear they're from
+             // generated code, not user code.
+             const base = `${data.stack || data.reason || data.error || data.message}`;
+             mappedReason = isNegative(line) ? `RUNTIME ERROR: ${base}` : base;
            } else {
              const codeThatThrewError = this.code.split('\n')[Number(data.line) - 1] || '';
              mappedReason = `${data.stack || data.reason || data.error || data.message}\nat line ${line}, column ${data.column} \n \n →    ${line}| ${codeThatThrewError}`;
@@ -3321,2642 +3482,53 @@ export function __parseStackLocation(frame) {
 
 class SandboxRuntime {
   static generate(code, config = {}) {
-     
- 
-    
-    return `
-
-
-globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}, __SEA_ASSETS__:${JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined)}};
-
-window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_
-
-
-if (!Array.prototype.toSorted) {
-  Array.prototype.toSorted = function(compareFn) {
-    // Create a shallow copy of the array and sort it in place
-    const copy = [...this];
-    copy.sort(compareFn);
-    return copy;
-  };
-}
-
-// A recursive Proxy that intercepts *any* missing property access and returns safe stubs
-    function createSafeProxy(target = {}) {
-      return new Proxy(target, {
-        get(obj, prop) {
-          if (prop === Symbol.iterator) return obj[Symbol.iterator];
-          if (prop in obj) {
-            const val = obj[prop];
-            if (val && typeof val === 'object') return createSafeProxy(val);
-            return val;
-          }
-          // Fallback recursive proxy for any unmapped configuration property
-          return createSafeProxy();
-        }
-      });
-    }
-
-    // Mock globalThis.__vitest_worker__ using the Proxy so .config or anything else never throws
-    globalThis.__vitest_worker__ = createSafeProxy({
-      config: {
-        root: '/',
-        globals: true,
-        environment: 'node',
-        test: {
-          globals: true,
-          environment: 'node',
-          reporters: [],
-          pool: 'threads'
-        }
-      },
-      durations: { environment: 0, prepare: 0 },
-      rpc: {}
-    });
-  
-class TaskTracker {
-  constructor() {
-    this.pendingCount = 0;
-    this.resolvers = [];
-  }
-
-  // Wraps any function (sync or async)
-  track(fn) {
-    const self = this;
-    return async function(...args) {
-      self.pendingCount++;
-      try {
-        return await fn.apply(this, args);
-      } finally {
-        self.pendingCount--;
-        if (self.pendingCount === 0) {
-          self._notify();
-        }
-      }
-    };
-  }
-
-  // The equivalent to your waitForAllTimers()
-  waitForIdle() {
-    if (this.pendingCount === 0) return Promise.resolve();
-    return new Promise(resolve => this.resolvers.push(resolve));
-  }
- 
-  _notify() {
-    while (this.resolvers.length) {
-      this.resolvers.shift()();
-    }
-  }
-}
-
-
-
-
-const channel = new MessageChannel();
-
-/*
-TODO: Build stream protocol over message passing (fetch for streams etc.)
-
-const requestPort = channel.port1;
-const responsePort = new MessageChannel().port1;
-const responsePortRemote = new MessageChannel().port2;
-*/
-
-Object.getOwnPropertyNames(globalThis).forEach(name => {
-  // Skip internal properties, the runtime itself, and 'globalThis' to avoid recursion
-  if (
-    !name.startsWith('_') && 
-    name !== 'globalThis' && 
-    name !== \`_RUNTIME${config.uuid}_\`
-  ) {
-    Object.defineProperty(globalThis._RUNTIME${config.uuid}_.globals, name, {
-      get: () => globalThis[name],
-      enumerable: true,
-      configurable: true
-    });
-  }
-});
-
-(async () => {
-
-
-const GlobalTracker = {
-  activeTasks: 0,
-  resolvers: [],
-  // Increments the counter
-  start() {
-    this.activeTasks++;
-  },
-
-  // Decrements and checks if we are done
-  stop() {
-    this.activeTasks--;
-    if (this.activeTasks === 0) {
-      while (this.resolvers.length) this.resolvers.shift()();
-    }
-  },
-
-  // The waiter function
-  waitForAll: function() {
-    if (this.activeTasks === 0) return Promise.resolve();
-    return new Promise(res => this.resolvers.push(res));
-  },
-
-  // The Magic: This patches any function you point it at
-  patch: function(obj, methodName) {
-    const original = obj[methodName];
-    const self = this;
-
-    obj[methodName] = function(...args) {
-      self.start();
-      try {
-        const result = original.apply(this, args);
-        
-        // Handle Async/Promises
-        if (result instanceof Promise || result && typeof result.then === "function") {
-          return result.finally(() => self.stop());
-        }
-
-        // Handle Sync
-        self.stop();
-        return result;
-      } catch (e) {
-        self.stop();
-        throw e;
-      }
-    };
-  },
-  patchChildProcess(fn) {
-    return (...args) => {
-      this.start();
-      try {
-        const child = fn(...args);
-        let stopped = false;
-        const stopOnce = () => {
-          if (stopped) return;
-          stopped = true;
-          this.stop();
-        };
-        child.once('close', stopOnce);
-        child.once('error', stopOnce);
-        return child;
-      } catch (err) {
-        this.stop();
-        throw err;
-      }
-    }
-  },
-  patchChildProcess2(fn) {
-    return (...args) => {
-      this.start(); // Start tracking when exec/spawn is called
-      
-      try {
-        const child = fn(...args);
-        
-        // Listen for the final event to stop tracking
-        // We use 'once' to ensure we only decrement once
-        child.once('close', () => this.stop());
-        
-        // Also handle cases where the process might error out immediately
-        child.once('error', (err) => {
-          // Only stop if 'close' hasn't fired yet
-          if (child.exitCode === null) this.stop();
-        });
-
-        return child;
-      } catch (err) {
-        this.stop(); // Stop if the synchronous part fails (like execSync)
-        throw err;
-      }
-    }
-  },
-  
-}; 
- 
-globalThis._RUNTIME${config.uuid}_.taskTracker = GlobalTracker;
-
-// _RUNTIME${config.uuid}_.taskTracker.patch(myUtils, 'calculate');
-
-
-// Registry of in-flight modules to catch circular references.
-// Maps resolvedKey -> { status: 'loading' | 'done', exports, promise }
-const moduleRegistry = new Map();
-
-/**
- * @param {string} modulePath     - The import path as written (e.g. './foo', '../bar', or a URL)
- * @param {string} moduleType     - 'import' | 'require'
- * @param {string} [entryPoint]   - The original top-level entry file; passed through to interop
- * @param {string} [parentEntryPoint]   - The original file entry file point; passed through to interop
- 
- *                                  so _build_file can resolve context-sensitive paths correctly.
- *                                  Defaults to modulePath when called at the root level.
- */
-async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) {
-
-  const isDynamicModule = p => typeof p === 'string' && /^(data:text\\/javascript|blob:)/.test(p);
-  
-  if(isDynamicModule(modulePath)){
-   return await import(modulePath);
-  }
- 
-  let relativeName = null;
- 
-  const node_builtin = ${JSON.stringify(builtinModules)}
-  
-  
-  const strippable_nodebuiltins = node_builtin.filter(m => m.includes('node:'))
-  
-  const isStrippable = strippable_nodebuiltins.includes(modulePath) || node_builtin.includes(modulePath);
-  
-   const isNodeBuiltIn = node_builtin.includes(modulePath) || isStrippable;  
-    
-   if(isStrippable){
-   modulePath = modulePath.replace("node:", ""); // strip node:
-   modulePath = modulePath.replace("/", "_");
-   modulePath = modulePath.replace("RUNTIME:", "RUNTIME_")
-   }  
-    
-  // The very first caller doesn't know the entry point yet — it IS the entry point.
-  if (entryPoint === undefined) entryPoint = modulePath;
-
-  if (parentEntryPoint === undefined) parentEntryPoint = null;
-
-  try {
-    const extension = modulePath.split('.').pop().toLowerCase();
-    const isRelative = modulePath.startsWith('./') || modulePath.startsWith('../');
-  const isAbsolute = modulePath.startsWith('./')
-
-  let sourceResolvedError = false;
-  
-   const isJSModule = !['json', 'css'].includes(extension);
-    // ─── Relative / interop-channel path ────────────────────────────────────
-    if (isRelative || isNodeBuiltIn || isAbsolute || !isRelative && !isNodeBuiltIn && !isAbsolute && !modulePath.includes("https://")) {
-      relativeName = modulePath;
-
-      // Use a stable key for the registry (entry + requested path disambiguates
-      // the same filename required from different entry points).
-      const registryKey = \`\${entryPoint}::\${modulePath}\`;
-      // ── Circular reference guard ─────────────────────────────────────────
-      if (moduleRegistry.has(registryKey) && isJSModule) {
-        const record = moduleRegistry.get(registryKey);
-
-        if (record.status === 'loading') {
-          // Circular dep detected — return the partially-populated exports object
-          // so the caller gets a live reference that will be filled in once the
-          // module finishes executing (same pattern Node.js uses).
-          console.warn(
-            \`[loadModule] Circular dependency detected for "\${modulePath}" \` +
-            \`(entry: "\${entryPoint}"). Returning partial exports.\`
-          );
-          return record.exports;
-        }
-
-        // Already fully resolved — return cached result.
-        return record.exports;
-      }
-
-      // Create a placeholder record immediately so any re-entrant call above
-      // sees 'loading' and gets the partial exports object.
-      const partialExports = {};
-      const record = { status: 'loading', exports: partialExports, promise: null };
-      moduleRegistry.set(registryKey, record);
-
-      try {
-        const cwd =
-          typeof process !== 'undefined' &&
-          process &&
-          typeof process.cwd === 'function'
-            ? process.cwd()
-            : undefined;
-        // Pass the entry point to the parent so _build_file can use it for
-        // things like resolving sibling imports or source-map hints.
-        
-        const vfs = globalThis._RUNTIME${config.uuid}_.__USER_FILES__
-        let source = await interopChannel.callParent(
-          '_dynamic_import',
-          modulePath,
-          moduleType,
-          entryPoint,
-          parentEntryPoint,
-          isNodeBuiltIn, 
-          cwd,
-          vfs   
-        );
-        
-          
-        if(!source){
-        throw new Error(\`[ERR_MODULE_NOT_FOUND]: Cannot find module \${modulePath}\`)
-        return;
-        }  
-          
-          if (extension != 'json' && extension != 'css') {
-        source = await interopChannel.callParent(
-          '_build_file',
-          source,
-          modulePath,
-          moduleType,
-          entryPoint,
-          parentEntryPoint,
-          isNodeBuiltIn
-        );
-        
-       }
-
-        let resolved; 
-
-        if (extension === 'json') {
-          // if typescript (need to add types)
-          resolved = JSON.parse(source);
-          return resolved;
-        } else if (extension === 'css') {
-          const sheet = new CSSStyleSheet();
-          await sheet.replace(source);
-          resolved = sheet;
-          return resolved;
-        } else {
-          if (moduleType === 'require') {
-            source = wrapCommonJS(source);
-          }
- 
-         function makeIdentitySourceMap(source, filename) {
-  // One mapping per line, all pointing to column 0 of the original
-  const lineCount = source.split('\\n').length;
-  // Each ';' = next line, 'AAAA' = col 0 -> col 0, same source, same line
-  const mappings = Array(lineCount).fill('AAAA').join(';');
-
-  const map = {
-    version: 3,
-    sources: [filename],
-    sourcesContent: [source],
-    names: [],
-    mappings,
-  };
-
-  return \`\\n//# sourceMappingURL=data:application/json;charset=utf-8,\${
-    encodeURIComponent(JSON.stringify(map))
-  }\`;
-}
- 
-         source  = source + \`\\n //# sourceURL=\${modulePath}\`
-             const sourceMapComment = makeIdentitySourceMap(source, modulePath);
-
-           const url = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(source)}\`;
-          
-          
-          
-          resolved = await importAndProxy(url, modulePath, relativeName, moduleType);
-        }
-
-        // Populate the partial exports object in-place so any circular
-        // reference holders also see the final values.
-        if (resolved && typeof resolved === 'object') {
-          Object.assign(partialExports, resolved);
-        }
-
-        record.status = 'done';
-        record.exports = resolved; // replace reference for future callers
-        return resolved;
-
-      } catch (err) {
-        // Remove failed entry so a retry can attempt a fresh load.
-        moduleRegistry.delete(registryKey);
-        throw err;
-      }
-    }
-
-    // ─── Asset handling (JSON / TXT / MD) ───────────────────────────────────
-    if (['json', 'txt', 'md'].includes(extension)) {
-      const response = await fetch(modulePath);
-      if (!response.ok) throw new Error(\`HTTP error! status: \${response.status}\`);
-
-      const contentType = response.headers.get('content-type');
-      if (extension === 'json' || (contentType && contentType.includes('application/json'))) {
-        try { return await response.json(); }
-        catch { return await response.text(); }
-      }
-      return await response.text();
-    }
-
-    // ─── CSS (absolute URL) ──────────────────────────────────────────────────
-    if (extension === 'css') {
-      const response = await fetch(modulePath);
-      if (!response.ok) throw new Error(\`HTTP error! status: \${response.status}\`);
-      const cssText = await response.text();
-      const sheet = new CSSStyleSheet();
-      await sheet.replace(cssText);
-      return sheet;
-    }
-
-    // ─── Standard JS import (absolute URL / bare specifier) ─────────────────
-    const requiredSupportedYet = false; // sync require transform not yet implemented
-
-    let data;
-     if (moduleType === 'require' && !isRelative && !isAbsolute){
-     throw new Error(\`[ERR_MODULE_NOT_FOUND]: Cannot find module \${modulePath}\`)
-     }
-    
-    if (moduleType === 'require' && requiredSupportedYet) {
-      let src = await fetch(modulePath).then(r => r.text());
-      src = wrapCommonJS(src);
-      const url = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(src)}\`;
-      data = await import(url);
-    } else {
-     /*  
- 
-     this actually works as is planned to use possibly.. (so we can patch node.js) - crazy slow. 
-      
-      data = await interopChannel.callParent(
-          '_bundler_',
-          modulePath
-        );
-      data = await import(data)  
-      */ 
-      
-      data = await import(modulePath);
-    } 
-
-    return buildModuleProxy(data, modulePath, relativeName, moduleType);
-
-  } catch (error) {
-     
-     // TODO Implement true stacks... 
-     // Fix errors for not found files... 
-     if (relativeName){
-     
-  const displayPath = relativeName || modulePath;
-  
- 
- const err = new Error(\`\${error.message} in \${displayPath}\`);
-
-err.stack = \`Error: Something broke
-    at myFunction (index.js:123:45)
-    at main (index.js:200:10)\`;
-    
-  
-  
-  
-  // Check if this error has already been wrapped by checking for our pattern
-  const alreadyWrapped = error.message.match(" in \\./");
-  
-  //error.stack = \`\${error.message}\`
- 
-  
-  if (alreadyWrapped) {
-    // Already has path context, just re-throw as-is
-    throw error;
-  }
-  
-  // First time catching - add context
-   if(entryPoint){
-   error.message = \`\${error.message} in \${displayPath} at \${entryPoint}\`
-  throw error;
-  }
-
-  
-  
- 
- 
-   
-   }
- 
-     
-    if (relativeName) modulePath = relativeName;
-    
-    
-    
-    // todo make stacks for relatives 
-    throw error;
-  }
-}
-
-globalThis._RUNTIME${config.uuid}_.loadModule = loadModule;
- 
-
-
-  
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Wraps a CommonJS source string in an ESM-compatible IIFE. */
-function wrapCommonJS(source) {
-  return \`
-const exports = {};
-const module = { exports };
-const require = null; // sync require not yet supported
-
-(function (require, module, exports) {
-  \${source}
-})(require, module, exports);
-
-export default module.exports;
-\`;
-}
- 
-/** Dynamically imports a data-URL and returns a proxied module object. */
-async function importAndProxy(url, modulePath, relativeName, moduleType) {
-  const data = await import(url);
-  return buildModuleProxy(data, modulePath, relativeName, moduleType);
-}
-
-/**
- * Builds the module proxy / plain object returned to the caller.
- * - For require(): unwraps \`.default\` (CommonJS compat).
- * - For ESM:       throws on missing named exports, hides \`.default\` when absent.
- */
-function buildModuleProxy(data, modulePath, relativeName, moduleType) {
-  const moduleObject = Object.assign({}, data);
-
-  Object.defineProperty(moduleObject, Symbol.toStringTag, {
-    value: 'Module',
-    enumerable: false,
-  });
-
-  if (moduleType === 'require') {
-    return moduleObject.default ?? moduleObject;
-  }
-
-  const hasDefault = Object.prototype.hasOwnProperty.call(data, 'default');
-  
-  
-   // Keep .default enumerable and accessible when the module exported one.
-  // If there's no default export, define it as undefined (non-enumerable)
-  // so \`import { default as x }\` still resolves without a throw, but
-  // Object.keys() / for..in won't surface a spurious \`default\` key.
-  /* if (!hasDefault) {
-    Object.defineProperty(moduleObject, 'default', {
-      value: undefined,
-      enumerable: false,
-      configurable: true,
-    });
-  }*/ 
-  
-  //if (!hasDefault) delete moduleObject.default;
-
-  return new Proxy(moduleObject, {
-    get(target, prop) {
-      if (typeof prop === 'symbol' || prop === 'then') return target[prop];
-
-      if (prop === 'default') return  target?.default || target; // TODO: if sourceType is CJS - force default.
-      if (prop === '__esModule') return true;
-
-      if (!(prop in target)) {
-        const displayPath = relativeName ?? modulePath;
-        throw new SyntaxError(
-          \`The requested module '\${displayPath}' does not provide an export named '\${String(prop)}'\`
-        );
-      }
-
-      return target[prop];
-    },
-  });
-}  
- 
- 
- 
- 
- // ─── Interop Channel ──────────────────────────────────────────────────────────
-
-const interopChannel = {
-  // Call parent functions from sandbox
-  callParent: async (method, ...args) => {
-    const callId = Math.random().toString(36).substr(2, 9);
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Interop call timeout'));
-      }, 10000);
-      
-      const handler = (event) => {
-     
-        if (event.data.type === 'interop_response' && event.data.callId === callId) {
-          clearTimeout(timeout);
-          window.removeEventListener('message', handler);
-          if (event.data.error) {
-          // thinking we need to throw back to sandbox then reject?
-            reject(new Error(event.data.error));
-          } else {
-            resolve(event.data.result);
-          }
-        }
-      };
-      
-      window.addEventListener('message', handler);
-      window.parent.postMessage({
-        type: 'interop_call',
-        callId,
-        method,
-        args
-      }, '*');
-    });
-  },
-  
-  // Register functions that parent can call
-  exports: {},
-  
-  
-  expose: (name, fn) => {
-    interopChannel.exports[name] = fn;
-    const RUNTIME_METHODS = ['__check_exists__', '__stdin__', '__serverRequest__']
-    if(!RUNTIME_METHODS.includes(name)){
-    window.parent.postMessage({ type: 'interop_registered', name }, '*');
-    };
-  }
-};
-
-//  window.parent.postMessage({ type: 'sandbox_ready' }, '*'); 
- 
-// Listen for parent calling sandbox functions
-window.addEventListener('message', (event) => {
-  if (event.data.type === 'interop_invoke') {
-    const { callId, method, args } = event.data;
-     
-    if (globalThis.${config.interopVariable}.exports[method]) {
-      try {
-        const result = globalThis.${config.interopVariable}.exports[method](...args);
-         
-        // Handle async functions
-        Promise.resolve(result).then(res => {
-          window.parent.postMessage({
-            type: 'interop_result',
-            callId,
-            result: res
-          }, '*');
-        }).catch(err => {
-          window.parent.postMessage({
-            type: 'interop_result',
-            callId,
-            error: err.message
-          }, '*');
-        });
-      } catch (err) {
-      
-      // Using STDIN error was thrown - pipe back into runtime
-       if(method === "__stdin__"){
-         throw err
-       }
-      
-      if(method != "__stdin__"){
-        window.parent.postMessage({
-          type: 'interop_result',
-          callId,
-          error: err.message
-        }, '*');
-      }
-     }
-    } else {
-      window.parent.postMessage({
-        type: 'interop_result',
-        callId,
-        error: \`Method '\${method}' not found\`
-      }, '*');
-    }
-  }
-}); 
-
-interopChannel.expose('__check_exists__', (methodName) => {
-  return typeof interopChannel.exports[methodName] === 'function';
-});
-
-
-
- 
-
-// Make available globally
-globalThis._RUNTIME_INTEROP = interopChannel;
-
-
-// Node.js Globals
-
-const global = globalThis;
-
-const setImmediate = globalThis.setImmediate || ((fn, ...args) => {
-  return setTimeout(fn, 0, ...args);
-});
-
-
-
- 
- 
-})();
- 
- 
-// Execute user code with comprehensive error handling
-(async () => {
-   
-
-
-
-// globalThis?.__RUNTIME_FS__ = await globalThis._RUNTIME_.loadModule("RUNTIME:NODE_GLOBALS"); if emulating node (for import.meta.resolve && other fs ops.) 
- 
-// all interop.expose() will be hoisted here when code is running. 
- 
-window.${config.interopVariable} =  globalThis._RUNTIME_INTEROP;  // this sets marker & exposes.
-
-
-
-//await _RUNTIME${config.uuid}_.loadModule("fs");
-//await _RUNTIME${config.uuid}_.__FS__.promises.writeFile("/data.json", JSON.stringify({ hello: "worlds" }), "utf8", );
- /**
- * Runtime-compliant shim for import.meta.resolve
- * @param {string} specifier - The path to resolve (e.g., './utils.js')
- * @param {string} [parent=import.meta.url] - The base URL (defaults to current module)
- * @returns {string} - The absolute resolved URL string
- */
- function __RUNTIME_RESOLVE__HANDLE(specifier, parent = 'file:') {
-  try {
-  
-  if(globalThis?._RUNTIME${config.uuid}_?.__FS__){
-  const fs = globalThis._RUNTIME${config.uuid}_.__FS__;
-  const parentDir = "./"
-   if(process){
-  parent = process.cwd();
-  }
-  if (!fs.existsSync(parentDir)) {
-    throw new TypeError(
-      \`Failed to resolve module specifier "\${specifier}" relative to "\${parent}"\`
-    );
-  } 
-  if (fs.statSync(parentDir).isFile()) {
-    // If parent is a file, strip the file name
-    const lastSlash = parentDir.lastIndexOf('/');
-    parentDir = lastSlash >= 0 ? parentDir.slice(0, lastSlash) : '.';
-  }
-
-  // Handle relative paths: ./ or ../
-  if (specifier.startsWith('./') || specifier.startsWith('../')) {
-    let parts = (parentDir + '/' + specifier).split('/');
-    const resolvedParts = [];
-    for (const part of parts) {
-      if (part === '.' || part === '') continue;
-      if (part === '..') resolvedParts.pop();
-      else resolvedParts.push(part);
-    }
-    const resolvedPath = '/' + resolvedParts.join('/');
-    if (fs.existsSync(resolvedPath) || fs.existsSync(resolvedPath + '.js')) {
-      return resolvedPath;
-    }
-    throw new TypeError(
-      \`Failed to resolve module specifier "\${specifier}" relative to "\${parent}"\`
-    );
-  }
-  
-  
-  throw new Error("Failed to find.")
-  
-  }
-
-   return new URL(specifier, parent).href; // for browser emulation
-   
-  } catch (err) {
- 
-    // 2. The spec requires throwing a TypeError on resolution failure
-   throw new TypeError(\`Failed to resolve module specifier "\${specifier}" relative to "\${parent}"\`);
-  }
-}
-
-Object.defineProperty(__RUNTIME_RESOLVE__HANDLE, 'toString', {
-  value: function() {
-    return 'function resolve() { [native code] }';
-  },
-  writable: false,
-  configurable: true
-});
-
- 
-
-
-    
- const observer = new PerformanceObserver((list) => {
-  list.getEntries().forEach((r) => {
-   
-   emitMe("resource_timing", null, {
-      url: r.name,
-      type: r.initiatorType,
-      start: r.startTime,
-      duration: r.duration,
-      size: r.transferSize,
-      encoded: r.encodedBodySize,
-      decoded: r.decodedBodySize
-    });
-   return;
-    console.log({
-      url: r.name,
-      type: r.initiatorType,
-      start: r.startTime,
-      duration: r.duration,
-      size: r.transferSize,
-      encoded: r.encodedBodySize,
-      decoded: r.decodedBodySize
-    });
-  });
-});
-
-observer.observe({ type: "resource", buffered: true });
-
-
-// Add to SandboxRuntime.generate() before user code execution:
-
-
- 
-// Full path to the current file (commonJS)
-/*
-globalThis.__filename = "";
-
-// Directory of the current file
-globalThis.__dirname = "";
-*/
-
-
-
-   // Track pending module imports
-const pendingModules = new Map();
-
- 
-function waitForAllModules() {
-  return new Promise(resolve => {
-    const check = () => {
-      if (pendingModules.size === 0) {
-        resolve();
-      } else {
-        setTimeout(check, 50);
-      }
-    };
-    check();
-  });
-}
-
-
-
-    
-
-
-const startTime = performance.now();
-
-
-
-// Save the original console methods
-const originalConsole = { ...console };
-
-
-const stripAnsi = ${String(stripAnsi)}
-
- 
-
-// Patch each console method
-for (const method in originalConsole) {
-  if (typeof originalConsole[method] === 'function') {
-    console[method] = function (...args) {
-     // const cleanArgs = args.map(arg => typeof arg === 'string' ? stripAnsi(arg) : arg);
-
-     // TODO STRIP ANSI 
-     if(process && process.env?.FORCE_COLOR === 0){
-     
-     }
-      emitMe("console", method, ...args);
-
-      if (originalConsole[method]) {
-        // originalConsole[method].apply(originalConsole, cleanArgs);
-      }
-    };
-  }
-}
-
- 
-// Example custom function that gets called before console methods
-function serialize(...args) {
-  const sanitized = args.map(arg => {
-    if (arg === null) return "null";
-    if (arg === undefined) return "undefined";
-    
-    // 1. If the argument is a function
-    if (typeof arg === 'function') {
-      return arg.toString();
-    }
-    
-    
-    // Handle all TypedArrays
-if (ArrayBuffer.isView(arg) && !(arg instanceof DataView)) {
-  
-
-  
-  return JSON.stringify({
-    type: "binary",
-    data: arg
-  }); 
-  
-   
-}
-
-    
-    function containsFunction(obj) {
-  return Object.values(obj).some(v => typeof v === 'function');
-}
-
-     // 2. Check for our custom [object Process] or other native tags
-     const tag = Object.prototype.toString.call(arg); 
-    // 3. Check for arrays specifically
-    if (Array.isArray(arg) || tag === '[object Object]' && typeof arg === 'object' && typeof tag != 'function' && !containsFunction(arg) || tag === '[object Module]' && typeof arg === 'object' && typeof tag != 'function' && !containsFunction(arg)) {
-      try {
-        return JSON.stringify(arg);
-      } catch {
-        return String(arg);
-      } 
-    }
-     
- 
-    
-    
-    
-     //if (tag !== '[object Objects]' && typeof arg === 'object') {
-    
-     if (tag && typeof arg === 'object') {
-  const properties = Object.getOwnPropertyNames(arg)
-    .map(p => {
-      const val = arg[p];
-      let valueStr;
-
-      if (typeof val === 'function') {
-        valueStr = val.toString();
-      } else if (typeof val === 'object' && val !== null) {
-        try {
-          valueStr = JSON.stringify(val);
-        } catch {
-          valueStr = String(val);
-        }
-      } else {
-        valueStr = JSON.stringify(val); // handles numbers, strings, booleans
-      }
-
-      return \`\n  "\${p}": \${valueStr}\`;
-    })
-    .join(',');
-
-  return \`\${tag} {\${properties}\n}\`;
-}
-
-    
-    // 4. Normal object handling
-    if (typeof arg === 'object') {
-      try {
-        return JSON.stringify(arg, null, 2);
-      } catch {
-        // Fallback for circular structures
-        return String(arg);
-      }
-    }
-    
-    // 5. Primitive values (Strings, Numbers, Booleans)
-    return String(arg);
-  });
-  return sanitized;
-}
- 
-
-function emitMe(fn, method, ...args) {
-const sanitized = serialize(...args)
-
-
-
-if(fn != "console" && fn != "fs"){
-window.parent.postMessage({
-    type: fn,
-    message: sanitized.join(' ')
-  }, '*');
-
-}
-
- if(fn === "fs"){
-  window.parent.postMessage({
-    type: 'fs',
-    method: method.replace("promises.", ''),
-    filename: args[0],
-    data: args[1]
-  }, '*');
- }
-
-function sanitizeArg(arg) {
-  const type = typeof arg;
-
-  if (
-    type === "string" ||
-    type === "number" ||
-    type === "boolean" ||
-    arg === null ||
-    arg === undefined
-  ) {
-    return arg; // primitives are safe
-  }
-
-  if (type === "object"){
-  return serialize(arg)
-  }
-
-  return arg.toString();
-}
-globalThis.emitMe = emitMe;
-
-globalThis._RUNTIME${config.uuid}_.emit = emitMe;
-
-function sendConsoleMessage(method, args) {
-
-const sanitizedArray = typeof serialize === 'function' ? serialize(...args) : args;
-const message = sanitizedArray.join(' ');
-
-  window.parent.postMessage({
-    type: "stdout",
-    method,
-    message: message,
-  }, "*");
-}
-
- if(fn === "console"){
- sendConsoleMessage(method, args);
- }
-}
-
-
-
-// Console capture with multiple levels
-const logs = [];
-const errors = [];
-
-class EventEmitter {
-  constructor() { this._events = {}; }
-  on(type, listener) {
-    (this._events[type] || (this._events[type] = [])).push(listener);
-    return this;
-  }
-  emit(type, ...args) {
-    if (!this._events[type]) return false;
-    this._events[type].forEach(fn => fn.apply(this, args));
-    return true;
-  }
-  once(type, listener) {
-    const selfClosing = (...args) => {
-      this.off(type, selfClosing);
-      listener.apply(this, args);
-    };
-    return this.on(type, selfClosing);
-  }
-  off(type, listener) {
-    if (!this._events[type]) return this;
-    this._events[type] = this._events[type].filter(fn => fn !== listener);
-    return this;
-  }
-}
-// Alias for Node compliance
-EventEmitter.prototype.addListener = EventEmitter.prototype.on;
-EventEmitter.prototype.removeListener = EventEmitter.prototype.off;
-
- 
- const process2 = (function () {
-  let _intervalId = null;
-    const listeners = Object.create(null);
-  let traceWarningHelperShown = false;
-  // --- Minimal EventEmitter ---
-  async function emit(event, ...args) {
-    const handlers = listeners[event];
-    if (!handlers) return false;
-
-    // Make a copy to avoid mutation during iteration
-    const results = handlers.slice().map(fn => {
-      if (fn._once) off(event, fn);
-      return fn.apply(processFinal, args);
-    });
-
-    // Await any promises returned by async functions
-    await Promise.all(results);
-
-    return true;
-  }
-
-function binding(name) {
-    if (name === "natives") return {
-      assert: true, buffer: true, child_process: true, constants: true,
-      crypto: true, events: true, fs: true, http: true, https: true,
-      module: true, os: true, path: true, process: true, stream: true,
-      string_decoder: true, timers: true, tty: true, url: true, util: true, zlib: true
-    };
-    if (name === "config") return { exposeInternals: false };
-    if (name === "constants")
-      return {
-        os: {
-          UV_UDP_REUSEADDR: 4,
-          signals: {
-            SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5,
-            SIGABRT: 6, SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10,
-            SIGSEGV: 11, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15,
-            SIGCHLD: 17, SIGCONT: 18, SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21,
-            SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24, SIGXFSZ: 25, SIGVTALRM: 26,
-            SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGPWR: 30, SIGSYS: 31,
-          },
-          errno: {},
-        },
-        fs: {
-          O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128,
-          O_NOCTTY: 256, O_TRUNC: 512, O_APPEND: 1024, O_NONBLOCK: 2048,
-          O_DSYNC: 4096, O_SYNC: 1052672, O_DIRECT: 16384, O_DIRECTORY: 65536,
-          O_NOATIME: 262144, O_NOFOLLOW: 131072, O_CLOEXEC: 524288,
-          UV_FS_O_FILEMAP: 0,
-          S_IFMT: 61440, S_IFREG: 32768, S_IFDIR: 16384, S_IFCHR: 8192,
-          S_IFBLK: 24576, S_IFIFO: 4096, S_IFLNK: 40960, S_IFSOCK: 49152,
-          F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1,
-        },
-        crypto: {},
-        zlib: {},
-      };
-    if (name === "util") return {};
-    if (name === "fs") return {};
-    if (name === "buffer") return {};
-    if (name === "stream_wrap") return {};
-    if (name === "tcp_wrap") return {};
-    if (name === "pipe_wrap") return {};
-    
-    // Throw for unknown bindings so callers fall back gracefully
-    throw new Error(\`No such module: \${name}\`);
-  }
-
-
-
-  function on(event, fn) {
-    if (!listeners[event]) listeners[event] = [];
-    listeners[event].push(fn);
-    return processFinal;
-  }
-  const addListener = on;
-
-  function prependListener(event, fn) {
-    if (!listeners[event]) listeners[event] = [];
-    listeners[event].unshift(fn);
-    return processFinal;
-  }
-
-  function once(event, fn) {
-    fn._once = true;
-    return on(event, fn);
-  }
-
-  function prependOnceListener(event, fn) {
-    fn._once = true;
-    return prependListener(event, fn);
-  }
-
-  function off(event, fn) {
-    const arr = listeners[event];
-    if (!arr) return processFinal;
-    const i = arr.indexOf(fn);
-    if (i !== -1) arr.splice(i, 1);
-    return processFinal;
-  }
-  const removeListener = off;
-
-  function listenerCount(event) {
-    return listeners[event] ? listeners[event].length : 0;
-  }
-
-  function nextTick(fn, ...args) {
-    Promise.resolve().then(() => fn(...args));
-  }
-
-  // --- Warning internals ---
-  function createWarningObject(message, type, code, ctor, detail) {
-    const warning = new Error(message);
-    warning.name = type || 'Warning';
-    if (code !== undefined) warning.code = code;
-    if (detail !== undefined) warning.detail = detail;
-
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(warning, ctor || processFinal.emitWarning);
-    }
-
-    return warning;
-  }
-
-  function formatWarning(warning) {
-    const isDeprecation = warning.name === 'DeprecationWarning';
-
-    const trace =
-      processFinal.traceProcessWarnings ||
-      (isDeprecation && processFinal.traceDeprecation);
-
-    let msg = \`(node:\${processFinal.pid || 1}) \`;
-
-    if (warning.code) {
-      msg += \`[\${warning.code}] \`;
-    }
-
-    if (trace && warning.stack) {
-      msg += warning.stack;
-    } else {
-      msg += warning.toString();
-    }
-
-    if (typeof warning.detail === 'string') {
-      msg += \`\n\${warning.detail}\`;
-    }
-
-    if (!trace && !traceWarningHelperShown) {
-      const flag = isDeprecation
-        ? '--trace-deprecation'
-        : '--trace-warnings';
-
-      const msg = \`\\n(Use \\\`node \\\${flag} ...\\\` to show where the warning was created)\`;
-      traceWarningHelperShown = true;
-    }
-
-    return msg;
-  }
-
-  function defaultWarningHandler(warning) {
-    if (!(warning instanceof Error)) return;
-
-    const isDeprecation = warning.name === 'DeprecationWarning';
-    if (isDeprecation && processFinal.noDeprecation) return;
-
-    console.error(formatWarning(warning));
-  }
-
-  function emitWarning(warning, type, code, ctor) {
-    if (processFinal.noDeprecation && type === 'DeprecationWarning') {
-      return;
-    }
-
-    let detail;
-
-    if (type && typeof type === 'object' && !Array.isArray(type)) {
-      ctor = type.ctor;
-      code = type.code;
-      detail = type.detail;
-      type = type.type || 'Warning';
-    } else if (typeof type === 'function') {
-      ctor = type;
-      type = 'Warning';
-      code = undefined;
-    }
-
-    if (typeof code === 'function') {
-      ctor = code;
-      code = undefined;
-    }
-
-    if (typeof warning === 'string') {
-      warning = createWarningObject(warning, type, code, ctor, detail);
-    } else if (!(warning instanceof Error)) {
-      throw new TypeError('warning must be a string or Error');
-    }
-
-    if (warning.name === 'DeprecationWarning') {
-      if (processFinal.noDeprecation) return;
-
-      if (processFinal.throwDeprecation) {
-        return nextTick(() => { throw warning; });
-      }
-    }
-
-    nextTick(() => {
-      if (listenerCount('warning') === 0) {
-        defaultWarningHandler(warning);
-      }
-      emit('warning', warning);
-    });
-  }
-
-  function emitWarningSync(warning, type, code, ctor) {
-    if (typeof warning === 'string') {
-      warning = createWarningObject(warning, type, code, ctor);
-    }
-
-    if (listenerCount('warning') === 0) {
-      defaultWarningHandler(warning);
-    }
-
-    emit('warning', warning);
-  }
-
-
- // Report 
- 
- const report = (function () {
-  let _directory = '';
-  let _filename = '';
-  let _compact = false;
-  let _excludeNetwork = false;
-  let _signal = null;
-  let _reportOnFatalError = false;
-  let _reportOnSignal = false;
-  let _reportOnUncaughtException = false;
-  let _excludeEnv = false;
-
-  // Internal store for reports
-  const reports = [];
-
-  function writeReport(file, err) {
-    if (typeof file === 'object' && file !== null) {
-      err = file;
-      file = undefined;
-    } else if (file !== undefined && typeof file !== 'string') {
-      throw new TypeError('file must be a string');
-    }
-
-    if (err === undefined) {
-      err = new Error('Synthetic error');
-    } else if (typeof err !== 'object' || err === null) {
-      throw new TypeError('err must be an object');
-    }
-
-    const r = {
-      source: 'JavaScript API',
-      type: 'API',
-      file: file || _filename || null,
-      error: err,
-      timestamp: Date.now(),
-      compact: _compact,
-      directory: _directory,
-      excludeNetwork: _excludeNetwork,
-      excludeEnv: _excludeEnv,
+    // Injectable sandbox template built from src/sandbox/*.js by
+    // src/build-sandbox.mjs. Single-pass %%TOKEN%% replacement — no escaping.
+    let out = SANDBOX_TEMPLATE;
+
+    const hasTest = config?.process?.argv.includes('--test');
+    const importsStr = config.imports?.join('\n') || '';
+
+    // Log tokens (9 debug statements, enabled via config.logNetworkRequests).
+    const logStmts = {
+      FETCH_PARENT_FALLBACK: "console.log('[FETCH] Parent failed, falling back:', requestInfo);",
+      FETCH_COMPLETED: "console.log('[FETCH] Completed:', requestInfo, '- Status:', response.status);",
+      FETCH_TIMEOUT: "console.log('[FETCH] Timeout:', requestInfo);",
+      FETCH_FAILED: "console.log('[FETCH] Failed:', requestInfo, '- Error:', error.message);",
+      FETCH_STARTED: "console.log('[FETCH] Request started:', requestInfo);",
+      XHR_STARTED: "console.log('[XHR] Request started:', method, url);",
+      XHR_COMPLETED: "console.log('[XHR] Completed:', method, url, '- Status:', xhr.status);",
+      XHR_FAILED: "console.log('[XHR] Failed:', method, url);",
+      XHR_ABORTED: "console.log('[XHR] Aborted:', method, url);",
     };
 
-    reports.push(r);
-
-    // For demo, log to console
-    console.warn('Report written:', r);
-
-    return r;
-  }
-
-  function getReport(err) {
-    if (err === undefined) {
-      err = new Error('Synthetic error');
-    } else if (typeof err !== 'object' || err === null) {
-      throw new TypeError('err must be an object');
+    // %%USER_CODE%% goes LAST so user code containing %%TOKEN%%-like text
+    // is never accidentally replaced. split/join is literal (no $ hazards).
+    const replacements = [
+      ['%%UUID%%', config.uuid],
+      ['%%PROCESS_JSON%%', String(JSON.stringify(config.process))],
+      ['%%USER_FILES_JSON%%', String(JSON.stringify(config.fs))],
+      ['%%SEA_ASSETS_JSON%%', String(JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined))],
+      ['%%INTEROP_VAR%%', config.interopVariable],
+      ['%%BUILTIN_MODULES_JSON%%', String(JSON.stringify(builtinModules))],
+      ['%%STRIP_ANSI_FN%%', String(stripAnsi)],
+      ['%%PARSE_STACK_LOCATION_FN%%', __parseStackLocation.toString()],
+      ['%%FILENAME%%', config.fileName],
+      ['%%TEST_IMPORTS%%', hasTest ? '' : importsStr],
+      ['%%ARGV_HAS_TEST%%', hasTest ? 'true' : 'false'],
+      ['%%IMPORTS%%', importsStr],
+    ];
+    for (const suffix of Object.keys(logStmts)) {
+      replacements.push(['%%LOG_' + suffix + '%%', config.logNetworkRequests ? logStmts[suffix] : '']);
     }
-
-    // Return the latest report matching this error, if any
-    const r = reports.find(r => r.error === err);
-    return r ? JSON.parse(JSON.stringify(r)) : null;
-  }
- 
-  function addSignalHandler(sig) {
-    if (!_reportOnSignal) return;
-
-    if (typeof sig !== 'string') sig = _signal;
-
-    if (sig) {
-      process.on(sig, signalHandler);
+    for (const [from, to] of replacements) {
+      out = out.split(from).join(to);
     }
+    // User code last (see above).
+    out = out.split('%%USER_CODE%%').join(code);
+    return out;
   }
 
-  function removeSignalHandler() {
-    if (_signal) {
-      process.removeListener(_signal, signalHandler);
-    }
-  }
-
-  function signalHandler(sig) {
-    writeReport(sig, { type: 'Signal', message: 'Signal received' });
-  }
-
-   function hrtime(previous) {
-  const now = performance.now() / 1000; // seconds
-  const sec = Math.floor(now);
-  const nano = Math.floor((now - sec) * 1e9);
-
-  if (!previous) return [sec, nano];
-
-  let diffSec = sec - previous[0];
-  let diffNano = nano - previous[1];
-
-  if (diffNano < 0) {
-    diffSec -= 1;
-    diffNano += 1e9;
-  }
-
-hrtime.bigint = () => {
-  return BigInt(Math.floor(performance.now() * 1e6));
-};
-
-  return [diffSec, diffNano];
-};
-
-
-
-
-  return {
-   
-    writeReport,
-    getReport,
-
-    get directory() { return _directory; },
-    set directory(dir) { _directory = String(dir); },
-
-    get filename() { return _filename; },
-    set filename(name) { _filename = String(name); },
-
-    get compact() { return _compact; },
-    set compact(b) { _compact = Boolean(b); },
-
-    get excludeNetwork() { return _excludeNetwork; },
-    set excludeNetwork(b) { _excludeNetwork = Boolean(b); },
-
-    get signal() { return _signal; },
-    set signal(sig) { 
-      removeSignalHandler();
-      _signal = String(sig); 
-      addSignalHandler(sig);
-    },
-
-    get reportOnFatalError() { return _reportOnFatalError; },
-    set reportOnFatalError(trigger) { _reportOnFatalError = Boolean(trigger); },
-
-    get reportOnSignal() { return _reportOnSignal; },
-    set reportOnSignal(trigger) { 
-      _reportOnSignal = Boolean(trigger);
-      removeSignalHandler();
-      addSignalHandler();
-    },
-
-    get reportOnUncaughtException() { return _reportOnUncaughtException; },
-    set reportOnUncaughtException(trigger) { _reportOnUncaughtException = Boolean(trigger); },
-
-    get excludeEnv() { return _excludeEnv; },
-    set excludeEnv(b) { _excludeEnv = Boolean(b); },
-  };
-})
-
-  let cwd = "/"
-  // 1. Real logic
-  const rawMethods = {
- 
-    async exit(code = 0) {
-      emit('beforeExit', code);  // async breaks kill
-      emit('exit', code);
-       if (_intervalId) {
-        clearInterval(_intervalId);
-        _intervalId = null;
-      }
-    const endTime = performance.now();
-    const executionTime = (endTime - startTime).toFixed(2); 
-     
-      window.parent.postMessage({ type: 'kill', logs: logs || [], executionTime: parseFloat(executionTime) }, '*');
-    },
-    
-    abort() {
-    throw new Error('Process aborted');
-    },
-      // --- Timing ---
-  uptime() {
-    return (Date.now() - startTime) / 1000;
-  },
-
-  // --- Working directory ---
-  cwd() {
-    return cwd;
-  }, 
-
-  chdir(_cwd){
-     if(!globalThis._RUNTIME${config.uuid}_.__FS__.existsSync(_cwd)){
-        throw new Error(\`ENOENT: no such file or directory, chdir '\${_cwd}'\`)
-     }
-     cwd = _cwd
-     // fs.chdir(cwd)
-  },
-
-
-  hrtime:function hrtime(previous) {
-      const now = performance.now() / 1000;
-      const sec = Math.floor(now);
-      const nano = Math.floor((now - sec) * 1e9);
-
-      if (!previous) return [sec, nano];
-
-      let diffSec = sec - previous[0];
-      let diffNano = nano - previous[1];
-
-      if (diffNano < 0) {
-        diffSec -= 1;
-        diffNano += 1e9;
-      }
-
-  
-
-      return [diffSec, diffNano];
-    },
-  
-  // --- Memory ---
-    memoryUsage() {
-    return {
-      rss: 0,
-      heapTotal: 0,
-      heapUsed: 0,
-      external: 0,
-      arrayBuffers: 0
-    };
-   },
-
-  // --- CPU ---
-  cpuUsage() {
-    return {
-      user: 0,
-      system: 0
-    };
-  },
-
-
-
-  kill(pid, signal = 'SIGTERM') {
-  if (typeof pid !== 'number') {
-    throw new TypeError('The "pid" argument must be of type number');
-  }
-
-  if (typeof signal !== 'string') {
-    throw new TypeError('The "signal" argument must be of type string');
-  }
-  
-  
-        const endTime = performance.now();
-    const executionTime = (endTime - startTime).toFixed(2); 
-     
-      window.parent.postMessage({ type: 'process_kill', logs: logs || [], executionTime: parseFloat(executionTime) }, '*');
-     //this.emit('kill', { pid, signal });
-   },
-   
-   
-       emitWarning,
-    emitWarningSync,
-    on,
-    off,
-    emit,
-    listenerCount, 
-    binding,
-    nextTick,
-    title:globalThis._RUNTIME${config.uuid}_.process.title,
-    arch:globalThis._RUNTIME${config.uuid}_.process.arch,
-    env:globalThis._RUNTIME${config.uuid}_.process.env,
-    platform:globalThis._RUNTIME${config.uuid}_.process.platform,
-    pid: globalThis._RUNTIME${config.uuid}_.process.pid,
-    ppid: globalThis._RUNTIME${config.uuid}_.process.ppid,
-    argv0: globalThis._RUNTIME${config.uuid}_.process.argv,
-    execPath: globalThis._RUNTIME${config.uuid}_.process.execPath,
-    execArgv: globalThis._RUNTIME${config.uuid}_.process.execArgv,
-    version: globalThis._RUNTIME${config.uuid}_.process.version,
-    versions: globalThis._RUNTIME${config.uuid}_.process.versions,
-    argv: globalThis._RUNTIME${config.uuid}_.process.argv,
-    once,
-    prependListener,
-    prependOnceListener,
-    report: report(),
-    cwd: function(){
-     return cwd
-    }
-  };
-   
-   
-  
-  
-       
-
-  // 2. Cloak all methods
-  const processBase = {};
-
-  Object.getOwnPropertyNames(rawMethods).forEach(key => {
-  
-  const value = rawMethods[key];
-
-    // If it's NOT a function, just copy it as-is
-    if (typeof value !== "function") {
-      processBase[key] = value;
-      return;
-    }
-    const fn = function () {
-      return rawMethods[key].apply(this, arguments);
-    };
-
-    Object.defineProperties(fn, {
-      name: { value: key },
-      toString: {
-        value: function () {
-          return \`function \${key}() { [native code] }\`;
-        }
-      }
-    });
-
-    processBase[key] = fn;
-  });
-
-  // 3. Create object with fake type
-  const processFinal = Object.create({}, {
-    [Symbol.toStringTag]: { value: 'Process', enumerable: false }
-  });
-
-  Object.assign(processFinal, processBase);
- // Object.freeze(processFinal);
-
-
-   // Deprecation flags
-  processFinal.noDeprecation = false;
-  processFinal.throwDeprecation = false;
-  processFinal.traceDeprecation = false;
-  processFinal.traceProcessWarnings = false;
-try{
-  // 4. Optionally expose globally
-  
-Object.defineProperty(window, 'process', {
-    value: processFinal,
-    writable: false,
-    configurable: false,
-   enumerable: true
-  });
-   
-   globalThis.process = processFinal;
-  }catch(err){
-  
-  }
-  return processFinal;
-})(); 
-  
-
-  
-
-
- 
-
-const cloakedConsole = (function () {
-  const logLevels = Object.getOwnPropertyNames(console).filter(k => typeof console[k] === 'function');
-
- 
-
-  // 1. Logic Storage (The "Raw" Methods)
-  const rawMethods = {};
-  logLevels.forEach(level => {
-    const original = console[level];
-    rawMethods[level] = function (...args) {
-      const sanitizedArray = typeof serialize === 'function' ? serialize(...args) : args;
-      const message = sanitizedArray.join(' ');
- 
-      if (level === 'error') errors.push(message);
-      
-      if (level != 'clear'){
-      logs.push({type:level, args:message});
-      }
-      return original.apply(console, args);
-    };
-  });
-
-  // 2. Cloak all methods (Mirroring your processBase logic)
-  const consoleBase = {};
-  Object.getOwnPropertyNames(rawMethods).forEach(key => {
-    const fn = function () {
-      return rawMethods[key].apply(this, arguments);
-    };
-
-    Object.defineProperties(fn, {
-      name: { value: key },
-      toString: {
-        value: function () {
-          return \`function \${key}() { [native code] }\`;
-        }
-      }
-    });
-
-    consoleBase[key] = fn;
-  });
-
-  // 3. Create the final object with the fake "Console" type
-  const consoleFinal = Object.create({}, {
-    [Symbol.toStringTag]: { value: 'Object', enumerable: false }
-  });
-
-  Object.assign(consoleFinal, consoleBase);
-  
-  // Note: We don't freeze it here because some 3rd party libs 
-  // might try to add properties to console, which would crash the script.
-
-  // 4. Swap the global console
-  // We use defineProperty to overwrite the existing window.console
-  Object.defineProperty(window, 'console', {
-    value: consoleFinal,
-    writable: true,
-    configurable: true,
-    enumerable: true
-  });
-
-  return consoleFinal;
-})();
-
-await globalThis._RUNTIME${config.uuid}_.loadModule("RUNTIME:NODE_GLOBALS"); 
-      
-   
-// Enhanced timer tracking with WeakMap for cleanup
-const timerRegistry = new Map();
-let timerIdCounter = 0;
-const originalSetInterval = setInterval;
-const originalClearInterval = clearInterval;
-const originalSetTimeout = setTimeout;
-const originalClearTimeout = clearTimeout;
-
-function revertTrueOriginals(){
-globalThis.setTimeout = originalSetTimeout;
-globalThis.clearTimeout = originalClearTimeout;
-globalThis.setInterval = originalSetInterval;
-globalThis.clearInterval = originalClearInterval;
-globalThis.console = originalConsole;
-}
-
-globalThis.setTimeout = (fn, delay, ...args) => {
-  const timerId = originalSetTimeout(() => {
-    timerRegistry.delete(timerId);
-    try {
-      fn(...args);
-    } catch (err) {
-      console.log(err.stack)
-      console.error('Timer error:', err.message);
-    }
-  }, Math.max(0, delay || 0));
-  
-  timerRegistry.set(timerId, { type: 'timeout', created: Date.now() });
-  return timerId;
-};
-
-globalThis.clearTimeout = (id) => {
-  timerRegistry.delete(id);
-  originalClearTimeout(id);
-};
-  
-function waitForAllTimers() {
-  return new Promise(resolve => {
-    const check = () => {
-      const pending = Array.from(timerRegistry.values())
-        .filter(t => t.type === 'timeout');
-      
-      if (pending.length === 0) {
-        resolve();
-      } else {
-        originalSetTimeout(check, 50);
-      }
-    };
-    check();
-  });
-}
-
-
-
-setInterval = (fn, delay, ...args) => {
-  const id = originalSetInterval(() => {
-    try {
-      fn(...args);
-    } catch (err) {
-      console.error('Interval error:', err.message);
-      clearInterval(id);
-    }
-  }, Math.max(0, delay || 0));
-  
-  timerRegistry.set(id, { type: 'interval', created: Date.now() });
-  return id;
-};
-
-clearInterval = (id) => {
-  timerRegistry.delete(id);
-  originalClearInterval(id);
-};
-
-function clearAllIntervals() {
-  timerRegistry.forEach((info, id) => {
-    if (info.type === 'interval') {
-      clearInterval(id);
-    }
-  });
-}
-
-
-const _realCreateElement = document.createElement;
-
-document.createElement = function(tagName, options) {
-  const tag = tagName.toLowerCase();
-  if (tag === 'iframe' || tag === 'frame' || tag === 'object' || tag === 'embed') {
-     // throw new SecurityError("Creation of frames/objects is disabled in this sandbox.");
-  }
-  return _realCreateElement.apply(document, [tagName, options]);
-};
-
-// Mask it
-// Object.defineProperty(document.createElement, 'name', { value: 'createElement' });
-// document.createElement.toString = () => "function createElement() { [native code] }";
-
-const _originalInnerHTML = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set;
-
-Object.defineProperty(Element.prototype, 'innerHTML', {
-  set: function(value) {
-    if (typeof value === 'string' && /<iframe|<frame|<object|<embed/i.test(value)) {
-     // throw new SecurityError("Illegal HTML injection detected.");
-    }
-    _originalInnerHTML.call(this, value);
-  },
-  configurable: false
-});
-
-
-const OrigEventSource = window.EventSource;
-
-globalThis.EventSource = function (url, options) {
-  if (url.includes('blocked.com')) throw new Error(\`Blocked EventSource to \${url}\`);
-  return new OrigEventSource(url, options);
-};
-
-
-
-const OrigWS = window.WebSocket;
-
-globalThis.WebSocket = function (url, protocols) {
-  if (url.includes('blocked.com')) throw new Error(\`Blocked WebSocket to \${url}\`);
-  return new OrigWS(url, protocols);
-};
-
-
-const origBeacon = navigator.sendBeacon.bind(navigator);
-
-globalThis.navigator.sendBeacon = (url, data) => {
-  if (url.includes('blocked.com')) return false;
-  return origBeacon(url, data);
-};
-
-
-// Enhanced fetch tracking with timeout and abort support
-
-
-
-
-function wrapNetwork(fnName, origFn, blocker) {
-  return function (...args) {
-    const url = typeof args[0] === 'string' ? args[0] : args[0]?.url;
-    if (blocker(url)) throw new Error(\`Blocked \${fnName} to \${url}\`);
-    return origFn(...args);
-  };
-}
-
-const _realFetch = window.fetch;
-const pendingFetches = new Map();
-
-  // Create the patched fetch
-  
-const patchedFetch = async function (input, init = {}) {
-  const requestInfo = typeof input === 'string' ? input : input?.url;
-  const requestId = Math.random().toString(36).substr(2, 9);
-
- 
-
-  const blockedUrls = [
-    'https://example.com/bad',
-  ];
-
-  const url = typeof input === 'string' ? input : input.url;
-
-  if (
-    blockedUrls.some(pattern =>
-      typeof pattern === 'string'
-        ? pattern === url
-        : pattern.test(url)
-    )
-  ) {
-    return Promise.reject(new Error(\`Blocked fetch to \${url}\`));
-  }
-
-  emitMe("network_request", null, {
-    url: input,
-    id: requestId,
-    type: "fetch",
-    status: "started",
-    body: init
-  });
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
-  const fetchInit = { ...init, signal: controller.signal };
-
-  let hasError = null;
-  let response;
-
-  try {
-const { signal, ...serializableInit } = fetchInit;
-
-if (serializableInit.headers) {
-  const h = serializableInit.headers;
-
-  serializableInit.headers =
-    h instanceof Headers
-      ? Object.fromEntries(h.entries())
-      : Array.isArray(h)
-        ? Object.fromEntries(h)
-        : { ...h };
-}
-
-
-    let fetchPromise;
-
-    // pendingFetches.set(requestId, { url: requestInfo, promise: fetchPromise });
-
-    try {
-      // 🔥 FIRST: Try parent
-      if(serializableInit.body){
-       // serializableInit.body = JSON.parse(serializableInit.body)
-       }
-      const parentFetch = globalThis.${config.interopVariable}?.callParent?.(
-        '_fetch_',
-        input,
-        serializableInit
-      );
-
-      if (parentFetch == null) {
-        throw new Error('Parent declined fetch');
-      }
-
-       fetchPromise = parentFetch 
-
-      self.operations?.fetches?.add(fetchPromise);
-      fetchPromise.finally(() =>
-        self.operations?.fetches?.delete(fetchPromise)
-      );
-
-      response = await fetchPromise;
-      if(!response){
-      throw new Error("Parent Fetch Returned Null")
-      }
-      
-      const res = new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: response.headers, 
-            url: "test"
-          })
-      
-      Object.defineProperty(res, 'url', { value: response.url });
-      return res
-
-    } catch (parentError) {
- 
-      // 🔥 Parent failed — fallback to real fetch
-      ${config.logNetworkRequests ? "console.log('[FETCH] Parent failed, falling back:', requestInfo);" : ''}
-
-      fetchPromise = _realFetch.apply(window, [input, fetchInit]);
-
-      self.operations?.fetches?.add(fetchPromise);
-      fetchPromise.finally(() =>
-        self.operations?.fetches?.delete(fetchPromise)
-      );
-
-      response = await fetchPromise;
-    }
-
-    // ${config.logNetworkRequests ? "console.log('[FETCH] Completed:', requestInfo, '- Status:', response.status);" : ''}
-
-    return response;
-
-  } catch (error) {
-    hasError = error;
-
-    if (error.name === 'AbortError') {
-      ${config.logNetworkRequests ? "console.log('[FETCH] Timeout:', requestInfo);" : ''}
-    } else {
-      ${config.logNetworkRequests ? "console.log('[FETCH] Failed:', requestInfo, '- Error:', error.message);" : ''}
-    }
-
-    throw error;
-
-  } finally {
-    clearTimeout(timeoutId);
-
-    if (!hasError) {
-      emitMe("network_request", null, {
-        url: input,
-        id: requestId,
-        type: "fetch",
-        status: "finished"
-      });
-    } else {
-      emitMe("network_request", null, {
-        url: input,
-        id: requestId,
-        type: "fetch",
-        status: "failed",
-        error: hasError?.message || hasError
-      });
-    }
-
-    pendingFetches.delete(requestId);
-  }
-};
-  
-  const patchedFetch2 = async function(input, init = {}) {
-    const requestInfo = typeof input === 'string' ? input : input.url;
-    const requestId = Math.random().toString(36).substr(2, 9);
-    
-    
-    const blockedUrls = [
-  'https://example.com/bad',
-  //https:\//\//malware\.site\///
-];
-       const url = input;
-
-  // Check blocked URLs
-  if (blockedUrls.some(pattern => 
-    typeof pattern === 'string' ? pattern === url : pattern.test(url)
-  )) {
-    return Promise.reject(new Error(\`Blocked fetch to \${url}\`));
-  }
-    
-    
-
-    emitMe("network_request", null, {
-      url:input,
-      id:requestId,
-      type:"fetch",
-      status: "started",
-      body:init
-    });
-    ${config.logNetworkRequests ? "console.log('[FETCH] Request started:', requestInfo);" : ''}
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-    
-    const fetchInit = { ...init, signal: controller.signal };
-    
-    // We use .apply(window) to ensure 'this' context is correct
-    const fetchPromise = _realFetch.apply(window, [input, fetchInit]);
-    
-    pendingFetches.set(requestId, { url: requestInfo, promise: fetchPromise });
-    let hasError = false;
-    try {
-      const response = await fetchPromise;
-      ${config.logNetworkRequests ? "console.log('[FETCH] Completed:', requestInfo, '- Status:', response.status);" : ''}
-      return response;
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        ${config.logNetworkRequests ? "console.log('[FETCH] Timeout:', requestInfo);" : ''}
-      } else {
-        ${config.logNetworkRequests ? "console.log('[FETCH] Failed:', requestInfo, '- Error:', error.message);" : ''}
-      }
-      hasError = error;
-      throw error;
-    } finally {
-      clearTimeout(timeoutId);
-      if(!hasError){
-      emitMe("network_request", null, {
-      url:input,
-      id:requestId,
-      type:"fetch",
-      status: "finished",
-       
-      });
-     }
-    if(hasError){
-      emitMe("network_request", null, {
-      url:input,
-      id:requestId,
-      type:"fetch",
-      status: "failed",
-      error: hasError?.message || hasError
-      });
-     }  
-
-      pendingFetches.delete(requestId);
-    }
-  };
- 
-  // MASKING: Make the patched function look exactly like the native one
-  Object.defineProperty(patchedFetch, 'name', { value: 'fetch' });
-  patchedFetch.toString = () => "function fetch() { [native code] }";
-
-  // LOCKING: Replace global fetch and prevent modification
-  Object.defineProperty(window, 'fetch', {
-    value: patchedFetch,
-    writable: true,
-    configurable: true,
-    enumerable: true
-  });
-  
-
-
-function waitForAllFetches() {
-  const promises = Array.from(pendingFetches.values()).map(f => f.promise);
-  return Promise.allSettled(promises);
-}
-
-// Enhanced XHR tracking
-const originalXHR = window.XMLHttpRequest;
-const pendingXhrs = new Map();
-
-function PatchedXHR() {
-  const xhr = new originalXHR();
-  const xhrId = Math.random().toString(36).substr(2, 9);
-  
-  const originalOpen = xhr.open;
-  const originalSend = xhr.send;
-
-  let url = '';
-  let method = '';
-
-  xhr.open = function(m, u, ...args) {
-    method = m;
-    url = u;
-    return originalOpen.apply(this, [m, u, ...args]);
-  };
-
-  xhr.send = function(body) {
-    ${config.logNetworkRequests ? "console.log('[XHR] Request started:', method, url);" : ''}
-    
-    emitMe("network_request", null, {
-      method,
-      url,
-      type:"xhr",
-      status: xhr.status
-    });
-    
-
-    const cleanup = () => {
-      pendingXhrs.delete(xhrId);
-      ${config.logNetworkRequests ? "console.log('[XHR] Completed:', method, url, '- Status:', xhr.status);" : ''}
-    };
-
-    xhr.addEventListener('loadend', cleanup);
-    xhr.addEventListener('error', () => {
-      pendingXhrs.delete(xhrId);
-      ${config.logNetworkRequests ? "console.log('[XHR] Failed:', method, url);" : ''}
-    });
-    xhr.addEventListener('abort', () => {
-      pendingXhrs.delete(xhrId);
-      ${config.logNetworkRequests ? "console.log('[XHR] Aborted:', method, url);" : ''}
-    });
-
-    pendingXhrs.set(xhrId, xhr);
-    return originalSend.apply(this, [body]);
-  };
-
-  return xhr;
-  
-}
-
-function maskFunction(patchedFn, originalFn) {
-  Object.defineProperty(patchedFn, 'name', { value: originalFn.name });
-  patchedFn.toString = () => originalFn.toString();
-}
-maskFunction(PatchedXHR, originalXHR)
-maskFunction(setTimeout, originalSetTimeout)
-maskFunction(clearTimeout, originalClearTimeout)
-maskFunction(setInterval, originalSetInterval)
-maskFunction(clearInterval, originalClearInterval)
- 
- Object.defineProperty(document.createElement, 'name', { value: 'createElement' });
-document.createElement.toString = () => "function createElement() { [native code] }";
-
-window.XMLHttpRequest = PatchedXHR;
-
-function waitForAllXhrs() {
-  return new Promise(resolve => {
-    const check = () => {
-      if (pendingXhrs.size === 0) {
-        resolve();
-      } else {
-        setTimeout(check, 50);
-      }
-    };
-    check();
-  });
-}
-
-// __parseStackLocation is defined once at module scope (exported for
-// unit tests) and inlined here so the iframe runs the identical code.
-${__parseStackLocation.toString()}
-
-// Enhanced error handling with stack traces
-window.onerror = function(message, source, lineno, colno, error) {
-  const errorMsg = error ? (error.stack || error.message || message) : message;
-  console.error('Uncaught error:', errorMsg);
-
-  // Parse all frames for parent-side source-map mapping.
-  const frames = [];
-  if (error?.stack) {
-    for (const line of String(error.stack).split('\\n')) {
-      const loc = __parseStackLocation(line);
-      if (loc) frames.push(loc);
-    }
-  }
-
-  window.parent.postMessage({
-    type: 'window_error',
-    message: error ? (error.message || String(message)) : String(message),
-    source,
-    lineno,
-    colno,
-    stack: error?.stack || null,
-    frames,
-    errorName: error?.name || 'Error'
-  }, '*');
-
-  return true;
-};
-
-window.onunhandledrejection = function (event) {
-  let reason = event.reason;
-
-  // Normalize non-Error rejections
-  if (!(reason instanceof Error)) {
-    reason = new Error(typeof reason === 'string'
-      ? reason
-      : JSON.stringify(reason));
-  }
-
-  const stack = reason.stack || '';
-  const message = reason.message || String(reason);
-
-  // Extract the first stack frame (where it happened) with a parser that
-  // understands URLs — no naive split(':').
-  let loc = null;
-  const frames = [];
-  const stackLines = stack.split('\\n');
-  for (let i = 1; i < stackLines.length; i++) {
-    const parsed = __parseStackLocation(stackLines[i]);
-    if (parsed) {
-      frames.push(parsed);
-      if (!loc) loc = parsed;
-    }
-  }
-
-window.parent.postMessage({
-    type: 'unhandled_promise_rejection',
-    reason: \`Uncaught (in promise) \${reason.name || 'Error'}: \${message}\`,
-    stack: stack || null,
-    file: loc?.file || null,
-    line: loc?.line ?? null,
-    column: loc?.column ?? null,
-    location: loc ? \`\${loc.file}:\${loc.line}:\${loc.column}\` : null,
-    frames,
-    errorName: reason?.name || 'Error'
-  }, '*');
-
-  event.preventDefault();
-};
-
-
- 
-
-async function initSandboxState(){
-let __initSandboxState = await globalThis.${config.interopVariable}.callParent('_getState');
-
-__initSandboxState = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(__initSandboxState)}\`;
-
- 
-await import(__initSandboxState);
-
-}
-
-
-globalThis.${config.interopVariable}.expose('__stdin__', (args) => {
-    const s = process?.stdin;
-  const hasListeners = s && (s.listenerCount('data') > 0 || s.listenerCount('keypress') > 0); 
- 
-  if (s && hasListeners && !s.isPaused()) {
-    return s.pushData(args);
-  }
-  
-  
-  // process.stdin.pushData(args)
-   if(process && process.stdin && process.stdin.listenerCount('data') != 0 && process.stdin.isPaused() == false){
-    return process.stdin.pushData(args);
-   }
-  
-  // --- Key Decoder Function ---
-  function decodeKeyPress(str) {
-    if (!str) return null;
-
-    // ANSI Escape sequences for arrow keys
-    if (str === '\\x1b[A' || str === '\\x1bOA') return { name: 'up', sequence: str };
-    if (str === '\\x1b[B' || str === '\\x1bOB') return { name: 'down', sequence: str };
-    if (str === '\\x1b[C' || str === '\\x1bOC') return { name: 'right', sequence: str };
-    if (str === '\\x1b[D' || str === '\\x1bOD') return { name: 'left', sequence: str };
-
-    // Enter / Return keys
-    if (str === '\\r' || str === '\\n') return { name: 'return', sequence: str };
-
-    // Backspace
-    if (str === '\\x7f' || str === '\\b') return { name: 'backspace', sequence: str };
-
-    // Handle single characters & Ctrl combinations
-    if (str.length === 1) {
-      const code = str.charCodeAt(0);
-      // Check for Ctrl+A through Ctrl+Z (ASCII codes 1 to 26)
-      if (code >= 1 && code <= 26) {
-        return {
-          name: String.fromCharCode(code + 96),
-          ctrl: true,
-          sequence: str
-        };
-      }
-      return { name: str, sequence: str };
-    }
-
-    // Fallback for complex/unrecognized sequences
-    return { name: 'unknown', sequence: str };
-  }
-  
-  function stripKeySequencesPreserveWhitespace(str) {
-  if (!str) return "";
-
-  return str
-    // Remove ANSI escape sequences (arrow keys, function keys, CSI sequences)
-    .replace(/\\x1b\\[[0-9;?]*[A-Za-z]/g, '')
-    .replace(/\\x1b[\\(\\)][0-9A-Za-z]/g, '')
-    // Remove control characters except \\n (\\x0A) and \\t (\\x09)
-    .replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
-}
-  // TODO: handle if buffered pass or possible remove if emulating node?
-    try {   
-              const cleanedCode = stripKeySequencesPreserveWhitespace(args);
-              
-               const keyEvent = decodeKeyPress(args);
-              if (keyEvent) {
-                // emitMe("key_event", null, keyEvent)
-                return;  
-              }
-              
-               if(!cleanedCode){
-                return; 
-               }
-                const E = window.eval(cleanedCode);
-                console.log(E)
-            } catch (E) {
-                return void console.error(E.message)
-            }
-});
-
- 
-
-globalThis.${config.interopVariable}.expose('__serverRequest__', async (port=8080, URL = "/", type = "GET", body= {}, headers = {}) => {
-    return await globalThis._RUNTIME${config.uuid}_.__httpServerRunTime.handleRequest(port, URL, type, body, headers)
-});
- 
-
-
- 
-
-
-  try {
-  await initSandboxState();
-
-
-  await globalThis._RUNTIME${config.uuid}_.loadModule("fs");
-  
- window.parent.postMessage({ type: 'sandbox_ready' }, '*'); 
-
-  
-// Remove these when emulating Node.js true behaviour
-// let document = undefined;
-// let location = undefined; 
- 
-    
-  ${
-  config?.process?.argv.includes('--test') 
-    ? '' // if --test is present, include nothing
-    : config.imports?.join('\n') || '' // otherwise include imports
-}
-  
-  
- // globalThis.window =  _window;
-  // globalThis.document =  _document;
-
-
-
-
- 
-  for (const [name, fn] of [
-  ['setTimeout',    setTimeout],
-  ['clearTimeout',  clearTimeout],
-  ['setInterval',   setInterval],
-  ['clearInterval', clearInterval],
-]) {
-  Object.defineProperty(globalThis, name, {
-    get: () => fn,
-    set: () => {},       // silently swallow user writes
-    configurable: false,
-    enumerable: true,
-  });
-}
-      
-     
- 
-   
-      // const tracker = new AsyncOperationTracker();
-    /* TODO: add flags for --test-reporter=spec mytest.js (json, dot, spec - exists) or if in env.NODE_TEST_REPORTER
-     node --test file.js 
-    node --test (run all test files in VFS)
-    */ 
- ${config?.process?.argv.includes('--test') 
-    ? `
-    
-     let _testRunner;
-     
-      try{ 
-      
-      if(!globalThis._RUNTIME${config.uuid}_._TEST_RUNNER_){
-       await globalThis._RUNTIME${config.uuid}_.loadModule("node:test")
-       }
-      // globalThis._RUNTIME_TEST_RUNNER_.REPORTER_TYPE = 'tap';
-       // console.log(globalThis._RUNTIME_TEST_RUNNER_._activeReporter)
-     
-       // const reporter = process.argv.find(arg => arg.startsWith('--test-reporter='))?.split('=')[1];
-       
-       function getTestReporters(argv) {
-  const reporters = [];
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-
-    if (arg === '--test-reporter') {
-      const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
-        reporters.push(...next.split(','));
-        i++;
-      }
-    } else if (arg.startsWith('--test-reporter=')) {
-      const value = arg.split('=').slice(1).join('=');
-      reporters.push(...value.split(','));
-    }
-  }
-
-  if(reporters.filter(Boolean).length === 0){
-    return ['spec'];
-  }
-
-  return reporters.filter(Boolean);
-}
-
- 
-
-   
- 
-       const _REPORTERS = getTestReporters(process.argv)
-       for (const REPORTER in _REPORTERS){
-
-       if(_REPORTERS[REPORTER] === "lcov"){
-         // TODO: inject a coverage event into events somehow.
-         throw new Error("lcov is not implemented")
-       };
-       const testRunner = await globalThis._RUNTIME${config.uuid}_._TEST_RUNNER_.execute(\`
-       
-       
-       ${config.imports?.join('\n') || ''}
-       //__$PROVIDED_RUNTIME_CODE__/
-       
-       ${code}
-       
-       
-       
-       \`, {reporter:_REPORTERS[REPORTER]});
-       
-       console.log(testRunner.output)
-       
-       }
-       
-       
-       
-       
-         
-      // console.log(globalThis._RUNTIME_TEST_RUNNER_.tap(testRunner));
-       }catch(err){
-         err.stack = err.message;
-         throw err
-       }
-       `
-    : `
-await (async () => {
-//__$PROVIDED_RUNTIME_CODE__/
-${code}\n})();
-`}
-  
-     
-   
-    // await tracker.waitForCompletion();
-   
-       
-    // Multiple drain cycles to catch cascading async operations
-     for (let i = 0; i < 1; i++) {
-       await Promise.resolve(); // Drain microtasks
-       await new Promise(r => setTimeout(r, 100)); // Let macrotasks run
-    } 
-    
-    
-     
-   
-     
- 
-    await Promise.race([
-  
-      Promise.all([
-       _RUNTIME${config.uuid}_.taskTracker.waitForAll(),
-        waitForAllFetches(),
-        waitForAllXhrs(),
-        waitForAllTimers(),
-                 typeof process?.stdin?.waitUntilNoListeners === "function" ? process?.stdin?.waitUntilNoListeners() ?? Promise.resolve()
-  : Promise.resolve(),
-           typeof _RUNTIME${config.uuid}_.__httpServerRunTime !== "undefined"
-  ? _RUNTIME${config.uuid}_.__httpServerRunTime.waitForAllServers?.() ?? Promise.resolve()
-  : Promise.resolve()
-      ]),
-       
-   
-    ])
-    
-    revertTrueOriginals();
-    
-    //clearAllIntervals();
-   
-
-  } catch (err) {
-    const sanitized_logs = serialize(logs)
-    revertTrueOriginals();
-    console.error('Execution error:', err.stack);
-    const endTime = performance.now();
-    const executionTime = (endTime - startTime).toFixed(2); 
-    
-   // const stack = reason.stack || '';
- // const message = reason.message || String(reason);
-
-  // Extract the first stack frame (where it happened) with a parser that
-  // understands URLs — no naive split(':').
-  let location = null;
-  let loc = null;
-  const frames = [];
-  const stackLines = err.stack.split('\\n');
-
-  for (let i = 1; i < stackLines.length; i++) {
-    const parsed = __parseStackLocation(stackLines[i]);
-    if (parsed) {
-      frames.push(parsed);
-      if (!loc) {
-        loc = parsed;
-        location = \`\${loc.file}:\${loc.line}:\${loc.column}\`;
-      }
-    }
-  }
-
-    window.parent.postMessage({
-      type: 'function_error',
-      error: err.message || String(err),
-      stack: err.stack,
-      location,
-      line: loc?.line ?? null,
-      column: loc?.column ?? null,
-      frames,
-      errorName: err?.name || 'Error',
-      logs: logs,
-      executionTime: parseFloat(executionTime)
-    }, '*');
-    return;
-  } 
-  
-  
-  
-  console = originalConsole;
-  const endTime = performance.now();
-  const executionTime = (endTime - startTime).toFixed(2);
-  
-  const sanitized_logs = serialize(logs)
-
-  // need a better way to do this - since dev use export {promises}
-
- const fs = globalThis._RUNTIME${config.uuid}_.__FS__; // This is the fs-like object
-const vol = fs?._vol;      // This is the underlying volume
-
-const serializedFs = {};
-
-// 1. Get all file paths in the volume
-const files = vol?.toJSON?.() ?? {}; // We use this JUST to get the list of keys/paths
-
-for (const path in files) {
-  try {
-    // 2. Read each file as a raw Buffer (no encoding = binary)
-    // In the browser, memfs Buffers are actually Uint8Arrays
-    const data = fs.readFileSync(path);
-    
-    // 3. Store it. postMessage handles Uint8Array perfectly.
-    serializedFs[path] = data instanceof Uint8Array ? data : new Uint8Array(data);
-  } catch (e) {
-    
-  }
-}
- 
- 
- 
- 
-  
-  window.parent.postMessage({ 
-    type: 'function_results', 
-    logs,
-    errors,
-    fs: serializedFs,
-    executionTime: parseFloat(executionTime)
-  }, '*');
- })();
-
-//# sourceURL=sandbox://${config.uuid}/${config.fileName}
-`;
-  }
 } 
 
 // ============================================================================
@@ -6449,9 +4021,16 @@ function createFetchAdapter(fetchImpl) {
             
             
             // replace our special variable for runtime.
+            // Symbol.for key is realm-shared but each sandbox is its own
+            // iframe realm with its own globalThis, giving per-sandbox
+            // isolation. Symbol keys are hidden from string-key enumeration
+            // (Object.keys/for-in/JSON/`in`), which is the goal — casual
+            // inspection of globalThis must not surface runtime internals.
+            // Not secrecy: the UUID is in the generated script source, so
+            // devtools can reconstruct the key (see 00-runtime-object.js).
             if(isNodeBuiltIn){
               const result = replaceGlobalThisVar(source, "_RUNTIME_", {
-                replacement: `globalThis._RUNTIME${this.uuid}_`,
+                replacement: `globalThis[Symbol.for("bvm.runtime.${this.uuid}")]`,
                 filename: fileName,
               });
               source = result.code;
@@ -6895,66 +4474,6 @@ function vfsLookup(path, vfs) {
       
       
       
-      this.registerInterop('_dynamic_import', async (path, type, entryPoint, parentEntryPoint, isNodeBuiltIn, cwd) => {
-
-        const vfs = {
-  "src": {
-    "utils": {
-      "math.js": "export const add = (a, b) => a + b;",
-      "math2.js": "import {add} from '../main2.js'; console.log(add)",
-    },
-    "main.js": "import { add } from './utils/math.js'; import helper from 'my-lib'; console.log(add(1, 2), helper); export {add}",
-    "main2.js": `console.log('hello')`,
-    "node_modules": {
-      "my-lib": {
-        "package.json": '{"main": "dist/index.js"}',
-        "dist": {
-          "index.js": "export default 'Hello from local node_modules package!';"
-        }
-      }
-    }
-  },
-  "node_modules": {
-    "lodash-es": {
-      "index.js": "export function cloneDeep(val) { return JSON.parse(JSON.stringify(val)); }"
-    }
-  },
-  "require.js": `exports.add = (a, b) => a + b;
-  exports.msg = 'Hello from CommonJS!';`, 
-  "test.js": "console.log('root file');",
-  "package.json": '{"name": "sandbox"}'
-};
-        
-  // 1. For Node built-ins, hand off to your shim resolver as before
-  if (isNodeBuiltIn) return sandboxModules[path] || `export default {}`;
-
-  // 2. Determine the importer's VFS path
-  const importerVFSPath = entryPoint
-    ? toVFSPath(entryPoint, parentEntryPoint)   
-    : (parentEntryPoint ?? '');
-
-  const isRelative = path.startsWith('./') || path.startsWith('../');
-
-  // 3. Handle Bare Specifiers (node_modules lookup)
-  if (!isRelative) {
-    const resolvedPackage = resolveNodeModule(path, importerVFSPath, vfs);
-    if (resolvedPackage) {
-      console.log(`Resolved from node_modules: ${path}`);
-      return resolvedPackage.source;
-    }
-    return null; // Fall through if package is completely missing
-  }
-
-  // 4. Handle Relative Paths
-  const result = resolveVFS(path, importerVFSPath, vfs);
-  if (!result) {
-    throw new Error(`[ERR_MODULE_NOT_FOUND]: Cannot find module '${path}' (imported from '${importerVFSPath}')`);
-  }
-  
-  console.log(result, path);
-  return result.source; 
-});
-      
       this.registerInterop('_dynamic_import', async (path, type, entryPoint, parentEntryPoint, isNodeBuiltIn, cwd, vfs={}) => {
 
          
@@ -6985,8 +4504,13 @@ function vfsLookup(path, vfs) {
         
         vfs =  unflattenFileSystem(vfs)
         
-  // 1. For Node built-ins, hand off to your shim resolver as before
-  if (isNodeBuiltIn) return sandboxModules[path] || `export default {}`;
+  // 1. Node built-ins: fetch the published dist source on demand.
+  // Only the requested module's file is fetched (never the whole bundle);
+  // the source crosses the interop boundary as text and _build_file
+  // rewrites it for the sandbox before execution.
+  if (isNodeBuiltIn) {
+    return await fetchBuiltinSource(path);
+  }
 
   // 2. Determine the importer's VFS path
   const importerVFSPath = entryPoint
@@ -7072,15 +4596,17 @@ function tryResolveFileOrPackage(basePath, vfs) {
           
          
           if(path === "./serialize"){
-            return sandboxModules.serialize_js
+            // serialize helper loaded lazily
+            return await loadBuiltin("serialize").catch(() => ({ default: {} }));
           }
          
         
  
          
-         if(isNodeBuiltIn && sandboxModules[path]){
-           // console.log(sandboxModules[path])
-           return sandboxModules[path] 
+         if(isNodeBuiltIn){
+           // Lazy-load built-in on demand. Only the requested module's
+           // dist file is fetched, not the full 6.8MB bundle.
+           return await loadBuiltin(path);
          }
          
        
@@ -7602,41 +5128,31 @@ sandbox.on('execution:key_event',async  (key_data) => {
   
    
 }); 
-let lineNumber = 0;
 sandbox.on('execution:stdout', ({type, args}) => {
-   
-  //console.log(type, args)  
-  const levelClasses = {
-  info: 'text-blue-500',
-  error: 'text-red-500',
-  warn: 'text-yellow-500',
-  debug: 'text-purple-500',
-  log: '' // no color  
-};
+  const term = globalThis._xterm;
+  if (!term) return;
+
+  if(type === "clear"){
+    term.clear();
+    return;
+  }
 
   if(type === "table"){
   // args = table(...args) // todo: shove in run time
   }
   
-  if(type === "clear"){
-    output.innerHTML = "";
-    return;
-  }
-  const line = document.createElement('div');
-  lineNumber++;
-  line.className = `whitespace-pre-wrap font-mono ${levelClasses[type] || ''} hover:text-blue-500`;
- // line.className = `-mx-3 whitespace-pre-wrap font-mono ${levelClasses[type] || ''}  hover:bg-gray-200 hover:text-blue-500 `;
-  line.dataset.lineNumber = lineNumber;
-  line.textContent = Array.isArray(args) ? args.join(' ') : args;
-  
-  output.appendChild(line);
+  // xterm.js interprets ANSI escape codes natively (colors, cursor
+  // movement, clear screen). Write directly; no stripping needed.
+  const text = Array.isArray(args) ? args.join(' ') : String(args ?? '');
+  // Ensure text ends with newline for proper line handling, unless it's
+  // already a control sequence or ends with newline.
+  term.write(text + (text.endsWith('\n') ? '' : '\r\n'));
 });
  
 
 sandbox.on('execution:complete', ({ id, result }) => {
   console.log(`[Sandbox] Execution ${id} completed in ${result.executionTime}ms`);
   //console.log(result)
-  lineNumber = 0; // reset terminal line number.
 });
 
 
@@ -8261,14 +5777,39 @@ console.log(isString("cool"));`,
 await demo();`
         };
 
-        // DOM elements
+        // DOM elements (demo page only — skip if not on the demo page).
         const codeInput = document.getElementById('codeInput');
+        if (codeInput) {
         const output = document.getElementById('output');
         const runBtn = document.getElementById('runBtn');
         const clearBtn = document.getElementById('clearBtn');
         const status = document.getElementById('status');
         const execTime = document.getElementById('execTime');
         const exampleBtns = document.querySelectorAll('.example-btn');
+
+        // Initialize xterm.js terminal emulator. This replaces the old
+        // DOM-div-based terminal. xterm handles ANSI escape codes natively
+        // (cursor movement, colors, clear screen), which the div-based
+        // terminal could not.
+        const term = new Terminal({
+          cols: 80,
+          rows: 24,
+          cursorBlink: true,
+          theme: {
+            background: '#1a1b26',
+            foreground: '#c0caf5',
+          },
+        });
+        term.open(output);
+        // Make terminal globally accessible for stdout/stderr handlers
+        globalThis._xterm = term;
+        // Wire user input to sandbox stdin. xterm's onData fires for every
+        // keypress including special keys (arrows, backspace, etc.).
+        term.onData((data) => {
+          sandbox.invoke('__stdin__', data).catch(err => {
+            console.error('[stdin] send failed:', err);
+          });
+        });
         let currentExample = null;
         // Load example code
         exampleBtns.forEach(btn => {
@@ -8313,74 +5854,15 @@ function getStdin() {
 
 
 
-const stdinEl = document.getElementById('stdinInput');
-let shadowBuffer = '';
-
-function updateTerminalInput(){
-      const targetLine = document.querySelector(`[data-line-number="${lineNumber}"]`);
-    targetLine.innerText = targetLine.innerText + shadowBuffer
-    shadowBuffer = '';
-}
-
-toNodeKeypress(stdinEl, (sequence, key) => {
-      let targetLine = document.querySelector(`[data-line-number="${lineNumber}"]`);
-  
-  if(!targetLine){
-     createNewTerminalLine(lineNumber)
-     targetLine = document.querySelector(`[data-line-number="${lineNumber}"]`);
-  }
-  if(!targetLine.textStored){
-  targetLine.textStored = targetLine.innerText;
-  }   
-   
-  // 1. Update the visible buffer immediately, synchronously, in keystroke order.
-  if (key.name === 'backspace') {
-    shadowBuffer = shadowBuffer.slice(0, -1);
-   targetLine.innerText = targetLine.textStored + shadowBuffer
-  } else if (key.name === 'enter') {
-   targetLine.innerText = targetLine.textStored + shadowBuffer
-    shadowBuffer = '';
-  } else if (sequence.length === 1 && !key.ctrl) {
-    shadowBuffer += sequence;
-    targetLine.innerText = targetLine.textStored + shadowBuffer
-  }
-//  stdinEl.value = shadowBuffer; // reflects UI instantly, no waiting on round-trip
-
-  // 2. Fire the actual send. Don't await it, don't let it drive UI state —
-  // postMessage preserves call order to the same target, so the sandbox
-  // still receives keys in the right sequence even though this resolves later.
-  sandbox.invoke('__stdin__', sequence).catch(err => {
-    console.error('[stdin] send failed:', err);
-  });  
-  
-});
-
-
-function createNewTerminalLine(newNum) {
-  // 1. Grab your main terminal container element
-  const terminalContainer = document.getElementById('output'); 
-  
-  // 2. Create the new line element
-  const newLine = document.createElement('div');
-  newLine.className = 'terminal-line'; // Use this for CSS styling if needed
-  newLine.setAttribute('data-line-number', newNum);
-  
-  // 3. Optional: If you want a prompt symbol (like '>') to appear automatically on new lines:
-  // newLine.innerText = '> '; 
-
-  // 4. Append it to the terminal container
-  terminalContainer.appendChild(newLine);
-  
-  // 5. Automatically scroll to the bottom so the user always sees the active line
-  terminalContainer.scrollTop = terminalContainer.scrollHeight;
-
-  return newLine;
-}
+// NOTE: The old DOM-div-based terminal (shadowBuffer, toNodeKeypress,
+// createNewTerminalLine, updateTerminalInput, lineNumber) has been replaced
+// by xterm.js. See the Terminal initialization above. User input is wired
+// via term.onData(), output via term.write(). xterm handles ANSI natively.
 
 document.getElementById('sendInput').addEventListener('click', () => {
   sandbox.invoke('__stdin__', '\n').catch(err => console.error('[stdin] send failed:', err));
-  shadowBuffer = '';
-  stdinEl.value = '';
+  const stdinInput = document.getElementById("stdinInput");
+  if (stdinInput) stdinInput.value = '';
 });
 /* 
 
@@ -8529,6 +6011,8 @@ renderFiles(result.fs);
             });
         });
 
+        } // end if (codeInput) — demo page only
+
 class FormattedError extends Error {
   constructor(originalError, formattedMessage) {
     super(formattedMessage);
@@ -8581,7 +6065,10 @@ function formatErrors(code, err) {
 
   let formattedMessage = message;
 
-  if (loc && code) {
+  // Guard: loc.line may be NaN/undefined for errors without location info
+  // (e.g. RangeError). Only show line context for valid finite line numbers.
+  const locLine = Number(loc?.line);
+  if (loc && code && Number.isFinite(locLine) && locLine > 0) {
     const lines = code.split("\n");
     const lineText = lines[loc.line - 1] || "";
     const unexpectedChar = lineText[loc.column] || "EOF";
@@ -8626,7 +6113,9 @@ function formatErrors2(code, err) {
 
   let formattedMessage = message;
 
-  if (loc && code) {
+  // Guard: loc.line may be NaN/undefined for errors without location info.
+  const locLine2 = Number(loc?.line);
+  if (loc && code && Number.isFinite(locLine2) && locLine2 > 0) {
     const lines = code.split("\n");
     const lineText = lines[loc.line - 1] || "";
     const unexpectedChar = lineText[loc.column] || "EOF";
@@ -8646,7 +6135,8 @@ function formatErrors2(code, err) {
 
 const filesDiv = document.getElementById("files");
 
-// Event delegation: only ONE listener for the whole list
+// Event delegation: only ONE listener for the whole list (demo page only)
+if (filesDiv) {
 filesDiv.addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -8656,6 +6146,7 @@ filesDiv.addEventListener("click", (event) => {
 
   pre.classList.toggle("hidden");
 });
+} // end if (filesDiv) — demo page only
 
 
 function detectMimeType(uint8) {
@@ -8853,7 +6344,9 @@ function renderFiles(filesObj) {
 } 
  
 
+if (typeof filesDiv !== 'undefined' && filesDiv) {
 renderFiles(sandbox.config.fs)
+}
 
 function renderFiles2(filesObj) {
   if (!filesObj) filesObj = {};

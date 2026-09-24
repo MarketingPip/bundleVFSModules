@@ -350,6 +350,8 @@ const BUNDLED_MODULES = {
   
   
  // buffer: "buffer.js",
+  // Virtual cookie jar (RFC 6265) for emulated HTTP servers
+  cookieJar: "cookieJar.js",
 };
 
 // Node core modules to stub
