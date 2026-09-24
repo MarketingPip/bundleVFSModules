@@ -1271,6 +1271,54 @@ const consoleMethods = {
 
     return final(keys, values);
   },
+
+  // Inspector-integrated methods. In Node these are native functions wired to
+  // the inspector; without an inspector attached they are noops returning
+  // `undefined`. There is no such integration in browsers, so these are
+  // honest noops (Jared's rule: noop over throw).
+  profile(label) {
+    void label;
+  },
+
+  profileEnd(label) {
+    void label;
+  },
+
+  timeStamp(label) {
+    void label;
+  },
+
+  // Returns a fresh object exposing the same logging surface (mirrors Node's
+  // native `console.context()`; the methods are wrappers, not the console's
+  // own function references).
+  context() {
+    const self = this;
+    const ctx = {};
+    for (const key of [
+      'assert', 'clear', 'count', 'countReset', 'debug', 'dir', 'error',
+      'group', 'groupCollapsed', 'groupEnd', 'info', 'log', 'profile',
+      'profileEnd', 'table', 'time', 'timeEnd', 'timeLog', 'timeStamp',
+      'trace', 'warn',
+    ]) {
+      ctx[key] = (...args) => ReflectApply(self[key], self, args);
+    }
+    // Node names it `dirXml` (capital X) on the context object.
+    ctx.dirXml = (...args) => ReflectApply(self.dirxml, self, args);
+    return ctx;
+  },
+
+  // Creates an inspector task used for async stack traces (mirrors Node's
+  // native `console.createTask`). Without an inspector attached this just
+  // runs the function: extra arguments are ignored and `this` is the global
+  // object, exactly like Node.
+  createTask(name) {
+    void name;
+    return {
+      run(fn) {
+        return ReflectApply(fn, globalThis, []);
+      },
+    };
+  },
 };
 
 const keyKey = 'Key';
@@ -1396,3 +1444,34 @@ if (typeof globalThis._RUNTIME_ === "undefined") {
 
 export default globalConsole;
 export { Console };
+
+// Node-compatible named exports: the 24 public console methods, destructured
+// from the global console instance so each is the identical (bound) function
+// reference (`log === globalConsole.log`). They keep working when
+// destructured, exactly like Node's `const { log } = require('console')`.
+export const {
+  assert,
+  clear,
+  context,
+  count,
+  countReset,
+  createTask,
+  debug,
+  dir,
+  dirxml,
+  error,
+  group,
+  groupCollapsed,
+  groupEnd,
+  info,
+  log,
+  profile,
+  profileEnd,
+  table,
+  time,
+  timeEnd,
+  timeLog,
+  timeStamp,
+  trace,
+  warn,
+} = globalConsole;

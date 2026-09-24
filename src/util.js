@@ -4301,6 +4301,155 @@ export function aborted(signal, resource) {
 }
 
 // ---------------------------------------------------------------------------
+// diff — ported from Node v24.20.0 `lib/internal/util/diff.js` and
+// `lib/internal/assert/myers_diff.js` (myersDiff/backtrack only; the
+// print*MyersDiff formatters are assert-internal and not part of this
+// surface). `checkCommaDisparity` is omitted: `util.diff` never enables it.
+// ---------------------------------------------------------------------------
+
+const kDiffDelete = -1; // entry present only in `expected`
+const kDiffNop = 0;     // entry present in both inputs
+const kDiffInsert = 1;  // entry present only in `actual`
+
+function myersDiffBacktrack(trace, actual, expected) {
+  const actualLength = actual.length;
+  const expectedLength = expected.length;
+  const max = actualLength + expectedLength;
+
+  let x = actualLength;
+  let y = expectedLength;
+  const result = [];
+
+  for (let diffLevel = trace.length - 1; diffLevel >= 0; diffLevel--) {
+    const v = trace[diffLevel];
+    const diagonalIndex = x - y;
+    const offset = diagonalIndex + max;
+
+    let prevDiagonalIndex;
+    if (
+      diagonalIndex === -diffLevel ||
+      (diagonalIndex !== diffLevel && v[offset - 1] < v[offset + 1])
+    ) {
+      prevDiagonalIndex = diagonalIndex + 1;
+    } else {
+      prevDiagonalIndex = diagonalIndex - 1;
+    }
+
+    const prevX = v[prevDiagonalIndex + max];
+    const prevY = prevX - prevDiagonalIndex;
+
+    while (x > prevX && y > prevY) {
+      result.push([kDiffNop, actual[x - 1]]);
+      x--;
+      y--;
+    }
+
+    if (diffLevel > 0) {
+      if (x > prevX) {
+        result.push([kDiffInsert, actual[--x]]);
+      } else {
+        result.push([kDiffDelete, expected[--y]]);
+      }
+    }
+  }
+
+  return result;
+}
+
+function myersDiff(actual, expected) {
+  const actualLength = actual.length;
+  const expectedLength = expected.length;
+  const max = actualLength + expectedLength;
+
+  if (max > 2 ** 31 - 1) {
+    throw ERR_OUT_OF_RANGE('myersDiff input size', '< 2^31', max);
+  }
+
+  const v = new Int32Array(2 * max + 1);
+  const trace = [];
+
+  for (let diffLevel = 0; diffLevel <= max; diffLevel++) {
+    trace.push(new Int32Array(v)); // Clone the current state of `v`
+
+    for (let diagonalIndex = -diffLevel; diagonalIndex <= diffLevel; diagonalIndex += 2) {
+      const offset = diagonalIndex + max;
+      const previousOffset = v[offset - 1];
+      const nextOffset = v[offset + 1];
+      let x = diagonalIndex === -diffLevel ||
+        (diagonalIndex !== diffLevel && previousOffset < nextOffset) ?
+        nextOffset :
+        previousOffset + 1;
+      let y = x - diagonalIndex;
+
+      while (
+        x < actualLength &&
+        y < expectedLength &&
+        actual[x] === expected[y]
+      ) {
+        x++;
+        y++;
+      }
+
+      v[offset] = x;
+
+      if (x >= actualLength && y >= expectedLength) {
+        return myersDiffBacktrack(trace, actual, expected);
+      }
+    }
+  }
+}
+
+function validateDiffInput(value, name) {
+  if (!Array.isArray(value)) {
+    validateString(value, name);
+    return;
+  }
+  for (let i = 0; i < value.length; i++) {
+    // Don't use validateString here for performance reasons, as we would
+    // generate intermediate strings for the name (mirrors Node).
+    if (typeof value[i] !== 'string') {
+      throw ERR_INVALID_ARG_TYPE(`${name}[${i}]`, 'string', value[i]);
+    }
+  }
+}
+
+/**
+ * Generate a difference report between two values.
+ * @param {Array | string} actual - The first value to compare
+ * @param {Array | string} expected - The second value to compare
+ * @returns {Array} An array of `[operation, value]` pairs where operation is
+ * `-1` (present only in `expected`), `0` (present in both), or `1`
+ * (present only in `actual`).
+ */
+export function diff(actual, expected) {
+  if (actual === expected) {
+    return [];
+  }
+
+  validateDiffInput(actual, 'actual');
+  validateDiffInput(expected, 'expected');
+
+  // NB: Node calls the generic Array.prototype.reverse on the myers result
+  // rather than a method call, so the `diff([], [])` edge case throws the
+  // exact same `TypeError: Cannot convert undefined or null to object`
+  // (myersDiff returns undefined there) instead of a different TypeError.
+  return Array.prototype.reverse.call(myersDiff(actual, expected));
+}
+
+/**
+ * Port of Node's `internal/util/trace_sigint.js`. In Node this starts/stops
+ * the SIGINT watchdog that prints a stack trace on Ctrl+C (main thread only;
+ * throws `ERR_WORKER_UNSUPPORTED_OPERATION` in workers). Browsers have no
+ * SIGINT, so this is an honest noop — like Node it validates nothing and
+ * returns `undefined`.
+ * @param {unknown} enabled
+ */
+export function setTraceSigInt(enabled) {
+  void enabled;
+  // No SIGINT in browsers: noop (Jared's rule: noop over throw).
+}
+
+// ---------------------------------------------------------------------------
 // legacy (deprecated) type checks
 // ---------------------------------------------------------------------------
 
@@ -4684,6 +4833,7 @@ export default {
   _exceptionWithHostPort,
   isArray, isBoolean, isBuffer, isNull, isNullOrUndefined, isNumber, isString,
   isSymbol, isUndefined, isRegExp, isObject, isDate, isError, isFunction, isPrimitive,
+  diff, setTraceSigInt,
 };
 
 // --- Usage ---

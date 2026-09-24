@@ -34,6 +34,12 @@
 
 'use strict';
 
+// Fallback AsyncResource for the lazy `EventEmitterAsyncResource` getter:
+// under Node the genuine builtin is preferred (true async-context
+// semantics); everywhere else our own async_hooks port backs the class so the
+// named export below is safe to resolve at module load in browsers.
+import { AsyncResource as LocalAsyncResource } from './async_hooks.js';
+
 // ---------------------------------------------------------------------------
 // Local symbols (public-registry ones match Node; module-local ones are the
 // port's own and are NOT identical to Node's private symbols).
@@ -488,6 +494,11 @@ class FixedQueue {
 // ---------------------------------------------------------------------------
 let defaultMaxListeners = 10;
 let EventEmitterAsyncResource;
+// Live ESM binding for the `captureRejections` named export (Node's ESM
+// exposes it too). This is the single store; the `EventEmitter.captureRejections`
+// static below delegates to it and keeps `EventEmitter.prototype[kCapture]`
+// in sync so instance construction (`init`) keeps working.
+let captureRejections = false;
 
 function _setMaxListeners(n, ...targets) {
   validateNumber(n, 'setMaxListeners', 0);
@@ -1466,11 +1477,12 @@ EventEmitter.setMaxListeners = _setMaxListeners;
 Object.defineProperty(EventEmitter, 'captureRejections', {
   __proto__: null,
   get() {
-    return EventEmitter.prototype[kCapture];
+    return captureRejections;
   },
   set(value) {
     validateBoolean(value, 'EventEmitter.captureRejections');
 
+    captureRejections = value;
     EventEmitter.prototype[kCapture] = value;
   },
   enumerable: true,
@@ -1481,8 +1493,12 @@ Object.defineProperty(EventEmitter, 'EventEmitterAsyncResource', {
   enumerable: true,
   get: function lazyEventEmitterAsyncResource() {
     if (EventEmitterAsyncResource === undefined) {
+      // Prefer the genuine builtin under Node; fall back to our own
+      // async_hooks port so this stays constructible in browsers (backed by
+      // the stub AsyncResource — honest, documented limits — instead of
+      // throwing at import time).
       const mod = getBuiltinModuleSafe('async_hooks');
-      const AsyncResource = mod?.AsyncResource;
+      const AsyncResource = mod?.AsyncResource ?? LocalAsyncResource;
       if (typeof AsyncResource !== 'function') {
         throw new Error(
           'EventEmitterAsyncResource requires the async_hooks module, which is unavailable in this environment');
@@ -1618,6 +1634,12 @@ function getMaxListeners(emitterOrTarget) {
 // Exports (mirror Node: `require('events')` is the EventEmitter class with
 // the helpers attached as properties).
 // ---------------------------------------------------------------------------
+// Resolve the lazy `EventEmitterAsyncResource` class now so the named export
+// below carries the class itself (Node's ESM namespace exposes it too).
+// Safe in browsers: the getter falls back to our async_hooks port instead of
+// throwing when the native builtin is unavailable.
+void EventEmitter.EventEmitterAsyncResource;
+
 export default EventEmitter;
 export {
   EventEmitter,
@@ -1627,4 +1649,12 @@ export {
   getMaxListeners,
   listenerCount,
   addAbortListener,
+  // Additional Node v24.20.0 named exports (all present on the default
+  // `EventEmitter` as well, exactly like `require('events')`):
+  _setMaxListeners as setMaxListeners,
+  defaultMaxListeners, // live binding: reflects `EventEmitter.defaultMaxListeners = n`
+  kErrorMonitor as errorMonitor,
+  kRejection as captureRejectionSymbol,
+  captureRejections, // live binding: reflects `EventEmitter.captureRejections = b`
+  EventEmitterAsyncResource,
 };
