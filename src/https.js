@@ -6,8 +6,7 @@
 // TLS options (key/cert/ca/rejectUnauthorized/...) are accepted and ignored:
 // browsers do not let pages configure TLS.
 
-import http from './http.js';
-import { Agent as HttpAgent, _createClientRequest } from './http.js';
+import http, { Agent as HttpAgent } from './http.js';
 
 // ---------------------------------------------------------------------------
 // Runtime bridge (guarded: rewritten to the sandbox scope at load time,
@@ -72,7 +71,7 @@ Agent.prototype = HttpsAgentBase.prototype;
 export const globalAgent = new Agent({ keepAlive: true, scheduling: 'lifo', timeout: 5000 });
 
 export function request(urlOrOptions, optionsOrCallback, callback) {
-  return _createClientRequest(
+  return http._createClientRequest(
     urlOrOptions, optionsOrCallback, callback, 'https:', globalAgent);
 }
 

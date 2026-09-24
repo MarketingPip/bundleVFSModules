@@ -515,3 +515,14 @@ export {
   executionAsyncResource,
   triggerAsyncId,
 };
+
+// Default export: the full named-export set (mirrors require('async_hooks')).
+export default {
+  AsyncLocalStorage,
+  AsyncResource,
+  asyncWrapProviders,
+  createHook,
+  executionAsyncId,
+  executionAsyncResource,
+  triggerAsyncId,
+};

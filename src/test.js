@@ -1331,10 +1331,14 @@ test.skip = skip;
 test.todo = todo;
 test.expectFailure = expectFailure;
 test.getTestContext = getTestContext;
+// Host-only helper (not a named ESM export in real node:test): reachable as
+// `default.execute` for the repo's own test harness.
+test.execute = execute;
 export default test;
 
 // ─── execute() — host-only helper (not part of node:test public API) ─────────
-export async function execute(userCode, opts = {}) {
+// NOTE: kept local-only — real node:test does not export execute.
+async function execute(userCode, opts = {}) {
   _userInvokedRun = true; // explicit run — disables the auto-run lane
   if (opts.resetBefore !== false) _reset();
   if (opts.reporter) _reporterOverride = _resolveReporter(opts.reporter);

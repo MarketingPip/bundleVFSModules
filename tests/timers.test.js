@@ -5,11 +5,15 @@ import timers, {
   setTimeout, clearTimeout,
   setInterval, clearInterval,
   setImmediate, clearImmediate,
-  enroll, unenroll, active, _unrefActive
-} from '../dist/timers.js';
+} from '../src/timers.js';
+// NOTE: enroll/unenroll/active/_unrefActive are NOT named ESM exports in
+// real node:timers — they live only on the default export, so the tests
+// reach them there (matching the true module surface).
 
 describe('timers-web', () => {
-  
+  // Legacy idle-timer helpers (default-export only in real node:timers).
+  const { enroll, unenroll, active, _unrefActive } = timers;
+
     beforeAll(() => {
     jest.useFakeTimers();
   });

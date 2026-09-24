@@ -638,11 +638,23 @@ export function createSocket(type, listener) {
   return new Socket(type, listener);
 }
 
-// Note: Node also exports the deprecated private `_createSocketHandle`
-// (DEP0112) and deprecated `_handle`/`_receiving`/`_bindState`/`_queue`/
-// `_reuseAddr`/`_healthCheck()`/`_stopReceiving()` accessors. They are
-// intentionally omitted: they expose the native handle, which cannot exist
-// in a browser.
+// Node also exports the deprecated private `_createSocketHandle` (DEP0112)
+export function _createSocketHandle(..._ignored) {
+  // Impossible in a browser: no native UDP handle exists, so return an
+  // honest noop stub (never throw).
+  const noop = () => {};
+  return {
+    bind: noop, close: noop, send: noop,
+    recvStart: noop, recvStop: noop,
+    ref() { return this; },
+    unref() { return this; },
+  };
+}
+
+// Note: Node also exports the deprecated `_handle`/`_receiving`/`_bindState`/
+// `_queue`/`_reuseAddr`/`_healthCheck()`/`_stopReceiving()` accessors on
+// Socket instances. They are intentionally omitted: they expose the native
+// handle, which cannot exist in a browser.
 
 export default {
   Socket,

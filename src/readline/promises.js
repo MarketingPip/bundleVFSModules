@@ -269,7 +269,8 @@ function charLengthAt(str, i) {
  * @param {{ emit: Function }} stream
  * @returns {Generator<undefined, never, string>}
  */
-export function* emitKeys(stream) {
+// NOTE: kept local-only — real node:readline/promises does not export emitKeys.
+function* emitKeys(stream) {
   const kEscape = CSI.kEscape;
 
   while (true) {

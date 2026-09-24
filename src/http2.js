@@ -600,7 +600,7 @@ export const sensitiveHeaders = Symbol('sensitiveHeaders');
 
 const kEncrypted = Symbol('http2.encrypted');
 
-export class Http2Session extends EventEmitter {
+class Http2Session extends EventEmitter {
   constructor(options = {}) {
     super();
     this._closed = false;
@@ -745,7 +745,7 @@ export class Http2Session extends EventEmitter {
   }
 }
 
-export class ClientHttp2Session extends Http2Session {
+class ClientHttp2Session extends Http2Session {
   constructor(options = {}) {
     super(options);
   }
@@ -768,7 +768,7 @@ export class ClientHttp2Session extends Http2Session {
   }
 }
 
-export class ServerHttp2Session extends Http2Session {
+class ServerHttp2Session extends Http2Session {
   constructor(options = {}) {
     super(options);
   }
@@ -784,7 +784,7 @@ export class ServerHttp2Session extends Http2Session {
 //    side.
 // ---------------------------------------------------------------------------
 
-export class Http2Stream extends EventEmitter {
+class Http2Stream extends EventEmitter {
   constructor(session = null, headers = {}) {
     super();
     this.session = session;
@@ -1122,7 +1122,7 @@ function dispatchVirtualRequest(session, stream) {
   server._dispatchVirtualStream(session, stream);
 }
 
-export class Http2Server extends EventEmitter {
+class Http2Server extends EventEmitter {
   constructor(options = {}, requestListener) {
     super();
     if (typeof options === 'function') {
@@ -1285,7 +1285,7 @@ export class Http2Server extends EventEmitter {
   }
 }
 
-export class Http2SecureServer extends Http2Server {}
+class Http2SecureServer extends Http2Server {}
 
 // ---------------------------------------------------------------------------
 // 9. Factories.

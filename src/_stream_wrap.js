@@ -5,7 +5,7 @@
 // shape-preserving stub: constructing it records the wrapped stream and does
 // nothing else. Never throws.
 // Dependency-free ESM, browser-safe. No _RUNTIME_ access needed.
-export function StreamWrap(stream) {
+function StreamWrap(stream) {
   if (!(this instanceof StreamWrap)) return new StreamWrap(stream);
   this.stream = stream ?? null;
 }

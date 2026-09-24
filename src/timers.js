@@ -341,8 +341,9 @@ Object.defineProperty(setImmediate, customPromisify, {
 
 /**
  * Prepares an object for idle-timeout tracking without starting the timer.
+ * NOTE: local-only — real node:timers does not export enroll/unenroll/active.
  */
-export function enroll(item, msecs) {
+function enroll(item, msecs) {
   _clearTimeout(item._idleTimeoutId);
   item._idleTimeout = msecs;
 }
@@ -350,7 +351,7 @@ export function enroll(item, msecs) {
 /**
  * Cancels and removes an enrolled idle timer.
  */
-export function unenroll(item) {
+function unenroll(item) {
   _clearTimeout(item._idleTimeoutId);
   item._idleTimeout = -1;
 }
@@ -359,7 +360,7 @@ export function unenroll(item) {
  * Starts (or restarts) the idle timer for an enrolled object.
  * Calls `item._onTimeout()` when the timer fires.
  */
-export function active(item) {
+function active(item) {
   _clearTimeout(item._idleTimeoutId);
   const ms = item._idleTimeout;
   if (ms >= 0) {
@@ -369,8 +370,8 @@ export function active(item) {
   }
 }
 
-/** Alias preserved for older Node.js ecosystem code. */
-export { active as _unrefActive };
+/** Internal alias for the default export (not a named ESM export in real Node). */
+const _unrefActive = active;
 
 export default {
   setTimeout,

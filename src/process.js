@@ -652,6 +652,40 @@ const process2 = (function () {
 
     emitWarning, emitWarningSync,
     report,
+
+    // Internal slots mirroring Node's process internals. These appear on the
+    // `node:process` namespace in real Node (and on the default export), so
+    // they live here too. Browser-safe: unimplementable internals are honest
+    // noops, never throws.
+    get _events() { return listeners; },
+    get _eventsCount() { return Object.keys(listeners).length; },
+    get _exiting() { return _exiting; },
+    _maxListeners: undefined,
+    _debugEnd() {},
+    _debugProcess() {},
+    _fatalException(err) {
+      const l = listeners.uncaughtException;
+      if (l && l.length) { emit('uncaughtException', err); return true; }
+      throw err;
+    },
+    _getActiveHandles() { return []; },
+    _getActiveRequests() { return []; },
+    _kill() {},
+    _linkedBinding() { return undefined; },
+    _preload_modules: [],
+    _eval: undefined,
+    _rawDebug(...args) {
+      try {
+        const msg = args.map(String).join(' ');
+        if (typeof console !== 'undefined' && console.error) console.error(msg);
+        else logs.push(msg);
+      } catch { /* debug output must never throw */ }
+    },
+    _startProfilerIdleNotifier() {},
+    _stopProfilerIdleNotifier() {},
+    _tickCallback() {},
+    finalization: {},
+    threadCpuUsage() { return { user: 0, system: 0 }; },
   };
 
   // Cloak functions as `[native code]` (matches the runtime's own process
@@ -713,6 +747,28 @@ const process2 = (function () {
 // (they agree at import; `env`/`versions`/etc. share the same live object
 // reference). Methods are this-safe wrappers around the default export.
 
+// Internal slots (see rawMethods above): present on the real `node:process`
+// namespace. Underscore-prefixed internals are deliberately exposed to match.
+export const _events                   = process2._events;
+export const _eventsCount              = process2._eventsCount;
+export const _exiting                  = process2._exiting;
+export const _maxListeners             = process2._maxListeners;
+export const _debugEnd                 = (...a) => process2._debugEnd(...a);
+export const _debugProcess             = (...a) => process2._debugProcess(...a);
+export const _fatalException          = (...a) => process2._fatalException(...a);
+export const _getActiveHandles        = (...a) => process2._getActiveHandles(...a);
+export const _getActiveRequests       = (...a) => process2._getActiveRequests(...a);
+export const _kill                     = (...a) => process2._kill(...a);
+export const _linkedBinding            = (...a) => process2._linkedBinding(...a);
+export const _preload_modules          = process2._preload_modules;
+export const _eval                    = process2._eval;
+export const _rawDebug                 = (...a) => process2._rawDebug(...a);
+export const _startProfilerIdleNotifier = (...a) => process2._startProfilerIdleNotifier(...a);
+export const _stopProfilerIdleNotifier  = (...a) => process2._stopProfilerIdleNotifier(...a);
+export const _tickCallback             = (...a) => process2._tickCallback(...a);
+export const finalization              = process2.finalization;
+export const threadCpuUsage            = (...a) => process2.threadCpuUsage(...a);
+
 export const arch                        = process2.arch;
 export const allowedNodeEnvironmentFlags = process2.allowedNodeEnvironmentFlags;
 export const argv                        = process2.argv;
@@ -757,18 +813,7 @@ export const resourceUsage      = (...a) => process2.resourceUsage(...a);
 export const getActiveResourcesInfo = (...a) => process2.getActiveResourcesInfo(...a);
 export const kill               = (...a) => process2.kill(...a);
 export const nextTick           = (...a) => process2.nextTick(...a);
-export const on                 = (...a) => process2.on(...a);
-export const off                = (...a) => process2.off(...a);
-export const once               = (...a) => process2.once(...a);
-export const addListener        = (...a) => process2.addListener(...a);
-export const removeListener     = (...a) => process2.removeListener(...a);
-export const removeAllListeners = (...a) => process2.removeAllListeners(...a);
-export const prependListener    = (...a) => process2.prependListener(...a);
-export const prependOnceListener= (...a) => process2.prependOnceListener(...a);
-export const emit               = (...a) => process2.emit(...a);
-export const listenerCount      = (...a) => process2.listenerCount(...a);
 export const emitWarning        = (...a) => process2.emitWarning(...a);
-export const emitWarningSync    = (...a) => process2.emitWarningSync(...a);
 export const getuid             = (...a) => process2.getuid(...a);
 export const geteuid            = (...a) => process2.geteuid(...a);
 export const setuid             = (...a) => process2.setuid(...a);

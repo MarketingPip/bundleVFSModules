@@ -18,10 +18,9 @@ import http, {
   setMaxIdleHTTPParsers,
   maxHeaderSize,
   globalAgent,
-  getServer,
-  getAllServers,
-  _createClientRequest,
 } from '../src/http.js';
+// Internal helpers (not public node:http API) are reached via the default export.
+const { getServer, getAllServers, _createClientRequest } = http;
 import {
   _checkIsHttpToken,
   _checkInvalidHeaderChar,

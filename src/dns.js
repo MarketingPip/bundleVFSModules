@@ -96,7 +96,7 @@ function coded(err, code) {
   return err;
 }
 
-export function invalidArgType(name, expected, actual, prop = false) {  // Mirrors Node's ERR_INVALID_ARG_TYPE "Received ..." rendering.
+function invalidArgType(name, expected, actual, prop = false) {  // Mirrors Node's ERR_INVALID_ARG_TYPE "Received ..." rendering.
   // prop=true → 'The "options.x" property must be ...' (lookup options).
   let received;
   if (actual === null || actual === undefined) received = `${actual}`;
@@ -872,7 +872,7 @@ const WELL_KNOWN_PORTS = {
   8080: 'http-alt', 8443: 'https-alt',
 };
 
-export function validateLookupServiceArgs(address, port, callback, missingNames) {
+function validateLookupServiceArgs(address, port, callback, missingNames) {
   // Missing-argument shape mirrors Node exactly: the callback API names all
   // three arguments, the promises API names only address and port.
   if (port === undefined || (missingNames.length === 3 && callback === undefined)) {
@@ -1211,7 +1211,7 @@ export const promises = _promisesNs;
 // node:dns/promises exports): same configuration surface as the callback
 // Resolver, but every query method returns a promise. Defined here so the
 // extends clause never touches a cross-module binding at evaluation time.
-export class PromisesResolver extends Resolver {
+class PromisesResolver extends Resolver {
   _asPromise(method, ...args) {
     return new Promise((resolvePromise, reject) => {
       method(...args, (err, result) => (err ? reject(err) : resolvePromise(result)));
@@ -1294,4 +1294,8 @@ export default {
   DESTRUCTION, BADSTR, BADFLAGS, NONAME, BADHINTS, NOTINITIALIZED,
   LOADIPHLPAPI, ADDRGETNETWORKPARAMS, CANCELLED,
   ADDRCONFIG, V4MAPPED, ALL,
+  // Internal helpers shared with dns/promises (not public node:dns API).
+  invalidArgType,
+  validateLookupServiceArgs,
+  PromisesResolver,
 };

@@ -15,6 +15,7 @@ const NODE_EXPORTS = [
   'AsyncResource',
   'asyncWrapProviders',
   'createHook',
+  'default',
   'executionAsyncId',
   'executionAsyncResource',
   'triggerAsyncId',
@@ -42,9 +43,9 @@ function nativeAvailable() {
 }
 
 describe('export surface (both lanes)', () => {
-  test('exports exactly the Node v24.20.0 surface, no default export', () => {
+  test('exports exactly the Node v24.20.0 surface, including default export', () => {
     expect(Object.keys(ah).sort()).toEqual([...NODE_EXPORTS].sort());
-    expect('default' in ah).toBe(false);
+    expect('default' in ah).toBe(true);
   });
 
   test('export types', () => {
@@ -146,7 +147,7 @@ describe('browser fallback (no native delegation)', () => {
 
   test('module loads with the native bridge disabled', () => {
     expect(Object.keys(fb).sort()).toEqual([...NODE_EXPORTS].sort());
-    expect('default' in fb).toBe(false);
+    expect('default' in fb).toBe(true);
   });
 
   test('does not patch host globals (Promise / setTimeout / nextTick)', () => {

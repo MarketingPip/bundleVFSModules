@@ -42,8 +42,11 @@ describe('crypto native bridge (node)', () => {
 
   test('deprecated aliases are non-enumerable own props of require shape', () => {
     for (const f of ['pseudoRandomBytes', 'prng', 'rng']) {
-      expect(typeof crypto[f]).toBe('function');
-      expect(crypto[f]).toBe(crypto.randomBytes);
+      // NOT named ESM exports in real node:crypto — they live only on the
+      // default export (require shape), as non-enumerable own properties.
+      expect(crypto[f]).toBe(undefined);
+      expect(typeof crypto.default[f]).toBe('function');
+      expect(crypto.default[f]).toBe(crypto.default.randomBytes);
       const desc = Object.getOwnPropertyDescriptor(crypto.default, f);
       expect(desc).toBeDefined();
       expect(desc.enumerable).toBe(false);

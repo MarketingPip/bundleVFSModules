@@ -41,3 +41,9 @@ export class Session extends CallbackSession {
 export { open, close, url, waitForDebugger };
 export { inspectorConsole as console };
 export { Network, DOMStorage, NetworkResources };
+
+// Default export: the full named-export set (mirrors require('inspector/promises')).
+export default {
+  Session, open, close, url, waitForDebugger,
+  console: inspectorConsole, Network, DOMStorage, NetworkResources,
+};

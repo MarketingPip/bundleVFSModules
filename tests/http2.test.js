@@ -4,7 +4,12 @@
 // against the REAL node:http2; class shapes and the in-process virtual
 // client/server loop are tested against the emulation's documented behavior.
 
-import http2, {
+import http2 from '../src/http2.js';
+// NOTE: Http2Server/Http2SecureServer/Http2Session/ClientHttp2Session/
+// ServerHttp2Session/Http2Stream are NOT named ESM exports in real node:http2
+// — they are reachable via the default export, so the tests destructure them
+// from there to keep exercising the emulation's class shapes.
+const {
   Http2Server,
   Http2SecureServer,
   Http2Session,
@@ -22,7 +27,7 @@ import http2, {
   getPackedSettings,
   getUnpackedSettings,
   sensitiveHeaders,
-} from '../src/http2.js';
+} = http2;
 import realHttp2 from 'node:http2';
 import { Buffer } from 'buffer';
 import { describe, test, expect, jest } from '@jest/globals';
@@ -738,7 +743,9 @@ describe('browser fallback (no native builtins)', () => {
   });
 
   test('session ping works with native builtins hidden', async () => {
-    const s = new fb.Http2Session();
+    // Http2Session is not a named export in real node:http2 — reach it via
+    // the default export (same class the named imports came from above).
+    const s = new fb.default.Http2Session();
     const [err, , payload] = await new Promise((resolve) => {
       s.ping((...args) => resolve(args));
     });

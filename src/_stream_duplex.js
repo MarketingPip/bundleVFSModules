@@ -4,4 +4,4 @@
 // Dependency-free ESM, browser-safe. No _RUNTIME_ access needed.
 import { Duplex } from './stream.js';
 export default Duplex;
-export { Duplex };
+export const { from, fromWeb, toWeb } = Duplex;

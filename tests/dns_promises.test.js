@@ -85,11 +85,13 @@ describe('dns/promises', () => {
     await new Promise((r) => stubServer.close(r));
   });
 
-  test('module namespace holds the promises API (no default export, like CJS require)', () => {
+  test('module namespace holds the promises API', () => {
     expect(typeof dnsPromisesNS.lookup).toBe('function');
     expect(dnsPromisesNS.resolve4).toBe(resolve4);
     expect(dnsPromisesNS.Resolver).toBe(Resolver);
-    expect('default' in dnsPromisesNS).toBe(false);
+    // Real node:dns/promises has a default export (the full API object).
+    expect(dnsPromisesNS.default).toBeDefined();
+    expect(typeof dnsPromisesNS.default.lookup).toBe('function');
   });
 
   test('argument validation throws synchronously (like node:dns/promises)', () => {

@@ -8,16 +8,20 @@ export {
   OutgoingMessage,
   validateHeaderName,
   validateHeaderValue,
+} from './http.js';
+export {
   kUniqueHeaders,
   kHighWaterMark,
-} from './http.js';
+} from './internals/http-symbols.js';
 import {
   OutgoingMessage,
   validateHeaderName,
   validateHeaderValue,
+} from './http.js';
+import {
   kUniqueHeaders,
   kHighWaterMark,
-} from './http.js';
+} from './internals/http-symbols.js';
 
 /**
  * Parse the `uniqueHeaders` server option into a Set of lowercased names

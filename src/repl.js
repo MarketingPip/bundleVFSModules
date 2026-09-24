@@ -1973,8 +1973,8 @@ export function start(options) {
 // `repl.writer` — the shared default writer.
 export { writer };
 
-// Named export without the deprecation warning (mirrors Node's dual export).
-export const builtinModules = replBuiltinLibs;
+// (No named `builtinModules` export — real node:repl only exposes it as a
+// deprecated getter on the default export, which is preserved below.)
 
 // ---------------------------------------------------------------------------
 // Module namespace (default export) with deprecated getters.

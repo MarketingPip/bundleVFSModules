@@ -243,16 +243,16 @@ describe('cluster.disconnect()', () => {
 });
 
 describe('emitter surface', () => {
-  test('named emitter helpers are bound to the cluster singleton', async () => {
+  test('default export is the cluster EventEmitter singleton', async () => {
     const seen = [];
-    ns.on('x', (v) => seen.push(v));
-    ns.emit('x', 42);
+    cluster.on('x', (v) => seen.push(v));
+    cluster.emit('x', 42);
     expect(seen).toEqual([42]);
-    ns.removeListener('x', seen.push); // different fn: no-op, must not throw
+    cluster.removeListener('x', seen.push); // different fn: no-op, must not throw
     const onceSeen = [];
-    ns.once('y', (v) => onceSeen.push(v));
-    ns.emit('y', 1);
-    ns.emit('y', 2);
+    cluster.once('y', (v) => onceSeen.push(v));
+    cluster.emit('y', 1);
+    cluster.emit('y', 2);
     expect(onceSeen).toEqual([1]);
   });
 });

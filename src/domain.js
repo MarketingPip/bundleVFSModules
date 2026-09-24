@@ -580,7 +580,7 @@ function patchEventEmitter(EE) {
 
       // Now that the domain's error handler has completed, restore the domains
       // stack and the active domain to their original values.
-      shared.stack = origDomainsStack;
+      shared.stack = _stack = origDomainsStack;
       setActiveDomain(origActiveDomain);
       updateExceptionCapture();
 
@@ -791,3 +791,6 @@ const api = {
 export default api;
 export { Domain, createDomain };
 export const create = createDomain;
+// Named export mirroring real node:domain's `exports._stack`. Live binding:
+// kept in sync at the single reassignment site (error handler restore).
+export let _stack = shared.stack;

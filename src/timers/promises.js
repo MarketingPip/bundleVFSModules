@@ -36,7 +36,10 @@ import {
 //   assert.deepStrictEqual(require('node:timers/promises'),
 //                          require('node:timers').promises)
 // ---------------------------------------------------------------------------
-export const __esModule = true;
+// NOTE: intentionally NOT a named export — real node:timers/promises ESM
+// namespace has no __esModule key (require(esm) synthesizes it on the CJS
+// side only). Kept as a local for the default-export interop below.
+const __esModule = true;
 
 // ---------------------------------------------------------------------------
 // setTimeout
@@ -226,4 +229,4 @@ export const scheduler = Reflect.construct(
   Scheduler,
 );
 
-export default { setTimeout, setInterval, setImmediate, scheduler };
+export default { setTimeout, setInterval, setImmediate, scheduler, __esModule };
