@@ -1633,6 +1633,64 @@ REPLServer.prototype.clearBufferedCommand = function clearBufferedCommand() {
   this[kBufferedCommand] = '';
 };
 
+// Longest common prefix of a string array (mirrors Node's lib/repl.js
+// helper used by completeOnEditorMode).
+function replCommonPrefix(strings) {
+  if (strings.length === 0) {
+    return '';
+  }
+  const sorted = [...strings].sort();
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+  for (let i = 0; i < min.length; i++) {
+    if (min[i] !== max[i]) {
+      return min.slice(0, i);
+    }
+  }
+  return min;
+}
+
+REPLServer.prototype.complete = function complete() {
+  this.completer.apply(this, arguments);
+};
+
+REPLServer.prototype.completeOnEditorMode = (callback) => (err, results) => {
+  if (err) return callback(err);
+
+  const { 0: completions, 1: completeOn = '' } = results;
+  let result = completions.filter(Boolean);
+
+  if (completeOn && result.length !== 0) {
+    result = [replCommonPrefix(result)];
+  }
+
+  callback(null, [result, completeOn]);
+};
+
+// Persistent history is file-backed in Node; in the browser the file half is
+// an honest no-op (see ReplHistory in readline.js) while the in-memory
+// navigation API keeps working. The callback still fires so callers that
+// gate on it behave identically.
+REPLServer.prototype.setupHistory = function setupHistory(historyConfig = {}, cb) {
+  // Node tolerates a bare callback as the first argument (it lands in
+  // `options`, never fires, and nothing throws); normalize so the stricter
+  // in-memory ReplHistory below observes the same behavior.
+  if (typeof historyConfig === 'function') {
+    historyConfig = {};
+  }
+  // Necessary because historyConfig can be a string for backwards
+  // compatibility.
+  const options = typeof historyConfig === 'string' ?
+    { filePath: historyConfig } :
+    historyConfig;
+
+  if (typeof cb === 'function') {
+    options.onHistoryFileLoaded = cb;
+  }
+
+  this.setupHistoryManager(options);
+};
+
 Object.defineProperties(REPLServer.prototype, {
   history: {
     configurable: true,
