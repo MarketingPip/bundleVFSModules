@@ -3980,8 +3980,8 @@ function createSyncRequire(parentPath, vfs) {
         // Return default export or namespace
         return mod.default !== undefined && Object.keys(mod).length === 1 ? mod.default : mod;
       }
-      throw new Error("[ERR_REQUIRE_ASYNC]: Built-in \"" + request + "\" not yet loaded. " +
-        "Call await loadBuiltin(\"" + request + "\") first, or use dynamic import().");
+      throw new Error('[ERR_REQUIRE_ASYNC]: Built-in "' + request + '" not yet loaded. ' +
+        'Call await loadBuiltin("' + request + '") first, or use dynamic import().');
     }
     
     // 2. Resolve path (relative/absolute)
