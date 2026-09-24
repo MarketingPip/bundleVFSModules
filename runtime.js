@@ -2,7 +2,7 @@ import * as acorn from "https://esm.sh/acorn";
 import {importAssertions} from "https://esm.sh/acorn-import-assertions"
 import { escape, split, join } from "https://esm.sh/shellwords?target=node"; 
 import { v4 as uuid } from 'https://esm.sh/uuid';   
-import * as sandboxModules from "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@a97251d/dist/vfs.js"  
+import * as sandboxModules from "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@56191086/dist/vfs.js"  
  /* TODO :         
         
 Fix issues like:  
