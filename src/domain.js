@@ -71,6 +71,13 @@ const shared = (globalThis[SHARED_KEY] ??= {
   timerPatches: null, // lazy global-timer patch state, see below
 });
 
+// Live ESM binding for the `active` named export (Node exposes
+// `domain.active`). `shared.active` stays the single store; this binding is
+// kept in sync everywhere `shared.active` is written (`setActiveDomain` and
+// the default export's setter below) so `import { active }` observes the
+// same value as `domain.active`.
+export let active = null;
+
 // ---------------------------------------------------------------------------
 // Inlined error codes (from internal/errors).
 // ---------------------------------------------------------------------------
@@ -115,6 +122,7 @@ if (proc !== undefined) {
 
 function setActiveDomain(d) {
   shared.active = d;
+  active = d; // keep the `active` named-export binding in sync
   shared.procDomain = d;
 }
 
@@ -776,7 +784,7 @@ const api = {
   create: createDomain,
   createDomain,
   get active() { return shared.active; },
-  set active(v) { shared.active = v; },
+  set active(v) { shared.active = v; active = v; },
   get _stack() { return shared.stack; },
 };
 

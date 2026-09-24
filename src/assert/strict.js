@@ -53,4 +53,9 @@ export const {
   CallTracker,
 } = strict;
 
+// Self-reference: `strict.strict === strict`, exactly like Node's
+// `require('assert/strict').strict`. Exported as a live binding to the same
+// object as the default export (identity, not a copy).
+export { strict };
+
 export default strict;

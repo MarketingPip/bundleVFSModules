@@ -537,7 +537,9 @@ function tracingChannelFrom(nameOrChannels, name) {
                                  nameOrChannels);
 }
 
-export class TracingChannel {
+// Not exported: Node v24.20.0 exposes only the lowercase `tracingChannel`
+// factory, never the class itself. Kept module-private for the factory below.
+class TracingChannel {
   constructor(nameOrChannels) {
     for (let i = 0; i < traceEvents.length; ++i) {
       const eventName = traceEvents[i];
