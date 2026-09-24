@@ -1,2 +1,2 @@
-function t(a){if(!(this instanceof t))return new t(a);this.stream=a??null}t.StreamWrap=t;var a=t;export{a as default};
+function a(t){if(!(this instanceof a))return new a(t);this.stream=t??null}a.StreamWrap=a;var t=a;export{a as StreamWrap,t as default};
 /*! For license information please see _stream_wrap.js.LEGAL.txt */

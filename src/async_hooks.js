@@ -26,6 +26,45 @@
 // are left alone) and there are no npm dependencies.
 'use strict';
 
+import { AsyncLocalStorage as _BrowserALSBase } from 'als-browser';
+
+// Wrapper around als-browser's AsyncLocalStorage adding Node's `name`
+// option and `withScope()` which als-browser doesn't implement.
+class BrowserALS extends _BrowserALSBase {
+  #alsName = '';
+  constructor(options) {
+    if (options !== undefined) {
+      if (typeof options !== 'object' || options === null) {
+        const e = new TypeError(
+          `The "options" argument must be of type object. Received type ${typeof options}`
+        );
+        e.code = 'ERR_INVALID_ARG_TYPE';
+        throw e;
+      }
+      if (options.name !== undefined) {
+        if (typeof options.name !== 'string') {
+          const e = new TypeError(
+            `The "options.name" property must be of type string. Received type ${typeof options.name}`
+          );
+          e.code = 'ERR_INVALID_ARG_TYPE';
+          throw e;
+        }
+      }
+    }
+    super();
+    this.#alsName = options?.name ?? '';
+  }
+  get name() { return this.#alsName; }
+  withScope(store) {
+    const self = this;
+    return {
+      run(callback, ...args) {
+        return self.run(store, callback, ...args);
+      },
+    };
+  }
+}
+
 // 1. Runtime bridge (guarded: the runtime AST-rewrites exactly the
 //    `globalThis._RUNTIME_` member expression to the sandbox scope;
 //    undefined under real Node / direct import).
@@ -491,7 +530,7 @@ function buildAsyncWrapProviders() {
 // ---------------------------------------------------------------------------
 
 const AsyncLocalStorage =
-  native !== undefined ? native.AsyncLocalStorage : StubAsyncLocalStorage;
+  native !== undefined ? native.AsyncLocalStorage : BrowserALS;
 const AsyncResource =
   native !== undefined ? native.AsyncResource : StubAsyncResource;
 const asyncWrapProviders =

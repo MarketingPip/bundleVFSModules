@@ -2,7 +2,70 @@ import * as acorn from "https://esm.sh/acorn";
 import {importAssertions} from "https://esm.sh/acorn-import-assertions"
 import { escape, split, join } from "https://esm.sh/shellwords?target=node"; 
 import { v4 as uuid } from 'https://esm.sh/uuid';   
-import * as sandboxModules from "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@56191086/dist/vfs.js"  
+import { Terminal } from "https://esm.sh/xterm@5.3.0";
+// NOTE: The full vfs.js bundle (6.8MB) is NOT imported statically.
+// Built-in modules are loaded lazily on-demand via loadBuiltin() below,
+// fetching only the individual dist files needed (see dist/manifest.json).
+// This keeps initial load fast; modules are fetched when user code
+// actually require()s or import()s them.
+
+/**
+ * Lazy loader for Node.js built-in modules.
+ * Fetches individual dist files on-demand instead of the full 6.8MB bundle.
+ * Results are cached; subsequent loads for the same module return instantly.
+ */
+const _builtinCache = new Map();
+const _builtinBaseUrl = "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/";
+// Maps Node.js specifiers to dist filenames (mirrors dist/manifest.json)
+const _builtinManifest = {
+  "assert": "assert.js", "assert/strict": "assert_strict.js",
+  "async_hooks": "async_hooks.js", "buffer": "buffer.js",
+  "child_process": "child_process.js", "cluster": "cluster.js",
+  "console": "console.js", "constants": "constants.js", "crypto": "crypto.js",
+  "dgram": "dgram.js", "diagnostics_channel": "diagnostics_channel.js",
+  "dns": "dns.js", "dns/promises": "dns_promises.js", "domain": "domain.js",
+  "events": "events.js", "fs": "fs.js", "fs/promises": "fs_promises.js",
+  "http": "http.js", "http2": "http2.js", "https": "https.js",
+  "inspector": "inspector.js", "module": "module.js", "net": "net.js",
+  "os": "os.js", "path": "path.js", "path/posix": "path.js", "path/win32": "path.js",
+  "perf_hooks": "perf_hooks.js", "process": "process.js", "punycode": "punycode.js",
+  "querystring": "querystring.js", "readline": "readline.js",
+  "readline/promises": "readline_promises.js", "repl": "repl.js",
+  "stream": "stream.js", "stream/consumers": "stream.js",
+  "stream/promises": "stream.js", "stream/web": "stream.js",
+  "string_decoder": "string_decoder.js", "test": "test.js", "timers": "timers.js",
+  "timers/promises": "timers_promises.js", "tls": "tls.js",
+  "trace_events": "trace_events.js", "tty": "tty.js", "url": "url.js",
+  "util": "util.js", "util/types": "util.js", "v8": "v8.js", "vm": "vm.js",
+  "wasi": "wasi.js", "worker_threads": "worker_threads.js", "zlib": "zlib.js",
+};
+
+async function loadBuiltin(specifier) {
+  // Normalize: strip "node:" prefix
+  let key = String(specifier).trim();
+  if (key.startsWith('node:')) key = key.slice(5);
+  
+  if (_builtinCache.has(key)) return _builtinCache.get(key);
+  
+  const file = _builtinManifest[key];
+  if (!file) {
+    // Unknown built-in: return empty module stub
+    return { default: {} };
+  }
+  
+  try {
+    const mod = await import(_builtinBaseUrl + file);
+    _builtinCache.set(key, mod);
+    return mod;
+  } catch (err) {
+    console.warn(`[loadBuiltin] Failed to load "${key}":`, err.message);
+    const stub = { default: {} };
+    _builtinCache.set(key, stub);
+    return stub;
+  }
+}
+// Expose for developers who want manual control
+globalThis.loadBuiltin = loadBuiltin;
  /* TODO :         
         
 Fix issues like:  
@@ -21,7 +84,24 @@ How to handle dynamic / variables (simulate evaluation) for ImportResolver
   
 // import {table} from "https://esm.sh/gh/MarketingPip/bundleVFSModules@main/src/cli_table.js"  
 
-function toNodeKeypress(element, callback) {
+/**
+ * toNodeKeypress - Helper for developers wiring up custom DOM input elements.
+ * 
+ * Converts DOM keydown/paste events on an HTML element into Node.js-style
+ * (sequence, key) callbacks, matching the shape of process.stdin 'keypress'
+ * events. Useful when building custom input UIs outside of xterm.js.
+ * 
+ * @param {HTMLElement} element - The DOM element to attach listeners to
+ * @param {Function} callback - Called as callback(sequence, key) where key
+ *   is { name, ctrl, meta, shift, sequence }
+ * @returns {{ stop: Function }} - Call .stop() to remove listeners
+ * 
+ * @example
+ *   toNodeKeypress(document.getElementById('myInput'), (sequence, key) => {
+ *     console.log('Key:', key.name, 'Ctrl:', key.ctrl);
+ *   });
+ */
+export function toNodeKeypress(element, callback) {
   if (!element || typeof callback !== "function") {
     throw new Error("Element and callback function are required");
   }
@@ -962,7 +1042,7 @@ ImportExpression(node) {
     //if (enclosingFunc && enclosingFunc.async) functionsToMakeAsync.add(enclosingFunc);
 
     // Replace 'import' with 'loadModule'
-    s.overwrite(node.start, node.start + 6, `_RUNTIME${sandboxUUID}_.loadModule`);
+    s.overwrite(node.start, node.start + 6, `globalThis[Symbol.for("bvm.runtime.${sandboxUUID}")].loadModule`);
 
     // Append loader arguments inside parentheses
     s.appendLeft(
@@ -983,7 +1063,7 @@ ImportExpression(node) {
     if (enclosingFunc && !enclosingFunc.async) functionsToMakeAsync.add(enclosingFunc);
 
     // Replace the 'import' keyword with 'loadModule'
-    s.overwrite(node.start, node.start + 6, `_RUNTIME${sandboxUUID}_.loadModule`);
+    s.overwrite(node.start, node.start + 6, `globalThis[Symbol.for("bvm.runtime.${sandboxUUID}")].loadModule`);
 
     // Append the loader type as a second argument **inside the parentheses**
     // node.source.end points just after the string literal
@@ -1022,7 +1102,7 @@ ImportExpression(node) {
   for (const [modulePath, v] of liftedModules.entries()) {
     const type = moduleImportType.get(modulePath) || "import";
     preambleParts.push(
-      `const ${v} = await _RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
+      `const ${v} = await globalThis[Symbol.for("bvm.runtime.${sandboxUUID}")].loadModule(${JSON.stringify(
         modulePath
       )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`
     );
@@ -2534,19 +2614,19 @@ function buildHtmlString(csp, code, hasImports, iframe) {
 
        if(isNodeBuiltIn){ 
         
-       let data =  await globalThis._RUNTIME_INTEROP.callParent(
+       let data =  await globalThis[Symbol.for("bvm.interop")].callParent(
           '_dynamic_import',
           modulePath,
           'import',
           '/',
           '/',
           true,
-          globalThis._RUNTIME${iframe.sandbox.uuid}_.cwd,
-          globalThis._RUNTIME${iframe.sandbox.uuid}_.__USER_FILES__   
+          globalThis.globalThis[Symbol.for("bvm.runtime.${iframe.sandbox.uuid}")].cwd,
+          globalThis.globalThis[Symbol.for("bvm.runtime.${iframe.sandbox.uuid}")].__USER_FILES__   
         );
         
         
-        data = await globalThis._RUNTIME_INTEROP.callParent(
+        data = await globalThis[Symbol.for("bvm.interop")].callParent(
           '_build_file',
           data,
           specifier,
@@ -3331,6 +3411,45 @@ globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringi
 
 window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_
 
+// ─── Vitest/fork support patches ───
+// 1. Force configurable:true on global defineProperty. All forks share one
+//    globalThis, and vitest sets globals (like __vitest_index__) non-configurably
+//    which crashes every re-run (watch mode). Neuter at the lowest level.
+(function() {
+  const origDefineProperty = Object.defineProperty;
+  Object.defineProperty = function(obj, prop, descriptor) {
+    if (obj === globalThis && descriptor && typeof descriptor === 'object') {
+      descriptor = { ...descriptor, configurable: true };
+    }
+    return origDefineProperty.call(this, obj, prop, descriptor);
+  };
+})();
+
+// 2. process.exit semantics: in sync context throw to halt execution (like
+//    real Node), in async context resolve silently. This lets forked workers
+//    terminate cleanly without killing the parent realm.
+(function() {
+  const rt = globalThis._RUNTIME${config.uuid}_;
+  if (rt && rt.process) {
+    const origExit = rt.process.exit;
+    rt.process.exit = function(code) {
+      code = code || 0;
+      // Emit 'exit' event if listeners exist
+      if (typeof rt.process.emit === 'function') {
+        try { rt.process.emit('exit', code); } catch {}
+      }
+      // In async context (we're in a promise), resolve silently.
+      // In sync context, throw to halt like real Node.
+      // Heuristic: if we're inside a microtask, we're async.
+      // For now, throw a special error that the runtime catches.
+      const err = new Error('process.exit(' + code + ')');
+      err.code = 'PROCESS_EXIT';
+      err.exitCode = code;
+      throw err;
+    };
+  }
+})();
+
 
 if (!Array.prototype.toSorted) {
   Array.prototype.toSorted = function(compareFn) {
@@ -3675,7 +3794,10 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
           return resolved;
         } else {
           if (moduleType === 'require') {
-            source = wrapCommonJS(source);
+            // Provide sync require bound to this module's path
+            const vfsForRequire = globalThis._RUNTIME_?.__USER_FILES__ || {};
+            globalThis.__syncRequire__ = createSyncRequire(parentEntryPoint || entryPoint || modulePath, vfsForRequire);
+            source = wrapCommonJS(source, parentEntryPoint || entryPoint || modulePath, vfsForRequire);
           }
  
          function makeIdentitySourceMap(source, filename) {
@@ -3757,7 +3879,9 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
     
     if (moduleType === 'require' && requiredSupportedYet) {
       let src = await fetch(modulePath).then(r => r.text());
-      src = wrapCommonJS(src);
+      const vfsForRequire2 = globalThis._RUNTIME_?.__USER_FILES__ || {};
+      globalThis.__syncRequire__ = createSyncRequire(parentEntryPoint || entryPoint || modulePath, vfsForRequire2);
+      src = wrapCommonJS(src, parentEntryPoint || entryPoint || modulePath, vfsForRequire2);
       const url = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(src)}\`;
       data = await import(url);
     } else {
@@ -3837,11 +3961,105 @@ globalThis._RUNTIME${config.uuid}_.loadModule = loadModule;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Wraps a CommonJS source string in an ESM-compatible IIFE. */
-function wrapCommonJS(source) {
+/**
+ * Synchronous require() for CJS modules (vitest support).
+ * Resolves against VFS, loads source synchronously, executes with
+ * cycle tolerance (returns partial exports on circular require).
+ */
+function createSyncRequire(parentPath, vfs) {
+  const cache = new Map(); // resolvedPath -> module.exports (for cycles)
+  
+  function syncRequire(request) {
+    // 1. Built-in modules: return from cache if loaded, else throw
+    // (async loadBuiltin must have been called first)
+    let builtinKey = request.startsWith('node:') ? request.slice(5) : request;
+    if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
+      const key = _builtinManifest[builtinKey] ? builtinKey : request;
+      if (_builtinCache.has(key)) {
+        const mod = _builtinCache.get(key);
+        // Return default export or namespace
+        return mod.default !== undefined && Object.keys(mod).length === 1 ? mod.default : mod;
+      }
+      throw new Error("[ERR_REQUIRE_ASYNC]: Built-in \"" + request + "\" not yet loaded. " +
+        "Call await loadBuiltin(\"" + request + "\") first, or use dynamic import().");
+    }
+    
+    // 2. Resolve path (relative/absolute)
+    let resolved;
+    if (request.startsWith('./') || request.startsWith('../') || request.startsWith('/')) {
+      const fromDir = parentPath ? parentPath.split('/').slice(0, -1).join('/') : '';
+      const joined = fromDir ? fromDir + '/' + request : request;
+      const parts = joined.split('/');
+      const normalized = [];
+      for (const p of parts) {
+        if (p === '..') normalized.pop();
+        else if (p !== '.' && p !== '') normalized.push(p);
+      }
+      resolved = normalized.join('/');
+      // Try .js extension
+      if (!resolved.endsWith('.js')) {
+        const withJs = resolved + '.js';
+        // Check VFS for existence (simplified)
+        resolved = withJs; // assume .js for now
+      }
+    } else {
+      // Bare specifier (node_modules): simplified resolution
+      // TODO: full node_modules walk with package.json exports
+      throw new Error('[ERR_MODULE_NOT_FOUND]: Cannot find module \'' + request + '\'');
+    }
+    
+    // 3. Check cache (cycle tolerance: return partial exports)
+    if (cache.has(resolved)) {
+      return cache.get(resolved).exports;
+    }
+    
+    // 4. Load source from VFS (sync)
+    // vfs is the unflattened filesystem object
+    const source = vfsLookup(resolved, vfs);
+    if (source == null) {
+      throw new Error('[ERR_MODULE_NOT_FOUND]: Cannot find module \'' + request + '\' (resolved: ' + resolved + ')');
+    }
+    
+    // 5. Create module object, cache BEFORE executing (for cycles)
+    const module = { exports: {}, id: resolved, filename: resolved, loaded: false };
+    cache.set(resolved, module);
+    
+    // 6. Wrap and execute
+    const wrapper = new Function('require', 'module', 'exports', '__filename', '__dirname',
+      source + '\n//# sourceURL=' + resolved);
+    const dirname = resolved.split('/').slice(0, -1).join('/') || '.';
+    try {
+      wrapper(
+        createSyncRequire(resolved, vfs), // recursive require with new parent
+        module,
+        module.exports,
+        resolved,
+        dirname
+      );
+    } catch (err) {
+      cache.delete(resolved); // remove failed module from cache
+      throw err;
+    }
+    module.loaded = true;
+    return module.exports;
+  }
+  
+  syncRequire.cache = cache;
+  syncRequire.resolve = (request) => request; // simplified
+  return syncRequire;
+}
+
+function wrapCommonJS(source, parentPath, vfs) {
+  // The require function is provided at module instantiation time via
+  // the runtime's sync require. For ESM-converted CJS, we embed a
+  // placeholder that gets replaced with the real require.
   return \`
 const exports = {};
 const module = { exports };
-const require = null; // sync require not yet supported
+// Sync require is provided by the runtime via __syncRequire__
+const require = typeof __syncRequire__ !== 'undefined' 
+  ? __syncRequire__ 
+  : (() => { throw new Error('[ERR_REQUIRE_NOT_SUPPORTED]: sync require not available in this context'); });
 
 (function (require, module, exports) {
   \${source}
@@ -4020,7 +4238,7 @@ interopChannel.expose('__check_exists__', (methodName) => {
  
 
 // Make available globally
-globalThis._RUNTIME_INTEROP = interopChannel;
+globalThis[Symbol.for("bvm.interop")] = interopChannel;
 
 
 // Node.js Globals
@@ -4048,7 +4266,7 @@ const setImmediate = globalThis.setImmediate || ((fn, ...args) => {
  
 // all interop.expose() will be hoisted here when code is running. 
  
-window.${config.interopVariable} =  globalThis._RUNTIME_INTEROP;  // this sets marker & exposes.
+window.${config.interopVariable} =  globalThis[Symbol.for("bvm.interop")];  // this sets marker & exposes.
 
 
 
@@ -6451,7 +6669,7 @@ function createFetchAdapter(fetchImpl) {
             // replace our special variable for runtime.
             if(isNodeBuiltIn){
               const result = replaceGlobalThisVar(source, "_RUNTIME_", {
-                replacement: `globalThis._RUNTIME${this.uuid}_`,
+                replacement: `globalThis[Symbol.for("bvm.runtime.${this.uuid}")]`,
                 filename: fileName,
               });
               source = result.code;
@@ -6926,7 +7144,12 @@ function vfsLookup(path, vfs) {
 };
         
   // 1. For Node built-ins, hand off to your shim resolver as before
-  if (isNodeBuiltIn) return sandboxModules[path] || `export default {}`;
+  if (isNodeBuiltIn) {
+    // Built-ins are lazy-loaded via loadBuiltin() in the async import path.
+    // VFS construction is sync, so return a stub here; the real module
+    // is fetched on-demand when user code imports it.
+    return `export default {}`;
+  }
 
   // 2. Determine the importer's VFS path
   const importerVFSPath = entryPoint
@@ -6986,7 +7209,12 @@ function vfsLookup(path, vfs) {
         vfs =  unflattenFileSystem(vfs)
         
   // 1. For Node built-ins, hand off to your shim resolver as before
-  if (isNodeBuiltIn) return sandboxModules[path] || `export default {}`;
+  if (isNodeBuiltIn) {
+    // Built-ins are lazy-loaded via loadBuiltin() in the async import path.
+    // VFS construction is sync, so return a stub here; the real module
+    // is fetched on-demand when user code imports it.
+    return `export default {}`;
+  }
 
   // 2. Determine the importer's VFS path
   const importerVFSPath = entryPoint
@@ -7072,15 +7300,17 @@ function tryResolveFileOrPackage(basePath, vfs) {
           
          
           if(path === "./serialize"){
-            return sandboxModules.serialize_js
+            // serialize helper loaded lazily
+            return await loadBuiltin("serialize").catch(() => ({ default: {} }));
           }
          
         
  
          
-         if(isNodeBuiltIn && sandboxModules[path]){
-           // console.log(sandboxModules[path])
-           return sandboxModules[path] 
+         if(isNodeBuiltIn){
+           // Lazy-load built-in on demand. Only the requested module's
+           // dist file is fetched, not the full 6.8MB bundle.
+           return await loadBuiltin(path);
          }
          
        
@@ -7602,41 +7832,31 @@ sandbox.on('execution:key_event',async  (key_data) => {
   
    
 }); 
-let lineNumber = 0;
 sandbox.on('execution:stdout', ({type, args}) => {
-   
-  //console.log(type, args)  
-  const levelClasses = {
-  info: 'text-blue-500',
-  error: 'text-red-500',
-  warn: 'text-yellow-500',
-  debug: 'text-purple-500',
-  log: '' // no color  
-};
+  const term = globalThis._xterm;
+  if (!term) return;
+
+  if(type === "clear"){
+    term.clear();
+    return;
+  }
 
   if(type === "table"){
   // args = table(...args) // todo: shove in run time
   }
   
-  if(type === "clear"){
-    output.innerHTML = "";
-    return;
-  }
-  const line = document.createElement('div');
-  lineNumber++;
-  line.className = `whitespace-pre-wrap font-mono ${levelClasses[type] || ''} hover:text-blue-500`;
- // line.className = `-mx-3 whitespace-pre-wrap font-mono ${levelClasses[type] || ''}  hover:bg-gray-200 hover:text-blue-500 `;
-  line.dataset.lineNumber = lineNumber;
-  line.textContent = Array.isArray(args) ? args.join(' ') : args;
-  
-  output.appendChild(line);
+  // xterm.js interprets ANSI escape codes natively (colors, cursor
+  // movement, clear screen). Write directly; no stripping needed.
+  const text = Array.isArray(args) ? args.join(' ') : String(args ?? '');
+  // Ensure text ends with newline for proper line handling, unless it's
+  // already a control sequence or ends with newline.
+  term.write(text + (text.endsWith('\n') ? '' : '\r\n'));
 });
  
 
 sandbox.on('execution:complete', ({ id, result }) => {
   console.log(`[Sandbox] Execution ${id} completed in ${result.executionTime}ms`);
   //console.log(result)
-  lineNumber = 0; // reset terminal line number.
 });
 
 
@@ -8269,6 +8489,30 @@ await demo();`
         const status = document.getElementById('status');
         const execTime = document.getElementById('execTime');
         const exampleBtns = document.querySelectorAll('.example-btn');
+
+        // Initialize xterm.js terminal emulator. This replaces the old
+        // DOM-div-based terminal. xterm handles ANSI escape codes natively
+        // (cursor movement, colors, clear screen), which the div-based
+        // terminal could not.
+        const term = new Terminal({
+          cols: 80,
+          rows: 24,
+          cursorBlink: true,
+          theme: {
+            background: '#1a1b26',
+            foreground: '#c0caf5',
+          },
+        });
+        term.open(output);
+        // Make terminal globally accessible for stdout/stderr handlers
+        globalThis._xterm = term;
+        // Wire user input to sandbox stdin. xterm's onData fires for every
+        // keypress including special keys (arrows, backspace, etc.).
+        term.onData((data) => {
+          sandbox.invoke('__stdin__', data).catch(err => {
+            console.error('[stdin] send failed:', err);
+          });
+        });
         let currentExample = null;
         // Load example code
         exampleBtns.forEach(btn => {
@@ -8313,74 +8557,15 @@ function getStdin() {
 
 
 
-const stdinEl = document.getElementById('stdinInput');
-let shadowBuffer = '';
-
-function updateTerminalInput(){
-      const targetLine = document.querySelector(`[data-line-number="${lineNumber}"]`);
-    targetLine.innerText = targetLine.innerText + shadowBuffer
-    shadowBuffer = '';
-}
-
-toNodeKeypress(stdinEl, (sequence, key) => {
-      let targetLine = document.querySelector(`[data-line-number="${lineNumber}"]`);
-  
-  if(!targetLine){
-     createNewTerminalLine(lineNumber)
-     targetLine = document.querySelector(`[data-line-number="${lineNumber}"]`);
-  }
-  if(!targetLine.textStored){
-  targetLine.textStored = targetLine.innerText;
-  }   
-   
-  // 1. Update the visible buffer immediately, synchronously, in keystroke order.
-  if (key.name === 'backspace') {
-    shadowBuffer = shadowBuffer.slice(0, -1);
-   targetLine.innerText = targetLine.textStored + shadowBuffer
-  } else if (key.name === 'enter') {
-   targetLine.innerText = targetLine.textStored + shadowBuffer
-    shadowBuffer = '';
-  } else if (sequence.length === 1 && !key.ctrl) {
-    shadowBuffer += sequence;
-    targetLine.innerText = targetLine.textStored + shadowBuffer
-  }
-//  stdinEl.value = shadowBuffer; // reflects UI instantly, no waiting on round-trip
-
-  // 2. Fire the actual send. Don't await it, don't let it drive UI state —
-  // postMessage preserves call order to the same target, so the sandbox
-  // still receives keys in the right sequence even though this resolves later.
-  sandbox.invoke('__stdin__', sequence).catch(err => {
-    console.error('[stdin] send failed:', err);
-  });  
-  
-});
-
-
-function createNewTerminalLine(newNum) {
-  // 1. Grab your main terminal container element
-  const terminalContainer = document.getElementById('output'); 
-  
-  // 2. Create the new line element
-  const newLine = document.createElement('div');
-  newLine.className = 'terminal-line'; // Use this for CSS styling if needed
-  newLine.setAttribute('data-line-number', newNum);
-  
-  // 3. Optional: If you want a prompt symbol (like '>') to appear automatically on new lines:
-  // newLine.innerText = '> '; 
-
-  // 4. Append it to the terminal container
-  terminalContainer.appendChild(newLine);
-  
-  // 5. Automatically scroll to the bottom so the user always sees the active line
-  terminalContainer.scrollTop = terminalContainer.scrollHeight;
-
-  return newLine;
-}
+// NOTE: The old DOM-div-based terminal (shadowBuffer, toNodeKeypress,
+// createNewTerminalLine, updateTerminalInput, lineNumber) has been replaced
+// by xterm.js. See the Terminal initialization above. User input is wired
+// via term.onData(), output via term.write(). xterm handles ANSI natively.
 
 document.getElementById('sendInput').addEventListener('click', () => {
   sandbox.invoke('__stdin__', '\n').catch(err => console.error('[stdin] send failed:', err));
-  shadowBuffer = '';
-  stdinEl.value = '';
+  const stdinInput = document.getElementById("stdinInput");
+  if (stdinInput) stdinInput.value = '';
 });
 /* 
 

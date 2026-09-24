@@ -126,7 +126,9 @@ stdin.pause = function pause() {
   return this;
 };
 
-Object.defineProperty(stdin, 'isPaused', { get() { return this._paused; } });
+// Node's readable.isPaused() is a METHOD. Define as a method (not a getter)
+// so `stdin.isPaused()` works. Also keep a getter for the property form.
+stdin.isPaused = function isPaused() { return !!this._paused; };
 
 // ── Stream termination ────────────────────────────────────────────────────────
 

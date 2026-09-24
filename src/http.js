@@ -467,8 +467,12 @@ export class OutgoingMessage extends Writable {
         lines.push(`${name}: ${v}\r\n`);
       }
       const key = String(name).toLowerCase();
-      if (key === 'set-cookie' && values.length > 1) {
-        flat[key] = values.map(String);
+      if (key === 'set-cookie') {
+        // Accumulate across calls: each set-cookie value stays a separate
+        // array entry so the cookie jar can store every cookie.
+        const cur = flat[key];
+        const arr = Array.isArray(cur) ? cur : (cur === undefined ? [] : [cur]);
+        flat[key] = arr.concat(values.map(String));
       } else {
         flat[key] = values.map(String).join(', ');
       }
@@ -524,12 +528,19 @@ export class OutgoingMessage extends Writable {
   _renderHeaderEntry(pushLine, name, value) {
     if (Array.isArray(value)) {
       const isCookie = String(name).toLowerCase() === 'set-cookie';
-      if ((value.length < 2 || !isCookie) &&
+      if (isCookie) {
+        // set-cookie arrays must reach pushLine intact: joining them with
+        // '; ' would corrupt a multi-cookie response into one unparseable
+        // value (only the first cookie would survive the jar).
+        pushLine(name, value);
+        return;
+      }
+      if ((value.length < 2) &&
           !(this[kUniqueHeaders]?.has(String(name).toLowerCase()))) {
         for (const v of value) pushLine(name, v);
         return;
       }
-      value = value.join('; ');
+      value = value.join(', ');
     }
     pushLine(name, value);
   }
@@ -707,6 +718,17 @@ export class IncomingMessage extends Readable {
     if (body !== null && body !== undefined &&
         (typeof body === 'string' || ArrayBuffer.isView(body))) {
       msg._setBody(body);
+      // Mimic a real HTTP client: set content-length if the caller didn't.
+      // body-parser (express.json()) skips parsing when content-length is
+      // absent, so requests via __serverRequest__ would see req.body undefined.
+      if (msg.headers['content-length'] === undefined) {
+        const len = typeof body === 'string'
+          ? Buffer.byteLength(body)
+          : body.byteLength ?? body.length ?? 0;
+        msg.headers['content-length'] = String(len);
+        msg.rawHeaders.push('content-length', String(len));
+        msg.headersDistinct['content-length'] = [String(len)];
+      }
     } else {
       msg._finishBody();
     }
@@ -1822,7 +1844,9 @@ class ServerBase extends EventEmitter {
     this._host = host || '::';
     _registerServer(port, this);
     this.listening = true;
-    emitEvent?.('serverListening', { port });
+    // emitMe(fn, method, ...args) serializes only ...args — the payload must
+    // go in args (3rd position), not method, or the parent sees an empty message.
+    emitEvent?.('serverListening', null, { port });
     queueMicrotask(() => {
       this.emit('listening');
       if (cb) cb.call(this);
@@ -1839,7 +1863,7 @@ class ServerBase extends EventEmitter {
       const port = this._port;
       this._port = null;
       _unregisterServer(port);
-      emitEvent?.('serverClosed', { port });
+      emitEvent?.('serverClosed', null, { port });
     }
     this.listening = false;
     queueMicrotask(() => this.emit('close'));

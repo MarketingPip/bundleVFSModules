@@ -9,13 +9,18 @@ against the actual `runtime.js` source.
 ## Big picture
 
 1. Host page creates `new CodeSandbox(...)` with a config: `{ uuid, process: {...}, fs: {...} }`.
-2. `SandboxRuntime.generate(code, config)` builds the iframe HTML, seeds
-   `globalThis._RUNTIME<uuid>_ = { globals, process, taskTracker: null, __USER_FILES__ }`,
-   installs the module system (`loadModule`, `transformImportsToLoadModule`,
-   `_build_file` / `_dynamic_import` interop handlers), the process shim, the
-   terminal, and network wrappers — then runs the user code.
+2. `SandboxRuntime.generate(code, config)` takes the sandbox template
+   (`src/sandbox-template.js` — built from the authored fragments in
+   `src/sandbox/*.js`, see "Sandbox template build" below), replaces its
+   `%%TOKEN%%` placeholders with per-sandbox values, and builds the iframe
+   HTML. The bootstrap installs the runtime object under the Symbol key
+   `Symbol.for('bvm.runtime.<uuid>')` (non-enumerable — see "Symbol-backed
+   runtime globals"), the module system (`loadModule`,
+   `transformImportsToLoadModule`, `_build_file` / `_dynamic_import`
+   interop handlers), the process shim, the terminal, and network
+   wrappers — then runs the user code.
 3. Any `import … from "node:fs"` (or `"fs"`) in user code is rewritten to
-   `await _RUNTIME<uuid>_.loadModule("fs")`.
+   `await globalThis[Symbol.for("bvm.runtime.<uuid>")].loadModule("fs")`.
 4. `loadModule` asks the parent frame (`_dynamic_import` interop) for the
    module source. For builtins the parent returns `sandboxModules["fs"]` —
    our `dist/vfs.js` bundle, fetched from jsDelivr and pinned to a commit.
@@ -25,22 +30,68 @@ against the actual `runtime.js` source.
    import→`loadModule` rewriting. Circular imports get Node-style partial
    exports via a module registry.
 
+## Sandbox template build
+
+The sandbox bootstrap script is **not** hand-written in `runtime.js`. The
+authored source is the ordered fragments in `src/sandbox/*.js`
+(`// SANDBOX SECTION` headers; execution order is the manifest in
+`src/build-sandbox.mjs`), which build `src/sandbox-template.js`:
+
+- `npm run build:sandbox` — concatenate fragments, rewrite `__TOKEN__`
+  placeholders to `%%TOKEN%%`, inline a freshly esbuild-bundled cookie-jar
+  IIFE (`src/sandbox/cookie-entry.js` bundles `src/cookieJar.js` + its npm
+  deps into a self-contained IIFE), validate, and write
+  `src/sandbox-template.js`.
+- `npm run check:sandbox` — fail if the checked-in template differs from a
+  fresh build. The build is deterministic (no timestamps); two consecutive
+  builds are byte-identical.
+
+The build validates twice: the concatenated fragments must parse as JS
+*before* token rewriting, and the final template must parse *after*
+`%%TOKEN%%` substitution (inert dummies per token kind, mirroring what
+`generate()` injects) and cookie-IIFE inlining. `SandboxRuntime.generate()`
+then does single-pass `%%TOKEN%%` replacement at runtime (`%%USER_CODE%%`
+last, so user code containing `%%…%%`-like text is never replaced).
+
+The fragments are the source of truth — edit them, rebuild, commit the
+template. (The old reverse-extraction script `src/extract-sandbox.py` was
+removed: it would clobber authored fragments with stale output.)
+
 ## The `_RUNTIME_` rewrite (the one rule that matters)
 
-`replaceGlobalThisVar(source, "_RUNTIME_", { replacement: "globalThis._RUNTIME<uuid>_" })`
+`replaceGlobalThisVar(source, "_RUNTIME_", { replacement: 'globalThis[Symbol.for("bvm.runtime.<uuid>")]' })`
 walks the AST and replaces **only** `MemberExpression`s of the exact shape
 `globalThis._RUNTIME_`. Consequences:
 
 - Write `globalThis._RUNTIME_.__FS__` in shims — it becomes
-  `globalThis._RUNTIME<uuid>_.__FS__` per sandbox. ✅
+  `globalThis[Symbol.for("bvm.runtime.<uuid>")].__FS__` per sandbox. ✅
 - Write bare `_RUNTIME_` — it is **not** rewritten and throws at runtime. ❌
 - Guards like `typeof globalThis._RUNTIME_ !== "undefined"` are rewritten too,
   so they keep working inside the sandbox and protect us outside it (parity
   tests under real Node, direct imports).
 
+## Symbol-backed runtime globals
+
+The per-sandbox runtime object and the interop channel live under Symbol
+keys, not string keys:
+
+- `Symbol.for('bvm.runtime.<uuid>')` — the runtime object (`process`,
+  `__FS__`, `loadModule`, …). Installed via `Object.defineProperty` as
+  **writable, configurable, non-enumerable**.
+- `Symbol.for('bvm.interop')` — the `_dynamic_import` interop channel.
+
+The point is **string-key enumeration hiding, not secrecy**: `Object.keys`,
+`for…in`, `JSON.stringify`, and the `in` operator never surface these keys,
+so casual inspection of `globalThis` doesn't reveal runtime internals. The
+UUID is visible in the generated script source, so devtools can always
+reconstruct the key — `Object.getOwnPropertySymbols` / `Reflect.ownKeys`
+are deliberately *not* patched. Non-enumerable also keeps the keys out of
+`Object.assign` / spread copies.
+
 ## Special runtime variables
 
-These live on `globalThis._RUNTIME<uuid>_`:
+These live on the Symbol-keyed runtime object
+(`globalThis[Symbol.for('bvm.runtime.<uuid>')]`):
 
 | Variable | Set by | Notes |
 |---|---|---|
