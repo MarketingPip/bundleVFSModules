@@ -2687,8 +2687,8 @@ function buildHtmlString(csp, code, hasImports, iframe) {
           '/',
           '/',
           true,
-          globalThis[Symbol.for("bvm.runtime." + iframe.sandbox.uuid)].cwd,
-          globalThis[Symbol.for("bvm.runtime." + iframe.sandbox.uuid)].__USER_FILES__   
+          globalThis[Symbol.for("bvm.runtime.${iframe.sandbox.uuid}")].cwd,
+          globalThis[Symbol.for("bvm.runtime.${iframe.sandbox.uuid}")].__USER_FILES__   
         );
         
         

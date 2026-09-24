@@ -718,6 +718,17 @@ export class IncomingMessage extends Readable {
     if (body !== null && body !== undefined &&
         (typeof body === 'string' || ArrayBuffer.isView(body))) {
       msg._setBody(body);
+      // Mimic a real HTTP client: set content-length if the caller didn't.
+      // body-parser (express.json()) skips parsing when content-length is
+      // absent, so requests via __serverRequest__ would see req.body undefined.
+      if (msg.headers['content-length'] === undefined) {
+        const len = typeof body === 'string'
+          ? Buffer.byteLength(body)
+          : body.byteLength ?? body.length ?? 0;
+        msg.headers['content-length'] = String(len);
+        msg.rawHeaders.push('content-length', String(len));
+        msg.headersDistinct['content-length'] = [String(len)];
+      }
     } else {
       msg._finishBody();
     }

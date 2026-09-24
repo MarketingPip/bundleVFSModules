@@ -96,6 +96,50 @@ function readSection(name) {
   return lines.slice(4).join('\n').replace(/\s+$/, '');
 }
 
+// Post-substitution validation: substitute inert dummies for every %%TOKEN%%
+// (one per token kind, mirroring what SandboxRuntime.generate() injects at
+// runtime) and prove the final template parses as JS. Throws loudly.
+function validateFinalTemplate(template) {
+  // [token, dummy] — dummy must be valid in every position the token occurs.
+  const dummies = [
+    // Replaced with JSON payloads (bare expression positions).
+    ['%%PROCESS_JSON%%', '{}'],
+    ['%%USER_FILES_JSON%%', '{}'],
+    ['%%SEA_ASSETS_JSON%%', '{}'],
+    ['%%BUILTIN_MODULES_JSON%%', '{}'],
+    // Replaced with function sources (bare expression positions).
+    ['%%PARSE_STACK_LOCATION_FN%%', '()=>{}'],
+    ['%%STRIP_ANSI_FN%%', '()=>{}'],
+    // Replaced with an identifier name.
+    ['%%INTEROP_VAR%%', 'x'],
+    // Replaced with plain strings (string-literal or comment positions).
+    ['%%UUID%%', 'x'],
+    ['%%FILENAME%%', 'x'],
+    // Replaced with a boolean literal.
+    ['%%ARGV_HAS_TEST%%', 'true'],
+    // Replaced with code snippets or '' (statement positions).
+    ['%%TEST_IMPORTS%%', ''],
+    ['%%IMPORTS%%', ''],
+    ['%%USER_CODE%%', ''],
+  ];
+  let probe = template;
+  for (const [from, to] of dummies) {
+    if (!probe.includes(from)) throw new Error(`final template missing token: ${from}`);
+    probe = probe.split(from).join(to);
+  }
+  for (const suffix of Object.keys(LOG_TOKENS)) {
+    const tok = `%%LOG_${suffix}%%`;
+    if (!probe.includes(tok)) throw new Error(`final template missing token: ${tok}`);
+    probe = probe.split(tok).join('');
+  }
+  const unsubstituted = probe.match(/%%[A-Z0-9_]+%%/g);
+  if (unsubstituted) {
+    throw new Error(`tokens without dummy substitution: ${[...new Set(unsubstituted)].join(', ')}`);
+  }
+  // Throws on syntax error.
+  transformSync(probe, { loader: 'js' });
+}
+
 function buildTemplate() {
   const concatenated = MANIFEST.map(readSection).join('\n');
 
@@ -129,6 +173,12 @@ function buildTemplate() {
   const authoredTokens = /__PROCESS_JSON__|__USER_FILES_JSON__|__SEA_ASSETS_JSON__|__BUILTIN_MODULES_JSON__|__INTEROP_VAR__|__STRIP_ANSI_FN__|__PARSE_STACK_LOCATION_FN__|__FILENAME__|__TEST_IMPORTS__|__ARGV_HAS_TEST__|__IMPORTS__|__USER_CODE__|__COOKIE_JAR_IIFE__|__LOG_[A-Z_]+__|__UUID__(?!_)/g;
   const leftover = template.match(authoredTokens);
   if (leftover) throw new Error(`unreplaced tokens: ${[...new Set(leftover)].join(', ')}`);
+
+  // Post-substitution validation: prove the FINAL template parses as JS after
+  // %%TOKEN%% replacement and cookie-IIFE inlining. Substitute inert dummies
+  // per token kind (mirroring what SandboxRuntime.generate() injects), then
+  // parse with esbuild. Throws loudly on failure.
+  validateFinalTemplate(template);
 
   const outPath = join(root, 'src', 'sandbox-template.js');
   const header = [

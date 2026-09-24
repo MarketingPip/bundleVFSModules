@@ -2378,6 +2378,19 @@ FastBuffer.prototype.constructor = Buffer;
 Buffer.prototype = FastBuffer.prototype;
 addBufferPrototypeMethods(Buffer.prototype);
 
+// Cross-copy Buffer identification: Symbol.for is shared across all realms
+// and all copies of this module (sandbox template vs dist VFS builds).
+// instanceof fails when two different Buffer classes exist (e.g. globalThis.Buffer
+// from RUNTIME_NODE_GLOBALS vs require('node:buffer').Buffer), so isBuffer
+// checks this marker as a fallback.
+const kIsBufferMarker = Symbol.for('bvm.buffer.isBuffer');
+Object.defineProperty(Buffer.prototype, kIsBufferMarker, {
+  value: true,
+  writable: false,
+  enumerable: false,
+  configurable: false,
+});
+
 Buffer.poolSize = 64 * 1024;
 let poolSize, poolOffset, allocPool, allocBuffer;
 
@@ -2806,7 +2819,13 @@ function fromObject(obj) {
 // Static methods
 
 Buffer.isBuffer = function isBuffer(b) {
-  return b instanceof Buffer;
+  // instanceof covers the common single-copy case; the Symbol.for marker
+  // covers cross-copy cases (e.g. globalThis.Buffer vs node:buffer Buffer
+  // from a separately-built bundle). Symbol.for is realm-shared, so the
+  // marker works even when the Buffer classes differ.
+  return b instanceof Buffer ||
+    (b != null && (typeof b === 'object' || typeof b === 'function') &&
+      b[Symbol.for('bvm.buffer.isBuffer')] === true);
 };
 
 Buffer.compare = function compare(buf1, buf2) {

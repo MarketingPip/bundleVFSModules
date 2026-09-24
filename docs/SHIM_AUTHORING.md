@@ -33,8 +33,10 @@ export default { myFunc, notPossibleInBrowser };
    `platform: "browser"` and the result must run from a string of source.
 2. **`globalThis._RUNTIME_`, never bare `_RUNTIME_`, never `window`.**
    The runtime AST-rewrites exactly the `globalThis._RUNTIME_` member
-   expression. `window`/`document` at module scope breaks future worker
-   support — use `globalThis` and feature-detect.
+   expression to `globalThis[Symbol.for("bvm.runtime.<uuid>")]` (the
+   Symbol-keyed, non-enumerable runtime object — see `docs/RUNTIME.md`).
+   `window`/`document` at module scope breaks future worker support —
+   use `globalThis` and feature-detect.
 3. **Reuse the singletons.** `RT.__FS__` (filesystem), `RT.__httpServerRunTime`
    (server registry), `RT.process` (config values), `RT.taskTracker`
    (async tracking). Don't build a second VFS or a second process object.
