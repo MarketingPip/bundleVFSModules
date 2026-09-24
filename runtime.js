@@ -4026,7 +4026,7 @@ function createSyncRequire(parentPath, vfs) {
     
     // 6. Wrap and execute
     const wrapper = new Function('require', 'module', 'exports', '__filename', '__dirname',
-      source + '\n//# sourceURL=' + resolved);
+      source + String.fromCharCode(10) + '//# sourceURL=' + resolved);
     const dirname = resolved.split('/').slice(0, -1).join('/') || '.';
     try {
       wrapper(
