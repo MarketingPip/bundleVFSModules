@@ -1381,8 +1381,18 @@ globalConsole[kBindStreamsLazy]({
   },
 });
 
-// Install as the global console, like Node does at startup.
-globalThis.console = globalConsole;
+// Install as the global console, like Node does at startup — but never inside
+// the sandboxed iframe, where the runtime owns the global console. This module
+// is bundled as a transitive dependency (notably by node:repl), so an
+// unconditional install would bind the ported Console to the sandbox's
+// process.stdout mock, whose write() calls console.log(), creating infinite
+// write→console.log→write recursion (RangeError: Maximum call stack size
+// exceeded) on the first log after the import. Under Node / in a plain
+// browser _RUNTIME_ is undefined and the install still happens (parity:
+// require('console') === globalThis.console).
+if (typeof globalThis._RUNTIME_ === "undefined") {
+  globalThis.console = globalConsole;
+}
 
 export default globalConsole;
 export { Console };
