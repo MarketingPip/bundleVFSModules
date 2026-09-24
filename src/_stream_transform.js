@@ -3,4 +3,3 @@
 // Dependency-free ESM, browser-safe. No _RUNTIME_ access needed.
 import { Transform } from './stream.js';
 export default Transform;
-export { Transform };

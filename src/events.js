@@ -1641,6 +1641,10 @@ function getMaxListeners(emitterOrTarget) {
 void EventEmitter.EventEmitterAsyncResource;
 
 export default EventEmitter;
+// Node v24.20.0 also exposes `init` and `usingDomains` as named ESM exports
+// (they are properties of the EventEmitter class, like the other statics).
+const init = EventEmitter.init;
+const usingDomains = EventEmitter.usingDomains;
 export {
   EventEmitter,
   once,
@@ -1649,6 +1653,8 @@ export {
   getMaxListeners,
   listenerCount,
   addAbortListener,
+  init,
+  usingDomains,
   // Additional Node v24.20.0 named exports (all present on the default
   // `EventEmitter` as well, exactly like `require('events')`):
   _setMaxListeners as setMaxListeners,

@@ -8,4 +8,4 @@
 // the runtime's builtin-module key normalization.
 import { Writable } from './stream.js';
 export default Writable;
-export { Writable };
+export const { WritableState, fromWeb, toWeb } = Writable;

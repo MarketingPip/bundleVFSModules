@@ -306,10 +306,12 @@ export const timingSafeEqual = pick('timingSafeEqual', _timingSafeEqual);
 export const verify = pick('verify', makeUnsupported('verify'));
 export const webcrypto = pick('webcrypto', _platformWebCrypto);
 
-// Deprecated aliases (Node: same function object as randomBytes).
-export const prng = native ? native.prng : _randomBytes;
-export const pseudoRandomBytes = native ? native.pseudoRandomBytes : _randomBytes;
-export const rng = native ? native.rng : _randomBytes;
+// Deprecated aliases (Node: same function object as randomBytes). Kept as
+// locals for the default export only — real node:crypto does NOT expose them
+// as named ESM exports.
+const prng = native ? native.prng : _randomBytes;
+const pseudoRandomBytes = native ? native.pseudoRandomBytes : _randomBytes;
+const rng = native ? native.rng : _randomBytes;
 
 const defaultExport = {
   Certificate,

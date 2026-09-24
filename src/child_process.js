@@ -1635,6 +1635,13 @@ Object.defineProperty(execFile, kPromisifyCustom, {
 
 // ─── Default export ─────────────────────────────────────────────────────────
 
+// Node's internal `_forkChild(fd, target)` entry point for a forked child.
+// Impossible in a browser (no process spawning): honest noop stub that
+// returns false, per the repo's noop-over-throw rule.
+export function _forkChild(_fd, _target) {
+  return false;
+}
+
 export default {
   ChildProcess,
   exec,
@@ -1644,4 +1651,5 @@ export default {
   fork,
   spawn,
   spawnSync,
+  _forkChild,
 };

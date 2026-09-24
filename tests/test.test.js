@@ -12,13 +12,13 @@ globalThis._RUNTIME_._TEST_RUNNER_.REPORTER_TYPE = 'spec';
 
 // Only import what node:test actually exports.
 // _reset is internal — reach it via the _RUNTIME_ hook that the module
-// installs on globalThis.
+// installs on globalThis. `execute` is a host-only helper, not a named ESM
+// export in real node:test — reach it via the default export.
 const testModule = await import('../src/test.js');
 const {
   default: nodeTest,
   mock,
   run,
-  execute,
   test: nodeTestFn,
   it,
   suite,
@@ -35,6 +35,7 @@ const {
   snapshot,
   assert,
 } = testModule;
+const execute = nodeTest.execute;
 
 const hook = () => globalThis._RUNTIME_._TEST_RUNNER_;
 const reset = () => hook()._reset();
@@ -620,7 +621,7 @@ describe('node:test Browser Shim', () => {
     });
 
     test('runner works with native builtins disabled', async () => {
-      const result = await fb.execute(`
+      const result = await fb.default.execute(`
         await test('fallback math', (t) => { t.assert.strictEqual(2 * 3, 6); });
         await describe('fallback group', () => {
           test('nested', (t) => { t.assert.ok(true); });
@@ -642,7 +643,7 @@ describe('node:test Browser Shim', () => {
 
     test('reporters transform the stream with native builtins disabled', async () => {
       const { tap: fbTap } = await import('../src/test/reporters.js?fallback=test-reporters');
-      const result = await fb.execute(`
+      const result = await fb.default.execute(`
         await test('r1', (t) => { t.assert.ok(true); });
       `, { reporter: 'dot' });
       expect(result.output).not.toContain('Failed tests:'); // no failures → no block

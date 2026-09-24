@@ -135,57 +135,60 @@ ObjectDefineProperty(eos, customPromisify, {
 // Backwards-compat with node 0.4.x
 Stream.Stream = Stream;
 
-Stream._isArrayBufferView = isArrayBufferView;
-Stream._isUint8Array = isUint8Array;
-Stream._uint8ArrayToBuffer = function _uint8ArrayToBuffer(chunk) {
+export const _isArrayBufferView = isArrayBufferView;
+export const _isUint8Array = isUint8Array;
+export function _uint8ArrayToBuffer(chunk) {
   return Buffer.from(chunk.buffer,
                      chunk.byteOffset,
                      chunk.byteLength);
-};
+}
+Stream._isArrayBufferView = _isArrayBufferView;
+Stream._isUint8Array = _isUint8Array;
+Stream._uint8ArrayToBuffer = _uint8ArrayToBuffer;
 
 export default Stream;
 
 // Named exports matching Node's ESM named-export detection for require('stream').
-export const {
-  Readable: StreamReadable,
-  Writable: StreamWritable,
-  Duplex: StreamDuplex,
-  Transform: StreamTransform,
-  PassThrough: StreamPassThrough,
-  duplexPair: streamDuplexPair,
-  pipeline: streamPipeline,
-  addAbortSignal: streamAddAbortSignal,
-  finished: streamFinished,
-  destroy: streamDestroy,
-  compose: streamCompose,
-  setDefaultHighWaterMark: streamSetDefaultHighWaterMark,
-  getDefaultHighWaterMark: streamGetDefaultHighWaterMark,
-  isDestroyed: streamIsDestroyed,
-  isDisturbed: streamIsDisturbed,
-  isErrored: streamIsErrored,
-  isReadable: streamIsReadable,
-  isWritable: streamIsWritable,
-  promises: streamPromises,
+const {
+  Readable: ReadableExport,
+  Writable: WritableExport,
+  Duplex: DuplexExport,
+  Transform: TransformExport,
+  PassThrough: PassThroughExport,
+  duplexPair: duplexPairExport,
+  pipeline: pipelineExport,
+  addAbortSignal: addAbortSignalExport,
+  finished: finishedExport,
+  destroy: destroyExport,
+  compose: composeExport,
+  setDefaultHighWaterMark: setDefaultHighWaterMarkExport,
+  getDefaultHighWaterMark: getDefaultHighWaterMarkExport,
+  isDestroyed: isDestroyedExport,
+  isDisturbed: isDisturbedExport,
+  isErrored: isErroredExport,
+  isReadable: isReadableExport,
+  isWritable: isWritableExport,
+  promises: promisesExport,
 } = Stream;
 export {
-  StreamReadable as Readable,
-  StreamWritable as Writable,
-  StreamDuplex as Duplex,
-  StreamTransform as Transform,
-  StreamPassThrough as PassThrough,
-  streamDuplexPair as duplexPair,
-  streamPipeline as pipeline,
-  streamAddAbortSignal as addAbortSignal,
-  streamFinished as finished,
-  streamDestroy as destroy,
-  streamCompose as compose,
-  streamSetDefaultHighWaterMark as setDefaultHighWaterMark,
-  streamGetDefaultHighWaterMark as getDefaultHighWaterMark,
-  streamIsDestroyed as isDestroyed,
-  streamIsDisturbed as isDisturbed,
-  streamIsErrored as isErrored,
-  streamIsReadable as isReadable,
-  streamIsWritable as isWritable,
-  streamPromises as promises,
+  ReadableExport as Readable,
+  WritableExport as Writable,
+  DuplexExport as Duplex,
+  TransformExport as Transform,
+  PassThroughExport as PassThrough,
+  duplexPairExport as duplexPair,
+  pipelineExport as pipeline,
+  addAbortSignalExport as addAbortSignal,
+  finishedExport as finished,
+  destroyExport as destroy,
+  composeExport as compose,
+  setDefaultHighWaterMarkExport as setDefaultHighWaterMark,
+  getDefaultHighWaterMarkExport as getDefaultHighWaterMark,
+  isDestroyedExport as isDestroyed,
+  isDisturbedExport as isDisturbed,
+  isErroredExport as isErrored,
+  isReadableExport as isReadable,
+  isWritableExport as isWritable,
+  promisesExport as promises,
 };
 export { Stream };

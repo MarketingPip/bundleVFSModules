@@ -249,8 +249,11 @@ describe('inspector shim', () => {
       expect(PromisesSession).not.toBe(Session);
     });
 
-    test('has no default export (mirrors real node:inspector/promises CJS facade)', () => {
-      expect(inspectorPromises.default).toBeUndefined();
+    test('has a default export (mirrors real node:inspector/promises)', () => {
+      // Real Node v24.20.0's node:inspector/promises ESM namespace includes
+      // `default` carrying the full API object.
+      expect(inspectorPromises.default).toBeDefined();
+      expect(typeof inspectorPromises.default.Session).toBe('function');
     });
   });
 

@@ -49,7 +49,9 @@ export const isMaster = true; // deprecated alias of isPrimary
 export const isWorker = false;
 
 // Only ever set inside a real worker process; always undefined here.
-export let worker = undefined;
+// NOTE: local-only — real node:cluster has no named `worker` ESM export
+// (it is only reachable as `cluster.worker` on the default export).
+let worker = undefined;
 
 /* ------------------------------------------------------------------ */
 /* Scheduling policy + settings                                        */
@@ -264,10 +266,15 @@ cluster.fork = fork;
 cluster.disconnect = disconnect;
 cluster.Worker = Worker;
 
-// Convenience bound emitter methods (kept from the previous shim).
-export const on = cluster.on.bind(cluster);
-export const once = cluster.once.bind(cluster);
-export const emit = cluster.emit.bind(cluster);
-export const removeListener = cluster.removeListener.bind(cluster);
+// NOTE: no named on/once/emit/removeListener exports — real node:cluster
+// does not expose them (they live on the EventEmitter prototype, reachable
+// via the default export's cluster instance).
+
+// Node v24.20.0 exposes the cluster EventEmitter instance's own state as
+// named ESM exports (CJS named-export interop): snapshots of the instance
+// properties, exactly like real Node.
+export const _events = cluster._events;
+export const _eventsCount = cluster._eventsCount;
+export const _maxListeners = cluster._maxListeners;
 
 export default cluster;

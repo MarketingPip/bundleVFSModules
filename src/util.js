@@ -4455,21 +4455,21 @@ export function setTraceSigInt(enabled) {
 
 const _deprecated = (name, msg, code, fn) => deprecate(fn, `\`util.${name}\` is deprecated. ${msg}`, code);
 
-export const isBoolean = _deprecated('isBoolean', 'Please use `typeof x === "boolean"` instead.', 'DEP0059', (arg) => typeof arg === 'boolean');
-export const isNull = _deprecated('isNull', 'Please use `x === null` instead.', 'DEP0055', (arg) => arg === null);
-export const isNullOrUndefined = _deprecated('isNullOrUndefined', 'Please use `x == null` instead.', 'DEP0056', (arg) => arg == null);
-export const isNumber = _deprecated('isNumber', 'Please use `typeof x === "number"` instead.', 'DEP0057', (arg) => typeof arg === 'number');
-export const isString = _deprecated('isString', 'Please use `typeof x === "string"` instead.', 'DEP0058', (arg) => typeof arg === 'string');
-export const isSymbol = _deprecated('isSymbol', 'Please use `typeof x === "symbol"` instead.', 'DEP0059', (arg) => typeof arg === 'symbol');
-export const isUndefined = _deprecated('isUndefined', 'Please use `x === undefined` instead.', 'DEP0060', (arg) => arg === void 0);
-export const isRegExp = _deprecated('isRegExp', 'Please use `util.types.isRegExp()` instead.', 'DEP0045', (re) => types.isRegExp(re));
-export const isObject = _deprecated('isObject', 'Please use `x !== null && typeof x === "object"` instead.', 'DEP0058', (arg) => typeof arg === 'object' && arg !== null);
-export const isDate = _deprecated('isDate', 'Please use `util.types.isDate()` instead.', 'DEP0042', (d) => types.isDate(d));
-export const isError = _deprecated('isError', 'Please use `util.types.isNativeError()` or `instanceof Error` instead.', 'DEP0043', (e) => types.isNativeError(e));
-export const isFunction = _deprecated('isFunction', 'Please use `typeof x === "function"` instead.', 'DEP0059', (arg) => typeof arg === 'function');
-export const isPrimitive = _deprecated('isPrimitive', 'Please use `typeof x !== "object" && typeof x !== "function" || x === null` instead.', 'DEP0046', (arg) => arg === null || (typeof arg !== 'object' && typeof arg !== 'function'));
+const isBoolean = _deprecated('isBoolean', 'Please use `typeof x === "boolean"` instead.', 'DEP0059', (arg) => typeof arg === 'boolean');
+const isNull = _deprecated('isNull', 'Please use `x === null` instead.', 'DEP0055', (arg) => arg === null);
+const isNullOrUndefined = _deprecated('isNullOrUndefined', 'Please use `x == null` instead.', 'DEP0056', (arg) => arg == null);
+const isNumber = _deprecated('isNumber', 'Please use `typeof x === "number"` instead.', 'DEP0057', (arg) => typeof arg === 'number');
+const isString = _deprecated('isString', 'Please use `typeof x === "string"` instead.', 'DEP0058', (arg) => typeof arg === 'string');
+const isSymbol = _deprecated('isSymbol', 'Please use `typeof x === "symbol"` instead.', 'DEP0059', (arg) => typeof arg === 'symbol');
+const isUndefined = _deprecated('isUndefined', 'Please use `x === undefined` instead.', 'DEP0060', (arg) => arg === void 0);
+const isRegExp = _deprecated('isRegExp', 'Please use `util.types.isRegExp()` instead.', 'DEP0045', (re) => types.isRegExp(re));
+const isObject = _deprecated('isObject', 'Please use `x !== null && typeof x === "object"` instead.', 'DEP0058', (arg) => typeof arg === 'object' && arg !== null);
+const isDate = _deprecated('isDate', 'Please use `util.types.isDate()` instead.', 'DEP0042', (d) => types.isDate(d));
+const isError = _deprecated('isError', 'Please use `util.types.isNativeError()` or `instanceof Error` instead.', 'DEP0043', (e) => types.isNativeError(e));
+const isFunction = _deprecated('isFunction', 'Please use `typeof x === "function"` instead.', 'DEP0059', (arg) => typeof arg === 'function');
+const isPrimitive = _deprecated('isPrimitive', 'Please use `typeof x !== "object" && typeof x !== "function" || x === null` instead.', 'DEP0046', (arg) => arg === null || (typeof arg !== 'object' && typeof arg !== 'function'));
 export const isArray = _deprecated('isArray', 'Please use `Array.isArray()` instead.', 'DEP0044', (ar) => Array.isArray(ar));
-export const isBuffer = _deprecated('isBuffer', 'Please use `Buffer.isBuffer()` instead.', 'DEP0041', (b) => Buffer.isBuffer(b));
+const isBuffer = _deprecated('isBuffer', 'Please use `Buffer.isBuffer()` instead.', 'DEP0041', (b) => Buffer.isBuffer(b));
 
 /**
  * @deprecated since v6.0.0 — use `Object.assign()`.
@@ -4505,9 +4505,10 @@ function timestamp() {
 
 /**
  * Thin console.log wrapper prepending a timestamp. (Legacy node:util.log.)
+ * NOTE: local-only — real node:util does not export log as a named ESM export.
  * @param {...any} args
  */
-export function log(...args) {
+function log(...args) {
   console.log(`%s - %s`, timestamp(), format(...args));
 }
 
@@ -4811,6 +4812,27 @@ export function _exceptionWithHostPort(err, syscall, address, port, additional) 
   }
   if (typeof Error.captureStackTrace === 'function') {
     Error.captureStackTrace(ex, _exceptionWithHostPort);
+  }
+  return ex;
+}
+
+/**
+ * Port of Node's internal _errnoException (lib/util.js).
+ * Creates a system Error for the given errno, like ExceptionWithHostPort
+ * but without host/port details.
+ * @param {number} err - errno number (e.g. -2 for ENOENT)
+ * @param {string} syscall
+ * @param {string} [path]
+ */
+export function _errnoException(err, syscall, path) {
+  const code = getSystemErrorName(err);
+  const ex = new Error(`${syscall} ${code}${path ? ` ${path}` : ''}`);
+  ex.errno = err;
+  ex.code = code;
+  ex.syscall = syscall;
+  if (path !== undefined) ex.path = path;
+  if (typeof Error.captureStackTrace === 'function') {
+    Error.captureStackTrace(ex, _errnoException);
   }
   return ex;
 }

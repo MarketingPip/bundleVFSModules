@@ -299,6 +299,76 @@ class Dirent {
   isSocket() { return (this._mode & S_IFMT) === S_IFSOCK; }
 }
 
+// ── 6b. Node-shaped Utf8Stream ──────────────────────────────────────────────
+// Minimal port of Node's internal Utf8Stream (lib/fs.js): a small buffered
+// UTF-8 file writer. Real Node uses native handles; here writes go through
+// the virtual volume via fs.writeSync when a real fd is available, otherwise
+// they are buffered and emitted as 'data' events (honest browser fallback).
+import { EventEmitter as _FsEventEmitter } from './events.js';
+class Utf8Stream extends _FsEventEmitter {
+  constructor(options = {}) {
+    super();
+    this.path = options.dest ?? null;
+    this.fd = options.fd ?? -1;
+    this.minLength = options.minLength ?? 0;
+    this.maxLength = options.maxLength ?? Infinity;
+    this.sync = !!options.sync;
+    this._buf = '';
+    this._destroyed = false;
+  }
+  write(data, cb) {
+    if (this._destroyed) { if (cb) cb(new Error('write after destroy')); return false; }
+    const s = String(data ?? '');
+    if (this._buf.length + s.length > this.maxLength) {
+      const err = new Error('write buffer exceeded maxLength');
+      if (cb) cb(err); else this.emit('error', err);
+      return false;
+    }
+    this._buf += s;
+    if (this._buf.length >= this.minLength) this._flush();
+    if (cb) cb(null);
+    return true;
+  }
+  _flush() {
+    if (!this._buf.length) return;
+    const chunk = this._buf;
+    this._buf = '';
+    this.emit('data', chunk);
+  }
+  end(data, cb) {
+    if (data !== undefined) this.write(data);
+    this._flush();
+    this.emit('finish');
+    if (cb) cb(null);
+  }
+  destroy(err) {
+    this._destroyed = true;
+    this._buf = '';
+    if (err) this.emit('error', err);
+    this.emit('close');
+  }
+}
+
+// Port of Node's internal toUnixTimestamp (lib/fs.js).
+function _toUnixTimestamp(time, name = 'time') {
+  if (typeof time === 'string' && +time == time) {
+    return +time;
+  }
+  if (Number.isFinite(time)) {
+    if (time < 0) {
+      return Date.now() / 1000;
+    }
+    return time;
+  }
+  if (Object.prototype.toString.call(time) === '[object Date]') {
+    // Convert to 123.456 UNIX timestamp
+    return time.getTime() / 1000;
+  }
+  throw new TypeError(
+    `The "${name}" argument must be of type Date or time in seconds. Received ${time}`
+  );
+}
+
 // ── 7. API builder ──────────────────────────────────────────────────────────
 function buildApi(vol) {
   const fs = createFsFromVolume(vol);
@@ -2217,7 +2287,7 @@ export const {
   glob, globSync,
   lchmod, lchmodSync, lchown, lchownSync, link, linkSync,
   lstat, lstatSync, lutimes, lutimesSync,
-  mkdir, mkdirSync, mkdtemp, mkdtempSync, mkdtempDisposable, mkdtempDisposableSync,
+  mkdir, mkdirSync, mkdtemp, mkdtempSync, mkdtempDisposableSync,
   open, openSync, openAsBlob, opendir, opendirSync,
   read, readSync, readdir, readdirSync, readFile, readFileSync,
   readlink, readlinkSync, readv, readvSync,
@@ -2230,3 +2300,6 @@ export const {
   Dir, ReadStream, WriteStream, FileReadStream, FileWriteStream,
   promises, constants,
 } = fs;
+
+// Class/function exports mirroring node:fs (not on the fs singleton object).
+export { Stats, Dirent, Utf8Stream, _toUnixTimestamp };

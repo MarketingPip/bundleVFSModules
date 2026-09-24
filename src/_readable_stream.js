@@ -8,4 +8,4 @@
 // runtime's builtin-module key normalization.
 import { Readable } from './stream.js';
 export default Readable;
-export { Readable };
+export const { ReadableState, _fromList, from, fromWeb, toWeb, wrap } = Readable;

@@ -13,7 +13,6 @@ import replDefault, {
   REPL_MODE_SLOPPY,
   REPL_MODE_STRICT,
   Recoverable,
-  builtinModules,
 } from '../src/repl.js';
 
 function makeRepl(options = {}) {
@@ -62,7 +61,9 @@ describe('repl export surface', () => {
     expect(typeof Recoverable).toBe('function');
     expect(REPL_MODE_SLOPPY).toBeDefined();
     expect(REPL_MODE_STRICT).toBeDefined();
-    expect(Array.isArray(builtinModules)).toBe(true);
+    // builtinModules is NOT a named export in real node:repl — it lives only
+    // on the default export as a deprecated getter (DEP0191).
+    expect(Array.isArray(replDefault.builtinModules)).toBe(true);
     expect(replDefault.start).toBe(start);
     expect(replDefault.REPLServer).toBe(REPLServer);
     expect(replDefault.Recoverable).toBe(Recoverable);

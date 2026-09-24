@@ -80,18 +80,28 @@ describe('process shim — identity & exports', () => {
   });
 
   test('named exports agree with the default export (methods exist & behave)', () => {
+    // Real node:process has NO named ESM exports for the EventEmitter methods
+    // (on/off/once/etc.) — they live only on the default process object.
+    const emitterMethods = ['on', 'off', 'once', 'addListener', 'removeListener',
+        'removeAllListeners', 'prependListener', 'prependOnceListener', 'emit',
+        'listenerCount', 'emitWarningSync'];
     for (const name of ['cwd', 'chdir', 'exit', 'reallyExit', 'abort', 'umask',
         'uptime', 'hrtime', 'memoryUsage', 'cpuUsage', 'availableMemory',
         'constrainedMemory', 'resourceUsage', 'getActiveResourcesInfo', 'kill',
-        'nextTick', 'on', 'off', 'once', 'addListener', 'removeListener',
-        'removeAllListeners', 'prependListener', 'prependOnceListener', 'emit',
-        'listenerCount', 'emitWarning', 'emitWarningSync', 'getuid', 'geteuid',
+        'nextTick',
+        'emitWarning',
+        'getuid', 'geteuid',
         'setuid', 'seteuid', 'getgid', 'getegid', 'setgid', 'setegid',
         'getgroups', 'setgroups', 'initgroups', 'binding', 'dlopen',
         'getBuiltinModule', 'openStdin', 'ref', 'unref', 'setSourceMapsEnabled',
         'setUncaughtExceptionCaptureCallback', 'hasUncaughtExceptionCaptureCallback',
         'loadEnvFile', 'execve']) {
       expect(typeof ns[name]).toBe('function');
+      expect(typeof def[name]).toBe('function');
+    }
+    // Emitter methods: on the default object only, NOT as named exports.
+    for (const name of emitterMethods) {
+      expect(ns[name]).toBeUndefined();
       expect(typeof def[name]).toBe('function');
     }
     expect(ns.hrtime.bigint).toBeInstanceOf(Function);

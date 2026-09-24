@@ -25,6 +25,10 @@ import {
   _checkInvalidHeaderChar,
   _checkIsHttpToken,
 } from './_http_common.js';
+import {
+  kUniqueHeaders,
+  kHighWaterMark,
+} from './internals/http-symbols.js';
 
 // ---------------------------------------------------------------------------
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
@@ -260,10 +264,10 @@ class FakeSocket extends EventEmitter {
 }
 
 // Module-local symbols mirroring Node's internal slots.
+// (kUniqueHeaders / kHighWaterMark live in ./internals/http-symbols.js so the
+// http module family shares them without exposing them on the public surface.)
 const kOutHeaders = Symbol('kOutHeaders');
 const kPath = Symbol('kPath');
-export const kUniqueHeaders = Symbol('kUniqueHeaders');
-export const kHighWaterMark = Symbol('kHighWaterMark');
 
 const INVALID_PATH_REGEX = /[^\u0021-\u00ff]/;
 
@@ -1612,7 +1616,7 @@ function _sha1Base64(ascii) {
 // ---------------------------------------------------------------------------
 // 10. WebSocket frame helpers (kept from the previous shim).
 // ---------------------------------------------------------------------------
-export function _parseWsFrame(data) {
+function _parseWsFrame(data) {
   if (data.length < 2) return null;
 
   const opcode = data[0] & 0x0f;
@@ -1649,7 +1653,7 @@ export function _parseWsFrame(data) {
   };
 }
 
-export function _createWsFrame(opcode, payload, masked) {
+function _createWsFrame(opcode, payload, masked) {
   const length = payload.length;
   let headerSize = 2;
   if (length > 125 && length <= 65535) headerSize += 2;
@@ -1726,22 +1730,22 @@ function _waitForAllServers() {
   return _waitForServersPromise;
 }
 
-export function _registerServer(port, server) {
+function _registerServer(port, server) {
   serverRegistry.set(port, server);
 }
 
-export function _unregisterServer(port) {
+function _unregisterServer(port) {
   serverRegistry.delete(port);
   if (serverRegistry.size === 0) {
     _resolveWaitForServers();
   }
 }
 
-export function getServer(port) {
+function getServer(port) {
   return serverRegistry.get(port);
 }
 
-export function getAllServers() {
+function getAllServers() {
   return new Map(serverRegistry);
 }
 
@@ -2036,7 +2040,7 @@ export function get(urlOrOptions, optionsOrCallback, callback) {
  * Internal: build a client request with an explicit default protocol/agent.
  * Used by the https module (avoids an import cycle: https -> http only).
  */
-export function _createClientRequest(
+function _createClientRequest(
   urlOrOptions, optionsOrCallback, callback, defaultProtocol, defaultAgent) {
   const { options, callback: cb } = parseRequestArgs(
     urlOrOptions, optionsOrCallback, callback);
