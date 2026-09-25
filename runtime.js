@@ -38,7 +38,24 @@ const _builtinManifest = {
   "trace_events": "trace_events.js", "tty": "tty.js", "url": "url.js",
   "util": "util.js", "util/types": "util.js", "v8": "v8.js", "vm": "vm.js",
   "wasi": "wasi.js", "worker_threads": "worker_threads.js", "zlib": "zlib.js",
-};
+}
+const _builtinSourceCache = new Map();
+async function fetchBuiltinSource(specifier) {
+  let key = String(specifier).trim();
+  if (key.startsWith('node:')) key = key.slice(5);
+  let file = _builtinManifest[key];
+  if (!file && key.includes('_')) file = _builtinManifest[key.split('_').join('/')];
+  if (!file && key.startsWith('RUNTIME_')) file = `${key}.js`;
+  if (!file) return `export default {}`;
+  if (_builtinSourceCache.has(file)) return _builtinSourceCache.get(file);
+  const url = _builtinBaseUrl + file;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`[ERR_BUILTIN_LOAD]: failed to fetch ${url}: HTTP ${res.status}`);
+  const text = await res.text();
+  _builtinSourceCache.set(file, text);
+  return text;
+}
+;
 
 async function loadBuiltin(specifier) {
   // Normalize: strip "node:" prefix
@@ -7147,10 +7164,7 @@ function vfsLookup(path, vfs) {
         
   // 1. For Node built-ins, hand off to your shim resolver as before
   if (isNodeBuiltIn) {
-    // Built-ins are lazy-loaded via loadBuiltin() in the async import path.
-    // VFS construction is sync, so return a stub here; the real module
-    // is fetched on-demand when user code imports it.
-    return `export default {}`;
+    return await fetchBuiltinSource(path);
   }
 
   // 2. Determine the importer's VFS path
@@ -7212,10 +7226,7 @@ function vfsLookup(path, vfs) {
         
   // 1. For Node built-ins, hand off to your shim resolver as before
   if (isNodeBuiltIn) {
-    // Built-ins are lazy-loaded via loadBuiltin() in the async import path.
-    // VFS construction is sync, so return a stub here; the real module
-    // is fetched on-demand when user code imports it.
-    return `export default {}`;
+    return await fetchBuiltinSource(path);
   }
 
   // 2. Determine the importer's VFS path
