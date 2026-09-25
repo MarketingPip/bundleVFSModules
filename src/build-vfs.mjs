@@ -182,6 +182,50 @@ const DIST_DIR = "dist";
 // Get __dirname equivalent in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Rewrites relative imports of Node.js built-ins to `node:*` specifiers
+ * and marks them as external.
+ *
+ * Source files use `import x from './http.js'` (so tests running under Node
+ * resolve to our shims). But when esbuild bundles, this inlines the entire
+ * dependency into every dist file, duplicating code across 80+ files.
+ *
+ * This plugin intercepts `./<builtin>.js` imports and rewrites them to
+ * `node:<builtin>`, which esbuild leaves as-is (external). At runtime,
+ * the runtime's module loader (`_dynamic_import`/`loadModule`) resolves
+ * `node:*` specifiers to the already-loaded built-in via fetchBuiltinSource.
+ */
+export function builtinExternalPlugin() {
+  const builtinFiles = new Set([
+    'assert.js', 'async_hooks.js', 'buffer.js', 'child_process.js',
+    'cluster.js', 'console.js', 'constants.js', 'crypto.js', 'dgram.js',
+    'diagnostics_channel.js', 'dns.js', 'domain.js', 'events.js', 'fs.js',
+    'http.js', 'http2.js', 'https.js', 'inspector.js', 'module.js',
+    'net.js', 'os.js', 'path.js', 'perf_hooks.js', 'process.js',
+    'punycode.js', 'querystring.js', 'readline.js', 'repl.js', 'sea.js',
+    'stream.js', 'string_decoder.js', 'sys.js', 'timers.js', 'tls.js',
+    'trace_events.js', 'tty.js', 'url.js', 'util.js', 'v8.js', 'vm.js',
+    'wasi.js', 'worker_threads.js', 'zlib.js',
+  ]);
+
+  return {
+    name: 'builtin-external',
+    setup(build) {
+      build.onResolve({ filter: /^\.\/[^/]+\.js$/ }, (args) => {
+        const filename = args.path.slice(2); // remove './'
+        if (builtinFiles.has(filename)) {
+          const builtinName = filename.slice(0, -3); // remove '.js'
+          return {
+            path: `node:${builtinName}`,
+            external: true,
+          };
+        }
+        return null; // let esbuild handle it normally
+      });
+    },
+  };
+}
+
 async function bundleToString(entry) {
   entry = path.resolve(__dirname, entry);
   try {
@@ -193,9 +237,9 @@ async function bundleToString(entry) {
       target: "es2020",
       minify: true, // esbuild's minifier is extremely fast and reliable
       write: false,
-      external: [], 
+      external: [],
       treeShaking:true,
-      plugins: [nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
+      plugins: [builtinExternalPlugin(), nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
       // Whether to polyfill specific globals.
       //modules: { fs: false, path: true, /* only what's needed */ },  
       globals: {
@@ -223,12 +267,135 @@ async function bundleToString(entry) {
 
 
 // Modules that should be bundled
-// NOTE: Node.js built-ins are NOT bundled into vfs.js.
-// They are built as individual dist/*.js files and loaded on-demand
-// at runtime via fetchBuiltinSource() (see runtime.js loadBuiltin).
-// Bundling them here would duplicate all 70+ modules (7MB+) for no benefit.
-// Only runtime specials and non-Node modules belong in this VFS.
+// All Node.js built-ins are built as individual dist/*.js files.
+// They are loaded on-demand at runtime via fetchBuiltinSource()
+// (see runtime.js loadBuiltin), with `node:*` imports resolving
+// through the runtime's built-in module loader (not bundled).
+//
+// The `builtinExternalPlugin` (above) rewrites `./<builtin>.js`
+// imports to `node:<builtin>` (external) during the build, so each
+// dist file stays small and shares dependencies at runtime instead
+// of inlining them.
 const BUNDLED_MODULES = {
+  buffer: "buffer.js",
+  // Cluster
+  cluster: "cluster.js",
+  // FS
+  fs: "fs.js",
+  fs_promises: "fs/promises.js",
+  // Path
+  path: "path.js",
+  path_posix: "path/posix.js",
+  path_win32: "path/win32.js",
+  // Assert
+  assert: "assert.js",
+  assert_strict: "assert/strict.js",
+  // OS
+  os: "os.js",
+  // Util
+  util: "util.js",
+  util_types: "util/types.js",
+  // Sys
+  sys: "sys.js",
+  // Async Hooks
+  async_hooks: "async_hooks.js",
+   // Async Context
+  async_context: "async_context.js",
+  // Domain
+  domain: "domain.js",
+  url: "url.js",
+  // Readline
+  readline: "readline.js",
+  readline_promises: "readline/promises.js",
+  // HTTP
+  http: "http.js",
+  https: "https.js",
+  http2: "http2.js",
+  // HTTP internals (node:_http_*)
+  _http_agent: "_http_agent.js",
+  _http_client: "_http_client.js",
+  _http_common: "_http_common.js",
+  _http_incoming: "_http_incoming.js",
+  _http_outgoing: "_http_outgoing.js",
+  _http_server: "_http_server.js",
+  // Stream
+  stream: "stream.js",
+  stream_promises: "stream/promises.js",
+  stream_web: "stream/web.js",
+  stream_consumers: "stream/consumers.js",
+  // Stream internals (node:_stream_*)
+  _stream_duplex: "_stream_duplex.js",
+  _stream_passthrough: "_stream_passthrough.js",
+  _stream_readable: "_readable_stream.js",
+  _stream_transform: "_stream_transform.js",
+  _stream_wrap: "_stream_wrap.js",
+  _stream_writable: "_stream_writeable.js",
+  // Crypto
+  crypto: "crypto.js",
+  // Net
+  net: "net.js",
+  // Events
+  events: "events.js",
+  // Inspector
+  inspector: "inspector.js",
+  inspector_promises: "inspector/promises.js",
+  // v8
+  v8: "v8.js",
+  // TTY
+  tty: "tty.js",
+  // TLS
+  tls: "tls.js",
+  // TLS internals (node:_tls_*)
+  _tls_common: "_tls_common.js",
+  _tls_wrap: "_tls_wrap.js",
+  // Dgram
+  dgram: "dgram.js",
+  // Diagnostics
+  diagnostics_channel: "diagnostics_channel.js",
+  // REPL
+  repl: "repl.js",
+  // Module
+  module: "module.js",
+  // WS
+  ws: "ws.js",
+  // DNS
+  dns: "dns.js",
+  dns_promises: "dns/promises.js",
+  // Constants
+  constants: "constants.js",
+  // Query String
+  querystring: "querystring.js",
+  // VM
+  vm: "vm.js",
+  // String Decoder
+  string_decoder: "string_decoder.js",
+  //serialize_js: "serialize_js.js",
+  // Test
+  test: "test.js",
+  test_reporters: "test/reporters.js",
+  // Perf Hooks
+  perf_hooks: "perf_hooks.js",
+  // Zlib
+  zlib: "zlib.js",
+  // Sea
+  sea: "sea.js",
+  // Trace Events
+  trace: "trace_events.js",
+  // Wasi
+  wasi: "wasi.js",
+   // Process
+  process: "process.js",
+  // Child Process
+  child_process: "child_process.js",
+  // Puny Code
+  punycode: "punycode.js",
+  // Timers
+  timers: "timers.js",
+  timers_promises: "timers/promises.js",
+  // Console
+  console: "console.js",
+  // Worker Threads
+  worker_threads: "worker_threads.js",
   // Specials
  // RUNTIME_CLI_TABLE: "specials/cli_table.js",
   RUNTIME_BUNDLER: "specials/bundler.js",
@@ -239,6 +406,16 @@ const BUNDLED_MODULES = {
   // Virtual cookie jar (RFC 6265) for emulated HTTP servers
   cookieJar: "cookieJar.js",
 };
+
+// Subset of BUNDLED_MODULES that goes into vfs.js.
+// The full vfs.js bundle (6.9MB) is NOT imported by the runtime
+// (see runtime.js:6-10) — built-ins load on-demand from individual
+// dist files. Only runtime specials belong in the VFS.
+const VFS_MODULES = new Set([
+  'RUNTIME_BUNDLER',
+  'RUNTIME_NODE_GLOBALS',
+  'cookieJar',
+]);
 
 // Node core modules to stub
 const STUB_MODULES = [
@@ -370,7 +547,12 @@ async function main() {
   const bundledModules = await buildBundledModules();
   const stubModules = generateStubModules();
 
-  const vfsContent = await minifyCode(generateVFS(bundledModules, stubModules));
+  // vfs.js only includes the VFS_MODULES subset (runtime specials).
+  // The full 76-module bundle is NOT imported by the runtime.
+  const vfsModules = Object.fromEntries(
+    Object.entries(bundledModules).filter(([name]) => VFS_MODULES.has(name))
+  );
+  const vfsContent = await minifyCode(generateVFS(vfsModules, stubModules));
 
   const vfsPath = path.join(DIST_DIR, "vfs.js");
   fs.writeFileSync(vfsPath, vfsContent);
