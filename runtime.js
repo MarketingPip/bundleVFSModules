@@ -6141,6 +6141,9 @@ ${code}\n})();
         // many ticks. Poll every 50ms (like waitForAllTimers) for up to 2s;
         // if listeners appear, waitUntilNoListeners() takes over and waits
         // for them to be removed (i.e. prompt resolved/dismissed).
+        // NOTE: Use originalSetTimeout (not the patched setTimeout) so the
+        // polling delays aren't tracked by waitForAllTimers() — otherwise
+        // the two would deadlock (each waiting for the other's timers).
         (async () => {
           if (typeof process?.stdin?.waitUntilNoListeners !== "function") {
             return Promise.resolve();
@@ -6151,9 +6154,14 @@ ${code}\n})();
           ) > 0;
           // Give async module loading a bounded window to wire up stdin.
           const maxAttempts = 40; // 40 * 50ms = 2s
+          const sleep = (ms) => new Promise(res =>
+            (typeof originalSetTimeout !== 'undefined'
+              ? originalSetTimeout
+              : setTimeout)(res, ms)
+          );
           for (let i = 0; i < maxAttempts; i++) {
             if (hasListeners()) break;
-            await new Promise(res => setTimeout(res, 50));
+            await sleep(50);
           }
           return process.stdin.waitUntilNoListeners() ?? Promise.resolve();
         })(),
