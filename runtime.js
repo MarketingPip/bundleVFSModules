@@ -6901,10 +6901,11 @@ function createFetchAdapter(fetchImpl) {
 
     _dispatch(chunk) {
       const data = this._decode(chunk);
-      this.emit('data', data);
 
       if (typeof data === 'string') {
         if (this._isRaw) {
+          // Raw mode: emit keypress only (not data) to avoid double-processing.
+          // Readline in raw mode listens for keypress, not data.
           // one pushData() call == one physical keypress in raw mode
           const keyEvent = _parseKey(data);
           this.emit('keypress', data, keyEvent);
@@ -6912,14 +6913,14 @@ function createFetchAdapter(fetchImpl) {
             emitMe('key_event', null, keyEvent);
           }
         } else {
-          for (const ch of data) {
-            const keyEvent = _parseKey(ch);
-            this.emit('keypress', ch, keyEvent);
-            if (typeof emitMe === 'function') {
-              emitMe('key_event', null, keyEvent);
-            }
-          }
+          // Non-raw (line-buffered) mode: emit data only. The keypress
+          // events here were causing double input when readline also
+          // listens for data.
+          this.emit('data', data);
         }
+      } else {
+        // Non-string data (Buffer): emit data only
+        this.emit('data', data);
       }
     },
 
@@ -7906,9 +7907,10 @@ sandbox.on('execution:stdout', ({type, args}) => {
   // xterm.js interprets ANSI escape codes natively (colors, cursor
   // movement, clear screen). Write directly; no stripping needed.
   const text = Array.isArray(args) ? args.join(' ') : String(args ?? '');
-  // Ensure text ends with newline for proper line handling, unless it's
-  // already a control sequence or ends with newline.
-  term.write(text + (text.endsWith('\n') ? '' : '\r\n'));
+  // Convert \n to \r\n for xterm (it needs carriage return for proper
+  // line starts). Do NOT append newlines that aren't there — prompts like
+  // '> ' and single-char echoes must not get extra line breaks.
+  term.write(text.replace(/\n/g, '\r\n'));
 });
  
 
@@ -8591,13 +8593,7 @@ await demo();`
 
         // Clear output
         clearBtn.addEventListener('click', () => {
-            const t = globalThis._xterm;
-            if (t) {
-                t.clear();
-                t.writeln('Output cleared...');
-            } else {
-                output.innerHTML = '<div class="text-gray-500 italic">Output cleared...</div>';
-            }
+            output.innerHTML = '<div class="text-gray-500 italic">Output cleared...</div>';
             execTime.textContent = '';
         });
 
@@ -8664,13 +8660,7 @@ document.getElementById("sendInput").addEventListener("click", async () => {
          
              output.classList.add("whitespace-pre-wrap")
            }
-            // Write to xterm instead of innerHTML (which would destroy the terminal)
-            const _term = globalThis._xterm;
-            if (_term) {
-                _term.writeln('⚡ Executing code...');
-            } else {
-                output.innerHTML = '<div class="text-yellow-400 animate-pulse">⚡ Executing code...</div>';
-            }
+            output.innerHTML = '<div class="text-yellow-400 animate-pulse">⚡ Executing code...</div>';
             
          
             
@@ -8760,12 +8750,7 @@ renderFiles(result.fs);
                 let message = err.message;
 
                 execTime.textContent = `Execution time: ${executionTime}ms`;
-                const _errTerm = globalThis._xterm;
-                if (_errTerm) {
-                    _errTerm.writeln(`\x1b[31m✗ Error: ${message}\x1b[0m`);
-                } else {
-                    output.innerHTML = `<div class="text-red-400">✗ Error: ${message}</div>`;
-                }
+                output.innerHTML = `<div class="text-red-400">✗ Error: ${message}</div>`;
                 status.textContent = 'Error';
                 status.className = 'text-red-400';
             }finally{
