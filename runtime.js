@@ -6134,37 +6134,9 @@ ${code}\n})();
         waitForAllFetches(),
         waitForAllXhrs(),
         waitForAllTimers(),
-        // Poll for stdin listeners to allow async code (like inquirer via
-        // esm.sh CDN) time to finish module loading and attach its listeners.
-        // A single tick isn't enough: inquirer's dependency graph resolves
-        // through interopChannel dynamic imports (network fetches), taking
-        // many ticks. Poll every 50ms (like waitForAllTimers) for up to 2s;
-        // if listeners appear, waitUntilNoListeners() takes over and waits
-        // for them to be removed (i.e. prompt resolved/dismissed).
-        // NOTE: Use originalSetTimeout (not the patched setTimeout) so the
-        // polling delays aren't tracked by waitForAllTimers() — otherwise
-        // the two would deadlock (each waiting for the other's timers).
-        (async () => {
-          if (typeof process?.stdin?.waitUntilNoListeners !== "function") {
-            return Promise.resolve();
-          }
-          const relevant = ['data','end','close','error','keypress'];
-          const hasListeners = () => relevant.reduce(
-            (n, ev) => n + process.stdin.listenerCount(ev), 0
-          ) > 0;
-          // Give async module loading a bounded window to wire up stdin.
-          const maxAttempts = 40; // 40 * 50ms = 2s
-          const sleep = (ms) => new Promise(res =>
-            (typeof originalSetTimeout !== 'undefined'
-              ? originalSetTimeout
-              : setTimeout)(res, ms)
-          );
-          for (let i = 0; i < maxAttempts; i++) {
-            if (hasListeners()) break;
-            await sleep(50);
-          }
-          return process.stdin.waitUntilNoListeners() ?? Promise.resolve();
-        })(),
+        typeof process?.stdin?.waitUntilNoListeners === "function"
+          ? process.stdin.waitUntilNoListeners() ?? Promise.resolve()
+          : Promise.resolve(),
            typeof _RUNTIME${config.uuid}_.__httpServerRunTime !== "undefined"
   ? _RUNTIME${config.uuid}_.__httpServerRunTime.waitForAllServers?.() ?? Promise.resolve()
   : Promise.resolve()
