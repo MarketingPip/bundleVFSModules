@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en"> 
+<head>
+    <meta charset="UTF-8">  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="IsolateX.js - A powerful JavaScript sandbox library for safe code execution in isolated environments. Execute untrusted code securely with real-time monitoring and advanced features.">
+    <meta name="keywords" content="javascript sandbox, code execution, isolated environment, security, web workers, ES6"> 
+    <title>IsolateX.js - Safe JavaScript Execution in Isolated Environments</title>   
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateX(-100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .animate-fade-in-up {
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .animate-pulse-slow {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        .animate-slide-in {
+            animation: slideIn 0.5s ease-out;
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .code-editor {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            tab-size: 2;
+        }
+
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .hover-lift {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .hover-lift:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+
+        pre {
+            scrollbar-width: thin;
+            scrollbar-color: #667eea #1f2937;
+        }
+
+        pre::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        pre::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+
+        pre::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+
+        .feature-card {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            transition: left 0.5s;
+        }
+
+        .feature-card:hover::before {
+            left: 100%;
+        }
+    </style>
+</head>
+  
+<div class="sr-only">
+  <h2>JavaScript Sandbox Features</h2>
+  <p>Execute JavaScript safely in isolated iframe sandboxes with real-time monitoring, syntax validation, import resolution, and comprehensive error handling. Supports ES6+ features, top-level await, async/await, and NPM or relative imports. Provides structured input/output for secure function calls and API execution. Perfect for LLMs or AI assistants to run untrusted code safely with zero access to the parent context.</p>
+  
+  <ul>
+    <li>Real-time syntax checking with Acorn parser.</li>
+    <li>Automatic ESM CDN import resolution with caching and transforms.</li>
+    <li>Configurable execution timeouts with automatic cleanup.</li>
+    <li>Console, network, timers, and async operation monitoring.</li>
+    <li>Event emitter system for lifecycle hooks and execution tracking.</li>
+    <li>Supports CLI input/output, file system simulation, and sandbox interop.</li>
+    <li>Safe execution of untrusted code in iframes with CSP enforcement.</li>
+    <li>Handles CommonJS, TypeScript, and relative imports.</li>
+    <li>LLM-ready structured execution outputs and logs.</li>
+  </ul>
+
+  <p>Perfect for educational platforms, online IDEs, plugin systems, testing environments, and sharing interactive code samples securely.</p>
+</div>
+  
+  
+<body class="bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 text-white min-h-screen">
+    
+    <!-- Hero Section -->
+    <header class="container mx-auto px-4 py-20 text-center animate-fade-in-up">
+        <div class="inline-block mb-6">
+            <div class="w-20 h-20 mx-auto bg-gradient-to-br from-purple-400 to-indigo-600 rounded-2xl flex items-center justify-center transform rotate-12 hover:rotate-0 transition-transform duration-300">
+                <svg class="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"></path>
+                </svg>
+            </div>
+        </div>
+        
+        <h1 class="text-6xl md:text-7xl font-bold mb-6 gradient-text">
+            IsolateX.js
+        </h1>
+        
+        <p class="text-xl md:text-2xl text-purple-200 mb-8 max-w-3xl mx-auto">
+            Execute JavaScript safely in isolated sandboxes with real-time monitoring, import resolution, and comprehensive error handling
+        </p>
+        
+        <div class="flex flex-wrap gap-4 justify-center mb-12">
+            <a href="#demo" class="px-8 py-4 bg-gradient-to-r from-purple-600 to-indigo-600 rounded-full font-semibold hover:from-purple-700 hover:to-indigo-700 transform hover:scale-105 transition-all duration-300 shadow-lg">
+                Try Live Demo
+            </a>
+            <a href="#docs" class="px-8 py-4 bg-white bg-opacity-10 rounded-full font-semibold hover:bg-opacity-20 transform hover:scale-105 transition-all duration-300 backdrop-blur-sm">
+                Read Documentation
+            </a>
+        </div>
+        
+        <div class="flex flex-wrap gap-6 justify-center text-sm text-purple-300">
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+                ES6+ Support
+            </div>
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+                Zero Dependencies
+            </div>
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+                Production Ready
+            </div>
+        </div>
+    </header>
+
+    <!-- Features Grid -->
+    <section class="container mx-auto px-4 py-20">
+        <h2 class="text-4xl font-bold text-center mb-16 gradient-text">Powerful Features</h2>
+         
+        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+            <div class="feature-card bg-white bg-opacity-5 p-8 rounded-2xl hover-lift backdrop-blur-sm">
+                <div class="w-14 h-14 bg-purple-600 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold mb-4">Isolated Execution</h3>
+                <p class="text-purple-200">Run untrusted code in sandboxed iframes with CSP enforcement and zero access to parent context</p>
+            </div>
+
+            <div class="feature-card bg-white bg-opacity-5 p-8 rounded-2xl hover-lift backdrop-blur-sm">
+                <div class="w-14 h-14 bg-indigo-600 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold mb-4">Syntax Validation</h3>
+                <p class="text-purple-200">Real-time syntax checking with Acorn parser before execution with detailed error reporting</p>
+            </div>
+
+            <div class="feature-card bg-white bg-opacity-5 p-8 rounded-2xl hover-lift backdrop-blur-sm">
+                <div class="w-14 h-14 bg-purple-600 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold mb-4">Import Resolution</h3>
+                <p class="text-purple-200">Automatic NPM package imports via ESM CDN with custom transform rules and caching</p>
+            </div>
+
+            <div class="feature-card bg-white bg-opacity-5 p-8 rounded-2xl hover-lift backdrop-blur-sm">
+                <div class="w-14 h-14 bg-indigo-600 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold mb-4">Real-time Monitoring</h3>
+                <p class="text-purple-200">Track console logs, network requests, timers, and async operations with detailed metrics</p>
+            </div>
+
+            <div class="feature-card bg-white bg-opacity-5 p-8 rounded-2xl hover-lift backdrop-blur-sm">
+                <div class="w-14 h-14 bg-purple-600 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold mb-4">Timeout Control</h3>
+                <p class="text-purple-200">Configurable execution timeouts with automatic cleanup to prevent infinite loops</p>
+            </div>
+
+            <div class="feature-card bg-white bg-opacity-5 p-8 rounded-2xl hover-lift backdrop-blur-sm">
+                <div class="w-14 h-14 bg-indigo-600 rounded-xl flex items-center justify-center mb-6">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-bold mb-4">Event System</h3>
+                <p class="text-purple-200">Built-in event emitter for lifecycle hooks and execution monitoring</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Live Demo Section -->
+    <section id="demo" class="container mx-auto px-4 py-20">
+        <h2 class="text-4xl font-bold text-center mb-4 gradient-text">Interactive Playground</h2>
+        <p class="text-center text-purple-200 mb-12 max-w-2xl mx-auto">
+            Try executing JavaScript code in real-time. The sandbox automatically handles imports, validates syntax, and captures all output.
+        </p>
+        
+        <div class="max-w-6xl mx-auto bg-white bg-opacity-5 rounded-2xl overflow-hidden backdrop-blur-sm">
+            <div class="grid lg:grid-cols-2 gap-0 divide-x divide-gray-700">
+                <!-- Code Editor -->
+                <div class="p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-xl font-bold flex items-center gap-2">
+                            <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path>
+                            </svg>
+                            Code Editor
+                        </h3>
+                        <button id="runBtn" class="px-6 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 rounded-lg font-semibold hover:from-purple-700 hover:to-indigo-700 transition-all duration-300 transform hover:scale-105 flex items-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            Run Code
+                        </button>
+                    </div>
+                    <textarea 
+                        id="codeInput" 
+                        class="w-full h-96 bg-gray-900 text-green-400 p-4 rounded-lg code-editor focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
+                        spellcheck="false"
+                    >// Try importing NPM packages!
+import * as math from 'mathjs';
+
+console.log('🚀 Starting execution...');
+
+// Mathematical operations
+const result = math.sqrt(16);
+console.log('Square root of 16:', result);
+
+// Async operations
+async function fetchData() {
+  const response = await fetch('https://api.github.com/repos/MarketingPipeline/Termino.js');
+  const data = await response.json();
+  console.log('⭐ Stars:', data.stargazers_count);
+}
+
+await fetchData();
+console.log('✅ Execution complete!');</textarea>
+                  
+                  
+                  
+                  <div class="mt-4 p-4 bg-gray-800 rounded-xl text-sm text-gray-200 space-y-3">
+
+  <!-- Top row: Status + Exec time -->
+  <div class="flex items-center justify-between">
+    <div>
+     Command Line
+    </div>
+    
+  </div>
+
+  <!-- Arguments input -->
+  <div class="flex items-center gap-2">
+    <span class="text-gray-400">argv:</span>
+    <input
+      id="argvInput"
+      type="text"
+      placeholder="--name John --age 22"
+      class="flex-1 bg-gray-900 border border-gray-700 rounded-md px-3 py-1 text-gray-200 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:bg-gray-800 disabled:text-gray-400 disabled:opacity-70 disabled:cursor-not-allowed"
+    />
+  </div>
+
+  <!-- STDIN input -->
+  <div class="flex items-center gap-2">
+    <span class="text-gray-400">stdin:</span>
+    <input
+      id="stdinInput"
+      type="text"
+      placeholder="Type input to send..."
+      class="flex-1 bg-gray-900 border border-gray-700 rounded-md px-3 py-1 text-gray-200 focus:outline-none focus:ring-2 focus:ring-purple-500"
+    />
+    <button
+      id="sendInput"
+      class="bg-purple-600 hover:bg-purple-700 px-3 py-1 rounded-md text-white"
+    >
+      Send
+    </button>
+  </div>
+
+</div>
+
+                  
+                </div>
+
+                <!-- Output Console -->
+                <div class="p-6 bg-gray-900 bg-opacity-50">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-xl font-bold flex items-center gap-2">
+                            <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                            </svg>
+                            Console Output
+                        </h3>
+                        <button id="clearBtn" class="px-4 py-2 bg-gray-700 rounded-lg hover:bg-gray-600 transition-colors text-sm">
+                            Clear
+                        </button>
+                    </div>
+                    <div id="output" class="h-96 bg-black bg-opacity-50 p-4 rounded-lg overflow-y-auto code-editor text-sm break-all">
+                        <div class="text-gray-500 italic ">
+                            Click "Run Code" to see output here...
+                        </div>
+                    </div>
+                    <div id="statusBar" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm flex items-center justify-between">
+                        <span class="text-gray-400">Status: <span id="status" class="text-purple-400">Ready</span></span>
+                        <span id="execTime" class="text-gray-400"></span>
+                    </div>
+                  
+                          <div id="fileList" class="mt-4 p-3 bg-gray-800 rounded-lg text-sm">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-gray-400">Files Written (Using FS)</span>
+        </div>
+        <div id="files"></div>
+      </div>
+
+   <div class="mt-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-xl font-bold flex items-center gap-2">
+                <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                </svg>
+                Live Preview
+            </h3>
+        </div>
+        <div class="rounded-lg overflow-hidden bg-white border-4 border-gray-800 shadow-xl">
+            <iframe id="preview" class="w-full h-96 bg-white"></iframe>
+        </div>
+    </div>               
+                  
+                </div>
+            </div>
+        </div>
+
+        <!-- Example Snippets -->
+        <div class="max-w-6xl mx-auto mt-8 grid md:grid-cols-3 gap-4">
+            <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="basic">
+                <div class="font-semibold mb-1">Basic Example</div>
+                <div class="text-sm text-purple-200">Simple console logging</div>
+            </button>
+            <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="async">
+                <div class="font-semibold mb-1">Async/Await</div>
+                <div class="text-sm text-purple-200">Fetch API with promises</div>
+            </button>
+            <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="sleep">
+                <div class="font-semibold mb-1">Sleep / Delay</div>
+                <div class="text-sm text-purple-200">Handling async timeouts gracefully.</div>
+            </button>
+            <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="imports">
+                <div class="font-semibold mb-1">NPM Imports</div>
+                <div class="text-sm text-purple-200">Use external libraries</div>
+            </button>
+               <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="require">
+                <div class="font-semibold mb-1">CommonJS Require</div>
+                <div class="text-sm text-purple-200">Legacy module loading via virtual file system.</div>
+            </button>
+          <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="process_kill">
+                <div class="font-semibold mb-1">Kill Process</div>
+                <div class="text-sm text-purple-200">Simulate terminating execution mid-loop.</div>
+            </button>
+           
+          <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="interop">
+                <div class="font-semibold mb-1">Sandbox Interop</div>
+                <div class="text-sm text-purple-200">Expose methods & call parent functions.</div>
+            </button>
+          
+            <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="top_level">
+                <div class="font-semibold mb-1">Top Level Await</div>
+                <div class="text-sm text-purple-200">Use top level await</div>
+            </button>
+          
+          <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="typescript">
+                <div class="font-semibold mb-1">Typescript</div>
+                <div class="text-sm text-purple-200">Typed variables & external ESM imports.</div>
+            </button> 
+          
+          
+          <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="relative">
+                <div class="font-semibold mb-1">Relative Imports</div>
+                <div class="text-sm text-purple-200">Use relative imports from a fake filesystem</div>
+            </button> 
+          
+            <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="tests">
+                <div class="font-semibold mb-1">Node.js Tests</div>
+                <div class="text-sm text-purple-200">Emulate Node.js Tests</div>
+            </button> 
+          
+           <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="cli">
+                <div class="font-semibold mb-1">CLI</div>
+                <div class="text-sm text-purple-200">Use STDInput</div>
+            </button> 
+          
+                <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="cli_menu">
+                <div class="font-semibold mb-1">ReadLine Menu</div>
+                <div class="text-sm text-purple-200">Use CLI Up / Down</div>
+            </button> 
+          
+          
+            <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="inquirer">
+                <div class="font-semibold mb-1">inquierer</div>
+                <div class="text-sm text-purple-200">Use CLI Up / Down</div>
+            </button> 
+          
+            </button> 
+          
+           <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="repl">
+                <div class="font-semibold mb-1">Repl 1</div>
+                <div class="text-sm text-purple-200">Use File System</div>
+            </button> 
+      
+                 <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="repl2">
+                <div class="font-semibold mb-1">Repl 2</div>
+                <div class="text-sm text-purple-200">Use File System</div>
+            </button> 
+      
+         <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="fs">
+                <div class="font-semibold mb-1">File System</div>
+                <div class="text-sm text-purple-200">Use File System</div>
+            </button> 
+      
+               <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="child_process">
+                <div class="font-semibold mb-1">Child Process</div>
+                <div class="text-sm text-purple-200">Use File System</div>
+            </button> 
+      
+      
+              <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="http">
+                <div class="font-semibold mb-1">Emulated HTTP Server</div>
+                <div class="text-sm text-purple-200">Use File System</div>
+            </button> 
+      
+      
+        <button class="example-btn p-4 bg-white bg-opacity-5 rounded-lg hover:bg-opacity-10 transition-all text-left hover-lift" data-example="express">
+                <div class="font-semibold mb-1">Express HTTP Server</div>
+                <div class="text-sm text-purple-200">Use File System</div>
+            </button> 
+      
+        </div>
+    </section>
+
+    <!-- Documentation Section -->
+    <section id="docs" class="container mx-auto px-4 py-20">
+        <h2 class="text-4xl font-bold text-center mb-16 gradient-text">Quick Start Guide</h2>
+        
+        <div class="max-w-4xl mx-auto space-y-12">
+            <!-- Installation -->
+            <div class="bg-white bg-opacity-5 p-8 rounded-2xl backdrop-blur-sm animate-fade-in-up">
+                <h3 class="text-2xl font-bold mb-4 flex items-center gap-3">
+                    <span class="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center text-sm">1</span>
+                    Installation
+                </h3>
+                <p class="text-purple-200 mb-4">Import the library directly in your HTML or JavaScript:</p>
+                <pre class="bg-gray-900 p-4 rounded-lg overflow-x-auto"><code class="text-green-400">&lt;script type="module"&gt;
+  import { CodeSandbox } from './isolatex.js';
+&lt;/script&gt;</code></pre>
+            </div>
+
+            <!-- Basic Usage -->
+            <div class="bg-white bg-opacity-5 p-8 rounded-2xl backdrop-blur-sm animate-fade-in-up">
+                <h3 class="text-2xl font-bold mb-4 flex items-center gap-3">
+                    <span class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-sm">2</span>
+                    Basic Usage
+                </h3>  
+                <p class="text-purple-200 mb-4">Create a sandbox and execute code:</p>
+                <pre class="bg-gray-900 p-4 rounded-lg overflow-x-auto"><code class="text-green-400">const sandbox = new CodeSandbox({
+  timeout: 5000,
+  validateSyntax: true,
+  logNetworkRequests: true
+});
+
+await sandbox.init();
+
+const result = await sandbox.execute(`
+  console.log('Hello from IsolateX!');
+  const data = await fetch('https://api.github.com/repos/MarketingPipeline/Termino.js');
+  console.log(await data.json());
+`);
+
+console.log(result.logs); // Array of console outputs
+console.log(result.executionTime); // Execution time in ms</code></pre>
+            </div>
+
+            <!-- Configuration -->
+            <div class="bg-white bg-opacity-5 p-8 rounded-2xl backdrop-blur-sm animate-fade-in-up">
+                <h3 class="text-2xl font-bold mb-4 flex items-center gap-3">
+                    <span class="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center text-sm">3</span>
+                    Configuration Options
+                </h3>
+                <div class="space-y-4">
+                    <div class="p-4 bg-gray-900 bg-opacity-50 rounded-lg">
+                        <div class="flex items-start gap-3">
+                            <code class="text-purple-400 font-semibold">timeout</code>
+                            <div class="flex-1">
+                                <span class="text-gray-400 text-sm">number (default: 30000)</span>
+                                <p class="text-purple-200 text-sm mt-1">Maximum execution time in milliseconds</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-4 bg-gray-900 bg-opacity-50 rounded-lg">
+                        <div class="flex items-start gap-3">
+                            <code class="text-purple-400 font-semibold">validateSyntax</code>
+                            <div class="flex-1">
+                                <span class="text-gray-400 text-sm">boolean (default: true)</span>
+                                <p class="text-purple-200 text-sm mt-1">Enable syntax validation before execution</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-4 bg-gray-900 bg-opacity-50 rounded-lg">
+                        <div class="flex items-start gap-3">
+                            <code class="text-purple-400 font-semibold">logNetworkRequests</code>
+                            <div class="flex-1">
+                                <span class="text-gray-400 text-sm">boolean (default: false)</span>
+                                <p class="text-purple-200 text-sm mt-1">Log all fetch and XHR requests to console</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-4 bg-gray-900 bg-opacity-50 rounded-lg">
+                        <div class="flex items-start gap-3">
+                            <code class="text-purple-400 font-semibold">captureWindowErrors</code>
+                            <div class="flex-1">
+                                <span class="text-gray-400 text-sm">boolean (default: true)</span>
+                                <p class="text-purple-200 text-sm mt-1">Capture and report window-level errors</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Events -->
+            <div class="bg-white bg-opacity-5 p-8 rounded-2xl backdrop-blur-sm animate-fade-in-up">
+                <h3 class="text-2xl font-bold mb-4 flex items-center gap-3">
+                    <span class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-sm">4</span>
+                    Event Monitoring
+                </h3>
+                <p class="text-purple-200 mb-4">Listen to sandbox lifecycle events:</p>
+                <pre class="bg-gray-900 p-4 rounded-lg overflow-x-auto"><code class="text-green-400">sandbox.on('execution:start', ({ id, code }) => {
+  console.log(`Starting execution ${id}`);
+});
+
+sandbox.on('execution:complete', ({ id, result }) => {
+  console.log(`Completed in ${result.executionTime}ms`);
+}); 
+
+sandbox.on('execution:error', ({ id, error }) => {
+  console.error(`Execution failed: ${error}`);
+});
+
+sandbox.on('execution:fs', ({ method, filename, data }) => {
+  console.error(`Execution failed: ${error}`);
+});
+
+sandbox.on('execution:stdout', ({ type, args }) => {
+  console.log(type, args);
+});
+
+sandbox.on('execution:timeout', ({ id }) => {
+  console.warn(`Execution ${id} timed out`);
+});</code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Use Cases -->
+    <section class="container mx-auto px-4 py-20">
+        <h2 class="text-4xl font-bold text-center mb-16 gradient-text">Perfect For</h2>
+        
+        <div class="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
+            <div class="bg-gradient-to-br from-purple-900 to-indigo-900 p-8 rounded-2xl hover-lift">
+                <div class="text-4xl mb-4">🎓</div>
+                <h3 class="text-2xl font-bold mb-3">Educational Platforms</h3>
+                <p class="text-purple-200">Create interactive coding tutorials and exercises with safe code execution</p>
+            </div>
+            
+            <div class="bg-gradient-to-br from-indigo-900 to-purple-900 p-8 rounded-2xl hover-lift">
+                <div class="text-4xl mb-4">🔬</div>
+                <h3 class="text-2xl font-bold mb-3">Code Playgrounds</h3>
+                <p class="text-purple-200">Build online IDEs and code editors with real-time execution feedback</p>
+            </div>
+            
+            <div class="bg-gradient-to-br from-purple-900 to-pink-900 p-8 rounded-2xl hover-lift">
+                <div class="text-4xl mb-4">🤖</div>
+                <h3 class="text-2xl font-bold mb-3">Plugin Systems</h3>
+                <p class="text-purple-200">Allow users to extend your application with custom scripts safely</p>
+            </div>
+            
+            <div class="bg-gradient-to-br from-pink-900 to-purple-900 p-8 rounded-2xl hover-lift">
+                <div class="text-4xl mb-4">⚡</div>
+                <h3 class="text-2xl font-bold mb-3">Testing & QA</h3>
+                <p class="text-purple-200">Execute test scripts in isolated environments for reliable testing</p>
+            </div>
+          
+          
+           <div class="bg-gradient-to-br from-purple-900 to-indigo-900 p-8 rounded-2xl hover-lift">
+      <div class="text-4xl mb-4">🛠️</div>
+      <h3 class="text-2xl font-bold mb-3">Function Call / JS Execution</h3>
+      <p class="text-purple-200">Safely run JavaScript in a sandbox with structured inputs/outputs - perfect for LLMs or AI assistants.</p>
+  </div>
+
+  <!-- New card: Interactive Code Samples -->
+  <div class="bg-gradient-to-br from-indigo-900 to-purple-900 p-8 rounded-2xl hover-lift">
+      <div class="text-4xl mb-4">💻</div>
+      <h3 class="text-2xl font-bold mb-3">Interactive Code Samples</h3>
+      <p class="text-purple-200">Sharing code snippets live to experiment and learn safely</p>
+  </div> 
+          
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="container mx-auto px-4 py-12 text-center border-t border-purple-800">
+      
+        <div class="mb-6">
+          <div class="flex flex-col items-center">
+            <div class="inline-block w-12 h-12 bg-gradient-to-br from-purple-400 to-indigo-600 rounded-xl flex items-center justify-center mb-4">
+                <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"></path>
+                </svg>
+            </div>
+          </div>
+            <h3 class="text-2xl font-bold gradient-text">IsolateX.js</h3>
+        </div>
+        
+        <p class="text-purple-300 mb-6 max-w-2xl mx-auto">
+            Built with security and performance in mind. Execute JavaScript safely in any web application.
+        </p>
+        
+        <div class="flex flex-wrap gap-6 justify-center text-sm text-purple-400">
+            <a href="#" class="hover:text-white transition-colors">Documentation</a>
+            <a href="#" class="hover:text-white transition-colors">GitHub</a>
+            <a href="#" class="hover:text-white transition-colors">Examples</a>
+            <a href="#" class="hover:text-white transition-colors">License</a>
+        </div>
+        
+        <div class="mt-8 text-sm text-purple-500">
+            &copy; 2024 IsolateX.js. MIT License.
+        </div>
+    </footer>
+
+    <script type="module">
+       
+    </script>
+</body>
+</html>
