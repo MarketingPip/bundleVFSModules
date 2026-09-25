@@ -41,19 +41,7 @@ app.listen(PORT, () => {
 
 ```
 
-Output: module "supports-color" not found
-🚀 Server is happily running at http://localhost:3000
-TypeError: argument entity must be string, Buffer, or fs.Stats
-    at Dx (https://esm.sh/express@5.2.1/node/express.bundle.mjs:33:3591)
-    at https://esm.sh/express@5.2.1/node/express.bundle.mjs:33:18187
-    at A.send (https://esm.sh/express@5.2.1/node/express.bundle.mjs:43:3455)
-    at A.json (https://esm.sh/express@5.2.1/node/express.bundle.mjs:43:4023)
-    at https://cdpn.io/index.js:2443:9
-    at Ke.handleRequest (https://esm.sh/express@5.2.1/node/express.bundle.mjs:33:25595)
-    at p (https://esm.sh/express@5.2.1/node/express.bundle.mjs:33:27502)
-    at Je.dispatch (https://esm.sh/express@5.2.1/node/express.bundle.mjs:33:27258)
-    at t (https://esm.sh/express@5.2.1/node/express.bundle.mjs:33:31310)
-    at Ke.handleRequest (https://esm.sh/express@5.2.1/node/express.bundle.mjs:33:25595)
+Output: ✗ Error: TypeError: Aa.deprecate is not a function
 
 
 
@@ -115,11 +103,7 @@ runMenu();
 
 Output:
 
-✗ Error: HookError: [Inquirer] Hook functions can only be called from within a prompt
-    at k (https://esm.sh/@inquirer/core@10.3.2/node/core.mjs:2:1224)
-    at e (https://esm.sh/@inquirer/core@10.3.2/node/core.mjs:2:1370)
-    at data:text/javascript;charset=utf-8,var%20e%3De%3D%3E%7Bthrow%20TypeError(e)%7D%2Ct%3D(t%2Co%2Ci)%3D%3Eo.has(t)%7C%7Ce
-
+✗ Error: SyntaxError: The requested module 'blob:https://cdpn.io/4ce43871-da62-42bd-a454-7f1123a32ae1' does not provide an export named 'stripVTControlCharacters'
 
 
 ```js
@@ -141,7 +125,7 @@ describe('my suite', () => {
 
 Output: 
 
-✗ Error: [reporter:] this is not iterable
+✗ Error: Cannot read properties of undefined (reading 'execute')
 
 
 
@@ -183,11 +167,15 @@ replServer.setupHistory(historyPath, (err) => {
 ```
 
 Output:
+✗ Error: SyntaxError: Unexpected token (2669:13)
+at line 2669, column 13
+Unexpected token (2669:13): 'W'
 
-✗ Error: Maximum call stack size exceeded
-at line NaN, column 1 
- 
- →    NaN| 
+  2667 | 
+  2668 | // Match native Node.js startup message exactly
+→ 2669 | console.log(`Welcome to Node.js ${process.version}.`);
+  2670 | console.log('Type ".help" for more information.');
+  2671 | 
 
 
 ```js
@@ -341,26 +329,15 @@ rl.on('close', () => {
 
 ```
 
-Output after input (acting glitchy now):
+Output: ✗ Error: SyntaxError: Unexpected token (2657:24)
+at line 2657, column 24
+Unexpected token (2657:24): 'v'
 
-Welcome to the Custom Node.js REPL!
-Type ".help" for a list of commands.
-Press Ctrl+C to abort current expression, Ctrl+D to exit the REPL.
-[1G
-[0J
-> 
-[3G1
-1
-11 
- 
- 1 +
-+
-+1 + 
- 
- 1 + 1
-1
-1
-
+  2655 | 
+  2656 | // Self-rebinding eval that preserves context between runs
+→ 2657 | let __EVAL = s => eval(`void (__EVAL = ${__EVAL.toString()}); ${s}`);
+  2658 | 
+  2659 | // Create readline interface
 
 
 ```js
@@ -442,7 +419,46 @@ function cleanupAndExecute(index) {
 drawMenu();
 ```
 
-Output: this acts glitchy, skips a row each render... never did this before.
+Output: ✗ Error: TypeError: readline.emitKeypressEvents is not a function
+at (index.js:2:10)
+
+     1 | // Enable raw mode so we can capture keypress events (like arrow keys) directly
+→    2 | readline.emitKeypressEvents(process.stdin);
+     3 | if (process.stdin.isTTY) {
+     4 |   process.stdin.setRawMode(true);
 
 
-    
+
+
+```js
+// server.js
+import http from 'node:http';
+
+const hostname = '127.0.0.1';
+const port = 3000;
+
+// Create the HTTP server
+const server = http.createServer((req, res) => {
+  // Log when a network request connects/arrives
+  console.log(`[Connected] Incoming ${req.method} request for: ${req.url} from ${req.socket.remoteAddress || 'unknown client'}`);
+
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/plain');
+  res.end('Hello from the Node.js ES6 HTTP Server!\n');
+});
+
+// Start listening
+server.listen(port, hostname, () => {
+  console.log(`Server running at http://${hostname}:${port}/`);
+});
+```
+
+Output:
+✗ Error: TypeError: http.createServer is not a function
+at (index.js:8:21)
+
+     6 | 
+     7 | // Create the HTTP server
+→    8 | const server = http.createServer((req, res) => {
+     9 |   // Log when a network request connects/arrives
+    10 |   console.log(`[Connected] Incoming ${req.method} request for: ${req.url} from ${req.socket.remoteAddress || 'unknown client'}`);
