@@ -6134,8 +6134,16 @@ ${code}\n})();
         waitForAllFetches(),
         waitForAllXhrs(),
         waitForAllTimers(),
-                 typeof process?.stdin?.waitUntilNoListeners === "function" ? process?.stdin?.waitUntilNoListeners() ?? Promise.resolve()
-  : Promise.resolve(),
+        // Wait a tick before checking stdin listeners to allow async code
+        // (like inquirer) to attach its listeners. Without this, there's
+        // a race where waitUntilNoListeners() sees 0 listeners and resolves
+        // immediately, killing the execution before inquirer starts.
+        (async () => {
+          await new Promise(res => setImmediate(res));
+          return typeof process?.stdin?.waitUntilNoListeners === "function"
+            ? process?.stdin?.waitUntilNoListeners() ?? Promise.resolve()
+            : Promise.resolve();
+        })(),
            typeof _RUNTIME${config.uuid}_.__httpServerRunTime !== "undefined"
   ? _RUNTIME${config.uuid}_.__httpServerRunTime.waitForAllServers?.() ?? Promise.resolve()
   : Promise.resolve()
@@ -6901,11 +6909,10 @@ function createFetchAdapter(fetchImpl) {
 
     _dispatch(chunk) {
       const data = this._decode(chunk);
+      this.emit('data', data);
 
       if (typeof data === 'string') {
         if (this._isRaw) {
-          // Raw mode: emit keypress only (not data) to avoid double-processing.
-          // Readline in raw mode listens for keypress, not data.
           // one pushData() call == one physical keypress in raw mode
           const keyEvent = _parseKey(data);
           this.emit('keypress', data, keyEvent);
@@ -6913,14 +6920,14 @@ function createFetchAdapter(fetchImpl) {
             emitMe('key_event', null, keyEvent);
           }
         } else {
-          // Non-raw (line-buffered) mode: emit data only. The keypress
-          // events here were causing double input when readline also
-          // listens for data.
-          this.emit('data', data);
+          for (const ch of data) {
+            const keyEvent = _parseKey(ch);
+            this.emit('keypress', ch, keyEvent);
+            if (typeof emitMe === 'function') {
+              emitMe('key_event', null, keyEvent);
+            }
+          }
         }
-      } else {
-        // Non-string data (Buffer): emit data only
-        this.emit('data', data);
       }
     },
 
@@ -7907,10 +7914,9 @@ sandbox.on('execution:stdout', ({type, args}) => {
   // xterm.js interprets ANSI escape codes natively (colors, cursor
   // movement, clear screen). Write directly; no stripping needed.
   const text = Array.isArray(args) ? args.join(' ') : String(args ?? '');
-  // Convert \n to \r\n for xterm (it needs carriage return for proper
-  // line starts). Do NOT append newlines that aren't there — prompts like
-  // '> ' and single-char echoes must not get extra line breaks.
-  term.write(text.replace(/\n/g, '\r\n'));
+  // Ensure text ends with newline for proper line handling, unless it's
+  // already a control sequence or ends with newline.
+  term.write(text + (text.endsWith('\n') ? '' : '\r\n'));
 });
  
 
