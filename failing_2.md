@@ -457,6 +457,62 @@ Output:
 ✗ Error: TypeError: http.createServer is not a function
 at (index.js:8:21)
 
+
+```js
+
+          
+          import fs from "fs";
+          
+          await fs.promises.writeFile("/data.json", JSON.stringify({ hello: "world" }), "utf8");
+
+const data = JSON.parse(await fs.promises.readFile("/data.json", "utf8"));
+console.log(data);
+
+
+
+async function downloadImageToMemfs(url, path) {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: ${response.status}`);
+  }
+
+  // Get binary data
+  const arrayBuffer = await response.arrayBuffer();
+
+  // Convert to Uint8Array (works everywhere)
+  const uint8 = new Uint8Array(arrayBuffer);
+
+  // Write directly to memfs
+  await fs.promises.writeFile(path, uint8);
+
+  console.log(`Saved image to ${path}`);
+}
+
+async function main() {
+  const imageUrl = "https://picsum.photos/id/237/300/200";
+
+  await downloadImageToMemfs(imageUrl, "/image.png");
+
+  const file = await fs.promises.readFile("/image.png");
+
+  console.log("Bytes:", file.length);
+}
+
+main();
+
+```
+
+Output: 
+
+✗ Error: TypeError: Cannot read properties of undefined (reading 'writeFile')
+at (index.js:1:19)
+
+→    1 | await fs.promises.writeFile("/data.json", JSON.stringify({ hello: "world" }), "utf8");
+     2 | 
+     3 | const data = JSON.parse(await fs.promises.readFile("/data.json", "utf8"));
+ 
+
      6 | 
      7 | // Create the HTTP server
 →    8 | const server = http.createServer((req, res) => {
