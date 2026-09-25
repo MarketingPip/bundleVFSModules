@@ -14,7 +14,7 @@
 // repo's own readline shim, which emits the same escape sequences.
 
 import { Readable, Writable } from './stream.js';
-import readline from 'readline';
+import readline from './readline';
 
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
