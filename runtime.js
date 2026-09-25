@@ -3409,7 +3409,9 @@ class SandboxRuntime {
 
 globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}, __SEA_ASSETS__:${JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined)}};
 
-window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_
+window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
+
+globalThis[Symbol.for(\"bvm.runtime.${config.uuid}\")] = globalThis._RUNTIME${config.uuid}_;
 
 // ─── Vitest/fork support patches ───
 // 1. Force configurable:true on global defineProperty. All forks share one
