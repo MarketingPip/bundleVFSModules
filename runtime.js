@@ -1042,7 +1042,7 @@ ImportExpression(node) {
     //if (enclosingFunc && enclosingFunc.async) functionsToMakeAsync.add(enclosingFunc);
 
     // Replace 'import' with 'loadModule'
-    s.overwrite(node.start, node.start + 6, `globalThis[Symbol.for("bvm.runtime.${sandboxUUID}")].loadModule`);
+    s.overwrite(node.start, node.start + 6, `globalThis._RUNTIME${sandboxUUID}_.loadModule`);
 
     // Append loader arguments inside parentheses
     s.appendLeft(
@@ -1063,7 +1063,7 @@ ImportExpression(node) {
     if (enclosingFunc && !enclosingFunc.async) functionsToMakeAsync.add(enclosingFunc);
 
     // Replace the 'import' keyword with 'loadModule'
-    s.overwrite(node.start, node.start + 6, `globalThis[Symbol.for("bvm.runtime.${sandboxUUID}")].loadModule`);
+    s.overwrite(node.start, node.start + 6, `globalThis._RUNTIME${sandboxUUID}_.loadModule`);
 
     // Append the loader type as a second argument **inside the parentheses**
     // node.source.end points just after the string literal
@@ -1102,7 +1102,7 @@ ImportExpression(node) {
   for (const [modulePath, v] of liftedModules.entries()) {
     const type = moduleImportType.get(modulePath) || "import";
     preambleParts.push(
-      `const ${v} = await globalThis[Symbol.for("bvm.runtime.${sandboxUUID}")].loadModule(${JSON.stringify(
+      `const ${v} = await globalThis._RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
         modulePath
       )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`
     );
@@ -2621,8 +2621,8 @@ function buildHtmlString(csp, code, hasImports, iframe) {
           '/',
           '/',
           true,
-          globalThis.globalThis[Symbol.for("bvm.runtime.${iframe.sandbox.uuid}")].cwd,
-          globalThis.globalThis[Symbol.for("bvm.runtime.${iframe.sandbox.uuid}")].__USER_FILES__   
+          globalThis._RUNTIME${iframe.sandbox.uuid}_.cwd,
+          globalThis._RUNTIME${iframe.sandbox.uuid}_.__USER_FILES__   
         );
         
         
@@ -3411,7 +3411,7 @@ globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringi
 
 window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
 
-globalThis[Symbol.for(\"bvm.runtime.${config.uuid}\")] = globalThis._RUNTIME${config.uuid}_;
+
 
 // ─── Vitest/fork support patches ───
 // 1. Force configurable:true on global defineProperty. All forks share one
@@ -6671,7 +6671,7 @@ function createFetchAdapter(fetchImpl) {
             // replace our special variable for runtime.
             if(isNodeBuiltIn){
               const result = replaceGlobalThisVar(source, "_RUNTIME_", {
-                replacement: `globalThis[Symbol.for("bvm.runtime.${this.uuid}")]`,
+                replacement: `globalThis._RUNTIME${this.uuid}_`,
                 filename: fileName,
               });
               source = result.code;
