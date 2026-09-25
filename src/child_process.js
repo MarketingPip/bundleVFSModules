@@ -1609,6 +1609,17 @@ export function fork(modulePath, args, options) {
   // Store prevProcess for restoration (set in the queueMicrotask below,
   // but capture the reference now for the disconnect closure)
   child.disconnect = () => {
+    // Match Node.js: second disconnect() emits 'error' with ERR_IPC_DISCONNECTED (does not throw)
+    // See lib/internal/child_process.js: target.disconnect = function() { if (!this.connected) { this.emit('error', new ERR_IPC_DISCONNECTED()); return; } ... }
+    if (!child.connected) {
+      child.emit(
+        'error',
+        Object.assign(new Error('IPC channel is already disconnected'), {
+          code: 'ERR_IPC_DISCONNECTED',
+        }),
+      );
+      return;
+    }
     child.connected = false;
     childProcess.connected = false;
     // Restore parent process if this fork's process is still active
