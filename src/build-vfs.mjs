@@ -223,132 +223,18 @@ async function bundleToString(entry) {
 
 
 // Modules that should be bundled
+// NOTE: Node.js built-ins are NOT bundled into vfs.js.
+// They are built as individual dist/*.js files and loaded on-demand
+// at runtime via fetchBuiltinSource() (see runtime.js loadBuiltin).
+// Bundling them here would duplicate all 70+ modules (7MB+) for no benefit.
+// Only runtime specials and non-Node modules belong in this VFS.
 const BUNDLED_MODULES = {
-  buffer: "buffer.js",
-  // Cluster
-  cluster: "cluster.js",
-  // FS
-  fs: "fs.js",
-  fs_promises: "fs/promises.js",
-  // Path
-  path: "path.js",
-  path_posix: "path/posix.js",
-  path_win32: "path/win32.js",
-  // Assert
-  assert: "assert.js",
-  assert_strict: "assert/strict.js",
-  // OS
-  os: "os.js",
-  // Util
-  util: "util.js",
-  util_types: "util/types.js",
-  // Sys
-  sys: "sys.js",
-  // Async Hooks
-  async_hooks: "async_hooks.js",
-   // Async Context
-  async_context: "async_context.js",
-  // Domain
-  domain: "domain.js",
-  url: "url.js",
-  // Readline
-  readline: "readline.js",
-  readline_promises: "readline/promises.js",
-  // HTTP
-  http: "http.js",
-  https: "https.js",
-  http2: "http2.js",
-  // HTTP internals (node:_http_*)
-  _http_agent: "_http_agent.js",
-  _http_client: "_http_client.js",
-  _http_common: "_http_common.js",
-  _http_incoming: "_http_incoming.js",
-  _http_outgoing: "_http_outgoing.js",
-  _http_server: "_http_server.js",
-  // Stream
-  stream: "stream.js",
-  stream_promises: "stream/promises.js",
-  stream_web: "stream/web.js",
-  stream_consumers: "stream/consumers.js",
-  // Stream internals (node:_stream_*)
-  _stream_duplex: "_stream_duplex.js",
-  _stream_passthrough: "_stream_passthrough.js",
-  _stream_readable: "_readable_stream.js",
-  _stream_transform: "_stream_transform.js",
-  _stream_wrap: "_stream_wrap.js",
-  _stream_writable: "_stream_writeable.js",
-  // Crypto
-  crypto: "crypto.js",
-  // Net
-  net: "net.js",
-  // Events
-  events: "events.js",
-  // Inspector
-  inspector: "inspector.js",
-  inspector_promises: "inspector/promises.js",
-  // v8
-  v8: "v8.js",
-  // TTY
-  tty: "tty.js",
-  // TLS
-  tls: "tls.js",
-  // TLS internals (node:_tls_*)
-  _tls_common: "_tls_common.js",
-  _tls_wrap: "_tls_wrap.js",
-  // Dgram
-  dgram: "dgram.js",
-  // Diagnostics
-  diagnostics_channel: "diagnostics_channel.js",
-  // REPL
-  repl: "repl.js",
-  // Module
-  module: "module.js",
-  // WS
-  ws: "ws.js",
-  // DNS
-  dns: "dns.js",
-  dns_promises: "dns/promises.js",
-  // Constants
-  constants: "constants.js",
-  // Query String
-  querystring: "querystring.js",
-  // VM
-  vm: "vm.js",
-  // String Decoder
-  string_decoder: "string_decoder.js",
-  //serialize_js: "serialize_js.js",
-  // Test
-  test: "test.js",
-  test_reporters: "test/reporters.js",
-  // Perf Hooks
-  perf_hooks: "perf_hooks.js",
-  // Zlib
-  zlib: "zlib.js",
-  // Sea
-  sea: "sea.js",
-  // Trace Events
-  trace: "trace_events.js",
-  // Wasi
-  wasi: "wasi.js",
-   // Process
-  process: "process.js",
-  // Child Process
-  child_process: "child_process.js",
-  // Puny Code
-  punycode: "punycode.js",
-  // Timers
-  timers: "timers.js",
-  timers_promises: "timers/promises.js",
-  // Console
-  console: "console.js", 
-  // Worker Threads
-  worker_threads: "worker_threads.js",
   // Specials
  // RUNTIME_CLI_TABLE: "specials/cli_table.js",
   RUNTIME_BUNDLER: "specials/bundler.js",
   RUNTIME_NODE_GLOBALS: "node_globals.js",
-  
-  
+
+
  // buffer: "buffer.js",
   // Virtual cookie jar (RFC 6265) for emulated HTTP servers
   cookieJar: "cookieJar.js",

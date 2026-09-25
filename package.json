@@ -24,6 +24,8 @@
   },
   "devDependencies": {
     "esbuild": "^0.22.0",
-    "esbuild-plugins-node-modules-polyfill": "^1.8.1"
+    "esbuild-plugins-node-modules-polyfill": "^1.8.1",
+    "node-fetch": "^3.3.2",
+    "terser": "^5.51.2"
   }
 }
