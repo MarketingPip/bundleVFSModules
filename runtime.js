@@ -6023,7 +6023,7 @@ globalThis.${config.interopVariable}.expose('__serverRequest__', async (port=808
        ${config.imports?.join('\n') || ''}
        //__$PROVIDED_RUNTIME_CODE__/
        
-       ${code}
+       ${code.replace(/`/g, '\\\`').replace(/\$\{/g, '\\\\\${')}
        
        
        
