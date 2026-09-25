@@ -6138,8 +6138,10 @@ ${code}\n})();
         // (like inquirer) to attach its listeners. Without this, there's
         // a race where waitUntilNoListeners() sees 0 listeners and resolves
         // immediately, killing the execution before inquirer starts.
+        // Note: Use setTimeout fallback since setImmediate is not available
+        // in browser sandbox contexts.
         (async () => {
-          await new Promise(res => setImmediate(res));
+          await new Promise(res => (typeof setImmediate !== 'undefined' ? setImmediate : (fn) => setTimeout(fn, 0))(res));
           return typeof process?.stdin?.waitUntilNoListeners === "function"
             ? process?.stdin?.waitUntilNoListeners() ?? Promise.resolve()
             : Promise.resolve();
