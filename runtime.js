@@ -8591,7 +8591,13 @@ await demo();`
 
         // Clear output
         clearBtn.addEventListener('click', () => {
-            output.innerHTML = '<div class="text-gray-500 italic">Output cleared...</div>';
+            const t = globalThis._xterm;
+            if (t) {
+                t.clear();
+                t.writeln('Output cleared...');
+            } else {
+                output.innerHTML = '<div class="text-gray-500 italic">Output cleared...</div>';
+            }
             execTime.textContent = '';
         });
 
@@ -8658,7 +8664,13 @@ document.getElementById("sendInput").addEventListener("click", async () => {
          
              output.classList.add("whitespace-pre-wrap")
            }
-            output.innerHTML = '<div class="text-yellow-400 animate-pulse">⚡ Executing code...</div>';
+            // Write to xterm instead of innerHTML (which would destroy the terminal)
+            const _term = globalThis._xterm;
+            if (_term) {
+                _term.writeln('⚡ Executing code...');
+            } else {
+                output.innerHTML = '<div class="text-yellow-400 animate-pulse">⚡ Executing code...</div>';
+            }
             
          
             
@@ -8748,7 +8760,12 @@ renderFiles(result.fs);
                 let message = err.message;
 
                 execTime.textContent = `Execution time: ${executionTime}ms`;
-                output.innerHTML = `<div class="text-red-400">✗ Error: ${message}</div>`;
+                const _errTerm = globalThis._xterm;
+                if (_errTerm) {
+                    _errTerm.writeln(`\x1b[31m✗ Error: ${message}\x1b[0m`);
+                } else {
+                    output.innerHTML = `<div class="text-red-400">✗ Error: ${message}</div>`;
+                }
                 status.textContent = 'Error';
                 status.className = 'text-red-400';
             }finally{
