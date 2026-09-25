@@ -3795,6 +3795,9 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
         throw new Error(\`[ERR_MODULE_NOT_FOUND]: Cannot find module \${modulePath}\`)
         return;
         }  
+        
+          // Save original source for fallback if transform breaks the module
+          const originalSourceForFallback = source;
           
           if (extension != 'json' && extension != 'css') {
         source = await interopChannel.callParent(
@@ -3855,6 +3858,27 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
           
           
           resolved = await importAndProxy(url, modulePath, relativeName, moduleType);
+          
+          // Verify critical builtins: if the transform broke the module
+          // (e.g. node:stream's Readable is undefined), retry with the
+          // original untransformed source.
+          if (isNodeBuiltIn && resolved && typeof resolved === 'object') {
+            let needsFallback = false;
+            try {
+              // Access via the proxy to trigger the get handler
+              if (modulePath === 'stream' && typeof resolved.Readable === 'undefined') {
+                needsFallback = true;
+              }
+            } catch (e) {
+              // get handler threw — module is broken
+              needsFallback = true;
+            }
+            if (needsFallback) {
+              console.warn('[loadModule] ' + modulePath + ' transform produced broken exports; retrying with original source');
+              const fallbackUrl = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(originalSourceForFallback)}\`;
+              resolved = await importAndProxy(fallbackUrl, modulePath, relativeName, moduleType);
+            }
+          }
         }
 
         // Populate the partial exports object in-place so any circular
@@ -5857,13 +5881,13 @@ globalThis.${config.interopVariable}.expose('__stdin__', (args) => {
     const s = process?.stdin;
   const hasListeners = s && (s.listenerCount('data') > 0 || s.listenerCount('keypress') > 0); 
  
-  if (s && hasListeners && !s.isPaused()) {
+  if (s && hasListeners && (typeof s.isPaused !== 'function' || !s.isPaused())) {
     return s.pushData(args);
   }
   
   
   // process.stdin.pushData(args)
-   if(process && process.stdin && process.stdin.listenerCount('data') != 0 && process.stdin.isPaused() == false){
+   if(process && process.stdin && process.stdin.listenerCount('data') != 0 && (typeof process.stdin.isPaused !== 'function' || process.stdin.isPaused() == false)){
     return process.stdin.pushData(args);
    }
   
@@ -6134,9 +6158,37 @@ ${code}\n})();
         waitForAllFetches(),
         waitForAllXhrs(),
         waitForAllTimers(),
-        typeof process?.stdin?.waitUntilNoListeners === "function"
-          ? process.stdin.waitUntilNoListeners() ?? Promise.resolve()
-          : Promise.resolve(),
+        // Poll for stdin listeners to allow async code (like inquirer via
+        // esm.sh CDN) time to finish module loading and attach its listeners.
+        // A single tick isn't enough: inquirer's dependency graph resolves
+        // through interopChannel dynamic imports (network fetches), taking
+        // many ticks. Poll every 50ms (like waitForAllTimers) for up to 2s;
+        // if listeners appear, waitUntilNoListeners() takes over and waits
+        // for them to be removed (i.e. prompt resolved/dismissed).
+        // NOTE: Use originalSetTimeout (not the patched setTimeout) so the
+        // polling delays aren't tracked by waitForAllTimers() — otherwise
+        // the two would deadlock (each waiting for the other's timers).
+        (async () => {
+          if (typeof process?.stdin?.waitUntilNoListeners !== "function") {
+            return Promise.resolve();
+          }
+          const relevant = ['data','end','close','error','keypress'];
+          const hasListeners = () => relevant.reduce(
+            (n, ev) => n + process.stdin.listenerCount(ev), 0
+          ) > 0;
+          // Give async module loading a bounded window to wire up stdin.
+          const maxAttempts = 40; // 40 * 50ms = 2s
+          const sleep = (ms) => new Promise(res =>
+            (typeof originalSetTimeout !== 'undefined'
+              ? originalSetTimeout
+              : setTimeout)(res, ms)
+          );
+          for (let i = 0; i < maxAttempts; i++) {
+            if (hasListeners()) break;
+            await sleep(50);
+          }
+          return process.stdin.waitUntilNoListeners() ?? Promise.resolve();
+        })(),
            typeof _RUNTIME${config.uuid}_.__httpServerRunTime !== "undefined"
   ? _RUNTIME${config.uuid}_.__httpServerRunTime.waitForAllServers?.() ?? Promise.resolve()
   : Promise.resolve()
