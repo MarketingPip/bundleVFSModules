@@ -1478,34 +1478,174 @@ export function fork(modulePath, args, options) {
   }
   options = { __proto__: null, ...options, shell: false };
 
-  // Node: `options.execPath ||= process.execPath`, then null-byte check.
   const execPath = options.execPath || defaultExecPath();
   validateStringNullBytes(execPath, 'options.execPath');
-  // fork() delegates to spawn(execPath, ...), whose file must be a string.
   validateString(execPath, 'file');
-
-  // Node: `execArgv = options.execArgv || process.execArgv`, null-checked
-  // with `options.execArgv[i]` positions.
   const execArgv = options.execArgv || defaultExecArgv();
   for (let i = 0; i < execArgv.length; ++i) {
     validateStringNullBytes(execArgv[i], `options.execArgv[${i}]`);
   }
 
-  // Node's fork() delegates to spawn(execPath, [...execArgv, modulePath,
-  // ...args], options): spawn-level validation (file/args null bytes with
-  // `args[i]` positions, cwd/env/uid/gid/shell/argv0) applies exactly.
   const norm = normalizeSpawnArguments(
     execPath, [...execArgv, modulePath, ...args], options);
 
+  // ─── In-realm fork (almostnode-style) ───
+  // A "forked process" is a fresh module scope in the same JS realm.
+  // No Web Worker, no iframe. The worker entry runs via the runtime's
+  // loadModule, with a per-fork `process` object providing IPC.
   const child = new ChildProcess();
   child.spawnfile = norm.file;
   child.spawnargs = norm.spawnargs;
-  installIPC(child);
 
-  queueMicrotask(() => {
-    if (!child._finalised) {
-      child.emit('spawn');
+  // Serialized async IPC queue. Real IPC crosses a process boundary, so
+  // messages arrive in order and handlers finish before the next message.
+  // In one realm, EventEmitter.emit is fire-and-forget — without this,
+  // vitest's onTaskUpdate would land before async onCollected finished.
+  let ipcQueue = Promise.resolve();
+  const cloneMsg = (msg) => {
+    try {
+      return structuredClone(msg);
+    } catch {
+      // structuredClone fails on functions etc.; fall back to shallow copy
+      return msg && typeof msg === 'object' ? { ...msg } : msg;
     }
+  };
+
+  // Child-side process object. The worker entry (e.g. vitest's forks.js)
+  // uses process.on('message') and process.send() directly.
+  const childProcess = {
+    // Copy parent process props
+    ...globalThis.process,
+    argv: ['node', modulePath, ...args],
+    execPath,
+    execArgv,
+    // IPC: child -> parent
+    send: (message, sendHandle, opts, callback) => {
+      if (typeof sendHandle === 'function') callback = sendHandle;
+      const cloned = cloneMsg(message);
+      ipcQueue = ipcQueue.then(async () => {
+        for (const listener of child.listeners('message')) {
+          try {
+            const result = listener(cloned);
+            if (result && typeof result.then === 'function') await result;
+          } catch (err) {
+            child.emit('error', err);
+          }
+        }
+      });
+      if (typeof callback === 'function') {
+        ipcQueue.then(() => callback(null)).catch(callback);
+      }
+      return true;
+    },
+    disconnect: () => {
+      child.connected = false;
+      child.emit('disconnect');
+    },
+    connected: true,
+  };
+
+  // Parent-side: child.send(message) -> child's process 'message' event
+  // We need an EventEmitter for the child's process 'message' listeners.
+  // Since childProcess is a plain object, add on/once/removeListener.
+  const childMsgListeners = new Set();
+  childProcess.on = childProcess.addListener = (event, listener) => {
+    if (event === 'message') childMsgListeners.add(listener);
+    return childProcess;
+  };
+  childProcess.once = (event, listener) => {
+    if (event === 'message') {
+      const wrapper = (...a) => {
+        childMsgListeners.delete(wrapper);
+        return listener(...a);
+      };
+      childMsgListeners.add(wrapper);
+    }
+    return childProcess;
+  };
+  childProcess.removeListener = (event, listener) => {
+    if (event === 'message') childMsgListeners.delete(listener);
+    return childProcess;
+  };
+
+  // Parent -> child IPC (serialized, cloned)
+  let parentToChildQueue = Promise.resolve();
+  child.send = function send(message, sendHandle, options, callback) {
+    if (typeof sendHandle === 'function') {
+      callback = sendHandle;
+      sendHandle = undefined;
+      options = undefined;
+    } else if (typeof options === 'function') {
+      callback = options;
+      options = undefined;
+    }
+    if (!child.connected) {
+      const err = Object.assign(new Error('Channel closed'), {
+        code: 'ERR_IPC_CHANNEL_CLOSED',
+      });
+      if (typeof callback === 'function') callback(err);
+      else child.emit('error', err);
+      return false;
+    }
+    const cloned = cloneMsg(message);
+    parentToChildQueue = parentToChildQueue.then(async () => {
+      for (const listener of [...childMsgListeners]) {
+        try {
+          const result = listener(cloned);
+          if (result && typeof result.then === 'function') await result;
+        } catch (err) {
+          // Child listener threw; emit on child process if it has emit
+          console.error('[fork child] message listener error:', err);
+        }
+      }
+    });
+    if (typeof callback === 'function') {
+      parentToChildQueue.then(() => callback(null)).catch(callback);
+    }
+    return true;
+  };
+  child.connected = true;
+  const _prevProcess = globalThis.process;
+  // Store prevProcess for restoration (set in the queueMicrotask below,
+  // but capture the reference now for the disconnect closure)
+  child.disconnect = () => {
+    child.connected = false;
+    childProcess.connected = false;
+    // Restore parent process if this fork's process is still active
+    if (globalThis.process === childProcess) {
+      globalThis.process = _prevProcessForRestore;
+    }
+    child.emit('disconnect');
+  };
+  // Updated in queueMicrotask to the actual previous process
+  let _prevProcessForRestore = _prevProcess;
+
+  // Load the worker entry in a fresh module scope with the child's process.
+  // We temporarily swap globalThis.process; the module's top-level code
+  // runs synchronously during import(), so the swap is safe for init.
+  // Async continuations use the child's process via closure (childProcess).
+  queueMicrotask(async () => {
+    const prevProcess = globalThis.process;
+    _prevProcessForRestore = prevProcess;
+    globalThis.process = childProcess;
+    try {
+      const rt = getRuntime();
+      if (rt && typeof rt.loadModule === 'function') {
+        await rt.loadModule(modulePath, 'import', null, null);
+      } else {
+        // Fallback: dynamic import (for parity tests under real Node)
+        await import(modulePath);
+      }
+      child.emit('spawn');
+    } catch (err) {
+      child.emit('error', err);
+    }
+    // NOTE: Do NOT restore globalThis.process here. The worker's async
+    // message handlers reference the global `process`, so the child's
+    // process must remain active for the lifetime of the fork.
+    // It is restored on child.disconnect() or child.kill().
+    // LIMITATION (v1): Only one fork's process can be active at a time.
+    // A second fork() will overwrite the first's process object.
   });
 
   return child;
