@@ -463,14 +463,27 @@ describe('fork() (browser noop)', () => {
     }));
   });
 
-  test('fork send() reports ERR_IPC_CHANNEL_CLOSED', async () => {
+  test('fork send() delivers when connected; ERR_IPC_CHANNEL_CLOSED when disconnected', async () => {
     const c = cp.fork('worker.js');
-    c.on('error', () => {});
+    c.on('error', () => {}); // Swallow MODULE_NOT_FOUND from missing worker.js fixture
+    // In-realm fork has real IPC (like Node): send() succeeds when connected
     const cbErr = await new Promise((resolve) => c.send('hello', resolve));
-    expect(cbErr.code).toBe('ERR_IPC_CHANNEL_CLOSED');
+    expect(cbErr).toBeNull();
+    expect(c.send('hello')).toBe(true);
+
+    // After disconnect, send() reports ERR_IPC_CHANNEL_CLOSED (matches Node)
+    c.disconnect();
+    const cbErr2 = await new Promise((resolve) => c.send('hello', resolve));
+    expect(cbErr2.code).toBe('ERR_IPC_CHANNEL_CLOSED');
 
     const emitted = await new Promise((resolve) => {
-      c.once('error', resolve);
+      const handler = (e) => {
+        if (e.code === 'ERR_IPC_CHANNEL_CLOSED') {
+          c.off('error', handler);
+          resolve(e);
+        }
+      };
+      c.on('error', handler);
       c.send('hello');
     });
     expect(emitted.code).toBe('ERR_IPC_CHANNEL_CLOSED');
@@ -480,14 +493,23 @@ describe('fork() (browser noop)', () => {
 
   test('fork disconnect() emits disconnect; twice errors', async () => {
     const c = cp.fork('worker.js');
-    c.on('error', () => {});
+    c.on('error', () => {}); // Swallow MODULE_NOT_FOUND from missing worker.js fixture
     const disc = new Promise((resolve) => c.once('disconnect', resolve));
     c.disconnect();
     await disc;
     expect(c.connected).toBe(false);
 
+    // Second disconnect() emits 'error' with ERR_IPC_DISCONNECTED (matches Node.js
+    // lib/internal/child_process.js: emits, does not throw). Filter by code to
+    // avoid catching MODULE_NOT_FOUND from the missing worker.js fixture.
     const err = await new Promise((resolve) => {
-      c.once('error', resolve);
+      const handler = (e) => {
+        if (e.code === 'ERR_IPC_DISCONNECTED') {
+          c.off('error', handler);
+          resolve(e);
+        }
+      };
+      c.on('error', handler);
       c.disconnect();
     });
     expect(err.code).toBe('ERR_IPC_DISCONNECTED');
