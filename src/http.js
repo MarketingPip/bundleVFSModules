@@ -718,17 +718,6 @@ export class IncomingMessage extends Readable {
     if (body !== null && body !== undefined &&
         (typeof body === 'string' || ArrayBuffer.isView(body))) {
       msg._setBody(body);
-      // Mimic a real HTTP client: set content-length if the caller didn't.
-      // body-parser (express.json()) skips parsing when content-length is
-      // absent, so requests via __serverRequest__ would see req.body undefined.
-      if (msg.headers['content-length'] === undefined) {
-        const len = typeof body === 'string'
-          ? Buffer.byteLength(body)
-          : body.byteLength ?? body.length ?? 0;
-        msg.headers['content-length'] = String(len);
-        msg.rawHeaders.push('content-length', String(len));
-        msg.headersDistinct['content-length'] = [String(len)];
-      }
     } else {
       msg._finishBody();
     }
@@ -2101,10 +2090,48 @@ async function handleRequest(port, urlOrMethod, methodOrUrl, bodyOrHeaders, head
   }
 
   let server = serverRegistry.get(port);
+  if (!server && serverRegistry.size > 0) {
+    server = serverRegistry.values().next().value;
+  }
   if (!server) {
     throw makeError('ERR_NO_SERVER', `No active HTTP server found for port ${port}`);
   }
-  return server.handleRequest(method, url, headers, body);
+
+  // Node lowercases incoming header names; Express relies on that.
+  // (fromRequest also lowercases, but the bridge needs lowercase keys for
+  // the content-type/content-length checks below.)
+  const h = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    h[k.toLowerCase()] = v;
+  }
+
+  // Plain object body -> JSON; empty object -> no body.
+  // A non-object-mode Readable can only push string/Buffer/Uint8Array,
+  // so a stray {} must never reach the stream (it caused a "chunk" TypeError).
+  let payload = body;
+  if (
+    payload != null &&
+    typeof payload === 'object' &&
+    !ArrayBuffer.isView(payload) &&
+    !(payload instanceof ArrayBuffer)
+  ) {
+    if (Object.keys(payload).length > 0) {
+      payload = JSON.stringify(payload);
+      h['content-type'] ??= 'application/json';
+    } else {
+      payload = null;
+    }
+  }
+  if (payload instanceof ArrayBuffer) payload = new Uint8Array(payload);
+
+  // Mimic a real HTTP client: set content-length if the caller didn't.
+  // body-parser (express.json()) skips parsing when content-length is
+  // absent, so requests via __serverRequest__ would see req.body undefined.
+  if (payload != null && h['content-length'] === undefined) {
+    h['content-length'] = String(Buffer.byteLength(payload));
+  }
+
+  return server.handleRequest(method, url, h, payload);
 }
 
 if (RT) {

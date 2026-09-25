@@ -280,6 +280,24 @@ describe('IncomingMessage', () => {
     expect(Buffer.concat(chunks).toString()).toBe('hello');
   });
 
+  test('should preserve original casing in rawHeaders', () => {
+    const msg = IncomingMessage.fromRequest('GET', '/', { 'X-Custom-Header': 'a' });
+    expect(msg.rawHeaders).toEqual(['X-Custom-Header', 'a']);
+    expect(msg.headers['x-custom-header']).toBe('a');
+    expect(msg.headers['X-Custom-Header']).toBeUndefined();
+  });
+
+  test('should join duplicate headers with ", "', () => {
+    const msg = IncomingMessage.fromRequest('GET', '/', { 'Accept': 'a', 'accept': 'b' });
+    expect(msg.headers.accept).toBe('a, b');
+  });
+
+  test('should not throw on a non-pushable body', (done) => {
+    const msg = IncomingMessage.fromRequest('GET', '/', {}, {});
+    msg.on('data', () => {});
+    msg.on('end', done);
+  });
+
   test('fromFetchResponse converts a fetch response', async () => {
     const mockResponse = {
       status: 201,
