@@ -4005,7 +4005,7 @@ function createSyncRequire(parentPath, vfs) {
     } else {
       // Bare specifier (node_modules): simplified resolution
       // TODO: full node_modules walk with package.json exports
-      throw new Error('[ERR_MODULE_NOT_FOUND]: Cannot find module \'' + request + '\'');
+      throw new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
     }
     
     // 3. Check cache (cycle tolerance: return partial exports)
@@ -4017,7 +4017,7 @@ function createSyncRequire(parentPath, vfs) {
     // vfs is the unflattened filesystem object
     const source = vfsLookup(resolved, vfs);
     if (source == null) {
-      throw new Error('[ERR_MODULE_NOT_FOUND]: Cannot find module \'' + request + '\' (resolved: ' + resolved + ')');
+      throw new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "' (resolved: " + resolved + ")");
     }
     
     // 5. Create module object, cache BEFORE executing (for cycles)
