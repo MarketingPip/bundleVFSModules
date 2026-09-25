@@ -411,11 +411,7 @@ const BUNDLED_MODULES = {
 // The full vfs.js bundle (6.9MB) is NOT imported by the runtime
 // (see runtime.js:6-10) — built-ins load on-demand from individual
 // dist files. Only runtime specials belong in the VFS.
-const VFS_MODULES = new Set([
-  'RUNTIME_BUNDLER',
-  'RUNTIME_NODE_GLOBALS',
-  'cookieJar',
-]);
+const VFS_MODULES = BUNDLED_MODULES;
 
 // Node core modules to stub
 const STUB_MODULES = [
@@ -549,9 +545,8 @@ async function main() {
 
   // vfs.js only includes the VFS_MODULES subset (runtime specials).
   // The full 76-module bundle is NOT imported by the runtime.
-  const vfsModules = Object.fromEntries(
-    Object.entries(bundledModules).filter(([name]) => VFS_MODULES.has(name))
-  );
+  const vfsModules = BUNDLED_MODULES;
+ 
   const vfsContent = await minifyCode(generateVFS(vfsModules, stubModules));
 
   const vfsPath = path.join(DIST_DIR, "vfs.js");
