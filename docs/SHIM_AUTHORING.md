@@ -1,8 +1,9 @@
 # Writing a shim
 
-A shim is `src/<name>.js` (or `src/<name>/<subpath>.js`), dependency-free ESM,
-that behaves like the Node.js builtin **in a browser**, inside Jared's runtime
-(see `docs/RUNTIME.md`) and standalone.
+A shim is `src/<name>.js` (or `src/<name>/<subpath>.js`), ESM that behaves
+like the Node.js builtin **in a browser**, inside Jared's runtime
+(see `docs/RUNTIME.md`) and standalone. npm dependencies are allowed —
+and preferred over reinventing the wheel (see rule 1).
 
 ## Template
 
@@ -29,8 +30,25 @@ export default { myFunc, notPossibleInBrowser };
 
 ## Rules
 
-1. **ESM, no dependencies.** No npm imports in `src/` — esbuild bundles with
-   `platform: "browser"` and the result must run from a string of source.
+1. **Dependencies are allowed — don't reinvent the wheel.** Use a maintained
+   npm package when you'd otherwise hand-roll an algorithm or protocol.
+   Decision order:
+   - Port Node's `lib/*.js` when the module IS Node's lib (pure JS,
+     parity-critical): `path`, `events`, `buffer`, `stream`, `vm`, etc.
+     The npm browserify shims are stale forks; v24 source is authoritative.
+   - Use the platform when it has a native API: `crypto.subtle`, `fetch`,
+     `CompressionStream`, WebAssembly.
+   - Use a maintained npm package for anything you'd otherwise hand-roll
+     (hashes, compression, wire protocols, parsers).
+   - Go dependency-free only when none of the above apply or the dep is
+     dead/unmaintained.
+   Hard constraint: the dep must survive the build. esbuild bundles with
+   `platform: "browser"` and the result must run from a string of source
+   inside the sandbox — pure-JS ESM packages bundle cleanly; WASM packages
+   need a loading strategy that works without runtime `fetch()` assumptions;
+   native addons are out. Declare every runtime dependency in `package.json`
+   `dependencies` (build/test-only in `devDependencies`); CI installs from
+   package.json, not from a second undocumented list.
 2. **`globalThis._RUNTIME_`, never bare `_RUNTIME_`, never `window`.**
    The runtime AST-rewrites exactly the `globalThis._RUNTIME_` member
    expression to `globalThis[Symbol.for("bvm.runtime.<uuid>")]` (the
@@ -100,7 +118,7 @@ Plus **differential testing**: property/fuzz checks of the shim against
 
 - [ ] Three lanes green (or honest gaps recorded)
 - [ ] `node --check` on changed files
-- [ ] No new npm dependencies; no `window`/`document` at module scope
+- [ ] New npm dependencies declared in `package.json` and justified (rule 1); no `window`/`document` at module scope
 - [ ] `globalThis._RUNTIME_` used (never bare), guarded for standalone use
 - [ ] Unimplementable APIs are noops with correct shapes
 - [ ] Registered in `src/build-vfs.mjs` if it's a new builtin
