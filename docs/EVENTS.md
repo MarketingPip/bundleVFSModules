@@ -232,6 +232,9 @@ sandbox.on('execution:server', ({ type, port }) => {
 
 Payload: `{ type: 'open' | 'closed', port }`.
 
+How to actually send a request to the emulated server and get its response
+back: `docs/INTEROP.md` (the `__serverRequest__` section).
+
 ---
 
 ## Interop
