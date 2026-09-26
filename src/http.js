@@ -33,7 +33,7 @@ import {
   kHighWaterMark,
 } from './internals/http-symbols.js';
 import { HTTPParser } from './_http_parser.js';
-import { createServer as createNetServer } from './net.js';
+import { connect as netConnect, createServer as createNetServer } from './net.js';
 
 // ---------------------------------------------------------------------------
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
@@ -1390,26 +1390,53 @@ export class ClientRequest extends OutgoingMessage {
     return serverRegistry.get(port) || null;
   }
 
-  /** Emulate a client→server round trip against a virtual server. */
+  /**
+   * Emulate a client→server round trip against a virtual server — over a
+   * real virtual socket now (phase 2): the request is serialized to
+   * HTTP/1.1 bytes and the response parsed from bytes, so req.socket on
+   * both ends is genuine and byte counts are real.
+   */
   async _performVirtualRequest(server, headers, body) {
+    // The real connected socket replaces the synthetic one for virtual
+    // requests. Created up front so timeout/abort can destroy it.
+    const sock = netConnect(server._port);
+    this.socket = sock;
+    this.connection = sock;
+    sock.on('connect', () => {
+      if (!this._aborted) this.emit('socket', sock);
+    });
+    const onSocketError = (err) => {
+      if (this._timeoutId) {
+        clearTimeout(this._timeoutId);
+        this._timeoutId = null;
+      }
+      if (this._aborted) return;
+      this._aborted = true;
+      this.emit('error', err instanceof Error ? err : new Error(String(err)));
+    };
+    sock.on('error', onSocketError);
+
     if (this.timeout) {
       this._timeoutId = setTimeout(() => {
         this._timeoutId = null;
         this._aborted = true;
+        try { sock.destroy(); } catch { /* best effort */ }
         this.emit('timeout');
       }, this.timeout);
     }
     if (this.agent) {
       try { this.agent.emit('request', this); } catch { /* noop */ }
     }
-    // Emit 'socket' with the synthetic socket, like Node does on connect.
-    queueMicrotask(() => {
-      if (!this._aborted) this.emit('socket', this.socket);
-    });
 
     let result;
     try {
-      result = await server.handleRequest(this.method, this.path, headers, body);
+      result = await _socketHttpRoundTrip(server._port, {
+        method: this.method,
+        path: this.path,
+        headers,
+        body: body && body.length > 0 ? body : null,
+        socket: sock,
+      });
     } catch (err) {
       if (this._timeoutId) {
         clearTimeout(this._timeoutId);
@@ -1431,18 +1458,14 @@ export class ClientRequest extends OutgoingMessage {
     msg.httpVersion = '1.1';
     msg.httpVersionMajor = 1;
     msg.httpVersionMinor = 1;
-    for (const [key, value] of Object.entries(result.headers || {})) {
-      const lower = key.toLowerCase();
-      msg.headers[lower] = value;
-      msg.headersDistinct[lower] = Array.isArray(value) ? value.map(String) : [String(value)];
-      msg.rawHeaders.push(key, Array.isArray(value) ? value.join(', ') : String(value));
+    const pairs = [];
+    for (let i = 0; i < result.rawHeaders.length; i += 2) {
+      pairs.push([result.rawHeaders[i], result.rawHeaders[i + 1]]);
     }
+    IncomingMessage._applyRawHeaders(msg, pairs);
     msg.socket = this.socket;
     msg.connection = this.socket;
-    const bodyBuf = Buffer.isBuffer(result.body)
-      ? result.body
-      : Buffer.from(result.body || '');
-    msg._setBody(bodyBuf);
+    msg._setBody(result.body);
     this.emit('response', msg);
   }
 
@@ -1770,6 +1793,120 @@ function getServer(port) {
 
 function getAllServers() {
   return new Map(serverRegistry);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: real byte-level HTTP round trips over virtual net.js sockets.
+// The client loopback and the host runtime bridge both go through here —
+// the request is serialized to HTTP/1.1 bytes, written to net.connect(port),
+// and the response is parsed with HTTPParser in response mode. No more
+// direct handleRequest() calls on the hot path.
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialize one HTTP/1.1 request head (+ optional body) to bytes.
+ * Ensures Host, Content-Length (when there is a body) and
+ * `Connection: close` (the client does no socket pooling, so every
+ * loopback request gets a fresh connection like Node's default agent
+ * would eventually recycle).
+ */
+function _serializeRequestHead(method, path, headers, body) {
+  const lines = [`${method} ${path} HTTP/1.1`];
+  let hasHost = false;
+  let hasContentLength = false;
+  let hasConnection = false;
+  const push = (name, value) => lines.push(`${name}: ${value}`);
+  for (const [name, value] of Object.entries(headers || {})) {
+    const lower = name.toLowerCase();
+    if (lower === 'host') hasHost = true;
+    else if (lower === 'content-length') hasContentLength = true;
+    else if (lower === 'connection') hasConnection = true;
+    if (Array.isArray(value)) {
+      // Like Node on the wire: one header line per element.
+      for (const v of value) push(name, v);
+    } else {
+      push(name, value);
+    }
+  }
+  if (!hasHost) push('Host', 'localhost');
+  const bodyBuf = body == null ? null
+    : Buffer.isBuffer(body) ? body : Buffer.from(body);
+  if (!hasContentLength && bodyBuf && bodyBuf.length > 0) {
+    push('Content-Length', String(bodyBuf.length));
+  }
+  if (!hasConnection) push('Connection', 'close');
+  lines.push('', '');
+  const head = Buffer.from(lines.join('\r\n'));
+  return bodyBuf && bodyBuf.length > 0 ? Buffer.concat([head, bodyBuf]) : head;
+}
+
+/**
+ * Perform one HTTP request/response exchange over a virtual socket.
+ *
+ * Resolves { statusCode, statusMessage, rawHeaders, body }. Rejects on
+ * socket errors, parser errors, or a close before the response completes.
+ * `onSocket` (optional) receives the connected socket — the client uses it
+ * to swap its synthetic socket for the real one and emit 'socket'.
+ */
+function _socketHttpRoundTrip(port, { method, path, headers, body, socket, onSocket }) {
+  return new Promise((resolve, reject) => {
+    const sock = socket || netConnect(port);
+    let settled = false;
+    const settle = (fn) => (value) => {
+      if (settled) return;
+      settled = true;
+      try { sock.destroy(); } catch { /* best effort */ }
+      fn(value);
+    };
+    const ok = settle(resolve);
+    const fail = settle(reject);
+
+    const parser = new HTTPParser('response');
+    // HEAD responses never have a body, regardless of framing.
+    parser.isHeadResponse = method === 'HEAD';
+    const chunks = [];
+    let info = null;
+    parser.onHeadersComplete = (i) => { info = i; };
+    parser.onBody = (chunk) => chunks.push(Buffer.from(chunk));
+    parser.onMessageComplete = () => {
+      ok({
+        statusCode: info.statusCode,
+        statusMessage: info.statusMessage,
+        rawHeaders: info.rawHeaders.slice(),
+        body: Buffer.concat(chunks),
+      });
+    };
+    parser.onError = (err) => fail(err);
+
+    sock.on('connect', () => {
+      if (typeof onSocket === 'function') {
+        try { onSocket(sock); } catch { /* listener errors are not fatal */ }
+      }
+      try {
+        sock.write(_serializeRequestHead(method, path, headers, body));
+      } catch (err) {
+        fail(err);
+      }
+    });
+    sock.on('data', (chunk) => {
+      try {
+        parser.execute(chunk);
+      } catch (err) {
+        fail(err);
+      }
+    });
+    sock.on('error', (err) => fail(err instanceof Error ? err : new Error(String(err))));
+    sock.on('close', () => {
+      if (settled) return;
+      // A response framed to EOF completes on close; anything else closing
+      // early is a truncated response.
+      try { parser.end(); } catch { /* fall through to fail */ }
+      if (!settled) {
+        fail(makeError('ERR_SOCKET_CLOSED',
+          'Socket closed before the HTTP response completed'));
+      }
+    });
+  });
 }
 
 class ServerBase extends EventEmitter {
@@ -2333,6 +2470,31 @@ async function handleRequest(port, urlOrMethod, methodOrUrl, bodyOrHeaders, head
   // absent, so requests via __serverRequest__ would see req.body undefined.
   if (payload != null && h['content-length'] === undefined) {
     h['content-length'] = String(Buffer.byteLength(payload));
+  }
+
+  // Phase 2: emulated inbound requests go over a real virtual socket, so
+  // the handler observes genuine HTTP bytes (and req.socket is real).
+  // Servers that never listened have no socket endpoint: keep the direct
+  // call for those.
+  if (server._netServer && server._port != null) {
+    const res = await _socketHttpRoundTrip(server._port, {
+      method,
+      path: url,
+      headers: h,
+      body: payload,
+    });
+    const headers = {};
+    for (let i = 0; i < res.rawHeaders.length; i += 2) {
+      const key = res.rawHeaders[i].toLowerCase();
+      const value = res.rawHeaders[i + 1];
+      headers[key] = headers[key] === undefined ? value : `${headers[key]}, ${value}`;
+    }
+    return {
+      statusCode: res.statusCode,
+      statusMessage: res.statusMessage,
+      headers,
+      body: res.body,
+    };
   }
 
   return server.handleRequest(method, url, h, payload);
