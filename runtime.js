@@ -927,7 +927,8 @@ export function replaceGlobalThisVar(code, variableName, opts = {}) {
  * Transform JS code to replace imports/requires with loadModule calls.
  * Handles static imports, dynamic imports, require(), and CJS → ESM interop.
  */
-export function transformImportsToLoadModule(sandboxUUID, code, entryPoint = null, parentEntryPoint = null) {
+export function transformImportsToLoadModule(sandboxUUID, code, entryPoint = null, parentEntryPoint = null, opts = {}) {
+   const preserveRequireCalls = opts.preserveRequireCalls === true;
    
   const s = new MagicString(code, { filename: entryPoint || 'input.js' });
   const ast = acorn.parse(code, { ecmaVersion: "latest", sourceType: "module", ranges: true });
@@ -1106,6 +1107,12 @@ ImportExpression(node) {
         node.arguments[0].type === "Literal" &&
         typeof node.arguments[0].value === "string"
       ) {
+        // When building a CommonJS module for require(), leave require()
+        // calls intact: the runtime executes them synchronously via
+        // __syncRequire__ inside wrapCommonJS. Rewriting them to awaited
+        // loadModule() calls here would place `await` inside the sync IIFE
+        // wrapper -> SyntaxError: Unexpected reserved word.
+        if (preserveRequireCalls) return;
         const modulePath = node.arguments[0].value;
         const v = getLiftedVar(modulePath);
         setImportType(modulePath, "require");
@@ -3471,6 +3478,13 @@ class SandboxRuntime {
 
 globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}, __SEA_ASSETS__:${JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined)}};
 
+// Builtin manifest for the sandbox-side sync require: createSyncRequire
+// checks _builtinManifest/_builtinCache, but the parent-scope originals are
+// not visible inside this generated script. The cache starts empty, so a
+// sync require() of a builtin throws ERR_REQUIRE_ASYNC (load it async first).
+const _builtinManifest = ${JSON.stringify(_builtinManifest)};
+const _builtinCache = new Map();
+
 window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
 
 
@@ -3861,10 +3875,15 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
           return resolved;
         } else {
           if (moduleType === 'require') {
-            // Provide sync require bound to this module's path
-            const vfsForRequire = globalThis._RUNTIME_?.__USER_FILES__ || {};
-            globalThis.__syncRequire__ = createSyncRequire(parentEntryPoint || entryPoint || modulePath, vfsForRequire);
-            source = wrapCommonJS(source, parentEntryPoint || entryPoint || modulePath, vfsForRequire);
+            // Provide sync require bound to THIS module's own path
+            // (modulePath), so its relative require() calls resolve against
+            // its own directory. Binding to the entry point instead would
+            // break nested requires (e.g. '../util.js' from lib/deep/x.js).
+            // vfsLookup walks a nested tree, so unflatten the flat
+            // __USER_FILES__ map first (keys may carry a leading slash).
+            const vfsForRequire = unflattenUserFiles(globalThis._RUNTIME${config.uuid}_.__USER_FILES__ || {});
+            globalThis.__syncRequire__ = createSyncRequire(modulePath, vfsForRequire);
+            source = wrapCommonJS(source, modulePath, vfsForRequire);
           }
  
          function makeIdentitySourceMap(source, filename) {
@@ -3967,9 +3986,9 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
     
     if (moduleType === 'require' && requiredSupportedYet) {
       let src = await fetch(modulePath).then(r => r.text());
-      const vfsForRequire2 = globalThis._RUNTIME_?.__USER_FILES__ || {};
-      globalThis.__syncRequire__ = createSyncRequire(parentEntryPoint || entryPoint || modulePath, vfsForRequire2);
-      src = wrapCommonJS(src, parentEntryPoint || entryPoint || modulePath, vfsForRequire2);
+      const vfsForRequire2 = unflattenUserFiles(globalThis._RUNTIME${config.uuid}_.__USER_FILES__ || {});
+      globalThis.__syncRequire__ = createSyncRequire(modulePath, vfsForRequire2);
+      src = wrapCommonJS(src, modulePath, vfsForRequire2);
       const url = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(src)}\`;
       data = await import(url);
     } else {
@@ -4054,8 +4073,85 @@ globalThis._RUNTIME${config.uuid}_.loadModule = loadModule;
  * Resolves against VFS, loads source synchronously, executes with
  * cycle tolerance (returns partial exports on circular require).
  */
-function createSyncRequire(parentPath, vfs) {
-  const cache = new Map(); // resolvedPath -> module.exports (for cycles)
+// Read a CJS module's source for the sync require path: live memfs first,
+// startup snapshot as fallback. The memfs volume is seeded from
+// __USER_FILES__ at startup and stays live, so files written at runtime via
+// __FS__.writeFileSync() are require-able (and deleted files stop being
+// require-able), matching Node semantics. Template-safe: no backticks or
+// dollar-brace sequences in this code.
+function readModuleSourceLiveFirst(resolved, vfs) {
+  const cands = resolved.endsWith('.js') ? [resolved] : [resolved, resolved + '.js'];
+  const rt = globalThis._RUNTIME${config.uuid}_;
+  const liveFs = rt && rt.__FS__;
+  if (liveFs && typeof liveFs.readFileSync === 'function') {
+    for (let i = 0; i < cands.length; i++) {
+      const c = cands[i];
+      const forms = c.charAt(0) === '/' ? [c] : [c, '/' + c];
+      for (let j = 0; j < forms.length; j++) {
+        try {
+          const data = liveFs.readFileSync(forms[j], 'utf8');
+          if (typeof data === 'string') return data;
+        } catch (e) { /* try next form */ }
+      }
+    }
+    return undefined;
+  }
+  for (let i = 0; i < cands.length; i++) {
+    const hit = vfsLookup(cands[i], vfs);
+    if (hit != null) return hit;
+  }
+  return undefined;
+}
+
+// Local copy of the parent's vfsLookup for the sandbox-side sync require.
+// (Written without template literals or backslash escapes: this code lives
+// inside the generate() template literal, where dollar-brace sequences
+// would interpolate and backslash-slash would collapse.)
+function vfsLookup(path, vfs) {
+  const tryPath = (p) => {
+    const segments = p.split('/').filter(Boolean);
+    let node = vfs;
+    for (const seg of segments) {
+      if (node == null || typeof node !== 'object') return undefined;
+      node = node[seg];
+    }
+    return typeof node === 'string' ? node : undefined;
+  };
+  const withJs = path.endsWith('.js') ? path : path + '.js';
+  const hit = tryPath(path);
+  return hit !== undefined ? hit : tryPath(withJs);
+}
+
+// __USER_FILES__ is a flat { 'lib/util.js': source } map whose keys may
+// carry a leading slash. createSyncRequire's vfsLookup walks a nested tree,
+// so normalize once here (same normalization as the parent's
+// unflattenFileSystem in _dynamic_import).
+function unflattenUserFiles(flatObj) {
+  const result = {};
+  if (!flatObj || typeof flatObj !== 'object') return result;
+  for (const rawPath of Object.keys(flatObj)) {
+    // NOTE: no \/ escapes here — this code lives inside the generate()
+    // template literal, where \/ collapses to /. [/] avoids backslashes.
+    const parts = String(rawPath).replace(/^[/]+/, '').split('/');
+    let current = result;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i];
+      if (!current[part] || typeof current[part] !== 'object') {
+        current[part] = {};
+      }
+      current = current[part];
+    }
+    current[parts[parts.length - 1]] = flatObj[rawPath];
+  }
+  return result;
+}
+
+function createSyncRequire(parentPath, vfs, cache) {
+  // One cache shared across the whole require tree (passed down to recursive
+  // requires). A fresh Map per recursion would break cache identity and turn
+  // circular requires into infinite recursion instead of Node-style partial
+  // exports.
+  cache = cache || new Map(); // resolvedPath -> module record (for cycles)
   
   function syncRequire(request) {
     // 1. Built-in modules: return from cache if loaded, else throw
@@ -4101,9 +4197,8 @@ function createSyncRequire(parentPath, vfs) {
       return cache.get(resolved).exports;
     }
     
-    // 4. Load source from VFS (sync)
-    // vfs is the unflattened filesystem object
-    const source = vfsLookup(resolved, vfs);
+    // 4. Load source synchronously: live memfs first, snapshot VFS fallback
+    const source = readModuleSourceLiveFirst(resolved, vfs);
     if (source == null) {
       throw new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "' (resolved: " + resolved + ")");
     }
@@ -4118,7 +4213,7 @@ function createSyncRequire(parentPath, vfs) {
     const dirname = resolved.split('/').slice(0, -1).join('/') || '.';
     try {
       wrapper(
-        createSyncRequire(resolved, vfs), // recursive require with new parent
+        createSyncRequire(resolved, vfs, cache), // recursive require shares the cache
         module,
         module.exports,
         resolved,
@@ -6867,7 +6962,13 @@ function createFetchAdapter(fetchImpl) {
              // console.log(`Building ${fileName} for ${entryPoint} - for imported module: ${parentEntryPoint}`)
             }
              
-           const importResult = transformImportsToLoadModule(this.uuid, source, fileName, entryPoint);
+           // For CommonJS modules loaded via require(), keep require() calls
+           // intact so the runtime's sync __syncRequire__ handles nested
+           // requires (rewriting them to awaited loadModule() calls would
+           // break the sync IIFE wrapper with a SyntaxError).
+           const preserveRequireCalls =
+             moduleType === "require" && sourceModuleType.isCJS && !sourceModuleType.isESM;
+           const importResult = transformImportsToLoadModule(this.uuid, source, fileName, entryPoint, { preserveRequireCalls });
            source = importResult.code;
            if (importResult.map) maps.push(importResult.map);
          
@@ -7377,8 +7478,12 @@ function vfsLookup(path, vfs) {
         function unflattenFileSystem(flatObj) {
   const result = {};
 
-  for (const [path, value] of Object.entries(flatObj)) {
-    const parts = path.split('/');
+  for (const [rawPath, value] of Object.entries(flatObj)) {
+    // User file keys may be '/lib/util.js' or 'lib/util.js'; resolution
+    // walks segments without a leading slash, so normalize here. Without
+    // this, '/lib/util.js'.split('/') yields a phantom '' root segment and
+    // every lookup misses (MODULE_NOT_FOUND).
+    const parts = String(rawPath).replace(/^\/+/, '').split('/');
     let current = result;
 
     // Traverse (or create) folders until the last segment (the file name)
