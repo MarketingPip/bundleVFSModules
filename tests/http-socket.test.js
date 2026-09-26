@@ -2,8 +2,8 @@
 // src/_http_parser.js unit tests + http.Server over src/net.js connections,
 // driven with raw HTTP bytes through net.connect().
 import { HTTPParser } from '../src/_http_parser.js';
-import { createServer } from '../src/http.js';
-import { connect as netConnect } from '../src/net.js';
+import { createServer, request } from '../src/http.js';
+import { connect as netConnect, Socket as NetSocket } from '../src/net.js';
 import { describe, test, expect, afterEach } from '@jest/globals';
 
 const servers = [];
@@ -541,5 +541,130 @@ describe('http.Server socket round trip', () => {
       'GET /c HTTP/1.1\r\nConnection: close\r\n\r\n');
     expect(headText).toMatch(/transfer-encoding:\s*chunked/i);
     expect(body.toString()).toBe('2\r\nhi\r\n0\r\n\r\n');
+  });
+});
+
+describe('phase 2: http client loopback over real sockets', () => {
+  /** Drive the http.request() client against a virtual server. */
+  function clientExchange(port, { method = 'GET', path = '/', headers = {}, body = null } = {}) {
+    return new Promise((resolve, reject) => {
+      const req = request({ host: 'localhost', port, method, path, headers }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ res, req, body: Buffer.concat(chunks) }));
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      if (body !== null) req.write(body);
+      req.end();
+    });
+  }
+
+  test('http.request() round-trips over a virtual socket', async () => {
+    let serverSideSocket = null;
+    const server = createServer((req, res) => {
+      serverSideSocket = req.socket;
+      res.end('hello-client');
+    });
+    servers.push(server);
+    const { port } = await listenAsync(server, 0);
+    const { res, body } = await clientExchange(port, { path: '/hi?name=x' });
+    expect(res.statusCode).toBe(200);
+    expect(body.toString()).toBe('hello-client');
+    // The server really saw bytes on a socket pair, not a direct call.
+    expect(serverSideSocket).toBeInstanceOf(NetSocket);
+    expect(typeof serverSideSocket.remotePort).toBe('number');
+  });
+
+  test('client req.socket is a real connected net.Socket, cleaned up after', async () => {
+    const server = createServer((req, res) => res.end('ok'));
+    servers.push(server);
+    const { port } = await listenAsync(server, 0);
+    const { req } = await clientExchange(port);
+    expect(req.socket).toBeInstanceOf(NetSocket);
+    expect(req.socket.destroyed).toBe(true);
+  });
+
+  test('POST echo with custom request headers over the client loopback', async () => {
+    const server = createServer((req, res) => {
+      let text = '';
+      req.on('data', (c) => { text += c; });
+      req.on('end', () => {
+        res.setHeader('x-echo', req.headers['x-custom']);
+        res.end(`got:${text}`);
+      });
+    });
+    servers.push(server);
+    const { port } = await listenAsync(server, 0);
+    const { res, body } = await clientExchange(port, {
+      method: 'POST',
+      path: '/echo',
+      headers: { 'x-custom': 'abc123', 'content-type': 'text/plain' },
+      body: 'payload-bytes',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['x-echo']).toBe('abc123');
+    expect(body.toString()).toBe('got:payload-bytes');
+  });
+
+  test('response headers incl. set-cookie parse from real bytes', async () => {
+    const server = createServer((req, res) => {
+      res.setHeader('x-multi', 'one');
+      res.setHeader('set-cookie', ['a=1', 'b=2']);
+      res.end('c');
+    });
+    servers.push(server);
+    const { port } = await listenAsync(server, 0);
+    const { res } = await clientExchange(port);
+    expect(res.headers['x-multi']).toBe('one');
+    expect(res.headers['set-cookie']).toEqual(['a=1', 'b=2']);
+    expect(res.rawHeaders).toContain('a=1');
+  });
+
+  test('HEAD via client loopback: content-length, no body bytes', async () => {
+    const server = createServer((req, res) => res.end('12345'));
+    servers.push(server);
+    const { port } = await listenAsync(server, 0);
+    const { res, body } = await clientExchange(port, { method: 'HEAD', path: '/h' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-length']).toBe('5');
+    expect(body.length).toBe(0);
+  });
+
+  test('status codes propagate through the socket round trip', async () => {
+    const server = createServer((req, res) => {
+      res.statusCode = 404;
+      res.end('nope');
+    });
+    servers.push(server);
+    const { port } = await listenAsync(server, 0);
+    const { res, body } = await clientExchange(port, { path: '/missing' });
+    expect(res.statusCode).toBe(404);
+    expect(body.toString()).toBe('nope');
+  });
+
+  test('sequential client requests each complete independently', async () => {
+    let count = 0;
+    const server = createServer((req, res) => res.end(`r${++count}`));
+    servers.push(server);
+    const { port } = await listenAsync(server, 0);
+    const a = await clientExchange(port, { path: '/1' });
+    const b = await clientExchange(port, { path: '/2' });
+    expect(a.body.toString()).toBe('r1');
+    expect(b.body.toString()).toBe('r2');
+    expect(a.req.socket).not.toBe(b.req.socket);
+  });
+
+  test('client emits socket event with the real socket', async () => {
+    const server = createServer((req, res) => res.end('s'));
+    servers.push(server);
+    const { port } = await listenAsync(server, 0);
+    const seen = await new Promise((resolve, reject) => {
+      const req = request({ host: 'localhost', port, path: '/' }, () => {});
+      req.on('socket', (sock) => resolve(sock));
+      req.on('error', reject);
+      req.end();
+    });
+    expect(seen).toBeInstanceOf(NetSocket);
   });
 });
