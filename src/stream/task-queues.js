@@ -9,7 +9,10 @@ const proc =
 const nextTick = (proc && typeof proc.nextTick === 'function') ?
   proc.nextTick.bind(proc) :
   (typeof queueMicrotask === 'function' ?
-    queueMicrotask :
+    // queueMicrotask takes only a callback: forward extra args manually so
+    // nextTick(fn, ...args) keeps working off-Node (was silently dropping
+    // them, breaking stream internals like resume_(stream, state)).
+    (fn, ...args) => queueMicrotask(() => fn(...args)) :
     (fn, ...args) => setTimeout(() => fn(...args), 0));
 
 // process.stdout / process.stderr only appear in a pipe-cleanup comparison;
