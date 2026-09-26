@@ -63,8 +63,11 @@ at sandbox startup to install globals like `Buffer`, `setImmediate`).
 3. **Don't "simplify" runtime integrations.** `src/{fs,http,module,process,
    child_process,test}.js` and `src/runtime/*` carry `_RUNTIME_` wiring —
    preserve it.
-4. **Dependency-free ESM** where possible. If an npm shim already exists,
-   test it before replacing it.
+4. **Dependencies allowed — don't reinvent the wheel.** Prefer a maintained
+   npm package over hand-rolling an algorithm or protocol (decision order in
+   `docs/SHIM_AUTHORING.md` rule 1). The dep must survive the build: esbuild
+   `platform: "browser"`, running from a string of source in the sandbox.
+   If an npm shim already exists, test it before replacing it.
 5. **100% parity where achievable** for deterministic modules; record honest
    gaps instead of faking them (`parity/expected-failures.json` is `{}`).
 
