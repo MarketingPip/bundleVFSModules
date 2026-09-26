@@ -33,6 +33,7 @@ Events are grouped by naming convention:
 | --------------- | ---------------------------------------------------- |
 | `initialized`, `error`, `reset` | Sandbox lifecycle                         |
 | `execution:*`   | One `execute()` run: start, finish, and live streams  |
+| `terminal:*`    | Terminal state changes                               |
 
 ---
 
@@ -259,46 +260,57 @@ parent `CodeSandbox` instance:
 
 ---
 
-## Proposed additions
+## Terminal
 
-The following are **not implemented yet**. They are the gaps found while
-auditing the event surface, starting with the terminal-size support
-currently under discussion.
+### `terminal:resize`
 
-### 1. `terminal:resize` + `sandbox.setTerminalSize(cols, rows)` (proposed)
-
-**Status quo:** `process.stdout.columns` / `rows` (and stderr's) are fixed
-at sandbox bootstrap from the `process` config (defaults 80×24). They are
-writable from inside the sandbox, but there is no parent→sandbox channel
-to change them at runtime, and no `resize` event is ever emitted — the
-`tty` shim's `_refreshSize()` is an explicit no-op ("the size is fixed"),
-even though `readline` already listens for `'resize'` on the output
-stream per Node API compatibility.
-
-**Proposal:**
+Fired when the sandbox terminal size changes via `setTerminalSize()`.
 
 ```js
-// Host side — e.g. xterm.js onResize, or a settings panel:
-await sandbox.setTerminalSize(cols, rows);
+// e.g. xterm.js onResize, or a settings panel:
+await sandbox.setTerminalSize(120, 40);
 
 sandbox.on('terminal:resize', ({ cols, rows }) => {
   term.resize(cols, rows); // keep the visible terminal in sync
 });
 ```
 
-Semantics:
+Payload: `{ cols, rows }`.
 
-1. `setTerminalSize(cols, rows)` posts into the iframe and updates
-   `process.stdout.columns/rows` and `process.stderr.columns/rows`.
-2. The sandbox emits Node's `'resize'` event on both streams, so
-   `readline` reflows and any guest `process.stdout.on('resize', …)`
-   handlers fire — matching real Node behavior.
-3. The parent emits `terminal:resize` with `{ cols, rows }` so *other*
-   host listeners (status bars, layout code) can react, not just the
-   caller.
+**Semantics:**
 
-This keeps the existing default (80×24, or whatever `config.process`
-sets) and makes size a runtime property instead of a boot-time constant.
+- `setTerminalSize(cols, rows)` validates (positive integers) and requires
+  a live sandbox — same constraint as `invoke('__stdin__', …)`: it throws
+  `"Sandbox is not running."` before `init()` or when no execution is
+  active.
+- The sandbox updates `process.stdout.columns/rows` and
+  `process.stderr.columns/rows`, then emits Node's `'resize'` event on
+  both streams, so `readline` reflows and any guest
+  `process.stdout.on('resize', …)` handlers fire — matching real Node.
+- The parent then emits `terminal:resize` so *other* host listeners
+  (status bars, layout code) can react, not just the caller.
+- Returns the applied `{ cols, rows }`.
+
+**Initial size:** `process.stdout.columns/rows` (and stderr's) default to
+80×24 but are overridable at construction time:
+
+```js
+const sandbox = new CodeSandbox({
+  process: { stdout: { columns: 120, rows: 40 } }
+});
+```
+
+---
+
+## Proposed additions
+
+The following are **not implemented yet** — gaps found while auditing the
+event surface. (`terminal:resize` / `setTerminalSize()` graduated from this
+list; see the Terminal section above.)
+
+### 1. `terminal:resize` + `setTerminalSize()` — implemented
+
+Graduated from this list; see the Terminal section above.
 
 ### 2. `execution:exit` (proposed)
 

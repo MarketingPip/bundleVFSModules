@@ -4268,7 +4268,7 @@ const interopChannel = {
   
   expose: (name, fn) => {
     interopChannel.exports[name] = fn;
-    const RUNTIME_METHODS = ['__check_exists__', '__stdin__', '__serverRequest__']
+    const RUNTIME_METHODS = ['__check_exists__', '__stdin__', '__terminal_resize__', '__serverRequest__']
     if(!RUNTIME_METHODS.includes(name)){
     window.parent.postMessage({ type: 'interop_registered', name }, '*');
     };
@@ -6001,6 +6001,24 @@ globalThis.${config.interopVariable}.expose('__stdin__', (args) => {
 
  
 
+// Runtime method (not reported via execution:interop_registered).
+// Updates the sandbox TTY dimensions and emits Node's 'resize' event on
+// stdout/stderr so readline and guest 'resize' listeners react.
+globalThis.${config.interopVariable}.expose('__terminal_resize__', (args) => {
+  const cols = Math.floor(Number(args && args.cols));
+  const rows = Math.floor(Number(args && args.rows));
+  if (!Number.isFinite(cols) || cols <= 0 || !Number.isFinite(rows) || rows <= 0) {
+    throw new Error('__terminal_resize__ requires positive integer cols and rows');
+  }
+  for (const s of [process.stdout, process.stderr]) {
+    if (!s) continue;
+    s.columns = cols;
+    s.rows = rows;
+    if (typeof s.emit === 'function') s.emit('resize');
+  }
+  return { cols, rows };
+});
+
 globalThis.${config.interopVariable}.expose('__serverRequest__', async (port=8080, URL = "/", type = "GET", body= {}, headers = {}) => {
     const __RT = globalThis._RUNTIME${config.uuid}_;
     const __h = { ...(headers || {}) };
@@ -6402,6 +6420,10 @@ export class CodeSandbox extends EventEmitter {
     argv0: "node",
     execPath: "/usr/local/bin/node",
     execArgv: [],
+    // Terminal dimensions. Overridable via options.process.stdout.columns/rows
+    // (and .stderr); also updatable at runtime via setTerminalSize().
+    stdout: { columns: 80, rows: 24 },
+    stderr: { columns: 80, rows: 24 },
     version: "v20.10.0",
     versions: {
       node: "20.10.0",
@@ -7157,12 +7179,20 @@ function makeOutputShim2(type) {
 }
 
   function makeOutputShim(stream) {
+    // Honor a configured initial size (options.process.stdout.columns/rows,
+    // serialized into the runtime singleton); falls back to 80x24.
+    const rtProcess = globalThis._RUNTIME${this.uuid}_ && globalThis._RUNTIME${this.uuid}_.process;
+    const prev = rtProcess && rtProcess[stream];
+    const initCols = prev && Number.isFinite(+prev.columns) && +prev.columns > 0
+      ? Math.floor(+prev.columns) : 80;
+    const initRows = prev && Number.isFinite(+prev.rows) && +prev.rows > 0
+      ? Math.floor(+prev.rows) : 24;
     const s = Object.assign(new EventEmitter(), {
       isTTY    : true,
       writable : true,
       fd       : stream === 'stderr' ? 2 : 1,
-      columns  : 80,
-      rows     : 24,
+      columns  : initCols,
+      rows     : initRows,
       write(data, enc, cb) {
         console[stream === 'stderr' ? 'error' : 'log'](
           typeof data === 'string' ? data : data.toString(enc || 'utf8')
@@ -7681,6 +7711,28 @@ function tryResolveFileOrPackage(basePath, vfs) {
     this.importResolver.clearCache();
     this.executionCount = 0;
     this.emit('reset', { timestamp: Date.now() });
+  }
+
+  /**
+   * Update the sandbox terminal size at runtime.
+   *
+   * Requires a live sandbox (same constraint as invoke('__stdin__', …):
+   * throws "Sandbox is not running." when called before init() or when no
+   * execution is active. Emits 'terminal:resize' with { cols, rows } on
+   * success; the sandbox also fires Node's 'resize' event on
+   * process.stdout/process.stderr so readline and guest listeners react.
+   */
+  async setTerminalSize(cols, rows) {
+    cols = Math.floor(Number(cols));
+    rows = Math.floor(Number(rows));
+    if (!Number.isFinite(cols) || cols <= 0 || !Number.isFinite(rows) || rows <= 0) {
+      throw new Error('setTerminalSize requires positive integer columns and rows');
+    }
+    const result = await this.invoke('__terminal_resize__', { cols, rows });
+    const size = { cols: result.cols, rows: result.rows };
+    this._terminalSize = size;
+    this.emit('terminal:resize', size);
+    return size;
   }
 }
 
