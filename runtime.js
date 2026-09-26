@@ -2638,31 +2638,57 @@ function buildHtmlString(csp, code, hasImports, iframe) {
    modulePath = modulePath.replace("RUNTIME:", "RUNTIME_")
    }  
 
-       if(isNodeBuiltIn){ 
-        
-       let data =  await globalThis[Symbol.for("bvm.interop")].callParent(
-          '_dynamic_import',
-          modulePath,
-          'import',
-          '/',
-          '/',
-          true,
-          globalThis._RUNTIME${iframe.sandbox.uuid}_.cwd,
-          globalThis._RUNTIME${iframe.sandbox.uuid}_.__USER_FILES__   
-        );
-        
-        
-        data = await globalThis[Symbol.for("bvm.interop")].callParent(
-          '_build_file',
-          data,
-          specifier,
-          'import',
-          '/',
-          '/',
-          true
-        );
-        
-         return \`data:text/javascript;charset=utf-8,\${encodeURIComponent(data)}\`; 
+       if(isNodeBuiltIn){
+        // Resolve Node builtins through the parent interop. Errors are wired
+        // properly: _dynamic_import / _build_file rejections keep err.code
+        // across the boundary (see interop_response wiring), and empty
+        // results throw a real ERR_MODULE_NOT_FOUND instead of producing a
+        // garbage data: URL that fails later with a cryptic SyntaxError.
+        var bvmInterop = globalThis[Symbol.for("bvm.interop")];
+        var bvmCwd = globalThis._RUNTIME${iframe.sandbox.uuid}_.cwd;
+        var bvmVfs = globalThis._RUNTIME${iframe.sandbox.uuid}_.__USER_FILES__;
+        var data;
+        try {
+          data = await bvmInterop.callParent(
+            '_dynamic_import',
+            modulePath,
+            'import',
+            '/',
+            '/',
+            true,
+            bvmCwd,
+            bvmVfs
+          );
+        } catch (err) {
+          console.error('[bvm:resolve] _dynamic_import failed for "' + specifier + '": ' + ((err && err.message) || err));
+          throw err;
+        }
+        if (data === null || data === undefined || data === '') {
+          var bvmNotFound = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + specifier + "'");
+          bvmNotFound.code = 'ERR_MODULE_NOT_FOUND';
+          console.error('[bvm:resolve] ' + bvmNotFound.message);
+          throw bvmNotFound;
+        }
+        try {
+          data = await bvmInterop.callParent(
+            '_build_file',
+            data,
+            specifier,
+            'import',
+            '/',
+            '/',
+            true
+          );
+        } catch (err) {
+          console.error('[bvm:resolve] _build_file failed for "' + specifier + '": ' + ((err && err.message) || err));
+          throw err;
+        }
+        if (data === null || data === undefined || data === '') {
+          var bvmBuildEmpty = new Error("[bvm:resolve] _build_file returned empty source for '" + specifier + "'");
+          console.error('[bvm:resolve] ' + bvmBuildEmpty.message);
+          throw bvmBuildEmpty;
+        }
+        return "data:text/javascript;charset=utf-8," + encodeURIComponent(data);
        } 
           
        
@@ -3128,7 +3154,11 @@ child.on('error', (err) => {
       this.iframe.contentWindow.postMessage({
         type: 'interop_response',
         callId,
-        error: `Method '${method}' not registered in parent`
+        error: {
+          message: `Method '${method}' not registered in parent`,
+          code: 'ERR_INTEROP_NO_HANDLER',
+          name: 'Error'
+        }
       }, '*');
       return;
     }
@@ -3143,10 +3173,16 @@ child.on('error', (err) => {
         result
       }, '*');
     } catch (err) {
+      // Send structured error info so the sandbox can reconstruct
+      // err.code / err.name (e.g. ERR_MODULE_NOT_FOUND), not just the message.
       this.iframe.contentWindow.postMessage({
         type: 'interop_response',
         callId,
-        error: err.message
+        error: {
+          message: (err && err.message) ? err.message : String(err),
+          code: err && err.code,
+          name: (err && err.name) || 'Error'
+        }
       }, '*');
     }
   }
@@ -4200,8 +4236,16 @@ const interopChannel = {
           clearTimeout(timeout);
           window.removeEventListener('message', handler);
           if (event.data.error) {
-          // thinking we need to throw back to sandbox then reject?
-            reject(new Error(event.data.error));
+            // Parent sends structured { message, code, name } (or a legacy string).
+            // Reconstruct the error so err.code / err.name survive the boundary.
+            var errInfo = event.data.error;
+            var errMessage = (errInfo && typeof errInfo === 'object') ? errInfo.message : errInfo;
+            var bvmErr = new Error(errMessage);
+            if (errInfo && typeof errInfo === 'object') {
+              if (errInfo.code) bvmErr.code = errInfo.code;
+              if (errInfo.name && errInfo.name !== 'Error') bvmErr.name = errInfo.name;
+            }
+            reject(bvmErr);
           } else {
             resolve(event.data.result);
           }
