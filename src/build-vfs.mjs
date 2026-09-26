@@ -3,12 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill";
-
+ 
 import { minify } from "terser";
 import { builtinModules } from 'module';
-
+ 
 import fetch from 'node-fetch';
-
+ 
 export function nodeGitHubPlugin() {
   return {
     name: 'node-github-resolver',
@@ -29,7 +29,7 @@ export function nodeGitHubPlugin() {
         // 2. Map internal/ and v8/ to the lib directory in GitHub
         if (args.path.startsWith('internal/') || args.path.startsWith('v8/')) {
           finalPath = `${GH_BASE}lib/${args.path}.js`;
-        }
+        } 
         // 3. Resolve relative paths within the GitHub repo
         else if (args.path.startsWith('.')) {
           finalPath = new URL(args.path, args.importer).href;
@@ -54,7 +54,7 @@ export function nodeGitHubPlugin() {
         }
 
         const rawUrl = args.path.replace(GH_BASE, RAW_BASE);
-
+        
         if (cache.has(rawUrl)) {
           return { contents: cache.get(rawUrl), loader: 'js' };
         }
@@ -65,9 +65,9 @@ export function nodeGitHubPlugin() {
           return { contents, loader: 'js' };
         } catch (err) {
           // Handle 404s for deps like undici/amaro which are complex sub-repos
-          return {
-            contents: `/* Failed to fetch ${rawUrl} */\nmodule.exports = {};`,
-            loader: 'js'
+          return { 
+            contents: `/* Failed to fetch ${rawUrl} */\nmodule.exports = {};`, 
+            loader: 'js' 
           };
         }
       });
@@ -104,7 +104,7 @@ export function esmShPlugin() {
       } catch (err) {
         const isLastAttempt = i === retries - 1;
         if (isLastAttempt) throw err;
-
+        
         console.warn(`[esm-sh-plugin] Fetch failed for ${url}. Retrying in ${delay}ms... (${i + 1}/${retries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
         delay *= 2; // Exponential backoff
@@ -123,7 +123,7 @@ export function esmShPlugin() {
       // Resolve relative or absolute paths inside esm.sh bundles
       build.onResolve({ filter: /^\.\/|^\.\.\/|^\//, namespace: 'esm-sh-ns' }, args => {
         if (!args.importer.startsWith('http')) {
-          return null;
+          return null; 
         }
         let resolved;
         try {
@@ -182,93 +182,6 @@ const DIST_DIR = "dist";
 // Get __dirname equivalent in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/**
- * Rewrites imports of Node.js built-ins — however they're written — to
- * `node:*` specifiers and marks them as external.
- *
- * Source files in this repo use `import x from './http.js'` (so tests
- * running under Node resolve to our shims). But when esbuild bundles, this
- * inlines the entire dependency into every dist file, duplicating code
- * across 80+ files. Meanwhile, *third-party* dependencies pulled in by
- * nodeModulesPolyfillPlugin/esmShPlugin reference builtins the normal way:
- * bare specifiers (`require('tty')`, `import 'stream'`) or already-prefixed
- * ones (`node:stream`).
- *
- * This plugin catches all three forms — `./<builtin>.js`, bare `<builtin>`,
- * and `node:<builtin>` (including known subpath builtins like
- * `stream/promises`) — and rewrites them all to the same `node:<builtin>`
- * external specifier. At runtime, the runtime's module loader
- * (`_dynamic_import`/`loadModule`) resolves `node:*` specifiers to the
- * already-loaded built-in via fetchBuiltinSource.
- *
- * Without the bare/`node:`-prefixed hook, anything reaching esbuild as a
- * bare specifier fell through to nodeModulesPolyfillPlugin instead, which
- * supplies its own (incompatible) browser polyfills for Node builtins —
- * silently substituting a completely different `tty`/`stream` module than
- * the one this project actually ships.
- */
-export function builtinExternalPlugin() {
-  const builtinFiles = new Set([
-    'assert.js', 'async_hooks.js', 'buffer.js', 'child_process.js',
-    'cluster.js', 'console.js', 'constants.js', 'crypto.js', 'dgram.js',
-    'diagnostics_channel.js', 'dns.js', 'domain.js', 'events.js', 'fs.js',
-    'http.js', 'http2.js', 'https.js', 'inspector.js', 'module.js',
-    'net.js', 'os.js', 'path.js', 'perf_hooks.js', 'process.js',
-    'punycode.js', 'querystring.js', 'readline.js', 'repl.js', 'sea.js',
-    'stream.js', 'string_decoder.js', 'sys.js', 'timers.js', 'tls.js',
-    'trace_events.js', 'tty.js', 'url.js', 'util.js', 'v8.js', 'vm.js',
-    'wasi.js', 'worker_threads.js', 'zlib.js',
-  ]);
-
-  // Canonical Node builtin names (fs, path, stream, tty, events, ...),
-  // used to recognize bare/`node:`-prefixed specifiers from third-party code.
-  const nodeBuiltinNames = new Set(builtinModules);
-
-  // Subpath builtins that don't appear in `builtinModules` but that this
-  // project ships its own shim for (see BUNDLED_MODULES below).
-  const supportedSubpaths = new Set([
-    'fs/promises', 'dns/promises', 'stream/promises', 'stream/web',
-    'stream/consumers', 'timers/promises', 'readline/promises',
-    'inspector/promises', 'assert/strict', 'path/posix', 'path/win32',
-    'test/reporters',
-  ]);
-
-  return {
-    name: 'builtin-external',
-    setup(build) {
-      // 1) Your own source files: `./stream.js`, `./tty.js`, etc.
-      build.onResolve({ filter: /^\.\/[^/]+\.js$/ }, (args) => {
-        const filename = args.path.slice(2); // remove './'
-        if (builtinFiles.has(filename)) {
-          const builtinName = filename.slice(0, -3); // remove '.js'
-          return {
-            path: `node:${builtinName}`,
-            external: true,
-          };
-        }
-        return null; // let esbuild handle it normally
-      });
-
-      // 2) Everyone else: bare specifiers (`stream`, `tty`) and already
-      //    `node:`-prefixed ones (`node:stream`), including known subpaths
-      //    (`fs/promises`, `stream/web`, ...). This is what catches
-      //    third-party deps pulled in via nodeModulesPolyfillPlugin /
-      //    esmShPlugin so they resolve to *our* shims, not JSPM's.
-      build.onResolve({ filter: /^(node:)?[a-zA-Z0-9_]+(\/[a-zA-Z0-9_]+)?$/ }, (args) => {
-        const bare = args.path.replace(/^node:/, '');
-        const top = bare.split('/')[0];
-        if (nodeBuiltinNames.has(top) || supportedSubpaths.has(bare)) {
-          return {
-            path: `node:${bare}`,
-            external: true,
-          };
-        }
-        return null; // not one of ours — let other plugins handle it
-      });
-    },
-  };
-}
-
 async function bundleToString(entry) {
   entry = path.resolve(__dirname, entry);
   try {
@@ -280,19 +193,15 @@ async function bundleToString(entry) {
       target: "es2020",
       minify: true, // esbuild's minifier is extremely fast and reliable
       write: false,
-      external: [],
-      treeShaking: true,
-      // Order matters: builtinExternalPlugin must run before
-      // nodeModulesPolyfillPlugin so it claims every Node builtin
-      // reference (relative, bare, or node:-prefixed) first, leaving
-      // only genuine third-party packages for the polyfill plugin.
-      plugins: [builtinExternalPlugin(), nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
-        // Whether to polyfill specific globals.
-        //modules: { fs: false, path: true, /* only what's needed */ },
-        globals: {
-          Buffer: true, // can also be 'global', 'process'
-        },
-      }), esmShPlugin()],
+      external: [], 
+      treeShaking:true,
+      plugins: [nodeGitHubPlugin(), nodeModulesPolyfillPlugin({
+      // Whether to polyfill specific globals.
+      //modules: { fs: false, path: true, /* only what's needed */ },  
+      globals: {
+        Buffer: true, // can also be 'global', 'process'
+      },
+    }), esmShPlugin()],
       legalComments: "linked", // This creates a separate file in the output array
       outdir: DIST_DIR
     });
@@ -303,9 +212,9 @@ async function bundleToString(entry) {
 
     if (!jsFile) throw new Error("No JS output found");
 
-    // If you already set minify: true in build(),
+    // If you already set minify: true in build(), 
     // you might not even need the minifyCode() wrapper.
-    return await minifyCode(jsFile.text);
+    return await minifyCode(jsFile.text); 
   } catch (err) {
     console.error(`Build failed for ${entry}:`, err);
     process.exit(1);
@@ -314,15 +223,6 @@ async function bundleToString(entry) {
 
 
 // Modules that should be bundled
-// All Node.js built-ins are built as individual dist/*.js files.
-// They are loaded on-demand at runtime via fetchBuiltinSource()
-// (see runtime.js loadBuiltin), with `node:*` imports resolving
-// through the runtime's built-in module loader (not bundled).
-//
-// The `builtinExternalPlugin` (above) rewrites `./<builtin>.js`
-// imports to `node:<builtin>` (external) during the build, so each
-// dist file stays small and shares dependencies at runtime instead
-// of inlining them.
 const BUNDLED_MODULES = {
   buffer: "buffer.js",
   // Cluster
@@ -346,7 +246,7 @@ const BUNDLED_MODULES = {
   sys: "sys.js",
   // Async Hooks
   async_hooks: "async_hooks.js",
-  // Async Context
+   // Async Context
   async_context: "async_context.js",
   // Domain
   domain: "domain.js",
@@ -430,7 +330,7 @@ const BUNDLED_MODULES = {
   trace: "trace_events.js",
   // Wasi
   wasi: "wasi.js",
-  // Process
+   // Process
   process: "process.js",
   // Child Process
   child_process: "child_process.js",
@@ -440,69 +340,63 @@ const BUNDLED_MODULES = {
   timers: "timers.js",
   timers_promises: "timers/promises.js",
   // Console
-  console: "console.js",
+  console: "console.js", 
   // Worker Threads
   worker_threads: "worker_threads.js",
   // Specials
-  // RUNTIME_CLI_TABLE: "specials/cli_table.js",
+ // RUNTIME_CLI_TABLE: "specials/cli_table.js",
   RUNTIME_BUNDLER: "specials/bundler.js",
   RUNTIME_NODE_GLOBALS: "node_globals.js",
-
-
-  // buffer: "buffer.js",
+  
+  
+ // buffer: "buffer.js",
   // Virtual cookie jar (RFC 6265) for emulated HTTP servers
   cookieJar: "cookieJar.js",
 };
 
-// Subset of BUNDLED_MODULES that goes into vfs.js.
-// The full vfs.js bundle (6.9MB) is NOT imported by the runtime
-// (see runtime.js:6-10) — built-ins load on-demand from individual
-// dist files. Only runtime specials belong in the VFS.
-const VFS_MODULES = BUNDLED_MODULES;
-
 // Node core modules to stub
 const STUB_MODULES = [
   //"os",
-  // "http",
-  //  "http2",
+ // "http",
+//  "http2",
   //"https",
-  //  "events",
+//  "events",
   //"async_hooks",
-  // "module",
+ // "module",
   //"url",
-  //  "crypto",
-  //  "constants",
-  //  "events",
-  // "util",
-  // "child_process",
-  // "readline",
-  //  "readline/promises",
-  //  "zlib",
-  //  "dns",
-  // "net",
-  // "tls",
-
-  //  "dgram",
-  //  "assert",
-  //  "inspector",
-
-  //  "vm",
-  // "module",
+//  "crypto",
+//  "constants",
+//  "events",
+ // "util",
+ // "child_process",
+ // "readline",
+//  "readline/promises",
+//  "zlib",
+//  "dns",
+ // "net",
+ // "tls",
+  
+//  "dgram",
+//  "assert",
+//  "inspector",
+  
+//  "vm",
+ // "module",
   //"v8",
-  //  "punycode",
-  // "querystring",
-  //  "repl",
-  // "string_decoder",
+//  "punycode",
+ // "querystring",
+//  "repl",
+ // "string_decoder",
   //"worker_threads",
   //"wasi",
-  //  "trace_events",
-  //  "sys",
-  //  "stream",
-  //  "stream/promises",
-  //  "stream/web",
+ // "trace_events",
+ // "sys",
+//  "stream",
+//  "stream/promises",
+//  "stream/web",
   //"tty",
-  //  "perf_hooks",
-  //  "cluster",
+//  "perf_hooks",
+//  "cluster",
 ];
 
 async function ensureDir(dir) {
@@ -544,12 +438,16 @@ async function buildBundledModules() {
 function generateStubModules() {
   const stubs = {};
 
+ 
+ 
+
+  
   for (const name of STUB_MODULES) {
     stubs[name] = `
 function ${name}() {
   throw new Error("Not implemented: ${name}");
 }
-`
+` 
   }
 
   return stubs;
@@ -566,7 +464,7 @@ function generateVFS(bundledModules, stubModules) {
   let output = "";
 
   // 1️⃣ Export each module individually
-  for (const [name, value] of Object.entries(allModules)) {
+    for (const [name, value] of Object.entries(allModules)) {
     output += `export const ${name} = ${JSON.stringify(value)};\n\n`;
   }
 
@@ -574,7 +472,7 @@ function generateVFS(bundledModules, stubModules) {
   // 2️⃣ Export combined VFS object (using references, not JSON)
   const moduleNames = Object.keys(allModules).join(", ");
 
-  // output += `export const myVFS = ${JSON.stringify(allModules)};`;
+ // output += `export const myVFS = ${JSON.stringify(allModules)};`;
 
   return output;
 }
@@ -586,11 +484,7 @@ async function main() {
   const bundledModules = await buildBundledModules();
   const stubModules = generateStubModules();
 
-  // vfs.js only includes the VFS_MODULES subset (runtime specials).
-  // The full 76-module bundle is NOT imported by the runtime.
-  const vfsModules = BUNDLED_MODULES;
-
-  const vfsContent = await minifyCode(generateVFS(vfsModules, stubModules));
+  const vfsContent = await minifyCode(generateVFS(bundledModules, stubModules));
 
   const vfsPath = path.join(DIST_DIR, "vfs.js");
   fs.writeFileSync(vfsPath, vfsContent);
