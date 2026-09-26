@@ -5,8 +5,11 @@
 //     owns TLS and connection pooling, so Agent socket pooling is metadata
 //     only (best-effort options, no real sockets).
 //   * Server is virtual: listen() registers the server in an in-process
-//     registry keyed by port. The host runtime delivers emulated inbound
-//     requests through globalThis._RUNTIME_.__httpServerRunTime.handleRequest.
+//     registry keyed by port AND binds a real in-memory socket server via
+//     src/net.js, so req.socket / res.socket are genuine connected sockets
+//     (remoteAddress, bytesRead/bytesWritten, getConnections all real).
+//     The host runtime delivers emulated inbound requests through
+//     globalThis._RUNTIME_.__httpServerRunTime.handleRequest.
 //   * Header validation, STATUS_CODES, METHODS, and the OutgoingMessage /
 //     IncomingMessage / ServerResponse state machines are ported faithfully
 //     from Node's lib/ (see /tmp/node-lib for the reference sources).
@@ -15,8 +18,8 @@
 //   * fetch() follows redirects automatically; Node's http client does not.
 //     There is no way to observe the 3xx hop in a browser (redirect:'manual'
 //     yields an opaque response), so redirects are followed and documented.
-//   * No raw TCP: req.socket / res.socket are synthetic placeholders, the
-//     'connection'/'connect' events fire with them, trailers are unsupported.
+//   * No raw TCP to the outside world: external client requests stay on
+//     fetch(). Trailers are unsupported.
 
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
@@ -29,6 +32,8 @@ import {
   kUniqueHeaders,
   kHighWaterMark,
 } from './internals/http-symbols.js';
+import { HTTPParser } from './_http_parser.js';
+import { createServer as createNetServer } from './net.js';
 
 // ---------------------------------------------------------------------------
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
@@ -685,16 +690,13 @@ export class IncomingMessage extends Readable {
   }
 
   /**
-   * Build a server-side request message from the runtime's emulated inbound
-   * request. Duplicate headers are joined with ", " (set-cookie stays an
-   * array), mirroring Node's parser.
+   * Fold raw [name, value] header pairs into headers / headersDistinct /
+   * rawHeaders, mirroring Node's parser: duplicates join with ", ",
+   * set-cookie stays an array. Shared by fromRequest() and the real socket
+   * server path so both observe identical header semantics.
    */
-  static fromRequest(method, url, headers, body) {
-    const msg = new IncomingMessage();
-    msg.method = method;
-    msg.url = url;
-
-    for (const [key, value] of Object.entries(headers || {})) {
+  static _applyRawHeaders(msg, pairs) {
+    for (const [key, value] of pairs) {
       const lower = key.toLowerCase();
       msg.rawHeaders.push(key, String(value));
       if (lower === 'set-cookie') {
@@ -714,6 +716,14 @@ export class IncomingMessage extends Readable {
         msg.headersDistinct[lower] = (msg.headersDistinct[lower] || []).concat(val);
       }
     }
+  }
+
+  static fromRequest(method, url, headers, body) {
+    const msg = new IncomingMessage();
+    msg.method = method;
+    msg.url = url;
+
+    IncomingMessage._applyRawHeaders(msg, Object.entries(headers || {}));
 
     if (body !== null && body !== undefined &&
         (typeof body === 'string' || ArrayBuffer.isView(body))) {
@@ -904,7 +914,9 @@ export class ServerResponse extends OutgoingMessage {
     this.finished = true;
     const done = () => {
       this._deliver();
-      this.emit('finish');
+      // NOTE: no manual 'finish' emit — Writable emits it exactly once via
+      // super.end() below, matching node:http. (A manual emit here used to
+      // double-fire 'finish' for on('finish') consumers.)
       if (callback) callback();
     };
     if (chunk !== null && chunk !== undefined) {
@@ -1789,6 +1801,10 @@ class ServerBase extends EventEmitter {
     this.connectionsCheckingInterval = options.connectionsCheckingInterval ?? 30000;
     this._port = null;
     this._host = null;
+    // Real virtual-network connections (src/net.js sockets), tracked for
+    // getConnections() / closeAllConnections() / closeIdleConnections().
+    this._connections = new Set();
+    this._netServer = null;
   }
 
   listen(portOrOptions, hostOrCallback, callback) {
@@ -1832,6 +1848,15 @@ class ServerBase extends EventEmitter {
     this._port = port;
     this._host = host || '::';
     _registerServer(port, this);
+    // Real virtual-network round trip: bind a net.js socket server on the
+    // same port so req.socket is a genuine connected socket with real
+    // remoteAddress/remotePort/byte counts. net.connect(port) finds this
+    // server through the wildcard keys ('::' / '0.0.0.0').
+    const netServer = createNetServer();
+    netServer.on('connection', (socket) => this._onSocketConnection(socket));
+    netServer.on('error', (err) => this.emit('error', err));
+    this._netServer = netServer;
+    netServer.listen(port, this._host);
     this.listening = true;
     // emitMe(fn, method, ...args) serializes only ...args — the payload must
     // go in args (3rd position), not method, or the parent sees an empty message.
@@ -1854,13 +1879,29 @@ class ServerBase extends EventEmitter {
       _unregisterServer(port);
       emitEvent?.('serverClosed', null, { port });
     }
+    if (this._netServer) {
+      this._netServer.close();
+      this._netServer = null;
+    }
     this.listening = false;
     queueMicrotask(() => this.emit('close'));
     return this;
   }
 
-  closeAllConnections() {}
-  closeIdleConnections() {}
+  closeAllConnections() {
+    for (const socket of this._connections) {
+      socket.destroy();
+    }
+    return this;
+  }
+
+  closeIdleConnections() {
+    for (const socket of this._connections) {
+      const state = socket._httpState;
+      if (!state || !state.busy) socket.destroy();
+    }
+    return this;
+  }
 
   address() {
     if (!this.listening || this._port === null) return null;
@@ -1869,9 +1910,172 @@ class ServerBase extends EventEmitter {
 
   getConnections(callback) {
     if (typeof callback === 'function') {
-      queueMicrotask(() => callback(null, 0));
+      queueMicrotask(() => callback(null, this._connections.size));
     }
     return this;
+  }
+
+  /**
+   * Accept a real virtual-network connection (from the net.js server bound
+   * in listen()). Requests are parsed from actual HTTP bytes; req.socket is
+   * the genuine connected socket. One request is handled at a time per
+   * connection (no pipelined concurrency); further bytes are gated until the
+   * current response finishes.
+   */
+  _onSocketConnection(socket) {
+    this._connections.add(socket);
+    const state = {
+      busy: false,   // a request is being handled; parser input is gated
+      awaitingBody: false, // the in-flight request still expects body bytes
+      pending: [],   // chunks received while busy
+      reqCount: 0,
+      current: null, // { req, res } for the in-flight request
+    };
+    socket._httpState = state;
+    socket.on('close', () => {
+      this._connections.delete(socket);
+      if (state.current) {
+        state.current.req.aborted = true;
+        state.current.req.emit('aborted');
+        state.current = null;
+      }
+    });
+    // Node parity: servers emit 'connection' for every accepted socket.
+    this.emit('connection', socket);
+
+    const parser = new HTTPParser('request');
+    // Strict one-request-at-a-time: the parser pauses after each message and
+    // only resumes once the in-flight response has been fully written.
+    parser.pauseBetweenMessages = true;
+    parser.onHeadersComplete = (info) => {
+      state.busy = true;
+      state.awaitingBody = info.hasBody;
+      const created = this._dispatchSocketRequest(socket, info, state);
+      state.current = created;
+      // Wired BEFORE the 100-continue ack below: net.js virtual sockets
+      // deliver writes synchronously, so the interim response can
+      // reentrantly pull the request body in on this same tick.
+      parser.onBody = (chunk) => created.req._pushBody(chunk);
+      parser.onMessageComplete = () => {
+        state.awaitingBody = false;
+        created.req._finishBody();
+        state.current = null;
+      };
+      if (info.headers.expect === '100-continue' &&
+          info.httpVersionMajor === 1 && info.httpVersionMinor === 1) {
+        socket.write('HTTP/1.1 100 Continue\r\n\r\n');
+      }
+    };
+    parser.onError = (err) => {
+      // Malformed request → 400 and close (Node's clientError path).
+      this.emit('clientError', err, socket);
+      if (!socket.destroyed) {
+        try {
+          socket.write(
+            'HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+        } catch { /* best effort */ }
+        socket.destroy();
+      }
+    };
+    socket.on('data', (chunk) => {
+      // While a request is in flight, only its own body may flow; anything
+      // else (e.g. a pipelined next request) waits for the response.
+      if (state.busy && !state.awaitingBody) {
+        state.pending.push(chunk);
+        return;
+      }
+      parser.execute(chunk);
+    });
+    socket.on('error', () => { /* 'close' handles cleanup */ });
+    socket.on('end', () => {
+      // Client half-closed an idle keep-alive connection: close our side.
+      if (!state.busy) socket.end();
+    });
+    state.parser = parser;
+  }
+
+  /**
+   * Build req/res for one parsed request and dispatch to 'request' handlers.
+   * The request body streams into req via parser.onBody as bytes arrive.
+   */
+  _dispatchSocketRequest(socket, info, state) {
+    const req = new IncomingMessage(socket);
+    req.method = info.method;
+    req.url = info.url;
+    req.httpVersionMajor = info.httpVersionMajor;
+    req.httpVersionMinor = info.httpVersionMinor;
+    req.httpVersion = info.httpVersion;
+    const pairs = [];
+    for (let i = 0; i < info.rawHeaders.length; i += 2) {
+      pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
+    }
+    IncomingMessage._applyRawHeaders(req, pairs);
+
+    const res = new ServerResponse(req);
+    const reqNo = ++state.reqCount;
+
+    res.on('finish', () => {
+      this._finishSocketResponse(socket, info, state, req, res, reqNo);
+    });
+
+    queueMicrotask(() => {
+      try {
+        this.emit('request', req, res);
+      } catch (err) {
+        this.emit('clientError', err, socket);
+        socket.destroy(err);
+      }
+    });
+    if (!info.hasBody) req._finishBody();
+    return { req, res };
+  }
+
+  /**
+   * Serialize a finished ServerResponse onto the socket as real HTTP/1.1
+   * bytes, then either resume parsing (keep-alive) or close the connection.
+   */
+  _finishSocketResponse(socket, info, state, req, res, reqNo) {
+    if (!socket.destroyed) {
+      const head = res._header || 'HTTP/1.1 200 OK\r\n\r\n';
+      const body = res._getBody();
+      const noBodyStatus = res._hasBody === false;
+      const sendBody = body.length > 0 && req.method !== 'HEAD' && !noBodyStatus;
+      let headOut = head;
+      const hasCL = res.hasHeader('content-length');
+      const hasTE = res.hasHeader('transfer-encoding');
+      if (!hasCL && !hasTE && !noBodyStatus) {
+        // Frame the body like Node does when its length is known at end():
+        // HEAD responses carry the length but no bytes.
+        headOut = head.replace(/\r\n$/, `Content-Length: ${body.length}\r\n\r\n`);
+      }
+      socket.write(headOut);
+      const te = hasTE ? String(res.getHeader('transfer-encoding')) : '';
+      if (/chunked/i.test(te)) {
+        if (sendBody) {
+          socket.write(`${body.length.toString(16)}\r\n`);
+          socket.write(body);
+          socket.write('\r\n');
+        }
+        socket.write('0\r\n\r\n');
+      } else if (sendBody) {
+        socket.write(body);
+      }
+    }
+    const maxOk = this.maxRequestsPerSocket === 0 || reqNo < this.maxRequestsPerSocket;
+    const keepAlive = info.shouldKeepAlive && maxOk && !socket.destroyed;
+    if (keepAlive) {
+      state.busy = false;
+      state.awaitingBody = false;
+      // Resume the parser (it may hold a fully-buffered pipelined request),
+      // then feed bytes that arrived while the response was in flight.
+      const parser = state.parser;
+      parser.unpause();
+      while (state.pending.length > 0 && !state.busy) {
+        parser.execute(state.pending.shift());
+      }
+    } else {
+      socket.end();
+    }
   }
 
   setTimeout(msecs, callback) {
