@@ -6850,9 +6850,12 @@ function createFetchAdapter(fetchImpl) {
            if (importResult.map) maps.push(importResult.map);
          
            // Compose all collected maps into a single map: final output -> original source.
+           // remapping() expects the chain ordered LAST transform first, but
+           // maps[] is pushed in first-transform-first order, so reverse it.
+           // (Wrong order silently yields an empty composed map.)
            if (maps.length > 0) {
              try {
-               const composed = remapping(maps, () => null);
+               const composed = remapping([...maps].reverse(), () => null);
                const sourceURL = `sandbox://${this.uuid}/${fileName}`;
                this._sourceMapRegistry.set(sourceURL, {
                  map: composed,
