@@ -4,6 +4,18 @@ The plan of record for the runtime. Completed work stays listed briefly for
 context; planned work is ordered by priority. One PR per change; merge only
 on green "Run Tests" + "Build VFS".
 
+## Direction
+
+The north star: true Node.js behaviour in the browser — a better
+Node-in-browser runtime library than AlmostNode, NodePod, or WebContainers.
+
+The path there is continued builtin parity: porting Node's own `lib/*.js`
+sources for parity-critical modules, measured against Node's official test
+suites through the parity harness and scoreboard (`parity/`, CI "Parity"
+job). Dependencies are allowed where they beat hand-rolled code (maintained
+npm packages over reinventing, platform APIs where native);
+unimplementable-in-browser APIs stay honest noop stubs, never throws.
+
 ## Recently completed
 
 - **http.js virtual-network round trip — phase 1** (PR #99, merged
@@ -18,38 +30,39 @@ on green "Run Tests" + "Build VFS".
 
 ## Planned
 
-### 1. Toolchain plugin architecture — support, don't ship, the toolchain
+### 1. Toolchain plugin architecture — opt-in power for library users
 
-**Philosophy** (2026-09-27): same rule as the shell — we never bake in the
-toolchain, developers bring their own; the runtime provides the *support* so
-a toolchain plugin can work. clang.wasm is real and shipping (clang + lld as
-wasm32-wasi modules, e.g. msorvig/llvm-wasi), but it is tens of MB and stays
-a plugin, never core.
+**Philosophy** (2026-09-27): we never ship a toolchain in core. It stays a
+plugin that developers *choose* to install, so they can unlock more power
+from the library: node modules with C code working through a compile step,
+WASI modules executed against the VFS, and other toolchain-shaped
+capabilities. Same rule as the shell — never bake it in, provide the
+*support*.
 
 **Seams to add** (design stage):
 
 - `runtime.runWasi(bytes, { args, env })` — first-class wasm32-wasi
   execution wired to `__FS__` and the virtual net. Useful with zero plugins
-  installed: runs *any* prebuilt wasm32-wasi module (sqlite.wasm, codecs,
-  …) against our VFS. A clang plugin just becomes one producer of such
-  modules.
+  installed: runs *any* prebuilt wasm32-wasi module against our VFS.
 - `globalThis._RUNTIME_.registerToolchain({ name, compile(files, opts),
   sysroot })` — the runtime mounts the sysroot into the VFS, calls
   `compile()` to get wasm bytes, feeds them to `runWasi`. Core never knows
   what clang is.
 - VFS read-only lazy mounts capable of hosting a sysroot (headers + libs).
-- Module-resolution build hook: `require('./foo.c')` may resolve to
-  "compile via registered toolchain → instantiate → exports". Makes plugins
-  feel native instead of bolted on.
+- Module-resolution build hook: `require('./native-addon')` may resolve to
+  "compile via registered toolchain → instantiate → exports", so node
+  modules with C sources work for developers who install the plugin.
 
-**Unlocks**: an honest answer for native addons (the `node-gyp` gap becomes
-"install the toolchain plugin" instead of "not supported"); a real
-`child_process` backend for toolchain commands; prebuilt WASM modules as
-first-class citizens.
+**Unlocks** (all opt-in, none in core): node modules with C code compile and
+run in the browser; WASI programs execute against the runtime VFS; WASI
+socket calls bridge to the virtual net so compiled programs use the same
+virtual networking as the Node shims.
 
-**Non-goals**: shipping clang.wasm in core; promising N-API compatibility
-(enormous surface); designing the core around any single toolchain. The core
-only knows "compile sources → wasm bytes" and "run wasm bytes on my VFS".
+**Non-goals**: shipping any toolchain in core; using the plugin to build our
+own parity shims (core shims stay ported JS — the plugin is for library
+*users*, not for us); promising N-API compatibility; designing the core
+around any single toolchain. The core only knows "compile sources → wasm
+bytes" and "run wasm bytes on my VFS".
 
 ### 2. Interop audit leftovers
 
