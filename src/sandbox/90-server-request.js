@@ -24,6 +24,17 @@
     }
     return __res;
 });
+
+// Host fetch bridge: revoke a lost port claim. The host calls this when
+// another sandbox already owns the port, so the loser's listen() fails
+// loudly with EADDRINUSE instead of silently shadowing the winner.
+globalThis.__INTEROP_VAR__.expose('__closeServer__', async (port) => {
+    const __RT = globalThis[_BVM_RT_KEY_];
+    if (__RT && __RT.__httpServerRunTime && typeof __RT.__httpServerRunTime.closeServer === 'function') {
+      return __RT.__httpServerRunTime.closeServer(port);
+    }
+    return false;
+});
  
 
 

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>VFS fetch bridge integration</title></head>
+<body>
+<div id="out">pending</div>
+<script>
+(async () => {
+  const out = [];
+  const log = (k, v) => out.push(k + '=' + v);
+  try {
+    // Extract the bridge section from the real runtime.js FIRST (before the
+    // spy below replaces window.fetch).
+    const src = await (await fetch('../runtime.js')).text();
+    const start = src.indexOf('// VFS_FETCH_BRIDGE_START');
+    const end = src.indexOf('// VFS_FETCH_BRIDGE_END');
+    if (start < 0 || end < 0) throw new Error('markers missing');
+    const bridgeCode = src.slice(start, end);
+
+    // Spy "native" fetch installed BEFORE the bridge patches window.fetch,
+    // so the bridge captures the spy as the native implementation.
+    const nativeCalls = [];
+    const spyNative = async (input, init) => {
+      nativeCalls.push(typeof input === 'string' ? input : input.url);
+      return new Response('spy-native', { status: 200 });
+    };
+    window.fetch = spyNative;
+
+    (0, eval)(bridgeCode +
+      '\n;window.__bridge = {_vfsServerRoutes,_vfsRegisterServerRoute,_vfsUnregisterServerRoute,_vfsExtractServerPort,_vfsIsLoopbackHostname};');
+    const B = window.__bridge;
+    log('markers', 'ok');
+
+    const invokeCalls = [];
+    const owner = {
+      running: true,
+      invoke: async (...args) => {
+        invokeCalls.push(args);
+        return { statusCode: 200, statusMessage: 'OK',
+                 headers: { 'content-type': 'text/plain', 'x-via': 'virtual' },
+                 body: 'virtual-hello' };
+      },
+    };
+
+    // 1. register -> patch installed, spy preserved underneath
+    log('register', B._vfsRegisterServerRoute(18902, owner));
+    log('patched', window.fetch !== spyNative && !!window.fetch.__vfsBridged);
+
+    // 2. loopback fetch on registered port -> virtual server
+    const r1 = await window.fetch('http://localhost:18902/api?q=1');
+    log('virtual.status', r1.status);
+    log('virtual.body', await r1.text());
+    log('virtual.hdr', r1.headers.get('x-via'));
+    log('virtual.nativeResponse', r1 instanceof Response);
+    log('invoke.method', invokeCalls[0][0]);
+    log('invoke.port', invokeCalls[0][1]);
+    log('invoke.path', invokeCalls[0][2]);
+    log('nativeCalls.duringVirtual', nativeCalls.length);
+
+    // 3. 127.0.0.1 and [::1] route to the same owner
+    await window.fetch('http://127.0.0.1:18902/');
+    await window.fetch('http://[::1]:18902/');
+    log('invoke.count', invokeCalls.length);
+
+    // 4. unregistered port -> falls through to the (spy) native fetch
+    const r2 = await window.fetch('http://localhost:18999/other');
+    log('passthrough.body', await r2.text());
+    log('passthrough.url', nativeCalls[0]);
+    log('invoke.countAfterPassthrough', invokeCalls.length);
+
+    // 5. non-loopback host -> native fetch even on a registered port number
+    await window.fetch('http://example.com:18902/');
+    log('passthrough.nonLoopback', nativeCalls[1]);
+
+    // 6. unregister -> original fetch restored; virtual URL now goes native
+    B._vfsUnregisterServerRoute(18902, owner);
+    log('restored', window.fetch === spyNative);
+    const r4 = await window.fetch('http://localhost:18902/api');
+    log('afterUnregister.body', await r4.text());
+    log('afterUnregister.invokeCount', invokeCalls.length);
+
+    // 7. wire-format port extraction (the sandbox posts message:'null {"port":N}')
+    log('extract.wire', B._vfsExtractServerPort({ type: 'serverListening', message: 'null {"port":8080}' }));
+    log('extract.direct', B._vfsExtractServerPort({ type: 'serverListening', port: 3000 }));
+    log('extract.none', B._vfsExtractServerPort({ type: 'serverListening', message: 'null {}' }));
+
+    document.getElementById('out').textContent = out.join('\n');
+  } catch (e) {
+    document.getElementById('out').textContent = 'FATAL: ' + (e && e.stack || e);
+  }
+})();
+</script>
+</body>
+</html>
