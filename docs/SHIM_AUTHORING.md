@@ -58,6 +58,10 @@ export default { myFunc, notPossibleInBrowser };
 3. **Reuse the singletons.** `RT.__FS__` (filesystem), `RT.__httpServerRunTime`
    (server registry), `RT.process` (config values), `RT.taskTracker`
    (async tracking). Don't build a second VFS or a second process object.
+   The full registry — what must be singleton, what must not, the two
+   scopes (per-sandbox vs per-module-instance), and lifecycle rules — is
+   `docs/SINGLETONS.md`. Read it before adding any module-level shared
+   state.
 4. **Noop over throw.** If the browser fundamentally cannot do it (UDP,
    raw TCP servers, `process.kill` semantics), export a stub with the right
    shape that does nothing. Document the gap in the PR, not in an exception.
