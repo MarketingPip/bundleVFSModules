@@ -5,8 +5,9 @@ behaviour in the browser** — better fidelity than AlmostNode, NodePod, or
 WebContainers.
 
 If you are an agent working in this repo, read this file first, then
-`docs/RUNTIME.md` (how the host runtime loads our code) and
-`docs/SHIM_AUTHORING.md` (how to write a new shim).
+`docs/RUNTIME.md` (how the host runtime loads our code),
+`docs/SHIM_AUTHORING.md` (how to write a new shim), and
+`docs/SINGLETONS.md` (what must be singleton, what must not).
 
 ## How the pieces fit
 

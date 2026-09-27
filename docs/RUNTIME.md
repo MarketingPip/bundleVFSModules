@@ -91,14 +91,16 @@ are deliberately *not* patched. Non-enumerable also keeps the keys out of
 ## Special runtime variables
 
 These live on the Symbol-keyed runtime object
-(`globalThis[Symbol.for('bvm.runtime.<uuid>')]`):
+(`globalThis[Symbol.for('bvm.runtime.<uuid>')]`). The per-sandbox
+singletons among them (`__FS__`, `__httpServerRunTime`) are documented
+with their lifecycle rules in `docs/SINGLETONS.md`.
 
 | Variable | Set by | Notes |
 |---|---|---|
 | `.process` | host config | `title, arch, env, platform, pid, ppid, argv, argv0, execPath, execArgv, version, versions`. JSON-serialised into the iframe at bootstrap. |
 | `.__USER_FILES__` | host config | seed files `{ path: contents }`; also fed to `_dynamic_import` for VFS module resolution. |
 | `.__FS__` | **our `src/fs.js`** | singleton virtual filesystem. The runtime reads it (cwd checks, `_getState`); other shims should reuse it, not create their own. |
-| `.__httpServerRunTime` | **our `src/http.js`** | `{ handleRequest(port, url, method, body, headers), waitForAllServers() }`. The runtime's `__serverRequest__` interop calls `handleRequest` to deliver emulated inbound HTTP requests to servers created via `http.createServer`. |
+| `.__httpServerRunTime` | **our `src/http.js`** | `{ handleRequest(port, url, method, body, headers), waitForAllServers(), closeServer(port) }`. The runtime's `__serverRequest__` interop calls `handleRequest` to deliver emulated inbound HTTP requests to servers created via `http.createServer`; `closeServer` forcibly closes the server on a port (host revokes a lost port claim). |
 | `.taskTracker` | runtime (`GlobalTracker`) | wraps async work (`track/patch/start/stop`); `waitForIdle()` lets the host know when the sandbox is quiescent. |
 | `.loadModule(name)` | runtime | load another builtin by bundle key (e.g. `"fs"`, `"timers_promises"`). Prefer this over relative imports for cross-builtin deps. |
 | `.emit` / `globalThis.emitMe` | runtime | forwards console calls and events to the parent frame via `postMessage`. |
