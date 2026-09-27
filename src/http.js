@@ -1787,6 +1787,23 @@ function _unregisterServer(port) {
   }
 }
 
+// Host-side hook: forcibly close the server bound to `port`. The parent
+// runtime uses this to revoke a port whose host-route claim was lost — e.g.
+// a second sandbox claimed the same port first at the host registry. The
+// server gets an EADDRINUSE 'error' (mirroring listen() on a taken port,
+// delivered to 'error' listeners only) followed by 'close', and the port is
+// unregistered. Returns true if a server was closed, false otherwise.
+function closeServer(port) {
+  const server = serverRegistry.get(port);
+  if (!server) return false;
+  const err = makeError('EADDRINUSE',
+    `listen EADDRINUSE: address already in use :::${port}`);
+  err.port = port;
+  queueMicrotask(() => { try { server.emit('error', err); } catch {} });
+  server.close();
+  return true;
+}
+
 function getServer(port) {
   return serverRegistry.get(port);
 }
@@ -2504,6 +2521,7 @@ if (RT) {
   RT.__httpServerRunTime = {
     handleRequest,
     waitForAllServers: _waitForAllServers,
+    closeServer,
   };
 }
 
