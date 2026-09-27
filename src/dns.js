@@ -28,11 +28,16 @@
 //   always echoes back exactly what was set.
 // - dns.resolveAny() is ENOTIMP in real Node too (c-ares deprecated ANY
 //   queries); the shim mirrors that.
-// - DNSSEC is never validated locally — real node:dns (c-ares) doesn't
-//   validate either. Every query sets the CD (checking-disabled) bit
-//   (RFC 4035 §3.1) so upstream resolvers skip validation too: answers
-//   come back even for DNSSEC-bogus names instead of SERVFAIL, matching
-//   Node's observable behavior.
+// - DNSSEC is validated by delegation (deliberate divergence from
+//   node:dns, which never validates). Queries go to validating DoH
+//   resolvers (Cloudflare, Google) WITHOUT the CD (checking-disabled) bit,
+//   so the upstream cryptographically validates the chain. Bogus signatures
+//   come back as SERVFAIL → ESERVFAIL (fail closed); unsigned ("insecure")
+//   names answer normally. This is the standard stub-resolver architecture:
+//   a browser cannot hold the root trust anchor or walk the chain itself,
+//   so the resolver the shim trusts does the cryptography. Verified live
+//   against cloudflare-dns.com: signed+valid → AD bit set; the deliberately
+//   bogus dnssec-failed.org → SERVFAIL.
 
 'use strict';
 
@@ -385,11 +390,11 @@ async function dohFetchOne(base, name, type, signal) {
   const wire = dnsPacket.encode({
     type: 'query',
     id: 0,
-    // Recursion desired, like any stub resolver. CHECKING_DISABLED (the CD
-    // bit, RFC 4035 §3.1) asks the upstream resolver to skip DNSSEC
-    // validation: real node:dns (c-ares) never validates, so answers come
-    // back even for DNSSEC-bogus names instead of SERVFAIL — matching Node.
-    flags: dnsPacket.RECURSION_DESIRED | dnsPacket.CHECKING_DISABLED,
+    // Recursion desired, like any stub resolver. The CD (checking-disabled)
+    // bit is deliberately NOT set: the default DoH upstreams (Cloudflare,
+    // Google) are validating resolvers, so they cryptographically validate
+    // the DNSSEC chain and the shim enforces the result — see the header.
+    flags: dnsPacket.RECURSION_DESIRED,
     questions: [{ type, name }],
   });
   const sep = base.includes('?') ? '&' : '?';
