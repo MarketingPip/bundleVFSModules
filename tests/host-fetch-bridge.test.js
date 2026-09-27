@@ -8,9 +8,13 @@
  *
  * TDD: this file was written before the bridge implementation.
  */
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
+import { describe, test, expect, jest } from "@jest/globals";
+import fs from 'fs';
+import path from 'path';
+import vm from 'vm';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const RUNTIME_PATH = path.join(__dirname, '..', 'runtime.js');
 const START_MARKER = '// VFS_FETCH_BRIDGE_START';
