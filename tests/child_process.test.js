@@ -29,6 +29,13 @@ let realCp;
 
 beforeEach(async () => {
   jest.resetModules();
+  // Force the browser lane (native bridge stays off): the os.js pattern.
+  // Without this, the genuine-Node detection would delegate to the real
+  // builtin and these tests would stop exercising the browser fallback.
+  Object.defineProperty(globalThis, "navigator", {
+    value: { userAgent: "Mozilla/5.0 (test)" },
+    configurable: true,
+  });
   cp = await import("../src/child_process.js");
   realCp = await import("node:child_process");
 });
@@ -36,6 +43,7 @@ beforeEach(async () => {
 afterEach(() => {
   delete globalThis.window;
   delete globalThis.parent;
+  delete globalThis.navigator;
 });
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
@@ -1341,5 +1349,82 @@ describe("spawn timeout and late messages", () => {
     await tick();
     expect(exits).toEqual([[null, "SIGKILL"]]);
     expect(child.exitCode).toBeNull();
+  });
+});
+
+// ─── Native bridge (genuine Node, no browser navigator) ─────────────────────
+// The os.js pattern: under real Node without a browser `navigator`, the
+// module delegates to the genuine builtin so the official parity suite
+// exercises real behavior. These tests pin the wiring.
+
+describe("native bridge (genuine Node, no navigator)", () => {
+  let nativeCp;
+
+  beforeEach(async () => {
+    jest.resetModules();
+    delete globalThis.navigator;
+    delete globalThis.window;
+    nativeCp = await import("../src/child_process.js");
+  });
+
+  afterEach(() => {
+    delete globalThis.window;
+    delete globalThis.parent;
+  });
+
+  test("exports are the real builtin's functions", async () => {
+    const real = await import("node:child_process");
+    expect(nativeCp.spawn).toBe(real.spawn);
+    expect(nativeCp.exec).toBe(real.exec);
+    expect(nativeCp.execFile).toBe(real.execFile);
+    expect(nativeCp.fork).toBe(real.fork);
+    expect(nativeCp.spawnSync).toBe(real.spawnSync);
+    expect(nativeCp.execSync).toBe(real.execSync);
+    expect(nativeCp.execFileSync).toBe(real.execFileSync);
+    expect(nativeCp.ChildProcess).toBe(real.ChildProcess);
+  });
+
+  test("spawn actually runs a process", async () => {
+    const child = nativeCp.spawn(
+      process.execPath,
+      ["-e", "console.log('hi')"],
+      {
+        stdio: "pipe",
+      },
+    );
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    expect(code).toBe(0);
+    expect(out.trim()).toBe("hi");
+  });
+
+  test("execSync actually runs", () => {
+    const out = nativeCp.execSync("echo hello").toString().trim();
+    expect(out).toBe("hello");
+  });
+
+  test("browser lane stays off native with a navigator present", () => {
+    // The outer beforeEach re-mocks navigator; cp is the browser lane.
+    expect(cp.spawn).not.toBe(realCp.spawn);
+    expect(cp.ChildProcess).not.toBe(realCp.ChildProcess);
+  });
+});
+
+describe("no global pollution on import", () => {
+  test("importing the module leaves host timer globals untouched", async () => {
+    jest.resetModules();
+    delete globalThis.navigator;
+    const before = {
+      setTimeout: globalThis.setTimeout,
+      setInterval: globalThis.setInterval,
+      setImmediate: globalThis.setImmediate,
+      queueMicrotask: globalThis.queueMicrotask,
+    };
+    await import("../src/child_process.js");
+    expect(globalThis.setTimeout).toBe(before.setTimeout);
+    expect(globalThis.setInterval).toBe(before.setInterval);
+    expect(globalThis.setImmediate).toBe(before.setImmediate);
+    expect(globalThis.queueMicrotask).toBe(before.queueMicrotask);
   });
 });
