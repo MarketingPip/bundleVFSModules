@@ -28,8 +28,11 @@
 //   always echoes back exactly what was set.
 // - dns.resolveAny() is ENOTIMP in real Node too (c-ares deprecated ANY
 //   queries); the shim mirrors that.
-// - No DNSSEC validation.
-// - resolveTlsa().data is a Uint8Array; real Node surfaces an ArrayBuffer.
+// - DNSSEC is never validated locally — real node:dns (c-ares) doesn't
+//   validate either. Every query sets the CD (checking-disabled) bit
+//   (RFC 4035 §3.1) so upstream resolvers skip validation too: answers
+//   come back even for DNSSEC-bogus names instead of SERVFAIL, matching
+//   Node's observable behavior.
 
 'use strict';
 
@@ -382,7 +385,11 @@ async function dohFetchOne(base, name, type, signal) {
   const wire = dnsPacket.encode({
     type: 'query',
     id: 0,
-    flags: dnsPacket.RECURSION_DESIRED,
+    // Recursion desired, like any stub resolver. CHECKING_DISABLED (the CD
+    // bit, RFC 4035 §3.1) asks the upstream resolver to skip DNSSEC
+    // validation: real node:dns (c-ares) never validates, so answers come
+    // back even for DNSSEC-bogus names instead of SERVFAIL — matching Node.
+    flags: dnsPacket.RECURSION_DESIRED | dnsPacket.CHECKING_DISABLED,
     questions: [{ type, name }],
   });
   const sep = base.includes('?') ? '&' : '?';
@@ -530,14 +537,16 @@ function mapRecord(type, data) {
         : null;
     case 'TLSA':
       // dns-packet: { usage, selector, matchingType, certificate } → Node
-      // { certUsage, selector, match, data }. (Node's data is an ArrayBuffer;
-      // we hand back a Uint8Array, which is friendlier in the sandbox.)
-      return data.certificate
-        ? {
-            certUsage: data.usage, selector: data.selector,
-            match: data.matchingType, data: new Uint8Array(data.certificate),
-          }
-        : null;
+      // { certUsage, selector, match, data }. Node builds data with
+      // ArrayBuffer::New + memcpy (cares_wrap.cc ParseTlsaReply), so hand
+      // back a fresh, exactly-sized ArrayBuffer — not a Uint8Array view.
+      if (!data.certificate) return null;
+      return {
+        certUsage: data.usage,
+        selector: data.selector,
+        match: data.matchingType,
+        data: new Uint8Array(data.certificate).buffer,
+      };
     default:
       return null;
   }

@@ -66,7 +66,7 @@ const STUB_ANSWERS = {
     { name: 'stub.test', type: 'NAPTR', ttl: 300, data: { order: 10, preference: 100, flags: 's', services: 'SIP+D2U', regexp: '', replacement: '_sip._udp.stub.test.' } },
   ],
   'TLSA|_443._tcp.stub.test': [
-    { name: '_443._tcp.stub.test', type: 'TLSA', ttl: 300, data: { usage: 3, selector: 1, matchingType: 1, certificate: Buffer.from('d2abde240d7cd3ee6b4b28c54df034b396c997a2d3f', 'hex') } },
+    { name: '_443._tcp.stub.test', type: 'TLSA', ttl: 300, data: { usage: 3, selector: 1, matchingType: 1, certificate: Buffer.from('d2abde240d7cd3ee6b4b28c54df034b396c997a2d3', 'hex') } },
   ],
   'PTR|34.216.184.93.in-addr.arpa': [
     { name: '34.216.184.93.in-addr.arpa', type: 'PTR', ttl: 300, data: 'host.stub.test.' },
@@ -93,6 +93,7 @@ function base64UrlDecode(s) {
 
 let stubServer;
 let stubBase;
+let lastQueryFlags = 0;
 
 function stubResponse(query, spec) {
   const rcode = spec.rcode || 'NOERROR';
@@ -113,6 +114,7 @@ function startStub() {
       let query;
       try {
         query = dnsPacket.decode(base64UrlDecode(u.searchParams.get('dns') || ''));
+        lastQueryFlags = query.flags;
       } catch {
         res.statusCode = 400;
         res.end();
@@ -502,8 +504,20 @@ describe('dns (DoH shim)', () => {
       expect(rec.certUsage).toBe(3);
       expect(rec.selector).toBe(1);
       expect(rec.match).toBe(1);
-      expect(rec.data).toBeInstanceOf(Uint8Array);
-      expect(rec.data.length).toBe(21);
+      // Real Node builds data with ArrayBuffer::New + memcpy — an
+      // ArrayBuffer, not a Uint8Array view.
+      expect(rec.data).toBeInstanceOf(ArrayBuffer);
+      expect(rec.data.byteLength).toBe(21);
+      expect(Buffer.from(rec.data).toString('hex'))
+        .toBe('d2abde240d7cd3ee6b4b28c54df034b396c997a2d3');
+    });
+
+    test('DoH queries set the CD (checking-disabled) flag: no DNSSEC validation, like Node', async () => {
+      await cbPromise(resolve4, 'stub.test');
+      // Real node:dns (c-ares) never performs DNSSEC validation. The shim
+      // asks upstream resolvers to skip it too via the CD bit (RFC 4035
+      // §3.1), so DNSSEC-bogus names answer instead of SERVFAIL.
+      expect(lastQueryFlags & dnsPacket.CHECKING_DISABLED).not.toBe(0);
     });
 
     test('resolveCname', async () => {
