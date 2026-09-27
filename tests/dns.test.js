@@ -81,6 +81,13 @@ const STUB_ANSWERS = {
   'A|gone.stub.test': { rcode: 'NXDOMAIN' },   // NXDOMAIN → ENOTFOUND
   'A|empty.stub.test': { rcode: 'NOERROR', answers: [] }, // NOERROR, no answers → ENODATA
   'A|fail.stub.test': { rcode: 'SERVFAIL' },   // SERVFAIL → ESERVFAIL
+  // DNSSEC fixtures: a signed name the (validating) stub marks with the AD
+  // bit, and a bogus-signed name the validator rejects with SERVFAIL.
+  'A|signed.stub.test': {
+    rcode: 'NOERROR', ad: true,
+    answers: [{ name: 'signed.stub.test', type: 'A', ttl: 300, data: '93.184.216.34' }],
+  },
+  'A|bogus.stub.test': { rcode: 'SERVFAIL' }, // bogus DNSSEC signature → ESERVFAIL
   'A|slow.stub.test': [
     { name: 'slow.stub.test', type: 'A', ttl: 100, data: '93.184.216.34' },
     { name: 'slow.stub.test', type: 'A', ttl: 100, data: '93.184.216.35' },
@@ -98,10 +105,13 @@ let lastQueryFlags = 0;
 function stubResponse(query, spec) {
   const rcode = spec.rcode || 'NOERROR';
   const answers = Array.isArray(spec) ? spec : (spec.answers || []);
+  // ad: true → the stub (a validating resolver) sets the AD (authenticated
+  // data) bit, like Cloudflare/Google do for DNSSEC-validated answers.
+  const flags = toRcode(rcode) | (spec.ad ? dnsPacket.AUTHENTIC_DATA : 0);
   return dnsPacket.encode({
     type: 'response',
     id: query.id,
-    flags: toRcode(rcode),
+    flags,
     questions: query.questions,
     answers,
   });
@@ -512,12 +522,34 @@ describe('dns (DoH shim)', () => {
         .toBe('d2abde240d7cd3ee6b4b28c54df034b396c997a2d3');
     });
 
-    test('DoH queries set the CD (checking-disabled) flag: no DNSSEC validation, like Node', async () => {
+    test('DoH queries do NOT set the CD flag: upstream validates DNSSEC', async () => {
       await cbPromise(resolve4, 'stub.test');
-      // Real node:dns (c-ares) never performs DNSSEC validation. The shim
-      // asks upstream resolvers to skip it too via the CD bit (RFC 4035
-      // §3.1), so DNSSEC-bogus names answer instead of SERVFAIL.
-      expect(lastQueryFlags & dnsPacket.CHECKING_DISABLED).not.toBe(0);
+      // Delegated DNSSEC validation: the shim queries validating resolvers
+      // (Cloudflare, Google) WITHOUT the CD (checking-disabled) bit, so the
+      // upstream cryptographically validates the chain. Verified live against
+      // cloudflare-dns.com: signed+valid → AD bit set; dnssec-failed.org
+      // (bogus) → SERVFAIL.
+      expect(lastQueryFlags & dnsPacket.CHECKING_DISABLED).toBe(0);
+    });
+
+    test('DNSSEC-signed name with AD bit resolves', async () => {
+      expect(await cbPromise(resolve4, 'signed.stub.test').then(([r]) => r))
+        .toEqual(['93.184.216.34']);
+    });
+
+    test('DNSSEC-bogus name (SERVFAIL) → ESERVFAIL: fail closed', async () => {
+      // A validating resolver returns SERVFAIL for a bogus signature; the
+      // shim fails closed instead of returning forged answers.
+      await expect(cbPromise(resolve4, 'bogus.stub.test')).rejects.toMatchObject({
+        code: 'ESERVFAIL', syscall: 'queryA', hostname: 'bogus.stub.test',
+      });
+    });
+
+    test('unsigned (insecure) name without AD bit resolves normally', async () => {
+      // Insecure ≠ bogus: names without DNSSEC answer normally, like any
+      // validating stub resolver.
+      expect(await cbPromise(resolve4, 'stub.test').then(([r]) => r))
+        .toEqual(['93.184.216.34', '93.184.216.35']);
     });
 
     test('resolveCname', async () => {
