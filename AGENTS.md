@@ -46,7 +46,7 @@ at sandbox startup to install globals like `Buffer`, `setImmediate`).
 | `.process` | host config | `title, arch, env, platform, pid, ppid, argv, argv0, execPath, execArgv, version, versions` |
 | `.__USER_FILES__` | host config | seed `{ path: contents }` for the virtual FS |
 | `.__FS__` | our `src/fs.js` | singleton virtual filesystem |
-| `.__httpServerRunTime` | our `src/http.js` | `{ handleRequest(port, url, method, body, headers), waitForAllServers() }` — the runtime calls `handleRequest` for emulated inbound requests |
+| `.__httpServerRunTime` | our `src/http.js` | `{ handleRequest(port, url, method, body, headers), waitForAllServers(), closeServer(port) }` — the runtime calls `handleRequest` for emulated inbound requests; `closeServer` forcibly closes the server on a port (host revokes a lost port claim) |
 | `.taskTracker` | runtime (`GlobalTracker`) | in-flight async work tracking; `waitForIdle()` |
 | `.loadModule(name)` | runtime | load another builtin by bundle key |
 | `.emit` | runtime | forward console/events to the host |
