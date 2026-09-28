@@ -31,39 +31,45 @@
  */
 
 const NATIVE_EXPORT_NAMES = [
-  'cachedDataVersionTag',
-  'getHeapSnapshot',
-  'getHeapStatistics',
-  'getHeapSpaceStatistics',
-  'getHeapCodeStatistics',
-  'getCppHeapStatistics',
-  'setFlagsFromString',
-  'Serializer',
-  'Deserializer',
-  'DefaultSerializer',
-  'DefaultDeserializer',
-  'deserialize',
-  'takeCoverage',
-  'stopCoverage',
-  'serialize',
-  'writeHeapSnapshot',
-  'promiseHooks',
-  'queryObjects',
-  'startupSnapshot',
-  'setHeapSnapshotNearHeapLimit',
-  'GCProfiler',
-  'isStringOneByteRepresentation',
-  'startCpuProfile',
+  "cachedDataVersionTag",
+  "getHeapSnapshot",
+  "getHeapStatistics",
+  "getHeapSpaceStatistics",
+  "getHeapCodeStatistics",
+  "getCppHeapStatistics",
+  "setFlagsFromString",
+  "Serializer",
+  "Deserializer",
+  "DefaultSerializer",
+  "DefaultDeserializer",
+  "deserialize",
+  "takeCoverage",
+  "stopCoverage",
+  "serialize",
+  "writeHeapSnapshot",
+  "promiseHooks",
+  "queryObjects",
+  "startupSnapshot",
+  "setHeapSnapshotNearHeapLimit",
+  "GCProfiler",
+  "isStringOneByteRepresentation",
+  "startCpuProfile",
 ];
 
 /** The genuine `node:v8` module when running under Node.js, else `null`. */
 const nativeV8 = (() => {
   try {
     const proc = globalThis.process;
-    if (proc !== null && proc !== undefined &&
-        typeof proc.getBuiltinModule === 'function') {
-      const mod = proc.getBuiltinModule('v8');
-      if (mod !== null && (typeof mod === 'object' || typeof mod === 'function')) {
+    if (
+      proc !== null &&
+      proc !== undefined &&
+      typeof proc.getBuiltinModule === "function"
+    ) {
+      const mod = proc.getBuiltinModule("v8");
+      if (
+        mod !== null &&
+        (typeof mod === "object" || typeof mod === "function")
+      ) {
         return mod;
       }
     }
@@ -90,11 +96,11 @@ function pick(name, fallback) {
 /* ------------------------------------------------------------------ */
 
 function typeName(value) {
-  if (value === null) return 'null';
+  if (value === null) return "null";
   const t = typeof value;
-  if (t === 'object') {
-    if (Array.isArray(value)) return 'Array';
-    return 'Object';
+  if (t === "object") {
+    if (Array.isArray(value)) return "Array";
+    return "Object";
   }
   return t;
 }
@@ -103,13 +109,14 @@ function typeName(value) {
 //   The "flags" argument must be of type string. Received type number (1)
 //   The "flags" argument must be of type string. Received undefined
 function invalidArgType(name, expected, actual) {
-  const received = actual === undefined
-    ? 'Received undefined'
-    : `Received type ${typeName(actual)} (${String(actual)})`;
+  const received =
+    actual === undefined
+      ? "Received undefined"
+      : `Received type ${typeName(actual)} (${String(actual)})`;
   const err = new TypeError(
     `The "${name}" argument must be of type ${expected}. ${received}`,
   );
-  err.code = 'ERR_INVALID_ARG_TYPE';
+  err.code = "ERR_INVALID_ARG_TYPE";
   return err;
 }
 
@@ -117,24 +124,27 @@ function invalidArgValue(name, expectedDesc, actual) {
   const err = new TypeError(
     `The argument '${name}' must be ${expectedDesc}. Received '${String(actual)}'`,
   );
-  err.code = 'ERR_INVALID_ARG_VALUE';
+  err.code = "ERR_INVALID_ARG_VALUE";
   return err;
 }
 
 function outOfRange(name, rangeDesc, actual, mustBeInt = false) {
-  const reason = mustBeInt && typeof actual === 'number' && !Number.isInteger(actual)
-    ? 'It must be an integer.'
-    : `It must be ${rangeDesc}.`;
+  const reason =
+    mustBeInt && typeof actual === "number" && !Number.isInteger(actual)
+      ? "It must be an integer."
+      : `It must be ${rangeDesc}.`;
   const err = new RangeError(
     `The value of "${name}" is out of range. ${reason} Received ${String(actual)}`,
   );
-  err.code = 'ERR_OUT_OF_RANGE';
+  err.code = "ERR_OUT_OF_RANGE";
   return err;
 }
 
 function notBuildingSnapshot() {
-  const err = new Error('Operation cannot be invoked when not building startup snapshot');
-  err.code = 'ERR_NOT_BUILDING_SNAPSHOT';
+  const err = new Error(
+    "Operation cannot be invoked when not building startup snapshot",
+  );
+  err.code = "ERR_NOT_BUILDING_SNAPSHOT";
   return err;
 }
 
@@ -147,11 +157,11 @@ function unsupported(api) {
 /* ------------------------------------------------------------------ */
 
 function utf8Encode(str) {
-  if (typeof TextEncoder !== 'undefined') {
+  if (typeof TextEncoder !== "undefined") {
     return new TextEncoder().encode(str);
   }
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(str, 'utf8');
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(str, "utf8");
   }
   const out = new Uint8Array(str.length * 3);
   let n = 0;
@@ -165,32 +175,42 @@ function utf8Encode(str) {
       }
     }
     if (cp < 0x80) out[n++] = cp;
-    else if (cp < 0x800) { out[n++] = 0xc0 | (cp >> 6); out[n++] = 0x80 | (cp & 0x3f); }
-    else if (cp < 0x10000) { out[n++] = 0xe0 | (cp >> 12); out[n++] = 0x80 | ((cp >> 6) & 0x3f); out[n++] = 0x80 | (cp & 0x3f); }
-    else { out[n++] = 0xf0 | (cp >> 18); out[n++] = 0x80 | ((cp >> 12) & 0x3f); out[n++] = 0x80 | ((cp >> 6) & 0x3f); out[n++] = 0x80 | (cp & 0x3f); }
+    else if (cp < 0x800) {
+      out[n++] = 0xc0 | (cp >> 6);
+      out[n++] = 0x80 | (cp & 0x3f);
+    } else if (cp < 0x10000) {
+      out[n++] = 0xe0 | (cp >> 12);
+      out[n++] = 0x80 | ((cp >> 6) & 0x3f);
+      out[n++] = 0x80 | (cp & 0x3f);
+    } else {
+      out[n++] = 0xf0 | (cp >> 18);
+      out[n++] = 0x80 | ((cp >> 12) & 0x3f);
+      out[n++] = 0x80 | ((cp >> 6) & 0x3f);
+      out[n++] = 0x80 | (cp & 0x3f);
+    }
   }
   return out.subarray(0, n);
 }
 
 function utf8Decode(bytes) {
-  if (typeof TextDecoder !== 'undefined') {
+  if (typeof TextDecoder !== "undefined") {
     return new TextDecoder().decode(bytes);
   }
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(bytes).toString('utf8');
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("utf8");
   }
-  let out = '';
+  let out = "";
   for (let i = 0; i < bytes.length; i++) out += String.fromCharCode(bytes[i]);
   return out;
 }
 
 function toUint8(value) {
   if (value instanceof Uint8Array) return value;
-  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value)) {
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   }
   if (Array.isArray(value)) return Uint8Array.from(value);
-  throw invalidArgType('buffer', 'Buffer or TypedArray', value);
+  throw invalidArgType("buffer", "Buffer or TypedArray", value);
 }
 
 /* ------------------------------------------------------------------ */
@@ -221,19 +241,19 @@ function fallbackGetHeapStatistics() {
 
 // Space names as reported by V8 in Node v24 (see test-v8-stats.js).
 const FALLBACK_HEAP_SPACES = [
-  'read_only_space',
-  'new_space',
-  'old_space',
-  'code_space',
-  'shared_space',
-  'new_large_object_space',
-  'large_object_space',
-  'code_large_object_space',
-  'shared_large_object_space',
-  'shared_trusted_large_object_space',
-  'shared_trusted_space',
-  'trusted_large_object_space',
-  'trusted_space',
+  "read_only_space",
+  "new_space",
+  "old_space",
+  "code_space",
+  "shared_space",
+  "new_large_object_space",
+  "large_object_space",
+  "code_large_object_space",
+  "shared_large_object_space",
+  "shared_trusted_large_object_space",
+  "shared_trusted_space",
+  "trusted_large_object_space",
+  "trusted_space",
 ];
 
 function fallbackGetHeapSpaceStatistics() {
@@ -255,9 +275,9 @@ function fallbackGetHeapCodeStatistics() {
   };
 }
 
-function fallbackGetCppHeapStatistics(type = 'detailed') {
-  if (type !== 'brief' && type !== 'detailed') {
-    throw invalidArgValue('type', "one of: 'brief', 'detailed'", type);
+function fallbackGetCppHeapStatistics(type = "detailed") {
+  if (type !== "brief" && type !== "detailed") {
+    throw invalidArgValue("type", "one of: 'brief', 'detailed'", type);
   }
   // There is no C++ heap outside V8; report zeros honestly, using the
   // exact v24 key set (committed/resident/used_size_bytes, space_statistics,
@@ -273,8 +293,8 @@ function fallbackGetCppHeapStatistics(type = 'detailed') {
 }
 
 function fallbackSetFlagsFromString(flags) {
-  if (typeof flags !== 'string') {
-    throw invalidArgType('flags', 'string', flags);
+  if (typeof flags !== "string") {
+    throw invalidArgType("flags", "string", flags);
   }
   // V8 flags cannot be set outside a V8 embedder — accepted and ignored.
 }
@@ -288,31 +308,32 @@ function fallbackGetHeapSnapshot() {
   // Node returns a Readable stream of the heap snapshot; without V8 there
   // is nothing to snapshot, so this fails loudly instead of returning null
   // (real Node never returns null here).
-  throw unsupported('v8.getHeapSnapshot()');
+  throw unsupported("v8.getHeapSnapshot()");
 }
 
 function fallbackWriteHeapSnapshot(filename) {
-  const name = filename === undefined
-    ? `Heap.${Date.now()}.heapsnapshot`
-    : String(filename);
+  const name =
+    filename === undefined
+      ? `Heap.${Date.now()}.heapsnapshot`
+      : String(filename);
   // No file is written outside Node.js; the would-be file name is returned
   // for API compatibility.
   return name;
 }
 
 function fallbackSetHeapSnapshotNearHeapLimit(limit) {
-  if (typeof limit !== 'number' || Number.isNaN(limit)) {
+  if (typeof limit !== "number" || Number.isNaN(limit)) {
     const err = new TypeError(
       `The "limit" argument must be of type number. Received type ${typeName(limit)}`,
     );
-    err.code = 'ERR_INVALID_ARG_TYPE';
+    err.code = "ERR_INVALID_ARG_TYPE";
     throw err;
   }
   if (!Number.isInteger(limit)) {
-    throw outOfRange('limit', '>= 1 && <= 4294967295', limit, true);
+    throw outOfRange("limit", ">= 1 && <= 4294967295", limit, true);
   }
   if (limit < 1 || limit > 4294967295) {
-    throw outOfRange('limit', '>= 1 && <= 4294967295', limit);
+    throw outOfRange("limit", ">= 1 && <= 4294967295", limit);
   }
   // No-op outside Node.js.
 }
@@ -323,8 +344,8 @@ function fallbackSetHeapSnapshotNearHeapLimit(limit) {
  * (0xD800–0xDFFF) are not one-byte representable.
  */
 function fallbackIsStringOneByteRepresentation(content) {
-  if (typeof content !== 'string') {
-    throw invalidArgType('content', 'string', content);
+  if (typeof content !== "string") {
+    throw invalidArgType("content", "string", content);
   }
   for (let i = 0; i < content.length; i++) {
     if (content.charCodeAt(i) > 0xff) return false;
@@ -356,7 +377,10 @@ class FallbackSerializer {
     this._treatArrayBufferViewsAsHostObjects = Boolean(value);
   }
   writeHeader() {}
-  writeValue(value) { this._values.push(value); return undefined; }
+  writeValue(value) {
+    this._values.push(value);
+    return undefined;
+  }
   writeUint32() {}
   writeUint64() {}
   writeDouble() {}
@@ -379,17 +403,29 @@ class FallbackDeserializer {
       if (!Array.isArray(this._values)) this._values = [this._values];
     }
   }
-  readHeader() { return true; }
+  readHeader() {
+    return true;
+  }
   readValue() {
     this._ensureParsed();
     return this._values[this._index++];
   }
-  readUint32() { return 0; }
-  readUint64() { return [0, 0]; }
-  readDouble() { return 0; }
-  readRawBytes(length) { return new Uint8Array(length); }
+  readUint32() {
+    return 0;
+  }
+  readUint64() {
+    return [0, 0];
+  }
+  readDouble() {
+    return 0;
+  }
+  readRawBytes(length) {
+    return new Uint8Array(length);
+  }
   transferArrayBuffer() {}
-  getWireFormatVersion() { return 0; }
+  getWireFormatVersion() {
+    return 0;
+  }
 }
 
 class FallbackDefaultSerializer extends FallbackSerializer {
@@ -411,17 +447,17 @@ class FallbackGCProfiler {
     // undefined rather than throwing.
     this.#started = false;
   }
-  [typeof Symbol.dispose === 'symbol' ? Symbol.dispose : 'dispose']() {
+  [typeof Symbol.dispose === "symbol" ? Symbol.dispose : "dispose"]() {
     this.stop();
   }
 }
 
 function fallbackStartCpuProfile() {
-  throw unsupported('v8.startCpuProfile()');
+  throw unsupported("v8.startCpuProfile()");
 }
 
 function fallbackQueryObjects() {
-  throw unsupported('v8.queryObjects()');
+  throw unsupported("v8.queryObjects()");
 }
 
 // Minimal browser emulation of v8.promiseHooks. Real Node returns a plain
@@ -430,10 +466,16 @@ function fallbackQueryObjects() {
 // small callback registry so the return shape and stop semantics match;
 // without V8 promise-lifecycle hooks the callbacks simply never fire.
 function makeFallbackPromiseHooks() {
-  const kinds = ['init', 'settled', 'before', 'after'];
-  const registry = { init: new Set(), settled: new Set(), before: new Set(), after: new Set() };
+  const kinds = ["init", "settled", "before", "after"];
+  const registry = {
+    init: new Set(),
+    settled: new Set(),
+    before: new Set(),
+    after: new Set(),
+  };
   const checkFn = (name, value) => {
-    if (typeof value !== 'function') throw invalidArgType(name, 'function', value);
+    if (typeof value !== "function")
+      throw invalidArgType(name, "function", value);
   };
   const hooks = {};
   for (const kind of kinds) {
@@ -441,22 +483,28 @@ function makeFallbackPromiseHooks() {
     hooks[method] = (cb) => {
       checkFn(kind, cb);
       registry[kind].add(cb);
-      return () => { registry[kind].delete(cb); };
+      return () => {
+        registry[kind].delete(cb);
+      };
     };
   }
   hooks.createHook = (callbacks) => {
-    if (callbacks === null || typeof callbacks !== 'object') {
-      throw invalidArgType('callbacks', 'object', callbacks);
+    if (callbacks === null || typeof callbacks !== "object") {
+      throw invalidArgType("callbacks", "object", callbacks);
     }
     const stoppers = [];
     for (const kind of kinds) {
       if (callbacks[kind] !== undefined) {
         checkFn(kind, callbacks[kind]);
         registry[kind].add(callbacks[kind]);
-        stoppers.push(() => { registry[kind].delete(callbacks[kind]); });
+        stoppers.push(() => {
+          registry[kind].delete(callbacks[kind]);
+        });
       }
     }
-    return () => { for (const stop of stoppers) stop(); };
+    return () => {
+      for (const stop of stoppers) stop();
+    };
   };
   return hooks;
 }
@@ -464,9 +512,15 @@ function makeFallbackPromiseHooks() {
 const fallbackPromiseHooks = makeFallbackPromiseHooks();
 
 const fallbackStartupSnapshot = {
-  addSerializeCallback: () => { throw notBuildingSnapshot(); },
-  addDeserializeCallback: () => { throw notBuildingSnapshot(); },
-  setDeserializeMainFunction: () => { throw notBuildingSnapshot(); },
+  addSerializeCallback: () => {
+    throw notBuildingSnapshot();
+  },
+  addDeserializeCallback: () => {
+    throw notBuildingSnapshot();
+  },
+  setDeserializeMainFunction: () => {
+    throw notBuildingSnapshot();
+  },
   isBuildingSnapshot: () => false,
 };
 
@@ -474,52 +528,64 @@ const fallbackStartupSnapshot = {
 /* Public surface — mirrors Node v24.20.0 `lib/v8.js` exports exactly. */
 /* ------------------------------------------------------------------ */
 
-export const cachedDataVersionTag =
-  pick('cachedDataVersionTag', fallbackCachedDataVersionTag);
-export const getHeapSnapshot =
-  pick('getHeapSnapshot', fallbackGetHeapSnapshot);
-export const getHeapStatistics =
-  pick('getHeapStatistics', fallbackGetHeapStatistics);
-export const getHeapSpaceStatistics =
-  pick('getHeapSpaceStatistics', fallbackGetHeapSpaceStatistics);
-export const getHeapCodeStatistics =
-  pick('getHeapCodeStatistics', fallbackGetHeapCodeStatistics);
-export const getCppHeapStatistics =
-  pick('getCppHeapStatistics', fallbackGetCppHeapStatistics);
-export const setFlagsFromString =
-  pick('setFlagsFromString', fallbackSetFlagsFromString);
-export const Serializer =
-  pick('Serializer', FallbackSerializer);
-export const Deserializer =
-  pick('Deserializer', FallbackDeserializer);
-export const DefaultSerializer =
-  pick('DefaultSerializer', FallbackDefaultSerializer);
-export const DefaultDeserializer =
-  pick('DefaultDeserializer', FallbackDefaultDeserializer);
-export const deserialize =
-  pick('deserialize', fallbackDeserialize);
+export const cachedDataVersionTag = pick(
+  "cachedDataVersionTag",
+  fallbackCachedDataVersionTag,
+);
+export const getHeapSnapshot = pick("getHeapSnapshot", fallbackGetHeapSnapshot);
+export const getHeapStatistics = pick(
+  "getHeapStatistics",
+  fallbackGetHeapStatistics,
+);
+export const getHeapSpaceStatistics = pick(
+  "getHeapSpaceStatistics",
+  fallbackGetHeapSpaceStatistics,
+);
+export const getHeapCodeStatistics = pick(
+  "getHeapCodeStatistics",
+  fallbackGetHeapCodeStatistics,
+);
+export const getCppHeapStatistics = pick(
+  "getCppHeapStatistics",
+  fallbackGetCppHeapStatistics,
+);
+export const setFlagsFromString = pick(
+  "setFlagsFromString",
+  fallbackSetFlagsFromString,
+);
+export const Serializer = pick("Serializer", FallbackSerializer);
+export const Deserializer = pick("Deserializer", FallbackDeserializer);
+export const DefaultSerializer = pick(
+  "DefaultSerializer",
+  FallbackDefaultSerializer,
+);
+export const DefaultDeserializer = pick(
+  "DefaultDeserializer",
+  FallbackDefaultDeserializer,
+);
+export const deserialize = pick("deserialize", fallbackDeserialize);
 // Like the real module, these are `undefined` when the inspector-backed
 // profiler binding is unavailable.
-export const takeCoverage = pick('takeCoverage', undefined);
-export const stopCoverage = pick('stopCoverage', undefined);
-export const serialize =
-  pick('serialize', fallbackSerialize);
-export const writeHeapSnapshot =
-  pick('writeHeapSnapshot', fallbackWriteHeapSnapshot);
-export const promiseHooks =
-  pick('promiseHooks', fallbackPromiseHooks);
-export const queryObjects =
-  pick('queryObjects', fallbackQueryObjects);
-export const startupSnapshot =
-  pick('startupSnapshot', fallbackStartupSnapshot);
-export const setHeapSnapshotNearHeapLimit =
-  pick('setHeapSnapshotNearHeapLimit', fallbackSetHeapSnapshotNearHeapLimit);
-export const GCProfiler =
-  pick('GCProfiler', FallbackGCProfiler);
-export const isStringOneByteRepresentation =
-  pick('isStringOneByteRepresentation', fallbackIsStringOneByteRepresentation);
-export const startCpuProfile =
-  pick('startCpuProfile', fallbackStartCpuProfile);
+export const takeCoverage = pick("takeCoverage", undefined);
+export const stopCoverage = pick("stopCoverage", undefined);
+export const serialize = pick("serialize", fallbackSerialize);
+export const writeHeapSnapshot = pick(
+  "writeHeapSnapshot",
+  fallbackWriteHeapSnapshot,
+);
+export const promiseHooks = pick("promiseHooks", fallbackPromiseHooks);
+export const queryObjects = pick("queryObjects", fallbackQueryObjects);
+export const startupSnapshot = pick("startupSnapshot", fallbackStartupSnapshot);
+export const setHeapSnapshotNearHeapLimit = pick(
+  "setHeapSnapshotNearHeapLimit",
+  fallbackSetHeapSnapshotNearHeapLimit,
+);
+export const GCProfiler = pick("GCProfiler", FallbackGCProfiler);
+export const isStringOneByteRepresentation = pick(
+  "isStringOneByteRepresentation",
+  fallbackIsStringOneByteRepresentation,
+);
+export const startCpuProfile = pick("startCpuProfile", fallbackStartCpuProfile);
 
 /**
  * Default export mirrors `require('node:v8')` (the CJS `module.exports`
@@ -553,3 +619,17 @@ const v8 = {
 };
 
 export default v8;
+
+import { maskMethodsAsNative } from "./_cloak.js";
+
+// Mask the genuinely-native functions as [native code] (verified on Node
+// v24.20.0). Host-native picks are already native and left untouched; the
+// browser fallbacks read as native. Pure-JS APIs keep visible source.
+maskMethodsAsNative(
+  v8,
+  "cachedDataVersionTag",
+  "Serializer",
+  "Deserializer",
+  "takeCoverage",
+  "stopCoverage",
+);
