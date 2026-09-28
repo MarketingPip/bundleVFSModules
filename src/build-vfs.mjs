@@ -239,6 +239,8 @@ const BUNDLED_MODULES = {
   assert_strict: "assert/strict.js",
   // OS
   os: "os.js",
+  // Navigator (Node.js global `navigator`, not the browser's)
+  navigator: "navigator.js",
   // Util
   util: "util.js",
   util_types: "util/types.js",
