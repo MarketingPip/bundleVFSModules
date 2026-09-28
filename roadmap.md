@@ -79,3 +79,25 @@ Full jest run passes all assertions but Jest reports it "did not exit one
 second after the test run" (2026-09-26). Investigate with
 `--detectOpenHandles` and suite isolation. Do not assume the http/net
 changes caused it — measure first.
+
+### 4. Real-runtime parity harness — official suites through the iframe host protocol
+
+**Problem** (2026-09-28): parity runs under Node with a
+`{ parityForceShim: true }` stub marker — a bridge kill-switch, not the
+real runtime (see `parity/README.md`). It proves our shim code with bridges
+off, but never the sandbox integration: `loadModule` interop, `taskTracker`,
+the `globalThis._RUNTIME_` → `globalThis._RUNTIME<uuid>_` AST rewrite,
+`node_globals.js` startup wiring, iframe execution. Scores are honest about
+our code, but not yet proof of execution through the real host protocol.
+
+**Build**: a parity execution path (or faithful adapter to the real host
+protocol) that runs the vendored official suites inside the actual sandbox
+runtime — the same iframe/postMessage path user code takes. Durable harness
+tests must prove: runtime-only execution (native delegation impossible),
+the marker is non-enumerable, expectation selection still works, and
+`report.json` records the runtime. Re-triage expectations inside that real
+runtime once it exists.
+
+**Non-goals**: replacing the Node-hosted parity lane (it stays as the fast
+lane); changing any shim to suit the harness; enshrining harness artifacts
+as expected failures.
