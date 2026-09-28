@@ -65,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           # Modules at 100% official parity with an empty
-          # parity/expected-failures.json.
+          # parity/expected-failures.shim.json (for their module prefix).
           for module in path punycode querystring string_decoder events assert; do
             echo "::group::parity: ${module}"
             node parity/run.mjs "${module}"

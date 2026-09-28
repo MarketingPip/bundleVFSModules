@@ -70,7 +70,8 @@ at sandbox startup to install globals like `Buffer`, `setImmediate`).
    `platform: "browser"`, running from a string of source in the sandbox.
    If an npm shim already exists, test it before replacing it.
 5. **100% parity where achievable** for deterministic modules; record honest
-   gaps instead of faking them (`parity/expected-failures.json` is `{}`).
+   gaps instead of faking them (`parity/expected-failures.shim.json` carries
+   no entries for fully-green modules).
 
 ## Working in this shared tree
 

@@ -108,8 +108,9 @@ Every shim PR must pass all three:
    Node v24 behaviour, not against the shim's wishes. Assert the uncomfortable
    cases (e.g. `v8.getHeapStatistics()` has no `total_allocated_bytes`).
 2. **Official parity** — vendored Node v24.20.0 tests under `parity/`,
-   run via `parity/run.mjs`. Keep `parity/expected-failures.json` empty;
-   record infrastructure-blocked tests honestly instead.
+   run via `parity/run.mjs`. Keep `parity/expected-failures.shim.json`
+   free of entries for your module; record infrastructure-blocked tests
+   honestly instead.
 3. **Browser-fallback lane** — run the repo tests with native builtins
    disabled (`process.getBuiltinModule` stubbed out) so the shim proves
    itself without Node delegation. Official parity passing under Node is

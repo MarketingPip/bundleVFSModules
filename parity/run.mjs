@@ -4,15 +4,15 @@
 // Usage:
 //   node parity/run.mjs [module]        e.g. node parity/run.mjs path
 //   PARITY_TARGET=path node parity/run.mjs
-//   PARITY_NATIVE=1 node parity/run.mjs child_process   # bridge diagnostic:
-//                           native delegation on, official tests run against
-//                           Node itself (a tautology, not a shim test)
-// The default lane is the shim lane: native bridges stay off, official tests
-// run against the code that actually executes in the sandbox.
+//
+// There is no native lane: native bridges stay off on every run, so the
+// official tests always run against the code that actually executes in the
+// sandbox — our runtime shims. Testing via native delegation would measure
+// Node-vs-Node, a tautology, not a test of our code.
 // For each test/parallel/test-<module>*.js it spawns:
 //   node --import ./parity/preload.mjs <testfile>
 // with PARITY_TARGET set, so only that module's builtin is redirected to
-// src/<module>.js. Results are compared against expected-failures.json:
+// src/<module>.js. Results are compared against expected-failures.shim.json:
 // the run fails only on NEW failures (or newly-fixed tests).
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -26,16 +26,12 @@ const preload = path.join(repoRoot, "parity", "preload.mjs");
 const reportPath = path.join(repoRoot, "parity", "report.json");
 
 const target = process.argv[2] || process.env.PARITY_TARGET || "path";
-// The shim lane is the default: the same test file legitimately fails in the
-// browser lane (e.g. real process spawning is a noop by design) while passing
-// via native delegation, so one flat file cannot describe both lanes.
-// PARITY_NATIVE=1 opts into the bridge diagnostic lane (native delegation);
-// PARITY_FORCE_SHIM=1 is accepted for backwards compatibility and is a no-op.
-const lane = process.env.PARITY_NATIVE === "1" ? "native" : "shim";
+// Known browser-lane gaps (e.g. real process spawning is a noop by design)
+// are triaged here with a reason each.
 const expectedPath = path.join(
   repoRoot,
   "parity",
-  lane === "shim" ? "expected-failures.shim.json" : "expected-failures.json",
+  "expected-failures.shim.json",
 );
 // Node names some test files with hyphens (test-string-decoder.js) while the
 // builtin uses an underscore; also pick up .mjs tests (e.g. events).
@@ -103,7 +99,7 @@ const fixed = Object.keys(expected).filter(
 
 console.log("\n----------------------------------------");
 console.log(
-  `Module: ${target}  [${lane} lane]  ${results.length - failed.length}/${results.length} passed`,
+  `Module: ${target}  ${results.length - failed.length}/${results.length} passed`,
 );
 
 if (newFailures.length > 0) {
@@ -123,7 +119,7 @@ if (newFailures.length === 0 && fixed.length === 0) {
 
 fs.writeFileSync(
   reportPath,
-  JSON.stringify({ target, lane, results }, null, 2),
+  JSON.stringify({ target, lane: "shim", results }, null, 2),
 );
 console.log(`\nFull report: parity/report.json`);
 

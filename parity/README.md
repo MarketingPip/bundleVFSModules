@@ -23,7 +23,7 @@ measure real API parity — instead of only hand-written unit tests.
    real Node builtins.
 3. `parity/run.mjs [module]` spawns each `test-<module>*.js` in a child
    process, collects pass/fail, and diffs against
-   `parity/expected-failures.json`. It exits non-zero only on **new**
+   `parity/expected-failures.shim.json`. It exits non-zero only on **new**
    failures (or newly-fixed tests), so it gates CI on parity regressions.
 
 ## Usage
@@ -36,32 +36,23 @@ npm run parity -- path        # or: node parity/run.mjs path
 name maps to `-` in test file names, so `node parity/run.mjs string_decoder`
 picks up `test-string-decoder*.js`.
 
-### The shim lane is the default
+### No native lane
 
 Some shims contain a *native bridge*: under genuine Node they delegate to
 the real builtin (`child_process` → `loadNativeChildProcess()`,
 `os` → `_nativeOs`). Letting a parity run exercise the bridge measures
 Node-vs-Node — a tautology, not a test of our code — so parity never uses
-the bridge. Every run defines the sandbox marker `globalThis._RUNTIME_`
-(non-enumerably, so Node's own global-leak detector stays quiet) before any
-test or shim loads. Every native bridge checks that marker first and stays
-off, so the official suite always runs against the browser fallback — the
-code that actually executes in Jared's sandbox.
+the bridge. There is no flag to turn it back on. Every run defines the
+sandbox marker `globalThis._RUNTIME_` (non-enumerably, so Node's own
+global-leak detector stays quiet) before any test or shim loads. Every
+native bridge checks that marker first and stays off, so the official suite
+always runs against the browser fallback — the code that actually executes
+in Jared's sandbox.
 
-```sh
-PARITY_NATIVE=1 node parity/run.mjs child_process
-```
-
-opts into the bridge diagnostic lane: native delegation on, official tests
-run against Node itself. It proves export-surface identity only — never
-quote it as a compatibility score. (`PARITY_FORCE_SHIM=1` is still accepted
-for backwards compatibility; it is now a no-op.)
-
-The shim lane gets its own expectations file,
-`parity/expected-failures.shim.json`: the same test file can legitimately
-fail in the browser lane (real process spawning is a noop by design) while
-passing through the bridge, so one flat file cannot describe both lanes.
-`parity/report.json` records which lane a run used.
+Known browser-lane gaps (real process spawning is a noop by design, no
+`window`/parent-frame host, …) are triaged in
+`parity/expected-failures.shim.json` with a reason each. `parity/report.json`
+records the last run.
 
 ## Scoreboard
 
@@ -70,10 +61,9 @@ pinned to **v24.20.0** and vendored under `parity/node-test/parallel/`.
 "Official" = `node parity/run.mjs <module>` pass/total.
 "Repo tests" = hand-written suites in `tests/`.
 Every score below was produced (or re-verified) from this repo — no
-score is taken on trust. Every number is the **shim** score: the default run
-against the browser fallback — the code that runs in the sandbox. The bridge
-diagnostic lane (`PARITY_NATIVE=1`) is never quoted as a score; it proves
-export-surface identity only.
+score is taken on trust. Every number is the **shim** score: the run
+against the browser fallback — the code that runs in the sandbox. There is
+no native-lane score; testing via native delegation is never done.
 
 ### Full official parity (100% — strict CI gate)
 
@@ -83,7 +73,7 @@ export-surface identity only.
 | `punycode` | 1/1 | — | #3 | merged |
 | `querystring` | 4/4 | — | #4 | merged |
 | `string_decoder` | 3/3 | — | #5 | merged |
-| `events` | 1/9 | — | #6 | merged | `als-browser` (via `async_hooks`) patches the timer globals at import time; 8 tests trip Node's leak detector. Pre-existing (also fails with `PARITY_NATIVE=1`) — a lazy import of `als-browser` (only when the native bridge is unavailable) would reclaim these |
+| `events` | 1/9 | — | #6 | merged | `als-browser` (via `async_hooks`) patches the timer globals at import time; 8 tests trip Node's leak detector. Pre-existing — the patching is unconditional (zero `_RUNTIME_` references in `als-browser`'s dist). A lazy import of `als-browser` (only when the native bridge is unavailable) would reclaim these |
 | `assert` (+`strict`) | 19/19 | 80/80 | #7 | merged |
 | `diagnostics_channel` | 26/26 | — | #11 | merged |
 | `os` | 5/7 | — | #12 | merged |
@@ -144,7 +134,8 @@ Merged: `sea` (#40, #57), `wasi` (#41), `trace_events` (#44).
 startup and is not a Node builtin — it has no official suite.
 
 Target state: every completed module has zero entries in
-`parity/expected-failures.json` (currently empty). See
+`parity/expected-failures.shim.json` (currently empty for the CI-gated
+modules). See
 `parity/report.json` for the last full run.
 
 ## CI
@@ -156,7 +147,7 @@ requests, pinned to Node 24.20.0 to match the vendored suite:
   above whose tests are vendored on `main`. Any new failure fails the job.
 - **Advisory** — the best-effort modules run with failures tolerated
   (`|| true`); they report scores but never fail the job. Their honest
-  gaps are tracked in the scoreboard, not in `expected-failures.json`.
+  gaps are tracked in the scoreboard, not in `expected-failures.shim.json`.
 
 Note: the full `npm test` suite in the build job is red on `main` for
 pre-existing environmental reasons (missing optional npm deps in this
@@ -169,4 +160,4 @@ parity job above, not by the whole-suite run.
    into `parity/node-test/parallel/` (keep the `test/`-style layout so
    `__filename`-based assertions behave).
 2. Run `node parity/run.mjs <name>`, triage failures, record genuine
-   known gaps in `expected-failures.json` with a reason each.
+   known gaps in `expected-failures.shim.json` with a reason each.
