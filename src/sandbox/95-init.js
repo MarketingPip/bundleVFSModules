@@ -54,4 +54,28 @@
      
        // const reporter = process.argv.find(arg => arg.startsWith('--test-reporter='))?.split('=')[1];
        
-       
+// --- begin sync builtin preload (gap #3) ---
+// Populate the SYNC builtin cache before user code runs so
+// createRequire()/Module._load can serve builtins synchronously via
+// process.getBuiltinModule(). Fully guarded: this fragment template has
+// no _builtinManifest/_builtinCache of its own (the shipped runtime.js
+// header defines them), so without them this block is inert.
+if (typeof _builtinManifest !== 'undefined' && typeof _builtinCache !== 'undefined') {
+  // Sequential (not concurrent): the interop channel times out under many
+  // concurrent loadModule calls. Slower but reliable.
+  try {
+    var _preloadKeys = Object.keys(_builtinManifest);
+    for (var _pi = 0; _pi < _preloadKeys.length; _pi++) {
+      var _pkey = _preloadKeys[_pi];
+      if (_pkey.indexOf('RUNTIME') === 0) continue;
+      try {
+        _builtinCache.set(_pkey, await globalThis[_BVM_RT_KEY_].loadModule(_pkey, 'import'));
+      } catch (e) {
+        console.warn('[bvm] sync-builtin preload skipped ' + _pkey + ': ' + String((e && e.message) || e));
+      }
+    }
+  } catch (e) {
+    console.warn('[bvm] sync-builtin preload failed: ' + String((e && e.message) || e));
+  }
+}
+// --- end sync builtin preload (gap #3) ---

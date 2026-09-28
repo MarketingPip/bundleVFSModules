@@ -36,6 +36,13 @@ const RT =
 const RTP =
   RT && RT.process && typeof RT.process === "object" ? RT.process : {};
 
+// Captured before the process2 IIFE below installs our own process object
+// as globalThis.process: the process we replaced. Inside the sandbox that
+// is the runtime's live processFinal (with the preloaded sync builtin
+// cache, gap #3); under direct import it is the real Node process.
+const _priorGlobalProcess =
+  typeof globalThis !== "undefined" ? globalThis.process : undefined;
+
 // ---------------------------------------------------------------------------
 // !! Capture native functions at module evaluation time !!
 //
@@ -754,13 +761,33 @@ const process2 = (function () {
   }
 
   /**
-   * No synchronous builtin registry exists in the browser; the runtime loads
-   * builtins asynchronously via `globalThis._RUNTIME_.loadModule(name)`.
+   * Synchronous builtin access (Vitest E2E gap #3: Rolldown's
+   * createRequire(import.meta.url) + require('fs')). The sandbox template
+   * preloads every manifest builtin into a sync cache at init and exposes
+   * it through the template's process.getBuiltinModule, saved as
+   * globalThis.__bvm_process_final__. This shim delegates ONLY to that
+   * template process — never to the native Node bridge. Under direct Node
+   * import (no bundleVFS runtime) there is no preloaded cache, so this
+   * returns undefined (honest noop, not a native bridge call).
    * @since Node.js v22.3.0
    */
   function getBuiltinModule(id) {
     if (typeof id !== "string")
       throw _invalidArgType("id", "of type string", id);
+    // Only the bundleVFS sandbox runtime provides the preloaded sync cache.
+    // The template saves its authoritative process (with getBuiltinModule)
+    // as globalThis.__bvm_process_final__.
+    const templateProcess =
+      typeof globalThis !== "undefined"
+        ? globalThis.__bvm_process_final__
+        : undefined;
+    if (
+      templateProcess &&
+      typeof templateProcess.getBuiltinModule === "function"
+    ) {
+      return templateProcess.getBuiltinModule(id);
+    }
+    // No bundleVFS runtime: honest undefined. Never consult native Node.
     return undefined;
   }
 

@@ -3687,6 +3687,17 @@ globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringi
 const _builtinManifest = ${JSON.stringify(_builtinManifest)};
 const _builtinCache = new Map();
 
+// --- begin sync builtin require interop (gap #3) ---
+// Single-default interop shared by the sync builtin consumers
+// (createSyncRequire, process.getBuiltinModule): what a synchronous
+// require() of a builtin returns. Mirrors the unwrap in 21-sync-require.
+function _builtinRequireValue(mod) {
+  return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
+    ? mod.default
+    : mod;
+}
+// --- end sync builtin require interop (gap #3) ---
+
 window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
 
 
@@ -5415,6 +5426,41 @@ hrtime.bigint = () => {
     abort() {
     throw new Error('Process aborted');
     },
+    // --- begin sandbox getBuiltinModule (gap #3) ---
+    // Synchronous builtin access for createRequire()/Module._load: the
+    // sandbox preloads every manifest builtin into _builtinCache at init
+    // (see the preload block after RUNTIME:NODE_GLOBALS), so this never
+    // needs to await. Matches Node v24: a non-string id throws
+    // ERR_INVALID_ARG_TYPE; unknown ids return undefined (no throw).
+    getBuiltinModule(id) {
+      if (typeof id !== 'string') {
+        const err = new TypeError(
+          'The "id" argument must be of type string. Received type ' + typeof id + ' (' + String(id) + ')'
+        );
+        err.code = 'ERR_INVALID_ARG_TYPE';
+        throw err;
+      }
+      const bare = id.startsWith('node:') ? id.slice(5) : id;
+      if (typeof _builtinManifest === 'undefined' || typeof _builtinCache === 'undefined') {
+        return undefined;
+      }
+      if (!Object.prototype.hasOwnProperty.call(_builtinManifest, bare)) {
+        return undefined;
+      }
+      if (!_builtinCache.has(bare)) {
+        // Manifest-listed but not preloaded (preload failed or was
+        // skipped): a sync require() can never wait for the async loader,
+        // so say so explicitly instead of the old silent undefined
+        // that surfaced far away as MODULE_NOT_FOUND.
+        const err = new Error(
+          "[ERR_REQUIRE_ASYNC_MODULE] Cannot require builtin '" + id + "' synchronously: it was not preloaded into the sync builtin cache"
+        );
+        err.code = 'ERR_REQUIRE_ASYNC_MODULE';
+        throw err;
+      }
+      return _builtinRequireValue(_builtinCache.get(bare));
+    },
+    // --- end sandbox getBuiltinModule (gap #3) ---
       // --- Timing ---
   uptime() {
     return (Date.now() - startTime) / 1000;
@@ -5569,6 +5615,10 @@ hrtime.bigint = () => {
   processFinal.throwDeprecation = false;
   processFinal.traceDeprecation = false;
   processFinal.traceProcessWarnings = false;
+// Save restorable reference BEFORE the try block: the defineProperty on
+// window may throw in some sandbox realms, which would skip everything in
+// the try. The template's process (with getBuiltinModule) is authoritative.
+try { globalThis.__bvm_process_final__ = processFinal; } catch (e) {}
 try{
   // 4. Optionally expose globally
   
@@ -5656,7 +5706,40 @@ const cloakedConsole = (function () {
 })();
 
 await globalThis._RUNTIME${config.uuid}_.loadModule("RUNTIME:NODE_GLOBALS"); 
+// Restore the template's process (with getBuiltinModule) if a dist shim
+// overwrote globalThis.process during RUNTIME:NODE_GLOBALS import.
+if (globalThis.__bvm_process_final__ && globalThis.process !== globalThis.__bvm_process_final__) {
+  globalThis.process = globalThis.__bvm_process_final__;
+}
       
+// --- begin sync builtin preload (gap #3) ---
+// Populate the SYNC builtin cache before user code runs. dist/module.js's
+// loadBuiltinModule() can only use the sandbox RT.loadModule() when it
+// returns synchronously — it never does — so sync require('fs') via
+// createRequire()/Module._load falls through to process.getBuiltinModule(),
+// which reads this cache. Without the preload every sync builtin require
+// died with MODULE_NOT_FOUND (Vitest E2E: Rolldown's createRequire('fs')).
+// Per-key try/catch: one unfetchable builtin must not abort the rest or
+// sandbox init. Async import() of builtins keeps working independently of
+// this cache (separate moduleRegistry path).
+// Sequential (not concurrent): the interop channel times out under 51
+// concurrent loadModule calls. Slower but reliable.
+try {
+  var _preloadKeys = Object.keys(_builtinManifest);
+  for (var _pi = 0; _pi < _preloadKeys.length; _pi++) {
+    var _pkey = _preloadKeys[_pi];
+    if (_pkey.indexOf('RUNTIME') === 0) continue;
+    try {
+      _builtinCache.set(_pkey, await globalThis._RUNTIME${config.uuid}_.loadModule(_pkey, 'import'));
+    } catch (e) {
+      console.warn('[bvm] sync-builtin preload skipped ' + _pkey + ': ' + String((e && e.message) || e));
+    }
+  }
+} catch (e) {
+  console.warn('[bvm] sync-builtin preload failed: ' + String((e && e.message) || e));
+}
+// --- end sync builtin preload (gap #3) ---
+
    
 // Enhanced timer tracking with WeakMap for cleanup
 const timerRegistry = new Map();
