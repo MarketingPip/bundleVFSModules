@@ -256,3 +256,25 @@ describe('os module (Node.js compat)', () => {
     expect(['/dev/null', '\\\\.\\nul']).toContain(devNull);
   });
 });
+
+describe('sandbox guard (_RUNTIME_ forces the shim lane)', () => {
+  test('_RUNTIME_ defeats the native bridge even with a spoofed Node.js/ userAgent', async () => {
+    jest.resetModules();
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { userAgent: 'Node.js/24', platform: '', hardwareConcurrency: 4 },
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, 'location', {
+      value: { hostname: 'test.local' },
+      configurable: true,
+    });
+    globalThis._RUNTIME_ = {}; // sandbox marker: never present under genuine Node
+    const sandboxOs = (await import('../src/os.js')).default;
+    // Shim fallback reads location.hostname; the native bridge would return
+    // the real machine hostname instead.
+    expect(sandboxOs.hostname()).toBe('test.local');
+    delete globalThis.navigator;
+    delete globalThis.location;
+    delete globalThis._RUNTIME_;
+  });
+});

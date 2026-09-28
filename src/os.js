@@ -101,7 +101,16 @@ const _uaString =
 const _hasBrowserNavigator =
   _uaString !== '' && !_uaString.startsWith('Node.js/');
 
+// Jared's sandbox always defines `globalThis._RUNTIME_`; genuine Node never
+// does. The userAgent check above can be spoofed by an installed shim
+// (e.g. navigator install() planting a `Node.js/` userAgent), so _RUNTIME_
+// is the one unfakeable signal and it short-circuits the bridge.
+const _inSandboxRuntime =
+  typeof globalThis !== 'undefined' &&
+  typeof globalThis._RUNTIME_ !== 'undefined';
+
 const _nativeOs =
+  !_inSandboxRuntime &&
   !_hasBrowserNavigator &&
   typeof process !== 'undefined' &&
   process.versions != null &&
