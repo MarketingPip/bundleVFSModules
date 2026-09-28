@@ -71,6 +71,31 @@ at sandbox startup to install globals like `Buffer`, `setImmediate`).
    If an npm shim already exists, test it before replacing it.
 5. **100% parity where achievable** for deterministic modules; record honest
    gaps instead of faking them (`parity/expected-failures.json` is `{}`).
+6. **Fix the platform, don't write library-specific shim code.** Adopted from
+   AlmostNode's CLAUDE.md (2026-09-28 competitor study). A shim that exists
+   only to satisfy one consumer — a Sentry remap, a framework-specific path
+   rewrite — is a bug in the platform layer. Fix `src/node_globals.js`, the
+   VFS, or the `_build_file` transform instead. Library-specific workarounds
+   belong in the consumer's repo, never in core.
+7. **No silent fakes.** Extends rule 2: an API that reports success for
+   something that never happened is worse than a loud noop. `net.connect()`
+   to a dead host must never emit `'connect'`; an unlistened loopback port
+   gets a real `ECONNREFUSED`. Honest error or honest noop — never a fake
+   success. (Nodepod's fake `net.connect()`/`dgram.send()` are the
+   anti-pattern; see `docs/COMPETITOR_TECHNIQUES.md`.)
+8. **WASM-of-the-real-thing for hard surfaces.** For surfaces too deep to
+   reimplement faithfully (SQLite, …), ship the WASM build of the real
+   implementation — the wa-sqlite pattern — instead of a from-scratch engine.
+   Reimplementation needs a stated reason, recorded in the commit.
+9. **Differential testing for emulated external behavior.** Where we emulate
+   something with a real-world counterpart (shell, dns, http), CI runs the
+   real binary and diffs stdout/stderr/exit code — Nodepod's
+   `bash-differential.test.ts` pattern. Catches drift our own assertions
+   can't see.
+10. **The capability matrix is generated, never hand-written.** `module × API
+    × status` (implemented / honest-noop / unsupported-with-reason) must be
+    derivable from code and CI. Hand-written tables rot — we watched it
+    happen to AlmostNode's README.
 
 ## Working in this shared tree
 
