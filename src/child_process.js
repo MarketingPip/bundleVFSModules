@@ -322,30 +322,72 @@ function errInvalidArgType(name, expected, actual) {
   }
 
   msg += `. Received ${determineSpecificType(actual)}`;
-  return Object.assign(new TypeError(msg), { code: "ERR_INVALID_ARG_TYPE" });
+  return tagCodedError(
+    Object.assign(new TypeError(msg), { code: "ERR_INVALID_ARG_TYPE" }),
+  );
+}
+
+/**
+ * Node's internal errors stringify as `TypeError [ERR_CODE]: message`
+ * (assert.throws' RegExp form matches against String(err), so the code
+ * must be visible there — a plain `new TypeError` only renders
+ * `TypeError: message`). err.message itself stays exactly Node's text.
+ */
+function tagCodedError(err) {
+  const { name, code } = err;
+  Object.defineProperty(err, "toString", {
+    value() {
+      return `${name} [${code}]: ${this.message}`;
+    },
+    writable: true,
+    configurable: true,
+  });
+  return err;
 }
 
 function errInvalidArgValue(name, value, reason = "is invalid") {
   const type = name.includes(".") ? "property" : "argument";
   const msg = `The ${type} '${name}' ${reason}. Received ${inspectValue(value)}`;
-  return Object.assign(new TypeError(msg), { code: "ERR_INVALID_ARG_VALUE" });
+  return tagCodedError(
+    Object.assign(new TypeError(msg), { code: "ERR_INVALID_ARG_VALUE" }),
+  );
 }
 
 function errOutOfRange(name, range, value) {
   const msg = `The value of "${name}" is out of range. It must be ${range}. Received ${inspectValue(value)}`;
-  return Object.assign(new RangeError(msg), { code: "ERR_OUT_OF_RANGE" });
+  return tagCodedError(
+    Object.assign(new RangeError(msg), { code: "ERR_OUT_OF_RANGE" }),
+  );
 }
 
 function errUnknownSignal(signal) {
   const msg = `Unknown signal: ${String(signal)}`;
-  return Object.assign(new TypeError(msg), { code: "ERR_UNKNOWN_SIGNAL" });
+  return tagCodedError(
+    Object.assign(new TypeError(msg), { code: "ERR_UNKNOWN_SIGNAL" }),
+  );
+}
+
+function errMissingArgs(name) {
+  const msg = `The "${name}" argument must be specified`;
+  return tagCodedError(
+    Object.assign(new TypeError(msg), { code: "ERR_MISSING_ARGS" }),
+  );
+}
+
+function errInvalidHandleType() {
+  const msg = "This handle type cannot be sent";
+  return tagCodedError(
+    Object.assign(new TypeError(msg), { code: "ERR_INVALID_HANDLE_TYPE" }),
+  );
 }
 
 function errStdioMaxBuffer(which) {
   const msg = `${which} maxBuffer length exceeded`;
-  return Object.assign(new Error(msg), {
-    code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
-  });
+  return tagCodedError(
+    Object.assign(new Error(msg), {
+      code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+    }),
+  );
 }
 
 function validateString(value, name) {
@@ -1210,24 +1252,378 @@ export class ChildProcess extends EventEmitter {
   unref() {
     // Node's ref()/unref() return undefined.
   }
+
+  /**
+   * Node's low-level ChildProcess.prototype.spawn(options): validates the
+   * options object (options/file/envPairs/args), then performs the spawn.
+   * The top-level spawn() normalizes (file, args, options) into this shape
+   * and delegates here — exactly like Node.
+   */
+  spawn(options) {
+    // Validation order matches Node's ChildProcess.prototype.spawn:
+    // options, serialization, envPairs (only with an IPC channel),
+    // file, args.
+    validateObject(options, "options");
+    validateSerializationOption(options.serialization);
+    const hasIpc = stdioHasIpc(options.stdio);
+    if (
+      hasIpc &&
+      options.envPairs !== undefined &&
+      !Array.isArray(options.envPairs)
+    ) {
+      throw errInvalidArgType("options.envPairs", "Array", options.envPairs);
+    }
+    validateString(options.file, "options.file");
+    if (options.args !== undefined) {
+      validateArray(options.args, "options.args");
+    }
+    validateTimeout(options.timeout);
+    validateAbortSignal(options.signal, "options.signal");
+    const killSignal = sanitizeKillSignal(options.killSignal);
+
+    const child = this;
+
+    child.spawnfile = options.file;
+    child.spawnargs = options.spawnargs ?? [
+      options.file,
+      ...(options.args ?? []),
+    ];
+
+    // Node installs the IPC surface when stdio includes 'ipc'.
+    if (hasIpc) {
+      installIPC(child);
+    }
+
+    /*
+     * Node emits 'spawn' asynchronously after the child has been created.
+     */
+    queueMicrotask(() => {
+      if (!child._finalised) {
+        child.emit("spawn");
+      }
+    });
+
+    const requestId = makeRequestId();
+    child._requestId = requestId;
+
+    wireAbortSignal(options.signal, child, killSignal);
+
+    /*
+     * Seed the child with the sandbox's live filesystem; the host returns
+     * the child's final filesystem as `vfs` and we merge back only what the
+     * child changed (parent-wins on conflict). No runtime FS → no `vfs` key.
+     */
+    const vfsBefore = captureVfsSnapshot();
+
+    /*
+     * Live streaming: the host may send PARENT_SPAWN_DATA chunks followed by
+     * PARENT_SPAWN_CLOSE, or answer once with PARENT_CHILD_EXEC_RESPONSE
+     * (older hosts). The first final message wins; everything after
+     * finalization is ignored. _finalise() below removes this listener, so
+     * no window listener can leak however the child ends (close, kill,
+     * timeout, abort, request failure).
+     */
+    const finalizeFromPayload = (payload) => {
+      if (child._finalised) {
+        return;
+      }
+
+      applyVfsDiff(vfsBefore, payload && payload.vfs);
+
+      const stdout = payload?.stdout ?? "";
+      const stderr = payload?.stderr ?? "";
+      const exitCode = payload?.exitCode ?? 0;
+      const signal = payload?.signal ?? null;
+
+      if ((exitCode !== null && exitCode !== 0) || signal) {
+        const err = new Error(`spawn ${options.file} failed`);
+
+        err.code = exitCode ?? undefined;
+        err.killed = child.killed;
+        err.signal = signal;
+
+        child.emit("error", err);
+      }
+
+      child._finalise(stdout, stderr, exitCode, signal);
+    };
+
+    const streamHandler = (event) => {
+      const data = event?.data;
+
+      if (data?.requestId !== requestId) {
+        return;
+      }
+
+      if (data?.type === "PARENT_SPAWN_DATA") {
+        // Live output: visible on the streams before the process closes.
+        if (child._finalised) {
+          return;
+        }
+        if (data?.payload?.stream === "stderr") {
+          child._pushStderr(data.payload.chunk ?? "");
+        } else {
+          child._pushStdout(data.payload.chunk ?? "");
+        }
+        return;
+      }
+
+      if (data?.type === "PARENT_SPAWN_CLOSE") {
+        finalizeFromPayload(data.payload || {});
+        return;
+      }
+
+      if (data?.type === "PARENT_CHILD_EXEC_RESPONSE") {
+        // Older host: single-shot answer.
+        finalizeFromPayload(data.payload || {});
+      }
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("message", streamHandler);
+    }
+
+    /*
+     * postToParent's own timeout is disabled (0) so a long-running
+     * streaming child isn't killed mid-stream: the timeout below owns the
+     * deadline and produces the same ETIMEDOUT outcome Node reports.
+     */
+    const timeoutMs = options.timeout ?? DEFAULT_TIMEOUT;
+    let timeoutTid;
+
+    const rawFinalise = child._finalise.bind(child);
+    child._finalise = (stdout, stderr, code, sig) => {
+      if (timeoutTid !== undefined) {
+        clearTimeout(timeoutTid);
+        timeoutTid = undefined;
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("message", streamHandler);
+      }
+      return rawFinalise(stdout, stderr, code, sig);
+    };
+
+    if (timeoutMs > 0) {
+      timeoutTid = setTimeout(
+        () => {
+          if (child._finalised) {
+            return;
+          }
+          // Node's timeout kills the child: tell the host too.
+          notifyParentKill(requestId, "SIGTERM");
+          child.killed = true;
+          const err = Object.assign(new Error("Process timed out"), {
+            code: "ETIMEDOUT",
+            signal: "SIGTERM",
+          });
+          child.emit("error", err);
+          child._finalise("", err.message, null, "SIGTERM");
+        },
+        Math.max(0, Number(timeoutMs) || 0),
+      );
+    }
+
+    /*
+     * stdin forwarding: writes to child.stdin are posted to the parent so
+     * the child actually receives input; PARENT_SPAWN_STDIN_END marks EOF.
+     * Best-effort — old hosts ignore these, and without a parent frame
+     * they are silent no-ops (the request itself fails closed anyway).
+     */
+    const postToHost = (type, payload) => {
+      if (child._finalised) {
+        return;
+      }
+      try {
+        const target = globalThis.parent;
+        if (!target || typeof target.postMessage !== "function") {
+          return;
+        }
+        target.postMessage({ type, requestId, payload }, "*");
+      } catch {
+        // Best effort only.
+      }
+    };
+
+    const stdin = child.stdin;
+    if (
+      stdin &&
+      typeof stdin.write === "function" &&
+      typeof stdin.end === "function"
+    ) {
+      const rawWrite = stdin.write.bind(stdin);
+      const rawEnd = stdin.end.bind(stdin);
+      stdin.write = (chunk, encoding, cb) => {
+        if (typeof encoding === "function") {
+          cb = encoding;
+          encoding = undefined;
+        }
+        const ret = rawWrite(chunk, encoding, cb);
+        // Only forward what the local stream accepted.
+        postToHost("PARENT_SPAWN_STDIN", { chunk });
+        return ret;
+      };
+      stdin.end = (chunk, encoding, cb) => {
+        if (typeof chunk === "function") {
+          cb = chunk;
+          chunk = undefined;
+          encoding = undefined;
+        } else if (typeof encoding === "function") {
+          cb = encoding;
+          encoding = undefined;
+        }
+        const ret = rawEnd(chunk, encoding, cb);
+        if (chunk !== undefined) {
+          postToHost("PARENT_SPAWN_STDIN", { chunk });
+        }
+        postToHost("PARENT_SPAWN_STDIN_END", {});
+        return ret;
+      };
+    }
+
+    postToParent(
+      "PARENT_SPAWN_REQUEST",
+      requestId,
+      {
+        command: options.file,
+        args: options.args,
+        options: options,
+        ...(vfsBefore ? { vfs: vfsBefore } : null),
+      },
+      0,
+      child._ac.signal,
+    )
+      .then((result = {}) => {
+        /*
+         * kill() may have won the race, or the stream may have closed
+         * already.
+         */
+        if (child._finalised) {
+          return;
+        }
+
+        finalizeFromPayload(result);
+      })
+      .catch((err) => {
+        /*
+         * If kill() already finalized the child, there is nothing left
+         * for the rejected request to do.
+         */
+        if (child._finalised) {
+          return;
+        }
+
+        const wrapped = err instanceof Error ? err : new Error(String(err));
+
+        if (wrapped.code === "ETIMEDOUT") {
+          child.killed = true;
+        }
+
+        child.emit("error", wrapped);
+
+        child._finalise(
+          "",
+          wrapped.message,
+          wrapped.code === "ETIMEDOUT" ? null : 1,
+          wrapped.signal ?? null,
+        );
+      });
+    return child;
+  }
+
+  /**
+   * Node's ChildProcess is disposable: disposing kills the child.
+   */
+  [Symbol.dispose]() {
+    this.kill();
+  }
 }
 
 /**
- * Install the IPC surface on fork()ed children only — matching Node, where
- * plain spawn() children have `send`/`disconnect` undefined.
+ * Node's options.serialization validation (normalizeSpawnArguments and
+ * ChildProcess.prototype.spawn both enforce it).
+ */
+function validateSerializationOption(serialization) {
+  if (
+    serialization !== undefined &&
+    serialization !== "json" &&
+    serialization !== "advanced"
+  ) {
+    throw errInvalidArgValue(
+      "options.serialization",
+      serialization,
+      "must be one of: undefined, 'json', 'advanced'",
+    );
+  }
+}
+
+/**
+ * Whether the normalized stdio value opens an IPC channel (Node installs
+ * the send()/disconnect() surface on children whose stdio includes 'ipc').
+ */
+function stdioHasIpc(stdio) {
+  if (stdio === "ipc") return true;
+  if (Array.isArray(stdio)) {
+    return stdio.some(
+      (entry) =>
+        entry === "ipc" || (Array.isArray(entry) && entry.includes("ipc")),
+    );
+  }
+  return false;
+}
+
+/**
+ * Shared send()/disconnect()-surface argument validation, ported from Node's
+ * internal child_process send: callback shifting, then message presence and
+ * type, sendHandle, options, and callback validation — in Node's order.
+ * Returns the shifted { message, sendHandle, options, callback }.
+ */
+function validateSendArgs(message, sendHandle, options, callback) {
+  if (typeof sendHandle === "function") {
+    callback = sendHandle;
+    sendHandle = undefined;
+    options = undefined;
+  } else if (typeof options === "function") {
+    callback = options;
+    options = undefined;
+  }
+
+  if (message === undefined) throw errMissingArgs("message");
+  if (
+    typeof message !== "string" &&
+    typeof message !== "object" &&
+    typeof message !== "number" &&
+    typeof message !== "boolean"
+  ) {
+    throw errInvalidArgType(
+      "message",
+      ["string", "object", "number", "boolean"],
+      message,
+    );
+  }
+  if (sendHandle !== undefined && sendHandle !== null) {
+    // The browser lane has no sendable handles; anything non-null is invalid.
+    throw errInvalidHandleType();
+  }
+  if (options !== undefined) validateObject(options, "options");
+  if (callback !== undefined) validateFunction(callback, "callback");
+  return { message, sendHandle, options, callback };
+}
+
+/**
+ * Install the IPC surface (connected, send(), disconnect()) — used for
+ * fork()ed children and for spawn() children whose stdio includes 'ipc'.
+ * Plain spawn() children keep `send`/`disconnect` undefined, matching Node.
  */
 function installIPC(target) {
   target.connected = true;
 
   target.send = function send(message, sendHandle, options, callback) {
-    if (typeof sendHandle === "function") {
-      callback = sendHandle;
-      sendHandle = undefined;
-      options = undefined;
-    } else if (typeof options === "function") {
-      callback = options;
-      options = undefined;
-    }
+    ({ message, sendHandle, options, callback } = validateSendArgs(
+      message,
+      sendHandle,
+      options,
+      callback,
+    ));
 
     // There is no real IPC channel in the browser; report it honestly.
     const err = Object.assign(new Error("Channel closed"), {
@@ -1363,6 +1759,11 @@ function normalizeSpawnArguments(file, args, options) {
   if (options.uid != null && !isInt32(options.uid)) {
     throw errInvalidArgType("options.uid", "int32", options.uid);
   }
+
+  // Validate the serialization, if present (Node's normalizeSpawnArguments
+  // and ChildProcess.prototype.spawn both reject anything but
+  // 'json'/'advanced').
+  validateSerializationOption(options.serialization);
 
   // Validate the gid, if present.
   if (options.gid != null && !isInt32(options.gid)) {
@@ -1753,250 +2154,8 @@ function _execFile(file, args, options, callback) {
 
 function _spawn(file, args, options) {
   const norm = normalizeSpawnArguments(file, args, options);
-  validateTimeout(norm.timeout);
-  validateAbortSignal(norm.signal, "options.signal");
-  const killSignal = sanitizeKillSignal(norm.killSignal);
-
   const child = new ChildProcess();
-
-  child.spawnfile = norm.file;
-  child.spawnargs = norm.spawnargs;
-
-  /*
-   * Node emits 'spawn' asynchronously after the child has been created.
-   */
-  queueMicrotask(() => {
-    if (!child._finalised) {
-      child.emit("spawn");
-    }
-  });
-
-  const requestId = makeRequestId();
-  child._requestId = requestId;
-
-  wireAbortSignal(norm.signal, child, killSignal);
-
-  /*
-   * Seed the child with the sandbox's live filesystem; the host returns
-   * the child's final filesystem as `vfs` and we merge back only what the
-   * child changed (parent-wins on conflict). No runtime FS → no `vfs` key.
-   */
-  const vfsBefore = captureVfsSnapshot();
-
-  /*
-   * Live streaming: the host may send PARENT_SPAWN_DATA chunks followed by
-   * PARENT_SPAWN_CLOSE, or answer once with PARENT_CHILD_EXEC_RESPONSE
-   * (older hosts). The first final message wins; everything after
-   * finalization is ignored. _finalise() below removes this listener, so
-   * no window listener can leak however the child ends (close, kill,
-   * timeout, abort, request failure).
-   */
-  const finalizeFromPayload = (payload) => {
-    if (child._finalised) {
-      return;
-    }
-
-    applyVfsDiff(vfsBefore, payload && payload.vfs);
-
-    const stdout = payload?.stdout ?? "";
-    const stderr = payload?.stderr ?? "";
-    const exitCode = payload?.exitCode ?? 0;
-    const signal = payload?.signal ?? null;
-
-    if ((exitCode !== null && exitCode !== 0) || signal) {
-      const err = new Error(`spawn ${norm.file} failed`);
-
-      err.code = exitCode ?? undefined;
-      err.killed = child.killed;
-      err.signal = signal;
-
-      child.emit("error", err);
-    }
-
-    child._finalise(stdout, stderr, exitCode, signal);
-  };
-
-  const streamHandler = (event) => {
-    const data = event?.data;
-
-    if (data?.requestId !== requestId) {
-      return;
-    }
-
-    if (data?.type === "PARENT_SPAWN_DATA") {
-      // Live output: visible on the streams before the process closes.
-      if (child._finalised) {
-        return;
-      }
-      if (data?.payload?.stream === "stderr") {
-        child._pushStderr(data.payload.chunk ?? "");
-      } else {
-        child._pushStdout(data.payload.chunk ?? "");
-      }
-      return;
-    }
-
-    if (data?.type === "PARENT_SPAWN_CLOSE") {
-      finalizeFromPayload(data.payload || {});
-      return;
-    }
-
-    if (data?.type === "PARENT_CHILD_EXEC_RESPONSE") {
-      // Older host: single-shot answer.
-      finalizeFromPayload(data.payload || {});
-    }
-  };
-
-  if (typeof window !== "undefined") {
-    window.addEventListener("message", streamHandler);
-  }
-
-  /*
-   * postToParent's own timeout is disabled (0) so a long-running
-   * streaming child isn't killed mid-stream: the timeout below owns the
-   * deadline and produces the same ETIMEDOUT outcome Node reports.
-   */
-  const timeoutMs = norm.timeout ?? DEFAULT_TIMEOUT;
-  let timeoutTid;
-
-  const rawFinalise = child._finalise.bind(child);
-  child._finalise = (stdout, stderr, code, sig) => {
-    if (timeoutTid !== undefined) {
-      clearTimeout(timeoutTid);
-      timeoutTid = undefined;
-    }
-    if (typeof window !== "undefined") {
-      window.removeEventListener("message", streamHandler);
-    }
-    return rawFinalise(stdout, stderr, code, sig);
-  };
-
-  if (timeoutMs > 0) {
-    timeoutTid = setTimeout(
-      () => {
-        if (child._finalised) {
-          return;
-        }
-        // Node's timeout kills the child: tell the host too.
-        notifyParentKill(requestId, "SIGTERM");
-        child.killed = true;
-        const err = Object.assign(new Error("Process timed out"), {
-          code: "ETIMEDOUT",
-          signal: "SIGTERM",
-        });
-        child.emit("error", err);
-        child._finalise("", err.message, null, "SIGTERM");
-      },
-      Math.max(0, Number(timeoutMs) || 0),
-    );
-  }
-
-  /*
-   * stdin forwarding: writes to child.stdin are posted to the parent so
-   * the child actually receives input; PARENT_SPAWN_STDIN_END marks EOF.
-   * Best-effort — old hosts ignore these, and without a parent frame
-   * they are silent no-ops (the request itself fails closed anyway).
-   */
-  const postToHost = (type, payload) => {
-    if (child._finalised) {
-      return;
-    }
-    try {
-      const target = globalThis.parent;
-      if (!target || typeof target.postMessage !== "function") {
-        return;
-      }
-      target.postMessage({ type, requestId, payload }, "*");
-    } catch {
-      // Best effort only.
-    }
-  };
-
-  const stdin = child.stdin;
-  if (
-    stdin &&
-    typeof stdin.write === "function" &&
-    typeof stdin.end === "function"
-  ) {
-    const rawWrite = stdin.write.bind(stdin);
-    const rawEnd = stdin.end.bind(stdin);
-    stdin.write = (chunk, encoding, cb) => {
-      if (typeof encoding === "function") {
-        cb = encoding;
-        encoding = undefined;
-      }
-      const ret = rawWrite(chunk, encoding, cb);
-      // Only forward what the local stream accepted.
-      postToHost("PARENT_SPAWN_STDIN", { chunk });
-      return ret;
-    };
-    stdin.end = (chunk, encoding, cb) => {
-      if (typeof chunk === "function") {
-        cb = chunk;
-        chunk = undefined;
-        encoding = undefined;
-      } else if (typeof encoding === "function") {
-        cb = encoding;
-        encoding = undefined;
-      }
-      const ret = rawEnd(chunk, encoding, cb);
-      if (chunk !== undefined) {
-        postToHost("PARENT_SPAWN_STDIN", { chunk });
-      }
-      postToHost("PARENT_SPAWN_STDIN_END", {});
-      return ret;
-    };
-  }
-
-  postToParent(
-    "PARENT_SPAWN_REQUEST",
-    requestId,
-    {
-      command: norm.file,
-      args: norm.args,
-      options: norm,
-      ...(vfsBefore ? { vfs: vfsBefore } : null),
-    },
-    0,
-    child._ac.signal,
-  )
-    .then((result = {}) => {
-      /*
-       * kill() may have won the race, or the stream may have closed
-       * already.
-       */
-      if (child._finalised) {
-        return;
-      }
-
-      finalizeFromPayload(result);
-    })
-    .catch((err) => {
-      /*
-       * If kill() already finalized the child, there is nothing left
-       * for the rejected request to do.
-       */
-      if (child._finalised) {
-        return;
-      }
-
-      const wrapped = err instanceof Error ? err : new Error(String(err));
-
-      if (wrapped.code === "ETIMEDOUT") {
-        child.killed = true;
-      }
-
-      child.emit("error", wrapped);
-
-      child._finalise(
-        "",
-        wrapped.message,
-        wrapped.code === "ETIMEDOUT" ? null : 1,
-        wrapped.signal ?? null,
-      );
-    });
-
-  return child;
+  return child.spawn(norm);
 }
 
 // ─── fork ───────────────────────────────────────────────────────────────────
@@ -2071,11 +2230,18 @@ export function fork(modulePath, args, options) {
     options,
   );
 
+  // Like spawn(): timeout, abort signal, and killSignal are validated even
+  // though the child runs in-realm.
+  validateTimeout(norm.timeout);
+  validateAbortSignal(norm.signal, "options.signal");
+  const killSignal = sanitizeKillSignal(norm.killSignal);
+
   // ─── In-realm fork (almostnode-style) ───
   // A "forked process" is a fresh module scope in the same JS realm.
   // No Web Worker, no iframe. The worker entry runs via the runtime's
   // loadModule, with a per-fork `process` object providing IPC.
   const child = new ChildProcess();
+  wireAbortSignal(norm.signal, child, killSignal);
   child.spawnfile = norm.file;
   child.spawnargs = norm.spawnargs;
 
@@ -2153,14 +2319,12 @@ export function fork(modulePath, args, options) {
   // Parent -> child IPC (serialized, cloned)
   let parentToChildQueue = Promise.resolve();
   child.send = function send(message, sendHandle, options, callback) {
-    if (typeof sendHandle === "function") {
-      callback = sendHandle;
-      sendHandle = undefined;
-      options = undefined;
-    } else if (typeof options === "function") {
-      callback = options;
-      options = undefined;
-    }
+    ({ message, sendHandle, options, callback } = validateSendArgs(
+      message,
+      sendHandle,
+      options,
+      callback,
+    ));
     if (!child.connected) {
       const err = Object.assign(new Error("Channel closed"), {
         code: "ERR_IPC_CHANNEL_CLOSED",

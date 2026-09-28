@@ -1467,3 +1467,161 @@ describe("sandbox guard (_RUNTIME_ forces the shim lane)", () => {
     delete globalThis._RUNTIME_;
   });
 });
+
+// ─── Validation fixes: 8 forced-shim parity bugs (2026-09-28) ───────────────
+// Every expectation below was verified against real node:child_process
+// (v24.20.0) before being written: same constructor, code, and message.
+// These failed on the pre-fix shim (red) and pass after the fix (green).
+
+describe("validation fixes (forced-shim parity work list)", () => {
+  test("serialization option is validated like Node", () => {
+    const cases = [
+      [null, "null"],
+      [42, "42"],
+      [Infinity, "Infinity"],
+      ["foo", "'foo'"],
+    ];
+    for (const [value, received] of cases) {
+      const e = throwsCode(() => cp.spawn("x", [], { serialization: value }));
+      expect(e).not.toBeNull();
+      expect(e.name).toBe("TypeError");
+      expect(e.code).toBe("ERR_INVALID_ARG_VALUE");
+      expect(e.message).toBe(
+        `The property 'options.serialization' must be one of: undefined, 'json', 'advanced'. Received ${received}`,
+      );
+    }
+    // fork() normalizes through the same path
+    const e2 = throwsCode(() => cp.fork("m", [], { serialization: null }));
+    expect(e2.code).toBe("ERR_INVALID_ARG_VALUE");
+    // valid values do not throw
+    expect(
+      throwsCode(() => cp.spawn("x", [], { serialization: "json" })),
+    ).toBeNull();
+    expect(
+      throwsCode(() => cp.spawn("x", [], { serialization: "advanced" })),
+    ).toBeNull();
+  });
+
+  test("timeout throws ERR_OUT_OF_RANGE with Node's string form", () => {
+    const e = throwsCode(() => cp.spawn("x", [], { timeout: "badValue" }));
+    expect(e).toBeInstanceOf(RangeError);
+    expect(e.code).toBe("ERR_OUT_OF_RANGE");
+    expect(e.message).toBe(
+      "The value of \"timeout\" is out of range. It must be an unsigned integer. Received 'badValue'",
+    );
+    // assert.throws' RegExp form matches String(err) — Node renders coded
+    // errors as `RangeError [ERR_OUT_OF_RANGE]: ...`
+    expect(String(e)).toBe(
+      "RangeError [ERR_OUT_OF_RANGE]: The value of \"timeout\" is out of range. It must be an unsigned integer. Received 'badValue'",
+    );
+    const e2 = throwsCode(() => cp.spawn("x", [], { timeout: {} }));
+    expect(e2.code).toBe("ERR_OUT_OF_RANGE");
+    expect(String(e2)).toMatch(/ERR_OUT_OF_RANGE/);
+  });
+
+  test("fork() validates timeout like spawn()", () => {
+    const e = throwsCode(() => cp.fork("m", { timeout: "badValue" }));
+    expect(e).not.toBeNull();
+    expect(e.code).toBe("ERR_OUT_OF_RANGE");
+    expect(String(e)).toMatch(/ERR_OUT_OF_RANGE/);
+    const e2 = throwsCode(() => cp.fork("m", { timeout: {} }));
+    expect(e2.code).toBe("ERR_OUT_OF_RANGE");
+  });
+
+  test("ChildProcess low-level spawn() validates its options", () => {
+    const c = new cp.ChildProcess(); // must not throw
+    const e = throwsCode(() => c.spawn(undefined));
+    expect(e.code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(e.message).toBe(
+      'The "options" argument must be of type object. Received undefined',
+    );
+    const e2 = throwsCode(() => c.spawn({ file: 5 }));
+    expect(e2.code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(e2.message).toBe(
+      'The "options.file" property must be of type string. Received type number (5)',
+    );
+    const e3 = throwsCode(() =>
+      c.spawn({ envPairs: 5, stdio: ["ignore", "ignore", "ignore", "ipc"] }),
+    );
+    expect(e3.code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(e3.message).toBe(
+      'The "options.envPairs" property must be an instance of Array. Received type number (5)',
+    );
+    const e4 = throwsCode(() => c.spawn({ file: "foo", args: 5 }));
+    expect(e4.code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(e4.message).toBe(
+      'The "options.args" property must be an instance of Array. Received type number (5)',
+    );
+  });
+
+  test("ChildProcess low-level spawn() works (shape + kill)", () => {
+    const c = new cp.ChildProcess();
+    c.on("error", () => {});
+    c.spawn({ file: "echo", args: ["hi"], stdio: "pipe" });
+    expect(Object.hasOwn(c, "pid")).toBe(true);
+    expect(Number.isInteger(c.pid)).toBe(true);
+    const e = throwsCode(() => c.kill("foo"));
+    expect(e.name).toBe("TypeError");
+    expect(e.code).toBe("ERR_UNKNOWN_SIGNAL");
+    expect(c.kill()).toBe(true);
+  });
+
+  test("send() argument validation (fork child)", () => {
+    const n = cp.fork("m");
+    n.on("error", () => {});
+    for (const args of [[], [undefined]]) {
+      const e = throwsCode(() => n.send(...args));
+      expect(e.name).toBe("TypeError");
+      expect(e.code).toBe("ERR_MISSING_ARGS");
+      expect(e.message).toBe('The "message" argument must be specified');
+    }
+    const e2 = throwsCode(() => n.send(Symbol("x")));
+    expect(e2.code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(e2.message).toBe(
+      'The "message" argument must be one of type string, object, number, or boolean. Received type symbol (Symbol(x))',
+    );
+    const e3 = throwsCode(() => n.send("msg", null, null));
+    expect(e3.code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(e3.message).toBe(
+      'The "options" argument must be of type object. Received null',
+    );
+    for (const v of ["", "foo", 0, NaN, 1]) {
+      expect(throwsCode(() => n.send("msg", null, v)).code).toBe(
+        "ERR_INVALID_ARG_TYPE",
+      );
+    }
+    const e4 = throwsCode(() => n.send("msg", "meow", undefined));
+    expect(e4.code).toBe("ERR_INVALID_HANDLE_TYPE");
+    expect(e4.message).toBe("This handle type cannot be sent");
+    n.kill();
+  });
+
+  test("spawn() with stdio 'ipc' installs the IPC surface", () => {
+    const s = cp.spawn("x", [], { stdio: ["pipe", "pipe", "pipe", "ipc"] });
+    s.on("error", () => {});
+    expect(typeof s.send).toBe("function");
+    expect(typeof s.disconnect).toBe("function");
+    expect(s.connected).toBe(true);
+    // send() still validates arguments like Node
+    const e = throwsCode(() => s.send("msg", null, null));
+    expect(e.code).toBe("ERR_INVALID_ARG_TYPE");
+    s.kill();
+  });
+
+  test("plain spawn() children still have no send()", () => {
+    const c = cp.spawn("echo", ["hi"]);
+    c.on("error", () => {});
+    expect(c.send).toBeUndefined();
+    expect(c.disconnect).toBeUndefined();
+    c.kill();
+  });
+
+  test("ChildProcess has Symbol.dispose (kills the child)", () => {
+    expect(typeof cp.ChildProcess.prototype[Symbol.dispose]).toBe("function");
+    const c = new cp.ChildProcess();
+    c.on("error", () => {});
+    expect(c.killed).toBe(false);
+    c[Symbol.dispose]();
+    expect(c.killed).toBe(true);
+  });
+});
