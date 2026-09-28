@@ -1428,3 +1428,42 @@ describe("no global pollution on import", () => {
     expect(globalThis.queueMicrotask).toBe(before.queueMicrotask);
   });
 });
+
+describe("sandbox guard (_RUNTIME_ forces the shim lane)", () => {
+  afterEach(() => {
+    delete globalThis._RUNTIME_;
+  });
+
+  test("_RUNTIME_ defeats the native bridge with no navigator and genuine getBuiltinModule", async () => {
+    jest.resetModules();
+    delete globalThis.navigator; // sandbox deny-lists the ambient navigator
+    delete globalThis.window;
+    globalThis._RUNTIME_ = {}; // sandbox marker: never present under genuine Node
+    const sandboxCp = await import("../src/child_process.js");
+    const real = await import("node:child_process");
+    // The native bridge must stay off: without this guard the checks above
+    // all pass in the sandbox and a VFS-resolving getBuiltinModule would hand
+    // the shim its own exports back as "native".
+    expect(sandboxCp.spawn).not.toBe(real.spawn);
+    expect(sandboxCp.exec).not.toBe(real.exec);
+    expect(sandboxCp.fork).not.toBe(real.fork);
+    expect(sandboxCp.ChildProcess).not.toBe(real.ChildProcess);
+    delete globalThis._RUNTIME_;
+  });
+
+  test("_RUNTIME_ defeats the native bridge with a spoofed Node.js/ userAgent", async () => {
+    jest.resetModules();
+    Object.defineProperty(globalThis, "navigator", {
+      value: { userAgent: "Node.js/0" }, // e.g. planted by navigator install()
+      configurable: true,
+    });
+    delete globalThis.window;
+    globalThis._RUNTIME_ = {};
+    const sandboxCp = await import("../src/child_process.js");
+    const real = await import("node:child_process");
+    expect(sandboxCp.spawn).not.toBe(real.spawn);
+    expect(sandboxCp.ChildProcess).not.toBe(real.ChildProcess);
+    delete globalThis.navigator;
+    delete globalThis._RUNTIME_;
+  });
+});

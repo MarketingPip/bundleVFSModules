@@ -85,6 +85,18 @@ import { Readable, Writable } from "./stream.js";
 // pinned by the repo tests with a mocked navigator.
 function loadNativeChildProcess() {
   try {
+    // Jared's sandbox always defines `globalThis._RUNTIME_`; genuine Node
+    // never does. The userAgent and versions.node checks below can both be
+    // spoofed by an installed shim (e.g. navigator install() planting a
+    // `Node.js/` userAgent), and a VFS-resolving getBuiltinModule would hand
+    // this module its own exports back as "native" — so _RUNTIME_ is the one
+    // unfakeable signal and it short-circuits first.
+    if (
+      typeof globalThis !== "undefined" &&
+      typeof globalThis._RUNTIME_ !== "undefined"
+    ) {
+      return undefined;
+    }
     const proc = typeof process !== "undefined" ? process : undefined;
     const getBuiltin =
       proc && typeof proc.getBuiltinModule === "function"
