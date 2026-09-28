@@ -9764,222 +9764,11 @@ console.log(isString("cool"));`,
 await demo();`,
 };
 
-// DOM elements
-const codeInput = document.getElementById("codeInput");
-const output = document.getElementById("output");
-const runBtn = document.getElementById("runBtn");
-const clearBtn = document.getElementById("clearBtn");
-const status = document.getElementById("status");
-const execTime = document.getElementById("execTime");
-const exampleBtns = document.querySelectorAll(".example-btn");
-
-// Initialize xterm.js terminal emulator. This replaces the old
-// DOM-div-based terminal. xterm handles ANSI escape codes natively
-// (cursor movement, colors, clear screen), which the div-based
-// terminal could not.
-const term = new Terminal({
-  cols: 80,
-  rows: 24,
-  cursorBlink: true,
-  theme: {
-    background: "#1a1b26",
-    foreground: "#c0caf5",
-  },
-});
-term.open(output);
-// Make terminal globally accessible for stdout/stderr handlers
-globalThis._xterm = term;
-// Wire user input to sandbox stdin. xterm's onData fires for every
-// keypress including special keys (arrows, backspace, etc.).
-term.onData((data) => {
-  sandbox.invoke("__stdin__", data).catch((err) => {
-    console.error("[stdin] send failed:", err);
-  });
-});
-let currentExample = null;
-// Load example code
-exampleBtns.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const example = btn.dataset.example;
-    codeInput.value = examples[example];
-    sandbox.requireAllowed = false;
-    if (example === "require") {
-      sandbox.requireAllowed = true;
-    }
-
-    currentExample = example;
-
-    codeInput.focus();
-  });
-});
-
-// Clear output
-clearBtn.addEventListener("click", () => {
-  output.innerHTML =
-    '<div class="text-gray-500 italic">Output cleared...</div>';
-  execTime.textContent = "";
-});
-
-function getArgv() {
-  const raw = document.getElementById("argvInput").value;
-  return `node script.js ${raw}`;
-}
-
-function toggleArgvInput(enabled) {
-  const input = document.getElementById("argvInput");
-  // If enabled is true, input should be enabled (disabled = false)
-  input.disabled = !enabled;
-}
-
-function getStdin() {
-  return document.getElementById("stdinInput").value;
-}
-
-// NOTE: The old DOM-div-based terminal (shadowBuffer, toNodeKeypress,
-// createNewTerminalLine, updateTerminalInput, lineNumber) has been replaced
-// by xterm.js. See the Terminal initialization above. User input is wired
-// via term.onData(), output via term.write(). xterm handles ANSI natively.
-
-document.getElementById("sendInput").addEventListener("click", () => {
-  sandbox
-    .invoke("__stdin__", "\n")
-    .catch((err) => console.error("[stdin] send failed:", err));
-  const stdinInput = document.getElementById("stdinInput");
-  if (stdinInput) stdinInput.value = "";
-});
-/* 
-
-document.getElementById("sendInput").addEventListener("click", async () => {
-  const input = getStdin();
- // console.log("Sending stdin:", input);
-  
-  await sandbox.invoke('__stdin__', input + "\n") // remove \n if emitting keypress.
-});
-*/
-
-// Simulate code execution
-runBtn.addEventListener("click", async () => {
-  let code = codeInput.value;
-
-  if (currentExample === "typescript") {
-    code = transpileTypeScript(code);
-  }
-
-  // Update UI
-  runBtn.disabled = true;
-  runBtn.innerHTML =
-    '<svg class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg> Running...';
-  status.textContent = "Executing...";
-  status.className = "text-yellow-400";
-  if (!output.classList.contains("whitespace-pre-wrap")) {
-    output.classList.add("whitespace-pre-wrap");
-  }
-  output.innerHTML =
-    '<div class="text-yellow-400 animate-pulse">⚡ Executing code...</div>';
-
-  const startTime = performance.now();
-
-  try {
-    // Initialize and execute
-    await sandbox.init();
-
-    const isRequireAllowed = true;
-
-    const _allowedGlobals = [];
-
-    if (sandbox.requireAllowed) {
-      _allowedGlobals.push("require");
-    }
-
-    _allowedGlobals.push("setImmediate");
-
-    _allowedGlobals.push("fs");
-
-    _allowedGlobals.push("interop");
-    _allowedGlobals.push("type");
-    _allowedGlobals.push("readline");
-    _allowedGlobals.push("__dirname");
-    _allowedGlobals.push("Buffer");
-    //_allowedGlobals.push('globalThis')
-
-    refCheck(code, _allowedGlobals);
-    toggleArgvInput(false);
-
-    const result = await sandbox.execute(code);
-
-    //this._serverRunning = false;
-
-    // console.log(result)
-
-    const logs = result?.logs;
-
-    console.log(result);
-    if (!result.success) {
-      throw new Error(result.stack);
-    }
-
-    // Initial render
-
-    renderFiles(result.fs);
-
-    /* output.innerHTML = "";
-              logs.forEach(({ type, args }) => {
-                const levelClasses = {
-                info: 'text-blue-500',
-                error: 'text-red-500',
-                warn: 'text-yellow-500',
-                debug: 'text-purple-500',
-                log: ''
-              };
-
-               const cls = levelClasses[type] || '';
-
-              const span = document.createElement('span');
-              span.className = `whitespace-pre-wrap font-mono ${cls}`;
-              span.textContent = args;
-
-              output.appendChild(span);
-              output.appendChild(document.createElement('br'));
-               }); */
-
-    const endTime = performance.now();
-
-    //const executionTime = (endTime - startTime).toFixed(2);
-    const executionTime = result?.executionTime;
-    execTime.textContent = `Execution time: ${executionTime}ms`;
-    status.textContent = "Success";
-    status.className = "text-green-400";
-  } catch (err) {
-    console.log(err);
-    const endTime = performance.now();
-    const executionTime = (endTime - startTime).toFixed(2);
-
-    let message = err.message;
-
-    execTime.textContent = `Execution time: ${executionTime}ms`;
-    output.innerHTML = `<div class="text-red-400">✗ Error: ${message}</div>`;
-    status.textContent = "Error";
-    status.className = "text-red-400";
-  } finally {
-    toggleArgvInput(true);
-
-    // Reset button
-    runBtn.disabled = false;
-    runBtn.innerHTML =
-      '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> Run Code';
-  }
-});
-
-// Smooth scrolling for anchor links
-document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
-  anchor.addEventListener("click", function (e) {
-    e.preventDefault();
-    const target = document.querySelector(this.getAttribute("href"));
-    if (target) {
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  });
-});
+// ---------------------------------------------------------------------------
+// Shared error-formatting helpers. Used by core sandbox code (acorn
+// parse-error paths at module top level), so they must stay at module scope
+// and never move inside the demo-playground init below. (Vitest gap #0
+// reorganization: previously interleaved with the playground init.)
 
 class FormattedError extends Error {
   constructor(originalError, formattedMessage) {
@@ -10006,6 +9795,7 @@ class FormattedError extends Error {
     return this.formattedMessage || this.message;
   }
 }
+
 function formatErrors(code, err) {
   const message = err?.message || "Unknown error";
 
@@ -10096,18 +9886,257 @@ function formatErrors2(code, err) {
   return new FormattedError(err, formattedMessage);
 }
 
+// ---------------------------------------------------------------------------
+// Playground DOM helpers. Kept at module top level (and null-safe) because
+// the sandbox beforeExecute hook (upgateProgressArgv -> getArgv) can call
+// getArgv() even when the demo DOM is absent.
+function getArgv() {
+  const el = document.getElementById("argvInput");
+  const raw = el ? el.value : "";
+  return `node script.js ${raw}`;
+}
+
+function toggleArgvInput(enabled) {
+  const input = document.getElementById("argvInput");
+  // If enabled is true, input should be enabled (disabled = false)
+  if (input) input.disabled = !enabled;
+}
+
+// Files panel lookup. Null-safe: null when the demo DOM is absent;
+// renderFiles()/renderFiles2() no-op in that case (see below).
 const filesDiv = document.getElementById("files");
 
-// Event delegation: only ONE listener for the whole list
-filesDiv.addEventListener("click", (event) => {
-  const button = event.target.closest("button");
-  if (!button) return;
+// __BVM_PLAYGROUND_BEGIN__
+// Demo playground. Everything inside initPlayground() requires the demo
+// page DOM (codeInput, output, runBtn, sendInput, files, ...). When
+// runtime.js is imported as a library in a minimal host page, the guard
+// at the bottom skips the playground entirely, so the import has no DOM
+// side effects and never throws on missing elements. (Vitest gap #0.)
+function initPlayground() {
+  // DOM elements
+  const codeInput = document.getElementById("codeInput");
+  const output = document.getElementById("output");
+  const runBtn = document.getElementById("runBtn");
+  const clearBtn = document.getElementById("clearBtn");
+  const status = document.getElementById("status");
+  const execTime = document.getElementById("execTime");
+  const exampleBtns = document.querySelectorAll(".example-btn");
 
-  const pre = button.nextElementSibling;
-  if (!pre) return;
+  // Initialize xterm.js terminal emulator. This replaces the old
+  // DOM-div-based terminal. xterm handles ANSI escape codes natively
+  // (cursor movement, colors, clear screen), which the div-based
+  // terminal could not.
+  const term = new Terminal({
+    cols: 80,
+    rows: 24,
+    cursorBlink: true,
+    theme: {
+      background: "#1a1b26",
+      foreground: "#c0caf5",
+    },
+  });
+  term.open(output);
+  // Make terminal globally accessible for stdout/stderr handlers
+  globalThis._xterm = term;
+  // Wire user input to sandbox stdin. xterm's onData fires for every
+  // keypress including special keys (arrows, backspace, etc.).
+  term.onData((data) => {
+    sandbox.invoke("__stdin__", data).catch((err) => {
+      console.error("[stdin] send failed:", err);
+    });
+  });
+  let currentExample = null;
+  // Load example code
+  exampleBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const example = btn.dataset.example;
+      codeInput.value = examples[example];
+      sandbox.requireAllowed = false;
+      if (example === "require") {
+        sandbox.requireAllowed = true;
+      }
 
-  pre.classList.toggle("hidden");
+      currentExample = example;
+
+      codeInput.focus();
+    });
+  });
+
+  // Clear output
+  clearBtn.addEventListener("click", () => {
+    output.innerHTML =
+      '<div class="text-gray-500 italic">Output cleared...</div>';
+    execTime.textContent = "";
+  });
+
+  // NOTE: The old DOM-div-based terminal (shadowBuffer, toNodeKeypress,
+  // createNewTerminalLine, updateTerminalInput, lineNumber) has been replaced
+  // by xterm.js. See the Terminal initialization above. User input is wired
+  // via term.onData(), output via term.write(). xterm handles ANSI natively.
+
+  document.getElementById("sendInput").addEventListener("click", () => {
+    sandbox
+      .invoke("__stdin__", "\n")
+      .catch((err) => console.error("[stdin] send failed:", err));
+    const stdinInput = document.getElementById("stdinInput");
+    if (stdinInput) stdinInput.value = "";
+  });
+  /* 
+
+document.getElementById("sendInput").addEventListener("click", async () => {
+  const input = getStdin();
+ // console.log("Sending stdin:", input);
+  
+  await sandbox.invoke('__stdin__', input + "\n") // remove \n if emitting keypress.
 });
+*/
+
+  // Simulate code execution
+  runBtn.addEventListener("click", async () => {
+    let code = codeInput.value;
+
+    if (currentExample === "typescript") {
+      code = transpileTypeScript(code);
+    }
+
+    // Update UI
+    runBtn.disabled = true;
+    runBtn.innerHTML =
+      '<svg class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg> Running...';
+    status.textContent = "Executing...";
+    status.className = "text-yellow-400";
+    if (!output.classList.contains("whitespace-pre-wrap")) {
+      output.classList.add("whitespace-pre-wrap");
+    }
+    output.innerHTML =
+      '<div class="text-yellow-400 animate-pulse">⚡ Executing code...</div>';
+
+    const startTime = performance.now();
+
+    try {
+      // Initialize and execute
+      await sandbox.init();
+
+      const _allowedGlobals = [];
+
+      if (sandbox.requireAllowed) {
+        _allowedGlobals.push("require");
+      }
+
+      _allowedGlobals.push("setImmediate");
+
+      _allowedGlobals.push("fs");
+
+      _allowedGlobals.push("interop");
+      _allowedGlobals.push("type");
+      _allowedGlobals.push("readline");
+      _allowedGlobals.push("__dirname");
+      _allowedGlobals.push("Buffer");
+      //_allowedGlobals.push('globalThis')
+
+      refCheck(code, _allowedGlobals);
+      toggleArgvInput(false);
+
+      const result = await sandbox.execute(code);
+
+      //this._serverRunning = false;
+
+      // console.log(result)
+
+      console.log(result);
+      if (!result.success) {
+        throw new Error(result.stack);
+      }
+
+      // Initial render
+
+      renderFiles(result.fs);
+
+      /* output.innerHTML = "";
+              logs.forEach(({ type, args }) => {
+                const levelClasses = {
+                info: 'text-blue-500',
+                error: 'text-red-500',
+                warn: 'text-yellow-500',
+                debug: 'text-purple-500',
+                log: ''
+              };
+
+               const cls = levelClasses[type] || '';
+
+              const span = document.createElement('span');
+              span.className = `whitespace-pre-wrap font-mono ${cls}`;
+              span.textContent = args;
+
+              output.appendChild(span);
+              output.appendChild(document.createElement('br'));
+               }); */
+
+      //const executionTime = (endTime - startTime).toFixed(2);
+      const executionTime = result?.executionTime;
+      execTime.textContent = `Execution time: ${executionTime}ms`;
+      status.textContent = "Success";
+      status.className = "text-green-400";
+    } catch (err) {
+      console.log(err);
+      const endTime = performance.now();
+      const executionTime = (endTime - startTime).toFixed(2);
+
+      let message = err.message;
+
+      execTime.textContent = `Execution time: ${executionTime}ms`;
+      output.innerHTML = `<div class="text-red-400">✗ Error: ${message}</div>`;
+      status.textContent = "Error";
+      status.className = "text-red-400";
+    } finally {
+      toggleArgvInput(true);
+
+      // Reset button
+      runBtn.disabled = false;
+      runBtn.innerHTML =
+        '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> Run Code';
+    }
+  });
+
+  // Smooth scrolling for anchor links
+  document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+    anchor.addEventListener("click", function (e) {
+      e.preventDefault();
+      const target = document.querySelector(this.getAttribute("href"));
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  });
+
+  // Files list event delegation: only ONE listener for the whole list.
+  // Guarded: filesDiv is null when the demo DOM is absent.
+  if (filesDiv) {
+    filesDiv.addEventListener("click", (event) => {
+      const button = event.target.closest("button");
+      if (!button) return;
+
+      const pre = button.nextElementSibling;
+      if (!pre) return;
+
+      pre.classList.toggle("hidden");
+    });
+  }
+}
+// __BVM_PLAYGROUND_END__
+
+// __BVM_PLAYGROUND_GUARD_BEGIN__
+// The demo playground requires the demo page DOM. In a minimal host page
+// (runtime.js imported as a library) the elements are absent and the
+// playground init is skipped entirely — the import stays side-effect free.
+const __bvmPlaygroundPresent =
+  typeof document !== "undefined" &&
+  !!document.getElementById("codeInput") &&
+  !!document.getElementById("output");
+if (__bvmPlaygroundPresent) {
+  initPlayground();
+}
+// __BVM_PLAYGROUND_GUARD_END__
 
 function detectMimeType(uint8) {
   if (
@@ -10222,6 +10251,7 @@ function flattenFileTree(obj, parentPath = "") {
 let activeBlobUrls = [];
 
 function renderFiles(filesObj) {
+  if (!filesDiv) return; // no files panel (minimal host page) — nothing to render
   if (!filesObj) filesObj = {};
 
   filesObj = flattenFileTree(filesObj);
