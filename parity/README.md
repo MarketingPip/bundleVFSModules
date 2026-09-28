@@ -36,6 +36,30 @@ npm run parity -- path        # or: node parity/run.mjs path
 name maps to `-` in test file names, so `node parity/run.mjs string_decoder`
 picks up `test-string-decoder*.js`.
 
+### `PARITY_FORCE_SHIM=1` — testing the browser lane
+
+Some shims contain a *native bridge*: under genuine Node they delegate to
+the real builtin (`child_process` → `loadNativeChildProcess()`,
+`os` → `_nativeOs`). A default parity run therefore exercises the bridge and
+measures Node-vs-Node — a tautology, not a test of our code.
+
+```sh
+PARITY_FORCE_SHIM=1 node parity/run.mjs child_process
+```
+
+defines the sandbox marker `globalThis._RUNTIME_` (non-enumerably, so Node's
+own global-leak detector stays quiet) before any test or shim loads. Every
+native bridge checks that marker first and stays off, so the official suite
+runs against the browser fallback — the code that actually executes in
+Jared's sandbox. This is the honest compatibility number; the default run
+only proves export-surface identity.
+
+The shim lane gets its own expectations file,
+`parity/expected-failures.shim.json`: the same test file can legitimately
+fail in the browser lane (real process spawning is a noop by design) while
+passing through the bridge, so one flat file cannot describe both lanes.
+`parity/report.json` records which lane a run used.
+
 ## Scoreboard
 
 Official suites are Node.js's own `test/parallel/test-<module>*.js` files,
@@ -43,7 +67,10 @@ pinned to **v24.20.0** and vendored under `parity/node-test/parallel/`.
 "Official" = `node parity/run.mjs <module>` pass/total.
 "Repo tests" = hand-written suites in `tests/`.
 Every score below was produced (or re-verified) from this repo — no
-score is taken on trust.
+score is taken on trust. Modules with a native bridge report two numbers:
+**shim** = `PARITY_FORCE_SHIM=1` (the browser fallback — the code that runs
+in the sandbox; the honest number) and **bridge** = default run (native
+delegation — export-surface identity only).
 
 ### Full official parity (100% — strict CI gate)
 
@@ -56,7 +83,7 @@ score is taken on trust.
 | `events` | 9/9 | — | #6 | merged |
 | `assert` (+`strict`) | 19/19 | 80/80 | #7 | merged |
 | `diagnostics_channel` | 26/26 | — | #11 | merged |
-| `os` | 7/7 | — | #12 | merged |
+| `os` | 5/7 shim · 7/7 bridge | — | #12 | merged |
 | `url` | 17/17 | — | #13 | merged |
 | `console` | 22/22 | — | #14 | merged |
 | `timers` (+`promises`) | 45/45 | 15/15 | #15 | merged |
@@ -91,7 +118,7 @@ documented limits — never silent data fabrication.
 | `vm` | 40/97 | 46/46 | #31 | merged | `eval`-based; weaker isolation than V8 contexts |
 | `zlib` | 31/65 | 38/38 | #59 | merged | brotli has no browser API; CompressionStream covers gzip/deflate |
 | `process` | 81/97 | 47/47 | #33 | merged | mirrors `globalThis._RUNTIME_.process`; OS signals unavailable |
-| `child_process` | 7/112 | 47/47 | #34 | merged | no OS processes; worker/postMessage emulation |
+| `child_process` | 4/112 shim · 98/112 bridge | 47/47 | #34 | merged | no OS processes; worker/postMessage emulation |
 | `module` | 30/32 | 83/83 | #35 | merged | `runMain`/`_preloadModules` are noops |
 | `http` (+`https`, `_http_*`) | 460/743 · 20/67 | 65/65 | #36 | merged | fetch-backed; no raw TCP/TLS servers |
 | `dns` (+`promises`) | 10/31 | 93/93 | #37, #58 | merged | DNS-over-HTTPS only; no raw UDP |
