@@ -68,6 +68,21 @@ own parity shims (core shims stay ported JS — the plugin is for library
 around any single toolchain. The core only knows "compile sources → wasm
 bytes" and "run wasm bytes on my VFS".
 
+**Musts from Jared's 2026-09-28 verdicts** (`docs/COMPETITOR_TECHNIQUES.md`):
+
+- Package `exports`/`imports` field resolution for the VFS — the resolution
+  logic is a must (the npm-install product stays OUT per AGENTS.md rule 11).
+- WASI execution path (Nodepod's `wasi.ts` + `napi-wasm-worker.ts`) with
+  wa-sqlite as the standing WASM-of-the-real-thing example (AGENTS.md
+  rule 8).
+- A Sharp-style Node-API→WASM port writeup as the template: "not supported"
+  becomes a porting guide, never a dead end.
+- Evaluate `reclaimprotocol/tls` as the `tls.js` dependency instead of
+  hand-rolled crypto — custom license, check terms before vendoring; needs
+  a byte transport (WS→TCP bridge or the future Node.js-hosted lane).
+- **OUT**: esbuild-wasm anywhere — way too heavy for this project; our
+  `_build_file` transform stays the CJS→ESM path.
+
 ### 2. Interop audit leftovers
 
 - Fix possibly reversed direction headings in interop docs.
@@ -76,6 +91,14 @@ bytes" and "run wasm bytes on my VFS".
 - Complete Chrome 137 verification: iframe / postMessage /
   `sandbox.invoke()` and the cookie wrapper.
 - Resolve the runtime-template source of truth.
+- **Framework integrations (must):** Vite/Next copy-based setup + plugins
+  so host apps serve runtime assets and previews (Nodepod's
+  `src/integrations/vite.ts`, `next.ts` pattern) — zero manual wiring for
+  host developers.
+- **Demo-only fake shell:** a fake shell for developers learning the
+  library — npm install-time behavior (reads each package's `bin` field,
+  routes through the runtime's `node`) plus sample code. Clearly marked
+  demo; never on the product path (AGENTS.md rule 11).
 
 ### 3. Full-suite open-handle investigation
 
@@ -105,3 +128,34 @@ runtime once it exists.
 **Non-goals**: replacing the Node-hosted parity lane (it stays as the fast
 lane); changing any shim to suit the harness; enshrining harness artifacts
 as expected failures.
+
+**Must**: headless host abstraction — the same core runtime runs on browser
+Web Workers and Node/Bun worker threads (Nodepod's `src/headless.ts` +
+`src/host/`), which gives a real-Node test lane for free.
+
+### 5. Host runtime product surface
+
+The public surface host developers actually touch — lifecycle, previews,
+and the process story. Technique references in
+`docs/COMPETITOR_TECHNIQUES.md`.
+
+- **Lifecycle API docs (must):** explicit boot/teardown promises, exit
+  codes, `server-ready` events, preview URL scheme — the product surface we
+  don't have yet (WebContainers' public docs are the template).
+- **Preview routing (must):** Service-Worker `/__virtual__/{port}/` route so
+  guest servers are real navigable URLs. Patching `fetch` only covers
+  programmatic requests from JS — the SW route covers address-bar
+  navigation, iframes, and new-tab previews.
+- **Worker-backed spawn (must):** stdio streaming, signals, exit codes —
+  workers boot from a VFS snapshot and receive changes over a VFS bridge
+  (Nodepod's `process-manager.ts` + `process-worker-entry.ts`). The honest
+  process story.
+- **DNS-over-HTTPS (must):** real DNS against
+  `https://cloudflare-dns.com/dns-query` for `dns.js` — no inventing
+  answers (Nodepod's `dns.ts`).
+- **Fetch platform-layer audit (must):** check whether our iframe realm
+  needs the browser `fetch`/`Headers`/`Response` patched to Node 20 undici
+  behavior (set-cookie handling, Headers parity — Nodepod's
+  `fetch-response.ts`).
+- **`forwardPreviewErrors`** pattern for preview error surfacing
+  (WebContainers).
