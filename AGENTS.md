@@ -88,14 +88,21 @@ at sandbox startup to install globals like `Buffer`, `setImmediate`).
    implementation — the wa-sqlite pattern — instead of a from-scratch engine.
    Reimplementation needs a stated reason, recorded in the commit.
 9. **Differential testing for emulated external behavior.** Where we emulate
-   something with a real-world counterpart (shell, dns, http), CI runs the
+   something with a real-world counterpart (dns, http), CI runs the
    real binary and diffs stdout/stderr/exit code — Nodepod's
    `bash-differential.test.ts` pattern. Catches drift our own assertions
-   can't see.
+   can't see. No shell differential — we don't build a shell (rule 11).
 10. **The capability matrix is generated, never hand-written.** `module × API
     × status` (implemented / honest-noop / unsupported-with-reason) must be
     derivable from code and CI. Hand-written tables rot — we watched it
     happen to AlmostNode's README.
+11. **No shell, no package manager as product.** We are a runtime library,
+    not a dev environment: no shell emulation, no npm-install product, no
+    esbuild anywhere (way too heavy — our `_build_file` transform stays the
+    CJS→ESM path). The one exception is a clearly-marked **demo-only** fake
+    shell for developers learning the library — npm install-time behavior
+    (reads each package's `bin` field, routes through the runtime's `node`)
+    plus sample code — which must never sit on the product path.
 
 ## Working in this shared tree
 
