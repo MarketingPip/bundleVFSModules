@@ -2445,14 +2445,16 @@ export class ImportResolver {
     return transformed
   }
 
-  // Gap #6: `node:`-prefixed builtins are not CDN packages — esm.sh 400s
-  // on them. Pass recognized ones through untouched so the sandbox loader
-  // resolves them via the builtin interop path (the same path VFS-file
-  // imports already use). Unrecognized `node:` specifiers keep the old
+  // Gap #6/#5: builtins are not CDN packages. esm.sh 400s on `node:`-style
+  // specifiers and would serve its own shim for bare names instead of our
+  // dist shims. Node treats `node:X` and `X` identically for every builtin,
+  // so pass recognized ones (prefixed or bare) through untouched — the
+  // sandbox loader resolves them via the builtin interop path (the same
+  // path VFS-file imports already use). Unrecognized specifiers keep the old
   // behavior (CDN fallback).
-  if (typeof transformed === 'string' && transformed.indexOf('node:') === 0) {
-    const __nodeNorm = normalizeBuiltinSpecifier(transformed, builtinModules);
-    if (__nodeNorm.isNodeBuiltIn) {
+  if (typeof transformed === 'string') {
+    const __builtinNorm = normalizeBuiltinSpecifier(transformed, builtinModules);
+    if (__builtinNorm.isNodeBuiltIn) {
       this.cache.set(cacheKey, transformed);
       return transformed;
     }

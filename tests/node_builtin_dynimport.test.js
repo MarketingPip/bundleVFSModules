@@ -122,18 +122,23 @@ describe('normalizeBuiltinSpecifier (gap #6)', () => {
   });
 });
 
-describe('ImportResolver node: pass-through wiring (gap #6)', () => {
-  test('_transformSource guards node:-prefixed builtins before the CDN fallback', () => {
-    // The guard itself delegates to normalizeBuiltinSpecifier (unit-tested
-    // above); this pins the wiring so a future edit cannot silently drop
-    // the guard and reintroduce the esm.sh 400. The real proof is the
-    // iframe probe (result-gap6.json).
+describe('ImportResolver builtin pass-through wiring (gap #6, generalized by gap #5)', () => {
+  test('_transformSource guards recognized builtins before the CDN fallback', () => {
+    // The guard delegates to normalizeBuiltinSpecifier (unit-tested above);
+    // this pins the wiring so a future edit cannot silently drop the guard
+    // and reintroduce the esm.sh 400 (gap #6) or the esm.sh shim
+    // substitution (gap #5). Gap #5 generalized the guard from
+    // `node:`-prefixed to all recognized builtins (Node treats `node:X`
+    // and `X` identically). Behavioral coverage lives in
+    // tests/sync_require_bare_builtins.test.js; the iframe probe is the
+    // real proof.
     const start = RUNTIME_SRC.indexOf('_transformSource(source, kind) {');
     expect(start).not.toBe(-1);
     const fallback = RUNTIME_SRC.indexOf('this.cdnBase}', start);
-    const guard = RUNTIME_SRC.indexOf("indexOf('node:') === 0", start);
-    expect(guard).not.toBe(-1);
-    expect(guard).toBeLessThan(fallback);
-    expect(RUNTIME_SRC.slice(guard, fallback)).toContain('normalizeBuiltinSpecifier');
+    expect(fallback).not.toBe(-1);
+    const guardCall = RUNTIME_SRC.indexOf('normalizeBuiltinSpecifier(transformed, builtinModules)', start);
+    expect(guardCall).not.toBe(-1);
+    expect(guardCall).toBeLessThan(fallback);
+    expect(RUNTIME_SRC.slice(guardCall, fallback)).toContain('isNodeBuiltIn');
   });
 });
