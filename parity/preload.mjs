@@ -22,15 +22,18 @@ const testsDir =
   path.join(repoRoot, "parity", "node-test", "parallel") + path.sep;
 const target = process.env.PARITY_TARGET;
 
-// PARITY_FORCE_SHIM=1 — exercise the browser fallback lane instead of native
-// delegation. Defines the sandbox marker `globalThis._RUNTIME_` before any
-// test or shim loads, so native bridges (child_process loadNativeChildProcess,
-// os _nativeOs, …) stay off and Node's official tests run against the code
-// that actually executes in Jared's sandbox. Without it, parity for delegated
-// modules measures Node-vs-Node: a tautology, not a test of our shims.
-// Only the marker is defined — no other sandbox services are faked.
+// Shim lane is the default: parity always tests our runtime shims, never
+// native delegation. PARITY_NATIVE=1 opts into the bridge diagnostic lane
+// (official tests run against Node itself — a tautology, not a shim test).
+// PARITY_FORCE_SHIM=1 is accepted for backwards compatibility and is a no-op:
+// the shim lane is already the default.
+// The marker is defined before any test or shim loads, so native bridges
+// (child_process loadNativeChildProcess, os _nativeOs, …) stay off and
+// Node's official tests run against the code that actually executes in
+// Jared's sandbox. Only the marker is defined — no other sandbox services
+// are faked.
 if (
-  process.env.PARITY_FORCE_SHIM === "1" &&
+  process.env.PARITY_NATIVE !== "1" &&
   typeof globalThis._RUNTIME_ === "undefined"
 ) {
   // Non-enumerable: Node's own test/common global-leak detector
