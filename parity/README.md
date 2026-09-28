@@ -70,10 +70,10 @@ pinned to **v24.20.0** and vendored under `parity/node-test/parallel/`.
 "Official" = `node parity/run.mjs <module>` pass/total.
 "Repo tests" = hand-written suites in `tests/`.
 Every score below was produced (or re-verified) from this repo — no
-score is taken on trust. Modules with a native bridge report two numbers:
-**shim** = the default run (the browser fallback — the code that runs in
-the sandbox; the honest number) and **bridge** = `PARITY_NATIVE=1`
-(native delegation — export-surface identity only).
+score is taken on trust. Every number is the **shim** score: the default run
+against the browser fallback — the code that runs in the sandbox. The bridge
+diagnostic lane (`PARITY_NATIVE=1`) is never quoted as a score; it proves
+export-surface identity only.
 
 ### Full official parity (100% — strict CI gate)
 
@@ -83,10 +83,10 @@ the sandbox; the honest number) and **bridge** = `PARITY_NATIVE=1`
 | `punycode` | 1/1 | — | #3 | merged |
 | `querystring` | 4/4 | — | #4 | merged |
 | `string_decoder` | 3/3 | — | #5 | merged |
-| `events` | 1/9 | — | #6 | merged | `als-browser` (via `async_hooks`) patches the timer globals at import time; 8 tests trip Node's leak detector. Pre-existing in both lanes — a lazy import of `als-browser` (only when the native bridge is unavailable) would reclaim these |
+| `events` | 1/9 | — | #6 | merged | `als-browser` (via `async_hooks`) patches the timer globals at import time; 8 tests trip Node's leak detector. Pre-existing (also fails with `PARITY_NATIVE=1`) — a lazy import of `als-browser` (only when the native bridge is unavailable) would reclaim these |
 | `assert` (+`strict`) | 19/19 | 80/80 | #7 | merged |
 | `diagnostics_channel` | 26/26 | — | #11 | merged |
-| `os` | 5/7 shim · 7/7 bridge | — | #12 | merged |
+| `os` | 5/7 | — | #12 | merged |
 | `url` | 17/17 | — | #13 | merged |
 | `console` | 22/22 | — | #14 | merged |
 | `timers` (+`promises`) | 45/45 | 15/15 | #15 | merged |
@@ -121,7 +121,7 @@ documented limits — never silent data fabrication.
 | `vm` | 40/97 | 46/46 | #31 | merged | `eval`-based; weaker isolation than V8 contexts |
 | `zlib` | 31/65 | 38/38 | #59 | merged | brotli has no browser API; CompressionStream covers gzip/deflate |
 | `process` | 81/97 | 47/47 | #33 | merged | mirrors `globalThis._RUNTIME_.process`; OS signals unavailable |
-| `child_process` | 4/112 shim · 98/112 bridge | 47/47 | #34 | merged | no OS processes; worker/postMessage emulation |
+| `child_process` | 4/112 | 47/47 | #34 | merged | no OS processes; worker/postMessage emulation |
 | `module` | 30/32 | 83/83 | #35 | merged | `runMain`/`_preloadModules` are noops |
 | `http` (+`https`, `_http_*`) | 460/743 · 20/67 | 65/65 | #36 | merged | fetch-backed; no raw TCP/TLS servers |
 | `dns` (+`promises`) | 10/31 | 93/93 | #37, #58 | merged | DNS-over-HTTPS only; no raw UDP |
