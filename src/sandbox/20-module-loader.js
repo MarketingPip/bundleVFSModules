@@ -6,6 +6,28 @@
 // Maps resolvedKey -> { status: 'loading' | 'done', exports, promise }
 const moduleRegistry = new Map();
 
+// Gap #6: single shared `node:`-prefix normalizer. Node treats `node:X`
+// and `X` identically for EVERY builtin; the old `isStrippable` check only
+// covered the four builtins whose listed names literally contain `node:`.
+// Keep in sync with normalizeBuiltinSpecifier in runtime.js (host scope).
+// Self-contained and backtick-free: this source is inlined into generated
+// scripts via toString() elsewhere.
+function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
+  var modulePath = specifier;
+  var bare = (typeof specifier === 'string' && specifier.indexOf('node:') === 0)
+    ? specifier.slice(5)
+    : specifier;
+  var listed = false;
+  for (var i = 0; i < nodeBuiltins.length; i++) {
+    if (nodeBuiltins[i] === specifier || nodeBuiltins[i] === bare) listed = true;
+  }
+  var isNodeBuiltIn = listed;
+  if (isNodeBuiltIn) {
+    modulePath = String(bare).replace('/', '_').replace('RUNTIME:', 'RUNTIME_');
+  }
+  return { isNodeBuiltIn: isNodeBuiltIn, modulePath: modulePath };
+}
+
 /**
  * @param {string} modulePath     - The import path as written (e.g. './foo', '../bar', or a URL)
  * @param {string} moduleType     - 'import' | 'require'
@@ -26,19 +48,13 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
   let relativeName = null;
  
   const node_builtin = "__BUILTIN_MODULES_JSON__"
-  
-  
-  const strippable_nodebuiltins = node_builtin.filter(m => m.includes('node:'))
-  
-  const isStrippable = strippable_nodebuiltins.includes(modulePath) || node_builtin.includes(modulePath);
-  
-   const isNodeBuiltIn = node_builtin.includes(modulePath) || isStrippable;  
-    
-   if(isStrippable){
-   modulePath = modulePath.replace("node:", ""); // strip node:
-   modulePath = modulePath.replace("/", "_");
-   modulePath = modulePath.replace("RUNTIME:", "RUNTIME_")
-   }  
+
+  // Gap #6: normalize `node:` prefix generally (see normalizeBuiltinSpecifier
+  // above); the old isStrippable check missed every `node:X` not literally
+  // listed with the prefix.
+  const __builtinNorm = normalizeBuiltinSpecifier(modulePath, node_builtin);
+  const isNodeBuiltIn = __builtinNorm.isNodeBuiltIn;
+  modulePath = __builtinNorm.modulePath;
     
   // The very first caller doesn't know the entry point yet — it IS the entry point.
   if (entryPoint === undefined) entryPoint = modulePath;

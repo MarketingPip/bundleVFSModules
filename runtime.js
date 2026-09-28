@@ -66,6 +66,44 @@ async function fetchBuiltinSource(specifier) {
 }
 ;
 
+// --- begin node: builtin normalization (gap #6) ---
+// Single source of truth for "is this specifier a Node builtin, and what
+// bundle-key form does the interop layer expect?". Node treats `node:X` and
+// `X` identically for EVERY builtin; the sandbox-side loader used to
+// recognize `node:` only for the four builtins whose listed names literally
+// contain `node:` (node:sea, node:sqlite, node:test, node:test/reporters),
+// so `import('node:child_process')` fell through to the esm.sh CDN path and
+// died with a 400. This normalizes the prefix generally.
+//
+// Returns { isNodeBuiltIn, modulePath } where modulePath is the form the
+// interop `_dynamic_import` expects: `node:` stripped, `/` -> `_`,
+// `RUNTIME:` -> `RUNTIME_` (e.g. `node:test/reporters` -> `test_reporters`,
+// `RUNTIME:NODE_GLOBALS` -> `RUNTIME_NODE_GLOBALS`).
+//
+// NOTE: this function's source is inlined into generated sandbox scripts
+// via `normalizeBuiltinSpecifier.toString()`, so it must stay
+// self-contained (no closure references) and must not contain backticks or
+// `${` (it is embedded inside outer template literals).
+function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
+  var modulePath = specifier;
+  var bare = (typeof specifier === 'string' && specifier.indexOf('node:') === 0)
+    ? specifier.slice(5)
+    : specifier;
+  var listed = false;
+  for (var i = 0; i < nodeBuiltins.length; i++) {
+    if (nodeBuiltins[i] === specifier || nodeBuiltins[i] === bare) listed = true;
+  }
+  // `listed` covers the old `isStrippable` cases too: the legacy
+  // `node:`-prefixed list entries (node:sea, node:sqlite, node:test,
+  // node:test/reporters) match `specifier` directly.
+  var isNodeBuiltIn = listed;
+  if (isNodeBuiltIn) {
+    modulePath = String(bare).replace('/', '_').replace('RUNTIME:', 'RUNTIME_');
+  }
+  return { isNodeBuiltIn: isNodeBuiltIn, modulePath: modulePath };
+}
+// --- end node: builtin normalization (gap #6) ---
+
 async function loadBuiltin(specifier) {
   // Normalize: strip "node:" prefix
   let key = String(specifier).trim();
@@ -2407,6 +2445,19 @@ export class ImportResolver {
     return transformed
   }
 
+  // Gap #6: `node:`-prefixed builtins are not CDN packages — esm.sh 400s
+  // on them. Pass recognized ones through untouched so the sandbox loader
+  // resolves them via the builtin interop path (the same path VFS-file
+  // imports already use). Unrecognized `node:` specifiers keep the old
+  // behavior (CDN fallback).
+  if (typeof transformed === 'string' && transformed.indexOf('node:') === 0) {
+    const __nodeNorm = normalizeBuiltinSpecifier(transformed, builtinModules);
+    if (__nodeNorm.isNodeBuiltIn) {
+      this.cache.set(cacheKey, transformed);
+      return transformed;
+    }
+  }
+
   if (!this.fallbackCDN) {
     this.cache.set(cacheKey, transformed);
     return transformed;
@@ -2762,21 +2813,17 @@ function buildHtmlString(csp, code, hasImports, iframe) {
 
 
   const node_builtin = ${JSON.stringify(builtinModules)}
-  
-  
+  // Gap #6: "node:"-prefix normalization lives in the host-scope
+  // normalizeBuiltinSpecifier; its source is inlined so the generated
+  // script stays self-contained.
+  ${normalizeBuiltinSpecifier.toString()}
+
+
   let modulePath = specifier;
-  
-  const strippable_nodebuiltins = node_builtin.filter(m => m.includes('node:'))
-  
-  const isStrippable = strippable_nodebuiltins.includes(modulePath) || node_builtin.includes(modulePath);
-  
-   const isNodeBuiltIn = node_builtin.includes(modulePath) || isStrippable;  
-    
-   if(isStrippable){
-   modulePath = modulePath.replace("node:", ""); // strip node:
-   modulePath = modulePath.replace("/", "_");
-   modulePath = modulePath.replace("RUNTIME:", "RUNTIME_")
-   }  
+
+  const __builtinNorm = normalizeBuiltinSpecifier(specifier, node_builtin);
+  const isNodeBuiltIn = __builtinNorm.isNodeBuiltIn;
+  modulePath = __builtinNorm.modulePath;
 
        if(isNodeBuiltIn){
         // Resolve Node builtins through the parent interop. Errors are wired
@@ -3912,20 +3959,15 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
   let relativeName = null;
  
   const node_builtin = ${JSON.stringify(builtinModules)}
-  
-  
-  const strippable_nodebuiltins = node_builtin.filter(m => m.includes('node:'))
-  
-  const isStrippable = strippable_nodebuiltins.includes(modulePath) || node_builtin.includes(modulePath);
-  
-   const isNodeBuiltIn = node_builtin.includes(modulePath) || isStrippable;  
-    
-   if(isStrippable){
-   modulePath = modulePath.replace("node:", ""); // strip node:
-   modulePath = modulePath.replace("/", "_");
-   modulePath = modulePath.replace("RUNTIME:", "RUNTIME_")
-   }  
-    
+  // Gap #6: "node:"-prefix normalization lives in the host-scope
+  // normalizeBuiltinSpecifier; its source is inlined so the generated
+  // script stays self-contained.
+  ${normalizeBuiltinSpecifier.toString()}
+
+  const __builtinNorm = normalizeBuiltinSpecifier(modulePath, node_builtin);
+  const isNodeBuiltIn = __builtinNorm.isNodeBuiltIn;
+  modulePath = __builtinNorm.modulePath;
+
   // The very first caller doesn't know the entry point yet — it IS the entry point.
   if (entryPoint === undefined) entryPoint = modulePath;
 
