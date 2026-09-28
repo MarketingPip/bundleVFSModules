@@ -503,8 +503,15 @@ describe("fork() (browser noop)", () => {
   });
 
   test("fork send() delivers when connected; ERR_IPC_CHANNEL_CLOSED when disconnected", async () => {
+    // The forked module must actually load for the child to stay connected
+    // (a failed load now finalizes with exit 1, Node parity) — stub the
+    // runtime's loadModule instead of depending on a missing fixture.
+    const realProcess = globalThis.process;
+    globalThis._RUNTIME_ = {
+      loadModule: async () => ({}),
+    };
     const c = cp.fork("worker.js");
-    c.on("error", () => {}); // Swallow MODULE_NOT_FOUND from missing worker.js fixture
+    c.on("error", () => {});
     // In-realm fork has real IPC (like Node): send() succeeds when connected
     const cbErr = await new Promise((resolve) => c.send("hello", resolve));
     expect(cbErr).toBeNull();
@@ -527,6 +534,8 @@ describe("fork() (browser noop)", () => {
     });
     expect(emitted.code).toBe("ERR_IPC_CHANNEL_CLOSED");
     expect(c.send("hello")).toBe(false);
+    delete globalThis._RUNTIME_;
+    if (globalThis.process !== realProcess) globalThis.process = realProcess;
     c.kill("SIGKILL");
   });
 
@@ -1623,5 +1632,308 @@ describe("validation fixes (forced-shim parity work list)", () => {
     expect(c.killed).toBe(false);
     c[Symbol.dispose]();
     expect(c.killed).toBe(true);
+  });
+});
+
+// ─── fork() multi-fork IPC + exit events (vitest gap #8) ────────────────────
+// In-realm forks share one globalThis.process slot and the runtime's
+// loadModule caches by `${entryPoint}::${modulePath}`. These tests pin:
+//  1. every fork() re-executes its module (unique entryPoint per fork —
+//     the second fork's IPC must arrive, not be served from cache);
+//  2. the child's process object owns exit() (never the host's);
+//  3. IPC routes per-fork (no cross-delivery);
+//  4. a failed module load finalizes with exit code 1 and NO 'error' event
+//     (Node parity: the crash goes to the child's stderr).
+describe("fork() multi-fork IPC + exit events (vitest gap #8)", () => {
+  let realProcess;
+
+  // Faithful miniature of runtime.js loadModule's registry: modules are
+  // cached by `${entryPoint}::${modulePath}` and a cache hit re-runs
+  // NOTHING — exactly the behavior that swallowed the second fork's IPC.
+  function installRuntime(childBody) {
+    const loadCalls = [];
+    const registry = new Map();
+    // Models the JS engine's data: URL module cache: the runtime builds the
+    // import URL from the source plus `//# sourceURL=<modulePath>`, so an
+    // identical request path reuses the cached module WITHOUT re-evaluating
+    // its top level — even when the runtime registry key differs.
+    const engineCache = new Set();
+    realProcess = globalThis.process;
+    globalThis._RUNTIME_ = {
+      loadModule: async (modulePath, _type, entryPoint) => {
+        loadCalls.push({ modulePath, entryPoint });
+        const key = `${entryPoint}::${modulePath}`;
+        if (registry.has(key)) return registry.get(key);
+        const exports = {};
+        registry.set(key, exports);
+        // Runs with globalThis.process already swapped to this fork's
+        // childProcess by fork()'s microtask — like the real child entry.
+        if (!engineCache.has(modulePath)) {
+          engineCache.add(modulePath);
+          await childBody(modulePath, globalThis.process);
+        }
+        return exports;
+      },
+    };
+    return loadCalls;
+  }
+
+  afterEach(() => {
+    delete globalThis._RUNTIME_;
+    // Safety: never leak a fork's process object into the global slot.
+    if (globalThis.process !== realProcess) globalThis.process = realProcess;
+  });
+
+  test("second fork() of the same module re-executes it (fresh entryPoint)", async () => {
+    const loadCalls = installRuntime(async (_mp, childProc) => {
+      childProc.send({ ready: true });
+    });
+    const c1 = cp.fork("./probe/child.js");
+    const c2 = cp.fork("./probe/child.js");
+    const got1 = [];
+    const got2 = [];
+    c1.on("message", (m) => got1.push(m));
+    c2.on("message", (m) => got2.push(m));
+    c1.on("error", () => {});
+    c2.on("error", () => {});
+    await tick();
+    await tick();
+    await tick();
+    // Each fork must load under a distinct entryPoint so the runtime's
+    // module registry cannot serve the second fork from cache.
+    expect(loadCalls).toHaveLength(2);
+    expect(loadCalls[0].entryPoint).not.toBe(loadCalls[1].entryPoint);
+    expect(got1).toEqual([{ ready: true }]);
+    expect(got2).toEqual([{ ready: true }]);
+    c1.kill();
+    c2.kill();
+    await tick();
+    await tick();
+  });
+
+  test("second fork() of the same module requests a distinct path (engine data-URL cache)", async () => {
+    // The runtime imports the child via import(data:URL) with the URL built
+    // from the source. The JS engine caches modules by URL, so an identical
+    // request path would serve the second fork the cached module WITHOUT
+    // re-evaluating its top level (no IPC, no exit) — even with a unique
+    // runtime entryPoint. Each fork must therefore request a distinct path.
+    const loadCalls = [];
+    realProcess = globalThis.process;
+    globalThis._RUNTIME_ = {
+      loadModule: async (modulePath, _type, entryPoint) => {
+        loadCalls.push({ modulePath, entryPoint });
+        await tick();
+        return {};
+      },
+    };
+    const c1 = cp.fork("./probe/child.js");
+    const c2 = cp.fork("./probe/child.js");
+    c1.on("error", () => {});
+    c2.on("error", () => {});
+    await tick();
+    await tick();
+    await tick();
+    expect(loadCalls).toHaveLength(2);
+    expect(loadCalls[0].modulePath).not.toBe(loadCalls[1].modulePath);
+    // Both must still resolve to the same file: the variation is a no-op
+    // dot segment the VFS resolver normalizes away.
+    for (const call of loadCalls) {
+      expect(call.modulePath).toContain("probe/child.js");
+    }
+    c1.kill();
+    c2.kill();
+    await tick();
+    await tick();
+  });
+
+  test("forked child's process object has its own exit(), not the host's", async () => {
+    const seen = [];
+    installRuntime(async (_mp, childProc) => {
+      seen.push(childProc);
+    });
+    const c = cp.fork("./probe/child.js");
+    c.on("error", () => {});
+    await tick();
+    await tick();
+    expect(seen).toHaveLength(1);
+    // Red flag: exit inherited from the host process via object spread —
+    // calling it would terminate the whole realm instead of the fork.
+    expect(seen[0].exit).not.toBe(realProcess.exit);
+    expect(typeof seen[0].exit).toBe("function");
+    c.kill();
+    await tick();
+    await tick();
+  });
+
+  test("per-fork IPC routing: no cross-delivery between forks", async () => {
+    // Tag by the requested file's basename: fork() varies the request path
+    // per fork (engine data-URL cache), so the raw path is not stable.
+    installRuntime(async (mp, childProc) => {
+      childProc.send({ tag: /([^/]+)$/.exec(mp)[1] });
+    });
+    const c1 = cp.fork("./a.js");
+    const c2 = cp.fork("./b.js");
+    const got1 = [];
+    const got2 = [];
+    c1.on("message", (m) => got1.push(m));
+    c2.on("message", (m) => got2.push(m));
+    c1.on("error", () => {});
+    c2.on("error", () => {});
+    await tick();
+    await tick();
+    await tick();
+    expect(got1).toEqual([{ tag: "a.js" }]);
+    expect(got2).toEqual([{ tag: "b.js" }]);
+    c1.kill();
+    c2.kill();
+    await tick();
+    await tick();
+  });
+
+  test("failed module load finalizes the fork with exit 1 and no error event", async () => {
+    realProcess = globalThis.process;
+    globalThis._RUNTIME_ = {
+      loadModule: async () => {
+        throw Object.assign(new Error("Cannot find module './nope.js'"), {
+          code: "ERR_MODULE_NOT_FOUND",
+        });
+      },
+    };
+    const c = cp.fork("./nope.js");
+    const seen = [];
+    c.on("exit", (code, sig) => seen.push(["exit", code, sig]));
+    c.on("close", (code, sig) => seen.push(["close", code, sig]));
+    c.on("error", (e) => seen.push(["error", e && e.code]));
+    await tick();
+    await tick();
+    await tick();
+    // Node parity: missing fork module -> child crashes, parent sees
+    // exit(1)/close(1); no 'error' event on the parent.
+    expect(seen).toEqual([
+      ["exit", 1, null],
+      ["close", 1, null],
+    ]);
+  });
+
+  test("child process.exit(code) emits disconnect/exit/close and restores the parent process", async () => {
+    let childProc;
+    installRuntime(async (_mp, cp_) => {
+      childProc = cp_;
+      cp_.send({ ready: true });
+      cp_.exit(42); // must not terminate the test runner
+    });
+    const parentProcess = globalThis.process;
+    const c = cp.fork("./probe/child.js");
+    const seen = [];
+    c.on("message", (m) => seen.push(["message", m]));
+    c.on("disconnect", () => seen.push(["disconnect"]));
+    c.on("exit", (code, sig) => seen.push(["exit", code, sig]));
+    c.on("close", (code, sig) => seen.push(["close", code, sig]));
+    c.on("error", () => {});
+    await tick();
+    await tick();
+    await tick();
+    await tick();
+    // IPC queued before exit() is flushed first (Node drains the channel),
+    // then disconnect/exit/close in Node's order.
+    expect(seen).toEqual([
+      ["message", { ready: true }],
+      ["disconnect"],
+      ["exit", 42, null],
+      ["close", 42, null],
+    ]);
+    expect(c.exitCode).toBe(42);
+    expect(c.connected).toBe(false);
+    expect(globalThis.process).toBe(parentProcess);
+    expect(childProc).toBeDefined();
+  });
+
+  test("child process.exit() coerces codes like Node", async () => {
+    const exits = [];
+    installRuntime(async (_mp, cp_) => {
+      exits.push(cp_);
+    });
+    const mk = async (code) => {
+      const c = cp.fork("./probe/child.js");
+      const done = new Promise((resolve) => c.on("exit", resolve));
+      c.on("error", () => {});
+      await tick();
+      await tick();
+      exits[exits.length - 1].exit(code);
+      return done;
+    };
+    expect(await mk("3")).toBe(3);
+    expect(await mk()).toBe(0);
+    expect(await mk(-1)).toBe(255);
+    await tick();
+  });
+
+  test("kill() on a fork child emits disconnect then exit(null, SIGTERM)", async () => {
+    installRuntime(async () => {});
+    const c = cp.fork("./probe/child.js");
+    const seen = [];
+    c.on("disconnect", () => seen.push("disconnect"));
+    c.on("exit", (code, sig) => seen.push(["exit", code, sig]));
+    c.on("close", (code, sig) => seen.push(["close", code, sig]));
+    c.on("error", () => {});
+    await tick();
+    await tick();
+    c.kill();
+    await tick();
+    await tick();
+    expect(seen).toEqual([
+      "disconnect",
+      ["exit", null, "SIGTERM"],
+      ["close", null, "SIGTERM"],
+    ]);
+    expect(c.killed).toBe(true);
+  });
+
+  test("sequential forks: exiting one restores the still-active fork's process", async () => {
+    const procs = [];
+    installRuntime(async (_mp, cp_) => {
+      procs.push(cp_);
+    });
+    const parentProcess = globalThis.process;
+    const c1 = cp.fork("./probe/child.js");
+    await tick();
+    await tick();
+    const c2 = cp.fork("./probe/child.js");
+    await tick();
+    await tick();
+    expect(procs).toHaveLength(2);
+    // Both forks loaded: the second fork's process owns the slot.
+    expect(globalThis.process).toBe(procs[1]);
+    const exited1 = new Promise((resolve) => c1.on("exit", resolve));
+    procs[0].exit(0);
+    expect(await exited1).toBe(0);
+    await tick();
+    // Fork 1's exit restores fork 2's process, not the parent's.
+    expect(globalThis.process).toBe(procs[1]);
+    const exited2 = new Promise((resolve) => c2.on("exit", resolve));
+    procs[1].exit(0);
+    expect(await exited2).toBe(0);
+    await tick();
+    expect(globalThis.process).toBe(parentProcess);
+  });
+
+  test("disconnect() then child exit(): single disconnect, exit still fires", async () => {
+    let childProc;
+    installRuntime(async (_mp, cp_) => {
+      childProc = cp_;
+    });
+    const c = cp.fork("./probe/child.js");
+    const seen = [];
+    c.on("disconnect", () => seen.push("disconnect"));
+    c.on("exit", (code) => seen.push(["exit", code]));
+    c.on("error", () => {});
+    await tick();
+    await tick();
+    c.disconnect();
+    childProc.exit(7);
+    await tick();
+    await tick();
+    await tick();
+    expect(seen).toEqual(["disconnect", ["exit", 7]]);
   });
 });
