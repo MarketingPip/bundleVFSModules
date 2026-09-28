@@ -30,6 +30,10 @@ unimplementable-in-browser APIs stay honest noop stubs, never throws.
 
 ## Planned
 
+Technique references from the 2026-09-28 competitor study (AlmostNode,
+Nodepod, WebContainers) live in `docs/COMPETITOR_TECHNIQUES.md`; several
+items below cite it.
+
 ### 1. Toolchain plugin architecture — opt-in power for library users
 
 **Philosophy** (2026-09-27): we never ship a toolchain in core. It stays a
