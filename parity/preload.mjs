@@ -8,36 +8,68 @@
 // Only the module named in PARITY_TARGET is redirected, and only for
 // importers under parity/node-test/parallel/. Everything else — including
 // test/common — keeps real Node builtins.
-import Module from 'node:module';
-import { register } from 'node:module';
-import path from 'node:path';
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import Module from "node:module";
+import { register } from "node:module";
+import path from "node:path";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const testsDir = path.join(repoRoot, 'parity', 'node-test', 'parallel') + path.sep;
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+const testsDir =
+  path.join(repoRoot, "parity", "node-test", "parallel") + path.sep;
 const target = process.env.PARITY_TARGET;
 
+// PARITY_FORCE_SHIM=1 — exercise the browser fallback lane instead of native
+// delegation. Defines the sandbox marker `globalThis._RUNTIME_` before any
+// test or shim loads, so native bridges (child_process loadNativeChildProcess,
+// os _nativeOs, …) stay off and Node's official tests run against the code
+// that actually executes in Jared's sandbox. Without it, parity for delegated
+// modules measures Node-vs-Node: a tautology, not a test of our shims.
+// Only the marker is defined — no other sandbox services are faked.
+if (
+  process.env.PARITY_FORCE_SHIM === "1" &&
+  typeof globalThis._RUNTIME_ === "undefined"
+) {
+  // Non-enumerable: Node's own test/common global-leak detector
+  // (`for (const val in globalThis)` on process 'exit') only sees
+  // enumerable properties, so the marker stays invisible to it.
+  Object.defineProperty(globalThis, "_RUNTIME_", {
+    value: { parityForceShim: true },
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+}
+
 function polyfillPath(request) {
-  const name = request.startsWith('node:') ? request.slice(5) : request;
-  if (name.startsWith('.') || path.isAbsolute(name)) return null;
-  const parts = name.split('/');
+  const name = request.startsWith("node:") ? request.slice(5) : request;
+  if (name.startsWith(".") || path.isAbsolute(name)) return null;
+  const parts = name.split("/");
   if (target && parts[0] !== target) return null;
-  const candidate = path.join(repoRoot, 'src', ...parts) + '.js';
+  const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   return fs.existsSync(candidate) ? candidate : null;
 }
 
 const origLoad = Module._load;
 Module._load = function (request, parent, isMain) {
-  const parentFile = parent?.filename ?? '';
+  const parentFile = parent?.filename ?? "";
   if (parentFile.startsWith(testsDir)) {
     // Mirror real CJS builtins: require('path') is module.exports (the
     // default export), and require('path/posix') / require('path/win32')
     // are the identical objects as require('path').posix / .win32.
     // (require() of an ESM file would otherwise hand back the module
     // namespace object, breaking reference equality.)
-    const bare = request.startsWith('node:') ? request.slice(5) : request;
-    if (target && (bare === target || bare === `${target}/posix` || bare === `${target}/win32` || bare === `${target}/strict`)) {
+    const bare = request.startsWith("node:") ? request.slice(5) : request;
+    if (
+      target &&
+      (bare === target ||
+        bare === `${target}/posix` ||
+        bare === `${target}/win32` ||
+        bare === `${target}/strict`)
+    ) {
       const ns = origLoad.call(this, polyfillPath(target), parent, isMain);
       if (bare === `${target}/posix`) return ns.posix;
       if (bare === `${target}/win32`) return ns.win32;
@@ -52,10 +84,10 @@ Module._load = function (request, parent, isMain) {
     // (CustomEvent, kEvents, kWeakHandler, NodeEventTarget). That module
     // needs --expose-internals in real Node; the adapter re-exports the
     // real globals plus discovered symbols so the tests run unmodified.
-    if (target === 'events' && bare === 'internal/event_target') {
+    if (target === "events" && bare === "internal/event_target") {
       return origLoad.call(
         this,
-        path.join(repoRoot, 'parity', 'internal-event-target-adapter.mjs'),
+        path.join(repoRoot, "parity", "internal-event-target-adapter.mjs"),
         parent,
         isMain,
       );
@@ -64,4 +96,4 @@ Module._load = function (request, parent, isMain) {
   return origLoad.call(this, request, parent, isMain);
 };
 
-register('./hooks.mjs', import.meta.url);
+register("./hooks.mjs", import.meta.url);
