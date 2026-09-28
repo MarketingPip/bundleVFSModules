@@ -7582,6 +7582,133 @@ function vfsLookup(path, vfs) {
   }
   return resolved.join('/');
 }
+
+      // --- Package exports/imports resolution (gap #2) ---
+      // Node's PACKAGE_EXPORTS_RESOLVE / PACKAGE_IMPORTS_RESOLVE, browser-VFS
+      // edition. Condition order mirrors Node's ESM-import defaults — the
+      // runtime emulates Node in the browser, so `node` wins over `browser`.
+      const PACKAGE_CONDITIONS = ['node', 'import', 'default'];
+
+      function splitPackageSpecifier(importPath) {
+        // '@scope/pkg/sub/deep' -> { packageName: '@scope/pkg', subpath: './sub/deep' }
+        if (importPath.startsWith('@')) {
+          const parts = importPath.split('/');
+          const packageName = parts.slice(0, 2).join('/');
+          const rest = parts.slice(2).join('/');
+          return { packageName, subpath: rest ? './' + rest : '.' };
+        }
+        const idx = importPath.indexOf('/');
+        if (idx === -1) return { packageName: importPath, subpath: '.' };
+        return { packageName: importPath.slice(0, idx), subpath: '.' + importPath.slice(idx) };
+      }
+
+      function resolvePackageTarget(target, conditions) {
+        // string | null (blocked subpath) | string[] (fallback chain) | { condition: target }
+        if (target === null || target === undefined) return null;
+        if (typeof target === 'string') return target;
+        if (Array.isArray(target)) {
+          for (const t of target) {
+            const r = resolvePackageTarget(t, conditions);
+            if (r !== null) return r;
+          }
+          return null;
+        }
+        if (typeof target === 'object') {
+          for (const cond of conditions) {
+            if (Object.prototype.hasOwnProperty.call(target, cond)) {
+              const r = resolvePackageTarget(target[cond], conditions);
+              if (r !== null) return r;
+            }
+          }
+          return null;
+        }
+        return null;
+      }
+
+      function resolvePackageExports(pkgJson, subpath) {
+        const exportsField = pkgJson.exports;
+        if (exportsField === null || exportsField === undefined) return null;
+        let target;
+        if (typeof exportsField === 'string') {
+          if (subpath !== '.') return null;
+          target = exportsField;
+        } else if (typeof exportsField === 'object' && !Array.isArray(exportsField)) {
+          const keys = Object.keys(exportsField);
+          const isSugar = keys.length > 0 && keys.every((k) => !k.startsWith('.'));
+          if (isSugar) {
+            // Condition-only object: the main entry.
+            if (subpath !== '.') return null;
+            target = exportsField;
+          } else if (Object.prototype.hasOwnProperty.call(exportsField, subpath)) {
+            target = exportsField[subpath];
+          } else {
+            // Longest pattern-key ('./x/*') match.
+            let best = null;
+            for (const key of keys) {
+              if (key.endsWith('/*')) {
+                const prefix = key.slice(0, -1);
+                if (subpath.startsWith(prefix) && (best === null || key.length > best.length)) {
+                  best = key;
+                }
+              }
+            }
+            if (best === null) return null;
+            const star = subpath.slice(best.length - 1);
+            const patternTarget = resolvePackageTarget(exportsField[best], PACKAGE_CONDITIONS);
+            if (typeof patternTarget !== 'string') return null;
+            return patternTarget.replace(/\*/g, star);
+          }
+        } else {
+          return null;
+        }
+        const resolved = resolvePackageTarget(target, PACKAGE_CONDITIONS);
+        return typeof resolved === 'string' ? resolved : null;
+      }
+
+      function resolvePackageImports(importPath, importerPath, vfs) {
+        // Nearest parent package.json scope wins; a scope without an
+        // `imports` field means the specifier is unresolvable (Node parity).
+        const segments = importerPath ? importerPath.split('/') : [];
+        segments.pop();
+        while (true) {
+          const pkgPath = [...segments, 'package.json'].join('/');
+          const hit = resolveVFS(pkgPath, '', vfs);
+          if (hit && hit.source) {
+            let pkg = null;
+            try { pkg = JSON.parse(hit.source); } catch (e) { /* invalid package.json */ }
+            if (pkg && pkg.imports && typeof pkg.imports === 'object') {
+              const keys = Object.keys(pkg.imports);
+              let target;
+              if (Object.prototype.hasOwnProperty.call(pkg.imports, importPath)) {
+                target = pkg.imports[importPath];
+              } else {
+                let best = null;
+                for (const key of keys) {
+                  if (key.endsWith('/*') && importPath.startsWith(key.slice(0, -1)) &&
+                      (best === null || key.length > best.length)) {
+                    best = key;
+                  }
+                }
+                if (best === null) return null;
+                const star = importPath.slice(best.length - 1);
+                const patternTarget = resolvePackageTarget(pkg.imports[best], PACKAGE_CONDITIONS);
+                if (typeof patternTarget !== 'string') return null;
+                target = patternTarget.replace(/\*/g, star);
+              }
+              const resolved = resolvePackageTarget(target, PACKAGE_CONDITIONS);
+              if (typeof resolved !== 'string' || !resolved.startsWith('./')) return null;
+              const dir = segments.join('/');
+              const rel = resolved.slice(2);
+              return resolveVFS(dir ? dir + '/' + rel : rel, '', vfs);
+            }
+            return null;
+          }
+          if (segments.length === 0) break;
+          segments.pop();
+        }
+        return null;
+      }
+      // --- end package exports/imports (gap #2) ---
       
       
       
@@ -7697,6 +7824,16 @@ function vfsLookup(path, vfs) {
 
   const isRelative = path.startsWith('./') || path.startsWith('../');
 
+  // 3a. Package-internal # imports (gap #2): resolve via the nearest
+  // package.json `imports` field before the node_modules walk.
+  if (path.startsWith('#')) {
+    const resolvedImport = resolvePackageImports(path, importerVFSPath, vfs);
+    if (resolvedImport) {
+      return { source: resolvedImport.source, resolvedPath: resolvedImport.resolvedPath };
+    }
+    return null;
+  }
+
   // 3. Handle Bare Specifiers (node_modules lookup)
   if (!isRelative) {
     const resolvedPackage = resolveNodeModule(path, importerVFSPath, vfs);
@@ -7719,17 +7856,20 @@ function vfsLookup(path, vfs) {
 });
       
       function resolveNodeModule(importPath, importerPath, vfs) {
+  // Split off any subpath so package.json `exports` can resolve it (gap #2).
+  const { packageName, subpath } = splitPackageSpecifier(importPath);
+
   // Extract directory path from the importer
   const segments = importerPath ? importerPath.split('/') : [];
   segments.pop(); // Remove the file name to get the parent directory
 
   // Walk up the directory tree looking for node_modules
   while (true) {
-    // Build candidate path: [dir1, dir2, ..., "node_modules", importPath]
-    const candidatePath = [...segments, "node_modules", ...importPath.split('/')].join('/');
-    
+    // Build candidate path: [dir1, dir2, ..., "node_modules", packageName]
+    const candidatePath = [...segments, "node_modules", ...packageName.split('/')].join('/');
+
     // Attempt resolution at this level using your existing VFS resolver
-    const resolved = tryResolveFileOrPackage(candidatePath, vfs);
+    const resolved = tryResolveFileOrPackage(candidatePath, subpath, vfs);
     if (resolved) return resolved;
 
     // Stop if we've reached the root
@@ -7738,32 +7878,46 @@ function vfsLookup(path, vfs) {
   }
 
   // Final fallback: Check root-level node_modules if not found via traversal
-  return tryResolveFileOrPackage(`node_modules/${importPath}`, vfs);
+  return tryResolveFileOrPackage(`node_modules/${packageName}`, subpath, vfs);
 }
 
-// Helper to check file existence, index files, or package.json mains
-function tryResolveFileOrPackage(basePath, vfs) {
-  // 1. Check exact file or file with .js extension
-  const fileCheck = resolveVFS(basePath, "", vfs) || resolveVFS(`${basePath}.js`, "", vfs);
-  if (fileCheck) return fileCheck;
-
-  // 2. Check if it's a directory containing an index.js
-  const indexCheck = resolveVFS(`${basePath}/index.js`, "", vfs);
-  if (indexCheck) return indexCheck;
-
-  // 3. Check package.json inside the package directory if it exists
-  const pkgJsonCheck = resolveVFS(`${basePath}/package.json`, "", vfs);
+// Helper to resolve a package root + subpath. The `exports` field wins when
+// present (gap #2 — the only legal route per Node); otherwise legacy
+// file/main/index.js probing. (Legacy order also corrected to Node parity:
+// package.json `main` now beats a sibling index.js.)
+function tryResolveFileOrPackage(packageRoot, subpath, vfs) {
+  const pkgJsonCheck = resolveVFS(`${packageRoot}/package.json`, "", vfs);
+  let pkg = null;
   if (pkgJsonCheck && pkgJsonCheck.source) {
     try {
-      const pkg = JSON.parse(pkgJsonCheck.source);
-      const mainFile = pkg.main || 'index.js';
-      return resolveVFS(`${basePath}/${mainFile}`, "", vfs);
+      pkg = JSON.parse(pkgJsonCheck.source);
     } catch (e) {
-      // Invalid package.json
+      // Invalid package.json — fall through to legacy probing
     }
   }
 
-  return null;
+  // 1. Package `exports` field (gap #2).
+  if (pkg && pkg.exports) {
+    const target = resolvePackageExports(pkg, subpath);
+    if (typeof target === 'string' && target.startsWith('./')) {
+      return resolveVFS(`${packageRoot}/${target.slice(2)}`, "", vfs);
+    }
+    return null; // not exported (or blocked) — honest miss
+  }
+
+  // 2. Legacy: subpath as a direct file.
+  if (subpath !== '.') {
+    const rel = subpath.slice(2);
+    const subCheck = resolveVFS(`${packageRoot}/${rel}`, "", vfs)
+      || resolveVFS(`${packageRoot}/${rel}.js`, "", vfs)
+      || resolveVFS(`${packageRoot}/${rel}/index.js`, "", vfs);
+    if (subCheck) return subCheck;
+  }
+
+  // 3. Legacy: package.json main, then index.js.
+  const mainFile = (pkg && pkg.main) || 'index.js';
+  return resolveVFS(`${packageRoot}/${mainFile}`, "", vfs)
+      || resolveVFS(`${packageRoot}/index.js`, "", vfs);
 } 
       
    
