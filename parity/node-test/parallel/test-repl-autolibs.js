@@ -19,44 +19,50 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const ArrayStream = require('../common/arraystream');
-const { startNewREPLServer } = require('../common/repl');
-const assert = require('assert');
-const util = require('util');
+"use strict";
+const common = require("../common");
+const ArrayStream = require("../common/arraystream");
+const { startNewREPLServer } = require("../common/repl");
+const assert = require("assert");
+const util = require("util");
 
 const putIn = new ArrayStream();
-startNewREPLServer({ input: putIn, output: putIn, useGlobal: true, terminal: false });
+startNewREPLServer({
+  input: putIn,
+  output: putIn,
+  useGlobal: true,
+  terminal: false,
+});
 
 test1();
 
 function test1() {
   let gotWrite = false;
-  putIn.write = common.mustCall(function(data) {
+  putIn.write = common.mustCall(function (data) {
     gotWrite = true;
     if (data.length) {
-
       // Inspect output matches repl output
-      assert.strictEqual(data,
-                         `${util.inspect(require('fs'), null, 2, false)}\n`);
+      assert.strictEqual(
+        data,
+        `${util.inspect(require("fs"), null, 2, false)}\n`,
+      );
       // Globally added lib matches required lib
-      assert.strictEqual(globalThis.fs, require('fs'));
+      assert.strictEqual(globalThis.fs, require("fs"));
       test2();
     }
   });
   assert(!gotWrite);
-  putIn.run(['fs']);
+  putIn.run(["fs"]);
   assert(gotWrite);
 }
 
 function test2() {
   let gotWrite = false;
-  putIn.write = common.mustCallAtLeast(function(data) {
+  putIn.write = common.mustCallAtLeast(function (data) {
     gotWrite = true;
     if (data.length) {
       // REPL response error message
-      assert.strictEqual(data, '{}\n');
+      assert.strictEqual(data, "{}\n");
       // Original value wasn't overwritten
       assert.strictEqual(val, globalThis.url);
     }
@@ -65,6 +71,6 @@ function test2() {
   globalThis.url = val;
   common.allowGlobals(val);
   assert(!gotWrite);
-  putIn.run(['url']);
+  putIn.run(["url"]);
   assert(gotWrite);
 }

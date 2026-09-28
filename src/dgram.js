@@ -40,12 +40,19 @@ function nodeError(Base, code, message) {
 }
 
 function errSocketBadType() {
-  return nodeError(TypeError, "ERR_SOCKET_BAD_TYPE",
-    "Bad socket type specified. Valid types are: udp4, udp6");
+  return nodeError(
+    TypeError,
+    "ERR_SOCKET_BAD_TYPE",
+    "Bad socket type specified. Valid types are: udp4, udp6",
+  );
 }
 
 function errSocketAlreadyBound() {
-  return nodeError(Error, "ERR_SOCKET_ALREADY_BOUND", "Socket is already bound");
+  return nodeError(
+    Error,
+    "ERR_SOCKET_ALREADY_BOUND",
+    "Socket is already bound",
+  );
 }
 
 function errSocketNotRunning() {
@@ -62,45 +69,69 @@ function errSocketNotConnected() {
 }
 
 function errSocketBadPort(name, port, allowZero) {
-  return nodeError(RangeError, "ERR_SOCKET_BAD_PORT",
-    `${name} should be ${allowZero ? ">= 0" : "> 0"} and < 65536. ${fmtReceived(port)}.`);
+  return nodeError(
+    RangeError,
+    "ERR_SOCKET_BAD_PORT",
+    `${name} should be ${allowZero ? ">= 0" : "> 0"} and < 65536. ${fmtReceived(port)}.`,
+  );
 }
 
 function errSocketBadBufferSize() {
-  return nodeError(Error, "ERR_SOCKET_BAD_BUFFER_SIZE",
-    "Buffer size must be a positive integer");
+  return nodeError(
+    Error,
+    "ERR_SOCKET_BAD_BUFFER_SIZE",
+    "Buffer size must be a positive integer",
+  );
 }
 
 function errInvalidArgType(name, expected, value, what = "argument") {
-  return nodeError(TypeError, "ERR_INVALID_ARG_TYPE",
-    `The "${name}" ${what} must be of type ${expected}. ${fmtReceived(value)}`);
+  return nodeError(
+    TypeError,
+    "ERR_INVALID_ARG_TYPE",
+    `The "${name}" ${what} must be of type ${expected}. ${fmtReceived(value)}`,
+  );
 }
 
 function errInvalidBufferArg(value) {
-  return nodeError(TypeError, "ERR_INVALID_ARG_TYPE",
+  return nodeError(
+    TypeError,
+    "ERR_INVALID_ARG_TYPE",
     `The "buffer" argument must be of type string or an instance of ` +
-    `Buffer, TypedArray, or DataView. ${fmtReceived(value)}`);
+      `Buffer, TypedArray, or DataView. ${fmtReceived(value)}`,
+  );
 }
 
 function errBufferOutOfBounds(which) {
-  return nodeError(RangeError, "ERR_BUFFER_OUT_OF_BOUNDS",
-    `"${which}" is outside of buffer bounds`);
+  return nodeError(
+    RangeError,
+    "ERR_BUFFER_OUT_OF_BOUNDS",
+    `"${which}" is outside of buffer bounds`,
+  );
 }
 
 function errMissingArgs(name) {
-  return nodeError(TypeError, "ERR_MISSING_ARGS",
-    `The "${name}" argument must be specified`);
+  return nodeError(
+    TypeError,
+    "ERR_MISSING_ARGS",
+    `The "${name}" argument must be specified`,
+  );
 }
 
 function errOutOfRange(name, value) {
-  return nodeError(RangeError, "ERR_OUT_OF_RANGE",
+  return nodeError(
+    RangeError,
+    "ERR_OUT_OF_RANGE",
     `The value of "${name}" is out of range. It must be >= 0 && <= 4294967295. ` +
-    `Received ${String(value)}`);
+      `Received ${String(value)}`,
+  );
 }
 
 function errInvalidArgValue(kind, name, reason, value) {
-  return nodeError(TypeError, "ERR_INVALID_ARG_VALUE",
-    `The ${kind} '${name}' ${reason}. Received ${fmtValue(value)}`);
+  return nodeError(
+    TypeError,
+    "ERR_INVALID_ARG_VALUE",
+    `The ${kind} '${name}' ${reason}. Received ${fmtValue(value)}`,
+  );
 }
 
 function fmtValue(value) {
@@ -132,11 +163,13 @@ function validateNumber(value, name) {
 // send()/connect() pass name 'Port', allowZero=false; bindSync() passes
 // name 'options.port', allowZero=true.
 function validatePort(port, name, allowZero = true) {
-  if ((typeof port !== "number" && typeof port !== "string") ||
-      (typeof port === "string" && port.trim().length === 0) ||
-      +port !== (+port >>> 0) ||
-      +port > 0xFFFF ||
-      (+port === 0 && !allowZero)) {
+  if (
+    (typeof port !== "number" && typeof port !== "string") ||
+    (typeof port === "string" && port.trim().length === 0) ||
+    +port !== +port >>> 0 ||
+    +port > 0xffff ||
+    (+port === 0 && !allowZero)
+  ) {
     throw errSocketBadPort(name, port, allowZero);
   }
   return +port | 0;
@@ -145,7 +178,8 @@ function validatePort(port, name, allowZero = true) {
 // Mirrors the `if (options.recvBufferSize)` + validateUint32() pair in the
 // Socket constructor.
 function validateBufferSizeOption(value, name) {
-  if (typeof value !== "number") throw errInvalidArgType(name, "number", value, "property");
+  if (typeof value !== "number")
+    throw errInvalidArgType(name, "number", value, "property");
   if (!(value >= 0 && value <= 4294967295 && Number.isInteger(value))) {
     throw errOutOfRange(name, value);
   }
@@ -156,16 +190,16 @@ function validateBufferSizeOption(value, name) {
 // literal forms without DNS.
 function isIPLiteral(s) {
   if (typeof s !== "string" || s.length === 0) return 0;
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(s) &&
-      s.split(".").every((p) => +p <= 255)) return 4;
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(s) && s.split(".").every((p) => +p <= 255))
+    return 4;
   // IPv6: full, compressed (::), and embedded-IPv4 forms.
   const h16 = "[0-9a-fA-F]{1,4}";
   const v6 = new RegExp(
-    `^(${h16}:){7}${h16}$` +                    // full
-    `|^:((:${h16}){1,7}|:)$` +                 // leading ::
-    `|^(${h16}:){1,7}:$` +                     // trailing ::
-    `|^(${h16}:){1,6}:${h16}$` +               // single ::
-    `|^::(ffff(:0{1,4})?:)?(\\d{1,3}\\.){3}\\d{1,3}$` // embedded IPv4
+    `^(${h16}:){7}${h16}$` + // full
+      `|^:((:${h16}){1,7}|:)$` + // leading ::
+      `|^(${h16}:){1,7}:$` + // trailing ::
+      `|^(${h16}:){1,6}:${h16}$` + // single ::
+      `|^::(ffff(:0{1,4})?:)?(\\d{1,3}\\.){3}\\d{1,3}$`, // embedded IPv4
   );
   if (v6.test(s)) return 6;
   return 0;
@@ -173,7 +207,8 @@ function isIPLiteral(s) {
 
 // Mirrors sliceBuffer()'s acceptance checks (offset/length bounds) without
 // materializing a Buffer — there is no network to hand bytes to.
-const _textEncoder = typeof TextEncoder !== "undefined" ? new TextEncoder() : null;
+const _textEncoder =
+  typeof TextEncoder !== "undefined" ? new TextEncoder() : null;
 
 function byteLengthOf(value) {
   if (typeof value === "string") {
@@ -195,8 +230,11 @@ function checkBufferSlice(buffer, offset, length) {
 function checkBufferList(list) {
   for (const item of list) {
     if (typeof item !== "string" && !ArrayBuffer.isView(item)) {
-      throw errInvalidArgType("buffer list arguments",
-        "Buffer, TypedArray, DataView, or string", list);
+      throw errInvalidArgType(
+        "buffer list arguments",
+        "Buffer, TypedArray, DataView, or string",
+        list,
+      );
     }
   }
 }
@@ -243,10 +281,16 @@ export class Socket extends EventEmitter {
     if (options) {
       // Mirrors Node: only validated when truthy.
       if (options.recvBufferSize) {
-        validateBufferSizeOption(options.recvBufferSize, "options.recvBufferSize");
+        validateBufferSizeOption(
+          options.recvBufferSize,
+          "options.recvBufferSize",
+        );
       }
       if (options.sendBufferSize) {
-        validateBufferSizeOption(options.sendBufferSize, "options.sendBufferSize");
+        validateBufferSizeOption(
+          options.sendBufferSize,
+          "options.sendBufferSize",
+        );
       }
       // receiveBlockList / sendBlockList: accepted and ignored — there is no
       // net.BlockList in a browser and no packets to filter. (Documented gap.)
@@ -265,17 +309,27 @@ export class Socket extends EventEmitter {
     // options.signal: aborting closes the socket (mirrors Node).
     if (options && options.signal !== undefined) {
       const signal = options.signal;
-      if (signal !== null && typeof signal === "object" &&
-          typeof signal.addEventListener === "function") {
+      if (
+        signal !== null &&
+        typeof signal === "object" &&
+        typeof signal.addEventListener === "function"
+      ) {
         if (signal.aborted) {
           this.close();
         } else {
           const onAbort = () => this.close();
           signal.addEventListener("abort", onAbort, { once: true });
-          this.once("close", () => signal.removeEventListener("abort", onAbort));
+          this.once("close", () =>
+            signal.removeEventListener("abort", onAbort),
+          );
         }
       } else {
-        throw errInvalidArgType("options.signal", "AbortSignal", signal, "property");
+        throw errInvalidArgType(
+          "options.signal",
+          "AbortSignal",
+          signal,
+          "property",
+        );
       }
     }
   }
@@ -290,7 +344,8 @@ export class Socket extends EventEmitter {
 
     // The callback is the last argument, whatever position it is in
     // (mirrors Node's `arguments[arguments.length - 1]` handling).
-    const last = arguments.length > 0 ? arguments[arguments.length - 1] : undefined;
+    const last =
+      arguments.length > 0 ? arguments[arguments.length - 1] : undefined;
     const cb = typeof last === "function" ? last : undefined;
     if (cb) {
       const onListening = () => {
@@ -310,8 +365,11 @@ export class Socket extends EventEmitter {
     // async bind() performs no synchronous port validation either — real
     // bind failures surface as async 'error' events, which cannot occur
     // without a network.
-    if (port_ !== null && typeof port_ === "object" &&
-        typeof port_.recvStart !== "function") {
+    if (
+      port_ !== null &&
+      typeof port_ === "object" &&
+      typeof port_.recvStart !== "function"
+    ) {
       address_ = port_.address; // eslint-disable-line no-param-reassign
     } else if (typeof address_ === "function") {
       address_ = undefined; // eslint-disable-line no-param-reassign
@@ -335,7 +393,11 @@ export class Socket extends EventEmitter {
   // returns null — there is no local address to report.
   bindSync(options = {}) {
     healthCheck(this);
-    if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    if (
+      options === null ||
+      typeof options !== "object" ||
+      Array.isArray(options)
+    ) {
       throw errInvalidArgType("options", "object", options);
     }
     const state = this[kState];
@@ -349,8 +411,12 @@ export class Socket extends EventEmitter {
     } else {
       validateString(address, "options.address");
       if (isIPLiteral(address) === 0) {
-        throw errInvalidArgValue("property", "options.address",
-          "must be a numeric IP address; bindSync does not perform DNS resolution", address);
+        throw errInvalidArgValue(
+          "property",
+          "options.address",
+          "must be a numeric IP address; bindSync does not perform DNS resolution",
+          address,
+        );
       }
     }
 
@@ -377,7 +443,8 @@ export class Socket extends EventEmitter {
     if (state.connectState !== CONN_DISCONNECTED) throw errSocketIsConnected();
     state.connectState = CONN_CONNECTING;
 
-    if (state.bindState === BIND_UNBOUND) this.bind({ port: 0, exclusive: true });
+    if (state.bindState === BIND_UNBOUND)
+      this.bind({ port: 0, exclusive: true });
 
     if (typeof callback === "function") this.once("connect", callback);
 
@@ -402,8 +469,12 @@ export class Socket extends EventEmitter {
     } else {
       validateString(address, "address");
       if (isIPLiteral(address) === 0) {
-        throw errInvalidArgValue("argument", "address",
-          "must be a numeric IP address; connectSync does not perform DNS resolution", address);
+        throw errInvalidArgValue(
+          "argument",
+          "address",
+          "must be a numeric IP address; connectSync does not perform DNS resolution",
+          address,
+        );
       }
     }
 
@@ -415,7 +486,8 @@ export class Socket extends EventEmitter {
     }
     state.connectState = CONN_CONNECTED;
     defer(() => {
-      if (!state.closed && state.connectState === CONN_CONNECTED) this.emit("connect");
+      if (!state.closed && state.connectState === CONN_CONNECTED)
+        this.emit("connect");
     });
     return undefined;
   }
@@ -485,7 +557,8 @@ export class Socket extends EventEmitter {
 
     healthCheck(this);
 
-    if (state.bindState === BIND_UNBOUND) this.bind({ port: 0, exclusive: true });
+    if (state.bindState === BIND_UNBOUND)
+      this.bind({ port: 0, exclusive: true });
 
     // Honest noop: the datagram is discarded; report zero bytes sent.
     defer(() => {
@@ -644,10 +717,17 @@ export function _createSocketHandle(..._ignored) {
   // honest noop stub (never throw).
   const noop = () => {};
   return {
-    bind: noop, close: noop, send: noop,
-    recvStart: noop, recvStop: noop,
-    ref() { return this; },
-    unref() { return this; },
+    bind: noop,
+    close: noop,
+    send: noop,
+    recvStart: noop,
+    recvStop: noop,
+    ref() {
+      return this;
+    },
+    unref() {
+      return this;
+    },
   };
 }
 

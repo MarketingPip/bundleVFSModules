@@ -19,29 +19,29 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
-const vm = require('vm');
+const vm = require("vm");
 
 const code =
-    'Object.defineProperty(this, "f", {\n' +
-    '  get: function() { return x; },\n' +
-    '  set: function(k) { x = k; },\n' +
-    '  configurable: true,\n' +
-    '  enumerable: true\n' +
-    '});\n' +
-    'g = f;\n' +
-    'f;\n';
+  'Object.defineProperty(this, "f", {\n' +
+  "  get: function() { return x; },\n" +
+  "  set: function(k) { x = k; },\n" +
+  "  configurable: true,\n" +
+  "  enumerable: true\n" +
+  "});\n" +
+  "g = f;\n" +
+  "f;\n";
 
 const x = {};
 const o = vm.createContext({ console, x });
 
-const res = vm.runInContext(code, o, 'test');
+const res = vm.runInContext(code, o, "test");
 
 assert(res);
-assert.strictEqual(typeof res, 'object');
+assert.strictEqual(typeof res, "object");
 assert.strictEqual(res, x);
 assert.strictEqual(o.f, res);
-assert.deepStrictEqual(Object.keys(o), ['console', 'x', 'f', 'g']);
+assert.deepStrictEqual(Object.keys(o), ["console", "x", "f", "g"]);

@@ -1,24 +1,25 @@
 // Flags: --expose-internals
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
-const assert = require('assert');
+const assert = require("assert");
 const {
   validateOffsetLengthRead,
   validateOffsetLengthWrite,
-} = require('internal/fs/utils');
+} = require("internal/fs/utils");
 
 {
   const offset = -1;
   assert.throws(
     () => validateOffsetLengthRead(offset, 0, 0),
     common.expectsError({
-      code: 'ERR_OUT_OF_RANGE',
-      name: 'RangeError',
-      message: 'The value of "offset" is out of range. ' +
-                 `It must be >= 0. Received ${offset}`
-    })
+      code: "ERR_OUT_OF_RANGE",
+      name: "RangeError",
+      message:
+        'The value of "offset" is out of range. ' +
+        `It must be >= 0. Received ${offset}`,
+    }),
   );
 }
 
@@ -27,11 +28,12 @@ const {
   assert.throws(
     () => validateOffsetLengthRead(0, length, 0),
     common.expectsError({
-      code: 'ERR_OUT_OF_RANGE',
-      name: 'RangeError',
-      message: 'The value of "length" is out of range. ' +
-                 `It must be >= 0. Received ${length}`
-    })
+      code: "ERR_OUT_OF_RANGE",
+      name: "RangeError",
+      message:
+        'The value of "length" is out of range. ' +
+        `It must be >= 0. Received ${length}`,
+    }),
   );
 }
 
@@ -42,11 +44,12 @@ const {
   assert.throws(
     () => validateOffsetLengthRead(offset, length, byteLength),
     common.expectsError({
-      code: 'ERR_OUT_OF_RANGE',
-      name: 'RangeError',
-      message: 'The value of "length" is out of range. ' +
-                 `It must be <= ${byteLength - offset}. Received ${length}`
-    })
+      code: "ERR_OUT_OF_RANGE",
+      name: "RangeError",
+      message:
+        'The value of "length" is out of range. ' +
+        `It must be <= ${byteLength - offset}. Received ${length}`,
+    }),
   );
 }
 
@@ -62,11 +65,12 @@ const kIoMaxLength = 2 ** 31 - 1;
   assert.throws(
     () => validateOffsetLengthWrite(offset, length, byteLength),
     common.expectsError({
-      code: 'ERR_OUT_OF_RANGE',
-      name: 'RangeError',
-      message: 'The value of "offset" is out of range. ' +
-               `It must be <= ${byteLength}. Received ${offset}`
-    })
+      code: "ERR_OUT_OF_RANGE",
+      name: "RangeError",
+      message:
+        'The value of "offset" is out of range. ' +
+        `It must be <= ${byteLength}. Received ${offset}`,
+    }),
   );
 }
 
@@ -78,10 +82,11 @@ const kIoMaxLength = 2 ** 31 - 1;
   assert.throws(
     () => validateOffsetLengthWrite(offset, length, byteLength),
     common.expectsError({
-      code: 'ERR_OUT_OF_RANGE',
-      name: 'RangeError',
-      message: 'The value of "length" is out of range. ' +
-               `It must be <= ${byteLength - offset}. Received ${length}`
-    })
+      code: "ERR_OUT_OF_RANGE",
+      name: "RangeError",
+      message:
+        'The value of "length" is out of range. ' +
+        `It must be <= ${byteLength - offset}. Received ${length}`,
+    }),
   );
 }

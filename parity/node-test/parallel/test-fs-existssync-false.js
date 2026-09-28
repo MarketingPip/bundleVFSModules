@@ -1,14 +1,14 @@
-'use strict';
-const common = require('../common');
-const tmpdir = require('../common/tmpdir');
+"use strict";
+const common = require("../common");
+const tmpdir = require("../common/tmpdir");
 
 // This test ensures that fs.existsSync doesn't incorrectly return false.
 // (especially on Windows)
 // https://github.com/nodejs/node-v0.x-archive/issues/3739
 
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 
 let dir = path.resolve(tmpdir.path);
 
@@ -21,12 +21,12 @@ for (let i = 0; i < 50; i++) {
 }
 
 fs.mkdirSync(dir, {
-  mode: '0777',
+  mode: "0777",
   recursive: true,
 });
 
 // Test if file exists synchronously
-assert(fs.existsSync(dir), 'Directory is not accessible');
+assert(fs.existsSync(dir), "Directory is not accessible");
 
 // Test if file exists asynchronously
 fs.access(dir, common.mustSucceed());

@@ -1,19 +1,19 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
-const fsPromises = require('fs/promises');
-const path = require('path');
-const { isMainThread } = require('worker_threads');
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
+const fsPromises = require("fs/promises");
+const path = require("path");
+const { isMainThread } = require("worker_threads");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
 async function basicUsage() {
-  const result = await fsPromises.mkdtempDisposable(tmpdir.resolve('foo.'));
+  const result = await fsPromises.mkdtempDisposable(tmpdir.resolve("foo."));
 
-  assert.strictEqual(path.basename(result.path).length, 'foo.XXXXXX'.length);
+  assert.strictEqual(path.basename(result.path).length, "foo.XXXXXX".length);
   assert.strictEqual(path.dirname(result.path), tmpdir.path);
   assert(fs.existsSync(result.path));
 
@@ -26,7 +26,7 @@ async function basicUsage() {
 }
 
 async function symbolAsyncDispose() {
-  const result = await fsPromises.mkdtempDisposable(tmpdir.resolve('foo.'));
+  const result = await fsPromises.mkdtempDisposable(tmpdir.resolve("foo."));
 
   assert(fs.existsSync(result.path));
 
@@ -45,8 +45,8 @@ async function chdirDoesNotAffectRemoval() {
   const originalCwd = process.cwd();
 
   process.chdir(tmpdir.path);
-  const first = await fsPromises.mkdtempDisposable('first.');
-  const second = await fsPromises.mkdtempDisposable('second.');
+  const first = await fsPromises.mkdtempDisposable("first.");
+  const second = await fsPromises.mkdtempDisposable("second.");
 
   const fullFirstPath = path.join(tmpdir.path, first.path);
   const fullSecondPath = path.join(tmpdir.path, second.path);
@@ -69,10 +69,12 @@ async function chdirDoesNotAffectRemoval() {
 async function errorsAreReThrown() {
   // It is difficult to arrange for rmdir to fail on windows
   if (common.isWindows || process.getuid() === 0) return;
-  const base = await fsPromises.mkdtempDisposable(tmpdir.resolve('foo.'));
+  const base = await fsPromises.mkdtempDisposable(tmpdir.resolve("foo."));
 
   // On Unix we can prevent removal by making the parent directory read-only
-  const child = await fsPromises.mkdtempDisposable(path.join(base.path, 'bar.'));
+  const child = await fsPromises.mkdtempDisposable(
+    path.join(base.path, "bar."),
+  );
 
   const originalMode = fs.statSync(base.path).mode;
   fs.chmodSync(base.path, 0o444);

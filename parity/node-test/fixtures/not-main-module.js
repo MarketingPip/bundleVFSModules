@@ -19,6 +19,6 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-const assert = require('assert');
+const assert = require("assert");
 assert.notStrictEqual(module, require.main);
 assert.notStrictEqual(module, process.mainModule);

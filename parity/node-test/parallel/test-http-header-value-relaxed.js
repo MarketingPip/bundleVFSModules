@@ -1,10 +1,10 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
-const net = require('net');
-const { duplexPair } = require('stream');
-const { HTTPParser } = require('_http_common');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
+const net = require("net");
+const { duplexPair } = require("stream");
+const { HTTPParser } = require("_http_common");
 // llhttp_set_lenient_header_value_relaxed() was added in llhttp 9.4.0.
 // On shared-library builds using an older system llhttp the constant is
 // exported as 0, so inbound-parsing tests must be skipped there.
@@ -21,8 +21,8 @@ const kRelaxedInboundSupported = HTTPParser.kLenientHeaderValueRelaxed > 0;
 
 // Helper: create a request that won't actually connect (for setHeader tests)
 function dummyRequest(opts) {
-  const req = http.request({ host: '127.0.0.1', port: 1, ...opts });
-  req.on('error', () => {});  // Suppress connection errors
+  const req = http.request({ host: "127.0.0.1", port: 1, ...opts });
+  req.on("error", () => {}); // Suppress connection errors
   return req;
 }
 
@@ -31,9 +31,12 @@ function dummyRequest(opts) {
 // ============================================================================
 {
   const req = dummyRequest();
-  assert.throws(() => {
-    req.setHeader('X-Test', 'value\x01here');
-  }, { code: 'ERR_INVALID_CHAR' });
+  assert.throws(
+    () => {
+      req.setHeader("X-Test", "value\x01here");
+    },
+    { code: "ERR_INVALID_CHAR" },
+  );
   req.destroy();
 }
 
@@ -41,12 +44,12 @@ function dummyRequest(opts) {
 // Test 2: Client setHeader with control chars in relaxed mode - allowed
 // ============================================================================
 {
-  const req = dummyRequest({ httpValidation: 'relaxed' });
+  const req = dummyRequest({ httpValidation: "relaxed" });
   // Should not throw - control chars allowed in relaxed mode
-  req.setHeader('X-Test', 'value\x01here');
-  req.setHeader('X-Bel', 'ding\x07');
-  req.setHeader('X-Esc', 'esc\x1b');
-  req.setHeader('X-Del', 'del\x7f');
+  req.setHeader("X-Test", "value\x01here");
+  req.setHeader("X-Bel", "ding\x07");
+  req.setHeader("X-Esc", "esc\x1b");
+  req.setHeader("X-Del", "del\x7f");
   req.destroy();
 }
 
@@ -54,16 +57,25 @@ function dummyRequest(opts) {
 // Test 3: NUL, CR, LF always rejected even in relaxed mode (client)
 // ============================================================================
 {
-  const req = dummyRequest({ httpValidation: 'relaxed' });
-  assert.throws(() => {
-    req.setHeader('X-Test', 'value\x00here');
-  }, { code: 'ERR_INVALID_CHAR' });
-  assert.throws(() => {
-    req.setHeader('X-Test', 'value\rhere');
-  }, { code: 'ERR_INVALID_CHAR' });
-  assert.throws(() => {
-    req.setHeader('X-Test', 'value\nhere');
-  }, { code: 'ERR_INVALID_CHAR' });
+  const req = dummyRequest({ httpValidation: "relaxed" });
+  assert.throws(
+    () => {
+      req.setHeader("X-Test", "value\x00here");
+    },
+    { code: "ERR_INVALID_CHAR" },
+  );
+  assert.throws(
+    () => {
+      req.setHeader("X-Test", "value\rhere");
+    },
+    { code: "ERR_INVALID_CHAR" },
+  );
+  assert.throws(
+    () => {
+      req.setHeader("X-Test", "value\nhere");
+    },
+    { code: "ERR_INVALID_CHAR" },
+  );
   req.destroy();
 }
 
@@ -71,88 +83,139 @@ function dummyRequest(opts) {
 // Test 4: Server response setHeader with control chars in relaxed mode
 // ============================================================================
 {
-  const server = http.createServer({
-    httpValidation: 'relaxed',
-  }, common.mustCall((req, res) => {
-    // Should not throw - control chars allowed in relaxed mode
-    res.setHeader('X-Custom', 'value\x01here');
-    res.end('ok');
-  }));
+  const server = http.createServer(
+    {
+      httpValidation: "relaxed",
+    },
+    common.mustCall((req, res) => {
+      // Should not throw - control chars allowed in relaxed mode
+      res.setHeader("X-Custom", "value\x01here");
+      res.end("ok");
+    }),
+  );
 
-  server.listen(0, common.mustCall(() => {
-    const port = server.address().port;
-    // Use a raw TCP connection to read the response headers directly,
-    // since http.get would fail to parse the control char in the header.
-    const client = net.connect(port, common.mustCall(() => {
-      client.write('GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
-    }));
-    let data = '';
-    client.on('data', (chunk) => { data += chunk; });
-    client.on('end', common.mustCall(() => {
-      // eslint-disable-next-line no-control-regex
-      assert.match(data, /X-Custom: value\x01here/);
-      server.close();
-    }));
-  }));
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const port = server.address().port;
+      // Use a raw TCP connection to read the response headers directly,
+      // since http.get would fail to parse the control char in the header.
+      const client = net.connect(
+        port,
+        common.mustCall(() => {
+          client.write(
+            "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+          );
+        }),
+      );
+      let data = "";
+      client.on("data", (chunk) => {
+        data += chunk;
+      });
+      client.on(
+        "end",
+        common.mustCall(() => {
+          // eslint-disable-next-line no-control-regex
+          assert.match(data, /X-Custom: value\x01here/);
+          server.close();
+        }),
+      );
+    }),
+  );
 }
 
 // ============================================================================
 // Test 5: Server response NUL/CR/LF always rejected in relaxed mode
 // ============================================================================
 {
-  const server = http.createServer({
-    httpValidation: 'relaxed',
-  }, common.mustCall((req, res) => {
-    assert.throws(() => {
-      res.setHeader('X-Test', 'value\x00here');
-    }, { code: 'ERR_INVALID_CHAR' });
-    assert.throws(() => {
-      res.setHeader('X-Test', 'value\rhere');
-    }, { code: 'ERR_INVALID_CHAR' });
-    assert.throws(() => {
-      res.setHeader('X-Test', 'value\nhere');
-    }, { code: 'ERR_INVALID_CHAR' });
-    res.end('ok');
-  }));
+  const server = http.createServer(
+    {
+      httpValidation: "relaxed",
+    },
+    common.mustCall((req, res) => {
+      assert.throws(
+        () => {
+          res.setHeader("X-Test", "value\x00here");
+        },
+        { code: "ERR_INVALID_CHAR" },
+      );
+      assert.throws(
+        () => {
+          res.setHeader("X-Test", "value\rhere");
+        },
+        { code: "ERR_INVALID_CHAR" },
+      );
+      assert.throws(
+        () => {
+          res.setHeader("X-Test", "value\nhere");
+        },
+        { code: "ERR_INVALID_CHAR" },
+      );
+      res.end("ok");
+    }),
+  );
 
-  server.listen(0, common.mustCall(() => {
-    http.get({ port: server.address().port }, common.mustCall((res) => {
-      res.resume();
-      res.on('end', common.mustCall(() => {
-        server.close();
-      }));
-    }));
-  }));
+  server.listen(
+    0,
+    common.mustCall(() => {
+      http.get(
+        { port: server.address().port },
+        common.mustCall((res) => {
+          res.resume();
+          res.on(
+            "end",
+            common.mustCall(() => {
+              server.close();
+            }),
+          );
+        }),
+      );
+    }),
+  );
 }
 
 // ============================================================================
 // Test 6: Server response strict mode (default) rejects control chars
 // ============================================================================
 {
-  const server = http.createServer(common.mustCall((req, res) => {
-    assert.throws(() => {
-      res.setHeader('X-Test', 'value\x01here');
-    }, { code: 'ERR_INVALID_CHAR' });
-    res.end('ok');
-  }));
+  const server = http.createServer(
+    common.mustCall((req, res) => {
+      assert.throws(
+        () => {
+          res.setHeader("X-Test", "value\x01here");
+        },
+        { code: "ERR_INVALID_CHAR" },
+      );
+      res.end("ok");
+    }),
+  );
 
-  server.listen(0, common.mustCall(() => {
-    http.get({ port: server.address().port }, common.mustCall((res) => {
-      res.resume();
-      res.on('end', common.mustCall(() => {
-        server.close();
-      }));
-    }));
-  }));
+  server.listen(
+    0,
+    common.mustCall(() => {
+      http.get(
+        { port: server.address().port },
+        common.mustCall((res) => {
+          res.resume();
+          res.on(
+            "end",
+            common.mustCall(() => {
+              server.close();
+            }),
+          );
+        }),
+      );
+    }),
+  );
 }
 
 // ============================================================================
 // Test 7: appendHeader also respects relaxed mode
 // ============================================================================
 {
-  const req = dummyRequest({ httpValidation: 'relaxed' });
+  const req = dummyRequest({ httpValidation: "relaxed" });
   // Should not throw in relaxed mode
-  req.appendHeader('X-Test', 'value\x01here');
+  req.appendHeader("X-Test", "value\x01here");
   req.destroy();
 }
 
@@ -161,9 +224,12 @@ function dummyRequest(opts) {
 // ============================================================================
 {
   const req = dummyRequest();
-  assert.throws(() => {
-    req.appendHeader('X-Test', 'value\x01here');
-  }, { code: 'ERR_INVALID_CHAR' });
+  assert.throws(
+    () => {
+      req.appendHeader("X-Test", "value\x01here");
+    },
+    { code: "ERR_INVALID_CHAR" },
+  );
   req.destroy();
 }
 
@@ -172,9 +238,12 @@ function dummyRequest(opts) {
 // ============================================================================
 {
   const req = dummyRequest({ insecureHTTPParser: false });
-  assert.throws(() => {
-    req.setHeader('X-Test', 'value\x01here');
-  }, { code: 'ERR_INVALID_CHAR' });
+  assert.throws(
+    () => {
+      req.setHeader("X-Test", "value\x01here");
+    },
+    { code: "ERR_INVALID_CHAR" },
+  );
   req.destroy();
 }
 
@@ -186,22 +255,25 @@ function dummyRequest(opts) {
 if (kRelaxedInboundSupported) {
   const [clientSide, serverSide] = duplexPair();
 
-  const req = http.request({
-    createConnection: common.mustCall(() => clientSide),
-    httpValidation: 'relaxed',
-  }, common.mustCall((res) => {
-    assert.strictEqual(res.headers['x-ctrl'], 'value\x01here');
-    res.resume();
-    res.on('end', common.mustCall());
-  }));
+  const req = http.request(
+    {
+      createConnection: common.mustCall(() => clientSide),
+      httpValidation: "relaxed",
+    },
+    common.mustCall((res) => {
+      assert.strictEqual(res.headers["x-ctrl"], "value\x01here");
+      res.resume();
+      res.on("end", common.mustCall());
+    }),
+  );
   req.end();
 
   serverSide.resume();
   serverSide.end(
-    'HTTP/1.1 200 OK\r\n' +
-    'X-Ctrl: value\x01here\r\n' +
-    'Content-Length: 0\r\n' +
-    '\r\n',
+    "HTTP/1.1 200 OK\r\n" +
+      "X-Ctrl: value\x01here\r\n" +
+      "Content-Length: 0\r\n" +
+      "\r\n",
   );
 }
 
@@ -209,18 +281,21 @@ if (kRelaxedInboundSupported) {
 {
   const [clientSide, serverSide] = duplexPair();
 
-  const req = http.request({
-    createConnection: common.mustCall(() => clientSide),
-  }, common.mustNotCall());
+  const req = http.request(
+    {
+      createConnection: common.mustCall(() => clientSide),
+    },
+    common.mustNotCall(),
+  );
   req.end();
-  req.on('error', common.mustCall());
+  req.on("error", common.mustCall());
 
   serverSide.resume();
   serverSide.end(
-    'HTTP/1.1 200 OK\r\n' +
-    'X-Ctrl: value\x01here\r\n' +
-    'Content-Length: 0\r\n' +
-    '\r\n',
+    "HTTP/1.1 200 OK\r\n" +
+      "X-Ctrl: value\x01here\r\n" +
+      "Content-Length: 0\r\n" +
+      "\r\n",
   );
 }
 
@@ -228,10 +303,10 @@ if (kRelaxedInboundSupported) {
 // Test 11: httpValidation: 'insecure' outbound - same as insecureHTTPParser
 // ============================================================================
 {
-  const req = dummyRequest({ httpValidation: 'insecure' });
+  const req = dummyRequest({ httpValidation: "insecure" });
   // Should not throw - control chars allowed in insecure mode
-  req.setHeader('X-Test', 'value\x01here');
-  req.setHeader('X-Bel', 'ding\x07');
+  req.setHeader("X-Test", "value\x01here");
+  req.setHeader("X-Bel", "ding\x07");
   req.destroy();
 }
 
@@ -239,18 +314,27 @@ if (kRelaxedInboundSupported) {
 // Test 12: Mutual exclusion - client throws when both options are set
 // ============================================================================
 {
-  assert.throws(() => {
-    dummyRequest({ httpValidation: 'relaxed', insecureHTTPParser: true });
-  }, { code: 'ERR_INVALID_ARG_VALUE' });
+  assert.throws(
+    () => {
+      dummyRequest({ httpValidation: "relaxed", insecureHTTPParser: true });
+    },
+    { code: "ERR_INVALID_ARG_VALUE" },
+  );
 }
 
 // ============================================================================
 // Test 13: Mutual exclusion - server throws when both options are set
 // ============================================================================
 {
-  assert.throws(() => {
-    http.createServer({ httpValidation: 'relaxed', insecureHTTPParser: true });
-  }, { code: 'ERR_INVALID_ARG_VALUE' });
+  assert.throws(
+    () => {
+      http.createServer({
+        httpValidation: "relaxed",
+        insecureHTTPParser: true,
+      });
+    },
+    { code: "ERR_INVALID_ARG_VALUE" },
+  );
 }
 
 // ============================================================================
@@ -259,26 +343,42 @@ if (kRelaxedInboundSupported) {
 // Only runs on builds with llhttp >= 9.4 (kLenientHeaderValueRelaxed > 0).
 // ============================================================================
 if (kRelaxedInboundSupported) {
-  const server = http.createServer({
-    httpValidation: 'relaxed',
-  }, common.mustCall((req, res) => {
-    assert.strictEqual(req.headers['x-ctrl'], 'value\x01here');
-    res.end('ok');
-  }));
+  const server = http.createServer(
+    {
+      httpValidation: "relaxed",
+    },
+    common.mustCall((req, res) => {
+      assert.strictEqual(req.headers["x-ctrl"], "value\x01here");
+      res.end("ok");
+    }),
+  );
 
-  server.listen(0, common.mustCall(() => {
-    const port = server.address().port;
-    // Use a raw TCP connection to send a request with a control char header.
-    const client = net.connect(port, common.mustCall(() => {
-      client.write('GET / HTTP/1.1\r\nHost: localhost\r\nX-Ctrl: value\x01here\r\nConnection: close\r\n\r\n');
-    }));
-    let data = '';
-    client.on('data', (chunk) => { data += chunk; });
-    client.on('end', common.mustCall(() => {
-      assert.match(data, /^HTTP\/1\.1 200/);
-      server.close();
-    }));
-  }));
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const port = server.address().port;
+      // Use a raw TCP connection to send a request with a control char header.
+      const client = net.connect(
+        port,
+        common.mustCall(() => {
+          client.write(
+            "GET / HTTP/1.1\r\nHost: localhost\r\nX-Ctrl: value\x01here\r\nConnection: close\r\n\r\n",
+          );
+        }),
+      );
+      let data = "";
+      client.on("data", (chunk) => {
+        data += chunk;
+      });
+      client.on(
+        "end",
+        common.mustCall(() => {
+          assert.match(data, /^HTTP\/1\.1 200/);
+          server.close();
+        }),
+      );
+    }),
+  );
 }
 
 // ============================================================================
@@ -286,23 +386,34 @@ if (kRelaxedInboundSupported) {
 //          rejects request with control char in header value
 // ============================================================================
 {
-  const server = http.createServer(
-    common.mustNotCall(),
-  );
+  const server = http.createServer(common.mustNotCall());
 
-  server.listen(0, common.mustCall(() => {
-    const port = server.address().port;
-    const client = net.connect(port, common.mustCall(() => {
-      client.write('GET / HTTP/1.1\r\nHost: localhost\r\nX-Ctrl: value\x01here\r\nConnection: close\r\n\r\n');
-    }));
-    let data = '';
-    client.on('data', (chunk) => { data += chunk; });
-    client.on('end', common.mustCall(() => {
-      // Server should respond with 400 Bad Request or close the connection
-      assert.match(data, /^HTTP\/1\.1 400|^$/);
-      server.close();
-    }));
-  }));
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const port = server.address().port;
+      const client = net.connect(
+        port,
+        common.mustCall(() => {
+          client.write(
+            "GET / HTTP/1.1\r\nHost: localhost\r\nX-Ctrl: value\x01here\r\nConnection: close\r\n\r\n",
+          );
+        }),
+      );
+      let data = "";
+      client.on("data", (chunk) => {
+        data += chunk;
+      });
+      client.on(
+        "end",
+        common.mustCall(() => {
+          // Server should respond with 400 Bad Request or close the connection
+          assert.match(data, /^HTTP\/1\.1 400|^$/);
+          server.close();
+        }),
+      );
+    }),
+  );
 }
 
 // ============================================================================
@@ -315,53 +426,79 @@ if (kRelaxedInboundSupported) {
   // A request where Transfer-Encoding: chunked appears twice (joined internally
   // as "chunked, chunked"), which llhttp rejects without kLenientTransferEncoding.
   const doubleTE =
-    'GET / HTTP/1.1\r\n' +
-    'Host: localhost\r\n' +
-    'Connection: close\r\n' +
-    'Transfer-Encoding: chunked\r\n' +
-    'Transfer-Encoding: chunked\r\n' +
-    '\r\n' +
-    '0\r\n\r\n';
+    "GET / HTTP/1.1\r\n" +
+    "Host: localhost\r\n" +
+    "Connection: close\r\n" +
+    "Transfer-Encoding: chunked\r\n" +
+    "Transfer-Encoding: chunked\r\n" +
+    "\r\n" +
+    "0\r\n\r\n";
 
   // With httpValidation: 'relaxed', duplicate T-E should be rejected (400).
   {
-    const server = http.createServer({
-      httpValidation: 'relaxed',
-    }, common.mustNotCall());
+    const server = http.createServer(
+      {
+        httpValidation: "relaxed",
+      },
+      common.mustNotCall(),
+    );
 
-    server.listen(0, common.mustCall(() => {
-      const port = server.address().port;
-      const client = net.connect(port, common.mustCall(() => {
-        client.write(doubleTE);
-      }));
-      client.resume();
-      client.on('close', common.mustCall(() => {
-        server.close();
-      }));
-    }));
+    server.listen(
+      0,
+      common.mustCall(() => {
+        const port = server.address().port;
+        const client = net.connect(
+          port,
+          common.mustCall(() => {
+            client.write(doubleTE);
+          }),
+        );
+        client.resume();
+        client.on(
+          "close",
+          common.mustCall(() => {
+            server.close();
+          }),
+        );
+      }),
+    );
   }
 
   // With httpValidation: 'insecure', duplicate T-E is accepted (kLenientAll
   // includes kLenientTransferEncoding).
   {
-    const server = http.createServer({
-      httpValidation: 'insecure',
-    }, common.mustCall((req, res) => {
-      res.end('ok');
-    }));
+    const server = http.createServer(
+      {
+        httpValidation: "insecure",
+      },
+      common.mustCall((req, res) => {
+        res.end("ok");
+      }),
+    );
 
-    server.listen(0, common.mustCall(() => {
-      const port = server.address().port;
-      const client = net.connect(port, common.mustCall(() => {
-        client.write(doubleTE);
-      }));
-      let data = '';
-      client.on('data', (chunk) => { data += chunk; });
-      client.on('end', common.mustCall(() => {
-        assert.match(data, /^HTTP\/1\.1 200/);
-        server.close();
-      }));
-    }));
+    server.listen(
+      0,
+      common.mustCall(() => {
+        const port = server.address().port;
+        const client = net.connect(
+          port,
+          common.mustCall(() => {
+            client.write(doubleTE);
+          }),
+        );
+        let data = "";
+        client.on("data", (chunk) => {
+          data += chunk;
+        });
+        client.on(
+          "end",
+          common.mustCall(() => {
+            assert.match(data, /^HTTP\/1\.1 200/);
+            server.close();
+          }),
+        );
+      }),
+    );
   }
 }
 
@@ -370,49 +507,79 @@ if (kRelaxedInboundSupported) {
 //          (exercises the storeHeader/validateHeaderValue path, not setHeader)
 // ============================================================================
 {
-  const server = http.createServer({
-    httpValidation: 'relaxed',
-  }, common.mustCall((req, res) => {
-    // writeHead calls _storeHeader which calls storeHeader/validateHeaderValue.
-    // With httpValidation: 'relaxed', control chars should be allowed.
-    res.writeHead(200, { 'X-Custom': 'value\x01here' });
-    res.end('ok');
-  }));
+  const server = http.createServer(
+    {
+      httpValidation: "relaxed",
+    },
+    common.mustCall((req, res) => {
+      // writeHead calls _storeHeader which calls storeHeader/validateHeaderValue.
+      // With httpValidation: 'relaxed', control chars should be allowed.
+      res.writeHead(200, { "X-Custom": "value\x01here" });
+      res.end("ok");
+    }),
+  );
 
-  server.listen(0, common.mustCall(() => {
-    const port = server.address().port;
-    const client = net.connect(port, common.mustCall(() => {
-      client.write('GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
-    }));
-    let data = '';
-    client.on('data', (chunk) => { data += chunk; });
-    client.on('end', common.mustCall(() => {
-      // eslint-disable-next-line no-control-regex
-      assert.match(data, /X-Custom: value\x01here/);
-      server.close();
-    }));
-  }));
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const port = server.address().port;
+      const client = net.connect(
+        port,
+        common.mustCall(() => {
+          client.write(
+            "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+          );
+        }),
+      );
+      let data = "";
+      client.on("data", (chunk) => {
+        data += chunk;
+      });
+      client.on(
+        "end",
+        common.mustCall(() => {
+          // eslint-disable-next-line no-control-regex
+          assert.match(data, /X-Custom: value\x01here/);
+          server.close();
+        }),
+      );
+    }),
+  );
 }
 
 // ============================================================================
 // Test 18: writeHead strict mode (default) rejects control chars
 // ============================================================================
 {
-  const server = http.createServer(common.mustCall((req, res) => {
-    assert.throws(() => {
-      res.writeHead(200, { 'X-Custom': 'value\x01here' });
-    }, { code: 'ERR_INVALID_CHAR' });
-    res.end('ok');
-  }));
+  const server = http.createServer(
+    common.mustCall((req, res) => {
+      assert.throws(
+        () => {
+          res.writeHead(200, { "X-Custom": "value\x01here" });
+        },
+        { code: "ERR_INVALID_CHAR" },
+      );
+      res.end("ok");
+    }),
+  );
 
-  server.listen(0, common.mustCall(() => {
-    http.get({ port: server.address().port }, common.mustCall((res) => {
-      res.resume();
-      res.on('end', common.mustCall(() => {
-        server.close();
-      }));
-    }));
-  }));
+  server.listen(
+    0,
+    common.mustCall(() => {
+      http.get(
+        { port: server.address().port },
+        common.mustCall((res) => {
+          res.resume();
+          res.on(
+            "end",
+            common.mustCall(() => {
+              server.close();
+            }),
+          );
+        }),
+      );
+    }),
+  );
 }
 
 // ============================================================================
@@ -420,10 +587,13 @@ if (kRelaxedInboundSupported) {
 //          when insecureHTTPParser would otherwise be lenient
 // ============================================================================
 {
-  const req = dummyRequest({ httpValidation: 'strict' });
+  const req = dummyRequest({ httpValidation: "strict" });
   // 'strict' must always reject control chars, regardless of any global setting
-  assert.throws(() => {
-    req.setHeader('X-Test', 'value\x01here');
-  }, { code: 'ERR_INVALID_CHAR' });
+  assert.throws(
+    () => {
+      req.setHeader("X-Test", "value\x01here");
+    },
+    { code: "ERR_INVALID_CHAR" },
+  );
   req.destroy();
 }

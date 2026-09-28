@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
-const assert = require('assert');
-const { isMainThread } = require('worker_threads');
+const assert = require("assert");
+const { isMainThread } = require("worker_threads");
 
 if (common.isWindows) {
   // uid/gid functions are POSIX only.
@@ -38,27 +38,42 @@ if (!isMainThread) {
   return;
 }
 
-assert.throws(() => {
-  process.setuid({});
-}, {
-  code: 'ERR_INVALID_ARG_TYPE',
-  message: 'The "id" argument must be one of type ' +
-    'number or string. Received an instance of Object'
-});
+assert.throws(
+  () => {
+    process.setuid({});
+  },
+  {
+    code: "ERR_INVALID_ARG_TYPE",
+    message:
+      'The "id" argument must be one of type ' +
+      "number or string. Received an instance of Object",
+  },
+);
 
-assert.throws(() => {
-  process.setuid('fhqwhgadshgnsdhjsdbkhsdabkfabkveyb');
-}, {
-  code: 'ERR_UNKNOWN_CREDENTIAL',
-  message: 'User identifier does not exist: fhqwhgadshgnsdhjsdbkhsdabkfabkveyb'
-});
+assert.throws(
+  () => {
+    process.setuid("fhqwhgadshgnsdhjsdbkhsdabkfabkveyb");
+  },
+  {
+    code: "ERR_UNKNOWN_CREDENTIAL",
+    message:
+      "User identifier does not exist: fhqwhgadshgnsdhjsdbkhsdabkfabkveyb",
+  },
+);
 
 // Passing -0 shouldn't crash the process
 // Refs: https://github.com/nodejs/node/issues/32750
 // And neither should values exceeding 2 ** 31 - 1.
 for (const id of [-0, 2 ** 31, 2 ** 32 - 1]) {
-  for (const fn of [process.setuid, process.setuid, process.setgid, process.setegid]) {
-    try { fn(id); } catch {
+  for (const fn of [
+    process.setuid,
+    process.setuid,
+    process.setgid,
+    process.setegid,
+  ]) {
+    try {
+      fn(id);
+    } catch {
       // Continue regardless of error.
     }
   }
@@ -70,33 +85,31 @@ if (process.getuid() !== 0) {
   process.getgid();
   process.getuid();
 
-  assert.throws(
-    () => { process.setgid('nobody'); },
-    /(?:EPERM, .+|Group identifier does not exist: nobody)$/
-  );
+  assert.throws(() => {
+    process.setgid("nobody");
+  }, /(?:EPERM, .+|Group identifier does not exist: nobody)$/);
 
-  assert.throws(
-    () => { process.setuid('nobody'); },
-    /(?:EPERM, .+|User identifier does not exist: nobody)$/
-  );
+  assert.throws(() => {
+    process.setuid("nobody");
+  }, /(?:EPERM, .+|User identifier does not exist: nobody)$/);
   return;
 }
 
 // If we are running as super user...
 const oldgid = process.getgid();
 try {
-  process.setgid('nobody');
+  process.setgid("nobody");
 } catch (err) {
-  if (err.code !== 'ERR_UNKNOWN_CREDENTIAL') {
+  if (err.code !== "ERR_UNKNOWN_CREDENTIAL") {
     throw err;
   }
-  process.setgid('nogroup');
+  process.setgid("nogroup");
 }
 
 const newgid = process.getgid();
 assert.notStrictEqual(newgid, oldgid);
 
 const olduid = process.getuid();
-process.setuid('nobody');
+process.setuid("nobody");
 const newuid = process.getuid();
 assert.notStrictEqual(newuid, olduid);

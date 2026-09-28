@@ -1,10 +1,8 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const {
-  Duplex,
-} = require('stream');
-const { setTimeout } = require('timers/promises');
+const common = require("../common");
+const { Duplex } = require("stream");
+const { setTimeout } = require("timers/promises");
 
 {
   class Foo extends Duplex {
@@ -20,6 +18,6 @@ const { setTimeout } = require('timers/promises');
   foo._write = common.mustCall((chunk, encoding, cb) => {
     cb();
   });
-  foo.end('test', common.mustCall());
-  foo.on('error', common.mustNotCall());
+  foo.end("test", common.mustCall());
+  foo.on("error", common.mustNotCall());
 }

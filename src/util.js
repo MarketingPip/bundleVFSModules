@@ -26,8 +26,8 @@
  * helpers, and the legacy deprecated type checks.
  */
 
-import { Buffer } from 'buffer';
-import process from 'process';
+import { Buffer } from "buffer";
+import process from "process";
 
 // ---------------------------------------------------------------------------
 // internal/errors-lite
@@ -47,8 +47,15 @@ function E(code, message, Base = Error) {
 }
 
 const kInvalidArgTypes = [
-  'string', 'function', 'number', 'object',
-  'Function', 'Object', 'boolean', 'bigint', 'symbol',
+  "string",
+  "function",
+  "number",
+  "object",
+  "Function",
+  "Object",
+  "boolean",
+  "bigint",
+  "symbol",
 ];
 const classRegExp = /^[A-Z][a-zA-Z0-9]*$/;
 
@@ -57,35 +64,35 @@ const classRegExp = /^[A-Z][a-zA-Z0-9]*$/;
  * @param {unknown} value
  */
 function determineSpecificType(value) {
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
   const type = typeof value;
   switch (type) {
-    case 'bigint':
+    case "bigint":
       return `type bigint (${value}n)`;
-    case 'number':
+    case "number":
       if (value === 0) {
-        return 1 / value === -Infinity ? 'type number (-0)' : 'type number (0)';
+        return 1 / value === -Infinity ? "type number (-0)" : "type number (0)";
       } else if (value !== value) {
-        return 'type number (NaN)';
+        return "type number (NaN)";
       } else if (value === Infinity) {
-        return 'type number (Infinity)';
+        return "type number (Infinity)";
       } else if (value === -Infinity) {
-        return 'type number (-Infinity)';
+        return "type number (-Infinity)";
       }
       return `type number (${value})`;
-    case 'boolean':
-      return value ? 'type boolean (true)' : 'type boolean (false)';
-    case 'symbol':
+    case "boolean":
+      return value ? "type boolean (true)" : "type boolean (false)";
+    case "symbol":
       return `type symbol (${String(value)})`;
-    case 'function':
+    case "function":
       return `function ${value.name}`;
-    case 'object':
-      if (value.constructor && 'name' in value.constructor) {
+    case "object":
+      if (value.constructor && "name" in value.constructor) {
         return `an instance of ${value.constructor.name}`;
       }
       return `${inspect(value, { depth: -1 })}`;
-    case 'string': {
+    case "string": {
       let s = value;
       if (s.length > 28) s = `${s.slice(0, 25)}...`;
       if (!s.includes("'")) {
@@ -103,7 +110,7 @@ function determineSpecificType(value) {
 
 function formatList(list, conjunction) {
   if (list.length === 1) return list[0];
-  return `${list.slice(0, -1).join(', ')} ${conjunction} ${list[list.length - 1]}`;
+  return `${list.slice(0, -1).join(", ")} ${conjunction} ${list[list.length - 1]}`;
 }
 
 /**
@@ -115,15 +122,15 @@ function formatList(list, conjunction) {
  */
 const ERR_INVALID_ARG_TYPE = (name, expected, actual) => {
   const expectedArr = Array.isArray(expected) ? expected : [expected];
-  let msg = 'The ';
-  if (name.endsWith(' argument')) {
+  let msg = "The ";
+  if (name.endsWith(" argument")) {
     // For cases like 'first argument' / 'last argument'.
     msg += `${name} `;
   } else {
-    const type = name.includes('.') ? 'property' : 'argument';
+    const type = name.includes(".") ? "property" : "argument";
     msg += `"${name}" ${type} `;
   }
-  msg += 'must be ';
+  msg += "must be ";
 
   const types = [];
   const instances = [];
@@ -140,47 +147,55 @@ const ERR_INVALID_ARG_TYPE = (name, expected, actual) => {
 
   // Special handle `object` in case other instances are allowed.
   if (instances.length > 0) {
-    const pos = types.indexOf('object');
+    const pos = types.indexOf("object");
     if (pos !== -1) {
       types.splice(pos, 1);
-      instances.push('Object');
+      instances.push("Object");
     }
   }
 
   if (types.length > 0) {
-    msg += `${types.length > 1 ? 'one of type' : 'of type'} ${formatList(types, 'or')}`;
-    if (instances.length > 0 || other.length > 0) msg += ' or ';
+    msg += `${types.length > 1 ? "one of type" : "of type"} ${formatList(types, "or")}`;
+    if (instances.length > 0 || other.length > 0) msg += " or ";
   }
   if (instances.length > 0) {
-    msg += `an instance of ${formatList(instances, 'or')}`;
-    if (other.length > 0) msg += ' or ';
+    msg += `an instance of ${formatList(instances, "or")}`;
+    if (other.length > 0) msg += " or ";
   }
   if (other.length > 0) {
     if (other.length > 1) {
-      msg += `one of ${formatList(other, 'or')}`;
+      msg += `one of ${formatList(other, "or")}`;
     } else {
-      if (other[0].toLowerCase() !== other[0]) msg += 'an ';
+      if (other[0].toLowerCase() !== other[0]) msg += "an ";
       msg += `${other[0]}`;
     }
   }
 
   msg += `. Received ${determineSpecificType(actual)}`;
-  return E('ERR_INVALID_ARG_TYPE', msg, TypeError);
+  return E("ERR_INVALID_ARG_TYPE", msg, TypeError);
 };
 
 /**
  * Matches node's ERR_INVALID_ARG_VALUE (a TypeError).
  */
-const ERR_INVALID_ARG_VALUE = (name, value, reason = 'is invalid') => {
+const ERR_INVALID_ARG_VALUE = (name, value, reason = "is invalid") => {
   let inspected;
   try {
     inspected = inspect(value);
   } catch {
-    try { inspected = String(value); } catch { inspected = '?'; }
+    try {
+      inspected = String(value);
+    } catch {
+      inspected = "?";
+    }
   }
   if (inspected.length > 128) inspected = `${inspected.slice(0, 128)}...`;
-  const type = name.includes('.') ? 'property' : 'argument';
-  return E('ERR_INVALID_ARG_VALUE', `The ${type} '${name}' ${reason}. Received ${inspected}`, TypeError);
+  const type = name.includes(".") ? "property" : "argument";
+  return E(
+    "ERR_INVALID_ARG_VALUE",
+    `The ${type} '${name}' ${reason}. Received ${inspected}`,
+    TypeError,
+  );
 };
 
 /**
@@ -190,38 +205,63 @@ const ERR_OUT_OF_RANGE = (name, range, input) => {
   let received;
   if (Number.isInteger(input) && Math.abs(input) > 2 ** 32) {
     received = addNumericSeparator(String(input));
-  } else if (typeof input === 'bigint') {
+  } else if (typeof input === "bigint") {
     received = String(input);
     if (input > 2n ** 32n || input < -(2n ** 32n)) {
       received = addNumericSeparator(received);
     }
-    received += 'n';
+    received += "n";
   } else {
     try {
       received = inspect(input);
     } catch {
-      try { received = String(input); } catch { received = '?'; }
+      try {
+        received = String(input);
+      } catch {
+        received = "?";
+      }
     }
   }
-  return E('ERR_OUT_OF_RANGE',
+  return E(
+    "ERR_OUT_OF_RANGE",
     `The value of "${name}" is out of range. It must be ${range}. Received ${received}`,
-    RangeError);
+    RangeError,
+  );
 };
 
 // validators
-const validateString = (v, n) => { if (typeof v !== 'string') throw ERR_INVALID_ARG_TYPE(n, 'string', v); };
-const validateNumber = (v, n) => { if (typeof v !== 'number') throw ERR_INVALID_ARG_TYPE(n, 'number', v); };
-const validateBoolean = (v, n) => { if (typeof v !== 'boolean') throw ERR_INVALID_ARG_TYPE(n, 'boolean', v); };
-const validateFunction = (v, n) => { if (typeof v !== 'function') throw ERR_INVALID_ARG_TYPE(n, 'function', v); };
-const validateObject = (v, n) => { if (v === null || typeof v !== 'object') throw ERR_INVALID_ARG_TYPE(n, 'object', v); };
-const validateInteger = (v, n, min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER) => {
-  if (typeof v !== 'number') throw ERR_INVALID_ARG_TYPE(n, 'number', v);
-  if (!Number.isInteger(v)) throw ERR_OUT_OF_RANGE(n, 'an integer', v);
-  if (v < min || v > max) throw ERR_OUT_OF_RANGE(n, `>= ${min} && <= ${max}`, v);
+const validateString = (v, n) => {
+  if (typeof v !== "string") throw ERR_INVALID_ARG_TYPE(n, "string", v);
+};
+const validateNumber = (v, n) => {
+  if (typeof v !== "number") throw ERR_INVALID_ARG_TYPE(n, "number", v);
+};
+const validateBoolean = (v, n) => {
+  if (typeof v !== "boolean") throw ERR_INVALID_ARG_TYPE(n, "boolean", v);
+};
+const validateFunction = (v, n) => {
+  if (typeof v !== "function") throw ERR_INVALID_ARG_TYPE(n, "function", v);
+};
+const validateObject = (v, n) => {
+  if (v === null || typeof v !== "object")
+    throw ERR_INVALID_ARG_TYPE(n, "object", v);
+};
+const validateInteger = (
+  v,
+  n,
+  min = Number.MIN_SAFE_INTEGER,
+  max = Number.MAX_SAFE_INTEGER,
+) => {
+  if (typeof v !== "number") throw ERR_INVALID_ARG_TYPE(n, "number", v);
+  if (!Number.isInteger(v)) throw ERR_OUT_OF_RANGE(n, "an integer", v);
+  if (v < min || v > max)
+    throw ERR_OUT_OF_RANGE(n, `>= ${min} && <= ${max}`, v);
 };
 const validateOneOf = (v, n, values) => {
   if (!values.includes(v)) {
-    const allowed = values.map((x) => typeof x === 'string' ? `'${x}'` : String(x)).join(', ');
+    const allowed = values
+      .map((x) => (typeof x === "string" ? `'${x}'` : String(x)))
+      .join(", ");
     throw ERR_INVALID_ARG_VALUE(n, v, `must be one of: ${allowed}`);
   }
 };
@@ -230,30 +270,45 @@ const validateOneOf = (v, n, values) => {
 // monkey-patching of globals (e.g. Object.keys in tests) cannot break us.
 const PrimordialObjectKeys = Object.keys;
 const PrimordialObjectGetOwnPropertyNames = Object.getOwnPropertyNames;
-const PrimordialObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
-const PrimordialObjectGetOwnPropertyDescriptors = Object.getOwnPropertyDescriptors;
+const PrimordialObjectGetOwnPropertyDescriptor =
+  Object.getOwnPropertyDescriptor;
+const PrimordialObjectGetOwnPropertyDescriptors =
+  Object.getOwnPropertyDescriptors;
 const PrimordialObjectGetPrototypeOf = Object.getPrototypeOf;
 const PrimordialObjectDefineProperty = Object.defineProperty;
 const PrimordialObjectDefineProperties = Object.defineProperties;
-const PrimordialObjectHasOwn = Object.hasOwn || ((o, p) => Object.prototype.hasOwnProperty.call(o, p));
+const PrimordialObjectHasOwn =
+  Object.hasOwn || ((o, p) => Object.prototype.hasOwnProperty.call(o, p));
 const PrimordialReflectOwnKeys = Reflect.ownKeys;
 const PrimordialArrayIsArray = Array.isArray;
-const PrimordialArrayPrototypePush = Function.prototype.call.bind(Array.prototype.push);
-const PrimordialFunctionPrototypeToString = Function.prototype.call.bind(Function.prototype.toString);
-const PrimordialObjectPrototypeToString = (v) => Object.prototype.toString.call(v);
-const PrimordialObjectPrototypeHasOwnProperty = (o, p) => Object.prototype.hasOwnProperty.call(o, p);
+const PrimordialArrayPrototypePush = Function.prototype.call.bind(
+  Array.prototype.push,
+);
+const PrimordialFunctionPrototypeToString = Function.prototype.call.bind(
+  Function.prototype.toString,
+);
+const PrimordialObjectPrototypeToString = (v) =>
+  Object.prototype.toString.call(v);
+const PrimordialObjectPrototypeHasOwnProperty = (o, p) =>
+  Object.prototype.hasOwnProperty.call(o, p);
 const PrimordialObjectCreate = Object.create;
 const PrimordialObjectSetPrototypeOf = Object.setPrototypeOf;
-const PrimordialFunctionPrototypeApply = Function.prototype.call.bind(Function.prototype.apply);
+const PrimordialFunctionPrototypeApply = Function.prototype.call.bind(
+  Function.prototype.apply,
+);
 const PrimordialReflectConstruct = Reflect.construct;
 const PrimordialSet = Set;
-const PrimordialArrayPrototypeMap = Function.prototype.call.bind(Array.prototype.map);
+const PrimordialArrayPrototypeMap = Function.prototype.call.bind(
+  Array.prototype.map,
+);
 const PrimordialObjectGetOwnPropertySymbols = Object.getOwnPropertySymbols;
-const PrimordialArrayPrototypePop = Function.prototype.call.bind(Array.prototype.pop);
+const PrimordialArrayPrototypePop = Function.prototype.call.bind(
+  Array.prototype.pop,
+);
 const PrimordialReflectApply = Reflect.apply;
 
 const objectToString = PrimordialObjectPrototypeToString;
-const isObjectLike = (v) => v !== null && typeof v === 'object';
+const isObjectLike = (v) => v !== null && typeof v === "object";
 const hasOwn = PrimordialObjectPrototypeHasOwnProperty;
 
 // ---------------------------------------------------------------------------
@@ -269,7 +324,9 @@ const F = PrimordialObjectGetPrototypeOf(function () {});
  * @param {unknown} v
  * @returns {v is (...args: any[]) => any}
  */
-function isFunctionType(v) { return typeof v === 'function'; }
+function isFunctionType(v) {
+  return typeof v === "function";
+}
 
 /**
  * Brand check for a concrete TypedArray constructor that survives
@@ -279,7 +336,8 @@ function isFunctionType(v) { return typeof v === 'function'; }
  * @param {Function|undefined} Ctor
  */
 function isTypedArrayOf(v, Ctor) {
-  if (typeof Ctor !== 'function' || v === null || typeof v !== 'object') return false;
+  if (typeof Ctor !== "function" || v === null || typeof v !== "object")
+    return false;
   if (!ArrayBuffer.isView(v) || v instanceof DataView) return false;
   let proto = v;
   while (proto !== null) {
@@ -293,38 +351,92 @@ function isTypedArrayOf(v, Ctor) {
 function isAsyncGeneratorFunctionValue(v) {
   if (!isFunctionType(v)) return false;
   if (PrimordialObjectGetPrototypeOf(v) === AGF) return true;
-  return /^\s*async\s+function\s*\*/.test(PrimordialFunctionPrototypeToString(v));
+  return /^\s*async\s+function\s*\*/.test(
+    PrimordialFunctionPrototypeToString(v),
+  );
 }
 
 let types = {
-  isArrayBuffer: (v) => objectToString(v) === '[object ArrayBuffer]',
-  isSharedArrayBuffer: (v) => typeof SharedArrayBuffer !== 'undefined' && objectToString(v) === '[object SharedArrayBuffer]',
-  isAnyArrayBuffer: (v) => types.isArrayBuffer(v) || types.isSharedArrayBuffer(v),
+  isArrayBuffer: (v) => objectToString(v) === "[object ArrayBuffer]",
+  isSharedArrayBuffer: (v) =>
+    typeof SharedArrayBuffer !== "undefined" &&
+    objectToString(v) === "[object SharedArrayBuffer]",
+  isAnyArrayBuffer: (v) =>
+    types.isArrayBuffer(v) || types.isSharedArrayBuffer(v),
   isArrayBufferView: (v) => ArrayBuffer.isView(v),
-  isTypedArray: (v) => ArrayBuffer.isView(v) && !(v instanceof DataView) &&
+  isTypedArray: (v) =>
+    ArrayBuffer.isView(v) &&
+    !(v instanceof DataView) &&
     v[Symbol.toStringTag] !== undefined,
-  isUint8Array: (v) => isTypedArrayOf(v, typeof Uint8Array !== 'undefined' ? Uint8Array : undefined),
-  isUint8ClampedArray: (v) => isTypedArrayOf(v, typeof Uint8ClampedArray !== 'undefined' ? Uint8ClampedArray : undefined),
-  isUint16Array: (v) => isTypedArrayOf(v, typeof Uint16Array !== 'undefined' ? Uint16Array : undefined),
-  isUint32Array: (v) => isTypedArrayOf(v, typeof Uint32Array !== 'undefined' ? Uint32Array : undefined),
-  isInt8Array: (v) => isTypedArrayOf(v, typeof Int8Array !== 'undefined' ? Int8Array : undefined),
-  isInt16Array: (v) => isTypedArrayOf(v, typeof Int16Array !== 'undefined' ? Int16Array : undefined),
-  isInt32Array: (v) => isTypedArrayOf(v, typeof Int32Array !== 'undefined' ? Int32Array : undefined),
-  isFloat16Array: (v) => isTypedArrayOf(v, typeof Float16Array !== 'undefined' ? Float16Array : undefined),
-  isFloat32Array: (v) => isTypedArrayOf(v, typeof Float32Array !== 'undefined' ? Float32Array : undefined),
-  isFloat64Array: (v) => isTypedArrayOf(v, typeof Float64Array !== 'undefined' ? Float64Array : undefined),
-  isBigInt64Array: (v) => isTypedArrayOf(v, typeof BigInt64Array !== 'undefined' ? BigInt64Array : undefined),
-  isBigUint64Array: (v) => isTypedArrayOf(v, typeof BigUint64Array !== 'undefined' ? BigUint64Array : undefined),
+  isUint8Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof Uint8Array !== "undefined" ? Uint8Array : undefined,
+    ),
+  isUint8ClampedArray: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof Uint8ClampedArray !== "undefined" ? Uint8ClampedArray : undefined,
+    ),
+  isUint16Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof Uint16Array !== "undefined" ? Uint16Array : undefined,
+    ),
+  isUint32Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof Uint32Array !== "undefined" ? Uint32Array : undefined,
+    ),
+  isInt8Array: (v) =>
+    isTypedArrayOf(v, typeof Int8Array !== "undefined" ? Int8Array : undefined),
+  isInt16Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof Int16Array !== "undefined" ? Int16Array : undefined,
+    ),
+  isInt32Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof Int32Array !== "undefined" ? Int32Array : undefined,
+    ),
+  isFloat16Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof Float16Array !== "undefined" ? Float16Array : undefined,
+    ),
+  isFloat32Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof Float32Array !== "undefined" ? Float32Array : undefined,
+    ),
+  isFloat64Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof Float64Array !== "undefined" ? Float64Array : undefined,
+    ),
+  isBigInt64Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof BigInt64Array !== "undefined" ? BigInt64Array : undefined,
+    ),
+  isBigUint64Array: (v) =>
+    isTypedArrayOf(
+      v,
+      typeof BigUint64Array !== "undefined" ? BigUint64Array : undefined,
+    ),
   isDataView: (v) => ArrayBuffer.isView(v) && v instanceof DataView,
-  isMap: (v) => objectToString(v) === '[object Map]',
-  isSet: (v) => objectToString(v) === '[object Set]',
-  isWeakMap: (v) => objectToString(v) === '[object WeakMap]',
-  isWeakSet: (v) => objectToString(v) === '[object WeakSet]',
-  isMapIterator: (v) => isObjectLike(v) && objectToString(v) === '[object Map Iterator]',
-  isSetIterator: (v) => isObjectLike(v) && objectToString(v) === '[object Set Iterator]',
-  isDate: (v) => objectToString(v) === '[object Date]',
-  isRegExp: (v) => objectToString(v) === '[object RegExp]',
-  isPromise: (v) => objectToString(v) === '[object Promise]',
+  isMap: (v) => objectToString(v) === "[object Map]",
+  isSet: (v) => objectToString(v) === "[object Set]",
+  isWeakMap: (v) => objectToString(v) === "[object WeakMap]",
+  isWeakSet: (v) => objectToString(v) === "[object WeakSet]",
+  isMapIterator: (v) =>
+    isObjectLike(v) && objectToString(v) === "[object Map Iterator]",
+  isSetIterator: (v) =>
+    isObjectLike(v) && objectToString(v) === "[object Set Iterator]",
+  isDate: (v) => objectToString(v) === "[object Date]",
+  isRegExp: (v) => objectToString(v) === "[object RegExp]",
+  isPromise: (v) => objectToString(v) === "[object Promise]",
   // Undetectable in pure JS (no reflection API for proxies); the native
   // bridge below overrides these when running on Node.
   isProxy: () => false,
@@ -332,40 +444,58 @@ let types = {
   isExternal: () => false,
   // Requires node:crypto internals; overridden by the native bridge on Node.
   isKeyObject: () => false,
-  isCryptoKey: (v) => typeof globalThis.CryptoKey === 'function' && v instanceof globalThis.CryptoKey,
-  isNumberObject: (v) => isObjectLike(v) && objectToString(v) === '[object Number]',
-  isStringObject: (v) => isObjectLike(v) && objectToString(v) === '[object String]',
-  isBooleanObject: (v) => isObjectLike(v) && objectToString(v) === '[object Boolean]',
-  isSymbolObject: (v) => isObjectLike(v) && objectToString(v) === '[object Symbol]',
-  isBigIntObject: (v) => isObjectLike(v) && objectToString(v) === '[object BigInt]',
+  isCryptoKey: (v) =>
+    typeof globalThis.CryptoKey === "function" &&
+    v instanceof globalThis.CryptoKey,
+  isNumberObject: (v) =>
+    isObjectLike(v) && objectToString(v) === "[object Number]",
+  isStringObject: (v) =>
+    isObjectLike(v) && objectToString(v) === "[object String]",
+  isBooleanObject: (v) =>
+    isObjectLike(v) && objectToString(v) === "[object Boolean]",
+  isSymbolObject: (v) =>
+    isObjectLike(v) && objectToString(v) === "[object Symbol]",
+  isBigIntObject: (v) =>
+    isObjectLike(v) && objectToString(v) === "[object BigInt]",
   isBoxedPrimitive(v) {
-    return types.isNumberObject(v) || types.isStringObject(v) || types.isBooleanObject(v) ||
-           types.isSymbolObject(v) || types.isBigIntObject(v);
+    return (
+      types.isNumberObject(v) ||
+      types.isStringObject(v) ||
+      types.isBooleanObject(v) ||
+      types.isSymbolObject(v) ||
+      types.isBigIntObject(v)
+    );
   },
   isAsyncFunction(v) {
     if (!isFunctionType(v)) return false;
     const proto = PrimordialObjectGetPrototypeOf(v);
     if (proto === AF) return true;
-    return v[Symbol.toStringTag] === 'AsyncFunction';
+    return v[Symbol.toStringTag] === "AsyncFunction";
   },
   isGeneratorFunction(v) {
     if (!isFunctionType(v)) return false;
     // Fall back to source text when the prototype was tampered with.
     if (PrimordialObjectGetPrototypeOf(v) === GF) return true;
-    return /^\s*(async\s+)?function\s*\*/.test(PrimordialFunctionPrototypeToString(v));
+    return /^\s*(async\s+)?function\s*\*/.test(
+      PrimordialFunctionPrototypeToString(v),
+    );
   },
   isGeneratorObject(v) {
-    if (v === null || typeof v !== 'object') return false;
-    return objectToString(v) === '[object Generator]';
+    if (v === null || typeof v !== "object") return false;
+    return objectToString(v) === "[object Generator]";
   },
-  isArgumentsObject(v) { return objectToString(v) === '[object Arguments]'; },
+  isArgumentsObject(v) {
+    return objectToString(v) === "[object Arguments]";
+  },
   isNativeError(v) {
     // Pure-JS fallback: real native errors (including cross-realm ones) carry
     // the '[object Error]' tag; plain objects with a borrowed Error.prototype
     // do not. The native bridge below gives exact semantics on Node.
-    return isObjectLike(v) && objectToString(v) === '[object Error]';
+    return isObjectLike(v) && objectToString(v) === "[object Error]";
   },
-  isModuleNamespaceObject(v) { return objectToString(v) === '[object Module]'; },
+  isModuleNamespaceObject(v) {
+    return objectToString(v) === "[object Module]";
+  },
 };
 
 /**
@@ -373,8 +503,13 @@ let types = {
  * @param {unknown} v
  */
 function isBoxedPrimitiveValue(v) {
-  return types.isNumberObject(v) || types.isStringObject(v) || types.isBooleanObject(v) ||
-         types.isSymbolObject(v) || types.isBigIntObject(v);
+  return (
+    types.isNumberObject(v) ||
+    types.isStringObject(v) ||
+    types.isBooleanObject(v) ||
+    types.isSymbolObject(v) ||
+    types.isBigIntObject(v)
+  );
 }
 
 export { types };
@@ -384,12 +519,14 @@ export { types };
 // isNativeError, isKeyObject, cross-realm typed arrays, ...) to the genuine
 // builtin. Browsers keep the dependency-free fallbacks above.
 try {
-  const getBuiltinModule = typeof process !== 'undefined' && typeof process.getBuiltinModule === 'function'
-    ? process.getBuiltinModule.bind(process)
-    : undefined;
-  const nativeUtil = getBuiltinModule?.('util');
+  const getBuiltinModule =
+    typeof process !== "undefined" &&
+    typeof process.getBuiltinModule === "function"
+      ? process.getBuiltinModule.bind(process)
+      : undefined;
+  const nativeUtil = getBuiltinModule?.("util");
   const nativeTypes = nativeUtil?.types;
-  if (nativeTypes && typeof nativeTypes.isProxy === 'function') {
+  if (nativeTypes && typeof nativeTypes.isProxy === "function") {
     // Use the genuine native types object directly. This gives exact
     // semantics for isProxy/isExternal/isNativeError/isKeyObject and,
     // crucially, makes require('util/types') === require('util').types.
@@ -397,8 +534,10 @@ try {
     types = nativeTypes;
   }
   // Keep a handle for proxy-aware inspect.
-  var nativeInspectBridge = typeof nativeUtil?.inspect === 'function' ? nativeUtil.inspect : undefined;
-  var nativeTypesBridge = typeof nativeTypes?.isProxy === 'function' ? nativeTypes : undefined;
+  var nativeInspectBridge =
+    typeof nativeUtil?.inspect === "function" ? nativeUtil.inspect : undefined;
+  var nativeTypesBridge =
+    typeof nativeTypes?.isProxy === "function" ? nativeTypes : undefined;
 } catch {
   var nativeInspectBridge = undefined;
   var nativeTypesBridge = undefined;
@@ -417,15 +556,18 @@ const { maxStackErrorName, maxStackErrorMessage } = (() => {
   } catch (e) {
     return { maxStackErrorName: e.name, maxStackErrorMessage: e.message };
   }
-  return { maxStackErrorName: '', maxStackErrorMessage: '' };
+  return { maxStackErrorName: "", maxStackErrorMessage: "" };
 })();
 /**
  * @param {unknown} err
  */
 function isStackOverflowError(err) {
   try {
-    return !!err && err.name === maxStackErrorName &&
-      err.message === maxStackErrorMessage;
+    return (
+      !!err &&
+      err.name === maxStackErrorName &&
+      err.message === maxStackErrorMessage
+    );
   } catch {
     // If name/message getters throw, it's not a stack overflow error.
     return false;
@@ -445,8 +587,8 @@ function isStackOverflowError(err) {
 function reindentBridgeResult(ctx, s) {
   if (ctx.options.compact !== true) return s;
   const lvl = ctx.indentationLvl || 0;
-  if (lvl === 0 || !s.includes('\n')) return s;
-  const pad = ' '.repeat(lvl);
+  if (lvl === 0 || !s.includes("\n")) return s;
+  const pad = " ".repeat(lvl);
   return s.replace(/\n/g, `\n${pad}`);
 }
 
@@ -460,7 +602,10 @@ function reindentBridgeResult(ctx, s) {
  * @returns {string}
  */
 export function toUSVString(input) {
-  return `${input}`.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�');
+  return `${input}`.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "�",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -468,12 +613,13 @@ export function toUSVString(input) {
 // ---------------------------------------------------------------------------
 
 const vtRegex = new RegExp(
-  '[\\u001B\\u009B][[\\]()#;?]*' +
-  '(?:(?:(?:(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]+)*' +
-  '|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?' +
-  '(?:\\u0007|\\u001B\\u005C|\\u009C))' +
-  '|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?' +
-  '[\\dA-PR-TZcf-nq-uy=><~]))', 'g',
+  "[\\u001B\\u009B][[\\]()#;?]*" +
+    "(?:(?:(?:(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]+)*" +
+    "|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?" +
+    "(?:\\u0007|\\u001B\\u005C|\\u009C))" +
+    "|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?" +
+    "[\\dA-PR-TZcf-nq-uy=><~]))",
+  "g",
 );
 
 /**
@@ -483,16 +629,16 @@ const vtRegex = new RegExp(
  * @throws {TypeError} ERR_INVALID_ARG_TYPE
  */
 export function stripVTControlCharacters(str) {
-  validateString(str, 'str');
-  return str.replace(vtRegex, '');
+  validateString(str, "str");
+  return str.replace(vtRegex, "");
 }
 
 // ---------------------------------------------------------------------------
 // inspect
 // ---------------------------------------------------------------------------
 
-const kEscape = '\u001B[';
-const kEscapeEnd = 'm';
+const kEscape = "\u001B[";
+const kEscapeEnd = "m";
 const kDimCode = 2;
 const kBoldCode = 1;
 const kHexCloseSeq = `${kEscape}39${kEscapeEnd}`;
@@ -520,9 +666,10 @@ const hexStyleCache = new Map();
  */
 function hexToRgb(hex) {
   let hexStr;
-  if (hex.length === 4) hexStr = hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+  if (hex.length === 4)
+    hexStr = hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
   else if (hex.length === 7) hexStr = hex.slice(1);
-  else throw ERR_OUT_OF_RANGE('hex', '#RGB or #RRGGBB', hex);
+  else throw ERR_OUT_OF_RANGE("hex", "#RGB or #RRGGBB", hex);
   return [
     parseInt(hexStr.slice(0, 2), 16),
     parseInt(hexStr.slice(2, 4), 16),
@@ -551,7 +698,7 @@ function replaceCloseCode(str, closeSeq, openSeq, keepClose) {
   const closeLen = closeSeq.length;
   let index = str.indexOf(closeSeq);
   if (index === -1) return str;
-  let result = '';
+  let result = "";
   let lastIndex = 0;
   const replacement = keepClose ? closeSeq + openSeq : openSeq;
   do {
@@ -568,21 +715,48 @@ function replaceCloseCode(str, closeSeq, openSeq, keepClose) {
 /** @type {Record<string, [number, number]>} */
 const inspectColors = {
   reset: [0, 0],
-  bold: [1, 22], dim: [2, 22], italic: [3, 23], underline: [4, 24],
-  blink: [5, 25], inverse: [7, 27], hidden: [8, 28], strikethrough: [9, 29],
+  bold: [1, 22],
+  dim: [2, 22],
+  italic: [3, 23],
+  underline: [4, 24],
+  blink: [5, 25],
+  inverse: [7, 27],
+  hidden: [8, 28],
+  strikethrough: [9, 29],
   doubleunderline: [21, 24],
-  black: [30, 39], red: [31, 39], green: [32, 39], yellow: [33, 39],
-  blue: [34, 39], magenta: [35, 39], cyan: [36, 39], white: [37, 39],
-  bgBlack: [40, 49], bgRed: [41, 49], bgGreen: [42, 49], bgYellow: [43, 49],
-  bgBlue: [44, 49], bgMagenta: [45, 49], bgCyan: [46, 49], bgWhite: [47, 49],
-  framed: [51, 54], overlined: [53, 55],
+  black: [30, 39],
+  red: [31, 39],
+  green: [32, 39],
+  yellow: [33, 39],
+  blue: [34, 39],
+  magenta: [35, 39],
+  cyan: [36, 39],
+  white: [37, 39],
+  bgBlack: [40, 49],
+  bgRed: [41, 49],
+  bgGreen: [42, 49],
+  bgYellow: [43, 49],
+  bgBlue: [44, 49],
+  bgMagenta: [45, 49],
+  bgCyan: [46, 49],
+  bgWhite: [47, 49],
+  framed: [51, 54],
+  overlined: [53, 55],
   gray: [90, 39],
-  redBright: [91, 39], greenBright: [92, 39], yellowBright: [93, 39],
-  blueBright: [94, 39], magentaBright: [95, 39], cyanBright: [96, 39],
+  redBright: [91, 39],
+  greenBright: [92, 39],
+  yellowBright: [93, 39],
+  blueBright: [94, 39],
+  magentaBright: [95, 39],
+  cyanBright: [96, 39],
   whiteBright: [97, 39],
   bgGray: [100, 49],
-  bgRedBright: [101, 49], bgGreenBright: [102, 49], bgYellowBright: [103, 49],
-  bgBlueBright: [104, 49], bgMagentaBright: [105, 49], bgCyanBright: [106, 49],
+  bgRedBright: [101, 49],
+  bgGreenBright: [102, 49],
+  bgYellowBright: [103, 49],
+  bgBlueBright: [104, 49],
+  bgMagentaBright: [105, 49],
+  bgCyanBright: [106, 49],
   bgWhiteBright: [107, 49],
 };
 
@@ -590,30 +764,42 @@ const inspectColors = {
 // so they don't show up in Object.keys(inspect.colors).
 function defineColorAlias(target, alias) {
   Object.defineProperty(inspectColors, alias, {
-    get() { return this[target]; },
-    set(value) { this[target] = value; },
+    get() {
+      return this[target];
+    },
+    set(value) {
+      this[target] = value;
+    },
     configurable: true,
     enumerable: false,
   });
 }
-defineColorAlias('gray', 'grey');
-defineColorAlias('gray', 'blackBright');
-defineColorAlias('bgGray', 'bgGrey');
-defineColorAlias('bgGray', 'bgBlackBright');
-defineColorAlias('dim', 'faint');
-defineColorAlias('strikethrough', 'crossedout');
-defineColorAlias('strikethrough', 'strikeThrough');
-defineColorAlias('strikethrough', 'crossedOut');
-defineColorAlias('hidden', 'conceal');
-defineColorAlias('inverse', 'swapColors');
-defineColorAlias('inverse', 'swapcolors');
-defineColorAlias('doubleunderline', 'doubleUnderline');
+defineColorAlias("gray", "grey");
+defineColorAlias("gray", "blackBright");
+defineColorAlias("bgGray", "bgGrey");
+defineColorAlias("bgGray", "bgBlackBright");
+defineColorAlias("dim", "faint");
+defineColorAlias("strikethrough", "crossedout");
+defineColorAlias("strikethrough", "strikeThrough");
+defineColorAlias("strikethrough", "crossedOut");
+defineColorAlias("hidden", "conceal");
+defineColorAlias("inverse", "swapColors");
+defineColorAlias("inverse", "swapcolors");
+defineColorAlias("doubleunderline", "doubleUnderline");
 
 /** @type {Record<string, string>} */
 const inspectStyles = {
-  bigint: 'yellow', boolean: 'yellow', date: 'magenta', module: 'underline',
-  null: 'bold', number: 'yellow', regexp: 'red', special: 'cyan',
-  string: 'green', symbol: 'green', undefined: 'grey',
+  bigint: "yellow",
+  boolean: "yellow",
+  date: "magenta",
+  module: "underline",
+  null: "bold",
+  number: "yellow",
+  regexp: "red",
+  special: "cyan",
+  string: "green",
+  symbol: "green",
+  undefined: "grey",
 };
 
 /** @type {Record<string, {openSeq: string, closeSeq: string, keepClose: boolean}>} */
@@ -664,38 +850,43 @@ function quoteString(str, quote) {
     // no '${' (which would need escaping in a template literal); otherwise
     // use single-quotes.
     if (str.includes("'") && !str.includes('"')) quote = '"';
-    else if (str.includes("'") && str.includes('"') && !str.includes('`') &&
-             !str.includes('${')) quote = '`';
+    else if (
+      str.includes("'") &&
+      str.includes('"') &&
+      !str.includes("`") &&
+      !str.includes("${")
+    )
+      quote = "`";
     else quote = "'";
   }
   let result = quoteCache.get(str + quote);
   if (result !== undefined) return result;
-  result = '';
+  result = "";
   for (let i = 0; i < str.length; i++) {
     const code = str.charCodeAt(i);
     if (code === quote.charCodeAt(0) || code === 92 /* \\ */) {
-      result += '\\' + str[i];
-    } else if (quote === '`' && code === 0x24 && str[i + 1] === '{') {
-      result += '\\$'; // escape ${ in template-quoted strings
-    } else if (code === 0x08) result += '\\b';
-    else if (code === 0x09) result += '\\t';
-    else if (code === 0x0a) result += '\\n';
-    else if (code === 0x0c) result += '\\f';
-    else if (code === 0x0d) result += '\\r';
+      result += "\\" + str[i];
+    } else if (quote === "`" && code === 0x24 && str[i + 1] === "{") {
+      result += "\\$"; // escape ${ in template-quoted strings
+    } else if (code === 0x08) result += "\\b";
+    else if (code === 0x09) result += "\\t";
+    else if (code === 0x0a) result += "\\n";
+    else if (code === 0x0c) result += "\\f";
+    else if (code === 0x0d) result += "\\r";
     else if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
-      result += `\\x${code.toString(16).toUpperCase().padStart(2, '0')}`;
-    } else if (code >= 0xD800 && code <= 0xDFFF) {
+      result += `\\x${code.toString(16).toUpperCase().padStart(2, "0")}`;
+    } else if (code >= 0xd800 && code <= 0xdfff) {
       // Surrogate: if it's a valid pair, output both as-is; otherwise escape
       // the lone surrogate as \uHHHH (Node uses lowercase hex).
-      if (code >= 0xD800 && code <= 0xDBFF && i + 1 < str.length) {
+      if (code >= 0xd800 && code <= 0xdbff && i + 1 < str.length) {
         const next = str.charCodeAt(i + 1);
-        if (next >= 0xDC00 && next <= 0xDFFF) {
+        if (next >= 0xdc00 && next <= 0xdfff) {
           result += str[i] + str[i + 1];
           i++;
           continue;
         }
       }
-      result += `\\u${code.toString(16).padStart(4, '0')}`;
+      result += `\\u${code.toString(16).padStart(4, "0")}`;
     } else result += str[i];
   }
   result = quote + result + quote;
@@ -709,13 +900,13 @@ function quoteString(str, quote) {
  * @param {string} str
  */
 function addNumericSeparator(str) {
-  if (!str.includes('.') && str.length <= 3) return str;
-  const neg = str.startsWith('-') ? 1 : 0;
-  const dot = str.indexOf('.');
+  if (!str.includes(".") && str.length <= 3) return str;
+  const neg = str.startsWith("-") ? 1 : 0;
+  const dot = str.indexOf(".");
   const intEnd = dot === -1 ? str.length : dot;
   let out = str.slice(0, neg);
   const intPart = str.slice(neg, intEnd);
-  out += intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '_');
+  out += intPart.replace(/\B(?=(\d{3})+(?!\d))/g, "_");
   out += str.slice(intEnd);
   return out;
 }
@@ -769,23 +960,25 @@ const nodeStripCommentsRegExp = /(\/\/.*?\n)|(\/\*(.|\n)*?\*\/)/g;
  * prototypes, otherwise `<constructor><size> ` with an optional `[<tag>] `
  * suffix (e.g. `Settings(2) [Set] `).
  */
-function getPrefix(constructor, tag, fallback, size = '') {
+function getPrefix(constructor, tag, fallback, size = "") {
   if (constructor === null) {
-    if (tag !== '' && fallback !== tag) {
+    if (tag !== "" && fallback !== tag) {
       return `[${fallback}${size}: null prototype] [${tag}] `;
     }
     return `[${fallback}${size}: null prototype] `;
   }
 
   let result = `${constructor}${size} `;
-  if (tag !== '') {
+  if (tag !== "") {
     const position = constructor.indexOf(tag);
     if (position === -1) {
       result += `[${tag}] `;
     } else {
       const endPos = position + tag.length;
-      if (endPos !== constructor.length &&
-          constructor[endPos] === constructor[endPos].toLowerCase()) {
+      if (
+        endPos !== constructor.length &&
+        constructor[endPos] === constructor[endPos].toLowerCase()
+      ) {
         result += `[${tag}] `;
       }
     }
@@ -798,14 +991,23 @@ function getPrefix(constructor, tag, fallback, size = '') {
  * print as a regular property.
  */
 function getFilteredTag(ctx, value) {
-  let tag = '';
-  try { tag = value[Symbol.toStringTag]; } catch { /* ignore */ }
-  if (typeof tag !== 'string' ||
-      (tag !== '' &&
-       (ctx.options.showHidden
-         ? Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)
-         : Object.prototype.propertyIsEnumerable.call(value, Symbol.toStringTag)))) {
-    tag = '';
+  let tag = "";
+  try {
+    tag = value[Symbol.toStringTag];
+  } catch {
+    /* ignore */
+  }
+  if (
+    typeof tag !== "string" ||
+    (tag !== "" &&
+      (ctx.options.showHidden
+        ? Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)
+        : Object.prototype.propertyIsEnumerable.call(
+            value,
+            Symbol.toStringTag,
+          )))
+  ) {
+    tag = "";
   }
   return tag;
 }
@@ -816,7 +1018,13 @@ function getFilteredTag(ctx, value) {
  * constructor (e.g. `Object <[Function (null prototype) (anonymous)]>`).
  * Used for the object prefix when the prototype is non-standard.
  */
-function getConstructorNameWithProto(ctx, value, recurseTimes, seen = new Set(), nodeLevel = null) {
+function getConstructorNameWithProto(
+  ctx,
+  value,
+  recurseTimes,
+  seen = new Set(),
+  nodeLevel = null,
+) {
   if (seen.has(value)) return null;
   seen.add(value);
 
@@ -832,11 +1040,13 @@ function getConstructorNameWithProto(ctx, value, recurseTimes, seen = new Set(),
   const tmp = value;
   let obj = value;
   while (obj !== null) {
-    const desc = safeGetOwnPropertyDescriptor(obj, 'constructor');
-    if (desc !== undefined &&
-        typeof desc.value === 'function' &&
-        desc.value.name !== '' &&
-        safeInstanceof(tmp, desc.value)) {
+    const desc = safeGetOwnPropertyDescriptor(obj, "constructor");
+    if (
+      desc !== undefined &&
+      typeof desc.value === "function" &&
+      desc.value.name !== "" &&
+      safeInstanceof(tmp, desc.value)
+    ) {
       return String(desc.value.name);
     }
     obj = Object.getPrototypeOf(obj);
@@ -853,14 +1063,16 @@ function getConstructorNameWithProto(ctx, value, recurseTimes, seen = new Set(),
   // V8 tracks the constructor via the object's hidden class even when the
   // prototype was replaced (e.g. `StorageObject.prototype = {__proto__: null}`).
   // The native bridge can reveal it.
-  if (res === 'Object' && typeof nativeInspectBridge === 'function') {
+  if (res === "Object" && typeof nativeInspectBridge === "function") {
     try {
       const nativeOut = nativeInspectBridge(tmp, { depth: -1, colors: false });
       const m = /^([A-Za-z_$][\w$]*)(?:\s|<)/.exec(nativeOut);
-      if (m && m[1] !== 'Object') {
+      if (m && m[1] !== "Object") {
         res = m[1];
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   // Node: if depth is exceeded, show `<Complex prototype>` instead of recursing.
   // Node's check: `if (recurseTimes > ctx.depth)` where recurseTimes is the
@@ -869,7 +1081,13 @@ function getConstructorNameWithProto(ctx, value, recurseTimes, seen = new Set(),
   if (depth !== null && depth !== undefined && nodeLevel > depth) {
     return `${res} <Complex prototype>`;
   }
-  const protoConstr = getConstructorNameWithProto(ctx, firstProto, recurseTimes, seen, nodeLevel + 1);
+  const protoConstr = getConstructorNameWithProto(
+    ctx,
+    firstProto,
+    recurseTimes,
+    seen,
+    nodeLevel + 1,
+  );
 
   if (protoConstr === null) {
     // Prototype has no determinable constructor; inspect it directly
@@ -882,7 +1100,7 @@ function getConstructorNameWithProto(ctx, value, recurseTimes, seen = new Set(),
         depth: -1,
       });
     } catch {
-      inspected = '[Object]';
+      inspected = "[Object]";
     }
     return `${res} <${inspected}>`;
   }
@@ -895,23 +1113,25 @@ function getConstructorNameWithProto(ctx, value, recurseTimes, seen = new Set(),
  * type name, ignoring the prototype chain.
  */
 function intrinsicConstructorName(value) {
-  if (types.isPromise(value)) return 'Promise';
-  if (types.isWeakSet(value)) return 'WeakSet';
-  if (types.isWeakMap(value)) return 'WeakMap';
-  if (types.isDate(value)) return 'Date';
-  if (types.isRegExp(value)) return 'RegExp';
-  if (types.isMap(value)) return 'Map';
-  if (types.isSet(value)) return 'Set';
-  if (types.isDataView(value)) return 'DataView';
-  if (types.isArrayBuffer(value)) return 'ArrayBuffer';
-  if (types.isSharedArrayBuffer(value)) return 'SharedArrayBuffer';
-  if (Array.isArray(value)) return 'Array';
+  if (types.isPromise(value)) return "Promise";
+  if (types.isWeakSet(value)) return "WeakSet";
+  if (types.isWeakMap(value)) return "WeakMap";
+  if (types.isDate(value)) return "Date";
+  if (types.isRegExp(value)) return "RegExp";
+  if (types.isMap(value)) return "Map";
+  if (types.isSet(value)) return "Set";
+  if (types.isDataView(value)) return "DataView";
+  if (types.isArrayBuffer(value)) return "ArrayBuffer";
+  if (types.isSharedArrayBuffer(value)) return "SharedArrayBuffer";
+  if (Array.isArray(value)) return "Array";
   try {
     const s = Object.prototype.toString.call(value);
     const m = /^\[object ([^\]]+)\]$/.exec(s);
     if (m && m[1]) return m[1];
-  } catch { /* ignore */ }
-  return 'Object';
+  } catch {
+    /* ignore */
+  }
+  return "Object";
 }
 
 /**
@@ -920,11 +1140,11 @@ function intrinsicConstructorName(value) {
  * regular getPrefix.
  */
 function getCtxStyle(value, constructor, tag) {
-  let fallback = '';
+  let fallback = "";
   if (constructor === null) {
     fallback = intrinsicConstructorName(value);
     if (fallback === tag) {
-      fallback = 'Object';
+      fallback = "Object";
     }
   }
   return getPrefix(constructor, tag, fallback);
@@ -935,23 +1155,27 @@ function getCtxStyle(value, constructor, tag) {
  * [[<tag>]] [extends <super>|extends [null prototype]]]`.
  */
 function getClassBase(value, constructor, tag) {
-  const hasName = Object.prototype.hasOwnProperty.call(value, 'name');
-  const name = (hasName && value.name) || '(anonymous)';
+  const hasName = Object.prototype.hasOwnProperty.call(value, "name");
+  const name = (hasName && value.name) || "(anonymous)";
   let base = `class ${name}`;
-  if (constructor !== 'Function' && constructor !== null) {
+  if (constructor !== "Function" && constructor !== null) {
     base += ` [${constructor}]`;
   }
-  if (tag !== '' && constructor !== tag) {
+  if (tag !== "" && constructor !== tag) {
     base += ` [${tag}]`;
   }
   if (constructor !== null) {
-    let superName = '';
-    try { superName = Object.getPrototypeOf(value).name; } catch { /* ignore */ }
+    let superName = "";
+    try {
+      superName = Object.getPrototypeOf(value).name;
+    } catch {
+      /* ignore */
+    }
     if (superName) {
       base += ` extends ${superName}`;
     }
   } else {
-    base += ' extends [null prototype]';
+    base += " extends [null prototype]";
   }
   return `[${base}]`;
 }
@@ -960,7 +1184,9 @@ function getClassBase(value, constructor, tag) {
 // lib/internal/util/inspect.js). Used to stop the prototype walk and to
 // decide whether prototype properties are surfaced with showHidden.
 const builtinCtorNames = new Set(
-  Object.getOwnPropertyNames(globalThis).filter((n) => /^[A-Z][a-zA-Z0-9]+$/.test(n)),
+  Object.getOwnPropertyNames(globalThis).filter((n) =>
+    /^[A-Z][a-zA-Z0-9]+$/.test(n),
+  ),
 );
 
 /** instanceof check that never throws (proxies, revoked membranes, ...). */
@@ -993,18 +1219,20 @@ function nodeConstructorName(value) {
   try {
     proto = Object.getPrototypeOf(value);
   } catch {
-    return { name: 'Object', descended: false };
+    return { name: "Object", descended: false };
   }
   if (proto === null) return null;
   const tmp = value;
   let obj = value;
   let firstProto;
   while (obj !== null) {
-    const desc = safeGetOwnPropertyDescriptor(obj, 'constructor');
-    if (desc !== undefined &&
-        typeof desc.value === 'function' &&
-        desc.value.name !== '' &&
-        safeInstanceof(tmp, desc.value)) {
+    const desc = safeGetOwnPropertyDescriptor(obj, "constructor");
+    if (
+      desc !== undefined &&
+      typeof desc.value === "function" &&
+      desc.value.name !== "" &&
+      safeInstanceof(tmp, desc.value)
+    ) {
       return { name: String(desc.value.name), descended: firstProto !== obj };
     }
     let next;
@@ -1016,7 +1244,7 @@ function nodeConstructorName(value) {
     obj = next;
     if (firstProto === undefined) firstProto = obj;
   }
-  return { name: 'Object', descended: false };
+  return { name: "Object", descended: false };
 }
 
 /**
@@ -1038,10 +1266,12 @@ function collectPrototypeProps(ctx, main, recurseTimes) {
     }
     obj = next;
     if (obj === null) break;
-    const ctorDesc = safeGetOwnPropertyDescriptor(obj, 'constructor');
-    if (ctorDesc !== undefined &&
-        typeof ctorDesc.value === 'function' &&
-        builtinCtorNames.has(ctorDesc.value.name)) {
+    const ctorDesc = safeGetOwnPropertyDescriptor(obj, "constructor");
+    if (
+      ctorDesc !== undefined &&
+      typeof ctorDesc.value === "function" &&
+      builtinCtorNames.has(ctorDesc.value.name)
+    ) {
       break;
     }
     let keys;
@@ -1057,11 +1287,11 @@ function collectPrototypeProps(ctx, main, recurseTimes) {
     if (ctx.seenMap) ctx.seenMap.set(main, ctx.seen.length - 1);
     try {
       for (const key of keys) {
-        if (key === 'constructor') continue;
+        if (key === "constructor") continue;
         if (Object.prototype.hasOwnProperty.call(main, key)) continue;
         if (prevKeys !== null && prevKeys.has(key)) continue;
         const desc = safeGetOwnPropertyDescriptor(obj, key);
-        if (desc === undefined || typeof desc.value === 'function') continue;
+        if (desc === undefined || typeof desc.value === "function") continue;
         output.push(formatProperty(ctx, obj, recurseTimes, key, false, main));
       }
     } finally {
@@ -1093,52 +1323,77 @@ function maybePrototypeProps(ctx, value, recurseTimes, ctor) {
  * constructor walk (or null); `type` comes from the real function kind.
  */
 function getFunctionBase(ctx, value, recurseTimes) {
-  let type = 'Function';
-  if (isAsyncGeneratorFunctionValue(value)) type = 'AsyncGeneratorFunction';
-  else if (types.isGeneratorFunction(value)) type = 'GeneratorFunction';
-  else if (types.isAsyncFunction(value)) type = 'AsyncFunction';
+  let type = "Function";
+  if (isAsyncGeneratorFunctionValue(value)) type = "AsyncGeneratorFunction";
+  else if (types.isGeneratorFunction(value)) type = "GeneratorFunction";
+  else if (types.isAsyncFunction(value)) type = "AsyncFunction";
   const ctor = nodeConstructorName(value);
   const constructor = ctor === null ? null : ctor.name;
-  let tag = '';
+  let tag = "";
   try {
     tag = value[Symbol.toStringTag];
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   // Only list the tag when it wouldn't already print as a regular property.
-  if (typeof tag !== 'string' ||
-      (tag !== '' &&
-       (ctx.options.showHidden
-         ? Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)
-         : Object.prototype.propertyIsEnumerable.call(value, Symbol.toStringTag)))) {
-    tag = '';
+  if (
+    typeof tag !== "string" ||
+    (tag !== "" &&
+      (ctx.options.showHidden
+        ? Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)
+        : Object.prototype.propertyIsEnumerable.call(
+            value,
+            Symbol.toStringTag,
+          )))
+  ) {
+    tag = "";
   }
   // Node detects classes from the function's source and inspects them via
   // getClassBase instead of the regular function base.
-  let stringified = '';
-  try { stringified = Function.prototype.toString.call(value); } catch { /* ignore */ }
-  if (stringified.startsWith('class') && stringified[stringified.length - 1] === '}') {
+  let stringified = "";
+  try {
+    stringified = Function.prototype.toString.call(value);
+  } catch {
+    /* ignore */
+  }
+  if (
+    stringified.startsWith("class") &&
+    stringified[stringified.length - 1] === "}"
+  ) {
     const slice = stringified.slice(5, -1);
-    const bracketIndex = slice.indexOf('{');
-    if (bracketIndex !== -1 &&
-        (!slice.slice(0, bracketIndex).includes('(') ||
-         nodeClassRegExp.test(slice.replace(nodeStripCommentsRegExp, '')))) {
+    const bracketIndex = slice.indexOf("{");
+    if (
+      bracketIndex !== -1 &&
+      (!slice.slice(0, bracketIndex).includes("(") ||
+        nodeClassRegExp.test(slice.replace(nodeStripCommentsRegExp, "")))
+    ) {
       return {
-        base: ctx.stylize(getClassBase(value, constructor, tag), 'special'),
+        base: ctx.stylize(getClassBase(value, constructor, tag), "special"),
         protoProps: maybePrototypeProps(ctx, value, recurseTimes, ctor),
       };
     }
   }
   let base = `[${type}`;
-  if (constructor === null) base += ' (null prototype)';
-  if (value.name === '') base += ' (anonymous)';
+  if (constructor === null) base += " (null prototype)";
+  if (value.name === "") base += " (anonymous)";
   else {
-    base += `: ${typeof value.name === 'string'
-      ? value.name
-      : formatValue(ctx, value.name, recurseTimes === null ? null : recurseTimes - 1)}`;
+    base += `: ${
+      typeof value.name === "string"
+        ? value.name
+        : formatValue(
+            ctx,
+            value.name,
+            recurseTimes === null ? null : recurseTimes - 1,
+          )
+    }`;
   }
-  base += ']';
+  base += "]";
   if (constructor !== type && constructor !== null) base += ` ${constructor}`;
-  if (tag !== '' && constructor !== tag) base += ` [${tag}]`;
-  return { base: ctx.stylize(base, 'special'), protoProps: maybePrototypeProps(ctx, value, recurseTimes, ctor) };
+  if (tag !== "" && constructor !== tag) base += ` [${tag}]`;
+  return {
+    base: ctx.stylize(base, "special"),
+    protoProps: maybePrototypeProps(ctx, value, recurseTimes, ctor),
+  };
 }
 
 /**
@@ -1147,16 +1402,16 @@ function getFunctionBase(ctx, value, recurseTimes) {
  * @param {unknown} value
  */
 function formatPrimitive(ctx, value) {
-  if (value === undefined) return ctx.stylize('undefined', 'undefined');
-  if (value === null) return ctx.stylize('null', 'null');
-  if (typeof value === 'string') {
-    let trailer = '';
+  if (value === undefined) return ctx.stylize("undefined", "undefined");
+  if (value === null) return ctx.stylize("null", "null");
+  if (typeof value === "string") {
+    let trailer = "";
     let str = value;
     const maxLen = ctx.options.maxStringLength ?? 10000;
     if (str.length > maxLen) {
       const remaining = str.length - maxLen;
       str = str.slice(0, maxLen);
-      trailer = `... ${remaining} more character${remaining === 1 ? '' : 's'}`;
+      trailer = `... ${remaining} more character${remaining === 1 ? "" : "s"}`;
     }
     // Node splits long strings at newlines into multiple quoted segments
     // when compact is not true (lib/internal/util/inspect.js formatPrimitive).
@@ -1167,30 +1422,38 @@ function formatPrimitive(ctx, value) {
     if (compact !== true && str.length > 16 && str.length > breakLength - 4) {
       const parts = str.split(/(?<=\n)/);
       if (parts.length > 1) {
-        return parts.map((line) => ctx.stylize(quoteString(line), 'string'))
-          .join(' +\n  ') + trailer;
+        return (
+          parts
+            .map((line) => ctx.stylize(quoteString(line), "string"))
+            .join(" +\n  ") + trailer
+        );
       }
     }
-    return ctx.stylize(quoteString(str) + trailer, 'string');
+    return ctx.stylize(quoteString(str) + trailer, "string");
   }
-  if (typeof value === 'number') {
+  if (typeof value === "number") {
     let out;
-    if (Number.isNaN(value)) out = 'NaN';
-    else if (value === Infinity) out = 'Infinity';
-    else if (value === -Infinity) out = '-Infinity';
-    else if (Object.is(value, -0)) out = '-0';
-    else out = ctx.options.numericSeparator ? addNumericSeparator(String(value)) : String(value);
-    return ctx.stylize(out, 'number');
+    if (Number.isNaN(value)) out = "NaN";
+    else if (value === Infinity) out = "Infinity";
+    else if (value === -Infinity) out = "-Infinity";
+    else if (Object.is(value, -0)) out = "-0";
+    else
+      out = ctx.options.numericSeparator
+        ? addNumericSeparator(String(value))
+        : String(value);
+    return ctx.stylize(out, "number");
   }
-  if (typeof value === 'boolean') return ctx.stylize(String(value), 'boolean');
-  if (typeof value === 'bigint') {
-    const out = ctx.options.numericSeparator ? addNumericSeparator(String(value)) + 'n' : `${value}n`;
-    return ctx.stylize(out, 'bigint');
+  if (typeof value === "boolean") return ctx.stylize(String(value), "boolean");
+  if (typeof value === "bigint") {
+    const out = ctx.options.numericSeparator
+      ? addNumericSeparator(String(value)) + "n"
+      : `${value}n`;
+    return ctx.stylize(out, "bigint");
   }
-  if (typeof value === 'symbol') {
+  if (typeof value === "symbol") {
     // Escape newlines etc. in the symbol description (Node does this).
-    const str = String(value).replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-    return ctx.stylize(str, 'symbol');
+    const str = String(value).replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+    return ctx.stylize(str, "symbol");
   }
   return undefined;
 }
@@ -1203,22 +1466,24 @@ function formatPrimitive(ctx, value) {
  * @param {string} tag
  * @param {string} fallback
  */
-function getErrorPrefix(constructor, tag, fallback, size = '') {
+function getErrorPrefix(constructor, tag, fallback, size = "") {
   if (constructor === null) {
-    if (tag !== '' && fallback !== tag) {
+    if (tag !== "" && fallback !== tag) {
       return `[${fallback}${size}: null prototype] [${tag}] `;
     }
     return `[${fallback}${size}: null prototype] `;
   }
   let result = `${constructor}${size} `;
-  if (tag !== '') {
+  if (tag !== "") {
     const position = constructor.indexOf(tag);
     if (position === -1) {
       result += `[${tag}] `;
     } else {
       const endPos = position + tag.length;
-      if (endPos !== constructor.length &&
-          constructor[endPos] === constructor[endPos].toLowerCase()) {
+      if (
+        endPos !== constructor.length &&
+        constructor[endPos] === constructor[endPos].toLowerCase()
+      ) {
         result += `[${tag}] `;
       }
     }
@@ -1237,23 +1502,27 @@ function getErrorPrefix(constructor, tag, fallback, size = '') {
  */
 function improveErrorStack(stack, constructor, name, tag) {
   let len = name.length;
-  if (typeof name !== 'string') {
+  if (typeof name !== "string") {
     stack = stack.replace(
       `${name}`,
-      `${name} [${getErrorPrefix(constructor, tag, 'Error').slice(0, -1)}]`,
+      `${name} [${getErrorPrefix(constructor, tag, "Error").slice(0, -1)}]`,
     );
   }
-  if (constructor === null ||
-      (typeof name === 'string' && name.endsWith('Error') &&
-       stack.startsWith(name) &&
-       (stack.length === len || stack[len] === ':' || stack[len] === '\n'))) {
-    let fallback = 'Error';
+  if (
+    constructor === null ||
+    (typeof name === "string" &&
+      name.endsWith("Error") &&
+      stack.startsWith(name) &&
+      (stack.length === len || stack[len] === ":" || stack[len] === "\n"))
+  ) {
+    let fallback = "Error";
     if (constructor === null) {
-      const start = /^([A-Z][a-z_ A-Z0-9\-]+)(?::|\n {4}at)/.exec(stack) ||
+      const start =
+        /^([A-Z][a-z_ A-Z0-9\-]+)(?::|\n {4}at)/.exec(stack) ||
         /^([a-z_A-Z0-9-]*Error)$/.exec(stack);
-      fallback = (start && start[1]) || '';
+      fallback = (start && start[1]) || "";
       len = fallback.length;
-      fallback ||= 'Error';
+      fallback ||= "Error";
     }
     const prefix = getErrorPrefix(constructor, tag, fallback).slice(0, -1);
     if (name !== prefix) {
@@ -1281,9 +1550,9 @@ function improveErrorStack(stack, constructor, name, tag) {
 function errorProtoToString(value, name) {
   const nameStr = `${name}`;
   const message = value.message;
-  const msgStr = message === undefined ? '' : `${message}`;
-  if (nameStr === '') return msgStr;
-  if (msgStr === '') return nameStr;
+  const msgStr = message === undefined ? "" : `${message}`;
+  if (nameStr === "") return msgStr;
+  if (msgStr === "") return nameStr;
   return `${nameStr}: ${msgStr}`;
 }
 
@@ -1297,7 +1566,7 @@ function errorProtoToString(value, name) {
  * Documented limitation.
  */
 function formatPromise() {
-  return 'Promise { <pending> }';
+  return "Promise { <pending> }";
 }
 
 /** @param {ArrayBuffer|SharedArrayBuffer} buf @param {number} maxArrayLength */
@@ -1305,10 +1574,11 @@ function formatArrayBufferContents(buf, maxArrayLength) {
   const u8 = new Uint8Array(/** @type {any} */ (buf));
   const shown = [];
   const max = Math.min(u8.length, maxArrayLength);
-  for (let i = 0; i < max; i++) shown.push(u8[i].toString(16).padStart(2, '0'));
-  let contents = shown.join(' ');
+  for (let i = 0; i < max; i++) shown.push(u8[i].toString(16).padStart(2, "0"));
+  let contents = shown.join(" ");
   const remaining = u8.length - max;
-  if (remaining > 0) contents += ` ... ${remaining} more byte${remaining > 1 ? 's' : ''}`;
+  if (remaining > 0)
+    contents += ` ... ${remaining} more byte${remaining > 1 ? "s" : ""}`;
   return `<${contents}>`;
 }
 
@@ -1346,11 +1616,15 @@ function getMaxArrayLength(ctx) {
 function getCollectionSize(value, isMap) {
   try {
     const desc = Object.getOwnPropertyDescriptor(
-      isMap ? Map.prototype : Set.prototype, 'size');
-    if (desc && typeof desc.get === 'function') {
+      isMap ? Map.prototype : Set.prototype,
+      "size",
+    );
+    if (desc && typeof desc.get === "function") {
       return Reflect.apply(desc.get, value, []);
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return 0;
 }
 
@@ -1368,7 +1642,9 @@ function formatCollection(ctx, value, recurseTimes, isMap) {
     iterator = isMap
       ? Map.prototype.entries.call(value)
       : Set.prototype.values.call(value);
-  } catch { /* fall through with empty output */ }
+  } catch {
+    /* fall through with empty output */
+  }
   // Mirror Node's formatMap/formatSet: the indentation level grows around
   // entry formatting. Applied only for compact===true; other modes use the
   // polyfill's own `level`-based indentation and must observe
@@ -1379,13 +1655,15 @@ function formatCollection(ctx, value, recurseTimes, isMap) {
     const nextRecurse = recurseTimes === null ? null : recurseTimes - 1;
     if (isMap) {
       const [k, v] = entry;
-      output.push(`${formatValue(ctx, k, nextRecurse)} => ${formatValue(ctx, v, nextRecurse)}`);
+      output.push(
+        `${formatValue(ctx, k, nextRecurse)} => ${formatValue(ctx, v, nextRecurse)}`,
+      );
     } else {
       output.push(formatValue(ctx, entry, nextRecurse));
     }
     if (++i >= maxLen && size > maxLen) {
       const remaining = size - i;
-      output.push(`... ${remaining} more item${remaining === 1 ? '' : 's'}`);
+      output.push(`... ${remaining} more item${remaining === 1 ? "" : "s"}`);
       break;
     }
   }
@@ -1410,45 +1688,54 @@ function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
   } catch {
     // Uninitialized module namespace binding (e.g. export const a; before
     // evaluation). getOwnPropertyDescriptor throws for these.
-    const name = typeof key === 'symbol' ? `[${ctx.stylize(String(key), 'symbol')}]`
-      : /^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key) ? ctx.stylize(key, 'name') : quoteString(key);
-    return `${name}: ${ctx.stylize('<uninitialized>', 'special')}`;
+    const name =
+      typeof key === "symbol"
+        ? `[${ctx.stylize(String(key), "symbol")}]`
+        : /^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key)
+          ? ctx.stylize(key, "name")
+          : quoteString(key);
+    return `${name}: ${ctx.stylize("<uninitialized>", "special")}`;
   }
   // Handle uninitialized module namespace bindings (descriptor exists but
   // accessing the value throws).
-  if (!('value' in desc) && !desc.get && !desc.set) {
+  if (!("value" in desc) && !desc.get && !desc.set) {
     try {
       desc.value = value[key];
     } catch {
-      const name = typeof key === 'symbol' ? `[${ctx.stylize(String(key), 'symbol')}]`
-        : /^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key) ? ctx.stylize(key, 'name') : quoteString(key);
-      return `${name}: ${ctx.stylize('<uninitialized>', 'special')}`;
+      const name =
+        typeof key === "symbol"
+          ? `[${ctx.stylize(String(key), "symbol")}]`
+          : /^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key)
+            ? ctx.stylize(key, "name")
+            : quoteString(key);
+      return `${name}: ${ctx.stylize("<uninitialized>", "special")}`;
     }
   }
   const mode = ctx.options.getters || false;
   let str;
-  let extra = ' ';
+  let extra = " ";
   if (desc.get !== undefined || desc.set !== undefined) {
     // Accessor property. Mirror Node: `[Getter]` / `[Getter/Setter]` labels
     // are stylized; the evaluated result is shown as `[Getter] <obj>` for
     // objects and `[Getter: <primitive>]` for primitives. Getters run with
     // the original inspected object as receiver.
     if (desc.get !== undefined) {
-      const label = desc.set !== undefined ? 'Getter/Setter' : 'Getter';
-      const shouldEval = mode === true ||
-        (mode === 'get' && desc.set === undefined) ||
-        (mode === 'set' && desc.set !== undefined);
+      const label = desc.set !== undefined ? "Getter/Setter" : "Getter";
+      const shouldEval =
+        mode === true ||
+        (mode === "get" && desc.set === undefined) ||
+        (mode === "set" && desc.set !== undefined);
       if (shouldEval) {
         const nextRecurse = recurseTimes === null ? null : recurseTimes - 1;
         try {
           const tmp = desc.get.call(original === undefined ? value : original);
           if (tmp === null) {
-            str = `${ctx.stylize(`[${label}:`, 'special')} ${ctx.stylize('null', 'null')}${ctx.stylize(']', 'special')}`;
-          } else if (typeof tmp === 'object') {
-            str = `${ctx.stylize(`[${label}]`, 'special')} ${formatValue(ctx, tmp, nextRecurse)}`;
+            str = `${ctx.stylize(`[${label}:`, "special")} ${ctx.stylize("null", "null")}${ctx.stylize("]", "special")}`;
+          } else if (typeof tmp === "object") {
+            str = `${ctx.stylize(`[${label}]`, "special")} ${formatValue(ctx, tmp, nextRecurse)}`;
           } else {
             const primitive = formatPrimitive(ctx, tmp);
-            str = `${ctx.stylize(`[${label}:`, 'special')} ${primitive}${ctx.stylize(']', 'special')}`;
+            str = `${ctx.stylize(`[${label}:`, "special")} ${primitive}${ctx.stylize("]", "special")}`;
           }
         } catch (err) {
           // A stack overflow while running the getter or formatting its
@@ -1456,13 +1743,13 @@ function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
           // isStackOverflowError here instead of reporting it).
           if (isStackOverflowError(err)) throw err;
           const message = `<Inspection threw (${formatValue(ctx, err, nextRecurse)})>`;
-          str = `${ctx.stylize(`[${label}:`, 'special')} ${message}${ctx.stylize(']', 'special')}`;
+          str = `${ctx.stylize(`[${label}:`, "special")} ${message}${ctx.stylize("]", "special")}`;
         }
       } else {
-        str = ctx.stylize(`[${label}]`, 'special');
+        str = ctx.stylize(`[${label}]`, "special");
       }
     } else {
-      str = ctx.stylize('[Setter]', 'special');
+      str = ctx.stylize("[Setter]", "special");
     }
   } else if (ctx.seen.includes(desc.value)) {
     let num = ctx.circularNums.get(desc.value);
@@ -1470,29 +1757,33 @@ function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
       num = ctx.circularNums.size + 1;
       ctx.circularNums.set(desc.value, num);
     }
-    str = ctx.stylize(`[Circular *${num}]`, 'special');
+    str = ctx.stylize(`[Circular *${num}]`, "special");
   } else {
     // Mirror Node's formatProperty: the indentation level grows around the
     // value (diff 3 for object properties under compact===true, else 2) so
     // nested layout observes the absolute level. The bump applies only for
     // compact===true; other modes use the polyfill's own `level`-based
     // indentation and must see indentationLvl unchanged.
-    const diff = (ctx.options.compact !== true || isArray) ? 2 : 3;
+    const diff = ctx.options.compact !== true || isArray ? 2 : 3;
     const trackIndent = ctx.options.compact === true;
     if (trackIndent) ctx.indentationLvl = (ctx.indentationLvl || 0) + diff;
-    str = formatValue(ctx, desc.value, recurseTimes === null ? null : recurseTimes - 1);
+    str = formatValue(
+      ctx,
+      desc.value,
+      recurseTimes === null ? null : recurseTimes - 1,
+    );
     if (diff === 3) {
       // Node: when the formatted value is wider than breakLength, start it
       // on a new line at the (bumped) indentation level.
       const breakLength = ctx.options.breakLength ?? 80;
-      if (breakLength < str.replace(ansiLenRegex, '').length) {
-        extra = `\n${' '.repeat(ctx.indentationLvl || 0)}`;
+      if (breakLength < str.replace(ansiLenRegex, "").length) {
+        extra = `\n${" ".repeat(ctx.indentationLvl || 0)}`;
       }
     }
     if (trackIndent) ctx.indentationLvl -= diff;
   }
 
-  if (typeof key === 'symbol') {
+  if (typeof key === "symbol") {
     const symName = formatPrimitive(ctx, key);
     // Only non-enumerable symbol keys get brackets (with showHidden).
     if (ctx.options.showHidden && desc && desc.enumerable === false) {
@@ -1502,8 +1793,8 @@ function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
   }
   if (isArray && isCanonicalArrayIndex(key)) return str;
   let name = /^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key)
-    ? ctx.stylize(key, 'name')
-    : ctx.stylize(quoteString(key), 'string');
+    ? ctx.stylize(key, "name")
+    : ctx.stylize(quoteString(key), "string");
   // Show non-enumerable properties with brackets when showHidden is true.
   if (ctx.options.showHidden && desc && desc.enumerable === false) {
     name = `[${name}]`;
@@ -1524,7 +1815,7 @@ function reduceToSingleString(ctx, output, tag, braces, level) {
   const options = ctx.options;
   const breakLength = options.breakLength ?? 80;
   const compact = options.compact ?? 3;
-  const prefix = tag === '' ? '' : `${tag} `;
+  const prefix = tag === "" ? "" : `${tag} `;
 
   if (output.length === 0) return `${prefix}${braces[0]}${braces[1]}`;
 
@@ -1536,24 +1827,29 @@ function reduceToSingleString(ctx, output, tag, braces, level) {
     // re-indentation of embedded newlines is done (unlike the modes below).
     // (Mirrors Node's isBelowBreakLength with start=0.)
     let totalLength = output.length;
-    let fits = totalLength + output.length <= breakLength &&
-      (tag === '' || !tag.includes('\n'));
+    let fits =
+      totalLength + output.length <= breakLength &&
+      (tag === "" || !tag.includes("\n"));
     if (fits) {
       for (const o of output) {
-        totalLength += o.replace(ansiLenRegex, '').length;
-        if (totalLength > breakLength) { fits = false; break; }
+        totalLength += o.replace(ansiLenRegex, "").length;
+        if (totalLength > breakLength) {
+          fits = false;
+          break;
+        }
       }
     }
     if (fits) {
-      return `${prefix}${braces[0]} ${output.join(', ')} ${braces[1]}`;
+      return `${prefix}${braces[0]} ${output.join(", ")} ${braces[1]}`;
     }
-    const indentation = ' '.repeat(ctx.indentationLvl || 0);
-    const ln = tag === '' && braces[0].length === 1 ? ' ' : `\n${indentation}  `;
+    const indentation = " ".repeat(ctx.indentationLvl || 0);
+    const ln =
+      tag === "" && braces[0].length === 1 ? " " : `\n${indentation}  `;
     return `${prefix}${braces[0]}${ln}${output.join(`,\n${indentation}  `)} ${braces[1]}`;
   }
 
-  const budget = compact === false ? -1
-    : (typeof compact === 'number' ? compact : 3);
+  const budget =
+    compact === false ? -1 : typeof compact === "number" ? compact : 3;
 
   // Node only collapses to a single line when the remaining depth below this
   // object is within the compact budget (ctx.currentDepth - recurseTimes <
@@ -1564,12 +1860,17 @@ function reduceToSingleString(ctx, output, tag, braces, level) {
     // indentation, brace, base length, and a +10 fudge factor.
     const baseLen = tag.length;
     const indentLvl = ctx.indentationLvl || 0;
-    let totalLength = output.length + (output.length + indentLvl + braces[0].length + baseLen + 10);
-    let hasNewline = tag.includes('\n');
+    let totalLength =
+      output.length +
+      (output.length + indentLvl + braces[0].length + baseLen + 10);
+    let hasNewline = tag.includes("\n");
     if (totalLength + output.length <= breakLength) {
       for (const o of output) {
-        const stripped = o.replace(ansiLenRegex, '');
-        if (stripped.includes('\n')) { hasNewline = true; break; }
+        const stripped = o.replace(ansiLenRegex, "");
+        if (stripped.includes("\n")) {
+          hasNewline = true;
+          break;
+        }
         totalLength += stripped.length;
         if (totalLength > breakLength) break;
       }
@@ -1577,13 +1878,13 @@ function reduceToSingleString(ctx, output, tag, braces, level) {
       hasNewline = true; // Force multi-line via length check below
     }
     if (!hasNewline && totalLength <= breakLength) {
-      return `${prefix}${braces[0]} ${output.join(', ')} ${braces[1]}`;
+      return `${prefix}${braces[0]} ${output.join(", ")} ${braces[1]}`;
     }
   }
 
   const indentLvl = ctx.indentationLvl || 0;
-  const indent = ' '.repeat(indentLvl) + '  '.repeat(level + 1);
-  const closing = ' '.repeat(indentLvl) + '  '.repeat(level);
+  const indent = " ".repeat(indentLvl) + "  ".repeat(level + 1);
+  const closing = " ".repeat(indentLvl) + "  ".repeat(level);
   // Re-indent continuation lines of nested multi-line values. Each property
   // starts at `indent`, so newlines embedded in an already-formatted nested
   // value need the same indent to stay aligned (Node tracks this with
@@ -1597,9 +1898,11 @@ function reduceToSingleString(ctx, output, tag, braces, level) {
  * @param {string} k
  */
 function isCanonicalArrayIndex(k) {
-  if (typeof k !== 'string' || k === '') return false;
+  if (typeof k !== "string" || k === "") return false;
   const n = Number(k);
-  return Number.isSafeInteger(n) && n >= 0 && n < 2 ** 32 - 1 && String(n) === k;
+  return (
+    Number.isSafeInteger(n) && n >= 0 && n < 2 ** 32 - 1 && String(n) === k
+  );
 }
 
 /**
@@ -1611,7 +1914,10 @@ function getKeys(ctx, value) {
   /** @type {(string|symbol)[]} */
   let keys;
   if (ctx.options.showHidden) {
-    keys = [...PrimordialObjectGetOwnPropertyNames(value), ...PrimordialObjectGetOwnPropertySymbols(value)];
+    keys = [
+      ...PrimordialObjectGetOwnPropertyNames(value),
+      ...PrimordialObjectGetOwnPropertySymbols(value),
+    ];
   } else {
     try {
       keys = PrimordialObjectKeys(value);
@@ -1627,8 +1933,10 @@ function getKeys(ctx, value) {
       if (desc && desc.enumerable) keys.push(sym);
     }
   }
-  const strKeys = /** @type {string[]} */ (keys.filter((k) => typeof k === 'string'));
-  const symKeys = keys.filter((k) => typeof k === 'symbol');
+  const strKeys = /** @type {string[]} */ (
+    keys.filter((k) => typeof k === "string")
+  );
+  const symKeys = keys.filter((k) => typeof k === "symbol");
   // Node does NOT sort here; sorting happens on the formatted output strings
   // in formatValue (so symbols sort before strings with `sorted: true`).
   return [...strKeys, ...symKeys];
@@ -1649,7 +1957,10 @@ function formatArrayEntries(ctx, value, recurseTimes, extraKeys) {
   // Find first sparse index within the capped range (Node's formatArray).
   let sparseAt = -1;
   for (let i = 0; i < len; i++) {
-    if (!hasOwn(value, String(i))) { sparseAt = i; break; }
+    if (!hasOwn(value, String(i))) {
+      sparseAt = i;
+      break;
+    }
   }
 
   if (sparseAt === -1) {
@@ -1659,7 +1970,7 @@ function formatArrayEntries(ctx, value, recurseTimes, extraKeys) {
     }
     if (valLen > len) {
       const more = valLen - len;
-      output.push(`... ${more} more item${more === 1 ? '' : 's'}`);
+      output.push(`... ${more} more item${more === 1 ? "" : "s"}`);
     }
   } else {
     // Sparse: iterate keys and compute empty gaps arithmetically
@@ -1678,7 +1989,7 @@ function formatArrayEntries(ctx, value, recurseTimes, extraKeys) {
       if (tmp > 2 ** 32 - 2) break;
       if (tmp !== index) {
         const emptyItems = tmp - index;
-        output.push(`<${emptyItems} empty item${emptyItems === 1 ? '' : 's'}>`);
+        output.push(`<${emptyItems} empty item${emptyItems === 1 ? "" : "s"}>`);
         index = tmp;
         if (output.length >= len) break;
       }
@@ -1687,14 +1998,15 @@ function formatArrayEntries(ctx, value, recurseTimes, extraKeys) {
     }
     const remaining = valLen - index;
     if (output.length < len && remaining > 0) {
-      output.push(`<${remaining} empty item${remaining === 1 ? '' : 's'}>`);
+      output.push(`<${remaining} empty item${remaining === 1 ? "" : "s"}>`);
     } else if (output.length >= len && remaining > 0) {
       // Hit maxArrayLength with items remaining: Node shows "... N more items".
-      output.push(`... ${remaining} more item${remaining === 1 ? '' : 's'}`);
+      output.push(`... ${remaining} more item${remaining === 1 ? "" : "s"}`);
     }
   }
 
-  for (const key of extraKeys) output.push(formatProperty(ctx, value, recurseTimes, key, true));
+  for (const key of extraKeys)
+    output.push(formatProperty(ctx, value, recurseTimes, key, true));
   return output;
 }
 
@@ -1709,10 +2021,10 @@ function formatTypedArray(ctx, value) {
   for (let i = 0; i < len; i++) output.push(formatPrimitive(ctx, value[i]));
   if (value.length > max) {
     const remaining = value.length - max;
-    output.push(`... ${remaining} more item${remaining === 1 ? '' : 's'}`);
+    output.push(`... ${remaining} more item${remaining === 1 ? "" : "s"}`);
   }
-  if (output.length === 0) return '[]';
-  return `[ ${output.join(', ')} ]`;
+  if (output.length === 0) return "[]";
+  return `[ ${output.join(", ")} ]`;
 }
 
 /**
@@ -1728,18 +2040,20 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
   // Increment a counter; if we exceed a threshold, bail out.
   ctx.formatCount = (ctx.formatCount || 0) + 1;
   if (ctx.formatCount > 100000) {
-    return ctx.stylize('...', 'special');
+    return ctx.stylize("...", "special");
   }
 
   // For proxies, avoid triggering traps. Check via native bridge first.
-  const isProxy = typeof nativeTypesBridge?.isProxy === 'function' &&
-    (typeof value === 'object' || typeof value === 'function') && value !== null &&
+  const isProxy =
+    typeof nativeTypesBridge?.isProxy === "function" &&
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
     nativeTypesBridge.isProxy(value);
   if (isProxy) {
     // For proxies, delegate to native inspect which can safely get
     // target/handler without triggering user traps (via internal slots).
     // This handles revoked proxies, throwing traps, and showProxy correctly.
-    if (typeof nativeInspectBridge === 'function') {
+    if (typeof nativeInspectBridge === "function") {
       try {
         const nativeOut = nativeInspectBridge(value, {
           colors: ctx.options.colors,
@@ -1748,25 +2062,31 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           compact: ctx.options.compact,
         });
         return nativeOut;
-      } catch { /* ignore, fall through to safe fallback */ }
+      } catch {
+        /* ignore, fall through to safe fallback */
+      }
     }
     // Fallback: don't trigger traps.
     try {
       Object.getPrototypeOf(value);
     } catch (e) {
       if (e instanceof TypeError && /revoked/i.test(e.message)) {
-        return ctx.stylize('<Revoked Proxy>', 'special');
+        return ctx.stylize("<Revoked Proxy>", "special");
       }
     }
-    return ctx.stylize('Proxy', 'special');
+    return ctx.stylize("Proxy", "special");
   }
 
   // custom inspect hook
-  if (ctx.options.customInspect && value !== null && (typeof value === 'object' || typeof value === 'function')) {
+  if (
+    ctx.options.customInspect &&
+    value !== null &&
+    (typeof value === "object" || typeof value === "function")
+  ) {
     const custom = value[inspect.custom];
     // Filter out the inspect function itself (Node does this to avoid infinite
     // recursion when util.inspect is stored as a property value).
-    if (typeof custom === 'function' && custom !== inspect) {
+    if (typeof custom === "function" && custom !== inspect) {
       const depth = recurseTimes;
       // Node passes a filtered user options object (no internal ctx properties
       // like seen array/budget/indentationLvl; user-passed options are included).
@@ -1778,7 +2098,8 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       // If the custom inspection method returned `this`, don't go into
       // infinite recursion; fall through to normal formatting (Node does this).
       if (ret !== value) {
-        if (typeof ret !== 'string') ret = formatValue(ctx, ret, recurseTimes, level);
+        if (typeof ret !== "string")
+          ret = formatValue(ctx, ret, recurseTimes, level);
         return ret;
       }
       // Fall through: format the value normally without re-invoking custom.
@@ -1791,7 +2112,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
   if (types.isPromise(value)) {
     // Use native bridge to get the actual promise state (fulfilled/rejected value).
     // Pure JS cannot synchronously determine promise state.
-    if (typeof nativeInspectBridge === 'function') {
+    if (typeof nativeInspectBridge === "function") {
       try {
         const nativeOut = nativeInspectBridge(value, {
           colors: ctx.options.colors,
@@ -1802,14 +2123,16 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           showHidden: ctx.options.showHidden,
         });
         return reindentBridgeResult(ctx, nativeOut);
-      } catch { /* fall through */ }
+      } catch {
+        /* fall through */
+      }
     }
     return formatPromise();
   }
 
   // Map/Set iterators: use native bridge (iterating would consume them).
   if (types.isMapIterator(value) || types.isSetIterator(value)) {
-    if (typeof nativeInspectBridge === 'function') {
+    if (typeof nativeInspectBridge === "function") {
       try {
         const nativeOut = nativeInspectBridge(value, {
           colors: ctx.options.colors,
@@ -1820,18 +2143,20 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           showHidden: ctx.options.showHidden,
         });
         return reindentBridgeResult(ctx, nativeOut);
-      } catch { /* fall through */ }
+      } catch {
+        /* fall through */
+      }
     }
     // Fallback: generic.
-    const name = types.isMapIterator(value) ? 'Map Iterator' : 'Set Iterator';
+    const name = types.isMapIterator(value) ? "Map Iterator" : "Set Iterator";
     return `[${name}] {}`;
   }
 
   // ---- External (native external value). Pure JS cannot read the pointer
   // address, so we emit a placeholder that matches Node's `[External: <hex>]`
   // shape. types.isExternal delegates to the native predicate in Node.
-  if (typeof types.isExternal === 'function' && types.isExternal(value)) {
-    return ctx.stylize('[External: 0]', 'special');
+  if (typeof types.isExternal === "function" && types.isExternal(value)) {
+    return ctx.stylize("[External: 0]", "special");
   }
 
   // circular check (push/pop stack)
@@ -1846,7 +2171,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       num = ctx.circularNums.size + 1;
       ctx.circularNums.set(value, num);
     }
-    return ctx.stylize(`[Circular *${num}]`, 'special');
+    return ctx.stylize(`[Circular *${num}]`, "special");
   }
   const idx = ctx.seen.length;
   ctx.seen.push(value);
@@ -1885,11 +2210,16 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     // throwing getters).
     if (recurseTimes !== null && recurseTimes < 0) {
       const ctor = nodeConstructorName(value);
-      const name = ctor === null || ctor.name === 'Object' ? 'Error' : ctor.name;
-      return finish(ctx.stylize(`[${name}]`, 'special'));
+      const name =
+        ctor === null || ctor.name === "Object" ? "Error" : ctor.name;
+      return finish(ctx.stylize(`[${name}]`, "special"));
     }
     let stack;
-    try { stack = value.stack; } catch { stack = undefined; }
+    try {
+      stack = value.stack;
+    } catch {
+      stack = undefined;
+    }
     // Node's formatError inputs: the constructor name (null when the error
     // has a null prototype), the Symbol.toStringTag (only when it would not
     // print as a regular property), and the error name ('Error' when
@@ -1897,18 +2227,31 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     // line to reflect the current constructor/name/tag.
     const ctor = nodeConstructorName(value);
     const constructor = ctor === null ? null : ctor.name;
-    let tag = '';
-    try { tag = value[Symbol.toStringTag]; } catch { /* ignore */ }
-    if (typeof tag !== 'string' ||
-        (tag !== '' &&
-         (ctx.options.showHidden
-           ? Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)
-           : Object.prototype.propertyIsEnumerable.call(value, Symbol.toStringTag)))) {
-      tag = '';
+    let tag = "";
+    try {
+      tag = value[Symbol.toStringTag];
+    } catch {
+      /* ignore */
+    }
+    if (
+      typeof tag !== "string" ||
+      (tag !== "" &&
+        (ctx.options.showHidden
+          ? Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)
+          : Object.prototype.propertyIsEnumerable.call(
+              value,
+              Symbol.toStringTag,
+            )))
+    ) {
+      tag = "";
     }
     let name;
-    try { name = value.name; } catch { name = undefined; }
-    if (name === null || name === undefined) name = 'Error';
+    try {
+      name = value.name;
+    } catch {
+      name = undefined;
+    }
+    if (name === null || name === undefined) name = "Error";
     // Node's Error.prototype.toString fallback, improved like a stack's
     // first line. A throwing toString degrades to '[object Error]' without
     // improveStack, exactly like Node's formatError catch; when there is no
@@ -1916,22 +2259,27 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     let errStr;
     let errStrFailed = false;
     try {
-      errStr = improveErrorStack(errorProtoToString(value, name), constructor, name, tag);
+      errStr = improveErrorStack(
+        errorProtoToString(value, name),
+        constructor,
+        name,
+        tag,
+      );
     } catch {
       errStrFailed = true;
     }
     let base;
-    if (typeof stack === 'string' && stack !== '') {
+    if (typeof stack === "string" && stack !== "") {
       // Node's formatError always improveStacks a string stack (throwing for
       // symbol names, like Node), then wraps it in brackets when it holds
       // no stack frames.
       const improved = improveErrorStack(stack, constructor, name, tag);
-      base = improved.includes('\n    at') ? improved : `[${improved}]`;
+      base = improved.includes("\n    at") ? improved : `[${improved}]`;
     } else if (errStrFailed) {
       // Node does not return early here; it sets the base to
       // '[object Error]' and continues to format properties (e.g. throwing
       // getters show as `[Getter: <Inspection threw ...>]`).
-      base = '[object Error]';
+      base = "[object Error]";
     } else if (stack) {
       let inspectedStack;
       {
@@ -1962,8 +2310,8 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     let keys = getKeys(ctx, value);
     if (!ctx.options.showHidden) {
       keys = keys.filter((k) => {
-        if (k === 'stack') return stack === undefined;
-        if (k === 'message' || k === 'name') {
+        if (k === "stack") return stack === undefined;
+        if (k === "message" || k === "name") {
           let v;
           try {
             v = value[k];
@@ -1971,7 +2319,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
             // If the getter throws, keep the key (it will show as [Getter]).
             return true;
           }
-          return !(typeof v === 'string' && base.includes(v));
+          return !(typeof v === "string" && base.includes(v));
         }
         return true;
       });
@@ -1979,65 +2327,90 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     /** @type {string[]} */
     const extraProps = [];
     // Node surfaces a non-enumerable own 'cause' as [cause] (even if undefined).
-    if (Object.prototype.hasOwnProperty.call(value, 'cause') &&
-        !Object.prototype.propertyIsEnumerable.call(value, 'cause') &&
-        !keys.includes('cause')) {
-      extraProps.push(`${ctx.stylize('[cause]', 'special')}: ${formatValue(ctx, value.cause, nextRecurse, level + 1)}`);
+    if (
+      Object.prototype.hasOwnProperty.call(value, "cause") &&
+      !Object.prototype.propertyIsEnumerable.call(value, "cause") &&
+      !keys.includes("cause")
+    ) {
+      extraProps.push(
+        `${ctx.stylize("[cause]", "special")}: ${formatValue(ctx, value.cause, nextRecurse, level + 1)}`,
+      );
     }
     // Node surfaces AggregateError's non-enumerable own 'errors' as [errors].
     try {
       const errors = value.errors;
-      if (Array.isArray(errors) &&
-          Object.prototype.hasOwnProperty.call(value, 'errors') &&
-          !Object.prototype.propertyIsEnumerable.call(value, 'errors') &&
-          !keys.includes('errors')) {
-        extraProps.push(`${ctx.stylize('[errors]', 'special')}: ${formatValue(ctx, errors, nextRecurse, level + 1)}`);
+      if (
+        Array.isArray(errors) &&
+        Object.prototype.hasOwnProperty.call(value, "errors") &&
+        !Object.prototype.propertyIsEnumerable.call(value, "errors") &&
+        !keys.includes("errors")
+      ) {
+        extraProps.push(
+          `${ctx.stylize("[errors]", "special")}: ${formatValue(ctx, errors, nextRecurse, level + 1)}`,
+        );
       }
-    } catch { /* ignore getter that throws */ }
-    const output = keys.map((key) => formatProperty(ctx, value, recurseTimes, key, false)).concat(extraProps);
+    } catch {
+      /* ignore getter that throws */
+    }
+    const output = keys
+      .map((key) => formatProperty(ctx, value, recurseTimes, key, false))
+      .concat(extraProps);
     if (output.length === 0) return finish(base);
     // With compact:true, Node puts the error base inside the braces.
     // Single-line if it fits in breakLength, else props on new lines.
     if (ctx.options.compact === true) {
-      const singleLine = `{ ${base} ${output.join(', ')} }`;
+      const singleLine = `{ ${base} ${output.join(", ")} }`;
       const breakLength = ctx.options.breakLength ?? 80;
-      if (!base.includes('\n') && !output.some((o) => o.includes('\n')) &&
-          singleLine.length <= breakLength) {
+      if (
+        !base.includes("\n") &&
+        !output.some((o) => o.includes("\n")) &&
+        singleLine.length <= breakLength
+      ) {
         return finish(singleLine);
       }
-      return finish(`{ ${base}\n  ${output.join(',\n  ')} }`);
+      return finish(`{ ${base}\n  ${output.join(",\n  ")} }`);
     }
     // Multi-line base (stack trace): properties go on separate lines.
-    if (base.includes('\n')) {
-      const indent = '  '.repeat(level + 1);
-      const closing = '  '.repeat(level);
-      return finish(`${base} {\n${indent}${output.join(`,\n${indent}`)}\n${closing}}`);
+    if (base.includes("\n")) {
+      const indent = "  ".repeat(level + 1);
+      const closing = "  ".repeat(level);
+      return finish(
+        `${base} {\n${indent}${output.join(`,\n${indent}`)}\n${closing}}`,
+      );
     }
-    return finish(reduceToSingleString(ctx, output, base, ['{', '}'], level));
+    return finish(reduceToSingleString(ctx, output, base, ["{", "}"], level));
   }
 
   // ---- ArrayBuffer / SharedArrayBuffer
   if (types.isAnyArrayBuffer(value)) {
-    const name = types.isSharedArrayBuffer(value) ? 'SharedArrayBuffer' : 'ArrayBuffer';
+    const name = types.isSharedArrayBuffer(value)
+      ? "SharedArrayBuffer"
+      : "ArrayBuffer";
     // A null prototype gets Node's `[ArrayBuffer: null prototype]` prefix.
     const abCtor = nodeConstructorName(value);
-    const abBase = abCtor === null
-      ? `[${intrinsicConstructorName(value)}: null prototype]`
-      : name;
+    const abBase =
+      abCtor === null
+        ? `[${intrinsicConstructorName(value)}: null prototype]`
+        : name;
     const output = [];
     if (isDetachedBuffer(value)) {
       // Detached buffers show `(detached)` instead of contents (Node's
       // formatArrayBuffer catches the Uint8Array construction failure).
-      output.push(ctx.stylize('(detached)', 'special'));
+      output.push(ctx.stylize("(detached)", "special"));
     } else if (!typedArray) {
       // When formatting a TypedArray's [buffer] extra (typedArray flag),
       // Node omits the [Uint8Contents] to avoid redundancy.
-      output.push(`${ctx.stylize('[Uint8Contents]', 'special')}: ${formatArrayBufferContents(value, getMaxArrayLength(ctx))}`);
+      output.push(
+        `${ctx.stylize("[Uint8Contents]", "special")}: ${formatArrayBufferContents(value, getMaxArrayLength(ctx))}`,
+      );
     }
-    output.push(`[${ctx.stylize('byteLength', 'special')}]: ${value.byteLength}`);
+    output.push(
+      `[${ctx.stylize("byteLength", "special")}]: ${value.byteLength}`,
+    );
     const keys = getKeys(ctx, value);
-    for (const key of keys) output.push(formatProperty(ctx, value, recurseTimes, key, false));
-    return finish(reduceToSingleString(ctx, output, abBase, ['{', '}'], level));
+    for (const key of keys)
+      output.push(formatProperty(ctx, value, recurseTimes, key, false));
+    return finish(reduceToSingleString(ctx, output, abBase, ["{", "}"], level));
   }
 
   // ---- DataView (before TypedArray: ArrayBuffer.isView() is true for DataView).
@@ -2062,15 +2435,24 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
         }
       }
     };
-    output.push(`[${ctx.stylize('byteLength', 'special')}]: ${getExtra('byteLength')}`);
-    output.push(`[${ctx.stylize('byteOffset', 'special')}]: ${getExtra('byteOffset')}`);
-    output.push(`[${ctx.stylize('buffer', 'special')}]: ${formatValue(ctx, getExtra('buffer'), recurseTimes, 0)}`);
+    output.push(
+      `[${ctx.stylize("byteLength", "special")}]: ${getExtra("byteLength")}`,
+    );
+    output.push(
+      `[${ctx.stylize("byteOffset", "special")}]: ${getExtra("byteOffset")}`,
+    );
+    output.push(
+      `[${ctx.stylize("buffer", "special")}]: ${formatValue(ctx, getExtra("buffer"), recurseTimes, 0)}`,
+    );
     const keys = getKeys(ctx, value);
-    for (const key of keys) output.push(formatProperty(ctx, value, recurseTimes, key, false));
+    for (const key of keys)
+      output.push(formatProperty(ctx, value, recurseTimes, key, false));
     // A null prototype gets Node's `[DataView: null prototype]` prefix.
     const dvCtor = nodeConstructorName(value);
-    const dvBase = dvCtor === null ? '[DataView: null prototype]' : 'DataView';
-    return finish(reduceToSingleString(ctx, output, dvBase, ['{', '}'], level + levelBoost));
+    const dvBase = dvCtor === null ? "[DataView: null prototype]" : "DataView";
+    return finish(
+      reduceToSingleString(ctx, output, dvBase, ["{", "}"], level + levelBoost),
+    );
   }
 
   // ---- TypedArray
@@ -2078,7 +2460,10 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     // For exact Node parity on complex typed-array formatting (multiline grouping,
     // maxArrayLength, etc.), delegate to the native bridge in Node.
     // The pure-JS fallback below is for browsers.
-    if (typeof nativeInspectBridge === 'function' && typeof process !== 'undefined') {
+    if (
+      typeof nativeInspectBridge === "function" &&
+      typeof process !== "undefined"
+    ) {
       try {
         const nativeOut = nativeInspectBridge(value, {
           colors: ctx.options.colors,
@@ -2089,9 +2474,14 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           showHidden: ctx.options.showHidden,
         });
         return reindentBridgeResult(ctx, nativeOut);
-      } catch { /* fall through to pure-JS */ }
+      } catch {
+        /* fall through to pure-JS */
+      }
     }
-    const ctorName = value.constructor && value.constructor.name ? value.constructor.name : 'TypedArray';
+    const ctorName =
+      value.constructor && value.constructor.name
+        ? value.constructor.name
+        : "TypedArray";
     // Use the true length via byteLength (bypasses a broken own 'length'
     // property, like Node's TypedArrayPrototypeGetLength). Node decides
     // number vs BigInt formatting from value.length, so a broken length
@@ -2103,31 +2493,48 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     const tlen = Math.min(trueLength, max);
     for (let i = 0; i < tlen; i++) {
       if (useBigInt) {
-        const out = ctx.options.numericSeparator ? addNumericSeparator(String(value[i])) + 'n' : `${value[i]}n`;
-        output.push(ctx.stylize(out, 'bigint'));
+        const out = ctx.options.numericSeparator
+          ? addNumericSeparator(String(value[i])) + "n"
+          : `${value[i]}n`;
+        output.push(ctx.stylize(out, "bigint"));
       } else {
         output.push(formatPrimitive(ctx, value[i]));
       }
     }
     if (trueLength > max) {
       const remaining = trueLength - max;
-      output.push(`... ${remaining} more item${remaining === 1 ? '' : 's'}`);
+      output.push(`... ${remaining} more item${remaining === 1 ? "" : "s"}`);
     }
-    const keys = getKeys(ctx, value).filter((k) =>
-      !['length', 'byteLength', 'byteOffset', 'buffer'].includes(String(k)) &&
-      !isCanonicalArrayIndex(String(k)));
-    for (const key of keys) output.push(formatProperty(ctx, value, recurseTimes, key, false));
+    const keys = getKeys(ctx, value).filter(
+      (k) =>
+        !["length", "byteLength", "byteOffset", "buffer"].includes(String(k)) &&
+        !isCanonicalArrayIndex(String(k)),
+    );
+    for (const key of keys)
+      output.push(formatProperty(ctx, value, recurseTimes, key, false));
     // With showHidden, Node appends the non-enumerable typed-array internals.
     if (ctx.options.showHidden) {
-      for (const k of ['BYTES_PER_ELEMENT', 'length', 'byteLength', 'byteOffset', 'buffer']) {
+      for (const k of [
+        "BYTES_PER_ELEMENT",
+        "length",
+        "byteLength",
+        "byteOffset",
+        "buffer",
+      ]) {
         let v;
-        try { v = value[k]; } catch { v = undefined; }
+        try {
+          v = value[k];
+        } catch {
+          v = undefined;
+        }
         // Pass typedArray=true so a [buffer] ArrayBuffer omits [Uint8Contents].
-        const isBuf = k === 'buffer';
-        output.push(`[${ctx.stylize(k, 'special')}]: ${formatValue(ctx, v, recurseTimes, 0, isBuf)}`);
+        const isBuf = k === "buffer";
+        output.push(
+          `[${ctx.stylize(k, "special")}]: ${formatValue(ctx, v, recurseTimes, 0, isBuf)}`,
+        );
       }
     }
-    const arrStr = reduceToSingleString(ctx, output, '', ['[', ']'], level);
+    const arrStr = reduceToSingleString(ctx, output, "", ["[", "]"], level);
     return finish(`${ctorName}(${trueLength}) ${arrStr}`);
   }
 
@@ -2147,9 +2554,14 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       mapBase = `[Map(${mapSize}): null prototype]`;
     } else {
       const ctorName = mapCtor.name;
-      mapBase = (ctorName && ctorName !== 'Map') ? `${ctorName}(${mapSize})` : `Map(${mapSize})`;
+      mapBase =
+        ctorName && ctorName !== "Map"
+          ? `${ctorName}(${mapSize})`
+          : `Map(${mapSize})`;
     }
-    return finish(reduceToSingleString(ctx, entries, mapBase, ['{', '}'], level));
+    return finish(
+      reduceToSingleString(ctx, entries, mapBase, ["{", "}"], level),
+    );
   }
   if (types.isSet(value)) {
     const entries = formatCollection(ctx, value, recurseTimes, false);
@@ -2167,30 +2579,36 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       setBase = `[Set(${collSize}): null prototype]`;
     } else {
       const ctorName = ctor.name;
-      const setName = (ctorName && ctorName !== 'Set') ? ctorName : 'Set';
+      const setName = ctorName && ctorName !== "Set" ? ctorName : "Set";
       // Append [Set] tag for subclasses, unless the name already contains 'Set'
       // followed by an uppercase letter (e.g. SetSubclass -> no tag, Settings -> [Set]).
       // This matches Node's heuristic to avoid redundant tags.
-      let tagSuffix = '';
-      if (setName !== 'Set') {
-        const tag = 'Set';
+      let tagSuffix = "";
+      if (setName !== "Set") {
+        const tag = "Set";
         const idx = setName.indexOf(tag);
-        const isRedundant = idx !== -1 &&
+        const isRedundant =
+          idx !== -1 &&
           (idx + tag.length >= setName.length ||
-           /[A-Z]/.test(setName[idx + tag.length]));
-        if (!isRedundant) tagSuffix = ' [Set]';
+            /[A-Z]/.test(setName[idx + tag.length]));
+        if (!isRedundant) tagSuffix = " [Set]";
       }
       setBase = `${setName}(${collSize})${tagSuffix}`;
     }
-    return finish(reduceToSingleString(ctx, entries, setBase, ['{', '}'], level));
+    return finish(
+      reduceToSingleString(ctx, entries, setBase, ["{", "}"], level),
+    );
   }
   if (types.isWeakMap(value) || types.isWeakSet(value)) {
-    const name = types.isWeakMap(value) ? 'WeakMap' : 'WeakSet';
+    const name = types.isWeakMap(value) ? "WeakMap" : "WeakSet";
     // With showHidden, Node reveals WeakMap/WeakSet entries via an internal
     // API. Delegate to the native bridge in Node; browsers keep
     // '<items unknown>'.
-    if (ctx.options.showHidden && typeof nativeInspectBridge === 'function' &&
-        typeof process !== 'undefined') {
+    if (
+      ctx.options.showHidden &&
+      typeof nativeInspectBridge === "function" &&
+      typeof process !== "undefined"
+    ) {
       try {
         const nativeOut = nativeInspectBridge(value, {
           colors: ctx.options.colors,
@@ -2201,45 +2619,55 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           showHidden: true,
         });
         return finish(reindentBridgeResult(ctx, nativeOut));
-      } catch { /* fall through */ }
+      } catch {
+        /* fall through */
+      }
     }
     // Node prefixes via getPrefix: `Foo [WeakSet] ` for subclasses,
     // `[WeakSet: null prototype] ` for null prototypes.
     const weakCtor = nodeConstructorName(value);
     const weakConstructor = weakCtor === null ? null : weakCtor.name;
     const weakTag = getFilteredTag(ctx, value);
-    const weakPrefix = (weakConstructor !== name || weakTag !== '')
-      ? getPrefix(weakConstructor, weakTag, name)
-      : '';
+    const weakPrefix =
+      weakConstructor !== name || weakTag !== ""
+        ? getPrefix(weakConstructor, weakTag, name)
+        : "";
     const weakBase = weakPrefix ? weakPrefix.trimEnd() : name;
-    return finish(reduceToSingleString(
-      ctx,
-      (() => {
-        const entries = [ctx.stylize('<items unknown>', 'special')];
-        // Node always appends own enumerable properties (getKeys).
-        for (const k of getKeys(ctx, value)) {
-          entries.push(formatProperty(ctx, value, recurseTimes, k, false, value));
-        }
-        return entries;
-      })(),
-      weakBase,
-      ['{', '}'],
-      level,
-    ));
+    return finish(
+      reduceToSingleString(
+        ctx,
+        (() => {
+          const entries = [ctx.stylize("<items unknown>", "special")];
+          // Node always appends own enumerable properties (getKeys).
+          for (const k of getKeys(ctx, value)) {
+            entries.push(
+              formatProperty(ctx, value, recurseTimes, k, false, value),
+            );
+          }
+          return entries;
+        })(),
+        weakBase,
+        ["{", "}"],
+        level,
+      ),
+    );
   }
 
   // ---- Proxy (best effort)
   // Only use proxy formatting if the value is actually a proxy.
-  const isProxyValue = typeof nativeTypesBridge?.isProxy === 'function'
-    ? nativeTypesBridge.isProxy(value)
-    : false;
+  const isProxyValue =
+    typeof nativeTypesBridge?.isProxy === "function"
+      ? nativeTypesBridge.isProxy(value)
+      : false;
   if (isProxyValue && ctx.options.showProxy) {
-    return finish(`Proxy [ ${ctx.stylize('<target unknown>', 'special')}, ${ctx.stylize('<handler unknown>', 'special')} ]`);
+    return finish(
+      `Proxy [ ${ctx.stylize("<target unknown>", "special")}, ${ctx.stylize("<handler unknown>", "special")} ]`,
+    );
   }
 
   // ---- generic object / array / function / date / regexp
-  let tag = '';
-  let braces = ['{', '}'];
+  let tag = "";
+  let braces = ["{", "}"];
   let isArr = false;
   /** braces are always shown (objects/arrays) vs only when there are keys (fn/date/re) */
   let bracesAlways = true;
@@ -2248,9 +2676,11 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
 
   if (types.isArgumentsObject(value)) {
     // Mirror Node: Arguments objects use '[Arguments] {' as the opening brace.
-    braces[0] = '[Arguments] {';
-  } else if (Array.isArray(value) &&
-             (Symbol.iterator in Object(value) || nodeConstructorName(value) === null)) {
+    braces[0] = "[Arguments] {";
+  } else if (
+    Array.isArray(value) &&
+    (Symbol.iterator in Object(value) || nodeConstructorName(value) === null)
+  ) {
     isArr = true;
     // Node: `getPrefix(constructor, tag, 'Array', `(${value.length})`)` —
     // `[Array(3): null prototype] ` for null prototypes, `Foobar(5) ` for
@@ -2261,21 +2691,31 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     // to generic object formatting.
     const ctor = nodeConstructorName(value);
     const constructor = ctor === null ? null : ctor.name;
-    let arrayTag = '';
-    try { arrayTag = value[Symbol.toStringTag]; } catch { /* ignore */ }
-    if (typeof arrayTag !== 'string' ||
-        (arrayTag !== '' &&
-         (ctx.options.showHidden
-           ? Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)
-           : Object.prototype.propertyIsEnumerable.call(value, Symbol.toStringTag)))) {
-      arrayTag = '';
+    let arrayTag = "";
+    try {
+      arrayTag = value[Symbol.toStringTag];
+    } catch {
+      /* ignore */
     }
-    const arrayPrefix = (constructor !== 'Array' || arrayTag !== '')
-      ? getPrefix(constructor, arrayTag, 'Array', `(${value.length})`)
-      : '';
-    braces = [`${arrayPrefix}[`, ']'];
+    if (
+      typeof arrayTag !== "string" ||
+      (arrayTag !== "" &&
+        (ctx.options.showHidden
+          ? Object.prototype.hasOwnProperty.call(value, Symbol.toStringTag)
+          : Object.prototype.propertyIsEnumerable.call(
+              value,
+              Symbol.toStringTag,
+            )))
+    ) {
+      arrayTag = "";
+    }
+    const arrayPrefix =
+      constructor !== "Array" || arrayTag !== ""
+        ? getPrefix(constructor, arrayTag, "Array", `(${value.length})`)
+        : "";
+    braces = [`${arrayPrefix}[`, "]"];
     protoProps = maybePrototypeProps(ctx, value, recurseTimes, ctor);
-  } else if (typeof value === 'function') {
+  } else if (typeof value === "function") {
     // Classes are detected inside getFunctionBase (Node's getClassBase);
     // the base flows through the regular property handling below so class
     // properties (e.g. `clazz.foo = true`) still print.
@@ -2291,46 +2731,64 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     const reCtor = nodeConstructorName(value);
     const reConstructor = reCtor === null ? null : reCtor.name;
     const reTag = getFilteredTag(ctx, value);
-    const rePrefix = (reConstructor !== 'RegExp' || reTag !== '')
-      ? getPrefix(reConstructor, reTag, 'RegExp')
-      : '';
+    const rePrefix =
+      reConstructor !== "RegExp" || reTag !== ""
+        ? getPrefix(reConstructor, reTag, "RegExp")
+        : "";
     const reValue = reConstructor === null ? new RegExp(value) : value;
     let reStr;
     try {
       reStr = RegExp.prototype.toString.call(reValue);
     } catch {
-      reStr = '/undefined/undefined';
+      reStr = "/undefined/undefined";
     }
-    tag = rePrefix + ctx.stylize(reStr, 'regexp');
+    tag = rePrefix + ctx.stylize(reStr, "regexp");
     bracesAlways = false;
   } else if (types.isDate(value)) {
     const dCtor = nodeConstructorName(value);
     const dConstructor = dCtor === null ? null : dCtor.name;
     const dTag = getFilteredTag(ctx, value);
-    const dPrefix = (dConstructor !== 'Date' || dTag !== '')
-      ? getPrefix(dConstructor, dTag, 'Date')
-      : '';
-    try { tag = dPrefix + ctx.stylize(Date.prototype.toISOString.call(value), 'date'); }
-    catch { tag = dPrefix + ctx.stylize(Date.prototype.toString.call(value), 'date'); }
+    const dPrefix =
+      dConstructor !== "Date" || dTag !== ""
+        ? getPrefix(dConstructor, dTag, "Date")
+        : "";
+    try {
+      tag =
+        dPrefix + ctx.stylize(Date.prototype.toISOString.call(value), "date");
+    } catch {
+      tag = dPrefix + ctx.stylize(Date.prototype.toString.call(value), "date");
+    }
     bracesAlways = false;
   } else if (isBoxedPrimitiveValue(value)) {
     // Get the name from the actual type, not objectToString (which is affected
     // by Symbol.toStringTag).
-    const name = types.isNumberObject(value) ? 'Number' :
-                 types.isStringObject(value) ? 'String' :
-                 types.isBooleanObject(value) ? 'Boolean' :
-                 types.isBigIntObject(value) ? 'BigInt' :
-                 types.isSymbolObject(value) ? 'Symbol' : 'Object';
+    const name = types.isNumberObject(value)
+      ? "Number"
+      : types.isStringObject(value)
+        ? "String"
+        : types.isBooleanObject(value)
+          ? "Boolean"
+          : types.isBigIntObject(value)
+            ? "BigInt"
+            : types.isSymbolObject(value)
+              ? "Symbol"
+              : "Object";
     // Get the primitive value safely. Use the prototype's valueOf to handle
     // null-prototype objects (e.g. Object.setPrototypeOf(new Boolean(true), null)).
     let prim;
     try {
-      const proto = name === 'Number' ? Number.prototype :
-                    name === 'String' ? String.prototype :
-                    name === 'Boolean' ? Boolean.prototype :
-                    name === 'BigInt' ? Object.getPrototypeOf(Object(1n)) :
-                    name === 'Symbol' ? Symbol.prototype :
-                    Object.prototype;
+      const proto =
+        name === "Number"
+          ? Number.prototype
+          : name === "String"
+            ? String.prototype
+            : name === "Boolean"
+              ? Boolean.prototype
+              : name === "BigInt"
+                ? Object.getPrototypeOf(Object(1n))
+                : name === "Symbol"
+                  ? Symbol.prototype
+                  : Object.prototype;
       prim = proto.valueOf.call(value);
     } catch {
       prim = undefined;
@@ -2340,27 +2798,37 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     // For null-prototype objects, Node includes "(null prototype)" in the tag.
     // For non-default prototypes, Node includes the prototype name (e.g. "(Array)").
     const actualProto = Object.getPrototypeOf(value);
-    const defaultProto = name === 'Number' ? Number.prototype :
-                         name === 'String' ? String.prototype :
-                         name === 'Boolean' ? Boolean.prototype :
-                         name === 'BigInt' ? Object.getPrototypeOf(Object(1n)) :
-                         name === 'Symbol' ? Symbol.prototype : null;
-    let protoSuffix = '';
-    if (actualProto === null) protoSuffix = ' (null prototype)';
+    const defaultProto =
+      name === "Number"
+        ? Number.prototype
+        : name === "String"
+          ? String.prototype
+          : name === "Boolean"
+            ? Boolean.prototype
+            : name === "BigInt"
+              ? Object.getPrototypeOf(Object(1n))
+              : name === "Symbol"
+                ? Symbol.prototype
+                : null;
+    let protoSuffix = "";
+    if (actualProto === null) protoSuffix = " (null prototype)";
     else if (actualProto !== defaultProto) {
-      const protoName = actualProto?.constructor?.name || 'Object';
+      const protoName = actualProto?.constructor?.name || "Object";
       if (protoName && protoName !== name) protoSuffix = ` (${protoName})`;
     }
     if (inner !== undefined) {
       const styleType = typeof prim;
-      tag = ctx.stylize(`[${name}${protoSuffix}: ${inner.replace(/\x1B\[[0-9]+m/g, '')}]`, styleType);
+      tag = ctx.stylize(
+        `[${name}${protoSuffix}: ${inner.replace(/\x1B\[[0-9]+m/g, "")}]`,
+        styleType,
+      );
     } else {
       // Fallback: don't stylize if we can't get the primitive.
       tag = `[${name}${protoSuffix}]`;
     }
     // Append Symbol.toStringTag if present and different from the name.
     const toStringTag = value[Symbol.toStringTag];
-    if (typeof toStringTag === 'string' && toStringTag !== name) {
+    if (typeof toStringTag === "string" && toStringTag !== name) {
       tag += ` [${toStringTag}]`;
     }
     bracesAlways = false;
@@ -2370,113 +2838,136 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     try {
       objToString = objectToString(value);
     } catch {
-      objToString = '[object Object]';
+      objToString = "[object Object]";
     }
-    if (objToString === '[object Module]') {
+    if (objToString === "[object Module]") {
       // Module namespace object.
-      tag = '[Module: null prototype]';
-    } else if (objToString === '[object Object]') {
-    const proto = Object.getPrototypeOf(value);
-    if (proto === null) {
-      // For null-prototype objects, try to get the constructor name via the
-      // native bridge (V8 knows the constructor even when the prototype is
-      // null). Fall back to 'Object' if unavailable.
-      let ctorName = 'Object';
-      if (typeof nativeInspectBridge === 'function') {
-        try {
-          // Use a minimal inspect to extract the constructor name.
-          // The native output is like '[Foo: null prototype] {}'.
-          const nativeOut = nativeInspectBridge(value, { depth: -1, colors: false });
-          const m = /^\[([^:\]]+): null prototype\]/.exec(nativeOut);
-          if (m) ctorName = m[1];
-        } catch { /* ignore */ }
-      }
-      tag = `[${ctorName}: null prototype]`;
-    } else if (proto === Object.prototype) {
-      tag = '';
-    } else {
-      // Only use the constructor name when the value is genuinely an
-      // instance of that constructor (Node's getConstructorName walk).
-      // If no constructor is found but the prototype is non-standard,
-      // Node shows `Object <prototype>`.
-      const ctor = nodeConstructorName(value);
-      if (ctor !== null && ctor.name !== 'Object') {
-        tag = ctor.name;
-      } else if (proto !== Object.prototype && proto !== null) {
-        const fullName = getConstructorNameWithProto(ctx, value, recurseTimes);
-        if (fullName !== null && fullName !== 'Object') {
-          tag = fullName;
-        }
-      }
-      protoProps = maybePrototypeProps(ctx, value, recurseTimes, ctor);
-    }
-  } else {
-    // For objects with own Symbol.toStringTag (or custom toStringTag):
-    // - If plain and will show as key: no prefix (or null-prototype prefix).
-    // - Otherwise: use constructor name + [tag] (e.g. 'Foo [bar]').
-    const desc = Object.getOwnPropertyDescriptor(value, Symbol.toStringTag);
-    const proto = Object.getPrototypeOf(value);
-    const isPlain = proto === Object.prototype || proto === null;
-    const isNullProto = proto === null;
-    const isEnumerable = desc && desc.enumerable;
-    const willShowAsKey = isPlain && (isEnumerable || ctx.options.showHidden);
-    if (willShowAsKey) {
-      tag = isNullProto ? '[Object: null prototype]' : '';
-    } else {
-      let objStr;
-      try {
-        objStr = objectToString(value);
-      } catch {
-        // If Symbol.toStringTag getter throws, Node falls back to '[object Object]'.
-        objStr = '[object Object]';
-      }
-      // Node only shows the [Tag] suffix for an actual Symbol.toStringTag,
-      // never derived from objectToString (e.g. `[object Array]` does not
-      // produce `[Array]`).
-      let actualTag;
-      try {
-        actualTag = value[Symbol.toStringTag];
-      } catch {
-        actualTag = undefined;
-      }
-      // Get constructor name (e.g. 'Foo' for Foo [bar]).
-      let ctorName = '';
-      if (isNullProto) {
-        ctorName = '[Object: null prototype]';
-      } else if (!isPlain) {
-        const ctor = nodeConstructorName(value);
-        if (ctor !== null && ctor.name !== 'Object') {
-          ctorName = ctor.name;
-        } else {
-          // Node's getConstructorName shows `Object <prototype>` when the
-          // prototype chain has no determinable constructor.
-          const fullName = getConstructorNameWithProto(ctx, value, recurseTimes);
-          if (fullName !== null && fullName !== 'Object') {
-            ctorName = fullName;
+      tag = "[Module: null prototype]";
+    } else if (objToString === "[object Object]") {
+      const proto = Object.getPrototypeOf(value);
+      if (proto === null) {
+        // For null-prototype objects, try to get the constructor name via the
+        // native bridge (V8 knows the constructor even when the prototype is
+        // null). Fall back to 'Object' if unavailable.
+        let ctorName = "Object";
+        if (typeof nativeInspectBridge === "function") {
+          try {
+            // Use a minimal inspect to extract the constructor name.
+            // The native output is like '[Foo: null prototype] {}'.
+            const nativeOut = nativeInspectBridge(value, {
+              depth: -1,
+              colors: false,
+            });
+            const m = /^\[([^:\]]+): null prototype\]/.exec(nativeOut);
+            if (m) ctorName = m[1];
+          } catch {
+            /* ignore */
           }
         }
+        tag = `[${ctorName}: null prototype]`;
+      } else if (proto === Object.prototype) {
+        tag = "";
+      } else {
+        // Only use the constructor name when the value is genuinely an
+        // instance of that constructor (Node's getConstructorName walk).
+        // If no constructor is found but the prototype is non-standard,
+        // Node shows `Object <prototype>`.
+        const ctor = nodeConstructorName(value);
+        if (ctor !== null && ctor.name !== "Object") {
+          tag = ctor.name;
+        } else if (proto !== Object.prototype && proto !== null) {
+          const fullName = getConstructorNameWithProto(
+            ctx,
+            value,
+            recurseTimes,
+          );
+          if (fullName !== null && fullName !== "Object") {
+            tag = fullName;
+          }
+        }
+        protoProps = maybePrototypeProps(ctx, value, recurseTimes, ctor);
       }
-      // Set the tag suffix (only if different from constructor name to avoid
-      // duplication, e.g. `Foo [Foo]` -> `Foo`).
-      let tagSuffix = '';
-      if (typeof actualTag === 'string' && actualTag !== '' && actualTag !== ctorName) {
-        tagSuffix = ` [${actualTag}]`;
+    } else {
+      // For objects with own Symbol.toStringTag (or custom toStringTag):
+      // - If plain and will show as key: no prefix (or null-prototype prefix).
+      // - Otherwise: use constructor name + [tag] (e.g. 'Foo [bar]').
+      const desc = Object.getOwnPropertyDescriptor(value, Symbol.toStringTag);
+      const proto = Object.getPrototypeOf(value);
+      const isPlain = proto === Object.prototype || proto === null;
+      const isNullProto = proto === null;
+      const isEnumerable = desc && desc.enumerable;
+      const willShowAsKey = isPlain && (isEnumerable || ctx.options.showHidden);
+      if (willShowAsKey) {
+        tag = isNullProto ? "[Object: null prototype]" : "";
+      } else {
+        let objStr;
+        try {
+          objStr = objectToString(value);
+        } catch {
+          // If Symbol.toStringTag getter throws, Node falls back to '[object Object]'.
+          objStr = "[object Object]";
+        }
+        // Node only shows the [Tag] suffix for an actual Symbol.toStringTag,
+        // never derived from objectToString (e.g. `[object Array]` does not
+        // produce `[Array]`).
+        let actualTag;
+        try {
+          actualTag = value[Symbol.toStringTag];
+        } catch {
+          actualTag = undefined;
+        }
+        // Get constructor name (e.g. 'Foo' for Foo [bar]).
+        let ctorName = "";
+        if (isNullProto) {
+          ctorName = "[Object: null prototype]";
+        } else if (!isPlain) {
+          const ctor = nodeConstructorName(value);
+          if (ctor !== null && ctor.name !== "Object") {
+            ctorName = ctor.name;
+          } else {
+            // Node's getConstructorName shows `Object <prototype>` when the
+            // prototype chain has no determinable constructor.
+            const fullName = getConstructorNameWithProto(
+              ctx,
+              value,
+              recurseTimes,
+            );
+            if (fullName !== null && fullName !== "Object") {
+              ctorName = fullName;
+            }
+          }
+        }
+        // Set the tag suffix (only if different from constructor name to avoid
+        // duplication, e.g. `Foo [Foo]` -> `Foo`).
+        let tagSuffix = "";
+        if (
+          typeof actualTag === "string" &&
+          actualTag !== "" &&
+          actualTag !== ctorName
+        ) {
+          tagSuffix = ` [${actualTag}]`;
+        }
+        // For plain non-null-proto with tag, Node uses 'Object [tag]'.
+        if (!ctorName && tagSuffix) {
+          ctorName = "Object";
+        }
+        tag = ctorName + tagSuffix;
+        // If no ctor and no tag, fall back to objectToString.
+        if (!tag) tag = objStr;
       }
-      // For plain non-null-proto with tag, Node uses 'Object [tag]'.
-      if (!ctorName && tagSuffix) {
-        ctorName = 'Object';
-      }
-      tag = ctorName + tagSuffix;
-      // If no ctor and no tag, fall back to objectToString.
-      if (!tag) tag = objStr;
     }
-  }
   }
 
   const allKeys = getKeys(ctx, value);
-  const keys = (isArr || (typeof value === 'object' && value !== null && isBoxedPrimitiveValue(value)))
-    ? allKeys.filter((k) => typeof k === 'symbol' || !isCanonicalArrayIndex(String(k)))
-    : allKeys;
+  const keys =
+    isArr ||
+    (typeof value === "object" &&
+      value !== null &&
+      isBoxedPrimitiveValue(value))
+      ? allKeys.filter(
+          (k) => typeof k === "symbol" || !isCanonicalArrayIndex(String(k)),
+        )
+      : allKeys;
 
   // Depth-exhausted: Node still shows constructor name and Symbol.toStringTag.
   // - No keys: 'Foo [ABC] {}'
@@ -2485,36 +2976,48 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     if (isArr) {
       const isNullProtoArr = Object.getPrototypeOf(value) === null;
       // Empty plain arrays stay as [] even when depth is exhausted.
-      if (value.length === 0 && !isNullProtoArr) return finish('[]');
+      if (value.length === 0 && !isNullProtoArr) return finish("[]");
       // Empty null-proto arrays: `[Array(0): null prototype] []`.
       if (value.length === 0) {
-        return finish(ctx.stylize('[Array(0): null prototype]', 'special') + ' []');
+        return finish(
+          ctx.stylize("[Array(0): null prototype]", "special") + " []",
+        );
       }
       const ctorName = nodeConstructorName(value)?.name;
-      const arrName = (ctorName && ctorName !== 'Array') ? ctorName : 'Array';
-      const nullSuffix = isNullProtoArr ? ': null prototype' : '';
-      return finish(ctx.stylize(`[${arrName}${nullSuffix}]`, 'special'));
+      const arrName = ctorName && ctorName !== "Array" ? ctorName : "Array";
+      const nullSuffix = isNullProtoArr ? ": null prototype" : "";
+      return finish(ctx.stylize(`[${arrName}${nullSuffix}]`, "special"));
     }
-    if (typeof value === 'function') {
+    if (typeof value === "function") {
       // Node still formats the function base when depth is exhausted
       // (e.g. `[Function (null prototype) (anonymous)]`).
       const fb = getFunctionBase(ctx, value, recurseTimes);
       return finish(fb.base);
     }
-    if (value instanceof RegExp) return finish(ctx.stylize(String(value), 'regexp'));
-    let ctorName = nodeConstructorName(value)?.name || '';
+    if (value instanceof RegExp)
+      return finish(ctx.stylize(String(value), "regexp"));
+    let ctorName = nodeConstructorName(value)?.name || "";
     // For null-prototype objects, V8 knows the constructor via the native bridge.
-    if (!ctorName && Object.getPrototypeOf(value) === null && typeof nativeInspectBridge === 'function') {
+    if (
+      !ctorName &&
+      Object.getPrototypeOf(value) === null &&
+      typeof nativeInspectBridge === "function"
+    ) {
       try {
-        const nativeOut = nativeInspectBridge(value, { depth: -1, colors: false });
+        const nativeOut = nativeInspectBridge(value, {
+          depth: -1,
+          colors: false,
+        });
         const m = /^\[([^:\]]+)(?:: null prototype)?\]/.exec(nativeOut);
         if (m) ctorName = m[1];
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     const tagVal = value[Symbol.toStringTag];
-    let prefix = '';
-    if (ctorName && ctorName !== 'Object') prefix = ctorName;
-    if (typeof tagVal === 'string' && tagVal !== '' && tagVal !== ctorName) {
+    let prefix = "";
+    if (ctorName && ctorName !== "Object") prefix = ctorName;
+    if (typeof tagVal === "string" && tagVal !== "" && tagVal !== ctorName) {
       prefix = prefix ? `${prefix} [${tagVal}]` : `[${tagVal}]`;
     }
     // For null-prototype, Node shows '[Foo: null prototype]' (with brackets if has
@@ -2522,13 +3025,17 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     const isNullProto = Object.getPrototypeOf(value) === null;
     const hasProps = keys.length > 0 || protoProps.length > 0;
     // Empty objects stay as {} even when depth is exhausted.
-    if (!hasProps && !isNullProto && !prefix) return finish('{}');
-    if (!prefix && !isNullProto) return finish(ctx.stylize('[Object]', 'special'));
+    if (!hasProps && !isNullProto && !prefix) return finish("{}");
+    if (!prefix && !isNullProto)
+      return finish(ctx.stylize("[Object]", "special"));
     if (isNullProto) {
       // Base is '[Object: null prototype]' or '[Foo: null prototype]'.
       // The tag [Foo] comes after, not inside.
-      const baseName = (ctorName && ctorName !== 'Object') ? ctorName : 'Object';
-      const tagPart = (typeof tagVal === 'string' && tagVal !== '' && tagVal !== baseName) ? ` [${tagVal}]` : '';
+      const baseName = ctorName && ctorName !== "Object" ? ctorName : "Object";
+      const tagPart =
+        typeof tagVal === "string" && tagVal !== "" && tagVal !== baseName
+          ? ` [${tagVal}]`
+          : "";
       if (hasProps) return finish(`[${baseName}: null prototype]${tagPart}`);
       return finish(`[${baseName}: null prototype]${tagPart} {}`);
     }
@@ -2544,11 +3051,11 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
   const withRefMarker = () => {
     const num = ctx.circularNums.get(value);
     if (num === undefined) return [tag, braces];
-    const ref = ctx.stylize(`<ref *${num}>`, 'special');
+    const ref = ctx.stylize(`<ref *${num}>`, "special");
     if (ctx.options.compact === true) {
       return [tag, [`${ref} ${braces[0]}`, braces[1]]];
     }
-    return [tag === '' ? ref : `${ref} ${tag}`, braces];
+    return [tag === "" ? ref : `${ref} ${tag}`, braces];
   };
   // Cleanup for this path (the ref marker is folded in via withRefMarker(),
   // unlike finish() which appends it afterwards).
@@ -2559,7 +3066,11 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     return s;
   };
 
-  if (keys.length === 0 && protoProps.length === 0 && (!isArr || value.length === 0)) {
+  if (
+    keys.length === 0 &&
+    protoProps.length === 0 &&
+    (!isArr || value.length === 0)
+  ) {
     if (!bracesAlways) return finalize(withRefMarker()[0]);
     const [et, eb] = withRefMarker();
     return finalize(reduceToSingleString(ctx, [], et, eb, level));
@@ -2571,10 +3082,10 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
   let interruptName;
   if (isArr) {
     // braces[0] is '[' or 'Foobar(5) [' for Array subclasses.
-    const paren = braces[0].indexOf('(');
-    interruptName = paren === -1 ? 'Array' : braces[0].slice(0, paren);
+    const paren = braces[0].indexOf("(");
+    interruptName = paren === -1 ? "Array" : braces[0].slice(0, paren);
   } else {
-    interruptName = tag.startsWith('[') ? tag : (tag || 'Object');
+    interruptName = tag.startsWith("[") ? tag : tag || "Object";
   }
 
   // Mirror Node's formatObject: guard the recursive property gathering so a
@@ -2598,20 +3109,31 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       // formatProperty logic would be a no-op: string identifier key,
       // data descriptor, default compact (no indentation tracking),
       // no showHidden brackets, no getter evaluation.
-      const useFastPath = ctx.options.compact !== true &&
-        !ctx.options.showHidden && !ctx.options.getters;
+      const useFastPath =
+        ctx.options.compact !== true &&
+        !ctx.options.showHidden &&
+        !ctx.options.getters;
       for (let i = 0; i < keys.length; i++) {
         const key = keys[i];
-        if (useFastPath && typeof key === 'string' &&
-            /^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key)) {
+        if (
+          useFastPath &&
+          typeof key === "string" &&
+          /^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key)
+        ) {
           let desc;
           try {
             desc = Object.getOwnPropertyDescriptor(value, key);
-          } catch { desc = undefined; }
-          if (desc && 'value' in desc) {
-            output[i] = `${ctx.stylize(key, 'name')}: ` +
-              formatValue(ctx, desc.value,
-                recurseTimes === null ? null : recurseTimes - 1);
+          } catch {
+            desc = undefined;
+          }
+          if (desc && "value" in desc) {
+            output[i] =
+              `${ctx.stylize(key, "name")}: ` +
+              formatValue(
+                ctx,
+                desc.value,
+                recurseTimes === null ? null : recurseTimes - 1,
+              );
             continue;
           }
         }
@@ -2624,11 +3146,12 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     // indices stay in order.
     const sortedOpt = ctx.options.sorted;
     if (sortedOpt) {
-      const comparator = sortedOpt === true || sortedOpt === 'asc'
-        ? undefined
-        : sortedOpt === 'desc'
-          ? (a, b) => (a < b ? 1 : a > b ? -1 : 0)
-          : sortedOpt;
+      const comparator =
+        sortedOpt === true || sortedOpt === "asc"
+          ? undefined
+          : sortedOpt === "desc"
+            ? (a, b) => (a < b ? 1 : a > b ? -1 : 0)
+            : sortedOpt;
       if (isArr) {
         if (output.length - sortStart > 1) {
           const extras = output.slice(sortStart).sort(comparator);
@@ -2651,7 +3174,8 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     if (depthCounted) ctx.depthLevel--;
     return ctx.stylize(
       `[${interruptName}: Inspection interrupted prematurely. Maximum call stack size exceeded.]`,
-      'special');
+      "special",
+    );
   }
   const [effTag, effBraces] = withRefMarker();
   return finalize(reduceToSingleString(ctx, output, effTag, effBraces, level));
@@ -2666,7 +3190,8 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
 export function inspect(object, opts) {
   const options = normalizeInspectOptions(opts);
   // legacy signature: inspect(obj, showHidden, depth, colors)
-  if (arguments.length >= 3 && arguments[2] !== undefined) options.depth = arguments[2];
+  if (arguments.length >= 3 && arguments[2] !== undefined)
+    options.depth = arguments[2];
   if (arguments.length >= 4) options.colors = !!arguments[3];
   const ctx = makeCtx(options);
   const depth = options.depth === undefined ? 2 : options.depth;
@@ -2677,18 +3202,23 @@ export function inspect(object, opts) {
 function normalizeInspectOptions(opts) {
   /** @type {InspectOptions} */
   const options = { ...inspect.defaultOptions };
-  if (typeof opts === 'boolean') options.showHidden = opts;
+  if (typeof opts === "boolean") options.showHidden = opts;
   else if (opts) Object.assign(options, opts);
   if (options.depth === null) options.depth = null;
   // Node quirk: explicitly passing { depth: undefined } means infinite depth,
   // while omitting it uses the default (2).
-  if (opts && typeof opts === 'object' && 'depth' in opts && opts.depth === undefined) {
+  if (
+    opts &&
+    typeof opts === "object" &&
+    "depth" in opts &&
+    opts.depth === undefined
+  ) {
     options.depth = null;
   }
   return options;
 }
 
-inspect.custom = Symbol.for('nodejs.util.inspect.custom');
+inspect.custom = Symbol.for("nodejs.util.inspect.custom");
 inspect.colors = inspectColors;
 inspect.styles = inspectStyles;
 let _defaultOptions = {
@@ -2706,11 +3236,13 @@ let _defaultOptions = {
   numericSeparator: false,
 };
 
-Object.defineProperty(inspect, 'defaultOptions', {
-  get() { return _defaultOptions; },
+Object.defineProperty(inspect, "defaultOptions", {
+  get() {
+    return _defaultOptions;
+  },
   set(value) {
-    if (value === null || typeof value !== 'object') {
-      throw ERR_INVALID_ARG_TYPE('options', 'object', value);
+    if (value === null || typeof value !== "object") {
+      throw ERR_INVALID_ARG_TYPE("options", "object", value);
     }
     _defaultOptions = value;
   },
@@ -2727,17 +3259,19 @@ Object.defineProperty(inspect, 'defaultOptions', {
  * renders as '-0', and numericSeparator inserts '_' groups when enabled.
  */
 function formatNumberPlain(number, inspectOptions) {
-  if (Object.is(number, -0)) return '-0';
-  const numericSeparator = inspectOptions?.numericSeparator ?? inspect.defaultOptions.numericSeparator;
+  if (Object.is(number, -0)) return "-0";
+  const numericSeparator =
+    inspectOptions?.numericSeparator ?? inspect.defaultOptions.numericSeparator;
   if (!numericSeparator) return `${number}`;
   const numberString = String(number);
   const integer = Math.trunc(number);
   if (integer === number) {
-    if (!Number.isFinite(number) || numberString.includes('e')) return numberString;
+    if (!Number.isFinite(number) || numberString.includes("e"))
+      return numberString;
     return addNumericSeparator(numberString);
   }
-  if (Number.isNaN(number) || numberString.includes('e')) return numberString;
-  const decimalIndex = numberString.indexOf('.');
+  if (Number.isNaN(number) || numberString.includes("e")) return numberString;
+  const decimalIndex = numberString.indexOf(".");
   const integerPart = numberString.slice(0, decimalIndex);
   const fractionalPart = numberString.slice(decimalIndex + 1);
   return `${addNumericSeparator(integerPart)}.${addNumericSeparatorEnd(fractionalPart)}`;
@@ -2745,7 +3279,8 @@ function formatNumberPlain(number, inspectOptions) {
 
 function formatBigIntPlain(bigint, inspectOptions) {
   const string = String(bigint);
-  const numericSeparator = inspectOptions?.numericSeparator ?? inspect.defaultOptions.numericSeparator;
+  const numericSeparator =
+    inspectOptions?.numericSeparator ?? inspect.defaultOptions.numericSeparator;
   if (!numericSeparator) return `${string}n`;
   return `${addNumericSeparator(string)}n`;
 }
@@ -2754,8 +3289,8 @@ function tryStringify(arg) {
   try {
     return JSON.stringify(arg);
   } catch (err) {
-    if (err && err.name === 'TypeError' && /circular/i.test(err.message)) {
-      return '[Circular]';
+    if (err && err.name === "TypeError" && /circular/i.test(err.message)) {
+      return "[Circular]";
     }
     throw err;
   }
@@ -2769,7 +3304,9 @@ function tryStringify(arg) {
  */
 // Set of built-in constructor names (for hasBuiltInToString).
 const builtInObjects = new Set(
-  Object.getOwnPropertyNames(globalThis).filter((e) => /^[A-Z][a-zA-Z0-9]+$/.test(e))
+  Object.getOwnPropertyNames(globalThis).filter((e) =>
+    /^[A-Z][a-zA-Z0-9]+$/.test(e),
+  ),
 );
 
 function hasBuiltInToString(value) {
@@ -2778,16 +3315,16 @@ function hasBuiltInToString(value) {
   let hasOwnToPrimitive = hasOwn;
   const returnFalse = () => false;
 
-  if (typeof value.toString !== 'function') {
-    if (typeof value[Symbol.toPrimitive] !== 'function') {
+  if (typeof value.toString !== "function") {
+    if (typeof value[Symbol.toPrimitive] !== "function") {
       return true;
     } else if (hasOwn(value, Symbol.toPrimitive)) {
       return false;
     }
     hasOwnToString = returnFalse;
-  } else if (hasOwn(value, 'toString')) {
+  } else if (hasOwn(value, "toString")) {
     return false;
-  } else if (typeof value[Symbol.toPrimitive] !== 'function') {
+  } else if (typeof value[Symbol.toPrimitive] !== "function") {
     hasOwnToPrimitive = returnFalse;
   } else if (hasOwn(value, Symbol.toPrimitive)) {
     return false;
@@ -2798,17 +3335,24 @@ function hasBuiltInToString(value) {
   let pointer = value;
   do {
     pointer = PrimordialObjectGetPrototypeOf(pointer);
-  } while (pointer !== null &&
-           !hasOwnToString(pointer, 'toString') &&
-           !hasOwnToPrimitive(pointer, Symbol.toPrimitive));
+  } while (
+    pointer !== null &&
+    !hasOwnToString(pointer, "toString") &&
+    !hasOwnToPrimitive(pointer, Symbol.toPrimitive)
+  );
 
   if (pointer === null) return true;
 
   // Check if the object is a built-in.
-  const descriptor = PrimordialObjectGetOwnPropertyDescriptor(pointer, 'constructor');
-  return descriptor !== undefined &&
-    typeof descriptor.value === 'function' &&
-    builtInObjects.has(descriptor.value.name);
+  const descriptor = PrimordialObjectGetOwnPropertyDescriptor(
+    pointer,
+    "constructor",
+  );
+  return (
+    descriptor !== undefined &&
+    typeof descriptor.value === "function" &&
+    builtInObjects.has(descriptor.value.name)
+  );
 }
 
 /**
@@ -2820,10 +3364,10 @@ function hasBuiltInToString(value) {
 function formatWithOptionsInternal(inspectOptions, args) {
   const first = args[0];
   let a = 0;
-  let str = '';
-  let join = '';
+  let str = "";
+  let join = "";
 
-  if (typeof first === 'string') {
+  if (typeof first === "string") {
     if (args.length === 1) {
       return first;
     }
@@ -2831,19 +3375,23 @@ function formatWithOptionsInternal(inspectOptions, args) {
     let lastPos = 0;
 
     for (let i = 0; i < first.length - 1; i++) {
-      if (first.charCodeAt(i) === 37) { // '%'
+      if (first.charCodeAt(i) === 37) {
+        // '%'
         const nextChar = first.charCodeAt(++i);
         if (a + 1 !== args.length) {
           switch (nextChar) {
-            case 115: { // 's'
+            case 115: {
+              // 's'
               const tempArg = args[++a];
-              if (typeof tempArg === 'number') {
+              if (typeof tempArg === "number") {
                 tempStr = formatNumberPlain(tempArg, inspectOptions);
-              } else if (typeof tempArg === 'bigint') {
+              } else if (typeof tempArg === "bigint") {
                 tempStr = formatBigIntPlain(tempArg, inspectOptions);
-              } else if (typeof tempArg !== 'object' ||
-                         tempArg === null ||
-                         !hasBuiltInToString(tempArg)) {
+              } else if (
+                typeof tempArg !== "object" ||
+                tempArg === null ||
+                !hasBuiltInToString(tempArg)
+              ) {
                 tempStr = String(tempArg);
               } else {
                 tempStr = inspect(tempArg, {
@@ -2858,12 +3406,13 @@ function formatWithOptionsInternal(inspectOptions, args) {
             case 106: // 'j'
               tempStr = tryStringify(args[++a]);
               break;
-            case 100: { // 'd'
+            case 100: {
+              // 'd'
               const tempNum = args[++a];
-              if (typeof tempNum === 'bigint') {
+              if (typeof tempNum === "bigint") {
                 tempStr = formatBigIntPlain(tempNum, inspectOptions);
-              } else if (typeof tempNum === 'symbol') {
-                tempStr = 'NaN';
+              } else if (typeof tempNum === "symbol") {
+                tempStr = "NaN";
               } else {
                 tempStr = formatNumberPlain(Number(tempNum), inspectOptions);
               }
@@ -2880,31 +3429,37 @@ function formatWithOptionsInternal(inspectOptions, args) {
                 depth: 4,
               });
               break;
-            case 105: { // 'i'
+            case 105: {
+              // 'i'
               const tempInteger = args[++a];
-              if (typeof tempInteger === 'bigint') {
+              if (typeof tempInteger === "bigint") {
                 tempStr = formatBigIntPlain(tempInteger, inspectOptions);
-              } else if (typeof tempInteger === 'symbol') {
-                tempStr = 'NaN';
+              } else if (typeof tempInteger === "symbol") {
+                tempStr = "NaN";
               } else {
                 tempStr = formatNumberPlain(
-                  parseInt(tempInteger), inspectOptions);
+                  parseInt(tempInteger),
+                  inspectOptions,
+                );
               }
               break;
             }
-            case 102: { // 'f'
+            case 102: {
+              // 'f'
               const tempFloat = args[++a];
-              if (typeof tempFloat === 'symbol') {
-                tempStr = 'NaN';
+              if (typeof tempFloat === "symbol") {
+                tempStr = "NaN";
               } else {
                 tempStr = formatNumberPlain(
-                  parseFloat(tempFloat), inspectOptions);
+                  parseFloat(tempFloat),
+                  inspectOptions,
+                );
               }
               break;
             }
             case 99: // 'c'
               a += 1;
-              tempStr = '';
+              tempStr = "";
               break;
             case 37: // '%'
               str += first.slice(lastPos, i);
@@ -2926,7 +3481,7 @@ function formatWithOptionsInternal(inspectOptions, args) {
     }
     if (lastPos !== 0) {
       a++;
-      join = ' ';
+      join = " ";
       if (lastPos < first.length) {
         str += first.slice(lastPos);
       }
@@ -2936,8 +3491,8 @@ function formatWithOptionsInternal(inspectOptions, args) {
   while (a < args.length) {
     const value = args[a];
     str += join;
-    str += typeof value !== 'string' ? inspect(value, inspectOptions) : value;
-    join = ' ';
+    str += typeof value !== "string" ? inspect(value, inspectOptions) : value;
+    join = " ";
     a++;
   }
   return str;
@@ -2951,7 +3506,7 @@ function formatWithOptionsInternal(inspectOptions, args) {
  * @returns {string}
  */
 export function format(f, ...args) {
-  if (arguments.length === 0) return '';
+  if (arguments.length === 0) return "";
   return formatWithOptionsInternal(undefined, [f, ...args]);
 }
 
@@ -2964,8 +3519,8 @@ export function format(f, ...args) {
  * @returns {string}
  */
 export function formatWithOptions(inspectOptions, f, ...args) {
-  validateObject(inspectOptions, 'inspectOptions');
-  if (arguments.length === 1) return '';
+  validateObject(inspectOptions, "inspectOptions");
+  if (arguments.length === 1) return "";
   return formatWithOptionsInternal(inspectOptions, [f, ...args]);
 }
 
@@ -2979,10 +3534,10 @@ export function formatWithOptions(inspectOptions, f, ...args) {
  * @param {any} stream
  */
 function shouldColorize(stream) {
-  const env = (typeof process !== 'undefined' && process.env) || {};
-  if ('NO_COLOR' in env) return false;
-  if (env.FORCE_COLOR !== undefined) return env.FORCE_COLOR !== '0';
-  if (env.TERM === 'dumb') return false;
+  const env = (typeof process !== "undefined" && process.env) || {};
+  if ("NO_COLOR" in env) return false;
+  if (env.FORCE_COLOR !== undefined) return env.FORCE_COLOR !== "0";
+  if (env.TERM === "dumb") return false;
   return !(stream && stream.isTTY === false);
 }
 
@@ -2999,74 +3554,112 @@ export function styleText(format, text, options) {
   const validateStream = options?.validateStream ?? true;
 
   // Fast path: single format string with validateStream=false
-  if (!validateStream && typeof format === 'string' && typeof text === 'string') {
+  if (
+    !validateStream &&
+    typeof format === "string" &&
+    typeof text === "string"
+  ) {
     const cache = getStyleCache();
-    if (format === 'none') return text;
+    if (format === "none") return text;
     const style = cache[format];
     if (style !== undefined) {
-      const processed = replaceCloseCode(text, style.closeSeq, style.openSeq, style.keepClose);
+      const processed = replaceCloseCode(
+        text,
+        style.closeSeq,
+        style.openSeq,
+        style.keepClose,
+      );
       return style.openSeq + processed + style.closeSeq;
     }
-    if (format[0] === '#') {
+    if (format[0] === "#") {
       let hexStyle = hexStyleCache.get(format);
-      if (hexStyle === undefined && hexColorRegExp.test(format)) hexStyle = getHexStyle(format);
+      if (hexStyle === undefined && hexColorRegExp.test(format))
+        hexStyle = getHexStyle(format);
       if (hexStyle !== undefined) {
-        const processed = replaceCloseCode(text, hexStyle.closeSeq, hexStyle.openSeq, false);
+        const processed = replaceCloseCode(
+          text,
+          hexStyle.closeSeq,
+          hexStyle.openSeq,
+          false,
+        );
         return hexStyle.openSeq + processed + hexStyle.closeSeq;
       }
     }
   }
 
-  validateString(text, 'text');
-  if (options !== undefined) validateObject(options, 'options');
-  validateBoolean(validateStream, 'options.validateStream');
+  validateString(text, "text");
+  if (options !== undefined) validateObject(options, "options");
+  validateBoolean(validateStream, "options.validateStream");
 
   let skipColorize;
   if (validateStream) {
     const stream = options?.stream ?? process.stdout;
-    const isReadableStream = stream !== null && typeof stream === 'object' &&
-      typeof stream.getReader === 'function';
-    const isWritableStream = stream !== null && typeof stream === 'object' &&
-      typeof stream.getWriter === 'function';
-    const isNodeStream = stream !== null &&
-      (typeof stream === 'object' || typeof stream === 'function') &&
-      typeof stream.pipe === 'function';
+    const isReadableStream =
+      stream !== null &&
+      typeof stream === "object" &&
+      typeof stream.getReader === "function";
+    const isWritableStream =
+      stream !== null &&
+      typeof stream === "object" &&
+      typeof stream.getWriter === "function";
+    const isNodeStream =
+      stream !== null &&
+      (typeof stream === "object" || typeof stream === "function") &&
+      typeof stream.pipe === "function";
     if (!isReadableStream && !isWritableStream && !isNodeStream) {
-      throw ERR_INVALID_ARG_TYPE('stream', ['ReadableStream', 'WritableStream', 'Stream'], stream);
+      throw ERR_INVALID_ARG_TYPE(
+        "stream",
+        ["ReadableStream", "WritableStream", "Stream"],
+        stream,
+      );
     }
     skipColorize = !shouldColorize(stream);
   }
 
   const formatArray = Array.isArray(format) ? format : [format];
 
-  let openCodes = '';
-  let closeCodes = '';
+  let openCodes = "";
+  let closeCodes = "";
   let processedText = text;
 
   for (const key of formatArray) {
-    if (key === 'none') continue;
+    if (key === "none") continue;
 
-    if (typeof key === 'string' && key[0] === '#') {
+    if (typeof key === "string" && key[0] === "#") {
       if (!hexColorRegExp.test(key)) {
-        throw ERR_INVALID_ARG_VALUE('format', key, 'must be a valid hex color (#RGB or #RRGGBB)');
+        throw ERR_INVALID_ARG_VALUE(
+          "format",
+          key,
+          "must be a valid hex color (#RGB or #RRGGBB)",
+        );
       }
       if (skipColorize) continue;
       const [r, g, b] = hexToRgb(key);
       const hexOpenSeq = `${kEscape}${rgbToAnsi24Bit(r, g, b)}${kEscapeEnd}`;
       openCodes += hexOpenSeq;
       closeCodes = kHexCloseSeq + closeCodes;
-      processedText = replaceCloseCode(processedText, kHexCloseSeq, hexOpenSeq, false);
+      processedText = replaceCloseCode(
+        processedText,
+        kHexCloseSeq,
+        hexOpenSeq,
+        false,
+      );
       continue;
     }
 
     const codes = inspectColors[key];
     if (!codes) {
-      validateOneOf(key, 'format', Object.getOwnPropertyNames(inspectColors));
+      validateOneOf(key, "format", Object.getOwnPropertyNames(inspectColors));
     }
     const { openSeq, closeSeq, keepClose } = codesToStyle(codes);
     openCodes += openSeq;
     closeCodes = closeSeq + closeCodes;
-    processedText = replaceCloseCode(processedText, closeSeq, openSeq, keepClose);
+    processedText = replaceCloseCode(
+      processedText,
+      closeSeq,
+      openSeq,
+      keepClose,
+    );
   }
 
   if (skipColorize) return text;
@@ -3094,18 +3687,18 @@ const codesWarned = new PrimordialSet();
  */
 function getDeprecationWarningEmitter(code, msg, deprecated) {
   let warned = false;
-  return function() {
+  return function () {
     if (!warned) {
       warned = true;
-      if (code === 'ExperimentalWarning') {
+      if (code === "ExperimentalWarning") {
         process.emitWarning(msg, code, deprecated);
       } else if (code !== undefined) {
         if (!codesWarned.has(code)) {
-          process.emitWarning(msg, 'DeprecationWarning', code, deprecated);
+          process.emitWarning(msg, "DeprecationWarning", code, deprecated);
           codesWarned.add(code);
         }
       } else {
-        process.emitWarning(msg, 'DeprecationWarning', deprecated);
+        process.emitWarning(msg, "DeprecationWarning", deprecated);
       }
     }
   };
@@ -3120,10 +3713,14 @@ function getDeprecationWarningEmitter(code, msg, deprecated) {
  */
 function internalDeprecate(fn, msg, code, modifyPrototype = true) {
   if (code !== undefined) {
-    validateString(code, 'code');
+    validateString(code, "code");
   }
 
-  const emitDeprecationWarning = getDeprecationWarningEmitter(code, msg, deprecated);
+  const emitDeprecationWarning = getDeprecationWarningEmitter(
+    code,
+    msg,
+    deprecated,
+  );
 
   // use `function` instead of arrow to properly support `new` calls
   function deprecated(...args) {
@@ -3145,9 +3742,9 @@ function internalDeprecate(fn, msg, code, modifyPrototype = true) {
       deprecated.prototype = fn.prototype;
     }
 
-    PrimordialObjectDefineProperty(deprecated, 'length', {
+    PrimordialObjectDefineProperty(deprecated, "length", {
       __proto__: null,
-      ...PrimordialObjectGetOwnPropertyDescriptor(fn, 'length'),
+      ...PrimordialObjectGetOwnPropertyDescriptor(fn, "length"),
     });
   }
 
@@ -3163,9 +3760,9 @@ function internalDeprecate(fn, msg, code, modifyPrototype = true) {
  * @returns {Function}
  */
 export function deprecate(fn, msg, code, { modifyPrototype } = {}) {
-  validateFunction(fn, 'fn');
+  validateFunction(fn, "fn");
   if (msg !== undefined) {
-    validateString(msg, 'msg');
+    validateString(msg, "msg");
   }
   return internalDeprecate(fn, msg, code, modifyPrototype);
 }
@@ -3181,11 +3778,17 @@ const debugs = {};
 
 function initializeDebugLog() {
   debugEnvInitialized = true;
-  const debugEnv = (typeof process !== 'undefined' && process.env && process.env.NODE_DEBUG) || '';
-  const parts = debugEnv.split(',').map((v) => v.trim())
+  const debugEnv =
+    (typeof process !== "undefined" && process.env && process.env.NODE_DEBUG) ||
+    "";
+  const parts = debugEnv
+    .split(",")
+    .map((v) => v.trim())
     .filter((v) => v.length > 0)
-    .map((v) => v.replace(/[|\\{}()[\]^$+?.]/g, '\\$&').replace(/\*/g, '.*'));
-  debugEnvRegex = parts.length ? new RegExp(`^(?:${parts.join('|')})$`, 'i') : /^$/;
+    .map((v) => v.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*"));
+  debugEnvRegex = parts.length
+    ? new RegExp(`^(?:${parts.join("|")})$`, "i")
+    : /^$/;
 }
 
 /**
@@ -3193,11 +3796,13 @@ function initializeDebugLog() {
  * @param {string} section
  */
 function debuglogImpl(enabled, section) {
-  const d = /** @type {any} */ ((...args) => {
-    const msg = format(...args);
-    const pid = (typeof process !== 'undefined' && process.pid) || 0;
-    console.error(`${section} ${pid}: ${msg}`);
-  });
+  const d = /** @type {any} */ (
+    (...args) => {
+      const msg = format(...args);
+      const pid = (typeof process !== "undefined" && process.pid) || 0;
+      console.error(`${section} ${pid}: ${msg}`);
+    }
+  );
   d.enabled = enabled;
   return d;
 }
@@ -3211,8 +3816,8 @@ function debuglogImpl(enabled, section) {
  * @returns {((...args: any[]) => void) & { enabled: boolean }}
  */
 export function debuglog(set, callback) {
-  validateString(set, 'section');
-  if (callback !== undefined) validateFunction(callback, 'callback');
+  validateString(set, "section");
+  if (callback !== undefined) validateFunction(callback, "callback");
   if (!debugEnvInitialized) initializeDebugLog();
   const section = StringPrototypeToUpperCase(set);
   let d = debugs[section];
@@ -3242,13 +3847,17 @@ export const debug = debuglog;
  */
 export function inherits(ctor, superCtor) {
   if (ctor === undefined || ctor === null)
-    throw ERR_INVALID_ARG_TYPE('ctor', 'Function', ctor);
+    throw ERR_INVALID_ARG_TYPE("ctor", "Function", ctor);
   if (superCtor === undefined || superCtor === null)
-    throw ERR_INVALID_ARG_TYPE('superCtor', 'Function', superCtor);
+    throw ERR_INVALID_ARG_TYPE("superCtor", "Function", superCtor);
   if (superCtor.prototype === undefined)
-    throw ERR_INVALID_ARG_TYPE('superCtor.prototype', 'Object', superCtor.prototype);
+    throw ERR_INVALID_ARG_TYPE(
+      "superCtor.prototype",
+      "Object",
+      superCtor.prototype,
+    );
 
-  Object.defineProperty(ctor, 'super_', {
+  Object.defineProperty(ctor, "super_", {
     value: superCtor,
     writable: true,
     configurable: true,
@@ -3260,8 +3869,10 @@ export function inherits(ctor, superCtor) {
 // promisify / callbackify
 // ---------------------------------------------------------------------------
 
-const kCustomPromisifiedSymbol = Symbol.for('nodejs.util.promisify.custom');
-const kCustomPromisifyArgsSymbol = Symbol.for('nodejs.util.promisify.customArgs');
+const kCustomPromisifiedSymbol = Symbol.for("nodejs.util.promisify.custom");
+const kCustomPromisifyArgsSymbol = Symbol.for(
+  "nodejs.util.promisify.customArgs",
+);
 
 /**
  * Takes a function following the common error-first callback style
@@ -3272,15 +3883,15 @@ const kCustomPromisifyArgsSymbol = Symbol.for('nodejs.util.promisify.customArgs'
  * @returns {(...args: any[]) => Promise<T>}
  */
 export function promisify(original) {
-  if (typeof original !== 'function') {
-    throw ERR_INVALID_ARG_TYPE('original', 'Function', original);
+  if (typeof original !== "function") {
+    throw ERR_INVALID_ARG_TYPE("original", "Function", original);
   }
 
   if (original[kCustomPromisifiedSymbol]) {
     const fn = original[kCustomPromisifiedSymbol];
 
-    if (typeof fn !== 'function') {
-      throw ERR_INVALID_ARG_TYPE('util.promisify.custom', 'Function', fn);
+    if (typeof fn !== "function") {
+      throw ERR_INVALID_ARG_TYPE("util.promisify.custom", "Function", fn);
     }
 
     PrimordialObjectDefineProperty(fn, kCustomPromisifiedSymbol, {
@@ -3296,11 +3907,15 @@ export function promisify(original) {
   // Names to create an object from in case the callback receives multiple
   // arguments, e.g. ['bytesRead', 'buffer'] for fs.read.
   // Also supports the legacy internal customPromisifyArgs symbol.
-  const legacySymbol = typeof Symbol === 'function'
-    ? PrimordialObjectGetOwnPropertySymbols(original).find(
-        (s) => typeof s === 'symbol' && s.description === 'customPromisifyArgs')
-    : undefined;
-  const argumentNames = original[kCustomPromisifyArgsSymbol] ??
+  const legacySymbol =
+    typeof Symbol === "function"
+      ? PrimordialObjectGetOwnPropertySymbols(original).find(
+          (s) =>
+            typeof s === "symbol" && s.description === "customPromisifyArgs",
+        )
+      : undefined;
+  const argumentNames =
+    original[kCustomPromisifyArgsSymbol] ??
     (legacySymbol ? original[legacySymbol] : undefined);
 
   // Create a new function that will just call `original`.
@@ -3332,15 +3947,20 @@ export function promisify(original) {
       // 'warning' listener, so stderr output and --no-deprecation handling
       // are preserved, and listeners observe the warning before promise
       // continuations, matching Node's delivery order.
-      if (promise !== null && typeof promise === 'object' && typeof promise.then === 'function' &&
-          typeof process !== 'undefined') {
+      if (
+        promise !== null &&
+        typeof promise === "object" &&
+        typeof promise.then === "function" &&
+        typeof process !== "undefined"
+      ) {
         const warning = new Error(
-          'Calling promisify on a function that returns a Promise is likely a mistake.');
-        warning.name = 'DeprecationWarning';
-        warning.code = 'DEP0174';
-        if (typeof process.emit === 'function') {
-          process.emit('warning', warning);
-        } else if (typeof process.emitWarning === 'function') {
+          "Calling promisify on a function that returns a Promise is likely a mistake.",
+        );
+        warning.name = "DeprecationWarning";
+        warning.code = "DEP0174";
+        if (typeof process.emit === "function") {
+          process.emit("warning", warning);
+        } else if (typeof process.emitWarning === "function") {
           process.emitWarning(warning.message, warning.name, warning.code);
         }
       }
@@ -3356,7 +3976,10 @@ export function promisify(original) {
     writable: false,
     configurable: true,
   });
-  return PrimordialObjectDefineProperties(fn, PrimordialObjectGetOwnPropertyDescriptors(original));
+  return PrimordialObjectDefineProperties(
+    fn,
+    PrimordialObjectGetOwnPropertyDescriptors(original),
+  );
 }
 
 promisify.custom = kCustomPromisifiedSymbol;
@@ -3368,11 +3991,15 @@ promisify.custom = kCustomPromisifiedSymbol;
 function getCustomPromisifyArgs(original, values) {
   // The legacy internal symbol is keyed by description; find it without a
   // hard dependency on internal modules.
-  const legacySymbol = typeof Symbol === 'function'
-    ? PrimordialObjectGetOwnPropertySymbols(original).find(
-        (s) => typeof s === 'symbol' && s.description === 'customPromisifyArgs')
-    : undefined;
-  const customArgs = original[kCustomPromisifyArgsSymbol] ??
+  const legacySymbol =
+    typeof Symbol === "function"
+      ? PrimordialObjectGetOwnPropertySymbols(original).find(
+          (s) =>
+            typeof s === "symbol" && s.description === "customPromisifyArgs",
+        )
+      : undefined;
+  const customArgs =
+    original[kCustomPromisifyArgsSymbol] ??
     (legacySymbol ? original[legacySymbol] : undefined);
   if (customArgs !== undefined) {
     values = PrimordialArrayPrototypeMap(customArgs, (arg, i) => values[i]);
@@ -3386,8 +4013,8 @@ function getCustomPromisifyArgs(original, values) {
  */
 class FalsyValueRejectionError extends Error {
   constructor(reason) {
-    super('Promise was rejected with falsy value');
-    this.code = 'ERR_FALSY_VALUE_REJECTION';
+    super("Promise was rejected with falsy value");
+    this.code = "ERR_FALSY_VALUE_REJECTION";
     this.reason = reason;
   }
 }
@@ -3397,7 +4024,7 @@ function callbackifyOnRejected(reason, cb) {
   if (!reason) {
     reason = new FalsyValueRejectionError(reason);
     // Hide the internal frame, matching node's captureStackTrace behavior.
-    if (typeof Error.captureStackTrace === 'function') {
+    if (typeof Error.captureStackTrace === "function") {
       Error.captureStackTrace(reason, callbackifyOnRejected);
     }
   }
@@ -3411,8 +4038,8 @@ function callbackifyOnRejected(reason, cb) {
  * @returns {(...args: [...any[], (err:any, val?:any)=>void]) => void}
  */
 export function callbackify(original) {
-  if (typeof original !== 'function') {
-    throw ERR_INVALID_ARG_TYPE('original', 'Function', original);
+  if (typeof original !== "function") {
+    throw ERR_INVALID_ARG_TYPE("original", "Function", original);
   }
 
   // We DO NOT return the promise as it gives the user a false sense that
@@ -3420,8 +4047,8 @@ export function callbackify(original) {
   // and that the callback did not execute correctly.
   function callbackified(...args) {
     const maybeCb = PrimordialArrayPrototypePop(args);
-    if (typeof maybeCb !== 'function') {
-      throw ERR_INVALID_ARG_TYPE('last argument', 'Function', maybeCb);
+    if (typeof maybeCb !== "function") {
+      throw ERR_INVALID_ARG_TYPE("last argument", "Function", maybeCb);
     }
     const self = this;
     // In true node.js fashion, the callback will always be invoked
@@ -3438,11 +4065,11 @@ export function callbackify(original) {
   }
 
   const descriptors = PrimordialObjectGetOwnPropertyDescriptors(original);
-  if (typeof descriptors.length.value === 'number') {
+  if (typeof descriptors.length.value === "number") {
     descriptors.length.value++;
   }
-  if (typeof descriptors.name.value === 'string') {
-    descriptors.name.value += 'Callbackified';
+  if (typeof descriptors.name.value === "string") {
+    descriptors.name.value += "Callbackified";
   }
   PrimordialObjectDefineProperties(callbackified, descriptors);
   return callbackified;
@@ -3460,25 +4087,35 @@ function deepEqualInner(a, b, seen, skipPrototype) {
   if (a === b) return a !== 0 || 1 / a === 1 / b; // 0 !== -0
   if (Number.isNaN(a) && Number.isNaN(b)) return true; // NaN equals NaN
   if (typeof a !== typeof b) return false;
-  if (typeof a !== 'object' || a === null || b === null) return false;
+  if (typeof a !== "object" || a === null || b === null) return false;
 
   // boxed primitives: same brand and same unboxed value (Object.is for
   // numbers to preserve -0/NaN, identity for symbols), then fall through to
   // key comparison so extra own properties are still checked.
   if (isBoxedPrimitiveValue(a) || isBoxedPrimitiveValue(b)) {
     if (!isBoxedPrimitiveValue(a) || !isBoxedPrimitiveValue(b)) return false;
-    const brandA = types.isNumberObject(a) ? 'number' :
-      types.isStringObject(a) ? 'string' :
-      types.isBooleanObject(a) ? 'boolean' :
-      types.isBigIntObject(a) ? 'bigint' : 'symbol';
-    const brandB = types.isNumberObject(b) ? 'number' :
-      types.isStringObject(b) ? 'string' :
-      types.isBooleanObject(b) ? 'boolean' :
-      types.isBigIntObject(b) ? 'bigint' : 'symbol';
+    const brandA = types.isNumberObject(a)
+      ? "number"
+      : types.isStringObject(a)
+        ? "string"
+        : types.isBooleanObject(a)
+          ? "boolean"
+          : types.isBigIntObject(a)
+            ? "bigint"
+            : "symbol";
+    const brandB = types.isNumberObject(b)
+      ? "number"
+      : types.isStringObject(b)
+        ? "string"
+        : types.isBooleanObject(b)
+          ? "boolean"
+          : types.isBigIntObject(b)
+            ? "bigint"
+            : "symbol";
     if (brandA !== brandB) return false;
     const va = a.valueOf();
     const vb = b.valueOf();
-    if (brandA === 'number') {
+    if (brandA === "number") {
       if (!Object.is(va, vb)) return false;
     } else if (va !== vb) {
       return false;
@@ -3489,15 +4126,22 @@ function deepEqualInner(a, b, seen, skipPrototype) {
   // cycle guard for distinct references
   let pairs = seen.get(a);
   if (pairs !== undefined && pairs.has(b)) return true;
-  if (pairs === undefined) { pairs = new Set(); seen.set(a, pairs); }
+  if (pairs === undefined) {
+    pairs = new Set();
+    seen.set(a, pairs);
+  }
   pairs.add(b);
 
   if (types.isDate(a) || types.isDate(b)) {
     return types.isDate(a) && types.isDate(b) && a.getTime() === b.getTime();
   }
   if (types.isRegExp(a) || types.isRegExp(b)) {
-    return types.isRegExp(a) && types.isRegExp(b) &&
-           a.source === b.source && a.flags === b.flags;
+    return (
+      types.isRegExp(a) &&
+      types.isRegExp(b) &&
+      a.source === b.source &&
+      a.flags === b.flags
+    );
   }
   if (ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
     if (!(ArrayBuffer.isView(a) && ArrayBuffer.isView(b))) return false;
@@ -3512,7 +4156,8 @@ function deepEqualInner(a, b, seen, skipPrototype) {
   } else if (types.isAnyArrayBuffer(a) || types.isAnyArrayBuffer(b)) {
     if (!(types.isAnyArrayBuffer(a) && types.isAnyArrayBuffer(b))) return false;
     if (a.byteLength !== b.byteLength) return false;
-    const ua = new Uint8Array(a), ub = new Uint8Array(b);
+    const ua = new Uint8Array(a),
+      ub = new Uint8Array(b);
     for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return false;
     // Fall through to key comparison for extra own properties.
   }
@@ -3520,7 +4165,12 @@ function deepEqualInner(a, b, seen, skipPrototype) {
     if (!(types.isNativeError(a) && types.isNativeError(b))) return false;
     if (a.name !== b.name || a.message !== b.message) return false;
   }
-  if (types.isWeakMap(a) || types.isWeakSet(a) || types.isWeakMap(b) || types.isWeakSet(b)) {
+  if (
+    types.isWeakMap(a) ||
+    types.isWeakSet(a) ||
+    types.isWeakMap(b) ||
+    types.isWeakSet(b)
+  ) {
     return false; // cannot compare contents
   }
   if (types.isMap(a) || types.isMap(b)) {
@@ -3533,8 +4183,12 @@ function deepEqualInner(a, b, seen, skipPrototype) {
       for (let i = 0; i < bEntries.length; i++) {
         if (used[i]) continue;
         const [kb, vb] = bEntries[i];
-        if (deepEqualInner(ka, kb, seen, skipPrototype) && deepEqualInner(va, vb, seen, skipPrototype)) {
-          used[i] = true; continue outer;
+        if (
+          deepEqualInner(ka, kb, seen, skipPrototype) &&
+          deepEqualInner(va, vb, seen, skipPrototype)
+        ) {
+          used[i] = true;
+          continue outer;
         }
       }
       return false;
@@ -3550,21 +4204,27 @@ function deepEqualInner(a, b, seen, skipPrototype) {
     outer: for (const va of aVals) {
       for (let i = 0; i < bVals.length; i++) {
         if (used[i]) continue;
-        if (deepEqualInner(va, bVals[i], seen, skipPrototype)) { used[i] = true; continue outer; }
+        if (deepEqualInner(va, bVals[i], seen, skipPrototype)) {
+          used[i] = true;
+          continue outer;
+        }
       }
       return false;
     }
     return true;
   }
 
-  const aIsArr = Array.isArray(a), bIsArr = Array.isArray(b);
+  const aIsArr = Array.isArray(a),
+    bIsArr = Array.isArray(b);
   if (aIsArr !== bIsArr) return false;
   if (aIsArr && bIsArr) {
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
-      const aHas = hasOwn(a, i), bHas = hasOwn(b, i);
+      const aHas = hasOwn(a, i),
+        bHas = hasOwn(b, i);
       if (aHas !== bHas) return false;
-      if (aHas && !deepEqualInner(a[i], b[i], seen, skipPrototype)) return false;
+      if (aHas && !deepEqualInner(a[i], b[i], seen, skipPrototype))
+        return false;
     }
   } else if (!skipPrototype) {
     if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
@@ -3573,13 +4233,18 @@ function deepEqualInner(a, b, seen, skipPrototype) {
   const aKeys = PrimordialObjectKeys(a);
   const bKeys = PrimordialObjectKeys(b);
   // In strict mode, enumerable symbol keys are also compared.
-  const aSymbols = PrimordialObjectGetOwnPropertySymbols(a).filter((s) =>
-    PrimordialObjectPrototypeHasOwnProperty(a, s) &&
-    PrimordialObjectGetOwnPropertyDescriptor(a, s).enumerable);
-  const bSymbols = PrimordialObjectGetOwnPropertySymbols(b).filter((s) =>
-    PrimordialObjectPrototypeHasOwnProperty(b, s) &&
-    PrimordialObjectGetOwnPropertyDescriptor(b, s).enumerable);
-  if (aKeys.length !== bKeys.length || aSymbols.length !== bSymbols.length) return false;
+  const aSymbols = PrimordialObjectGetOwnPropertySymbols(a).filter(
+    (s) =>
+      PrimordialObjectPrototypeHasOwnProperty(a, s) &&
+      PrimordialObjectGetOwnPropertyDescriptor(a, s).enumerable,
+  );
+  const bSymbols = PrimordialObjectGetOwnPropertySymbols(b).filter(
+    (s) =>
+      PrimordialObjectPrototypeHasOwnProperty(b, s) &&
+      PrimordialObjectGetOwnPropertyDescriptor(b, s).enumerable,
+  );
+  if (aKeys.length !== bKeys.length || aSymbols.length !== bSymbols.length)
+    return false;
   for (const k of aKeys) {
     if (!hasOwn(b, k)) return false;
     if (!deepEqualInner(a[k], b[k], seen, skipPrototype)) return false;
@@ -3608,132 +4273,134 @@ export function isDeepStrictEqual(a, b, skipPrototype = false) {
 // ---------------------------------------------------------------------------
 
 /** @type {Map<number, [string, string]>} */
-const systemErrorMap = new Map(Object.entries({
-  1: ['EPERM', 'operation not permitted'],
-  2: ['ENOENT', 'no such file or directory'],
-  3: ['ESRCH', 'no such process'],
-  4: ['EINTR', 'interrupted system call'],
-  5: ['EIO', 'i/o error'],
-  6: ['ENXIO', 'no such device or address'],
-  7: ['E2BIG', 'argument list too long'],
-  8: ['ENOEXEC', 'exec format error'],
-  9: ['EBADF', 'bad file descriptor'],
-  10: ['ECHILD', 'no child processes'],
-  11: ['EAGAIN', 'resource temporarily unavailable'],
-  12: ['ENOMEM', 'not enough memory'],
-  13: ['EACCES', 'permission denied'],
-  14: ['EFAULT', 'bad address'],
-  16: ['EBUSY', 'resource busy or locked'],
-  17: ['EEXIST', 'file already exists'],
-  18: ['EXDEV', 'cross-device link not permitted'],
-  19: ['ENODEV', 'no such device'],
-  20: ['ENOTDIR', 'not a directory'],
-  21: ['EISDIR', 'is a directory'],
-  22: ['EINVAL', 'invalid argument'],
-  23: ['ENFILE', 'too many open files in system'],
-  24: ['EMFILE', 'too many open files'],
-  25: ['ENOTTY', 'inappropriate ioctl for device'],
-  26: ['ETXTBSY', 'text file is busy'],
-  27: ['EFBIG', 'file too large'],
-  28: ['ENOSPC', 'no space left on device'],
-  29: ['ESPIPE', 'illegal seek'],
-  30: ['EROFS', 'read-only file system'],
-  31: ['EMLINK', 'too many links'],
-  32: ['EPIPE', 'broken pipe'],
-  33: ['EDOM', 'domain error'],
-  34: ['ERANGE', 'result too large'],
-  36: ['EDEADLK', 'resource deadlock avoided'],
-  37: ['ENAMETOOLONG', 'name too long'],
-  38: ['ENOLCK', 'no locks available'],
-  39: ['ENOSYS', 'function not implemented'],
-  40: ['ENOTEMPTY', 'directory not empty'],
-  41: ['ELOOP', 'too many symbolic links encountered'],
-  42: ['EPROTOTYPE', 'protocol wrong type for socket'],
-  43: ['ENOPROTOOPT', 'protocol not available'],
-  44: ['EPROTONOSUPPORT', 'protocol not supported'],
-  45: ['EOPNOTSUPP', 'operation not supported'],
-  47: ['EAFNOSUPPORT', 'address family not supported'],
-  48: ['EADDRINUSE', 'address already in use'],
-  49: ['EADDRNOTAVAIL', 'address not available'],
-  50: ['ENETDOWN', 'network is down'],
-  51: ['ENETUNREACH', 'network is unreachable'],
-  52: ['ENETRESET', 'network connection reset'],
-  53: ['ECONNABORTED', 'software caused connection abort'],
-  54: ['ECONNRESET', 'connection reset by peer'],
-  55: ['ENOBUFS', 'no buffer space available'],
-  56: ['EISCONN', 'socket is already connected'],
-  57: ['ENOTCONN', 'socket is not connected'],
-  58: ['ESHUTDOWN', 'cannot send after transport endpoint shutdown'],
-  60: ['ETIMEDOUT', 'connection timed out'],
-  61: ['ECONNREFUSED', 'connection refused'],
-  63: ['ENAMETOOLONG', 'name too long'],
-  64: ['EHOSTDOWN', 'host is down'],
-  65: ['EHOSTUNREACH', 'host is unreachable'],
-  66: ['ENOTEMPTY', 'directory not empty'],
-  67: ['EUSERS', 'too many users'],
-  69: ['EDQUOT', 'disk quota exceeded'],
-  70: ['ESTALE', 'stale file handle'],
-  71: ['EREMOTE', 'remote I/O error'],
-  73: ['EOVERFLOW', 'value too large for defined data type'],
-  74: ['EBADMSG', 'bad message'],
-  75: ['EPROTOTYPE', 'protocol wrong type for socket'],
-  76: ['ENOPROTOOPT', 'protocol not available'],
-  77: ['EPROTONOSUPPORT', 'protocol not supported'],
-  78: ['EOPNOTSUPP', 'operation not supported'],
-  80: ['EINPROGRESS', 'operation now in progress'],
-  81: ['EALREADY', 'operation already in progress'],
-  82: ['ENOTSOCK', 'socket operation on non-socket'],
-  83: ['EDESTADDRREQ', 'destination address required'],
-  84: ['EMSGSIZE', 'message too long'],
-  85: ['EPROTOTYPE', 'protocol wrong type for socket'],
-  86: ['ENOPROTOOPT', 'protocol not available'],
-  87: ['EPROTONOSUPPORT', 'protocol not supported'],
-  88: ['ESOCKTNOSUPPORT', 'socket type not supported'],
-  89: ['EOPNOTSUPP', 'operation not supported'],
-  90: ['EPFNOSUPPORT', 'protocol family not supported'],
-  91: ['EADDRINUSE', 'address already in use'],
-  92: ['EADDRNOTAVAIL', 'address not available'],
-  93: ['ENETDOWN', 'network is down'],
-  94: ['ENETUNREACH', 'network is unreachable'],
-  95: ['ENETRESET', 'network connection reset'],
-  96: ['ECONNABORTED', 'software caused connection abort'],
-  97: ['ECONNRESET', 'connection reset by peer'],
-  98: ['ENOBUFS', 'no buffer space available'],
-  99: ['EISCONN', 'socket is already connected'],
-  100: ['ENOTCONN', 'socket is not connected'],
-  101: ['ESHUTDOWN', 'cannot send after transport endpoint shutdown'],
-  102: ['ETOOMANYREFS', 'too many references'],
-  103: ['ETIMEDOUT', 'connection timed out'],
-  104: ['ECONNREFUSED', 'connection refused'],
-  105: ['EHOSTDOWN', 'host is down'],
-  106: ['EHOSTUNREACH', 'host is unreachable'],
-  107: ['EALREADY', 'operation already in progress'],
-  108: ['EINPROGRESS', 'operation now in progress'],
-  110: ['ETIMEDOUT', 'connection timed out'],
-  111: ['ECONNREFUSED', 'connection refused'],
-  112: ['EHOSTDOWN', 'host is down'],
-  113: ['EHOSTUNREACH', 'host is unreachable'],
-  114: ['EALREADY', 'operation already in progress'],
-  115: ['EINPROGRESS', 'operation now in progress'],
-  122: ['EDQUOT', 'disk quota exceeded'],
-  123: ['ENOMEDIUM', 'no medium found'],
-  124: ['EMEDIUMTYPE', 'wrong medium type'],
-  125: ['ECANCELED', 'operation canceled'],
-  126: ['ENOKEY', 'required key not available'],
-  127: ['EKEYEXPIRED', 'key has expired'],
-  128: ['EKEYREVOKED', 'key has been revoked'],
-  129: ['EKEYREJECTED', 'key was rejected by service'],
-  130: ['EOWNERDEAD', 'owner died'],
-  131: ['ENOTRECOVERABLE', 'state not recoverable'],
-  4094: ['UNKNOWN', 'unknown error'],
-  4095: ['EOF', 'end of file'],
-}).map(([k, v]) => [-Number(k), /** @type {[string,string]} */ (v)]));
+const systemErrorMap = new Map(
+  Object.entries({
+    1: ["EPERM", "operation not permitted"],
+    2: ["ENOENT", "no such file or directory"],
+    3: ["ESRCH", "no such process"],
+    4: ["EINTR", "interrupted system call"],
+    5: ["EIO", "i/o error"],
+    6: ["ENXIO", "no such device or address"],
+    7: ["E2BIG", "argument list too long"],
+    8: ["ENOEXEC", "exec format error"],
+    9: ["EBADF", "bad file descriptor"],
+    10: ["ECHILD", "no child processes"],
+    11: ["EAGAIN", "resource temporarily unavailable"],
+    12: ["ENOMEM", "not enough memory"],
+    13: ["EACCES", "permission denied"],
+    14: ["EFAULT", "bad address"],
+    16: ["EBUSY", "resource busy or locked"],
+    17: ["EEXIST", "file already exists"],
+    18: ["EXDEV", "cross-device link not permitted"],
+    19: ["ENODEV", "no such device"],
+    20: ["ENOTDIR", "not a directory"],
+    21: ["EISDIR", "is a directory"],
+    22: ["EINVAL", "invalid argument"],
+    23: ["ENFILE", "too many open files in system"],
+    24: ["EMFILE", "too many open files"],
+    25: ["ENOTTY", "inappropriate ioctl for device"],
+    26: ["ETXTBSY", "text file is busy"],
+    27: ["EFBIG", "file too large"],
+    28: ["ENOSPC", "no space left on device"],
+    29: ["ESPIPE", "illegal seek"],
+    30: ["EROFS", "read-only file system"],
+    31: ["EMLINK", "too many links"],
+    32: ["EPIPE", "broken pipe"],
+    33: ["EDOM", "domain error"],
+    34: ["ERANGE", "result too large"],
+    36: ["EDEADLK", "resource deadlock avoided"],
+    37: ["ENAMETOOLONG", "name too long"],
+    38: ["ENOLCK", "no locks available"],
+    39: ["ENOSYS", "function not implemented"],
+    40: ["ENOTEMPTY", "directory not empty"],
+    41: ["ELOOP", "too many symbolic links encountered"],
+    42: ["EPROTOTYPE", "protocol wrong type for socket"],
+    43: ["ENOPROTOOPT", "protocol not available"],
+    44: ["EPROTONOSUPPORT", "protocol not supported"],
+    45: ["EOPNOTSUPP", "operation not supported"],
+    47: ["EAFNOSUPPORT", "address family not supported"],
+    48: ["EADDRINUSE", "address already in use"],
+    49: ["EADDRNOTAVAIL", "address not available"],
+    50: ["ENETDOWN", "network is down"],
+    51: ["ENETUNREACH", "network is unreachable"],
+    52: ["ENETRESET", "network connection reset"],
+    53: ["ECONNABORTED", "software caused connection abort"],
+    54: ["ECONNRESET", "connection reset by peer"],
+    55: ["ENOBUFS", "no buffer space available"],
+    56: ["EISCONN", "socket is already connected"],
+    57: ["ENOTCONN", "socket is not connected"],
+    58: ["ESHUTDOWN", "cannot send after transport endpoint shutdown"],
+    60: ["ETIMEDOUT", "connection timed out"],
+    61: ["ECONNREFUSED", "connection refused"],
+    63: ["ENAMETOOLONG", "name too long"],
+    64: ["EHOSTDOWN", "host is down"],
+    65: ["EHOSTUNREACH", "host is unreachable"],
+    66: ["ENOTEMPTY", "directory not empty"],
+    67: ["EUSERS", "too many users"],
+    69: ["EDQUOT", "disk quota exceeded"],
+    70: ["ESTALE", "stale file handle"],
+    71: ["EREMOTE", "remote I/O error"],
+    73: ["EOVERFLOW", "value too large for defined data type"],
+    74: ["EBADMSG", "bad message"],
+    75: ["EPROTOTYPE", "protocol wrong type for socket"],
+    76: ["ENOPROTOOPT", "protocol not available"],
+    77: ["EPROTONOSUPPORT", "protocol not supported"],
+    78: ["EOPNOTSUPP", "operation not supported"],
+    80: ["EINPROGRESS", "operation now in progress"],
+    81: ["EALREADY", "operation already in progress"],
+    82: ["ENOTSOCK", "socket operation on non-socket"],
+    83: ["EDESTADDRREQ", "destination address required"],
+    84: ["EMSGSIZE", "message too long"],
+    85: ["EPROTOTYPE", "protocol wrong type for socket"],
+    86: ["ENOPROTOOPT", "protocol not available"],
+    87: ["EPROTONOSUPPORT", "protocol not supported"],
+    88: ["ESOCKTNOSUPPORT", "socket type not supported"],
+    89: ["EOPNOTSUPP", "operation not supported"],
+    90: ["EPFNOSUPPORT", "protocol family not supported"],
+    91: ["EADDRINUSE", "address already in use"],
+    92: ["EADDRNOTAVAIL", "address not available"],
+    93: ["ENETDOWN", "network is down"],
+    94: ["ENETUNREACH", "network is unreachable"],
+    95: ["ENETRESET", "network connection reset"],
+    96: ["ECONNABORTED", "software caused connection abort"],
+    97: ["ECONNRESET", "connection reset by peer"],
+    98: ["ENOBUFS", "no buffer space available"],
+    99: ["EISCONN", "socket is already connected"],
+    100: ["ENOTCONN", "socket is not connected"],
+    101: ["ESHUTDOWN", "cannot send after transport endpoint shutdown"],
+    102: ["ETOOMANYREFS", "too many references"],
+    103: ["ETIMEDOUT", "connection timed out"],
+    104: ["ECONNREFUSED", "connection refused"],
+    105: ["EHOSTDOWN", "host is down"],
+    106: ["EHOSTUNREACH", "host is unreachable"],
+    107: ["EALREADY", "operation already in progress"],
+    108: ["EINPROGRESS", "operation now in progress"],
+    110: ["ETIMEDOUT", "connection timed out"],
+    111: ["ECONNREFUSED", "connection refused"],
+    112: ["EHOSTDOWN", "host is down"],
+    113: ["EHOSTUNREACH", "host is unreachable"],
+    114: ["EALREADY", "operation already in progress"],
+    115: ["EINPROGRESS", "operation now in progress"],
+    122: ["EDQUOT", "disk quota exceeded"],
+    123: ["ENOMEDIUM", "no medium found"],
+    124: ["EMEDIUMTYPE", "wrong medium type"],
+    125: ["ECANCELED", "operation canceled"],
+    126: ["ENOKEY", "required key not available"],
+    127: ["EKEYEXPIRED", "key has expired"],
+    128: ["EKEYREVOKED", "key has been revoked"],
+    129: ["EKEYREJECTED", "key was rejected by service"],
+    130: ["EOWNERDEAD", "owner died"],
+    131: ["ENOTRECOVERABLE", "state not recoverable"],
+    4094: ["UNKNOWN", "unknown error"],
+    4095: ["EOF", "end of file"],
+  }).map(([k, v]) => [-Number(k), /** @type {[string,string]} */ (v)]),
+);
 
 /** @param {number} err */
 function validateErrno(err) {
-  validateNumber(err, 'err');
+  validateNumber(err, "err");
   if (err >= 0 || !Number.isSafeInteger(err)) {
-    throw ERR_OUT_OF_RANGE('err', 'a negative integer', err);
+    throw ERR_OUT_OF_RANGE("err", "a negative integer", err);
   }
 }
 
@@ -3781,16 +4448,16 @@ const envKeyRegex = /^[a-zA-Z_][a-zA-Z_0-9]*$/;
  * @throws {Error} On malformed lines/keys.
  */
 export function parseEnv(content) {
-  validateString(content, 'content');
+  validateString(content, "content");
   /** @type {Record<string, string>} */
   const result = {};
 
   // Handle windows newlines "\r\n": remove "\r" and keep only "\n"
-  let lines = content.replace(/\r/g, '');
+  let lines = content.replace(/\r/g, "");
 
   const trimSpaces = (s) => {
     const start = s.search(/[^ \t\n]/);
-    if (start === -1) return '';
+    if (start === -1) return "";
     const end = s.search(/[^ \t\n](?=[ \t\n]*$)/);
     return s.slice(start, end + 1);
   };
@@ -3799,21 +4466,21 @@ export function parseEnv(content) {
 
   while (text.length > 0) {
     // Skip empty lines and comments
-    if (text[0] === '\n' || text[0] === '#') {
-      const newline = text.indexOf('\n');
+    if (text[0] === "\n" || text[0] === "#") {
+      const newline = text.indexOf("\n");
       if (newline !== -1) {
         text = text.slice(newline + 1);
       } else {
-        text = '';
+        text = "";
       }
       continue;
     }
 
     // Find the next equals sign or newline in a single pass.
     let equalOrNewline = -1;
-    let foundChar = '';
+    let foundChar = "";
     for (let i = 0; i < text.length; i++) {
-      if (text[i] === '=' || text[i] === '\n') {
+      if (text[i] === "=" || text[i] === "\n") {
         equalOrNewline = i;
         foundChar = text[i];
         break;
@@ -3821,7 +4488,7 @@ export function parseEnv(content) {
     }
 
     // If we found nothing or found a newline before equals, the line is invalid
-    if (equalOrNewline === -1 || foundChar === '\n') {
+    if (equalOrNewline === -1 || foundChar === "\n") {
       if (equalOrNewline !== -1) {
         text = trimSpaces(text.slice(equalOrNewline + 1));
         continue;
@@ -3835,8 +4502,8 @@ export function parseEnv(content) {
     key = trimSpaces(key);
 
     // If the value is not present (e.g. KEY=) set it to an empty string
-    if (text.length === 0 || text[0] === '\n') {
-      result[key] = '';
+    if (text.length === 0 || text[0] === "\n") {
+      result[key] = "";
       continue;
     }
 
@@ -3846,13 +4513,13 @@ export function parseEnv(content) {
     if (key.length === 0) continue;
 
     // Remove export prefix from key and ensure proper spacing.
-    if (key.startsWith('export ')) {
+    if (key.startsWith("export ")) {
       key = trimSpaces(key.slice(7));
     }
 
     if (text.length === 0) {
       // In case the last line is a single key without value
-      result[key] = '';
+      result[key] = "";
       break;
     }
 
@@ -3862,26 +4529,26 @@ export function parseEnv(content) {
       if (closingQuote !== -1) {
         const value = text.slice(1, closingQuote);
         // Replace \n with actual newlines in double-quoted strings
-        const multiLineValue = value.replace(/\\n/g, '\n');
+        const multiLineValue = value.replace(/\\n/g, "\n");
         result[key] = multiLineValue;
-        const newline = text.indexOf('\n', closingQuote + 1);
+        const newline = text.indexOf("\n", closingQuote + 1);
         if (newline !== -1) {
           text = text.slice(newline + 1);
         } else {
-          text = '';
+          text = "";
         }
         continue;
       }
     }
 
     // Handle quoted values (single quotes, double quotes, backticks)
-    if (text[0] === "'" || text[0] === '"' || text[0] === '`') {
+    if (text[0] === "'" || text[0] === '"' || text[0] === "`") {
       const quote = text[0];
       const closingQuote = text.indexOf(quote, 1);
 
       if (closingQuote === -1) {
         // Check if newline exists. If it does, take the entire line as the value
-        const newline = text.indexOf('\n');
+        const newline = text.indexOf("\n");
         if (newline !== -1) {
           result[key] = text.slice(0, newline);
           text = text.slice(newline + 1);
@@ -3893,21 +4560,21 @@ export function parseEnv(content) {
       } else {
         // Found closing quote - take content between quotes
         result[key] = text.slice(1, closingQuote);
-        const newline = text.indexOf('\n', closingQuote + 1);
+        const newline = text.indexOf("\n", closingQuote + 1);
         if (newline !== -1) {
           text = text.slice(newline + 1);
         } else {
-          text = '';
+          text = "";
         }
         continue;
       }
     } else {
       // Regular key value pair.
-      const newline = text.indexOf('\n');
+      const newline = text.indexOf("\n");
       let value;
       if (newline !== -1) {
         value = text.slice(0, newline);
-        const hashChar = value.indexOf('#');
+        const hashChar = value.indexOf("#");
         // Check if there is a comment in the line
         if (hashChar !== -1) {
           value = value.slice(0, hashChar);
@@ -3918,12 +4585,12 @@ export function parseEnv(content) {
       } else {
         // Last line without newline
         value = text;
-        const hashChar = value.indexOf('#');
+        const hashChar = value.indexOf("#");
         if (hashChar !== -1) {
           value = value.slice(0, hashChar);
         }
         result[key] = trimSpaces(value);
-        text = '';
+        text = "";
       }
     }
   }
@@ -3935,24 +4602,36 @@ export function parseEnv(content) {
 // parseArgs
 // ---------------------------------------------------------------------------
 
-const PARSE_ARGS_OPTIONS = Symbol('parseArgsOptions');
+const PARSE_ARGS_OPTIONS = Symbol("parseArgsOptions");
 
 /**
  * @param {any} config
  * @param {string} long
  */
 function validateArgConfig(config, long) {
-  const ERR = (msg) => E('ERR_PARSE_ARGS_INVALID_OPTION_VALUE', msg);
-  if (config == null || typeof config !== 'object' ||
-      (config.type !== 'string' && config.type !== 'boolean')) {
+  const ERR = (msg) => E("ERR_PARSE_ARGS_INVALID_OPTION_VALUE", msg);
+  if (
+    config == null ||
+    typeof config !== "object" ||
+    (config.type !== "string" && config.type !== "boolean")
+  ) {
     throw ERR(`Unexpected value for option "${long}"`);
   }
-  if (config.multiple !== undefined && typeof config.multiple !== 'boolean')
+  if (config.multiple !== undefined && typeof config.multiple !== "boolean")
     throw ERR(`Unexpected value for "multiple" of option "${long}"`);
-  if (config.short !== undefined && (typeof config.short !== 'string' || config.short.length !== 1))
+  if (
+    config.short !== undefined &&
+    (typeof config.short !== "string" || config.short.length !== 1)
+  )
     throw ERR(`Short option for "${long}" must be a single character`);
-  if (config.multiple === true && config.default !== undefined && !Array.isArray(config.default))
-    throw ERR(`"default" for multiply-occurring option "${long}" must be an Array`);
+  if (
+    config.multiple === true &&
+    config.default !== undefined &&
+    !Array.isArray(config.default)
+  )
+    throw ERR(
+      `"default" for multiply-occurring option "${long}" must be an Array`,
+    );
 }
 
 /**
@@ -3963,19 +4642,19 @@ function validateArgConfig(config, long) {
  * @returns {{ values: Record<string, any>, positionals: string[], tokens?: any[] }}
  */
 export function parseArgs(config = {}) {
-  if (config == null || typeof config !== 'object')
-    throw ERR_INVALID_ARG_TYPE('config', 'object', config);
+  if (config == null || typeof config !== "object")
+    throw ERR_INVALID_ARG_TYPE("config", "object", config);
   const {
-    args = (Array.isArray(process.argv) ? process.argv.slice(2) : []),
+    args = Array.isArray(process.argv) ? process.argv.slice(2) : [],
     allowPositionals = false,
     strict = true,
     options = {},
     tokens: returnTokens = false,
   } = config;
 
-  validateBoolean(strict, 'strict');
-  validateBoolean(allowPositionals, 'allowPositionals');
-  validateBoolean(returnTokens, 'tokens');
+  validateBoolean(strict, "strict");
+  validateBoolean(allowPositionals, "allowPositionals");
+  validateBoolean(returnTokens, "tokens");
 
   const optionConfigs = options;
   const shorts = {};
@@ -3986,7 +4665,10 @@ export function parseArgs(config = {}) {
     validateArgConfig(cfg, long);
     if (cfg.short !== undefined) {
       if (shorts[cfg.short] !== undefined)
-        throw E('ERR_PARSE_ARGS_INVALID_OPTION_VALUE', `Short option "-${cfg.short}" is used by both "--${shorts[cfg.short]}" and "--${long}"`);
+        throw E(
+          "ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+          `Short option "-${cfg.short}" is used by both "--${shorts[cfg.short]}" and "--${long}"`,
+        );
       shorts[cfg.short] = long;
     }
     if (cfg.default !== undefined) {
@@ -4022,24 +4704,28 @@ export function parseArgs(config = {}) {
     const index = i;
     if (terminated) {
       positionals.push(arg);
-      if (returnTokens) tokens.push({ kind: 'positional', value: arg, index });
-      i++; continue;
+      if (returnTokens) tokens.push({ kind: "positional", value: arg, index });
+      i++;
+      continue;
     }
-    if (arg === '--') {
+    if (arg === "--") {
       terminated = true;
-      if (returnTokens) tokens.push({ kind: 'terminator', rawName: '--', index });
-      i++; continue;
+      if (returnTokens)
+        tokens.push({ kind: "terminator", rawName: "--", index });
+      i++;
+      continue;
     }
-    if (arg === '-' || !arg.startsWith('-')) {
+    if (arg === "-" || !arg.startsWith("-")) {
       positionals.push(arg);
-      if (returnTokens) tokens.push({ kind: 'positional', value: arg, index });
-      i++; continue;
+      if (returnTokens) tokens.push({ kind: "positional", value: arg, index });
+      i++;
+      continue;
     }
 
-    if (arg.startsWith('--')) {
+    if (arg.startsWith("--")) {
       let name = arg.slice(2);
       let inlineValue;
-      const eq = name.indexOf('=');
+      const eq = name.indexOf("=");
       if (eq !== -1) {
         inlineValue = name.slice(eq + 1);
         name = name.slice(0, eq);
@@ -4047,26 +4733,61 @@ export function parseArgs(config = {}) {
       const cfg = optionConfigs[name];
       if (cfg === undefined) {
         if (strict)
-          throw E('ERR_PARSE_ARGS_UNKNOWN_OPTION', `Unknown option '--${name}'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- ${name}'`);
-        if (returnTokens) tokens.push({ kind: 'option', name, rawName: `--${name}`, index, value: inlineValue, inlineValue: inlineValue !== undefined });
-        i++; continue;
+          throw E(
+            "ERR_PARSE_ARGS_UNKNOWN_OPTION",
+            `Unknown option '--${name}'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- ${name}'`,
+          );
+        if (returnTokens)
+          tokens.push({
+            kind: "option",
+            name,
+            rawName: `--${name}`,
+            index,
+            value: inlineValue,
+            inlineValue: inlineValue !== undefined,
+          });
+        i++;
+        continue;
       }
-      if (cfg.type === 'boolean') {
+      if (cfg.type === "boolean") {
         if (inlineValue !== undefined)
-          throw E('ERR_PARSE_ARGS_INVALID_OPTION_VALUE', `Option '--${name}=${inlineValue}' does not take an argument`);
+          throw E(
+            "ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+            `Option '--${name}=${inlineValue}' does not take an argument`,
+          );
         setValue(name, true);
-        if (returnTokens) tokens.push({ kind: 'option', name, rawName: `--${name}`, index, value: true, inlineValue: inlineValue !== undefined });
+        if (returnTokens)
+          tokens.push({
+            kind: "option",
+            name,
+            rawName: `--${name}`,
+            index,
+            value: true,
+            inlineValue: inlineValue !== undefined,
+          });
       } else {
         let value = inlineValue;
         if (value === undefined) {
-          if (i + 1 >= argsArr.length || argsArr[i + 1] === '--')
-            throw E('ERR_PARSE_ARGS_MISSING_VALUE', `Option '--${name}' argument missing`);
+          if (i + 1 >= argsArr.length || argsArr[i + 1] === "--")
+            throw E(
+              "ERR_PARSE_ARGS_MISSING_VALUE",
+              `Option '--${name}' argument missing`,
+            );
           value = argsArr[++i];
         }
         setValue(name, value);
-        if (returnTokens) tokens.push({ kind: 'option', name, rawName: `--${name}`, index, value, inlineValue: inlineValue !== undefined });
+        if (returnTokens)
+          tokens.push({
+            kind: "option",
+            name,
+            rawName: `--${name}`,
+            index,
+            value,
+            inlineValue: inlineValue !== undefined,
+          });
       }
-      i++; continue;
+      i++;
+      continue;
     }
 
     // short option
@@ -4074,25 +4795,49 @@ export function parseArgs(config = {}) {
     if (letters.length === 1 && shorts[letters] !== undefined) {
       const long = shorts[letters];
       const cfg = optionConfigs[long];
-      if (cfg.type === 'boolean') {
+      if (cfg.type === "boolean") {
         setValue(long, true);
-        if (returnTokens) tokens.push({ kind: 'option', name: long, rawName: `-${letters}`, index, value: true, inlineValue: false });
-        i++; continue;
+        if (returnTokens)
+          tokens.push({
+            kind: "option",
+            name: long,
+            rawName: `-${letters}`,
+            index,
+            value: true,
+            inlineValue: false,
+          });
+        i++;
+        continue;
       }
-      if (i + 1 >= argsArr.length || argsArr[i + 1] === '--')
-        throw E('ERR_PARSE_ARGS_MISSING_VALUE', `Option '-${letters}' argument missing`);
+      if (i + 1 >= argsArr.length || argsArr[i + 1] === "--")
+        throw E(
+          "ERR_PARSE_ARGS_MISSING_VALUE",
+          `Option '-${letters}' argument missing`,
+        );
       const value = argsArr[++i];
       setValue(long, value);
-      if (returnTokens) tokens.push({ kind: 'option', name: long, rawName: `-${letters}`, index, value, inlineValue: false });
-      i++; continue;
+      if (returnTokens)
+        tokens.push({
+          kind: "option",
+          name: long,
+          rawName: `-${letters}`,
+          index,
+          value,
+          inlineValue: false,
+        });
+      i++;
+      continue;
     }
     if (strict)
-      throw E('ERR_PARSE_ARGS_UNKNOWN_OPTION', `Unknown option '${arg}'`);
+      throw E("ERR_PARSE_ARGS_UNKNOWN_OPTION", `Unknown option '${arg}'`);
     i++;
   }
 
   if (positionals.length > 0 && !allowPositionals && strict) {
-    throw E('ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL', `Too many positional arguments provided (got ${positionals.length}, expected 0). To configure positional argument parsing, set "allowPositionals: true"`);
+    throw E(
+      "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL",
+      `Too many positional arguments provided (got ${positionals.length}, expected 0). To configure positional argument parsing, set "allowPositionals: true"`,
+    );
   }
 
   return { values, positionals, ...(returnTokens ? { tokens } : {}) };
@@ -4109,9 +4854,13 @@ const mimeTokenRegex = /^[!#$%&'*+\-.^_`|~0-9a-zA-Z]+$/;
  */
 function unquoteMimeValue(value) {
   value = value.trim();
-  if (value.length >= 2 && value[0] === '"' && value[value.length - 1] === '"') {
+  if (
+    value.length >= 2 &&
+    value[0] === '"' &&
+    value[value.length - 1] === '"'
+  ) {
     const inner = value.slice(1, -1);
-    return inner.replace(/\\(["\\])/g, '$1');
+    return inner.replace(/\\(["\\])/g, "$1");
   }
   return value;
 }
@@ -4121,7 +4870,7 @@ function unquoteMimeValue(value) {
  */
 function quoteMimeValue(value) {
   if (mimeTokenRegex.test(value)) return value;
-  return `"${value.replace(/(["\\])/g, '\\$1')}"`;
+  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
 }
 
 /** WHATWG MIMEParams — a multimap of MIME parameters. */
@@ -4132,13 +4881,15 @@ export class MIMEParams {
   /** @param {string} [init] */
   constructor(init = undefined) {
     if (init !== undefined) {
-      validateString(init, 'init');
-      for (const part of init.split(';')) {
-        if (part.trim() === '') continue;
-        const eq = part.indexOf('=');
-        if (eq === -1) throw new TypeError(`Invalid MIME parameter: ${part.trim()}`);
+      validateString(init, "init");
+      for (const part of init.split(";")) {
+        if (part.trim() === "") continue;
+        const eq = part.indexOf("=");
+        if (eq === -1)
+          throw new TypeError(`Invalid MIME parameter: ${part.trim()}`);
         const name = part.slice(0, eq).trim().toLowerCase();
-        if (!mimeTokenRegex.test(name)) throw new TypeError(`Invalid MIME parameter name: ${name}`);
+        if (!mimeTokenRegex.test(name))
+          throw new TypeError(`Invalid MIME parameter name: ${name}`);
         this.#params.set(name, unquoteMimeValue(part.slice(eq + 1)));
       }
     }
@@ -4146,98 +4897,124 @@ export class MIMEParams {
 
   /** @param {string} name */
   get(name) {
-    validateString(name, 'name');
+    validateString(name, "name");
     return this.#params.get(name.toLowerCase());
   }
 
   /** @param {string} name @param {string} value */
   set(name, value) {
-    validateString(name, 'name');
-    validateString(value, 'value');
+    validateString(name, "name");
+    validateString(value, "value");
     const lowered = name.toLowerCase();
-    if (!mimeTokenRegex.test(lowered)) throw new TypeError(`Invalid MIME parameter name: ${name}`);
+    if (!mimeTokenRegex.test(lowered))
+      throw new TypeError(`Invalid MIME parameter name: ${name}`);
     this.#params.set(lowered, value);
   }
 
   /** @param {string} name */
   has(name) {
-    validateString(name, 'name');
+    validateString(name, "name");
     return this.#params.has(name.toLowerCase());
   }
 
   /** @param {string} name */
   delete(name) {
-    validateString(name, 'name');
+    validateString(name, "name");
     return this.#params.delete(name.toLowerCase());
   }
 
   /** @returns {number} */
-  get size() { return this.#params.size; }
+  get size() {
+    return this.#params.size;
+  }
 
-  *entries() { yield* this.#params.entries(); }
-  *keys() { yield* this.#params.keys(); }
-  *values() { yield* this.#params.values(); }
+  *entries() {
+    yield* this.#params.entries();
+  }
+  *keys() {
+    yield* this.#params.keys();
+  }
+  *values() {
+    yield* this.#params.values();
+  }
   /** @param {(value: string, name: string, params: MIMEParams) => void} callbackFn */
   forEach(callbackFn, thisArg = undefined) {
-    validateFunction(callbackFn, 'callbackFn');
+    validateFunction(callbackFn, "callbackFn");
     for (const [k, v] of this.#params) callbackFn.call(thisArg, v, k, this);
   }
 
-  [Symbol.iterator]() { return this.entries(); }
+  [Symbol.iterator]() {
+    return this.entries();
+  }
 
   toString() {
     return [...this.#params.entries()]
-      .map(([k, v]) => `${k}=${quoteMimeValue(v)}`).join(';');
+      .map(([k, v]) => `${k}=${quoteMimeValue(v)}`)
+      .join(";");
   }
 }
 
 /** WHATWG MIMEType — e.g. `new MIMEType('text/html; charset=utf-8')`. */
 export class MIMEType {
-  /** @type {string} */ #type = '';
-  /** @type {string} */ #subtype = '';
+  /** @type {string} */ #type = "";
+  /** @type {string} */ #subtype = "";
   /** @type {MIMEParams} */ #parameters;
 
   /** @param {string} input */
   constructor(input) {
-    validateString(input, 'input');
-    const parts = input.split(';');
-    const typeSubtype = parts[0].trim().toLowerCase().split('/');
-    if (typeSubtype.length !== 2 ||
-        !mimeTokenRegex.test(typeSubtype[0]) || !mimeTokenRegex.test(typeSubtype[1]) ||
-        typeSubtype[0] === '' || typeSubtype[1] === '') {
+    validateString(input, "input");
+    const parts = input.split(";");
+    const typeSubtype = parts[0].trim().toLowerCase().split("/");
+    if (
+      typeSubtype.length !== 2 ||
+      !mimeTokenRegex.test(typeSubtype[0]) ||
+      !mimeTokenRegex.test(typeSubtype[1]) ||
+      typeSubtype[0] === "" ||
+      typeSubtype[1] === ""
+    ) {
       throw new TypeError(`Invalid MIME type: ${input}`);
     }
     this.#type = typeSubtype[0];
     this.#subtype = typeSubtype[1];
-    this.#parameters = new MIMEParams(parts.slice(1).join(';'));
+    this.#parameters = new MIMEParams(parts.slice(1).join(";"));
   }
 
-  get type() { return this.#type; }
+  get type() {
+    return this.#type;
+  }
   /** @param {string} v */
   set type(v) {
-    validateString(v, 'type');
+    validateString(v, "type");
     const lowered = v.toLowerCase();
-    if (!mimeTokenRegex.test(lowered)) throw new TypeError(`Invalid MIME type: ${v}`);
+    if (!mimeTokenRegex.test(lowered))
+      throw new TypeError(`Invalid MIME type: ${v}`);
     this.#type = lowered;
   }
 
-  get subtype() { return this.#subtype; }
+  get subtype() {
+    return this.#subtype;
+  }
   /** @param {string} v */
   set subtype(v) {
-    validateString(v, 'subtype');
+    validateString(v, "subtype");
     const lowered = v.toLowerCase();
-    if (!mimeTokenRegex.test(lowered)) throw new TypeError(`Invalid MIME subtype: ${v}`);
+    if (!mimeTokenRegex.test(lowered))
+      throw new TypeError(`Invalid MIME subtype: ${v}`);
     this.#subtype = lowered;
   }
 
   /** @returns {MIMEParams} */
-  get parameters() { return this.#parameters; }
+  get parameters() {
+    return this.#parameters;
+  }
 
-  get essence() { return `${this.#type}/${this.#subtype}`; }
+  get essence() {
+    return `${this.#type}/${this.#subtype}`;
+  }
 
   toString() {
     const params = this.#parameters.toString();
-    return `${this.#type}/${this.#subtype}${params === '' ? '' : `;${params}`}`;
+    return `${this.#type}/${this.#subtype}${params === "" ? "" : `;${params}`}`;
   }
 }
 
@@ -4264,7 +5041,7 @@ export const TextDecoder = globalThis.TextDecoder;
  */
 export function transferableAbortSignal(signal) {
   if (!(signal instanceof AbortSignal)) {
-    throw ERR_INVALID_ARG_TYPE('signal', 'AbortSignal', signal);
+    throw ERR_INVALID_ARG_TYPE("signal", "AbortSignal", signal);
   }
   return signal;
 }
@@ -4277,9 +5054,13 @@ export function transferableAbortSignal(signal) {
 export function transferableAbortController() {
   const controller = new AbortController();
   const linked = new AbortController();
-  controller.signal.addEventListener('abort', () => {
-    linked.abort(controller.signal.reason);
-  }, { once: true });
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      linked.abort(controller.signal.reason);
+    },
+    { once: true },
+  );
   return { controller, signal: linked.signal };
 }
 
@@ -4291,13 +5072,14 @@ export function transferableAbortController() {
  */
 export function aborted(signal, resource) {
   if (!(signal instanceof AbortSignal)) {
-    throw ERR_INVALID_ARG_TYPE('signal', 'AbortSignal', signal);
+    throw ERR_INVALID_ARG_TYPE("signal", "AbortSignal", signal);
   }
   const emit = () => {
-    if (resource && typeof resource.emit === 'function') resource.emit('aborted', signal);
+    if (resource && typeof resource.emit === "function")
+      resource.emit("aborted", signal);
   };
   if (signal.aborted) queueMicrotask(emit);
-  else signal.addEventListener('abort', emit, { once: true });
+  else signal.addEventListener("abort", emit, { once: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -4308,8 +5090,8 @@ export function aborted(signal, resource) {
 // ---------------------------------------------------------------------------
 
 const kDiffDelete = -1; // entry present only in `expected`
-const kDiffNop = 0;     // entry present in both inputs
-const kDiffInsert = 1;  // entry present only in `actual`
+const kDiffNop = 0; // entry present in both inputs
+const kDiffInsert = 1; // entry present only in `actual`
 
 function myersDiffBacktrack(trace, actual, expected) {
   const actualLength = actual.length;
@@ -4362,7 +5144,7 @@ function myersDiff(actual, expected) {
   const max = actualLength + expectedLength;
 
   if (max > 2 ** 31 - 1) {
-    throw ERR_OUT_OF_RANGE('myersDiff input size', '< 2^31', max);
+    throw ERR_OUT_OF_RANGE("myersDiff input size", "< 2^31", max);
   }
 
   const v = new Int32Array(2 * max + 1);
@@ -4371,14 +5153,19 @@ function myersDiff(actual, expected) {
   for (let diffLevel = 0; diffLevel <= max; diffLevel++) {
     trace.push(new Int32Array(v)); // Clone the current state of `v`
 
-    for (let diagonalIndex = -diffLevel; diagonalIndex <= diffLevel; diagonalIndex += 2) {
+    for (
+      let diagonalIndex = -diffLevel;
+      diagonalIndex <= diffLevel;
+      diagonalIndex += 2
+    ) {
       const offset = diagonalIndex + max;
       const previousOffset = v[offset - 1];
       const nextOffset = v[offset + 1];
-      let x = diagonalIndex === -diffLevel ||
-        (diagonalIndex !== diffLevel && previousOffset < nextOffset) ?
-        nextOffset :
-        previousOffset + 1;
+      let x =
+        diagonalIndex === -diffLevel ||
+        (diagonalIndex !== diffLevel && previousOffset < nextOffset)
+          ? nextOffset
+          : previousOffset + 1;
       let y = x - diagonalIndex;
 
       while (
@@ -4407,8 +5194,8 @@ function validateDiffInput(value, name) {
   for (let i = 0; i < value.length; i++) {
     // Don't use validateString here for performance reasons, as we would
     // generate intermediate strings for the name (mirrors Node).
-    if (typeof value[i] !== 'string') {
-      throw ERR_INVALID_ARG_TYPE(`${name}[${i}]`, 'string', value[i]);
+    if (typeof value[i] !== "string") {
+      throw ERR_INVALID_ARG_TYPE(`${name}[${i}]`, "string", value[i]);
     }
   }
 }
@@ -4426,8 +5213,8 @@ export function diff(actual, expected) {
     return [];
   }
 
-  validateDiffInput(actual, 'actual');
-  validateDiffInput(expected, 'expected');
+  validateDiffInput(actual, "actual");
+  validateDiffInput(expected, "expected");
 
   // NB: Node calls the generic Array.prototype.reverse on the myers result
   // rather than a method call, so the `diff([], [])` edge case throws the
@@ -4453,23 +5240,100 @@ export function setTraceSigInt(enabled) {
 // legacy (deprecated) type checks
 // ---------------------------------------------------------------------------
 
-const _deprecated = (name, msg, code, fn) => deprecate(fn, `\`util.${name}\` is deprecated. ${msg}`, code);
+const _deprecated = (name, msg, code, fn) =>
+  deprecate(fn, `\`util.${name}\` is deprecated. ${msg}`, code);
 
-const isBoolean = _deprecated('isBoolean', 'Please use `typeof x === "boolean"` instead.', 'DEP0059', (arg) => typeof arg === 'boolean');
-const isNull = _deprecated('isNull', 'Please use `x === null` instead.', 'DEP0055', (arg) => arg === null);
-const isNullOrUndefined = _deprecated('isNullOrUndefined', 'Please use `x == null` instead.', 'DEP0056', (arg) => arg == null);
-const isNumber = _deprecated('isNumber', 'Please use `typeof x === "number"` instead.', 'DEP0057', (arg) => typeof arg === 'number');
-const isString = _deprecated('isString', 'Please use `typeof x === "string"` instead.', 'DEP0058', (arg) => typeof arg === 'string');
-const isSymbol = _deprecated('isSymbol', 'Please use `typeof x === "symbol"` instead.', 'DEP0059', (arg) => typeof arg === 'symbol');
-const isUndefined = _deprecated('isUndefined', 'Please use `x === undefined` instead.', 'DEP0060', (arg) => arg === void 0);
-const isRegExp = _deprecated('isRegExp', 'Please use `util.types.isRegExp()` instead.', 'DEP0045', (re) => types.isRegExp(re));
-const isObject = _deprecated('isObject', 'Please use `x !== null && typeof x === "object"` instead.', 'DEP0058', (arg) => typeof arg === 'object' && arg !== null);
-const isDate = _deprecated('isDate', 'Please use `util.types.isDate()` instead.', 'DEP0042', (d) => types.isDate(d));
-const isError = _deprecated('isError', 'Please use `util.types.isNativeError()` or `instanceof Error` instead.', 'DEP0043', (e) => types.isNativeError(e));
-const isFunction = _deprecated('isFunction', 'Please use `typeof x === "function"` instead.', 'DEP0059', (arg) => typeof arg === 'function');
-const isPrimitive = _deprecated('isPrimitive', 'Please use `typeof x !== "object" && typeof x !== "function" || x === null` instead.', 'DEP0046', (arg) => arg === null || (typeof arg !== 'object' && typeof arg !== 'function'));
-export const isArray = _deprecated('isArray', 'Please use `Array.isArray()` instead.', 'DEP0044', (ar) => Array.isArray(ar));
-const isBuffer = _deprecated('isBuffer', 'Please use `Buffer.isBuffer()` instead.', 'DEP0041', (b) => Buffer.isBuffer(b));
+const isBoolean = _deprecated(
+  "isBoolean",
+  'Please use `typeof x === "boolean"` instead.',
+  "DEP0059",
+  (arg) => typeof arg === "boolean",
+);
+const isNull = _deprecated(
+  "isNull",
+  "Please use `x === null` instead.",
+  "DEP0055",
+  (arg) => arg === null,
+);
+const isNullOrUndefined = _deprecated(
+  "isNullOrUndefined",
+  "Please use `x == null` instead.",
+  "DEP0056",
+  (arg) => arg == null,
+);
+const isNumber = _deprecated(
+  "isNumber",
+  'Please use `typeof x === "number"` instead.',
+  "DEP0057",
+  (arg) => typeof arg === "number",
+);
+const isString = _deprecated(
+  "isString",
+  'Please use `typeof x === "string"` instead.',
+  "DEP0058",
+  (arg) => typeof arg === "string",
+);
+const isSymbol = _deprecated(
+  "isSymbol",
+  'Please use `typeof x === "symbol"` instead.',
+  "DEP0059",
+  (arg) => typeof arg === "symbol",
+);
+const isUndefined = _deprecated(
+  "isUndefined",
+  "Please use `x === undefined` instead.",
+  "DEP0060",
+  (arg) => arg === void 0,
+);
+const isRegExp = _deprecated(
+  "isRegExp",
+  "Please use `util.types.isRegExp()` instead.",
+  "DEP0045",
+  (re) => types.isRegExp(re),
+);
+const isObject = _deprecated(
+  "isObject",
+  'Please use `x !== null && typeof x === "object"` instead.',
+  "DEP0058",
+  (arg) => typeof arg === "object" && arg !== null,
+);
+const isDate = _deprecated(
+  "isDate",
+  "Please use `util.types.isDate()` instead.",
+  "DEP0042",
+  (d) => types.isDate(d),
+);
+const isError = _deprecated(
+  "isError",
+  "Please use `util.types.isNativeError()` or `instanceof Error` instead.",
+  "DEP0043",
+  (e) => types.isNativeError(e),
+);
+const isFunction = _deprecated(
+  "isFunction",
+  'Please use `typeof x === "function"` instead.',
+  "DEP0059",
+  (arg) => typeof arg === "function",
+);
+const isPrimitive = _deprecated(
+  "isPrimitive",
+  'Please use `typeof x !== "object" && typeof x !== "function" || x === null` instead.',
+  "DEP0046",
+  (arg) =>
+    arg === null || (typeof arg !== "object" && typeof arg !== "function"),
+);
+export const isArray = _deprecated(
+  "isArray",
+  "Please use `Array.isArray()` instead.",
+  "DEP0044",
+  (ar) => Array.isArray(ar),
+);
+const isBuffer = _deprecated(
+  "isBuffer",
+  "Please use `Buffer.isBuffer()` instead.",
+  "DEP0041",
+  (b) => Buffer.isBuffer(b),
+);
 
 /**
  * @deprecated since v6.0.0 — use `Object.assign()`.
@@ -4478,29 +5342,52 @@ const isBuffer = _deprecated('isBuffer', 'Please use `Buffer.isBuffer()` instead
  * @param {S} add
  * @returns {T & S}
  */
-export const _extend = _deprecated('_extend', 'Please use `Object.assign()` instead.', 'DEP0060',
+export const _extend = _deprecated(
+  "_extend",
+  "Please use `Object.assign()` instead.",
+  "DEP0060",
   function _extend(origin, add) {
-    if (add === null || typeof add !== 'object') return origin;
+    if (add === null || typeof add !== "object") return origin;
     const keys = Object.keys(add);
     let i = keys.length;
     while (i--) origin[keys[i]] = add[keys[i]];
     return origin;
-  });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // log
 // ---------------------------------------------------------------------------
 
 /** @param {number} n */
-function pad2(n) { return n < 10 ? '0' + n.toString(10) : n.toString(10); }
+function pad2(n) {
+  return n < 10 ? "0" + n.toString(10) : n.toString(10);
+}
 
-const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const months = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 
 /** '26 Feb 16:19:34' */
 function timestamp() {
   const d = new Date();
-  const time = [pad2(d.getHours()), pad2(d.getMinutes()), pad2(d.getSeconds())].join(':');
-  return [d.getDate(), months[d.getMonth()], time].join(' ');
+  const time = [
+    pad2(d.getHours()),
+    pad2(d.getMinutes()),
+    pad2(d.getSeconds()),
+  ].join(":");
+  return [d.getDate(), months[d.getMonth()], time].join(" ");
 }
 
 /**
@@ -4519,7 +5406,8 @@ function log(...args) {
 /**
  * VLQ decoder for source maps (base64 values).
  */
-const base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const base64Chars =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const base64Map = {};
 for (let i = 0; i < base64Chars.length; i++) base64Map[base64Chars[i]] = i;
 
@@ -4547,7 +5435,7 @@ function decodeVLQ(str, index) {
  */
 function parseSourceMap(mapText) {
   const map = JSON.parse(mapText);
-  if (map.version !== 3 || typeof map.mappings !== 'string') return null;
+  if (map.version !== 3 || typeof map.mappings !== "string") return null;
   return map;
 }
 
@@ -4556,9 +5444,9 @@ function parseSourceMap(mapText) {
  * Uses greatest-lower-bound on the mappings.
  */
 function remapPosition(map, genLine, genColumn) {
-  const lines = map.mappings.split(';');
+  const lines = map.mappings.split(";");
   if (genLine - 1 >= lines.length) return null;
-  const segments = lines[genLine - 1].split(',');
+  const segments = lines[genLine - 1].split(",");
   let genCol = 0;
   let srcIdx = 0;
   let srcLine = 0;
@@ -4592,19 +5480,23 @@ function remapPosition(map, genLine, genColumn) {
  */
 function tryRemapCallSite(scriptName, lineNumber, columnNumber) {
   try {
-    if (typeof process === 'undefined' || !scriptName || scriptName.startsWith('node:')) {
+    if (
+      typeof process === "undefined" ||
+      !scriptName ||
+      scriptName.startsWith("node:")
+    ) {
       return null;
     }
     // Load fs lazily to keep the module browser-safe.
     let fs;
     try {
-      fs = require('node:fs');
+      fs = require("node:fs");
     } catch {
       return null;
     }
     let fileContent;
     try {
-      fileContent = fs.readFileSync(scriptName, 'utf8');
+      fileContent = fs.readFileSync(scriptName, "utf8");
     } catch {
       return null;
     }
@@ -4612,14 +5504,14 @@ function tryRemapCallSite(scriptName, lineNumber, columnNumber) {
     if (!match) return null;
     const url = match[1];
     let mapText;
-    if (url.startsWith('data:')) {
-      const base64 = url.split(',')[1];
-      mapText = Buffer.from(base64, 'base64').toString('utf8');
+    if (url.startsWith("data:")) {
+      const base64 = url.split(",")[1];
+      mapText = Buffer.from(base64, "base64").toString("utf8");
     } else {
-      const path = require('node:path');
+      const path = require("node:path");
       const mapPath = path.resolve(path.dirname(scriptName), url);
       try {
-        mapText = fs.readFileSync(mapPath, 'utf8');
+        mapText = fs.readFileSync(mapPath, "utf8");
       } catch {
         return null;
       }
@@ -4628,7 +5520,7 @@ function tryRemapCallSite(scriptName, lineNumber, columnNumber) {
     if (!map) return null;
     const remapped = remapPosition(map, lineNumber, columnNumber - 1);
     if (!remapped) return null;
-    const path = require('node:path');
+    const path = require("node:path");
     return {
       scriptName: path.resolve(path.dirname(scriptName), remapped.source),
       lineNumber: remapped.line + 1,
@@ -4650,30 +5542,35 @@ export function getCallSites(frameCount = 10, options) {
   // Overload: getCallSites(options)
   // Note: Arrays are not valid options (real Node rejects them).
   if (options === undefined) {
-    if (typeof frameCount === 'object' && frameCount !== null && !Array.isArray(frameCount)) {
+    if (
+      typeof frameCount === "object" &&
+      frameCount !== null &&
+      !Array.isArray(frameCount)
+    ) {
       options = frameCount;
-      validateObject(options, 'options');
+      validateObject(options, "options");
       if (options.sourceMap !== undefined) {
-        validateBoolean(options.sourceMap, 'options.sourceMap');
+        validateBoolean(options.sourceMap, "options.sourceMap");
       }
       frameCount = 10;
     } else {
       options = {};
     }
   } else {
-    validateObject(options, 'options');
+    validateObject(options, "options");
     if (options.sourceMap !== undefined) {
-      validateBoolean(options.sourceMap, 'options.sourceMap');
+      validateBoolean(options.sourceMap, "options.sourceMap");
     }
   }
 
-  validateInteger(frameCount, 'frameCount', 1, 200);
+  validateInteger(frameCount, "frameCount", 1, 200);
 
-  const useSourceMap = options.sourceMap === true ||
-    (typeof process !== 'undefined' &&
-     typeof process.getOptionValue === 'function' &&
-     process.getOptionValue('--enable-source-maps') &&
-     options.sourceMap !== false);
+  const useSourceMap =
+    options.sourceMap === true ||
+    (typeof process !== "undefined" &&
+      typeof process.getOptionValue === "function" &&
+      process.getOptionValue("--enable-source-maps") &&
+      options.sourceMap !== false);
 
   // Capture the stack with a private prepareStackTrace so user hooks and
   // stackTraceLimit cannot affect us.
@@ -4695,9 +5592,9 @@ export function getCallSites(frameCount = 10, options) {
   return sites.map((site) => {
     let scriptName;
     try {
-      scriptName = site.getFileName() || '';
+      scriptName = site.getFileName() || "";
     } catch {
-      scriptName = '';
+      scriptName = "";
     }
     let lineNumber;
     let columnNumber;
@@ -4714,12 +5611,12 @@ export function getCallSites(frameCount = 10, options) {
     } catch {
       functionName = null;
     }
-    let scriptId = '';
+    let scriptId = "";
     try {
       const id = site.getScriptId?.() ?? site.getScriptNameOrLine?.();
-      scriptId = id !== undefined && id !== null ? String(id) : '';
+      scriptId = id !== undefined && id !== null ? String(id) : "";
     } catch {
-      scriptId = '';
+      scriptId = "";
     }
 
     if (useSourceMap) {
@@ -4752,12 +5649,37 @@ export function getCallSites(frameCount = 10, options) {
  * On Node, the real constants are used via the guarded bridge.
  */
 const signalNumbers = {
-  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6,
-  SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
-  SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGSTKFLT: 16, SIGCHLD: 17,
-  SIGCONT: 18, SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22,
-  SIGURG: 23, SIGXCPU: 24, SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27,
-  SIGWINCH: 28, SIGIO: 29, SIGPWR: 30, SIGSYS: 31,
+  SIGHUP: 1,
+  SIGINT: 2,
+  SIGQUIT: 3,
+  SIGILL: 4,
+  SIGTRAP: 5,
+  SIGABRT: 6,
+  SIGBUS: 7,
+  SIGFPE: 8,
+  SIGKILL: 9,
+  SIGUSR1: 10,
+  SIGSEGV: 11,
+  SIGUSR2: 12,
+  SIGPIPE: 13,
+  SIGALRM: 14,
+  SIGTERM: 15,
+  SIGSTKFLT: 16,
+  SIGCHLD: 17,
+  SIGCONT: 18,
+  SIGSTOP: 19,
+  SIGTSTP: 20,
+  SIGTTIN: 21,
+  SIGTTOU: 22,
+  SIGURG: 23,
+  SIGXCPU: 24,
+  SIGXFSZ: 25,
+  SIGVTALRM: 26,
+  SIGPROF: 27,
+  SIGWINCH: 28,
+  SIGIO: 29,
+  SIGPWR: 30,
+  SIGSYS: 31,
 };
 
 /**
@@ -4770,12 +5692,18 @@ export function convertProcessSignalToExitCode(signalCode) {
   // Use real constants on Node when available.
   let signals = signalNumbers;
   try {
-    const getBuiltin = typeof process !== 'undefined' && process.getBuiltinModule;
-    const os = typeof getBuiltin === 'function' ? getBuiltin.call(process, 'os') : undefined;
+    const getBuiltin =
+      typeof process !== "undefined" && process.getBuiltinModule;
+    const os =
+      typeof getBuiltin === "function"
+        ? getBuiltin.call(process, "os")
+        : undefined;
     if (os?.constants?.signals) signals = os.constants.signals;
-  } catch { /* fall back to static table */ }
+  } catch {
+    /* fall back to static table */
+  }
 
-  validateOneOf(signalCode, 'signalCode', PrimordialObjectKeys(signals));
+  validateOneOf(signalCode, "signalCode", PrimordialObjectKeys(signals));
 
   // POSIX standard: exit code for signal termination is 128 + signal number.
   return 128 + signals[signalCode];
@@ -4790,9 +5718,15 @@ export function convertProcessSignalToExitCode(signalCode) {
  * @param {number} [port]
  * @param {string} [additional]
  */
-export function _exceptionWithHostPort(err, syscall, address, port, additional) {
+export function _exceptionWithHostPort(
+  err,
+  syscall,
+  address,
+  port,
+  additional,
+) {
   const code = getSystemErrorName(err);
-  let details = '';
+  let details = "";
   if (port && port > 0) {
     details = ` ${address}:${port}`;
   } else if (address) {
@@ -4810,7 +5744,7 @@ export function _exceptionWithHostPort(err, syscall, address, port, additional) 
   if (port) {
     ex.port = port;
   }
-  if (typeof Error.captureStackTrace === 'function') {
+  if (typeof Error.captureStackTrace === "function") {
     Error.captureStackTrace(ex, _exceptionWithHostPort);
   }
   return ex;
@@ -4826,12 +5760,12 @@ export function _exceptionWithHostPort(err, syscall, address, port, additional) 
  */
 export function _errnoException(err, syscall, path) {
   const code = getSystemErrorName(err);
-  const ex = new Error(`${syscall} ${code}${path ? ` ${path}` : ''}`);
+  const ex = new Error(`${syscall} ${code}${path ? ` ${path}` : ""}`);
   ex.errno = err;
   ex.code = code;
   ex.syscall = syscall;
   if (path !== undefined) ex.path = path;
-  if (typeof Error.captureStackTrace === 'function') {
+  if (typeof Error.captureStackTrace === "function") {
     Error.captureStackTrace(ex, _errnoException);
   }
   return ex;
@@ -4846,16 +5780,54 @@ export function _errnoException(err, syscall, path) {
 // ---------------------------------------------------------------------------
 
 export default {
-  format, formatWithOptions, inspect, styleText, stripVTControlCharacters,
-  deprecate, debuglog, debug, inherits, promisify, callbackify,
-  isDeepStrictEqual, toUSVString, getSystemErrorName, getSystemErrorMessage,
-  getSystemErrorMap, types, parseEnv, parseArgs, MIMEType, MIMEParams,
-  TextEncoder, TextDecoder, transferableAbortSignal, transferableAbortController,
-  aborted, log, _extend, getCallSites, convertProcessSignalToExitCode,
+  format,
+  formatWithOptions,
+  inspect,
+  styleText,
+  stripVTControlCharacters,
+  deprecate,
+  debuglog,
+  debug,
+  inherits,
+  promisify,
+  callbackify,
+  isDeepStrictEqual,
+  toUSVString,
+  getSystemErrorName,
+  getSystemErrorMessage,
+  getSystemErrorMap,
+  types,
+  parseEnv,
+  parseArgs,
+  MIMEType,
+  MIMEParams,
+  TextEncoder,
+  TextDecoder,
+  transferableAbortSignal,
+  transferableAbortController,
+  aborted,
+  log,
+  _extend,
+  getCallSites,
+  convertProcessSignalToExitCode,
   _exceptionWithHostPort,
-  isArray, isBoolean, isBuffer, isNull, isNullOrUndefined, isNumber, isString,
-  isSymbol, isUndefined, isRegExp, isObject, isDate, isError, isFunction, isPrimitive,
-  diff, setTraceSigInt,
+  isArray,
+  isBoolean,
+  isBuffer,
+  isNull,
+  isNullOrUndefined,
+  isNumber,
+  isString,
+  isSymbol,
+  isUndefined,
+  isRegExp,
+  isObject,
+  isDate,
+  isError,
+  isFunction,
+  isPrimitive,
+  diff,
+  setTraceSigInt,
 };
 
 // --- Usage ---

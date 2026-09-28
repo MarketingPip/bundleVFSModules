@@ -1,13 +1,11 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
-const assert = require('assert');
-const Transform = require('stream').Transform;
+const assert = require("assert");
+const Transform = require("stream").Transform;
 
-
-const expected = 'asdf';
-
+const expected = "asdf";
 
 function _transform(d, e, n) {
   n();
@@ -19,10 +17,13 @@ function _flush(n) {
 
 const t = new Transform({
   transform: _transform,
-  flush: _flush
+  flush: _flush,
 });
 
-t.end(Buffer.from('blerg'));
-t.on('data', common.mustCall((data) => {
-  assert.strictEqual(data.toString(), expected);
-}));
+t.end(Buffer.from("blerg"));
+t.on(
+  "data",
+  common.mustCall((data) => {
+    assert.strictEqual(data.toString(), expected);
+  }),
+);

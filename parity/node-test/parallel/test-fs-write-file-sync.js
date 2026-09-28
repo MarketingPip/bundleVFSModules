@@ -19,16 +19,16 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const { isMainThread } = require('worker_threads');
+"use strict";
+const common = require("../common");
+const { isMainThread } = require("worker_threads");
 
 if (!isMainThread) {
-  common.skip('Setting process.umask is not supported in Workers');
+  common.skip("Setting process.umask is not supported in Workers");
 }
 
-const assert = require('assert');
-const fs = require('fs');
+const assert = require("assert");
+const fs = require("fs");
 
 // On Windows chmod is only able to manipulate read-only bit. Test if creating
 // the file in read-only mode works.
@@ -37,26 +37,26 @@ const mode = common.isWindows ? 0o444 : 0o755;
 // Reset the umask for testing
 process.umask(0o000);
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
 // Test writeFileSync
 {
-  const file = tmpdir.resolve('testWriteFileSync.txt');
+  const file = tmpdir.resolve("testWriteFileSync.txt");
 
-  fs.writeFileSync(file, '123', { mode });
-  const content = fs.readFileSync(file, { encoding: 'utf8' });
-  assert.strictEqual(content, '123');
+  fs.writeFileSync(file, "123", { mode });
+  const content = fs.readFileSync(file, { encoding: "utf8" });
+  assert.strictEqual(content, "123");
   assert.strictEqual(fs.statSync(file).mode & 0o777, mode);
 }
 
 // Test appendFileSync
 {
-  const file = tmpdir.resolve('testAppendFileSync.txt');
+  const file = tmpdir.resolve("testAppendFileSync.txt");
 
-  fs.appendFileSync(file, 'abc', { mode });
-  const content = fs.readFileSync(file, { encoding: 'utf8' });
-  assert.strictEqual(content, 'abc');
+  fs.appendFileSync(file, "abc", { mode });
+  const content = fs.readFileSync(file, { encoding: "utf8" });
+  assert.strictEqual(content, "abc");
   assert.strictEqual(fs.statSync(file).mode & mode, mode);
 }
 
@@ -78,13 +78,13 @@ tmpdir.refresh();
     return _closeSync(...args);
   };
 
-  const file = tmpdir.resolve('testWriteFileSyncFd.txt');
-  const fd = fs.openSync(file, 'w+', mode);
+  const file = tmpdir.resolve("testWriteFileSyncFd.txt");
+  const fd = fs.openSync(file, "w+", mode);
 
-  fs.writeFileSync(fd, '123');
+  fs.writeFileSync(fd, "123");
   fs.closeSync(fd);
-  const content = fs.readFileSync(file, { encoding: 'utf8' });
-  assert.strictEqual(content, '123');
+  const content = fs.readFileSync(file, { encoding: "utf8" });
+  assert.strictEqual(content, "123");
   assert.strictEqual(fs.statSync(file).mode & 0o777, mode);
 
   // Verify that all opened files were closed.
@@ -95,44 +95,63 @@ tmpdir.refresh();
 
 // Test writeFileSync with flags
 {
-  const file = tmpdir.resolve('testWriteFileSyncFlags.txt');
+  const file = tmpdir.resolve("testWriteFileSyncFlags.txt");
 
-  fs.writeFileSync(file, 'hello ', { encoding: 'utf8', flag: 'a' });
-  fs.writeFileSync(file, 'world!', { encoding: 'utf8', flag: 'a' });
-  const content = fs.readFileSync(file, { encoding: 'utf8' });
-  assert.strictEqual(content, 'hello world!');
+  fs.writeFileSync(file, "hello ", { encoding: "utf8", flag: "a" });
+  fs.writeFileSync(file, "world!", { encoding: "utf8", flag: "a" });
+  const content = fs.readFileSync(file, { encoding: "utf8" });
+  assert.strictEqual(content, "hello world!");
 }
 
 // Test writeFileSync with no flags
 {
-  const utf8Data = 'hello world!';
+  const utf8Data = "hello world!";
   for (const test of [
     { data: utf8Data },
-    { data: utf8Data, options: { encoding: 'utf8' } },
-    { data: Buffer.from(utf8Data, 'utf8').toString('hex'), options: { encoding: 'hex' } },
+    { data: utf8Data, options: { encoding: "utf8" } },
+    {
+      data: Buffer.from(utf8Data, "utf8").toString("hex"),
+      options: { encoding: "hex" },
+    },
   ]) {
-    const file = tmpdir.resolve(`testWriteFileSyncNewFile_${Math.random()}.txt`);
+    const file = tmpdir.resolve(
+      `testWriteFileSyncNewFile_${Math.random()}.txt`,
+    );
     fs.writeFileSync(file, test.data, test.options);
 
-    const content = fs.readFileSync(file, { encoding: 'utf-8' });
+    const content = fs.readFileSync(file, { encoding: "utf-8" });
     assert.strictEqual(content, utf8Data);
   }
 }
 
 // Test writeFileSync with an invalid input
 {
-  const file = tmpdir.resolve('testWriteFileSyncInvalid.txt');
+  const file = tmpdir.resolve("testWriteFileSyncInvalid.txt");
   for (const data of [
-    false, 5, {}, [], null, undefined, true, 5n, () => {}, Symbol(), new Map(),
-    new String('notPrimitive'),
-    { [Symbol.toPrimitive]: (hint) => 'amObject' },
-    { toString() { return 'amObject'; } },
-    Promise.resolve('amPromise'),
+    false,
+    5,
+    {},
+    [],
+    null,
+    undefined,
+    true,
+    5n,
+    () => {},
+    Symbol(),
+    new Map(),
+    new String("notPrimitive"),
+    { [Symbol.toPrimitive]: (hint) => "amObject" },
+    {
+      toString() {
+        return "amObject";
+      },
+    },
+    Promise.resolve("amPromise"),
     common.mustNotCall(),
   ]) {
     assert.throws(
-      () => fs.writeFileSync(file, data, { encoding: 'utf8', flag: 'a' }),
-      { code: 'ERR_INVALID_ARG_TYPE' }
+      () => fs.writeFileSync(file, data, { encoding: "utf8", flag: "a" }),
+      { code: "ERR_INVALID_ARG_TYPE" },
     );
   }
 }

@@ -19,14 +19,16 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const tls = require('tls');
+const tls = require("tls");
 
 const conn = tls.connect(0, common.mustNotCall());
-conn.on('error', common.mustCall(function() {
-  conn.destroy();
-}));
+conn.on(
+  "error",
+  common.mustCall(function () {
+    conn.destroy();
+  }),
+);

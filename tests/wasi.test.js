@@ -1,7 +1,7 @@
-import { jest, describe, test, expect, beforeAll } from '@jest/globals';
-import { WASI } from '../src/wasi.js';
-import { WASI as NodeWASI } from 'wasi';
-import { wasi as wasiDefs } from '@bjorn3/browser_wasi_shim';
+import { jest, describe, test, expect, beforeAll } from "@jest/globals";
+import { WASI } from "../src/wasi.js";
+import { WASI as NodeWASI } from "wasi";
+import { wasi as wasiDefs } from "@bjorn3/browser_wasi_shim";
 
 const throwsCode = (fn) => {
   try {
@@ -9,7 +9,7 @@ const throwsCode = (fn) => {
   } catch (e) {
     return e;
   }
-  throw new Error('expected function to throw');
+  throw new Error("expected function to throw");
 };
 
 // Differential helper: the shim must raise the same code AND message as
@@ -26,262 +26,305 @@ function mockInstance(exports) {
   return { exports };
 }
 
-describe('export shape', () => {
-  test('WASI is exported by name and as the default export', async () => {
-    expect(typeof WASI).toBe('function');
-    const ns = await import('../src/wasi.js');
+describe("export shape", () => {
+  test("WASI is exported by name and as the default export", async () => {
+    expect(typeof WASI).toBe("function");
+    const ns = await import("../src/wasi.js");
     expect(ns.default).toEqual({ WASI });
-    expect(new WASI({ version: 'preview1' })).toBeInstanceOf(WASI);
+    expect(new WASI({ version: "preview1" })).toBeInstanceOf(WASI);
   });
 });
 
-describe('constructor validation (mirrors test-wasi-options-validation.js)', () => {
-  test('version is required', () => {
-    expectSameAsNode(() => new WASI(), () => new NodeWASI());
+describe("constructor validation (mirrors test-wasi-options-validation.js)", () => {
+  test("version is required", () => {
+    expectSameAsNode(
+      () => new WASI(),
+      () => new NodeWASI(),
+    );
   });
 
-  test.each([null, 'foo', '', 0, NaN, Symbol('s'), true, false, () => {}])(
-    'options=%p throws ERR_INVALID_ARG_TYPE',
+  test.each([null, "foo", "", 0, NaN, Symbol("s"), true, false, () => {}])(
+    "options=%p throws ERR_INVALID_ARG_TYPE",
     (options) => {
-      expectSameAsNode(() => new WASI(options), () => new NodeWASI(options));
+      expectSameAsNode(
+        () => new WASI(options),
+        () => new NodeWASI(options),
+      );
     },
   );
 
-  test('version must be a string', () => {
+  test("version must be a string", () => {
     expectSameAsNode(
       () => new WASI({ version: 123 }),
       () => new NodeWASI({ version: 123 }),
     );
   });
 
-  test('unsupported version throws ERR_INVALID_ARG_VALUE', () => {
+  test("unsupported version throws ERR_INVALID_ARG_VALUE", () => {
     expectSameAsNode(
-      () => new WASI({ version: 'not_a_version' }),
-      () => new NodeWASI({ version: 'not_a_version' }),
+      () => new WASI({ version: "not_a_version" }),
+      () => new NodeWASI({ version: "not_a_version" }),
     );
   });
 
-  test('both supported versions construct', () => {
-    expect(() => new WASI({ version: 'preview1' })).not.toThrow();
-    expect(() => new WASI({ version: 'unstable' })).not.toThrow();
+  test("both supported versions construct", () => {
+    expect(() => new WASI({ version: "preview1" })).not.toThrow();
+    expect(() => new WASI({ version: "unstable" })).not.toThrow();
   });
 
-  test('args defaults to [] and must be an Array', () => {
-    expect(() => new WASI({ version: 'preview1' })).not.toThrow();
+  test("args defaults to [] and must be an Array", () => {
+    expect(() => new WASI({ version: "preview1" })).not.toThrow();
     expectSameAsNode(
-      () => new WASI({ version: 'preview1', args: 'fhqwhgads' }),
-      () => new NodeWASI({ version: 'preview1', args: 'fhqwhgads' }),
-    );
-  });
-
-  test('env must be an Object', () => {
-    expectSameAsNode(
-      () => new WASI({ version: 'preview1', env: 'fhqwhgads' }),
-      () => new NodeWASI({ version: 'preview1', env: 'fhqwhgads' }),
-    );
-    expectSameAsNode(
-      () => new WASI({ version: 'preview1', env: 123 }),
-      () => new NodeWASI({ version: 'preview1', env: 123 }),
+      () => new WASI({ version: "preview1", args: "fhqwhgads" }),
+      () => new NodeWASI({ version: "preview1", args: "fhqwhgads" }),
     );
   });
 
-  test('preopens must be an Object', () => {
+  test("env must be an Object", () => {
     expectSameAsNode(
-      () => new WASI({ version: 'preview1', preopens: 'fhqwhgads' }),
-      () => new NodeWASI({ version: 'preview1', preopens: 'fhqwhgads' }),
+      () => new WASI({ version: "preview1", env: "fhqwhgads" }),
+      () => new NodeWASI({ version: "preview1", env: "fhqwhgads" }),
+    );
+    expectSameAsNode(
+      () => new WASI({ version: "preview1", env: 123 }),
+      () => new NodeWASI({ version: "preview1", env: 123 }),
     );
   });
 
-  test('returnOnExit must be a boolean', () => {
+  test("preopens must be an Object", () => {
     expectSameAsNode(
-      () => new WASI({ version: 'preview1', returnOnExit: 'fhqwhgads' }),
-      () => new NodeWASI({ version: 'preview1', returnOnExit: 'fhqwhgads' }),
+      () => new WASI({ version: "preview1", preopens: "fhqwhgads" }),
+      () => new NodeWASI({ version: "preview1", preopens: "fhqwhgads" }),
     );
   });
 
-  test.each(['stdin', 'stdout', 'stderr'])('%s must be an int32 >= 0', (fd) => {
+  test("returnOnExit must be a boolean", () => {
     expectSameAsNode(
-      () => new WASI({ version: 'preview1', [fd]: 'fhqwhgads' }),
-      () => new NodeWASI({ version: 'preview1', [fd]: 'fhqwhgads' }),
+      () => new WASI({ version: "preview1", returnOnExit: "fhqwhgads" }),
+      () => new NodeWASI({ version: "preview1", returnOnExit: "fhqwhgads" }),
+    );
+  });
+
+  test.each(["stdin", "stdout", "stderr"])("%s must be an int32 >= 0", (fd) => {
+    expectSameAsNode(
+      () => new WASI({ version: "preview1", [fd]: "fhqwhgads" }),
+      () => new NodeWASI({ version: "preview1", [fd]: "fhqwhgads" }),
     );
     expectSameAsNode(
-      () => new WASI({ version: 'preview1', [fd]: 1.5 }),
-      () => new NodeWASI({ version: 'preview1', [fd]: 1.5 }),
+      () => new WASI({ version: "preview1", [fd]: 1.5 }),
+      () => new NodeWASI({ version: "preview1", [fd]: 1.5 }),
     );
     expectSameAsNode(
-      () => new WASI({ version: 'preview1', [fd]: -1 }),
-      () => new NodeWASI({ version: 'preview1', [fd]: -1 }),
+      () => new WASI({ version: "preview1", [fd]: -1 }),
+      () => new NodeWASI({ version: "preview1", [fd]: -1 }),
     );
-    expect(() => new WASI({ version: 'preview1', [fd]: 2 })).not.toThrow();
+    expect(() => new WASI({ version: "preview1", [fd]: 2 })).not.toThrow();
   });
 });
 
-describe('getImportObject', () => {
-  test('preview1 uses wasi_snapshot_preview1', () => {
-    const wasi = new WASI({ version: 'preview1' });
+describe("getImportObject", () => {
+  test("preview1 uses wasi_snapshot_preview1", () => {
+    const wasi = new WASI({ version: "preview1" });
     const obj = wasi.getImportObject();
-    expect(Object.keys(obj)).toEqual(['wasi_snapshot_preview1']);
+    expect(Object.keys(obj)).toEqual(["wasi_snapshot_preview1"]);
     expect(obj.wasi_snapshot_preview1).toBe(wasi.wasiImport);
   });
 
-  test('unstable uses wasi_unstable', () => {
-    const wasi = new WASI({ version: 'unstable' });
-    expect(Object.keys(wasi.getImportObject())).toEqual(['wasi_unstable']);
+  test("unstable uses wasi_unstable", () => {
+    const wasi = new WASI({ version: "unstable" });
+    expect(Object.keys(wasi.getImportObject())).toEqual(["wasi_unstable"]);
   });
 });
 
-describe('wasiImport shape', () => {
-  test('contains the full preview1 syscall surface as functions', () => {
-    const wasi = new WASI({ version: 'preview1' });
+describe("wasiImport shape", () => {
+  test("contains the full preview1 syscall surface as functions", () => {
+    const wasi = new WASI({ version: "preview1" });
     const names = Object.keys(wasi.wasiImport);
     for (const name of [
-      'args_get', 'args_sizes_get', 'environ_get', 'environ_sizes_get',
-      'clock_res_get', 'clock_time_get', 'fd_read', 'fd_write',
-      'path_open', 'poll_oneoff', 'proc_exit', 'proc_raise',
-      'random_get', 'sched_yield', 'sock_accept',
+      "args_get",
+      "args_sizes_get",
+      "environ_get",
+      "environ_sizes_get",
+      "clock_res_get",
+      "clock_time_get",
+      "fd_read",
+      "fd_write",
+      "path_open",
+      "poll_oneoff",
+      "proc_exit",
+      "proc_raise",
+      "random_get",
+      "sched_yield",
+      "sock_accept",
     ]) {
       expect(names).toContain(name);
-      expect(typeof wasi.wasiImport[name]).toBe('function');
+      expect(typeof wasi.wasiImport[name]).toBe("function");
     }
     expect(names.length).toBe(46);
   });
 
-  test('unimplemented syscalls return __WASI_ERRNO_NOSYS (52), never throw', () => {
-    const wasi = new WASI({ version: 'preview1' });
-    for (const name of ['path_open', 'poll_oneoff', 'proc_raise', 'sock_accept', 'fd_seek']) {
+  test("unimplemented syscalls return __WASI_ERRNO_NOSYS (52), never throw", () => {
+    const wasi = new WASI({ version: "preview1" });
+    for (const name of [
+      "path_open",
+      "poll_oneoff",
+      "proc_raise",
+      "sock_accept",
+      "fd_seek",
+    ]) {
       expect(wasi.wasiImport[name]()).toBe(52);
     }
   });
 });
 
-describe('finalizeBindings / start / initialize validation', () => {
+describe("finalizeBindings / start / initialize validation", () => {
   const mem = () => new WebAssembly.Memory({ initial: 1 });
 
-  test('start() with no instance throws like Node', () => {
+  test("start() with no instance throws like Node", () => {
     expectSameAsNode(
-      () => new WASI({ version: 'preview1' }).start(),
-      () => new NodeWASI({ version: 'preview1' }).start(),
+      () => new WASI({ version: "preview1" }).start(),
+      () => new NodeWASI({ version: "preview1" }).start(),
     );
   });
 
-  test('start() rejects null exports like Node', () => {
+  test("start() rejects null exports like Node", () => {
     const mk = (Cls) => {
-      const wasi = new Cls({ version: 'preview1' });
+      const wasi = new Cls({ version: "preview1" });
       const instance = mockInstance(null);
-      Object.defineProperty(instance, 'exports', { get: () => null });
+      Object.defineProperty(instance, "exports", { get: () => null });
       return () => wasi.start(instance);
     };
     // Shim-vs-shim message shape is covered by the official vendored tests;
     // here just assert the code.
-    expect(throwsCode(mk(WASI)).code).toBe('ERR_INVALID_ARG_TYPE');
-    expect(throwsCode(mk(WASI)).message).toMatch(/"instance\.exports" property must be of type object/);
+    expect(throwsCode(mk(WASI)).code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(throwsCode(mk(WASI)).message).toMatch(
+      /"instance\.exports" property must be of type object/,
+    );
   });
 
-  test('start() requires a _start function', () => {
-    const wasi = new WASI({ version: 'preview1' });
+  test("start() requires a _start function", () => {
+    const wasi = new WASI({ version: "preview1" });
     const err = throwsCode(() => wasi.start(mockInstance({ memory: mem() })));
-    expect(err.code).toBe('ERR_INVALID_ARG_TYPE');
-    expect(err.message).toMatch(/"instance\.exports\._start" property must be of type function/);
+    expect(err.code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(err.message).toMatch(
+      /"instance\.exports\._start" property must be of type function/,
+    );
   });
 
-  test('start() rejects an _initialize export with Node\u2019s exact message', () => {
-    const wasi = new WASI({ version: 'preview1' });
+  test("start() rejects an _initialize export with Node\u2019s exact message", () => {
+    const wasi = new WASI({ version: "preview1" });
     const err = throwsCode(() =>
-      wasi.start(mockInstance({ _start() {}, _initialize() {}, memory: mem() })));
-    expect(err.code).toBe('ERR_INVALID_ARG_TYPE');
+      wasi.start(
+        mockInstance({ _start() {}, _initialize() {}, memory: mem() }),
+      ),
+    );
+    expect(err.code).toBe("ERR_INVALID_ARG_TYPE");
     expect(err.message).toBe(
       'The "instance.exports._initialize" property must be undefined. Received function _initialize',
     );
   });
 
-  test('start() requires a real WebAssembly.Memory with the native message', () => {
-    const wasi = new WASI({ version: 'preview1' });
+  test("start() requires a real WebAssembly.Memory with the native message", () => {
+    const wasi = new WASI({ version: "preview1" });
     const err = throwsCode(() => wasi.start(mockInstance({ _start() {} })));
-    expect(err.code).toBe('ERR_INVALID_ARG_TYPE');
+    expect(err.code).toBe("ERR_INVALID_ARG_TYPE");
     expect(err.message).toBe(
       '"instance.exports.memory" property must be a WebAssembly.Memory object',
     );
   });
 
-  test('start() can only be called once', () => {
-    const wasi = new WASI({ version: 'preview1' });
+  test("start() can only be called once", () => {
+    const wasi = new WASI({ version: "preview1" });
     const instance = mockInstance({ _start() {}, memory: mem() });
     wasi.start(instance);
     const err = throwsCode(() => wasi.start(instance));
-    expect(err.code).toBe('ERR_WASI_ALREADY_STARTED');
-    expect(err.message).toBe('WASI instance has already started');
+    expect(err.code).toBe("ERR_WASI_ALREADY_STARTED");
+    expect(err.message).toBe("WASI instance has already started");
   });
 
-  test('initialize() rejects a _start export', () => {
-    const wasi = new WASI({ version: 'preview1' });
+  test("initialize() rejects a _start export", () => {
+    const wasi = new WASI({ version: "preview1" });
     const err = throwsCode(() =>
-      wasi.initialize(mockInstance({ _start() {}, _initialize() {}, memory: mem() })));
-    expect(err.code).toBe('ERR_INVALID_ARG_TYPE');
+      wasi.initialize(
+        mockInstance({ _start() {}, _initialize() {}, memory: mem() }),
+      ),
+    );
+    expect(err.code).toBe("ERR_INVALID_ARG_TYPE");
     expect(err.message).toBe(
       'The "instance.exports._start" property must be undefined. Received function _start',
     );
   });
 
-  test('initialize() calls _initialize when present, ok when absent', () => {
+  test("initialize() calls _initialize when present, ok when absent", () => {
     const fn = jest.fn();
-    new WASI({ version: 'preview1' })
-      .initialize(mockInstance({ _initialize: fn, memory: mem() }));
+    new WASI({ version: "preview1" }).initialize(
+      mockInstance({ _initialize: fn, memory: mem() }),
+    );
     expect(fn).toHaveBeenCalledTimes(1);
     expect(() =>
-      new WASI({ version: 'preview1' }).initialize(mockInstance({ memory: mem() })),
+      new WASI({ version: "preview1" }).initialize(
+        mockInstance({ memory: mem() }),
+      ),
     ).not.toThrow();
   });
 
-  test('finalizeBindings twice throws ERR_WASI_ALREADY_STARTED', () => {
-    const wasi = new WASI({ version: 'preview1' });
+  test("finalizeBindings twice throws ERR_WASI_ALREADY_STARTED", () => {
+    const wasi = new WASI({ version: "preview1" });
     const instance = mockInstance({ memory: mem() });
     wasi.finalizeBindings(instance);
     const err = throwsCode(() => wasi.finalizeBindings(instance));
-    expect(err.code).toBe('ERR_WASI_ALREADY_STARTED');
+    expect(err.code).toBe("ERR_WASI_ALREADY_STARTED");
   });
 });
 
-describe('honest syscall behaviour', () => {
+describe("honest syscall behaviour", () => {
   const mem = () => new WebAssembly.Memory({ initial: 1 });
 
   function readU32(view, ptr) {
     return view.getUint32(ptr, true);
   }
 
-  test('start() returns the proc_exit code (returnOnExit=true)', () => {
-    const wasi = new WASI({ version: 'preview1', returnOnExit: true });
+  test("start() returns the proc_exit code (returnOnExit=true)", () => {
+    const wasi = new WASI({ version: "preview1", returnOnExit: true });
     let code;
     const instance = mockInstance({
-      _start() { wasi.wasiImport.proc_exit(42); },
+      _start() {
+        wasi.wasiImport.proc_exit(42);
+      },
       memory: mem(),
     });
     code = wasi.start(instance);
     expect(code).toBe(42);
   });
 
-  test('start() returns 0 when _start returns normally', () => {
-    const wasi = new WASI({ version: 'preview1' });
+  test("start() returns 0 when _start returns normally", () => {
+    const wasi = new WASI({ version: "preview1" });
     const code = wasi.start(mockInstance({ _start() {}, memory: mem() }));
     expect(code).toBe(0);
   });
 
-  test('proc_exit with returnOnExit=false raises WASI_EXIT instead of exiting', () => {
-    const wasi = new WASI({ version: 'preview1', returnOnExit: false });
+  test("proc_exit with returnOnExit=false raises WASI_EXIT instead of exiting", () => {
+    const wasi = new WASI({ version: "preview1", returnOnExit: false });
     const err = throwsCode(() => wasi.wasiImport.proc_exit(3));
-    expect(err.code).toBe('WASI_EXIT');
+    expect(err.code).toBe("WASI_EXIT");
     expect(err.exitCode).toBe(3);
   });
 
-  test('args_get / args_sizes_get round-trip through guest memory', () => {
+  test("args_get / args_sizes_get round-trip through guest memory", () => {
     const mem2 = new WebAssembly.Memory({ initial: 1 });
-    const wasi2 = new WASI({ version: 'preview1', args: ['prog', '--flag', 'x'] });
+    const wasi2 = new WASI({
+      version: "preview1",
+      args: ["prog", "--flag", "x"],
+    });
     wasi2.finalizeBindings(mockInstance({ memory: mem2 }));
     const v = new DataView(mem2.buffer);
     expect(wasi2.wasiImport.args_sizes_get(0, 4)).toBe(0);
     expect(readU32(v, 0)).toBe(3);
     const enc = new TextEncoder();
-    const expectedSize = ['prog', '--flag', 'x']
-      .reduce((n, s) => n + enc.encode(s).length + 1, 0);
+    const expectedSize = ["prog", "--flag", "x"].reduce(
+      (n, s) => n + enc.encode(s).length + 1,
+      0,
+    );
     expect(readU32(v, 4)).toBe(expectedSize);
     expect(wasi2.wasiImport.args_get(16, 64)).toBe(0);
     const dec = new TextDecoder();
@@ -292,12 +335,15 @@ describe('honest syscall behaviour', () => {
       while (bytes[end] !== 0) end++;
       return dec.decode(bytes.subarray(ptr, end));
     });
-    expect(argv).toEqual(['prog', '--flag', 'x']);
+    expect(argv).toEqual(["prog", "--flag", "x"]);
   });
 
-  test('environ_get / environ_sizes_get serialise KEY=VALUE', () => {
+  test("environ_get / environ_sizes_get serialise KEY=VALUE", () => {
     const mem3 = new WebAssembly.Memory({ initial: 1 });
-    const wasi = new WASI({ version: 'preview1', env: { A: '1', B: undefined, C: 'x' } });
+    const wasi = new WASI({
+      version: "preview1",
+      env: { A: "1", B: undefined, C: "x" },
+    });
     wasi.finalizeBindings(mockInstance({ memory: mem3 }));
     const v = new DataView(mem3.buffer);
     expect(wasi.wasiImport.environ_sizes_get(0, 4)).toBe(0);
@@ -311,28 +357,28 @@ describe('honest syscall behaviour', () => {
       while (bytes[end] !== 0) end++;
       return dec.decode(bytes.subarray(ptr, end));
     });
-    expect(vars).toEqual(['A=1', 'C=x']);
+    expect(vars).toEqual(["A=1", "C=x"]);
   });
 
-  test('fd_write to stdout/stderr reaches the console; bad fds give BADF', () => {
+  test("fd_write to stdout/stderr reaches the console; bad fds give BADF", () => {
     const mem4 = new WebAssembly.Memory({ initial: 1 });
-    const wasi = new WASI({ version: 'preview1' });
+    const wasi = new WASI({ version: "preview1" });
     wasi.finalizeBindings(mockInstance({ memory: mem4 }));
     const v = new DataView(mem4.buffer);
     const bytes = new Uint8Array(mem4.buffer);
-    const msg = new TextEncoder().encode('hello wasi\n');
+    const msg = new TextEncoder().encode("hello wasi\n");
     bytes.set(msg, 64);
     v.setUint32(16, 64, true); // iov ptr
     v.setUint32(20, msg.length, true); // iov len
 
-    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(wasi.wasiImport.fd_write(1, 16, 1, 32)).toBe(0);
       expect(readU32(v, 32)).toBe(msg.length);
-      expect(logSpy).toHaveBeenCalledWith('hello wasi');
+      expect(logSpy).toHaveBeenCalledWith("hello wasi");
       expect(wasi.wasiImport.fd_write(2, 16, 1, 32)).toBe(0);
-      expect(errSpy).toHaveBeenCalledWith('hello wasi');
+      expect(errSpy).toHaveBeenCalledWith("hello wasi");
       expect(wasi.wasiImport.fd_write(3, 16, 1, 32)).toBe(8); // BADF
       expect(wasi.wasiImport.fd_write(0, 16, 1, 32)).toBe(8); // BADF
     } finally {
@@ -341,9 +387,9 @@ describe('honest syscall behaviour', () => {
     }
   });
 
-  test('fd_read on stdin returns EOF (0 bytes)', () => {
+  test("fd_read on stdin returns EOF (0 bytes)", () => {
     const mem5 = new WebAssembly.Memory({ initial: 1 });
-    const wasi = new WASI({ version: 'preview1' });
+    const wasi = new WASI({ version: "preview1" });
     wasi.finalizeBindings(mockInstance({ memory: mem5 }));
     const v = new DataView(mem5.buffer);
     expect(wasi.wasiImport.fd_read(0, 16, 1, 32)).toBe(0);
@@ -351,9 +397,9 @@ describe('honest syscall behaviour', () => {
     expect(wasi.wasiImport.fd_read(1, 16, 1, 32)).toBe(8);
   });
 
-  test('clock_time_get returns plausible realtime/monotonic values', () => {
+  test("clock_time_get returns plausible realtime/monotonic values", () => {
     const mem6 = new WebAssembly.Memory({ initial: 1 });
-    const wasi = new WASI({ version: 'preview1' });
+    const wasi = new WASI({ version: "preview1" });
     wasi.finalizeBindings(mockInstance({ memory: mem6 }));
     const v = new DataView(mem6.buffer);
     expect(wasi.wasiImport.clock_time_get(0, 0, 64)).toBe(0);
@@ -364,17 +410,17 @@ describe('honest syscall behaviour', () => {
     expect(wasi.wasiImport.clock_time_get(99, 0, 64)).toBe(28); // INVAL
   });
 
-  test('random_get fills the guest buffer with non-trivial bytes', () => {
+  test("random_get fills the guest buffer with non-trivial bytes", () => {
     const mem7 = new WebAssembly.Memory({ initial: 1 });
-    const wasi = new WASI({ version: 'preview1' });
+    const wasi = new WASI({ version: "preview1" });
     wasi.finalizeBindings(mockInstance({ memory: mem7 }));
     expect(wasi.wasiImport.random_get(64, 32)).toBe(0);
     const slice = new Uint8Array(mem7.buffer).subarray(64, 96);
     expect(new Set(slice).size).toBeGreaterThan(1);
   });
 
-  test('sched_yield is a successful noop', () => {
-    const wasi = new WASI({ version: 'preview1' });
+  test("sched_yield is a successful noop", () => {
+    const wasi = new WASI({ version: "preview1" });
     expect(wasi.wasiImport.sched_yield()).toBe(0);
   });
 });
@@ -382,18 +428,21 @@ describe('honest syscall behaviour', () => {
 // ---------------------------------------------------------------------------
 // Filesystem engine: preopens are real virtual directories now, not stubs.
 // ---------------------------------------------------------------------------
-describe('preopen filesystem (shim engine)', () => {
+describe("preopen filesystem (shim engine)", () => {
   const enc = new TextEncoder();
   const dec = new TextDecoder();
   // fd rights sufficient for create/write/read/seek/tell on guest files
-  const RIGHTS_RW = wasiDefs.RIGHTS_FD_READ | wasiDefs.RIGHTS_FD_WRITE |
-    wasiDefs.RIGHTS_FD_SEEK | wasiDefs.RIGHTS_FD_TELL;
+  const RIGHTS_RW =
+    wasiDefs.RIGHTS_FD_READ |
+    wasiDefs.RIGHTS_FD_WRITE |
+    wasiDefs.RIGHTS_FD_SEEK |
+    wasiDefs.RIGHTS_FD_TELL;
 
   function setupPreopen() {
     const memory = new WebAssembly.Memory({ initial: 1 });
     const wasi = new WASI({
-      version: 'preview1',
-      preopens: { '/sandbox': '/host/ignored-in-browser' },
+      version: "preview1",
+      preopens: { "/sandbox": "/host/ignored-in-browser" },
     });
     wasi.finalizeBindings(mockInstance({ memory }));
     return {
@@ -407,25 +456,39 @@ describe('preopen filesystem (shim engine)', () => {
     u8.set(enc.encode(str), ptr);
   }
 
-  test('preopen fd exposes the guest path via fd_prestat_dir_name', () => {
+  test("preopen fd exposes the guest path via fd_prestat_dir_name", () => {
     const { wasi, v, u8 } = setupPreopen();
     expect(wasi.wasiImport.fd_prestat_get(3, 64)).toBe(0);
     expect(wasi.wasiImport.fd_prestat_dir_name(3, 128, 32)).toBe(0);
-    expect(dec.decode(u8.slice(128, 128 + 8))).toBe('/sandbox');
+    expect(dec.decode(u8.slice(128, 128 + 8))).toBe("/sandbox");
     // without a preopen there is no fd 3
-    const bare = new WASI({ version: 'preview1' });
-    bare.finalizeBindings(mockInstance({ memory: new WebAssembly.Memory({ initial: 1 }) }));
+    const bare = new WASI({ version: "preview1" });
+    bare.finalizeBindings(
+      mockInstance({ memory: new WebAssembly.Memory({ initial: 1 }) }),
+    );
     expect(bare.wasiImport.fd_prestat_get(3, 64)).toBe(8); // BADF
   });
 
-  test('path_open + fd_write + fd_seek + fd_read round-trip a file', () => {
+  test("path_open + fd_write + fd_seek + fd_read round-trip a file", () => {
     const { wasi, v, u8 } = setupPreopen();
-    guestBytes(u8, 64, 'hello.txt');
-    expect(wasi.wasiImport.path_open(3, 0, 64, 9, wasiDefs.OFLAGS_CREAT, RIGHTS_RW, 0, 0, 16)).toBe(0);
+    guestBytes(u8, 64, "hello.txt");
+    expect(
+      wasi.wasiImport.path_open(
+        3,
+        0,
+        64,
+        9,
+        wasiDefs.OFLAGS_CREAT,
+        RIGHTS_RW,
+        0,
+        0,
+        16,
+      ),
+    ).toBe(0);
     const fd = v.getUint32(16, true);
     expect(fd).toBeGreaterThanOrEqual(3);
 
-    const msg = enc.encode('hi wasi fs\n');
+    const msg = enc.encode("hi wasi fs\n");
     u8.set(msg, 256);
     v.setUint32(32, 256, true); // iov[0].buf
     v.setUint32(36, msg.length, true); // iov[0].buf_len
@@ -440,33 +503,59 @@ describe('preopen filesystem (shim engine)', () => {
     expect(wasi.wasiImport.fd_read(fd, 320, 1, 340)).toBe(0);
     const nread = v.getUint32(340, true);
     expect(nread).toBe(msg.length);
-    expect(dec.decode(u8.slice(512, 512 + nread))).toBe('hi wasi fs\n');
+    expect(dec.decode(u8.slice(512, 512 + nread))).toBe("hi wasi fs\n");
   });
 
-  test('path_open without O_CREAT fails for a missing file', () => {
+  test("path_open without O_CREAT fails for a missing file", () => {
     const { wasi, u8 } = setupPreopen();
-    guestBytes(u8, 64, 'nope.txt');
+    guestBytes(u8, 64, "nope.txt");
     // 44 == __WASI_ERRNO_NOENT
-    expect(wasi.wasiImport.path_open(3, 0, 64, 8, 0, RIGHTS_RW, 0, 0, 16)).toBe(44);
+    expect(wasi.wasiImport.path_open(3, 0, 64, 8, 0, RIGHTS_RW, 0, 0, 16)).toBe(
+      44,
+    );
   });
 
-  test('fd_readdir lists files created in the preopen', () => {
+  test("fd_readdir lists files created in the preopen", () => {
     const { wasi, v, u8 } = setupPreopen();
-    guestBytes(u8, 64, 'listed.txt');
-    expect(wasi.wasiImport.path_open(3, 0, 64, 10, wasiDefs.OFLAGS_CREAT, RIGHTS_RW, 0, 0, 16)).toBe(0);
+    guestBytes(u8, 64, "listed.txt");
+    expect(
+      wasi.wasiImport.path_open(
+        3,
+        0,
+        64,
+        10,
+        wasiDefs.OFLAGS_CREAT,
+        RIGHTS_RW,
+        0,
+        0,
+        16,
+      ),
+    ).toBe(0);
     expect(wasi.wasiImport.fd_readdir(3, 512, 512, 0n, 32)).toBe(0);
     const used = v.getUint32(32, true);
     expect(used).toBeGreaterThan(0);
-    expect(dec.decode(u8.slice(512, 512 + used))).toContain('listed.txt');
+    expect(dec.decode(u8.slice(512, 512 + used))).toContain("listed.txt");
   });
 
-  test('path_create_directory and path_filestat_get work on the preopen', () => {
+  test("path_create_directory and path_filestat_get work on the preopen", () => {
     const { wasi, v, u8 } = setupPreopen();
-    guestBytes(u8, 64, 'subdir');
+    guestBytes(u8, 64, "subdir");
     expect(wasi.wasiImport.path_create_directory(3, 64, 6)).toBe(0);
-    guestBytes(u8, 64, 'sized.txt');
-    expect(wasi.wasiImport.path_open(3, 0, 64, 9, wasiDefs.OFLAGS_CREAT, RIGHTS_RW, 0, 0, 16)).toBe(0);
-    const msg = enc.encode('12345');
+    guestBytes(u8, 64, "sized.txt");
+    expect(
+      wasi.wasiImport.path_open(
+        3,
+        0,
+        64,
+        9,
+        wasiDefs.OFLAGS_CREAT,
+        RIGHTS_RW,
+        0,
+        0,
+        16,
+      ),
+    ).toBe(0);
+    const msg = enc.encode("12345");
     u8.set(msg, 256);
     v.setUint32(32, 256, true);
     v.setUint32(36, msg.length, true);
@@ -484,40 +573,42 @@ describe('preopen filesystem (shim engine)', () => {
 let fb;
 beforeAll(async () => {
   const realGbm = process.getBuiltinModule;
-  const hadBuffer = 'Buffer' in globalThis;
+  const hadBuffer = "Buffer" in globalThis;
   const realBuffer = globalThis.Buffer;
   process.getBuiltinModule = () => {
-    throw new Error('native builtins disabled (browser-fallback lane)');
+    throw new Error("native builtins disabled (browser-fallback lane)");
   };
   // @ts-expect-error removing the host Buffer like a browser without one
   delete globalThis.Buffer;
   try {
-    fb = await import('../src/wasi.js?fallback=jest');
+    fb = await import("../src/wasi.js?fallback=jest");
   } finally {
     process.getBuiltinModule = realGbm;
     if (hadBuffer) globalThis.Buffer = realBuffer;
   }
 });
 
-describe('browser fallback (no native builtins, no Buffer)', () => {
-  test('constructor validation still matches Node exactly', () => {
+describe("browser fallback (no native builtins, no Buffer)", () => {
+  test("constructor validation still matches Node exactly", () => {
     const err = (() => {
       try {
-        new fb.WASI({ version: 'nope' });
+        new fb.WASI({ version: "nope" });
       } catch (e) {
         return e;
       }
-      throw new Error('should have thrown');
+      throw new Error("should have thrown");
     })();
-    expect(err.code).toBe('ERR_INVALID_ARG_VALUE');
+    expect(err.code).toBe("ERR_INVALID_ARG_VALUE");
     expect(err.message).toBe(
       "The property 'options.version' unsupported WASI version. Received 'nope'",
     );
   });
 
-  test('start/initialize lifecycle works on mock instances', () => {
-    const wasi = new fb.WASI({ version: 'preview1' });
-    expect(Object.keys(wasi.getImportObject())).toEqual(['wasi_snapshot_preview1']);
+  test("start/initialize lifecycle works on mock instances", () => {
+    const wasi = new fb.WASI({ version: "preview1" });
+    expect(Object.keys(wasi.getImportObject())).toEqual([
+      "wasi_snapshot_preview1",
+    ]);
     expect(Object.keys(wasi.wasiImport).length).toBe(46);
     const started = jest.fn();
     const code = wasi.start({
@@ -533,17 +624,22 @@ describe('browser fallback (no native builtins, no Buffer)', () => {
     expect(code).toBe(7);
     const err = (() => {
       try {
-        wasi.start({ exports: { _start() {}, memory: new WebAssembly.Memory({ initial: 1 }) } });
+        wasi.start({
+          exports: {
+            _start() {},
+            memory: new WebAssembly.Memory({ initial: 1 }),
+          },
+        });
       } catch (e) {
         return e;
       }
-      throw new Error('should have thrown');
+      throw new Error("should have thrown");
     })();
-    expect(err.code).toBe('ERR_WASI_ALREADY_STARTED');
+    expect(err.code).toBe("ERR_WASI_ALREADY_STARTED");
   });
 
-  test('args syscalls work without native delegation', () => {
-    const wasi = new fb.WASI({ version: 'preview1', args: ['a'] });
+  test("args syscalls work without native delegation", () => {
+    const wasi = new fb.WASI({ version: "preview1", args: ["a"] });
     const memory = new WebAssembly.Memory({ initial: 1 });
     wasi.finalizeBindings({ exports: { memory } });
     const v = new DataView(memory.buffer);

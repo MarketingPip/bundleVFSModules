@@ -19,15 +19,15 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
-const stream = require('stream');
+const stream = require("stream");
 
 class TestWriter extends stream.Writable {
   _write(buffer, encoding, callback) {
-    console.log('write called');
+    console.log("write called");
     // Super slow write stream (callback never called)
   }
 }
@@ -51,22 +51,19 @@ const src2 = new TestReader();
 
 src1.pipe(dest);
 
-src1.once('readable', () => {
+src1.once("readable", () => {
   process.nextTick(() => {
-
     src2.pipe(dest);
 
-    src2.once('readable', () => {
+    src2.once("readable", () => {
       process.nextTick(() => {
-
         src1.unpipe(dest);
       });
     });
   });
 });
 
-
-process.on('exit', () => {
+process.on("exit", () => {
   assert.strictEqual(src1.reads, 2);
   assert.strictEqual(src2.reads, 2);
 });

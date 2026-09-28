@@ -18,12 +18,12 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const Duplex = require('stream').Duplex;
-const { ReadableStream, WritableStream } = require('stream/web');
+const common = require("../common");
+const assert = require("assert");
+const Duplex = require("stream").Duplex;
+const { ReadableStream, WritableStream } = require("stream/web");
 
 const stream = new Duplex({ objectMode: true });
 
@@ -31,7 +31,7 @@ assert(Duplex() instanceof Duplex);
 assert(stream._readableState.objectMode);
 assert(stream._writableState.objectMode);
 assert(stream.allowHalfOpen);
-assert.strictEqual(stream.listenerCount('end'), 0);
+assert.strictEqual(stream.listenerCount("end"), 0);
 
 let written;
 let read;
@@ -43,22 +43,22 @@ stream._write = (obj, _, cb) => {
 
 stream._read = () => {};
 
-stream.on('data', (obj) => {
+stream.on("data", (obj) => {
   read = obj;
 });
 
 stream.push({ val: 1 });
 stream.end({ val: 2 });
 
-process.on('exit', () => {
+process.on("exit", () => {
   assert.strictEqual(read.val, 1);
   assert.strictEqual(written.val, 2);
 });
 
 // Duplex.fromWeb
 {
-  const dataToRead = Buffer.from('hello');
-  const dataToWrite = Buffer.from('world');
+  const dataToRead = Buffer.from("hello");
+  const dataToWrite = Buffer.from("world");
 
   const readable = new ReadableStream({
     start(controller) {
@@ -69,22 +69,25 @@ process.on('exit', () => {
   const writable = new WritableStream({
     write: common.mustCall((chunk) => {
       assert.strictEqual(chunk, dataToWrite);
-    })
+    }),
   });
 
   const pair = { readable, writable };
   const duplex = Duplex.fromWeb(pair);
 
   duplex.write(dataToWrite);
-  duplex.once('data', common.mustCall((chunk) => {
-    assert.strictEqual(chunk, dataToRead);
-  }));
+  duplex.once(
+    "data",
+    common.mustCall((chunk) => {
+      assert.strictEqual(chunk, dataToRead);
+    }),
+  );
 }
 
 // Duplex.fromWeb - using utf8 and objectMode
 {
-  const dataToRead = 'hello';
-  const dataToWrite = 'world';
+  const dataToRead = "hello";
+  const dataToWrite = "world";
 
   const readable = new ReadableStream({
     start(controller) {
@@ -95,24 +98,27 @@ process.on('exit', () => {
   const writable = new WritableStream({
     write: common.mustCall((chunk) => {
       assert.strictEqual(chunk, dataToWrite);
-    })
+    }),
   });
 
   const pair = {
     readable,
-    writable
+    writable,
   };
-  const duplex = Duplex.fromWeb(pair, { encoding: 'utf8', objectMode: true });
+  const duplex = Duplex.fromWeb(pair, { encoding: "utf8", objectMode: true });
 
   duplex.write(dataToWrite);
-  duplex.once('data', common.mustCall((chunk) => {
-    assert.strictEqual(chunk, dataToRead);
-  }));
+  duplex.once(
+    "data",
+    common.mustCall((chunk) => {
+      assert.strictEqual(chunk, dataToRead);
+    }),
+  );
 }
 // Duplex.toWeb
 {
-  const dataToRead = Buffer.from('hello');
-  const dataToWrite = Buffer.from('world');
+  const dataToRead = Buffer.from("hello");
+  const dataToWrite = Buffer.from("world");
 
   const duplex = Duplex({
     read() {
@@ -121,21 +127,26 @@ process.on('exit', () => {
     },
     write: common.mustCall((chunk) => {
       assert.strictEqual(chunk, dataToWrite);
-    })
+    }),
   });
 
   const { writable, readable } = Duplex.toWeb(duplex);
   writable.getWriter().write(dataToWrite);
 
-  readable.getReader().read().then(common.mustCall((result) => {
-    assert.deepStrictEqual(Buffer.from(result.value), dataToRead);
-  }));
+  readable
+    .getReader()
+    .read()
+    .then(
+      common.mustCall((result) => {
+        assert.deepStrictEqual(Buffer.from(result.value), dataToRead);
+      }),
+    );
 }
 
 // Duplex.toWeb BYOB
 {
-  const dataToRead = Buffer.from('hello');
-  const dataToWrite = Buffer.from('world');
+  const dataToRead = Buffer.from("hello");
+  const dataToWrite = Buffer.from("world");
 
   const duplex = Duplex({
     read() {
@@ -144,17 +155,24 @@ process.on('exit', () => {
     },
     write: common.mustCall((chunk) => {
       assert.strictEqual(chunk, dataToWrite);
-    })
+    }),
   });
 
-  const { writable, readable } = Duplex.toWeb(duplex, { readableType: 'bytes' });
+  const { writable, readable } = Duplex.toWeb(duplex, {
+    readableType: "bytes",
+  });
   writable.getWriter().write(dataToWrite);
   const data = new Uint8Array(dataToRead.length);
-  readable.getReader({ mode: 'byob' }).read(data).then(common.mustCall((result) => {
-    assert.deepStrictEqual(Buffer.from(result.value), dataToRead);
-  }));
+  readable
+    .getReader({ mode: "byob" })
+    .read(data)
+    .then(
+      common.mustCall((result) => {
+        assert.deepStrictEqual(Buffer.from(result.value), dataToRead);
+      }),
+    );
 
   // Ensure that the originally-named `options.type` still works as an alias for `options.readableType`
   // `getReader({ mode: 'byob' })` throws if the underlying ReadableStream is not a byte stream
-  Duplex.toWeb(duplex, { type: 'bytes' }).readable.getReader({ mode: 'byob' });
+  Duplex.toWeb(duplex, { type: "bytes" }).readable.getReader({ mode: "byob" });
 }

@@ -6,6 +6,7 @@
 // NOTE: the file is named _readable_stream.js for history; the bundle key is
 // `_stream_readable` (see BUNDLED_MODULES in src/build-vfs.mjs), matching the
 // runtime's builtin-module key normalization.
-import { Readable } from './stream.js';
+import { Readable } from "./stream.js";
 export default Readable;
-export const { ReadableState, _fromList, from, fromWeb, toWeb, wrap } = Readable;
+export const { ReadableState, _fromList, from, fromWeb, toWeb, wrap } =
+  Readable;

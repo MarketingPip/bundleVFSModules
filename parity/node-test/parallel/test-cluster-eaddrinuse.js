@@ -19,44 +19,53 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 // Check that having a worker bind to a port that's already taken doesn't
 // leave the primary process in a confused state. Releasing the port and
 // trying again should Just Work[TM].
 
-const common = require('../common');
-const assert = require('assert');
-const fork = require('child_process').fork;
-const net = require('net');
+const common = require("../common");
+const assert = require("assert");
+const fork = require("child_process").fork;
+const net = require("net");
 
 const id = String(process.argv[2]);
 const port = String(process.argv[3]);
 
-if (id === 'undefined') {
+if (id === "undefined") {
   const server = net.createServer(common.mustNotCall());
-  server.listen(0, function() {
-    const worker = fork(__filename, ['worker', server.address().port]);
-    worker.on('message', function(msg) {
-      if (msg !== 'stop-listening') return;
-      server.close(function() {
-        worker.send('stopped-listening');
+  server.listen(0, function () {
+    const worker = fork(__filename, ["worker", server.address().port]);
+    worker.on("message", function (msg) {
+      if (msg !== "stop-listening") return;
+      server.close(function () {
+        worker.send("stopped-listening");
       });
     });
   });
-} else if (id === 'worker') {
+} else if (id === "worker") {
   let server = net.createServer(common.mustNotCall());
   server.listen(port, common.mustNotCall());
-  server.on('error', common.mustCall(function(e) {
-    assert(e.code, 'EADDRINUSE');
-    process.send('stop-listening');
-    process.once('message', common.mustCall((msg) => {
-      if (msg !== 'stopped-listening') return;
-      server = net.createServer(common.mustNotCall());
-      server.listen(port, common.mustCall(function() {
-        server.close();
-      }));
-    }));
-  }));
+  server.on(
+    "error",
+    common.mustCall(function (e) {
+      assert(e.code, "EADDRINUSE");
+      process.send("stop-listening");
+      process.once(
+        "message",
+        common.mustCall((msg) => {
+          if (msg !== "stopped-listening") return;
+          server = net.createServer(common.mustNotCall());
+          server.listen(
+            port,
+            common.mustCall(function () {
+              server.close();
+            }),
+          );
+        }),
+      );
+    }),
+  );
 } else {
-  assert.fail('Bad argument');
+  assert.fail("Bad argument");
 }

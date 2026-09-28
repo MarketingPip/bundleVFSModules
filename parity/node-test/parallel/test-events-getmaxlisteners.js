@@ -1,8 +1,13 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('node:assert');
-const { getMaxListeners, EventEmitter, defaultMaxListeners, setMaxListeners } = require('node:events');
+require("../common");
+const assert = require("node:assert");
+const {
+  getMaxListeners,
+  EventEmitter,
+  defaultMaxListeners,
+  setMaxListeners,
+} = require("node:events");
 
 {
   const ee = new EventEmitter();

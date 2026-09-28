@@ -1,43 +1,52 @@
-'use strict';
+"use strict";
 
-require('../common');
-const path = require('path');
-const assert = require('assert');
-const { Worker } = require('worker_threads');
+require("../common");
+const path = require("path");
+const assert = require("assert");
+const { Worker } = require("worker_threads");
 
 {
   const expectedErr = {
-    code: 'ERR_WORKER_PATH',
-    name: 'TypeError'
+    code: "ERR_WORKER_PATH",
+    name: "TypeError",
   };
-  const existingRelPathNoDot = path.relative('.', __filename);
-  assert.throws(() => { new Worker(existingRelPathNoDot); }, expectedErr);
-  assert.throws(() => { new Worker('relative_no_dot'); }, expectedErr);
-  assert.throws(() => { new Worker('file:///file_url'); }, expectedErr);
-  assert.throws(() => { new Worker('https://www.url.com'); }, expectedErr);
+  const existingRelPathNoDot = path.relative(".", __filename);
+  assert.throws(() => {
+    new Worker(existingRelPathNoDot);
+  }, expectedErr);
+  assert.throws(() => {
+    new Worker("relative_no_dot");
+  }, expectedErr);
+  assert.throws(() => {
+    new Worker("file:///file_url");
+  }, expectedErr);
+  assert.throws(() => {
+    new Worker("https://www.url.com");
+  }, expectedErr);
 }
 
 {
+  assert.throws(() => {
+    new Worker("file:///file_url");
+  }, /Wrap file:\/\/ URLs with `new URL`/);
+  assert.throws(() => {
+    new Worker("data:text/javascript,");
+  }, /Wrap data: URLs with `new URL`/);
   assert.throws(
-    () => { new Worker('file:///file_url'); },
-    /Wrap file:\/\/ URLs with `new URL`/
-  );
-  assert.throws(
-    () => { new Worker('data:text/javascript,'); },
-    /Wrap data: URLs with `new URL`/
-  );
-  assert.throws(
-    () => { new Worker('relative_no_dot'); },
+    () => {
+      new Worker("relative_no_dot");
+    },
     // eslint-disable-next-line node-core/no-unescaped-regexp-dot
-    /^((?!Wrap file:\/\/ URLs with `new URL`).)*$/s
+    /^((?!Wrap file:\/\/ URLs with `new URL`).)*$/s,
   );
 }
 
 {
   const expectedErr = {
-    code: 'ERR_INVALID_URL_SCHEME',
-    name: 'TypeError'
+    code: "ERR_INVALID_URL_SCHEME",
+    name: "TypeError",
   };
-  assert.throws(() => { new Worker(new URL('https://www.url.com')); },
-                expectedErr);
+  assert.throws(() => {
+    new Worker(new URL("https://www.url.com"));
+  }, expectedErr);
 }

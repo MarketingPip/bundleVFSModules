@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 // Refs: https://github.com/nodejs/node/issues/10223
 
-require('../common');
-const vm = require('vm');
-const assert = require('assert');
+require("../common");
+const vm = require("vm");
+const assert = require("assert");
 
 const context = vm.createContext({});
 

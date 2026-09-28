@@ -1,13 +1,14 @@
-'use strict';
-const common = require('../common');
-const Countdown = require('../common/countdown');
-const assert = require('assert');
-const { Worker } = require('worker_threads');
-const { describe, it, mock } = require('node:test');
+"use strict";
+const common = require("../common");
+const Countdown = require("../common/countdown");
+const assert = require("assert");
+const { Worker } = require("worker_threads");
+const { describe, it, mock } = require("node:test");
 
-describe('Allocating uninitialized ArrayBuffers ...', () => {
-  it('...should not affect zero-fill in other threads', () => {
-    const w = new Worker(`
+describe("Allocating uninitialized ArrayBuffers ...", () => {
+  it("...should not affect zero-fill in other threads", () => {
+    const w = new Worker(
+      `
       const { parentPort } = require('worker_threads');
 
       function post() {
@@ -16,7 +17,9 @@ describe('Allocating uninitialized ArrayBuffers ...', () => {
       }
 
       setInterval(post, 0);
-    `, { eval: true });
+    `,
+      { eval: true },
+    );
 
     const fn = mock.fn(() => {
       // Continuously allocate memory in the main thread. The allocUnsafe
@@ -28,16 +31,22 @@ describe('Allocating uninitialized ArrayBuffers ...', () => {
       setInterval(() => Buffer.allocUnsafe(32 * 1024 * 1024), 0).unref();
     });
 
-    w.on('online', fn);
+    w.on("online", fn);
 
-    const countdown = new Countdown(100, common.mustCallAtLeast(() => {
-      w.terminate();
-      assert(fn.mock.calls.length > 0);
-    }));
+    const countdown = new Countdown(
+      100,
+      common.mustCallAtLeast(() => {
+        w.terminate();
+        assert(fn.mock.calls.length > 0);
+      }),
+    );
 
-    w.on('message', common.mustCallAtLeast((sum) => {
-      assert.strictEqual(sum, 0);
-      if (countdown.remaining) countdown.dec();
-    }));
+    w.on(
+      "message",
+      common.mustCallAtLeast((sum) => {
+        assert.strictEqual(sum, 0);
+        if (countdown.remaining) countdown.dec();
+      }),
+    );
   });
 });

@@ -43,18 +43,19 @@ import { EventEmitter } from "./events.js";
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import). The domain shim needs no
 //    runtime services; the guard documents the contract.
-const RT = (typeof globalThis._RUNTIME_ !== "undefined")
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 void RT;
 
 // 2. Host process handle. Real Node (and Jared's sandbox, which installs its
 //    own process object) has one; a bare browser does not. Everything below
 //    treats it as optional.
-const proc = (typeof globalThis.process === "object" &&
-              globalThis.process !== null)
-  ? globalThis.process
-  : undefined;
+const proc =
+  typeof globalThis.process === "object" && globalThis.process !== null
+    ? globalThis.process
+    : undefined;
 
 // ---------------------------------------------------------------------------
 // Shared state. All copies of this module in a realm (e.g. the plain and the
@@ -63,11 +64,11 @@ const proc = (typeof globalThis.process === "object" &&
 // ---------------------------------------------------------------------------
 const SHARED_KEY = Symbol.for("bundleVFSModules.domain.shared");
 const shared = (globalThis[SHARED_KEY] ??= {
-  active: null,      // mirrors `exports.active`
-  procDomain: null,  // backs the `process.domain` accessor
-  stack: [],         // the domain stack; reassigned (never mutated in place
-                     // across the save/restore dance)
-  installed: false,  // host patching (EventEmitter, nextTick, …) done
+  active: null, // mirrors `exports.active`
+  procDomain: null, // backs the `process.domain` accessor
+  stack: [], // the domain stack; reassigned (never mutated in place
+  // across the save/restore dance)
+  installed: false, // host patching (EventEmitter, nextTick, …) done
   timerPatches: null, // lazy global-timer patch state, see below
 });
 
@@ -83,17 +84,21 @@ export let active = null;
 // ---------------------------------------------------------------------------
 class ERR_DOMAIN_CALLBACK_NOT_AVAILABLE extends Error {
   constructor() {
-    super("A callback was registered through " +
-          "process.setUncaughtExceptionCaptureCallback(), which is mutually " +
-          "exclusive with using the `domain` module");
+    super(
+      "A callback was registered through " +
+        "process.setUncaughtExceptionCaptureCallback(), which is mutually " +
+        "exclusive with using the `domain` module",
+    );
     this.code = "ERR_DOMAIN_CALLBACK_NOT_AVAILABLE";
   }
 }
 
 class ERR_DOMAIN_CANNOT_SET_UNCAUGHT_EXCEPTION_CAPTURE extends Error {
   constructor() {
-    super("The `domain` module is in use, which is mutually exclusive with " +
-          "calling process.setUncaughtExceptionCaptureCallback()");
+    super(
+      "The `domain` module is in use, which is mutually exclusive with " +
+        "calling process.setUncaughtExceptionCaptureCallback()",
+    );
     this.code = "ERR_DOMAIN_CANNOT_SET_UNCAUGHT_EXCEPTION_CAPTURE";
   }
 }
@@ -114,10 +119,16 @@ if (proc !== undefined) {
       __proto__: null,
       enumerable: true,
       configurable: true,
-      get() { return shared.procDomain; },
-      set(arg) { shared.procDomain = arg; },
+      get() {
+        return shared.procDomain;
+      },
+      set(arg) {
+        shared.procDomain = arg;
+      },
     });
-  } catch { /* host process not patchable; carry on */ }
+  } catch {
+    /* host process not patchable; carry on */
+  }
 }
 
 function setActiveDomain(d) {
@@ -134,9 +145,11 @@ function currentProcessDomain() {
 // Mutual exclusion with a pre-existing uncaught-exception capture callback.
 // This throws before any patching, like lib/domain.js.
 // ---------------------------------------------------------------------------
-if (proc !== undefined &&
-    typeof proc.hasUncaughtExceptionCaptureCallback === "function" &&
-    proc.hasUncaughtExceptionCaptureCallback()) {
+if (
+  proc !== undefined &&
+  typeof proc.hasUncaughtExceptionCaptureCallback === "function" &&
+  proc.hasUncaughtExceptionCaptureCallback()
+) {
   throw new ERR_DOMAIN_CALLBACK_NOT_AVAILABLE();
 }
 
@@ -144,19 +157,24 @@ if (proc !== undefined &&
 // message, then lock process.setUncaughtExceptionCaptureCallback like Node does.
 const domainRequireStack = new Error("require(`domain`) at this point").stack;
 const rawSetUncaughtExceptionCaptureCallback =
-  (proc !== undefined &&
-   typeof proc.setUncaughtExceptionCaptureCallback === "function")
+  proc !== undefined &&
+  typeof proc.setUncaughtExceptionCaptureCallback === "function"
     ? proc.setUncaughtExceptionCaptureCallback.bind(proc)
     : undefined;
-if (proc !== undefined &&
-    typeof proc.setUncaughtExceptionCaptureCallback === "function") {
+if (
+  proc !== undefined &&
+  typeof proc.setUncaughtExceptionCaptureCallback === "function"
+) {
   try {
-    proc.setUncaughtExceptionCaptureCallback = function setUncaughtExceptionCaptureCallback() {
-      const err = new ERR_DOMAIN_CANNOT_SET_UNCAUGHT_EXCEPTION_CAPTURE();
-      err.stack += `\n${"-".repeat(40)}\n${domainRequireStack}`;
-      throw err;
-    };
-  } catch { /* ignore */ }
+    proc.setUncaughtExceptionCaptureCallback =
+      function setUncaughtExceptionCaptureCallback() {
+        const err = new ERR_DOMAIN_CANNOT_SET_UNCAUGHT_EXCEPTION_CAPTURE();
+        err.stack += `\n${"-".repeat(40)}\n${domainRequireStack}`;
+        throw err;
+      };
+  } catch {
+    /* ignore */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +186,7 @@ let browserCaptureOn = false;
 function onBrowserUncaughtException(event) {
   let er;
   try {
-    er = (event && event.error !== undefined) ? event.error : event;
+    er = event && event.error !== undefined ? event.error : event;
   } catch {
     er = event;
   }
@@ -176,13 +194,21 @@ function onBrowserUncaughtException(event) {
   if (d === null || d === undefined) return; // no domain: default handling
   const caught = d._errorHandler(er);
   if (caught && event && typeof event.preventDefault === "function") {
-    try { event.preventDefault(); } catch { /* ignore */ }
+    try {
+      event.preventDefault();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
 function rawSetCapture(fn) {
   if (rawSetUncaughtExceptionCaptureCallback !== undefined) {
-    try { rawSetUncaughtExceptionCaptureCallback(fn); } catch { /* ignore */ }
+    try {
+      rawSetUncaughtExceptionCaptureCallback(fn);
+    } catch {
+      /* ignore */
+    }
     return;
   }
   if (typeof globalThis.addEventListener !== "function") return;
@@ -191,25 +217,32 @@ function rawSetCapture(fn) {
       try {
         globalThis.addEventListener("error", onBrowserUncaughtException);
         browserCaptureOn = true;
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
   } else if (browserCaptureOn) {
     try {
       globalThis.removeEventListener("error", onBrowserUncaughtException);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     browserCaptureOn = false;
   }
 }
 
 function domainCaptureCallback(er) {
   const d = currentProcessDomain();
-  return (d !== null && d !== undefined) ? d._errorHandler(er) : false;
+  return d !== null && d !== undefined ? d._errorHandler(er) : false;
 }
 
 function updateExceptionCapture() {
   const anyListeners = shared.stack.some((d) => {
-    try { return d.listenerCount("error") > 0; }
-    catch { return false; }
+    try {
+      return d.listenerCount("error") > 0;
+    } catch {
+      return false;
+    }
   });
   if (anyListeners) {
     rawSetCapture(null);
@@ -228,15 +261,19 @@ function domainUncaughtExceptionClear() {
 
 // Keep the domain stack empty across user 'uncaughtException' listeners,
 // exactly like lib/domain.js.
-if (proc !== undefined &&
-    typeof proc.on === "function" &&
-    typeof proc.removeListener === "function" &&
-    typeof proc.prependListener === "function" &&
-    typeof proc.listeners === "function") {
+if (
+  proc !== undefined &&
+  typeof proc.on === "function" &&
+  typeof proc.removeListener === "function" &&
+  typeof proc.prependListener === "function" &&
+  typeof proc.listeners === "function"
+) {
   try {
     proc.on("newListener", function onProcessNewListener(name, listener) {
-      if (name === "uncaughtException" &&
-          listener !== domainUncaughtExceptionClear) {
+      if (
+        name === "uncaughtException" &&
+        listener !== domainUncaughtExceptionClear
+      ) {
         // Make sure the first listener for `uncaughtException` always clears
         // the domain stack.
         proc.removeListener(name, domainUncaughtExceptionClear);
@@ -244,17 +281,23 @@ if (proc !== undefined &&
       }
     });
     proc.on("removeListener", function onProcessRemoveListener(name, listener) {
-      if (name === "uncaughtException" &&
-          listener !== domainUncaughtExceptionClear) {
+      if (
+        name === "uncaughtException" &&
+        listener !== domainUncaughtExceptionClear
+      ) {
         // If the domain listener would be the only remaining one, remove it.
         const listeners = proc.listeners("uncaughtException");
-        if (listeners.length === 1 &&
-            listeners[0] === domainUncaughtExceptionClear) {
+        if (
+          listeners.length === 1 &&
+          listeners[0] === domainUncaughtExceptionClear
+        ) {
           proc.removeListener(name, domainUncaughtExceptionClear);
         }
       }
     });
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -369,21 +412,21 @@ Domain.prototype.exit = function exit() {
   // Exit all domains until this one.
   shared.stack.splice(index);
 
-  setActiveDomain(shared.stack.length === 0
-    ? undefined
-    : shared.stack[shared.stack.length - 1]);
+  setActiveDomain(
+    shared.stack.length === 0
+      ? undefined
+      : shared.stack[shared.stack.length - 1],
+  );
   updateExceptionCapture();
 };
 
 // note: this works for timers as well.
 Domain.prototype.add = function add(ee) {
   // If the domain is already added, then nothing left to do.
-  if (ee.domain === this)
-    return this;
+  if (ee.domain === this) return this;
 
   // Has a domain already - remove it first.
-  if (ee.domain)
-    ee.domain.remove(ee);
+  if (ee.domain) ee.domain.remove(ee);
 
   // Check for circular Domain->Domain links.
   // They cause big issues.
@@ -394,7 +437,7 @@ Domain.prototype.add = function add(ee) {
   // d.add(e);
   // e.add(d);
   // e.emit('error', er); // RangeError, stack overflow!
-  if (this.domain && (ee instanceof Domain)) {
+  if (this.domain && ee instanceof Domain) {
     for (let d = this.domain; d; d = d.domain) {
       if (ee === d) return this;
     }
@@ -414,8 +457,7 @@ Domain.prototype.add = function add(ee) {
 Domain.prototype.remove = function remove(ee) {
   ee.domain = null;
   const index = this.members.indexOf(ee);
-  if (index !== -1)
-    this.members.splice(index, 1);
+  if (index !== -1) this.members.splice(index, 1);
   return this;
 };
 
@@ -494,7 +536,8 @@ function patchEventEmitter(EE) {
   if (typeof EE !== "function" || EE.usingDomains) return;
   const eventInit = EE.init;
   const eventEmit = EE.prototype && EE.prototype.emit;
-  if (typeof eventInit !== "function" || typeof eventEmit !== "function") return;
+  if (typeof eventInit !== "function" || typeof eventEmit !== "function")
+    return;
 
   EE.usingDomains = true;
 
@@ -506,9 +549,11 @@ function patchEventEmitter(EE) {
       value: null,
       writable: true,
     });
-    if (shared.active !== null &&
-        shared.active !== undefined &&
-        !(this instanceof Domain)) {
+    if (
+      shared.active !== null &&
+      shared.active !== undefined &&
+      !(this instanceof Domain)
+    ) {
       this.domain = shared.active;
     }
     return eventInit.call(this, opts);
@@ -518,19 +563,22 @@ function patchEventEmitter(EE) {
     const domain = this.domain;
 
     const type = args[0];
-    const shouldEmitError = type === "error" &&
-                            this.listenerCount(type) > 0;
+    const shouldEmitError = type === "error" && this.listenerCount(type) > 0;
 
     // Just call original `emit` if current EE instance has `error`
     // handler, there's no active domain or this is process
-    if (shouldEmitError || domain === null || domain === undefined ||
-        this === proc) {
+    if (
+      shouldEmitError ||
+      domain === null ||
+      domain === undefined ||
+      this === proc
+    ) {
       return eventEmit.apply(this, args);
     }
 
     if (type === "error") {
-      const er = args.length > 1 && args[1] ?
-        args[1] : new ERR_UNHANDLED_ERROR();
+      const er =
+        args.length > 1 && args[1] ? args[1] : new ERR_UNHANDLED_ERROR();
 
       if (typeof er === "object") {
         er.domainEmitter = this;
@@ -617,18 +665,23 @@ function patchScheduler(obj, name) {
   if (typeof orig !== "function" || orig.usingDomains === true) return;
   function wrapped(callback, ...args) {
     const dom = shared.active;
-    if (typeof callback !== "function" ||
-        dom === null || dom === undefined) {
+    if (typeof callback !== "function" || dom === null || dom === undefined) {
       return orig.call(this, callback, ...args);
     }
-    return orig.call(this, function (...cbArgs) {
-      return wrapScheduledCallback(dom, callback, this, cbArgs);
-    }, ...args);
+    return orig.call(
+      this,
+      function (...cbArgs) {
+        return wrapScheduledCallback(dom, callback, this, cbArgs);
+      },
+      ...args,
+    );
   }
   wrapped.usingDomains = true;
   try {
     obj[name] = wrapped;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 // Lazy patching for the globalThis timer functions.
@@ -659,19 +712,24 @@ function installTimerPatches() {
     if (typeof orig !== "function" || orig.usingDomains === true) continue;
     const wrapped = function (callback, ...args) {
       const dom = shared.active;
-      if (typeof callback !== "function" ||
-          dom === null || dom === undefined) {
+      if (typeof callback !== "function" || dom === null || dom === undefined) {
         return orig.call(this, callback, ...args);
       }
-      return orig.call(this, function (...cbArgs) {
-        return wrapScheduledCallback(dom, callback, this, cbArgs);
-      }, ...args);
+      return orig.call(
+        this,
+        function (...cbArgs) {
+          return wrapScheduledCallback(dom, callback, this, cbArgs);
+        },
+        ...args,
+      );
     };
     wrapped.usingDomains = true;
     state.saved.push([obj, name, orig, wrapped]);
     try {
       obj[name] = wrapped;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -682,7 +740,9 @@ function restoreTimerPatches() {
   for (const [obj, name, orig, wrapped] of state.saved) {
     try {
       if (obj[name] === wrapped) obj[name] = orig;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   state.saved.length = 0;
 }
@@ -704,16 +764,17 @@ function patchPromiseThen() {
     if (dom === null || dom === undefined) {
       return origThen.call(this, onFulfilled, onRejected);
     }
-    const wrap = (fn) => (typeof fn === "function"
-      ? function (value) {
-          dom.enter();
-          try {
-            return fn.call(this, value);
-          } finally {
-            dom.exit();
+    const wrap = (fn) =>
+      typeof fn === "function"
+        ? function (value) {
+            dom.enter();
+            try {
+              return fn.call(this, value);
+            } finally {
+              dom.exit();
+            }
           }
-        }
-      : fn);
+        : fn;
     return origThen.call(this, wrap(onFulfilled), wrap(onRejected));
   }
   wrappedThen.usingDomains = true;
@@ -724,7 +785,9 @@ function patchPromiseThen() {
       writable: true,
       value: wrappedThen,
     });
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 function installHostPatches() {
@@ -739,10 +802,13 @@ function installHostPatches() {
   try {
     if (proc !== undefined && typeof proc.getBuiltinModule === "function") {
       const realEvents = proc.getBuiltinModule("events");
-      const RealEE = realEvents && (realEvents.EventEmitter || realEvents.default);
+      const RealEE =
+        realEvents && (realEvents.EventEmitter || realEvents.default);
       if (RealEE && RealEE !== EventEmitter) patchEventEmitter(RealEE);
     }
-  } catch { /* no native delegation available; browser lane */ }
+  } catch {
+    /* no native delegation available; browser lane */
+  }
 
   // Scheduling primitives for implicit binding. process.nextTick and
   // Promise.prototype.then are not globalThis values, so patching them does
@@ -767,7 +833,9 @@ function installHostPatches() {
     } else if (typeof proc.on === "function") {
       proc.on("exit", restoreTimerPatches);
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 installHostPatches();
@@ -783,9 +851,16 @@ const api = {
   Domain,
   create: createDomain,
   createDomain,
-  get active() { return shared.active; },
-  set active(v) { shared.active = v; active = v; },
-  get _stack() { return shared.stack; },
+  get active() {
+    return shared.active;
+  },
+  set active(v) {
+    shared.active = v;
+    active = v;
+  },
+  get _stack() {
+    return shared.stack;
+  },
 };
 
 export default api;

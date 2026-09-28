@@ -1,5 +1,5 @@
 // Flags: --experimental-vm-modules
-'use strict';
+"use strict";
 
 // https://github.com/nodejs/node/issues/59541
 //
@@ -7,10 +7,10 @@
 // has its own microtask queue), when resolved in the surrounding context, will
 // schedule a task back onto the inner context queue.
 
-const common = require('../common');
-const vm = require('vm');
+const common = require("../common");
+const vm = require("vm");
 
-const microtaskMode = 'afterEvaluate';
+const microtaskMode = "afterEvaluate";
 
 (async () => {
   const mustNotCall1 = common.mustNotCall();
@@ -21,10 +21,9 @@ const microtaskMode = 'afterEvaluate';
 
   const context = vm.createContext({ inner }, { microtaskMode });
 
-  const module = new vm.SourceTextModule(
-    'inner.promise = Promise.resolve();',
-    { context },
-  );
+  const module = new vm.SourceTextModule("inner.promise = Promise.resolve();", {
+    context,
+  });
 
   await module.link(mustNotCall1);
   await module.evaluate();
@@ -38,7 +37,7 @@ const microtaskMode = 'afterEvaluate';
   // onto the inner context microtask queue, but it will not be checkpointed,
   // therefore we never make progress.
   mustNotCall2();
-})().then(common.mustNotCall('never settling promise expected'));
+})().then(common.mustNotCall("never settling promise expected"));
 
 (async () => {
   const mustNotCall1 = common.mustNotCall();
@@ -50,10 +49,9 @@ const microtaskMode = 'afterEvaluate';
 
   const context = vm.createContext({ inner }, { microtaskMode });
 
-  const module = new vm.SourceTextModule(
-    'inner.promise = Promise.resolve();',
-    { context },
-  );
+  const module = new vm.SourceTextModule("inner.promise = Promise.resolve();", {
+    context,
+  });
 
   await module.link(mustNotCall1);
   await module.evaluate();

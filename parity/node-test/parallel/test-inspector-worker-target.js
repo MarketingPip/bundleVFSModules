@@ -1,30 +1,32 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const fixtures = require('../common/fixtures');
+const common = require("../common");
+const fixtures = require("../common/fixtures");
 
-const assert = require('assert');
+const assert = require("assert");
 
 common.skipIfInspectorDisabled();
 
-const { NodeInstance } = require('../common/inspector-helper.js');
+const { NodeInstance } = require("../common/inspector-helper.js");
 
 async function setupInspector(session, sessionId = undefined) {
-  await session.send({ method: 'NodeRuntime.enable', sessionId });
-  await session.waitForNotification('NodeRuntime.waitingForDebugger');
-  await session.send({ method: 'Runtime.enable', sessionId });
-  await session.send({ method: 'Debugger.enable', sessionId });
-  await session.send({ method: 'Runtime.runIfWaitingForDebugger', sessionId });
-  await session.send({ method: 'NodeRuntime.disable', sessionId });
+  await session.send({ method: "NodeRuntime.enable", sessionId });
+  await session.waitForNotification("NodeRuntime.waitingForDebugger");
+  await session.send({ method: "Runtime.enable", sessionId });
+  await session.send({ method: "Debugger.enable", sessionId });
+  await session.send({ method: "Runtime.runIfWaitingForDebugger", sessionId });
+  await session.send({ method: "NodeRuntime.disable", sessionId });
   await session.waitForNotification((notification) => {
-    return notification.method === 'Debugger.scriptParsed' &&
-            notification.params.url === 'node:internal/bootstrap/realm' &&
-            notification.sessionId === sessionId;
+    return (
+      notification.method === "Debugger.scriptParsed" &&
+      notification.params.url === "node:internal/bootstrap/realm" &&
+      notification.sessionId === sessionId
+    );
   });
 }
 
 async function assertTargetAttachedState(session, targetId, attached) {
-  const { targetInfos } = await session.send({ method: 'Target.getTargets' });
+  const { targetInfos } = await session.send({ method: "Target.getTargets" });
   const targetInfo = targetInfos.find((target) => {
     return target.targetId === targetId;
   });
@@ -33,38 +35,52 @@ async function assertTargetAttachedState(session, targetId, attached) {
 }
 
 async function test(isSetAutoAttachBeforeExecution) {
-  const child = new NodeInstance(['--inspect-brk=0', '--experimental-worker-inspection'],
-                                 '',
-                                 fixtures.path('inspect-worker/index.js')
+  const child = new NodeInstance(
+    ["--inspect-brk=0", "--experimental-worker-inspection"],
+    "",
+    fixtures.path("inspect-worker/index.js"),
   );
-
 
   const session = await child.connectInspectorSession();
   await setupInspector(session);
 
   if (isSetAutoAttachBeforeExecution) {
-    await session.send({ method: 'Target.setAutoAttach', params: { autoAttach: true, waitForDebuggerOnStart: true } });
+    await session.send({
+      method: "Target.setAutoAttach",
+      params: { autoAttach: true, waitForDebuggerOnStart: true },
+    });
   }
-  await session.waitForNotification('Debugger.paused');
-  await session.send({ method: 'Debugger.resume' });
+  await session.waitForNotification("Debugger.paused");
+  await session.send({ method: "Debugger.resume" });
 
-  const sessionId = '1';
-  const targetCreated = await session.waitForNotification('Target.targetCreated');
+  const sessionId = "1";
+  const targetCreated = await session.waitForNotification(
+    "Target.targetCreated",
+  );
   const targetId = targetCreated.params.targetInfo.targetId;
 
-  await assertTargetAttachedState(session, targetId, isSetAutoAttachBeforeExecution);
+  await assertTargetAttachedState(
+    session,
+    targetId,
+    isSetAutoAttachBeforeExecution,
+  );
 
   if (!isSetAutoAttachBeforeExecution) {
-    await session.send({ method: 'Target.setAutoAttach', params: { autoAttach: true, waitForDebuggerOnStart: true } });
+    await session.send({
+      method: "Target.setAutoAttach",
+      params: { autoAttach: true, waitForDebuggerOnStart: true },
+    });
   }
   await session.waitForNotification((notification) => {
-    return notification.method === 'Target.attachedToTarget' &&
-           notification.params.sessionId === sessionId;
+    return (
+      notification.method === "Target.attachedToTarget" &&
+      notification.params.sessionId === sessionId
+    );
   });
   await assertTargetAttachedState(session, targetId, true);
   await setupInspector(session, sessionId);
-  await session.waitForNotification('Debugger.paused');
-  await session.send({ method: 'Debugger.resume', sessionId });
+  await session.waitForNotification("Debugger.paused");
+  await session.send({ method: "Debugger.resume", sessionId });
   await session.waitForDisconnect();
 }
 
@@ -73,17 +89,18 @@ test(false).then(common.mustCall());
 
 function withPermissionOptionTest() {
   const permissionErrorThrow = common.mustCall();
-  const child = new NodeInstance(['--inspect-brk=0', '--experimental-worker-inspection', '--permission'],
-                                 '',
-                                 fixtures.path('inspect-worker/index.js'),
-                                 {
-                                   log: (_, msg) => {
-                                     if (msg.includes('Access to this API has been restricted')) {
-                                       permissionErrorThrow();
-                                     }
-                                   },
-                                   error: () => {},
-                                 }
+  const child = new NodeInstance(
+    ["--inspect-brk=0", "--experimental-worker-inspection", "--permission"],
+    "",
+    fixtures.path("inspect-worker/index.js"),
+    {
+      log: (_, msg) => {
+        if (msg.includes("Access to this API has been restricted")) {
+          permissionErrorThrow();
+        }
+      },
+      error: () => {},
+    },
   );
   child.connectInspectorSession();
 }

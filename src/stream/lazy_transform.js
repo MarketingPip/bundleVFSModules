@@ -3,16 +3,11 @@
 // for the stream, one conventional and one non-conventional.
 
 import {
-
   ObjectDefineProperties,
   ObjectDefineProperty,
   ObjectSetPrototypeOf,
-} from './primordials.js';
-import LazyTransformBase from './transform.js';
-
-
-
-
+} from "./primordials.js";
+import LazyTransformBase from "./transform.js";
 
 export default LazyTransform;
 
@@ -23,7 +18,7 @@ ObjectSetPrototypeOf(LazyTransform.prototype, LazyTransformBase.prototype);
 ObjectSetPrototypeOf(LazyTransform, LazyTransformBase);
 
 function makeGetter(name) {
-  return function() {
+  return function () {
     LazyTransformBase.call(this, this._options);
     this._writableState.decodeStrings = false;
     return this[name];
@@ -31,7 +26,7 @@ function makeGetter(name) {
 }
 
 function makeSetter(name) {
-  return function(val) {
+  return function (val) {
     ObjectDefineProperty(this, name, {
       __proto__: null,
       value: val,
@@ -45,15 +40,15 @@ function makeSetter(name) {
 ObjectDefineProperties(LazyTransform.prototype, {
   _readableState: {
     __proto__: null,
-    get: makeGetter('_readableState'),
-    set: makeSetter('_readableState'),
+    get: makeGetter("_readableState"),
+    set: makeSetter("_readableState"),
     configurable: true,
     enumerable: true,
   },
   _writableState: {
     __proto__: null,
-    get: makeGetter('_writableState'),
-    set: makeSetter('_writableState'),
+    get: makeGetter("_writableState"),
+    set: makeSetter("_writableState"),
     configurable: true,
     enumerable: true,
   },

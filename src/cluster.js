@@ -35,9 +35,10 @@ import { EventEmitter } from "./events.js";
 //    undefined under real Node / direct import). Declared for the sandbox
 //    contract; intentionally unused — the runtime exposes no spawn/fork hook
 //    today, and this module must not invent one.
-const RT = (typeof globalThis._RUNTIME_ !== "undefined")
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 void RT;
 
 /* ------------------------------------------------------------------ */
@@ -99,8 +100,12 @@ export function Worker(options) {
     // Re-emit process-level events on the worker, like Node. Guarded: a
     // foreign `process`-like object may not be an emitter.
     if (typeof self.process.on === "function") {
-      self.process.on("error", (code, signal) => self.emit("error", code, signal));
-      self.process.on("message", (message, handle) => self.emit("message", message, handle));
+      self.process.on("error", (code, signal) =>
+        self.emit("error", code, signal),
+      );
+      self.process.on("message", (message, handle) =>
+        self.emit("message", message, handle),
+      );
     }
   }
 
@@ -168,7 +173,9 @@ export function fork(env) {
   proc.exitCode = undefined; // never exits…
   proc.signalCode = undefined; // …and is never signalled
   proc.kill = function () {}; // noop
-  proc.send = function () { return false; }; // noop: nothing delivered
+  proc.send = function () {
+    return false;
+  }; // noop: nothing delivered
   proc.disconnect = function () {}; // noop
 
   const w = new Worker({ id, process: proc });

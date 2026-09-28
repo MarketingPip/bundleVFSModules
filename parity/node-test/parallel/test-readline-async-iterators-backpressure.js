@@ -1,11 +1,11 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { Readable } = require('stream');
-const readline = require('readline');
+const common = require("../common");
+const assert = require("assert");
+const { Readable } = require("stream");
+const readline = require("readline");
 
-const CONTENT = 'content';
+const CONTENT = "content";
 const LINES_PER_PUSH = 2051;
 const REPETITIONS = 3;
 
@@ -20,16 +20,19 @@ const REPETITIONS = 3;
 
   const rli = readline.createInterface({
     input: readable,
-    crlfDelay: Infinity
+    crlfDelay: Infinity,
   });
 
   const it = rli[Symbol.asyncIterator]();
-  const watermarkData = it[Symbol.for('nodejs.watermarkData')];
+  const watermarkData = it[Symbol.for("nodejs.watermarkData")];
   const highWaterMark = watermarkData.high;
 
   // For this test to work, we have to queue up more than the number of
   // highWaterMark items in rli. Make sure that is the case.
-  assert(TOTAL_LINES > highWaterMark, `TOTAL_LINES (${TOTAL_LINES}) isn't greater than highWaterMark (${highWaterMark})`);
+  assert(
+    TOTAL_LINES > highWaterMark,
+    `TOTAL_LINES (${TOTAL_LINES}) isn't greater than highWaterMark (${highWaterMark})`,
+  );
 
   let iterations = 0;
   let readableEnded = false;

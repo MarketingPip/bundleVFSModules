@@ -4,4 +4,4 @@ if (true) {
 } else {
   const c = 102;
 }
-throw new Error('test');
+throw new Error("test");

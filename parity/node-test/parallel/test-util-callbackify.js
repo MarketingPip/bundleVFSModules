@@ -1,26 +1,26 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // This test checks that the semantics of `util.callbackify` are as described in
 // the API docs
 
-const assert = require('assert');
-const { callbackify } = require('util');
-const { execFile } = require('child_process');
-const fixtures = require('../common/fixtures');
+const assert = require("assert");
+const { callbackify } = require("util");
+const { execFile } = require("child_process");
+const fixtures = require("../common/fixtures");
 
 const values = [
-  'hello world',
+  "hello world",
   null,
   undefined,
   false,
   0,
   {},
-  { key: 'value' },
-  Symbol('I am a symbol'),
+  { key: "value" },
+  Symbol("I am a symbol"),
   function ok() {},
-  ['array', 'with', 4, 'values'],
-  new Error('boo'),
+  ["array", "with", 4, "values"],
+  new Error("boo"),
 ];
 
 {
@@ -32,9 +32,11 @@ const values = [
     }
 
     const cbAsyncFn = callbackify(asyncFn);
-    cbAsyncFn(common.mustSucceed((ret) => {
-      assert.strictEqual(ret, value);
-    }));
+    cbAsyncFn(
+      common.mustSucceed((ret) => {
+        assert.strictEqual(ret, value);
+      }),
+    );
 
     // Test Promise factory
     function promiseFn() {
@@ -42,23 +44,27 @@ const values = [
     }
 
     const cbPromiseFn = callbackify(promiseFn);
-    cbPromiseFn(common.mustSucceed((ret) => {
-      assert.strictEqual(ret, value);
-    }));
+    cbPromiseFn(
+      common.mustSucceed((ret) => {
+        assert.strictEqual(ret, value);
+      }),
+    );
 
     // Test Thenable
     function thenableFn() {
       return {
         then(onRes, onRej) {
           onRes(value);
-        }
+        },
       };
     }
 
     const cbThenableFn = callbackify(thenableFn);
-    cbThenableFn(common.mustSucceed((ret) => {
-      assert.strictEqual(ret, value);
-    }));
+    cbThenableFn(
+      common.mustSucceed((ret) => {
+        assert.strictEqual(ret, value);
+      }),
+    );
   }
 }
 
@@ -72,75 +78,81 @@ const values = [
 
     const cbAsyncFn = callbackify(asyncFn);
     assert.strictEqual(cbAsyncFn.length, 1);
-    assert.strictEqual(cbAsyncFn.name, 'asyncFnCallbackified');
-    cbAsyncFn(common.mustCall((err, ret) => {
-      assert.strictEqual(ret, undefined);
-      if (err instanceof Error) {
-        if ('reason' in err) {
-          assert(!value);
-          assert.strictEqual(err.code, 'ERR_FALSY_VALUE_REJECTION');
-          assert.strictEqual(err.reason, value);
+    assert.strictEqual(cbAsyncFn.name, "asyncFnCallbackified");
+    cbAsyncFn(
+      common.mustCall((err, ret) => {
+        assert.strictEqual(ret, undefined);
+        if (err instanceof Error) {
+          if ("reason" in err) {
+            assert(!value);
+            assert.strictEqual(err.code, "ERR_FALSY_VALUE_REJECTION");
+            assert.strictEqual(err.reason, value);
+          } else {
+            assert.strictEqual(String(value).endsWith(err.message), true);
+          }
         } else {
-          assert.strictEqual(String(value).endsWith(err.message), true);
+          assert.strictEqual(err, value);
         }
-      } else {
-        assert.strictEqual(err, value);
-      }
-    }));
+      }),
+    );
 
     // Test a Promise factory
     function promiseFn() {
       return Promise.reject(value);
     }
     const obj = {};
-    Object.defineProperty(promiseFn, 'name', {
+    Object.defineProperty(promiseFn, "name", {
       value: obj,
       writable: false,
       enumerable: false,
-      configurable: true
+      configurable: true,
     });
 
     const cbPromiseFn = callbackify(promiseFn);
     assert.strictEqual(promiseFn.name, obj);
-    cbPromiseFn(common.mustCall((err, ret) => {
-      assert.strictEqual(ret, undefined);
-      if (err instanceof Error) {
-        if ('reason' in err) {
-          assert(!value);
-          assert.strictEqual(err.code, 'ERR_FALSY_VALUE_REJECTION');
-          assert.strictEqual(err.reason, value);
+    cbPromiseFn(
+      common.mustCall((err, ret) => {
+        assert.strictEqual(ret, undefined);
+        if (err instanceof Error) {
+          if ("reason" in err) {
+            assert(!value);
+            assert.strictEqual(err.code, "ERR_FALSY_VALUE_REJECTION");
+            assert.strictEqual(err.reason, value);
+          } else {
+            assert.strictEqual(String(value).endsWith(err.message), true);
+          }
         } else {
-          assert.strictEqual(String(value).endsWith(err.message), true);
+          assert.strictEqual(err, value);
         }
-      } else {
-        assert.strictEqual(err, value);
-      }
-    }));
+      }),
+    );
 
     // Test Thenable
     function thenableFn() {
       return {
         then(onRes, onRej) {
           onRej(value);
-        }
+        },
       };
     }
 
     const cbThenableFn = callbackify(thenableFn);
-    cbThenableFn(common.mustCall((err, ret) => {
-      assert.strictEqual(ret, undefined);
-      if (err instanceof Error) {
-        if ('reason' in err) {
-          assert(!value);
-          assert.strictEqual(err.code, 'ERR_FALSY_VALUE_REJECTION');
-          assert.strictEqual(err.reason, value);
+    cbThenableFn(
+      common.mustCall((err, ret) => {
+        assert.strictEqual(ret, undefined);
+        if (err instanceof Error) {
+          if ("reason" in err) {
+            assert(!value);
+            assert.strictEqual(err.code, "ERR_FALSY_VALUE_REJECTION");
+            assert.strictEqual(err.reason, value);
+          } else {
+            assert.strictEqual(String(value).endsWith(err.message), true);
+          }
         } else {
-          assert.strictEqual(String(value).endsWith(err.message), true);
+          assert.strictEqual(err, value);
         }
-      } else {
-        assert.strictEqual(err, value);
-      }
-    }));
+      }),
+    );
   }
 }
 
@@ -156,30 +168,36 @@ const values = [
     assert.strictEqual(cbAsyncFn.length, 2);
     assert.notStrictEqual(
       Object.getPrototypeOf(cbAsyncFn),
-      Object.getPrototypeOf(asyncFn)
+      Object.getPrototypeOf(asyncFn),
     );
     assert.strictEqual(Object.getPrototypeOf(cbAsyncFn), Function.prototype);
-    cbAsyncFn(value, common.mustSucceed((ret) => {
-      assert.strictEqual(ret, value);
-    }));
+    cbAsyncFn(
+      value,
+      common.mustSucceed((ret) => {
+        assert.strictEqual(ret, value);
+      }),
+    );
 
     function promiseFn(arg) {
       assert.strictEqual(arg, value);
       return Promise.resolve(arg);
     }
     const obj = {};
-    Object.defineProperty(promiseFn, 'length', {
+    Object.defineProperty(promiseFn, "length", {
       value: obj,
       writable: false,
       enumerable: false,
-      configurable: true
+      configurable: true,
     });
 
     const cbPromiseFn = callbackify(promiseFn);
     assert.strictEqual(promiseFn.length, obj);
-    cbPromiseFn(value, common.mustSucceed((ret) => {
-      assert.strictEqual(ret, value);
-    }));
+    cbPromiseFn(
+      value,
+      common.mustSucceed((ret) => {
+        assert.strictEqual(ret, value);
+      }),
+    );
   }
 }
 
@@ -194,10 +212,13 @@ const values = [
       },
     };
     iAmThis.cbFn = callbackify(iAmThis.fn);
-    iAmThis.cbFn(value, common.mustSucceed(function(ret) {
-      assert.strictEqual(ret, value);
-      assert.strictEqual(this, iAmThis);
-    }));
+    iAmThis.cbFn(
+      value,
+      common.mustSucceed(function (ret) {
+        assert.strictEqual(ret, value);
+        assert.strictEqual(this, iAmThis);
+      }),
+    );
 
     const iAmThat = {
       async fn(arg) {
@@ -207,57 +228,65 @@ const values = [
       },
     };
     iAmThat.cbFn = callbackify(iAmThat.fn);
-    iAmThat.cbFn(value, common.mustSucceed(function(ret) {
-      assert.strictEqual(ret, value);
-      assert.strictEqual(this, iAmThat);
-    }));
+    iAmThat.cbFn(
+      value,
+      common.mustSucceed(function (ret) {
+        assert.strictEqual(ret, value);
+        assert.strictEqual(this, iAmThat);
+      }),
+    );
   }
 }
 
 {
   // Test that callback that throws emits an `uncaughtException` event
-  const fixture = fixtures.path('uncaught-exceptions', 'callbackify1.js');
+  const fixture = fixtures.path("uncaught-exceptions", "callbackify1.js");
   execFile(
     process.execPath,
     [fixture],
     common.mustCall((err, stdout, stderr) => {
       assert.strictEqual(err.code, 1);
-      assert.strictEqual(Object.getPrototypeOf(err).name, 'Error');
-      assert.strictEqual(stdout, '');
+      assert.strictEqual(Object.getPrototypeOf(err).name, "Error");
+      assert.strictEqual(stdout, "");
       const errLines = stderr.trim().split(/[\r\n]+/);
       const errLine = errLines.find((l) => /^Error/.exec(l));
       assert.strictEqual(errLine, `Error: ${fixture}`);
       assert.strictEqual(errLines.length, 7);
-    })
+    }),
   );
 }
 
 {
   // Test that handled `uncaughtException` works and passes rejection reason
-  const fixture = fixtures.path('uncaught-exceptions', 'callbackify2.js');
+  const fixture = fixtures.path("uncaught-exceptions", "callbackify2.js");
   execFile(
     process.execPath,
     [fixture],
     common.mustSucceed((stdout, stderr) => {
       assert.strictEqual(
         stdout.trim(),
-        `ifError got unwanted exception: ${fixture}`);
-      assert.strictEqual(stderr, '');
-    })
+        `ifError got unwanted exception: ${fixture}`,
+      );
+      assert.strictEqual(stderr, "");
+    }),
   );
 }
 
 {
   // Verify that non-function inputs throw.
-  ['foo', null, undefined, false, 0, {}, Symbol(), []].forEach((value) => {
-    assert.throws(() => {
-      callbackify(value);
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-      message: 'The "original" argument must be of type function.' +
-               common.invalidArgTypeHelper(value)
-    });
+  ["foo", null, undefined, false, 0, {}, Symbol(), []].forEach((value) => {
+    assert.throws(
+      () => {
+        callbackify(value);
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        name: "TypeError",
+        message:
+          'The "original" argument must be of type function.' +
+          common.invalidArgTypeHelper(value),
+      },
+    );
   });
 }
 
@@ -270,16 +299,20 @@ const values = [
   const args = [];
 
   // Verify that the last argument to the callbackified function is a function.
-  ['foo', null, undefined, false, 0, {}, Symbol(), []].forEach((value) => {
+  ["foo", null, undefined, false, 0, {}, Symbol(), []].forEach((value) => {
     args.push(value);
-    assert.throws(() => {
-      cb(...args);
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-      message: 'The last argument must be of type function.' +
-               common.invalidArgTypeHelper(value)
-    });
+    assert.throws(
+      () => {
+        cb(...args);
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        name: "TypeError",
+        message:
+          "The last argument must be of type function." +
+          common.invalidArgTypeHelper(value),
+      },
+    );
   });
 }
 
@@ -291,11 +324,14 @@ const values = [
 
   const cbPromiseFn = callbackify(promiseFn);
 
-  cbPromiseFn(null, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'Promise was rejected with falsy value');
-    assert.strictEqual(err.code, 'ERR_FALSY_VALUE_REJECTION');
-    assert.strictEqual(err.reason, null);
-    const stack = err.stack.split(/[\r\n]+/);
-    assert.match(stack[1], /at process\.processTicksAndRejections/);
-  }));
+  cbPromiseFn(
+    null,
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "Promise was rejected with falsy value");
+      assert.strictEqual(err.code, "ERR_FALSY_VALUE_REJECTION");
+      assert.strictEqual(err.reason, null);
+      const stack = err.stack.split(/[\r\n]+/);
+      assert.match(stack[1], /at process\.processTicksAndRejections/);
+    }),
+  );
 }

@@ -1,6 +1,6 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 const {
   Duplex,
   Readable,
@@ -8,121 +8,149 @@ const {
   Writable,
   finished,
   compose,
-  PassThrough
-} = require('stream');
-const assert = require('assert');
+  PassThrough,
+} = require("stream");
+const assert = require("assert");
 
 {
-  let res = '';
+  let res = "";
   compose(
     new Transform({
       transform: common.mustCall((chunk, encoding, callback) => {
         callback(null, chunk + chunk);
-      })
+      }),
     }),
     new Transform({
       transform: common.mustCall((chunk, encoding, callback) => {
         callback(null, chunk.toString().toUpperCase());
-      })
-    })
+      }),
+    }),
   )
-  .end('asd')
-  .on('data', common.mustCall((buf) => {
-    res += buf;
-  }))
-  .on('end', common.mustCall(() => {
-    assert.strictEqual(res, 'ASDASD');
-  }));
+    .end("asd")
+    .on(
+      "data",
+      common.mustCall((buf) => {
+        res += buf;
+      }),
+    )
+    .on(
+      "end",
+      common.mustCall(() => {
+        assert.strictEqual(res, "ASDASD");
+      }),
+    );
 }
 
 {
-  let res = '';
+  let res = "";
   compose(
-    async function*(source) {
+    async function* (source) {
       for await (const chunk of source) {
         yield chunk + chunk;
       }
     },
-    async function*(source) {
+    async function* (source) {
       for await (const chunk of source) {
         yield chunk.toString().toUpperCase();
       }
+    },
+  )
+    .end("asd")
+    .on(
+      "data",
+      common.mustCall((buf) => {
+        res += buf;
+      }),
+    )
+    .on(
+      "end",
+      common.mustCall(() => {
+        assert.strictEqual(res, "ASDASD");
+      }),
+    );
+}
+
+{
+  let res = "";
+  compose(async function* (source) {
+    for await (const chunk of source) {
+      yield chunk + chunk;
     }
-  )
-  .end('asd')
-  .on('data', common.mustCall((buf) => {
-    res += buf;
-  }))
-  .on('end', common.mustCall(() => {
-    assert.strictEqual(res, 'ASDASD');
-  }));
+  })
+    .end("asd")
+    .on(
+      "data",
+      common.mustCall((buf) => {
+        res += buf;
+      }),
+    )
+    .on(
+      "end",
+      common.mustCall(() => {
+        assert.strictEqual(res, "asdasd");
+      }),
+    );
 }
 
 {
-  let res = '';
+  let res = "";
   compose(
-    async function*(source) {
-      for await (const chunk of source) {
-        yield chunk + chunk;
-      }
-    }
-  )
-  .end('asd')
-  .on('data', common.mustCall((buf) => {
-    res += buf;
-  }))
-  .on('end', common.mustCall(() => {
-    assert.strictEqual(res, 'asdasd');
-  }));
-}
-
-{
-  let res = '';
-  compose(
-    Readable.from(['asd']),
+    Readable.from(["asd"]),
     new Transform({
       transform: common.mustCall((chunk, encoding, callback) => {
         callback(null, chunk.toString().toUpperCase());
-      })
-    })
-  )
-  .on('data', common.mustCall((buf) => {
-    res += buf;
-  }))
-  .on('end', common.mustCall(() => {
-    assert.strictEqual(res, 'ASD');
-  }));
-}
-
-{
-  let res = '';
-  compose(
-    async function* () {
-      yield 'asd';
-    }(),
-    new Transform({
-      transform: common.mustCall((chunk, encoding, callback) => {
-        callback(null, chunk.toString().toUpperCase());
-      })
-    })
-  )
-  .on('data', common.mustCall((buf) => {
-    res += buf;
-  }))
-  .on('end', common.mustCall(() => {
-    assert.strictEqual(res, 'ASD');
-  }));
-}
-
-{
-  let res = '';
-  compose(
-    new Transform({
-      transform: common.mustCall((chunk, encoding, callback) => {
-        callback(null, chunk.toString().toUpperCase());
-      })
+      }),
     }),
-    async function*(source) {
+  )
+    .on(
+      "data",
+      common.mustCall((buf) => {
+        res += buf;
+      }),
+    )
+    .on(
+      "end",
+      common.mustCall(() => {
+        assert.strictEqual(res, "ASD");
+      }),
+    );
+}
+
+{
+  let res = "";
+  compose(
+    (async function* () {
+      yield "asd";
+    })(),
+    new Transform({
+      transform: common.mustCall((chunk, encoding, callback) => {
+        callback(null, chunk.toString().toUpperCase());
+      }),
+    }),
+  )
+    .on(
+      "data",
+      common.mustCall((buf) => {
+        res += buf;
+      }),
+    )
+    .on(
+      "end",
+      common.mustCall(() => {
+        assert.strictEqual(res, "ASD");
+      }),
+    );
+}
+
+{
+  let res = "";
+  compose(
+    new Transform({
+      transform: common.mustCall((chunk, encoding, callback) => {
+        callback(null, chunk.toString().toUpperCase());
+      }),
+    }),
+    async function* (source) {
       for await (const chunk of source) {
         yield chunk;
       }
@@ -131,38 +159,44 @@ const assert = require('assert');
       write: common.mustCall((chunk, encoding, callback) => {
         res += chunk;
         callback(null);
-      })
-    })
+      }),
+    }),
   )
-  .end('asd')
-  .on('finish', common.mustCall(() => {
-    assert.strictEqual(res, 'ASD');
-  }));
+    .end("asd")
+    .on(
+      "finish",
+      common.mustCall(() => {
+        assert.strictEqual(res, "ASD");
+      }),
+    );
 }
 
 {
-  let res = '';
+  let res = "";
   compose(
     new Transform({
       transform: common.mustCall((chunk, encoding, callback) => {
         callback(null, chunk.toString().toUpperCase());
-      })
+      }),
     }),
-    async function*(source) {
+    async function* (source) {
       for await (const chunk of source) {
         yield chunk;
       }
     },
-    async function(source) {
+    async function (source) {
       for await (const chunk of source) {
         res += chunk;
       }
-    }
+    },
   )
-  .end('asd')
-  .on('finish', common.mustCall(() => {
-    assert.strictEqual(res, 'ASD');
-  }));
+    .end("asd")
+    .on(
+      "finish",
+      common.mustCall(() => {
+        assert.strictEqual(res, "ASD");
+      }),
+    );
 }
 
 {
@@ -172,9 +206,9 @@ const assert = require('assert');
       objectMode: true,
       transform: common.mustCall((chunk, encoding, callback) => {
         callback(null, { chunk });
-      })
+      }),
     }),
-    async function*(source) {
+    async function* (source) {
       for await (const chunk of source) {
         yield chunk;
       }
@@ -183,28 +217,34 @@ const assert = require('assert');
       objectMode: true,
       transform: common.mustCall((chunk, encoding, callback) => {
         callback(null, { chunk });
-      })
-    })
+      }),
+    }),
   )
-  .end(true)
-  .on('data', common.mustCall((buf) => {
-    res = buf;
-  }))
-  .on('end', common.mustCall(() => {
-    assert.strictEqual(res.chunk.chunk, true);
-  }));
+    .end(true)
+    .on(
+      "data",
+      common.mustCall((buf) => {
+        res = buf;
+      }),
+    )
+    .on(
+      "end",
+      common.mustCall(() => {
+        assert.strictEqual(res.chunk.chunk, true);
+      }),
+    );
 }
 
 {
-  const _err = new Error('asd');
+  const _err = new Error("asd");
   compose(
     new Transform({
       objectMode: true,
       transform: common.mustCall((chunk, encoding, callback) => {
         callback(_err);
-      })
+      }),
     }),
-    async function*(source) {
+    async function* (source) {
       for await (const chunk of source) {
         yield chunk;
       }
@@ -213,28 +253,32 @@ const assert = require('assert');
       objectMode: true,
       transform: common.mustNotCall((chunk, encoding, callback) => {
         callback(null, { chunk });
-      })
-    })
+      }),
+    }),
   )
-  .end(true)
-  .on('data', common.mustNotCall())
-  .on('end', common.mustNotCall())
-  .on('error', common.mustCall((err) => {
-    assert.strictEqual(err, _err);
-  }));
+    .end(true)
+    .on("data", common.mustNotCall())
+    .on("end", common.mustNotCall())
+    .on(
+      "error",
+      common.mustCall((err) => {
+        assert.strictEqual(err, _err);
+      }),
+    );
 }
 
 {
-  const _err = new Error('asd');
+  const _err = new Error("asd");
   compose(
     new Transform({
       objectMode: true,
       transform: common.mustCall((chunk, encoding, callback) => {
         callback(null, chunk);
-      })
+      }),
     }),
-    async function*(source) { // eslint-disable-line require-yield
-      let tmp = '';
+    async function* (source) {
+      // eslint-disable-line require-yield
+      let tmp = "";
       for await (const chunk of source) {
         tmp += chunk;
         throw _err;
@@ -245,71 +289,86 @@ const assert = require('assert');
       objectMode: true,
       transform: common.mustNotCall((chunk, encoding, callback) => {
         callback(null, { chunk });
-      })
-    })
+      }),
+    }),
   )
-  .end(true)
-  .on('data', common.mustNotCall())
-  .on('end', common.mustNotCall())
-  .on('error', common.mustCall((err) => {
-    assert.strictEqual(err, _err);
-  }));
+    .end(true)
+    .on("data", common.mustNotCall())
+    .on("end", common.mustNotCall())
+    .on(
+      "error",
+      common.mustCall((err) => {
+        assert.strictEqual(err, _err);
+      }),
+    );
 }
 
 {
-  let buf = '';
+  let buf = "";
 
   // Convert into readable Duplex.
-  const s1 = compose(async function* () {
-    yield 'Hello';
-    yield 'World';
-  }(), async function* (source) {
-    for await (const chunk of source) {
-      yield String(chunk).toUpperCase();
-    }
-  }, async function(source) {
-    for await (const chunk of source) {
-      buf += chunk;
-    }
-  });
+  const s1 = compose(
+    (async function* () {
+      yield "Hello";
+      yield "World";
+    })(),
+    async function* (source) {
+      for await (const chunk of source) {
+        yield String(chunk).toUpperCase();
+      }
+    },
+    async function (source) {
+      for await (const chunk of source) {
+        buf += chunk;
+      }
+    },
+  );
 
   assert.strictEqual(s1.writable, false);
   assert.strictEqual(s1.readable, false);
 
-  finished(s1.resume(), common.mustCall((err) => {
-    assert(!err);
-    assert.strictEqual(buf, 'HELLOWORLD');
-  }));
+  finished(
+    s1.resume(),
+    common.mustCall((err) => {
+      assert(!err);
+      assert.strictEqual(buf, "HELLOWORLD");
+    }),
+  );
 }
 
 {
-  let buf = '';
+  let buf = "";
   // Convert into transform duplex.
   const s2 = compose(async function* (source) {
     for await (const chunk of source) {
       yield String(chunk).toUpperCase();
     }
   });
-  s2.end('helloworld');
+  s2.end("helloworld");
   s2.resume();
-  s2.on('data', (chunk) => {
+  s2.on("data", (chunk) => {
     buf += chunk;
   });
 
-  finished(s2.resume(), common.mustCall((err) => {
-    assert(!err);
-    assert.strictEqual(buf, 'HELLOWORLD');
-  }));
+  finished(
+    s2.resume(),
+    common.mustCall((err) => {
+      assert(!err);
+      assert.strictEqual(buf, "HELLOWORLD");
+    }),
+  );
 }
 
 {
-  let buf = '';
+  let buf = "";
 
   // Convert into readable Duplex.
-  const s1 = compose(async function* () {
-    yield 'Hello';
-    yield 'World';
-  }());
+  const s1 = compose(
+    (async function* () {
+      yield "Hello";
+      yield "World";
+    })(),
+  );
 
   // Convert into transform duplex.
   const s2 = compose(async function* (source) {
@@ -319,7 +378,7 @@ const assert = require('assert');
   });
 
   // Convert into writable duplex.
-  const s3 = compose(async function(source) {
+  const s3 = compose(async function (source) {
     for await (const chunk of source) {
       buf += chunk;
     }
@@ -327,97 +386,122 @@ const assert = require('assert');
 
   const s4 = compose(s1, s2, s3);
 
-  finished(s4, common.mustCall((err) => {
-    assert(!err);
-    assert.strictEqual(buf, 'HELLOWORLD');
-  }));
-}
-
-{
-  let buf = '';
-
-  // Convert into readable Duplex.
-  const s1 = compose(async function* () {
-    yield 'Hello';
-    yield 'World';
-  }(), async function* (source) {
-    for await (const chunk of source) {
-      yield String(chunk).toUpperCase();
-    }
-  }, async function(source) {
-    for await (const chunk of source) {
-      buf += chunk;
-    }
-  });
-
-  finished(s1, common.mustCall((err) => {
-    assert(!err);
-    assert.strictEqual(buf, 'HELLOWORLD');
-  }));
-}
-
-{
-  assert.throws(
-    () => compose(),
-    { code: 'ERR_MISSING_ARGS' }
+  finished(
+    s4,
+    common.mustCall((err) => {
+      assert(!err);
+      assert.strictEqual(buf, "HELLOWORLD");
+    }),
   );
 }
 
 {
-  assert.throws(
-    () => compose(new Writable(), new PassThrough()),
-    { code: 'ERR_INVALID_ARG_VALUE' }
+  let buf = "";
+
+  // Convert into readable Duplex.
+  const s1 = compose(
+    (async function* () {
+      yield "Hello";
+      yield "World";
+    })(),
+    async function* (source) {
+      for await (const chunk of source) {
+        yield String(chunk).toUpperCase();
+      }
+    },
+    async function (source) {
+      for await (const chunk of source) {
+        buf += chunk;
+      }
+    },
+  );
+
+  finished(
+    s1,
+    common.mustCall((err) => {
+      assert(!err);
+      assert.strictEqual(buf, "HELLOWORLD");
+    }),
   );
 }
 
 {
+  assert.throws(() => compose(), { code: "ERR_MISSING_ARGS" });
+}
+
+{
+  assert.throws(() => compose(new Writable(), new PassThrough()), {
+    code: "ERR_INVALID_ARG_VALUE",
+  });
+}
+
+{
   assert.throws(
-    () => compose(new PassThrough(), new Readable({ read() {} }), new PassThrough()),
-    { code: 'ERR_INVALID_ARG_VALUE' }
+    () =>
+      compose(
+        new PassThrough(),
+        new Readable({ read() {} }),
+        new PassThrough(),
+      ),
+    { code: "ERR_INVALID_ARG_VALUE" },
   );
 }
 
 {
-  let buf = '';
+  let buf = "";
 
   // Convert into readable Duplex.
-  const s1 = compose(async function* () {
-    yield 'Hello';
-    yield 'World';
-  }(), async function* (source) {
-    for await (const chunk of source) {
-      yield String(chunk).toUpperCase();
-    }
-  }, async function(source) {
-    for await (const chunk of source) {
-      buf += chunk;
-    }
-    return buf;
-  });
+  const s1 = compose(
+    (async function* () {
+      yield "Hello";
+      yield "World";
+    })(),
+    async function* (source) {
+      for await (const chunk of source) {
+        yield String(chunk).toUpperCase();
+      }
+    },
+    async function (source) {
+      for await (const chunk of source) {
+        buf += chunk;
+      }
+      return buf;
+    },
+  );
 
-  finished(s1, common.mustCall((err) => {
-    assert.strictEqual(err.code, 'ERR_INVALID_RETURN_VALUE');
-  }));
+  finished(
+    s1,
+    common.mustCall((err) => {
+      assert.strictEqual(err.code, "ERR_INVALID_RETURN_VALUE");
+    }),
+  );
 }
 
 {
-  let buf = '';
+  let buf = "";
 
   // Convert into readable Duplex.
-  const s1 = compose('HelloWorld', async function* (source) {
-    for await (const chunk of source) {
-      yield String(chunk).toUpperCase();
-    }
-  }, async function(source) {
-    for await (const chunk of source) {
-      buf += chunk;
-    }
-  });
+  const s1 = compose(
+    "HelloWorld",
+    async function* (source) {
+      for await (const chunk of source) {
+        yield String(chunk).toUpperCase();
+      }
+    },
+    async function (source) {
+      for await (const chunk of source) {
+        buf += chunk;
+      }
+    },
+  );
 
-  finished(s1, common.mustCall((err) => {
-    assert(!err);
-    assert.strictEqual(buf, 'HELLOWORLD');
-  }));
+  finished(
+    s1,
+    common.mustCall((err) => {
+      assert(!err);
+      assert.strictEqual(buf, "HELLOWORLD");
+    }),
+  );
 }
 
 {
@@ -440,21 +524,24 @@ const assert = require('assert');
         writableObjectMode: false,
         transform: (chunk, encoding, callback) => {
           callback(null, {
-            value: chunk.toString()
+            value: chunk.toString(),
           });
-        }
-      })
+        },
+      }),
     );
 
     assert.strictEqual(newStream.writableObjectMode, false);
     assert.strictEqual(newStream.readableObjectMode, true);
 
-    newStream.write('Steve Rogers');
-    newStream.write('On your left');
+    newStream.write("Steve Rogers");
+    newStream.write("On your left");
 
     newStream.end();
 
-    assert.deepStrictEqual(await newStream.toArray(), [{ value: 'Steve Rogers' }, { value: 'On your left' }]);
+    assert.deepStrictEqual(await newStream.toArray(), [
+      { value: "Steve Rogers" },
+      { value: "On your left" },
+    ]);
   })().then(common.mustCall());
 }
 
@@ -478,19 +565,21 @@ const assert = require('assert');
         writableObjectMode: true,
         transform: (chunk, encoding, callback) => {
           callback(null, chunk.value);
-        }
-      })
+        },
+      }),
     );
 
     assert.strictEqual(newStream.writableObjectMode, true);
     assert.strictEqual(newStream.readableObjectMode, false);
 
-    newStream.write({ value: 'Steve Rogers' });
-    newStream.write({ value: 'On your left' });
+    newStream.write({ value: "Steve Rogers" });
+    newStream.write({ value: "On your left" });
 
     newStream.end();
 
-    assert.deepStrictEqual(await newStream.toArray(), [Buffer.from('Steve RogersOn your left')]);
+    assert.deepStrictEqual(await newStream.toArray(), [
+      Buffer.from("Steve RogersOn your left"),
+    ]);
   })().then(common.mustCall());
 }
 
@@ -524,18 +613,14 @@ const assert = require('assert');
   const pass = new PassThrough({ objectMode: true });
   const duplex = new DuplexProcess();
 
-  const composed = compose(
-    pass,
-    duplex
-  ).on('error', () => {});
+  const composed = compose(pass, duplex).on("error", () => {});
 
-  composed.write('hello');
-  composed.write('world');
+  composed.write("hello");
+  composed.write("world");
   composed.end();
 
-  composed.destroy(new Error('an unexpected error'));
+  composed.destroy(new Error("an unexpected error"));
   assert.strictEqual(duplex.destroyed, true);
-
 }
 
 // Regression test: compose with a web TransformStream tail must always emit
@@ -544,17 +629,22 @@ const assert = require('assert');
 // skipped if canPushMore() returns false on the final done:true read.
 {
   const { TransformStream } = globalThis;
-  const { Readable } = require('stream');
+  const { Readable } = require("stream");
 
   // A web TransformStream as the tail exercises the isWebStream code path
   // in compose that loops over reader.read() results.
   const ts = new TransformStream();
-  const src = Readable.from(['hello', ' ', 'world']);
+  const src = Readable.from(["hello", " ", "world"]);
   const composed = compose(src, ts);
 
-  let result = '';
-  composed.on('data', (chunk) => { result += Buffer.from(chunk).toString(); });
-  composed.on('end', common.mustCall(() => {
-    assert.strictEqual(result, 'hello world');
-  }));
+  let result = "";
+  composed.on("data", (chunk) => {
+    result += Buffer.from(chunk).toString();
+  });
+  composed.on(
+    "end",
+    common.mustCall(() => {
+      assert.strictEqual(result, "hello world");
+    }),
+  );
 }

@@ -1,20 +1,20 @@
-import * as common from '../common/index.mjs';
-import { skipIfNoWatch } from '../common/watch.js';
+import * as common from "../common/index.mjs";
+import { skipIfNoWatch } from "../common/watch.js";
 
 skipIfNoWatch();
 
-const assert = await import('node:assert');
-const path = await import('node:path');
-const tmpdir = await import('../common/tmpdir.js');
-const { setTimeout } = await import('node:timers/promises');
-const { watch } = await import('node:fs/promises');
-const { writeFileSync } = await import('node:fs');
+const assert = await import("node:assert");
+const path = await import("node:path");
+const tmpdir = await import("../common/tmpdir.js");
+const { setTimeout } = await import("node:timers/promises");
+const { watch } = await import("node:fs/promises");
+const { writeFileSync } = await import("node:fs");
 
 tmpdir.refresh();
 
 const testDir = tmpdir.resolve();
-const keepFile = 'keep.txt';
-const ignoreFile = 'ignore.tmp';
+const keepFile = "keep.txt";
+const ignoreFile = "ignore.tmp";
 const keepFilePath = path.join(testDir, keepFile);
 const ignoreFilePath = path.join(testDir, ignoreFile);
 
@@ -37,8 +37,8 @@ async function writeFiles() {
     await setTimeout(common.platformTimeout(100));
   }
 
-  writeFileSync(ignoreFilePath, 'ignored');
-  writeFileSync(keepFilePath, 'content');
+  writeFileSync(ignoreFilePath, "ignored");
+  writeFileSync(keepFilePath, "content");
 }
 
 await Promise.all([watchDir(), writeFiles()]);

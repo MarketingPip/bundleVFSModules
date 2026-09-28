@@ -1,11 +1,11 @@
-'use strict';
+"use strict";
 
 /**
  * Browser-compatible Node.js Error System
  * Simplified for use in web environments.
  */
 
-const kIsNodeError = Symbol('kIsNodeError');
+const kIsNodeError = Symbol("kIsNodeError");
 const messages = new Map();
 const codes = {};
 
@@ -22,12 +22,15 @@ function makeNodeErrorWithCode(Base, key) {
   return class NodeError extends Base {
     constructor(...args) {
       const msgTemplate = messages.get(key);
-      const message = typeof msgTemplate === 'function' 
-        ? msgTemplate(...args) 
-        : (args.length > 0 ? format(msgTemplate, ...args) : msgTemplate);
-      
+      const message =
+        typeof msgTemplate === "function"
+          ? msgTemplate(...args)
+          : args.length > 0
+            ? format(msgTemplate, ...args)
+            : msgTemplate;
+
       super(message);
-      
+
       this.code = key;
       this[kIsNodeError] = true;
 
@@ -59,32 +62,36 @@ function E(sym, val, def) {
 
 // --- Define some common Node.js errors for testing ---
 
-E('ERR_INVALID_ARG_TYPE', (name, expected, actual) => {
-  return `The "${name}" argument must be of type ${expected}. Received ${typeof actual}`;
-}, TypeError);
+E(
+  "ERR_INVALID_ARG_TYPE",
+  (name, expected, actual) => {
+    return `The "${name}" argument must be of type ${expected}. Received ${typeof actual}`;
+  },
+  TypeError,
+);
 
-E('ERR_METHOD_NOT_IMPLEMENTED', 'The %s method is not implemented', Error);
+E("ERR_METHOD_NOT_IMPLEMENTED", "The %s method is not implemented", Error);
 
 // --- Classes ---
 
 class AbortError extends Error {
-  constructor(message = 'The operation was aborted', options = undefined) {
-    if (options !== undefined && typeof options !== 'object') {
-      throw new codes.ERR_INVALID_ARG_TYPE('options', 'Object', options);
+  constructor(message = "The operation was aborted", options = undefined) {
+    if (options !== undefined && typeof options !== "object") {
+      throw new codes.ERR_INVALID_ARG_TYPE("options", "Object", options);
     }
     super(message, options);
-    this.code = 'ABORT_ERR';
-    this.name = 'AbortError';
+    this.code = "ABORT_ERR";
+    this.name = "AbortError";
   }
 }
 
 // --- Utilities ---
 
 function determineSpecificType(value) {
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
-  if (typeof value === 'function') return `function ${value.name}`;
-  if (Array.isArray(value)) return 'an instance of Array';
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "function") return `function ${value.name}`;
+  if (Array.isArray(value)) return "an instance of Array";
   return typeof value;
 }
 
@@ -96,7 +103,7 @@ const errors = {
   E,
   AbortError,
   determineSpecificType,
-  kIsNodeError
+  kIsNodeError,
 };
 
 // Example Usage:

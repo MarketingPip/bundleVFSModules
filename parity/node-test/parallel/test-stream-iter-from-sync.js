@@ -1,21 +1,20 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { fromSync, textSync } = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { fromSync, textSync } = require("stream/iter");
 
 function testFromSyncString() {
   // String input should be UTF-8 encoded
-  const readable = fromSync('hello');
+  const readable = fromSync("hello");
   const batches = [];
   for (const batch of readable) {
     batches.push(batch);
   }
   assert.strictEqual(batches.length, 1);
   assert.strictEqual(batches[0].length, 1);
-  assert.deepStrictEqual(batches[0][0],
-                         new TextEncoder().encode('hello'));
+  assert.deepStrictEqual(batches[0][0], new TextEncoder().encode("hello"));
 }
 
 function testFromSyncUint8Array() {
@@ -75,7 +74,7 @@ function testFromSyncGenerator() {
 function testFromSyncNestedIterables() {
   // Nested arrays and strings should be flattened
   function* gen() {
-    yield ['hello', ' ', 'world'];
+    yield ["hello", " ", "world"];
   }
   const readable = fromSync(gen());
   const batches = [];
@@ -84,16 +83,16 @@ function testFromSyncNestedIterables() {
   }
   assert.strictEqual(batches.length, 1);
   assert.strictEqual(batches[0].length, 3);
-  assert.deepStrictEqual(batches[0][0], new TextEncoder().encode('hello'));
-  assert.deepStrictEqual(batches[0][1], new TextEncoder().encode(' '));
-  assert.deepStrictEqual(batches[0][2], new TextEncoder().encode('world'));
+  assert.deepStrictEqual(batches[0][0], new TextEncoder().encode("hello"));
+  assert.deepStrictEqual(batches[0][1], new TextEncoder().encode(" "));
+  assert.deepStrictEqual(batches[0][2], new TextEncoder().encode("world"));
 }
 
 function testFromSyncToStreamableProtocol() {
-  const sym = Symbol.for('Stream.toStreamable');
+  const sym = Symbol.for("Stream.toStreamable");
   const obj = {
     [sym]() {
-      return 'protocol-data';
+      return "protocol-data";
     },
   };
   function* gen() {
@@ -105,46 +104,49 @@ function testFromSyncToStreamableProtocol() {
     batches.push(batch);
   }
   assert.strictEqual(batches.length, 1);
-  assert.deepStrictEqual(batches[0][0],
-                         new TextEncoder().encode('protocol-data'));
+  assert.deepStrictEqual(
+    batches[0][0],
+    new TextEncoder().encode("protocol-data"),
+  );
 }
 
 function testFromSyncGeneratorError() {
   function* gen() {
     yield new Uint8Array([1]);
-    throw new Error('generator boom');
+    throw new Error("generator boom");
   }
   const readable = fromSync(gen());
-  assert.throws(() => {
-    // eslint-disable-next-line no-unused-vars
-    for (const _ of readable) { /* consume */ }
-  }, { message: 'generator boom' });
+  assert.throws(
+    () => {
+      // eslint-disable-next-line no-unused-vars
+      for (const _ of readable) {
+        /* consume */
+      }
+    },
+    { message: "generator boom" },
+  );
 }
 
 function testFromSyncRejectsNonStreamable() {
-  assert.throws(
-    () => fromSync(12345),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
-  assert.throws(
-    () => fromSync(null),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
+  assert.throws(() => fromSync(12345), { code: "ERR_INVALID_ARG_TYPE" });
+  assert.throws(() => fromSync(null), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 function testFromSyncEmptyGenerator() {
   function* empty() {}
   let count = 0;
   // eslint-disable-next-line no-unused-vars
-  for (const _ of fromSync(empty())) { count++; }
+  for (const _ of fromSync(empty())) {
+    count++;
+  }
   assert.strictEqual(count, 0);
 }
 
 // Top-level toStreamable protocol on input to fromSync()
 function testFromSyncTopLevelToStreamable() {
   const obj = {
-    [Symbol.for('Stream.toStreamable')]() {
-      return 'top-level-sync';
+    [Symbol.for("Stream.toStreamable")]() {
+      return "top-level-sync";
     },
   };
   const batches = [];
@@ -152,68 +154,81 @@ function testFromSyncTopLevelToStreamable() {
     batches.push(batch);
   }
   assert.strictEqual(batches.length, 1);
-  assert.deepStrictEqual(batches[0][0],
-                         new TextEncoder().encode('top-level-sync'));
+  assert.deepStrictEqual(
+    batches[0][0],
+    new TextEncoder().encode("top-level-sync"),
+  );
 }
 
 // Top-level: toStreamable takes precedence over Symbol.iterator
 function testFromSyncTopLevelProtocolOverIterator() {
   const obj = {
-    [Symbol.for('Stream.toStreamable')]() { return 'from-protocol'; },
-    *[Symbol.iterator]() { yield [new TextEncoder().encode('from-iterator')]; },
+    [Symbol.for("Stream.toStreamable")]() {
+      return "from-protocol";
+    },
+    *[Symbol.iterator]() {
+      yield [new TextEncoder().encode("from-iterator")];
+    },
   };
   const batches = [];
   for (const batch of fromSync(obj)) {
     batches.push(batch);
   }
   assert.strictEqual(batches.length, 1);
-  assert.deepStrictEqual(batches[0][0],
-                         new TextEncoder().encode('from-protocol'));
+  assert.deepStrictEqual(
+    batches[0][0],
+    new TextEncoder().encode("from-protocol"),
+  );
 }
 
 // Top-level: toAsyncStreamable is ignored by fromSync
 function testFromSyncIgnoresAsyncStreamable() {
   const obj = {
-    [Symbol.for('Stream.toAsyncStreamable')]() { return 'async'; },
+    [Symbol.for("Stream.toAsyncStreamable")]() {
+      return "async";
+    },
   };
   // Has no toStreamable and no Symbol.iterator, should throw
-  assert.throws(() => fromSync(obj), { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.throws(() => fromSync(obj), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 // Explicit async iterable rejected
 function testFromSyncRejectsAsyncIterable() {
-  async function* gen() { yield [new TextEncoder().encode('a')]; }
-  assert.throws(() => fromSync(gen()), { code: 'ERR_INVALID_ARG_TYPE' });
+  async function* gen() {
+    yield [new TextEncoder().encode("a")];
+  }
+  assert.throws(() => fromSync(gen()), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 function testFromSyncPrefersIteratorForDualIterable() {
   const input = {
     *[Symbol.iterator]() {
-      yield new TextEncoder().encode('sync');
+      yield new TextEncoder().encode("sync");
     },
     async *[Symbol.asyncIterator]() {
-      yield new TextEncoder().encode('async');
+      yield new TextEncoder().encode("async");
     },
   };
 
-  assert.strictEqual(textSync(fromSync(input)), 'sync');
+  assert.strictEqual(textSync(fromSync(input)), "sync");
 }
 
 function testFromSyncPrefersIteratorForThenableIterable() {
   const input = {
     then() {},
     *[Symbol.iterator]() {
-      yield new TextEncoder().encode('sync');
+      yield new TextEncoder().encode("sync");
     },
   };
 
-  assert.strictEqual(textSync(fromSync(input)), 'sync');
+  assert.strictEqual(textSync(fromSync(input)), "sync");
 }
 
 // Promise rejected
 function testFromSyncRejectsPromise() {
-  assert.throws(() => fromSync(Promise.resolve('hello')),
-                { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.throws(() => fromSync(Promise.resolve("hello")), {
+    code: "ERR_INVALID_ARG_TYPE",
+  });
 }
 
 // DataView input should be converted to Uint8Array (zero-copy)
@@ -232,11 +247,11 @@ function testFromSyncDataView() {
 }
 
 function testFromSyncNullThrows() {
-  assert.throws(() => fromSync(null), { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.throws(() => fromSync(null), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 function testFromSyncUndefinedThrows() {
-  assert.throws(() => fromSync(undefined), { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.throws(() => fromSync(undefined), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 Promise.all([

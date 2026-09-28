@@ -1,26 +1,29 @@
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
-const vm = require('node:vm');
-const util = require('node:util');
-const assert = require('node:assert');
+const vm = require("node:vm");
+const util = require("node:util");
+const assert = require("node:assert");
 
 // This verifies that invoking property getters defined with
 // `require('internal/util').defineLazyProperties` does not crash
 // the process.
 
 const ctx = vm.createContext();
-const getter = vm.runInContext(`
+const getter = vm.runInContext(
+  `
   function getter(object, property) {
     return object[property];
   }
   getter;
-`, ctx);
+`,
+  ctx,
+);
 
 // `util.parseArgs` is a lazy property.
-const parseArgs = getter(util, 'parseArgs');
+const parseArgs = getter(util, "parseArgs");
 assert.strictEqual(parseArgs, util.parseArgs);
 
 // `globalThis.TextEncoder` is a lazy property.
-const TextEncoder = getter(globalThis, 'TextEncoder');
+const TextEncoder = getter(globalThis, "TextEncoder");
 assert.strictEqual(TextEncoder, globalThis.TextEncoder);

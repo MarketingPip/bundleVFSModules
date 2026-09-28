@@ -10,41 +10,62 @@
  * (through ~/workspace/skills/github/bin/gh.py, authenticated), downloads
  * every test-<name>*.js/.mjs, and drops them into parity/node-test/parallel/.
  */
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
-const ROOT = join(fileURLToPath(import.meta.url), '..', 'node-test', 'parallel');
-const GH = '/home/hatch/workspace/skills/github/bin/gh.py';
+const ROOT = join(
+  fileURLToPath(import.meta.url),
+  "..",
+  "node-test",
+  "parallel",
+);
+const GH = "/home/hatch/workspace/skills/github/bin/gh.py";
 const moduleArg = process.argv[2];
 if (!moduleArg) {
-  console.error('usage: fetch-module-tests.mjs <module> [ref]');
+  console.error("usage: fetch-module-tests.mjs <module> [ref]");
   process.exit(2);
 }
-const REF = process.argv[3] || 'v24.20.0';
+const REF = process.argv[3] || "v24.20.0";
 
-const dashName = moduleArg.replace(/_/g, '-').replace(/\//g, '-');
+const dashName = moduleArg.replace(/_/g, "-").replace(/\//g, "-");
 const prefix = `test/parallel/test-${dashName}`;
 
 // Cache the recursive tree per ref in /tmp (it's ~15MB).
-const cachePath = `/tmp/node-tree-${REF.replace(/[^a-zA-Z0-9.]/g, '_')}.json`;
+const cachePath = `/tmp/node-tree-${REF.replace(/[^a-zA-Z0-9.]/g, "_")}.json`;
 let tree;
 try {
-  tree = JSON.parse(execFileSync('python3', ['-c', `print(open(${JSON.stringify(cachePath)}).read())`], { maxBuffer: 64 * 1024 * 1024 }).toString());
-  console.log('using cached tree');
+  tree = JSON.parse(
+    execFileSync(
+      "python3",
+      ["-c", `print(open(${JSON.stringify(cachePath)}).read())`],
+      { maxBuffer: 64 * 1024 * 1024 },
+    ).toString(),
+  );
+  console.log("using cached tree");
 } catch {
-  console.log('fetching recursive tree (one-time, ~15MB)…');
-  const out = execFileSync(GH, ['GET', `/repos/nodejs/node/git/trees/${REF}?recursive=1`], { maxBuffer: 64 * 1024 * 1024 });
+  console.log("fetching recursive tree (one-time, ~15MB)…");
+  const out = execFileSync(
+    GH,
+    ["GET", `/repos/nodejs/node/git/trees/${REF}?recursive=1`],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
   tree = JSON.parse(out.toString());
-  if (tree.truncated) console.log('!! tree truncated — results may be incomplete');
-  const { writeFileSync: w } = await import('node:fs');
+  if (tree.truncated)
+    console.log("!! tree truncated — results may be incomplete");
+  const { writeFileSync: w } = await import("node:fs");
   w(cachePath, JSON.stringify(tree));
 }
 
 const hits = tree.tree
-  .filter((e) => e.type === 'blob' && e.path.startsWith(prefix) && /\.(js|mjs)$/.test(e.path))
-  .map((e) => e.path.slice('test/parallel/'.length));
+  .filter(
+    (e) =>
+      e.type === "blob" &&
+      e.path.startsWith(prefix) &&
+      /\.(js|mjs)$/.test(e.path),
+  )
+  .map((e) => e.path.slice("test/parallel/".length));
 console.log(`found ${hits.length} test files for "${moduleArg}" at ${REF}`);
 
 mkdirSync(ROOT, { recursive: true });

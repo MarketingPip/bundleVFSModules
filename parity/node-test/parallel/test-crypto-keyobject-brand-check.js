@@ -1,23 +1,24 @@
-'use strict';
+"use strict";
 
 // KeyObject instances are backed by NativeKeyObject and must be
 // recognized by native brand, not by public prototype shape or
 // forgeable own properties.
 
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const assert = require('node:assert');
+const assert = require("node:assert");
 const {
   createHmac,
   createSecretKey,
   generateKeyPairSync,
   KeyObject,
-} = require('node:crypto');
-const { types: { isKeyObject } } = require('node:util');
+} = require("node:crypto");
+const {
+  types: { isKeyObject },
+} = require("node:util");
 
-const invalidThis = { code: 'ERR_INVALID_THIS', name: 'TypeError' };
+const invalidThis = { code: "ERR_INVALID_THIS", name: "TypeError" };
 
 function getter(proto, name) {
   return Object.getOwnPropertyDescriptor(proto, name).get;
@@ -25,33 +26,46 @@ function getter(proto, name) {
 
 {
   const secret = createSecretKey(Buffer.alloc(16));
-  const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 1024 });
+  const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 1024 });
 
-  const type = getter(KeyObject.prototype, 'type');
-  const symmetricKeySize =
-    getter(Object.getPrototypeOf(secret), 'symmetricKeySize');
-  const asymmetricProto = Object.getPrototypeOf(Object.getPrototypeOf(publicKey));
-  const asymmetricKeyType = getter(asymmetricProto, 'asymmetricKeyType');
-  const asymmetricKeyDetails = getter(asymmetricProto, 'asymmetricKeyDetails');
+  const type = getter(KeyObject.prototype, "type");
+  const symmetricKeySize = getter(
+    Object.getPrototypeOf(secret),
+    "symmetricKeySize",
+  );
+  const asymmetricProto = Object.getPrototypeOf(
+    Object.getPrototypeOf(publicKey),
+  );
+  const asymmetricKeyType = getter(asymmetricProto, "asymmetricKeyType");
+  const asymmetricKeyDetails = getter(asymmetricProto, "asymmetricKeyDetails");
 
   assert.strictEqual(isKeyObject(secret), true);
   assert.strictEqual(isKeyObject(publicKey), true);
-  assert.strictEqual(Object.hasOwn(KeyObject, 'getSlots'), false);
+  assert.strictEqual(Object.hasOwn(KeyObject, "getSlots"), false);
   for (const key of [secret, publicKey]) {
-    for (let proto = Object.getPrototypeOf(key);
+    for (
+      let proto = Object.getPrototypeOf(key);
       proto !== null;
-      proto = Object.getPrototypeOf(proto)) {
-      assert.strictEqual(Object.hasOwn(proto, 'getSlots'), false);
-      assert.strictEqual('getSlots' in proto, false);
-      if (Object.hasOwn(proto, 'constructor')) {
-        assert.strictEqual(Object.hasOwn(proto.constructor, 'getSlots'), false);
+      proto = Object.getPrototypeOf(proto)
+    ) {
+      assert.strictEqual(Object.hasOwn(proto, "getSlots"), false);
+      assert.strictEqual("getSlots" in proto, false);
+      if (Object.hasOwn(proto, "constructor")) {
+        assert.strictEqual(Object.hasOwn(proto.constructor, "getSlots"), false);
         assert.strictEqual(proto.constructor.getSlots, undefined);
       }
     }
   }
 
-  for (const value of [{}, { __proto__: null }, 1, null, undefined,
-                       Buffer.alloc(1), function() {}]) {
+  for (const value of [
+    {},
+    { __proto__: null },
+    1,
+    null,
+    undefined,
+    Buffer.alloc(1),
+    function () {},
+  ]) {
     assert.throws(() => type.call(value), invalidThis);
     assert.throws(() => symmetricKeySize.call(value), invalidThis);
     assert.throws(() => asymmetricKeyType.call(value), invalidThis);
@@ -68,12 +82,14 @@ function getter(proto, name) {
   assert.strictEqual(isKeyObject(spoofed), false);
   assert.throws(() => type.call(spoofed), invalidThis);
   assert.throws(() => symmetricKeySize.call(spoofed), invalidThis);
-  assert.throws(() => createHmac('sha256', spoofed), {
-    code: 'ERR_INVALID_ARG_TYPE',
+  assert.throws(() => createHmac("sha256", spoofed), {
+    code: "ERR_INVALID_ARG_TYPE",
   });
 
-  const originalHasInstance =
-    Object.getOwnPropertyDescriptor(KeyObject, Symbol.hasInstance);
+  const originalHasInstance = Object.getOwnPropertyDescriptor(
+    KeyObject,
+    Symbol.hasInstance,
+  );
   Object.defineProperty(KeyObject, Symbol.hasInstance, {
     configurable: true,
     value: () => true,

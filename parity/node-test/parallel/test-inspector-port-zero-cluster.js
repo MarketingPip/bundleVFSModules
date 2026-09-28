@@ -1,35 +1,38 @@
 // Flags: --inspect=0
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 common.skipIfInspectorDisabled();
 
-const { isMainThread } = require('worker_threads');
+const { isMainThread } = require("worker_threads");
 
 if (!isMainThread) {
-  common.skip('This test only works on a main thread');
+  common.skip("This test only works on a main thread");
 }
 
 // Assert that even when started with `--inspect=0` workers are assigned
 // consecutive (i.e. deterministically predictable) debug ports
 
-const assert = require('assert');
-const cluster = require('cluster');
+const assert = require("assert");
+const cluster = require("cluster");
 
 function serialFork() {
   return new Promise((res) => {
     const worker = cluster.fork();
-    worker.on('exit', common.mustCall((code, signal) => {
-      // code 0 is normal
-      // code 12 can happen if inspector could not bind because of a port clash
-      if (code !== 0 && code !== 12)
-        assert.fail(`code: ${code}, signal: ${signal}`);
-      const port = worker.process.spawnargs
-        .map((a) => (/=(?:.*:)?(\d{2,5})$/.exec(a) || [])[1])
-        .filter((p) => p)
-        .pop();
-      res(Number(port));
-    }));
+    worker.on(
+      "exit",
+      common.mustCall((code, signal) => {
+        // code 0 is normal
+        // code 12 can happen if inspector could not bind because of a port clash
+        if (code !== 0 && code !== 12)
+          assert.fail(`code: ${code}, signal: ${signal}`);
+        const port = worker.process.spawnargs
+          .map((a) => (/=(?:.*:)?(\d{2,5})$/.exec(a) || [])[1])
+          .filter((p) => p)
+          .pop();
+        res(Number(port));
+      }),
+    );
   });
 }
 

@@ -1,32 +1,31 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const fixtures = require('../common/fixtures');
+const common = require("../common");
+const fixtures = require("../common/fixtures");
 
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const assert = require('assert');
-const tls = require('tls');
+const assert = require("assert");
+const tls = require("tls");
 
 function toArrayBuffer(buf) {
   const ab = new ArrayBuffer(buf.length);
   const view = new Uint8Array(ab);
-  return buf.map((b, i) => view[i] = b);
+  return buf.map((b, i) => (view[i] = b));
 }
 
 function toDataView(buf) {
   const ab = new ArrayBuffer(buf.length);
   const view = new DataView(ab);
-  return buf.map((b, i) => view[i] = b);
+  return buf.map((b, i) => (view[i] = b));
 }
 
-const keyBuff = fixtures.readKey('agent1-key.pem');
-const certBuff = fixtures.readKey('agent1-cert.pem');
-const keyBuff2 = fixtures.readKey('ec-key.pem');
-const certBuff2 = fixtures.readKey('ec-cert.pem');
-const caCert = fixtures.readKey('ca1-cert.pem');
-const caCert2 = fixtures.readKey('ca2-cert.pem');
+const keyBuff = fixtures.readKey("agent1-key.pem");
+const certBuff = fixtures.readKey("agent1-cert.pem");
+const keyBuff2 = fixtures.readKey("ec-key.pem");
+const certBuff2 = fixtures.readKey("ec-cert.pem");
+const caCert = fixtures.readKey("ca1-cert.pem");
+const caCert2 = fixtures.readKey("ca2-cert.pem");
 const keyStr = keyBuff.toString();
 const certStr = certBuff.toString();
 const keyStr2 = keyBuff2.toString();
@@ -41,17 +40,18 @@ const certDataView = toDataView(certBuff);
 const caArrDataView = toDataView(caCert);
 
 function filterBoringSSLKeyCertArrayCases(options, setName) {
-  if (!process.features.openssl_is_boringssl)
-    return options;
+  if (!process.features.openssl_is_boringssl) return options;
 
   // The array-valued cases exercise multi-identity key/cert handling.
   // BoringSSL may reject those cases with backend key/cert mismatch errors
   // before the boolean/type validation this test is targeting. Keep the scalar
   // cases so tls.createServer() option type validation is still covered.
   common.printSkipMessage(
-    `BoringSSL: skipping ${setName} key/cert array cases`);
-  return options.filter(([key, cert]) => !Array.isArray(key) &&
-                                         !Array.isArray(cert));
+    `BoringSSL: skipping ${setName} key/cert array cases`,
+  );
+  return options.filter(
+    ([key, cert]) => !Array.isArray(key) && !Array.isArray(cert),
+  );
 }
 
 // Checks to ensure tls.createServer doesn't throw an error
@@ -70,18 +70,25 @@ const validOptions = [
   [keyDataView, certDataView],
   [keyDataView, false],
   [false, certDataView],
-  [[keyBuff, keyBuff2], [certBuff, certBuff2]],
-  [[keyStr, keyStr2], [certStr, certStr2]],
+  [
+    [keyBuff, keyBuff2],
+    [certBuff, certBuff2],
+  ],
+  [
+    [keyStr, keyStr2],
+    [certStr, certStr2],
+  ],
   [[keyStr, keyStr2], false],
   [false, [certStr, certStr2]],
   [[{ pem: keyBuff }], false],
   [[{ pem: keyBuff }, { pem: keyBuff }], false],
 ];
 
-filterBoringSSLKeyCertArrayCases(validOptions, 'valid')
-  .forEach(([key, cert]) => {
+filterBoringSSLKeyCertArrayCases(validOptions, "valid").forEach(
+  ([key, cert]) => {
     tls.createServer({ key, cert });
-  });
+  },
+);
 
 // Checks to ensure tls.createServer predictably throws an error
 // Format ['key', 'cert', 'expected message']
@@ -99,18 +106,24 @@ const invalidKeyOptions = [
   [true, [certBuff, certBuff2]],
 ];
 
-for (const [key, cert, index] of
-  filterBoringSSLKeyCertArrayCases(invalidKeyOptions, 'invalid key')) {
+for (const [key, cert, index] of filterBoringSSLKeyCertArrayCases(
+  invalidKeyOptions,
+  "invalid key",
+)) {
   const val = index === undefined ? key : key[index];
-  assert.throws(() => {
-    tls.createServer({ key, cert });
-  }, {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: 'The "options.key" property must be of type string or an ' +
-             'instance of Buffer, TypedArray, or DataView.' +
-             common.invalidArgTypeHelper(val)
-  });
+  assert.throws(
+    () => {
+      tls.createServer({ key, cert });
+    },
+    {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+      message:
+        'The "options.key" property must be of type string or an ' +
+        "instance of Buffer, TypedArray, or DataView." +
+        common.invalidArgTypeHelper(val),
+    },
+  );
 }
 
 const invalidCertOptions = [
@@ -128,18 +141,24 @@ const invalidCertOptions = [
   [[keyStr, keyStr2], true],
 ];
 
-for (const [key, cert, index] of
-  filterBoringSSLKeyCertArrayCases(invalidCertOptions, 'invalid cert')) {
+for (const [key, cert, index] of filterBoringSSLKeyCertArrayCases(
+  invalidCertOptions,
+  "invalid cert",
+)) {
   const val = index === undefined ? cert : cert[index];
-  assert.throws(() => {
-    tls.createServer({ key, cert });
-  }, {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: 'The "options.cert" property must be of type string or an ' +
-             'instance of Buffer, TypedArray, or DataView.' +
-             common.invalidArgTypeHelper(val)
-  });
+  assert.throws(
+    () => {
+      tls.createServer({ key, cert });
+    },
+    {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+      message:
+        'The "options.cert" property must be of type string or an ' +
+        "instance of Buffer, TypedArray, or DataView." +
+        common.invalidArgTypeHelper(val),
+    },
+  );
 }
 
 // Checks to ensure tls.createServer works with the CA parameter
@@ -166,15 +185,19 @@ for (const [key, cert, index] of
   [keyBuff, certBuff, [caCert, true], 1],
 ].forEach(([key, cert, ca, index]) => {
   const val = index === undefined ? ca : ca[index];
-  assert.throws(() => {
-    tls.createServer({ key, cert, ca });
-  }, {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: 'The "options.ca" property must be of type string or an instance' +
-             ' of Buffer, TypedArray, or DataView.' +
-             common.invalidArgTypeHelper(val)
-  });
+  assert.throws(
+    () => {
+      tls.createServer({ key, cert, ca });
+    },
+    {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+      message:
+        'The "options.ca" property must be of type string or an instance' +
+        " of Buffer, TypedArray, or DataView." +
+        common.invalidArgTypeHelper(val),
+    },
+  );
 });
 
 // Checks to ensure tls.createSecureContext works with false-y input
@@ -183,7 +206,7 @@ for (const [key, cert, index] of
   [null, null, null],
   [false, false, false],
   [undefined, undefined, undefined],
-  ['', '', ''],
+  ["", "", ""],
   [0, 0, 0],
 ].forEach(([key, cert, ca]) => {
   tls.createSecureContext({ key, cert, ca });

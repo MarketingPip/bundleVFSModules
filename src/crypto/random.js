@@ -8,39 +8,39 @@
  * exactly (verified against the real builtin).
  */
 
-import { Buffer } from '../buffer.js';
+import { Buffer } from "../buffer.js";
 import {
   ERR_INVALID_ARG_TYPE,
   ERR_OUT_OF_RANGE,
   ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH,
   ERR_OPERATION_FAILED,
   domException,
-} from './errors.js';
+} from "./errors.js";
 
 const kMaxInt32 = 2 ** 31 - 1;
 const kMaxPossibleLength = kMaxInt32;
 
 function validateNumber(value, name) {
-  if (typeof value !== 'number') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
+  if (typeof value !== "number") {
+    throw new ERR_INVALID_ARG_TYPE(name, "number", value);
   }
 }
 
 function validateFunction(value, name) {
-  if (typeof value !== 'function') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'function', value);
+  if (typeof value !== "function") {
+    throw new ERR_INVALID_ARG_TYPE(name, "function", value);
   }
 }
 
 function validateBoolean(value, name) {
-  if (typeof value !== 'boolean') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'boolean', value);
+  if (typeof value !== "boolean") {
+    throw new ERR_INVALID_ARG_TYPE(name, "boolean", value);
   }
 }
 
 function validateObject(value, name) {
-  if (value === null || typeof value !== 'object') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'object', value);
+  if (value === null || typeof value !== "object") {
+    throw new ERR_INVALID_ARG_TYPE(name, "object", value);
   }
 }
 
@@ -51,7 +51,7 @@ function isArrayBufferView(v) {
 function isAnyArrayBuffer(v) {
   return (
     v instanceof ArrayBuffer ||
-    (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer)
+    (typeof SharedArrayBuffer !== "undefined" && v instanceof SharedArrayBuffer)
   );
 }
 
@@ -59,7 +59,7 @@ function isTypedArray(v) {
   return (
     isArrayBufferView(v) &&
     !(v instanceof DataView) &&
-    typeof v.BYTES_PER_ELEMENT === 'number'
+    typeof v.BYTES_PER_ELEMENT === "number"
   );
 }
 
@@ -69,7 +69,7 @@ function isTypedArray(v) {
 
 function fillFromWebCrypto(view, offset, size) {
   const g = globalThis.crypto;
-  if (!g || typeof g.getRandomValues !== 'function') return false;
+  if (!g || typeof g.getRandomValues !== "function") return false;
   // Browsers cap a single getRandomValues call at 65536 bytes.
   let remaining = size;
   let pos = offset;
@@ -98,27 +98,27 @@ function fillRandom(view, offset, size) {
 }
 
 function assertOffset(offset, elementSize, length) {
-  validateNumber(offset, 'offset');
+  validateNumber(offset, "offset");
   offset *= elementSize;
   const maxLength = Math.min(length, kMaxPossibleLength);
   if (Number.isNaN(offset) || offset > maxLength || offset < 0) {
-    throw new ERR_OUT_OF_RANGE('offset', `>= 0 && <= ${maxLength}`, offset);
+    throw new ERR_OUT_OF_RANGE("offset", `>= 0 && <= ${maxLength}`, offset);
   }
   return offset >>> 0;
 }
 
 function assertSize(size, elementSize, offset, length) {
-  validateNumber(size, 'size');
+  validateNumber(size, "size");
   size *= elementSize;
   if (Number.isNaN(size) || size > kMaxPossibleLength || size < 0) {
     throw new ERR_OUT_OF_RANGE(
-      'size',
+      "size",
       `>= 0 && <= ${kMaxPossibleLength}`,
       size,
     );
   }
   if (size + offset > length) {
-    throw new ERR_OUT_OF_RANGE('size + offset', `<= ${length}`, size + offset);
+    throw new ERR_OUT_OF_RANGE("size + offset", `<= ${length}`, size + offset);
   }
   return size >>> 0;
 }
@@ -129,17 +129,13 @@ function assertSize(size, elementSize, offset, length) {
 
 function toUint8(buf) {
   if (isAnyArrayBuffer(buf)) return new Uint8Array(buf);
-  return new Uint8Array(
-    buf.buffer,
-    buf.byteOffset,
-    buf.byteLength,
-  );
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
 export function randomBytes(size, callback) {
   size = assertSize(size, 1, 0, Infinity);
   if (callback !== undefined) {
-    validateFunction(callback, 'callback');
+    validateFunction(callback, "callback");
   }
 
   const buf = Buffer.alloc(size);
@@ -163,11 +159,11 @@ export function randomBytes(size, callback) {
 export function randomFillSync(buf, offset = 0, size) {
   if (!isAnyArrayBuffer(buf) && !isArrayBufferView(buf)) {
     throw new ERR_INVALID_ARG_TYPE(
-      'buf',
+      "buf",
       null,
       buf,
       `The "buf" argument must be an instance of ArrayBuffer or ArrayBufferView. ` +
-        `Received ${typeof buf === 'string' ? `type string ('${buf}')` : String(buf)}`,
+        `Received ${typeof buf === "string" ? `type string ('${buf}')` : String(buf)}`,
     );
   }
 
@@ -188,20 +184,24 @@ export function randomFillSync(buf, offset = 0, size) {
 
 export function randomFill(buf, offset, size, callback) {
   if (!isAnyArrayBuffer(buf) && !isArrayBufferView(buf)) {
-    throw new ERR_INVALID_ARG_TYPE('buf', 'ArrayBuffer or ArrayBufferView', buf);
+    throw new ERR_INVALID_ARG_TYPE(
+      "buf",
+      "ArrayBuffer or ArrayBufferView",
+      buf,
+    );
   }
 
   const elementSize = buf.BYTES_PER_ELEMENT || 1;
 
-  if (typeof offset === 'function') {
+  if (typeof offset === "function") {
     callback = offset;
     offset = 0;
     size = buf.length;
-  } else if (typeof size === 'function') {
+  } else if (typeof size === "function") {
     callback = size;
     size = buf.length - offset;
   } else {
-    validateFunction(callback, 'callback');
+    validateFunction(callback, "callback");
   }
 
   offset = assertOffset(offset, elementSize, buf.byteLength);
@@ -249,7 +249,7 @@ function readUInt48BE(buf, offset) {
 
 export function randomInt(min, max, callback) {
   const minNotSpecified =
-    typeof max === 'undefined' || typeof max === 'function';
+    typeof max === "undefined" || typeof max === "function";
 
   if (minNotSpecified) {
     callback = max;
@@ -257,13 +257,13 @@ export function randomInt(min, max, callback) {
     min = 0;
   }
 
-  const isSync = typeof callback === 'undefined';
+  const isSync = typeof callback === "undefined";
   if (!isSync) {
-    validateFunction(callback, 'callback');
+    validateFunction(callback, "callback");
   }
   if (!Number.isSafeInteger(min)) {
     throw new ERR_INVALID_ARG_TYPE(
-      'min',
+      "min",
       null,
       min,
       `The "min" argument must be a safe integer. Received ${describeNotSafeInteger(min)}`,
@@ -271,7 +271,7 @@ export function randomInt(min, max, callback) {
   }
   if (!Number.isSafeInteger(max)) {
     throw new ERR_INVALID_ARG_TYPE(
-      'max',
+      "max",
       null,
       max,
       `The "max" argument must be a safe integer. Received ${describeNotSafeInteger(max)}`,
@@ -279,7 +279,7 @@ export function randomInt(min, max, callback) {
   }
   if (max <= min) {
     throw new ERR_OUT_OF_RANGE(
-      'max',
+      "max",
       `greater than the value of "min" (${min})`,
       max,
     );
@@ -288,7 +288,7 @@ export function randomInt(min, max, callback) {
   const range = max - min;
   if (!(range <= RAND_MAX)) {
     throw new ERR_OUT_OF_RANGE(
-      `max${minNotSpecified ? '' : ' - min'}`,
+      `max${minNotSpecified ? "" : " - min"}`,
       `<= ${RAND_MAX}`,
       range,
     );
@@ -320,9 +320,9 @@ export function randomInt(min, max, callback) {
 }
 
 function describeNotSafeInteger(v) {
-  if (typeof v === 'bigint') return `type bigint (${v}n)`;
-  if (typeof v === 'number') return `type number (${String(v)})`;
-  if (typeof v === 'string') return `type string ('${v}')`;
+  if (typeof v === "bigint") return `type bigint (${v}n)`;
+  if (typeof v === "number") return `type number (${String(v)})`;
+  if (typeof v === "string") return `type string ('${v}')`;
   return `type ${typeof v}`;
 }
 
@@ -338,14 +338,14 @@ export function getRandomValues(data) {
     data instanceof Float64Array
   ) {
     throw domException(
-      'The data argument must be an integer-type TypedArray',
-      'TypeMismatchError',
+      "The data argument must be an integer-type TypedArray",
+      "TypeMismatchError",
     );
   }
   if (data.byteLength > 65536) {
     throw domException(
-      'The requested length exceeds 65,536 bytes',
-      'QuotaExceededError',
+      "The requested length exceeds 65,536 bytes",
+      "QuotaExceededError",
     );
   }
   randomFillSync(data, 0);
@@ -363,7 +363,7 @@ let uuidBatch = 0;
 
 const hexBytesCache = new Array(256);
 for (let i = 0; i < 256; i++) {
-  hexBytesCache[i] = i.toString(16).padStart(2, '0');
+  hexBytesCache[i] = i.toString(16).padStart(2, "0");
 }
 
 function serializeUUID(buf, version, variant, offset = 0) {
@@ -372,16 +372,16 @@ function serializeUUID(buf, version, variant, offset = 0) {
     hexBytesCache[buf[offset + 1]] +
     hexBytesCache[buf[offset + 2]] +
     hexBytesCache[buf[offset + 3]] +
-    '-' +
+    "-" +
     hexBytesCache[buf[offset + 4]] +
     hexBytesCache[buf[offset + 5]] +
-    '-' +
+    "-" +
     hexBytesCache[(buf[offset + 6] & 0x0f) | version] +
     hexBytesCache[buf[offset + 7]] +
-    '-' +
+    "-" +
     hexBytesCache[(buf[offset + 8] & 0x3f) | variant] +
     hexBytesCache[buf[offset + 9]] +
-    '-' +
+    "-" +
     hexBytesCache[buf[offset + 10]] +
     hexBytesCache[buf[offset + 11]] +
     hexBytesCache[buf[offset + 12]] +
@@ -393,7 +393,7 @@ function serializeUUID(buf, version, variant, offset = 0) {
 
 function getBufferedUUID() {
   uuidData ??= new Uint8Array(16 * kBatchSize);
-  if (uuidData === undefined) throw new ERR_OPERATION_FAILED('Out of memory');
+  if (uuidData === undefined) throw new ERR_OPERATION_FAILED("Out of memory");
   if (uuidBatch === 0) fillRandom(uuidData, 0, uuidData.length);
   uuidBatch = (uuidBatch + 1) % kBatchSize;
   return serializeUUID(uuidData, 0x40, 0x80, uuidBatch * 16);
@@ -402,16 +402,16 @@ function getBufferedUUID() {
 function getUnbufferedUUID() {
   uuidNotBuffered ??= new Uint8Array(16);
   if (uuidNotBuffered === undefined) {
-    throw new ERR_OPERATION_FAILED('Out of memory');
+    throw new ERR_OPERATION_FAILED("Out of memory");
   }
   fillRandom(uuidNotBuffered, 0, 16);
   return serializeUUID(uuidNotBuffered, 0x40, 0x80);
 }
 
 export function randomUUID(options) {
-  if (options !== undefined) validateObject(options, 'options');
+  if (options !== undefined) validateObject(options, "options");
   const { disableEntropyCache = false } = options || {};
-  validateBoolean(disableEntropyCache, 'options.disableEntropyCache');
+  validateBoolean(disableEntropyCache, "options.disableEntropyCache");
   return disableEntropyCache ? getUnbufferedUUID() : getBufferedUUID();
 }
 
@@ -428,7 +428,7 @@ function writeTimestamp(buf, offset) {
 
 function getBufferedUUIDv7() {
   uuidData ??= new Uint8Array(16 * kBatchSize);
-  if (uuidData === undefined) throw new ERR_OPERATION_FAILED('Out of memory');
+  if (uuidData === undefined) throw new ERR_OPERATION_FAILED("Out of memory");
   if (uuidBatch === 0) fillRandom(uuidData, 0, uuidData.length);
   uuidBatch = (uuidBatch + 1) % kBatchSize;
   const offset = uuidBatch * 16;
@@ -439,7 +439,7 @@ function getBufferedUUIDv7() {
 function getUnbufferedUUIDv7() {
   uuidNotBuffered ??= new Uint8Array(16);
   if (uuidNotBuffered === undefined) {
-    throw new ERR_OPERATION_FAILED('Out of memory');
+    throw new ERR_OPERATION_FAILED("Out of memory");
   }
   fillRandom(uuidNotBuffered, 6, 10);
   writeTimestamp(uuidNotBuffered, 0);
@@ -447,9 +447,9 @@ function getUnbufferedUUIDv7() {
 }
 
 export function randomUUIDv7(options) {
-  if (options !== undefined) validateObject(options, 'options');
+  if (options !== undefined) validateObject(options, "options");
   const { disableEntropyCache = false } = options || {};
-  validateBoolean(disableEntropyCache, 'options.disableEntropyCache');
+  validateBoolean(disableEntropyCache, "options.disableEntropyCache");
   return disableEntropyCache ? getUnbufferedUUIDv7() : getBufferedUUIDv7();
 }
 
@@ -461,7 +461,7 @@ export function timingSafeEqual(a, b) {
   const aOk = isAnyArrayBuffer(a) || isArrayBufferView(a);
   if (!aOk) {
     throw new ERR_INVALID_ARG_TYPE(
-      'buf1',
+      "buf1",
       null,
       a,
       'The "buf1" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.',
@@ -470,7 +470,7 @@ export function timingSafeEqual(a, b) {
   const bOk = isAnyArrayBuffer(b) || isArrayBufferView(b);
   if (!bOk) {
     throw new ERR_INVALID_ARG_TYPE(
-      'buf2',
+      "buf2",
       null,
       b,
       'The "buf2" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.',

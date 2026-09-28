@@ -1,7 +1,7 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { Readable, Writable } = require('stream');
+const common = require("../common");
+const { Readable, Writable } = require("stream");
 
 // https://github.com/nodejs/node/issues/48666
 (async () => {
@@ -18,10 +18,10 @@ const { Readable, Writable } = require('stream');
     highWaterMark: 1000,
     write(buf, enc, cb) {
       process.nextTick(cb);
-    }
+    },
   });
 
   dst.write(Buffer.alloc(1000)); // Fill write buffer
-  dst.on('finish', common.mustCall());
+  dst.on("finish", common.mustCall());
   src.pipe(dst);
 })().then(common.mustCall());

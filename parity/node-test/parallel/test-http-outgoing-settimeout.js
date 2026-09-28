@@ -1,8 +1,8 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const { OutgoingMessage } = require('http');
+const { OutgoingMessage } = require("http");
 
 {
   // Tests for settimeout method with socket
@@ -11,7 +11,7 @@ const { OutgoingMessage } = require('http');
   outgoingMessage.socket = {
     setTimeout: common.mustCall((msecs) => {
       assert.strictEqual(msecs, expectedMsecs);
-    })
+    }),
   };
   outgoingMessage.setTimeout(expectedMsecs);
 }
@@ -22,9 +22,9 @@ const { OutgoingMessage } = require('http');
   const outgoingMessage = new OutgoingMessage();
   outgoingMessage.setTimeout(expectedMsecs);
 
-  outgoingMessage.emit('socket', {
+  outgoingMessage.emit("socket", {
     setTimeout: common.mustCall((msecs) => {
       assert.strictEqual(msecs, expectedMsecs);
-    })
+    }),
   });
 }

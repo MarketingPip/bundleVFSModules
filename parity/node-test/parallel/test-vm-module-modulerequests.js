@@ -1,15 +1,13 @@
-'use strict';
+"use strict";
 
 // Flags: --experimental-vm-modules --js-source-phase-imports
 
-require('../common');
-const assert = require('node:assert');
-const {
-  SourceTextModule,
-} = require('node:vm');
-const test = require('node:test');
+require("../common");
+const assert = require("node:assert");
+const { SourceTextModule } = require("node:vm");
+const test = require("node:test");
 
-test('SourceTextModule.moduleRequests should return module requests', (t) => {
+test("SourceTextModule.moduleRequests should return module requests", (t) => {
   const m = new SourceTextModule(`
     import { foo } from './foo.js';
     import * as FooDuplicate from './foo.js';
@@ -29,70 +27,70 @@ test('SourceTextModule.moduleRequests should return module requests', (t) => {
   assert.strictEqual(requests.length, 6);
   assert.deepStrictEqual(requests[0], {
     __proto__: null,
-    specifier: './foo.js',
+    specifier: "./foo.js",
     attributes: {
       __proto__: null,
     },
-    phase: 'evaluation',
+    phase: "evaluation",
   });
   assert.deepStrictEqual(requests[1], {
     __proto__: null,
-    specifier: './bar.json',
+    specifier: "./bar.json",
     attributes: {
       __proto__: null,
-      type: 'json'
+      type: "json",
     },
-    phase: 'evaluation',
+    phase: "evaluation",
   });
   assert.deepStrictEqual(requests[2], {
     __proto__: null,
-    specifier: './quz.js',
+    specifier: "./quz.js",
     attributes: {
       __proto__: null,
-      attr1: 'quz',
+      attr1: "quz",
     },
-    phase: 'evaluation',
+    phase: "evaluation",
   });
   assert.deepStrictEqual(requests[3], {
     __proto__: null,
-    specifier: './quz.js',
+    specifier: "./quz.js",
     attributes: {
       __proto__: null,
-      attr2: 'quark',
-      attr3: 'baz',
+      attr2: "quark",
+      attr3: "baz",
     },
-    phase: 'evaluation',
+    phase: "evaluation",
   });
   assert.deepStrictEqual(requests[4], {
     __proto__: null,
-    specifier: './source-module',
+    specifier: "./source-module",
     attributes: {
       __proto__: null,
     },
-    phase: 'source',
+    phase: "source",
   });
   assert.deepStrictEqual(requests[5], {
     __proto__: null,
-    specifier: './source-module',
+    specifier: "./source-module",
     attributes: {
       __proto__: null,
     },
-    phase: 'evaluation',
+    phase: "evaluation",
   });
 
   // Check the deprecated dependencySpecifiers property.
   // The dependencySpecifiers items are not unique.
   assert.deepStrictEqual(m.dependencySpecifiers, [
-    './foo.js',
-    './bar.json',
-    './quz.js',
-    './quz.js',
-    './source-module',
-    './source-module',
+    "./foo.js",
+    "./bar.json",
+    "./quz.js",
+    "./quz.js",
+    "./source-module",
+    "./source-module",
   ]);
 });
 
-test('SourceTextModule.moduleRequests items are frozen', (t) => {
+test("SourceTextModule.moduleRequests items are frozen", (t) => {
   const m = new SourceTextModule(`
     import { foo } from './foo.js';
   `);
@@ -100,17 +98,23 @@ test('SourceTextModule.moduleRequests items are frozen', (t) => {
   const requests = m.moduleRequests;
   assert.strictEqual(requests.length, 1);
 
-  const propertyNames = ['specifier', 'attributes', 'phase'];
+  const propertyNames = ["specifier", "attributes", "phase"];
   for (const propertyName of propertyNames) {
-    assert.throws(() => {
-      requests[0][propertyName] = 'bar.js';
-    }, {
-      name: 'TypeError',
-    });
+    assert.throws(
+      () => {
+        requests[0][propertyName] = "bar.js";
+      },
+      {
+        name: "TypeError",
+      },
+    );
   }
-  assert.throws(() => {
-    requests[0].attributes.type = 'json';
-  }, {
-    name: 'TypeError',
-  });
+  assert.throws(
+    () => {
+      requests[0].attributes.type = "json";
+    },
+    {
+      name: "TypeError",
+    },
+  );
 });

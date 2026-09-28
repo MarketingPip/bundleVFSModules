@@ -24,37 +24,39 @@
 // Browser-impossible behavior is a noop with the right shape, never a throw
 // (Jared's rule). Nothing here patches host globals (`Promise`, `setTimeout`
 // are left alone) and there are no npm dependencies.
-'use strict';
+"use strict";
 
-import { AsyncLocalStorage as _BrowserALSBase } from 'als-browser';
+import { AsyncLocalStorage as _BrowserALSBase } from "als-browser";
 
 // Wrapper around als-browser's AsyncLocalStorage adding Node's `name`
 // option and `withScope()` which als-browser doesn't implement.
 class BrowserALS extends _BrowserALSBase {
-  #alsName = '';
+  #alsName = "";
   constructor(options) {
     if (options !== undefined) {
-      if (typeof options !== 'object' || options === null) {
+      if (typeof options !== "object" || options === null) {
         const e = new TypeError(
-          `The "options" argument must be of type object. Received type ${typeof options}`
+          `The "options" argument must be of type object. Received type ${typeof options}`,
         );
-        e.code = 'ERR_INVALID_ARG_TYPE';
+        e.code = "ERR_INVALID_ARG_TYPE";
         throw e;
       }
       if (options.name !== undefined) {
-        if (typeof options.name !== 'string') {
+        if (typeof options.name !== "string") {
           const e = new TypeError(
-            `The "options.name" property must be of type string. Received type ${typeof options.name}`
+            `The "options.name" property must be of type string. Received type ${typeof options.name}`,
           );
-          e.code = 'ERR_INVALID_ARG_TYPE';
+          e.code = "ERR_INVALID_ARG_TYPE";
           throw e;
         }
       }
     }
     super();
-    this.#alsName = options?.name ?? '';
+    this.#alsName = options?.name ?? "";
   }
-  get name() { return this.#alsName; }
+  get name() {
+    return this.#alsName;
+  }
   withScope(store) {
     const self = this;
     return {
@@ -68,9 +70,10 @@ class BrowserALS extends _BrowserALSBase {
 // 1. Runtime bridge (guarded: the runtime AST-rewrites exactly the
 //    `globalThis._RUNTIME_` member expression to the sandbox scope;
 //    undefined under real Node / direct import).
-const RT = (typeof globalThis._RUNTIME_ !== "undefined")
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 void RT;
 
 // 2. Native delegation probe (Node lane only). `process.getBuiltinModule`
@@ -132,7 +135,11 @@ class ERR_INVALID_ASYNC_ID extends RangeError {
 function formatReceived(value) {
   if (value === undefined) return "undefined";
   if (value === null) return "null";
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
     return String(value);
   }
   return `type ${typeof value}`;
@@ -168,7 +175,8 @@ class StubAsyncHook {
   constructor(callbacks) {
     // Node destructures with no default: createHook()/createHook(null)
     // throw a plain TypeError ("Cannot destructure property 'init' of …").
-    const { init, before, after, destroy, promiseResolve, trackPromises } = callbacks;
+    const { init, before, after, destroy, promiseResolve, trackPromises } =
+      callbacks;
     if (init !== undefined && typeof init !== "function") {
       throw new ERR_ASYNC_CALLBACK("hook.init must be a function");
     }
@@ -186,7 +194,7 @@ class StubAsyncHook {
     }
     if (trackPromises !== undefined && typeof trackPromises !== "boolean") {
       throw new ERR_INVALID_ARG_TYPE(
-        `The "trackPromises" property must be of type boolean. Received ${formatReceived(trackPromises)}`
+        `The "trackPromises" property must be of type boolean. Received ${formatReceived(trackPromises)}`,
       );
     }
     this.#callbacks = { init, before, after, destroy, promiseResolve };
@@ -226,7 +234,7 @@ class StubAsyncResource {
   constructor(type, options = undefined) {
     if (typeof type !== "string") {
       throw new ERR_INVALID_ARG_TYPE(
-        `The "type" argument must be of type string. Received ${formatReceived(type)}`
+        `The "type" argument must be of type string. Received ${formatReceived(type)}`,
       );
     }
     let triggerAsyncId = currentAsyncId;
@@ -281,7 +289,7 @@ class StubAsyncResource {
 
   static bind(fn, type = undefined, thisArg = undefined) {
     const resource = new StubAsyncResource(
-      type === undefined ? (fn?.name || "bound-anonymous-fn") : type
+      type === undefined ? fn?.name || "bound-anonymous-fn" : type,
     );
     return function (...args) {
       return resource.runInAsyncScope(() => fn.apply(thisArg, args));
@@ -321,13 +329,13 @@ class StubAsyncLocalStorage {
     if (options !== undefined) {
       if (typeof options !== "object" || options === null) {
         throw new ERR_INVALID_ARG_TYPE(
-          `The "options" argument must be of type object. Received ${formatReceived(options)}`
+          `The "options" argument must be of type object. Received ${formatReceived(options)}`,
         );
       }
       if (options.name !== undefined) {
         if (typeof options.name !== "string") {
           throw new ERR_INVALID_ARG_TYPE(
-            `The "options.name" property must be of type string. Received ${formatReceived(options.name)}`
+            `The "options.name" property must be of type string. Received ${formatReceived(options.name)}`,
           );
         }
         this.#name = options.name;
@@ -536,14 +544,15 @@ const AsyncResource =
 const asyncWrapProviders =
   native !== undefined ? native.asyncWrapProviders : buildAsyncWrapProviders();
 
-const createHook =
-  native !== undefined ? native.createHook : stubCreateHook;
+const createHook = native !== undefined ? native.createHook : stubCreateHook;
 const executionAsyncId =
   native !== undefined ? native.executionAsyncId : stubExecutionAsyncId;
 const triggerAsyncId =
   native !== undefined ? native.triggerAsyncId : stubTriggerAsyncId;
 const executionAsyncResource =
-  native !== undefined ? native.executionAsyncResource : stubExecutionAsyncResource;
+  native !== undefined
+    ? native.executionAsyncResource
+    : stubExecutionAsyncResource;
 
 export {
   AsyncLocalStorage,

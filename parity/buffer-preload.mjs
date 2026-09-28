@@ -16,15 +16,18 @@
 //
 // This stays buffer-specific on purpose: the shared parity/preload.mjs only
 // redirects imports and must leave the global Buffer alone for other modules.
-import Module from 'node:module';
-import { register } from 'node:module';
-import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import Module from "node:module";
+import { register } from "node:module";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const nodeTestDir = path.join(repoRoot, 'parity', 'node-test') + path.sep;
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+const nodeTestDir = path.join(repoRoot, "parity", "node-test") + path.sep;
 const preloadURL = pathToFileURL(fileURLToPath(import.meta.url)).href;
-const polyfillURL = pathToFileURL(path.join(repoRoot, 'src', 'buffer.js')).href;
+const polyfillURL = pathToFileURL(path.join(repoRoot, "src", "buffer.js")).href;
 
 // Only the official test files (parallel/) and their fixture packages
 // (fixtures/, loaded by spawned child processes) are redirected.
@@ -32,8 +35,8 @@ const polyfillURL = pathToFileURL(path.join(repoRoot, 'src', 'buffer.js')).href;
 // common/index.js destructures atob/btoa from require('buffer') for its
 // global-leak detector, so it must keep seeing the native module.
 const redirectDirs = [
-  path.join(nodeTestDir, 'parallel') + path.sep,
-  path.join(nodeTestDir, 'fixtures') + path.sep,
+  path.join(nodeTestDir, "parallel") + path.sep,
+  path.join(nodeTestDir, "fixtures") + path.sep,
 ];
 
 const poly = await import(polyfillURL);
@@ -53,10 +56,10 @@ function getWrappedCrypto(request, parent, isMain) {
   const nativeCrypto = origLoad.call(this, request, parent, isMain);
   wrappedCrypto = new Proxy(nativeCrypto, {
     get(target, prop, receiver) {
-      if (prop === 'randomBytes') {
+      if (prop === "randomBytes") {
         return (size, callback) => {
           const buf = poly.Buffer.from(target.randomBytes(size));
-          if (typeof callback === 'function') {
+          if (typeof callback === "function") {
             process.nextTick(() => callback(null, buf));
           }
           return buf;
@@ -68,13 +71,13 @@ function getWrappedCrypto(request, parent, isMain) {
   return wrappedCrypto;
 }
 Module._load = function (request, parent, isMain) {
-  const parentFile = parent?.filename ?? '';
+  const parentFile = parent?.filename ?? "";
   if (redirectDirs.some((dir) => parentFile.startsWith(dir))) {
-    const bare = request.startsWith('node:') ? request.slice(5) : request;
-    if (bare === 'buffer') {
+    const bare = request.startsWith("node:") ? request.slice(5) : request;
+    if (bare === "buffer") {
       return poly.default;
     }
-    if (bare === 'crypto') {
+    if (bare === "crypto") {
       return getWrappedCrypto.call(this, request, parent, isMain);
     }
   }
@@ -82,13 +85,13 @@ Module._load = function (request, parent, isMain) {
 };
 
 // 3. ESM redirect for the vendored test tree.
-register(pathToFileURL(path.join(repoRoot, 'parity', 'buffer-hooks.mjs')));
+register(pathToFileURL(path.join(repoRoot, "parity", "buffer-hooks.mjs")));
 
 // 4. Make spawned `node` children load this adapter too, so child-process
 // tests exercise the polyfill. Guarded so the flag is appended only once.
 const importFlag = `--import ${preloadURL}`;
-const nodeOptions = process.env.NODE_OPTIONS ?? '';
+const nodeOptions = process.env.NODE_OPTIONS ?? "";
 if (!nodeOptions.includes(preloadURL)) {
   process.env.NODE_OPTIONS =
-    nodeOptions === '' ? importFlag : `${nodeOptions} ${importFlag}`;
+    nodeOptions === "" ? importFlag : `${nodeOptions} ${importFlag}`;
 }

@@ -19,19 +19,19 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const { Readable: R, Writable: W } = require('stream');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const { Readable: R, Writable: W } = require("stream");
+const assert = require("assert");
 
 let ondataCalled = 0;
 
 class TestReader extends R {
   constructor() {
     super();
-    this._buffer = Buffer.alloc(100, 'x');
+    this._buffer = Buffer.alloc(100, "x");
 
-    this.on('data', () => {
+    this.on("data", () => {
       ondataCalled++;
     });
   }
@@ -43,16 +43,18 @@ class TestReader extends R {
 }
 
 const reader = new TestReader();
-setImmediate(common.mustCall(() => {
-  assert.strictEqual(ondataCalled, 1);
-  console.log('ok');
-  reader.push(null);
-}));
+setImmediate(
+  common.mustCall(() => {
+    assert.strictEqual(ondataCalled, 1);
+    console.log("ok");
+    reader.push(null);
+  }),
+);
 
 class TestWriter extends W {
   constructor() {
     super();
-    this.write('foo');
+    this.write("foo");
     this.end();
   }
 
@@ -63,8 +65,8 @@ class TestWriter extends W {
 
 const writer = new TestWriter();
 
-process.on('exit', function() {
+process.on("exit", function () {
   assert.strictEqual(reader.readable, false);
   assert.strictEqual(writer.writable, false);
-  console.log('ok');
+  console.log("ok");
 });

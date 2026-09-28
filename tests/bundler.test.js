@@ -1,7 +1,14 @@
-import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import { bundle } from '../dist/RUNTIME_BUNDLER.js';
+import {
+  jest,
+  describe,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+} from "@jest/globals";
+import { bundle } from "../dist/RUNTIME_BUNDLER.js";
 
-describe('moduleLoader public API', () => {
+describe("moduleLoader public API", () => {
   let originalFetch;
   let blobUrls = [];
 
@@ -28,17 +35,20 @@ describe('moduleLoader public API', () => {
     jest.restoreAllMocks();
   });
 
-  test('bundles a simple module without dependencies', async () => {
-    global.fetch.mockResolvedValue({ ok: true, text: () => Promise.resolve(`export const x = 42;`) });
+  test("bundles a simple module without dependencies", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve(`export const x = 42;`),
+    });
 
-    const { url, revoke } = await bundle('https://example.com/main.js');
+    const { url, revoke } = await bundle("https://example.com/main.js");
 
     expect(url).toMatch(/^blob:fake-/);
     expect(blobUrls).toContain(url);
 
     // Dynamic import simulation (optional)
-    const code = await (await fetch('https://example.com/main.js')).text();
-    expect(code).toContain('export const x = 42;');
+    const code = await (await fetch("https://example.com/main.js")).text();
+    expect(code).toContain("export const x = 42;");
 
     revoke();
     expect(blobUrls).not.toContain(url);
@@ -62,19 +72,26 @@ describe('moduleLoader public API', () => {
     expect(blobUrls.length).toBe(3); // main.js + a.js + b.js
     revoke();
     expect(blobUrls.length).toBe(0);
-  });*/ 
+  });*/
 
-  test('throws if a fetch fails', async () => {
+  test("throws if a fetch fails", async () => {
     global.fetch.mockResolvedValue({ ok: false, status: 404 });
 
-    await expect(bundle('https://example.com/missing.js')).rejects.toThrow(/Fetch failed: 404/);
+    await expect(bundle("https://example.com/missing.js")).rejects.toThrow(
+      /Fetch failed: 404/,
+    );
   });
 
-  test('supports multiple bundles independently', async () => {
-    global.fetch.mockImplementation((url) => Promise.resolve({ ok: true, text: () => Promise.resolve(`export const y = 123;`) }));
+  test("supports multiple bundles independently", async () => {
+    global.fetch.mockImplementation((url) =>
+      Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(`export const y = 123;`),
+      }),
+    );
 
-    const b1 = await bundle('https://example.com/one.js');
-    const b2 = await bundle('https://example.com/two.js');
+    const b1 = await bundle("https://example.com/one.js");
+    const b2 = await bundle("https://example.com/two.js");
 
     expect(b1.url).not.toBe(b2.url);
     expect(blobUrls).toContain(b1.url);

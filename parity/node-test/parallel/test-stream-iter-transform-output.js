@@ -1,11 +1,11 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
 // Tests for transform output normalization edge cases:
 // ArrayBuffer, ArrayBufferView, iterables, strings, invalid types.
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 const {
   pull,
   pullSync,
@@ -13,7 +13,7 @@ const {
   bytesSync,
   from,
   fromSync,
-} = require('stream/iter');
+} = require("stream/iter");
 
 // Stateless transform returns ArrayBuffer (async)
 async function testTransformReturnsArrayBuffer() {
@@ -23,8 +23,8 @@ async function testTransformReturnsArrayBuffer() {
     new Uint8Array(ab).set(chunks[0]);
     return ab;
   };
-  const data = await bytes(pull(from('AB'), tx));
-  assert.deepStrictEqual(data, new TextEncoder().encode('AB'));
+  const data = await bytes(pull(from("AB"), tx));
+  assert.deepStrictEqual(data, new TextEncoder().encode("AB"));
 }
 
 // Stateless transform returns ArrayBuffer (sync)
@@ -35,8 +35,8 @@ async function testSyncTransformReturnsArrayBuffer() {
     new Uint8Array(ab).set(chunks[0]);
     return ab;
   };
-  const data = bytesSync(pullSync(fromSync('AB'), tx));
-  assert.deepStrictEqual(data, new TextEncoder().encode('AB'));
+  const data = bytesSync(pullSync(fromSync("AB"), tx));
+  assert.deepStrictEqual(data, new TextEncoder().encode("AB"));
 }
 
 // Stateless transform returns Float32Array (non-Uint8Array ArrayBufferView)
@@ -45,7 +45,7 @@ async function testTransformReturnsFloat32Array() {
     if (chunks === null) return null;
     return new Float32Array([1.0]);
   };
-  const data = await bytes(pull(from('x'), tx));
+  const data = await bytes(pull(from("x"), tx));
   assert.strictEqual(data.byteLength, 4); // 1 float32 = 4 bytes
 }
 
@@ -55,7 +55,7 @@ async function testSyncTransformReturnsFloat32Array() {
     if (chunks === null) return null;
     return new Float32Array([1.0]);
   };
-  const data = bytesSync(pullSync(fromSync('x'), tx));
+  const data = bytesSync(pullSync(fromSync("x"), tx));
   assert.strictEqual(data.byteLength, 4);
 }
 
@@ -63,12 +63,12 @@ async function testSyncTransformReturnsFloat32Array() {
 async function testTransformReturnsGenerator() {
   const tx = (chunks) => {
     if (chunks === null) return null;
-    return (function*() {
+    return (function* () {
       yield new Uint8Array([65]);
       yield new Uint8Array([66]);
     })();
   };
-  const data = await bytes(pull(from('x'), tx));
+  const data = await bytes(pull(from("x"), tx));
   assert.deepStrictEqual(data, new Uint8Array([65, 66]));
 }
 
@@ -76,12 +76,12 @@ async function testTransformReturnsGenerator() {
 async function testSyncTransformReturnsGenerator() {
   const tx = (chunks) => {
     if (chunks === null) return null;
-    return (function*() {
+    return (function* () {
       yield new Uint8Array([67]);
       yield new Uint8Array([68]);
     })();
   };
-  const data = bytesSync(pullSync(fromSync('x'), tx));
+  const data = bytesSync(pullSync(fromSync("x"), tx));
   assert.deepStrictEqual(data, new Uint8Array([67, 68]));
 }
 
@@ -89,12 +89,12 @@ async function testSyncTransformReturnsGenerator() {
 async function testTransformReturnsAsyncGenerator() {
   const tx = (chunks) => {
     if (chunks === null) return null;
-    return (async function*() {
+    return (async function* () {
       yield new Uint8Array([69]);
       yield new Uint8Array([70]);
     })();
   };
-  const data = await bytes(pull(from('x'), tx));
+  const data = await bytes(pull(from("x"), tx));
   assert.deepStrictEqual(data, new Uint8Array([69, 70]));
 }
 
@@ -104,12 +104,12 @@ async function testStatefulTransformYieldsString() {
     async *transform(source) {
       for await (const chunks of source) {
         if (chunks === null) return;
-        yield 'hello';
+        yield "hello";
       }
     },
   };
-  const data = await bytes(pull(from('x'), tx));
-  assert.deepStrictEqual(data, new TextEncoder().encode('hello'));
+  const data = await bytes(pull(from("x"), tx));
+  assert.deepStrictEqual(data, new TextEncoder().encode("hello"));
 }
 
 // Stateful async transform yields ArrayBuffer
@@ -124,7 +124,7 @@ async function testStatefulTransformYieldsArrayBuffer() {
       }
     },
   };
-  const data = await bytes(pull(from('x'), tx));
+  const data = await bytes(pull(from("x"), tx));
   assert.deepStrictEqual(data, new Uint8Array([71, 72]));
 }
 
@@ -134,12 +134,12 @@ async function testStatefulSyncTransformYieldsString() {
     *transform(source) {
       for (const chunks of source) {
         if (chunks === null) return;
-        yield 'world';
+        yield "world";
       }
     },
   };
-  const data = bytesSync(pullSync(fromSync('x'), tx));
-  assert.deepStrictEqual(data, new TextEncoder().encode('world'));
+  const data = bytesSync(pullSync(fromSync("x"), tx));
+  assert.deepStrictEqual(data, new TextEncoder().encode("world"));
 }
 
 // Stateful async transform yields null (no output)
@@ -149,7 +149,7 @@ async function testStatefulTransformYieldsNull() {
       yield null;
     },
   };
-  const data = await bytes(pull(from('x'), tx));
+  const data = await bytes(pull(from("x"), tx));
   assert.deepStrictEqual(data, new Uint8Array());
 }
 
@@ -160,7 +160,7 @@ async function testStatefulSyncTransformYieldsNull() {
       yield null;
     },
   };
-  const data = bytesSync(pullSync(fromSync('x'), tx));
+  const data = bytesSync(pullSync(fromSync("x"), tx));
   assert.deepStrictEqual(data, new Uint8Array());
 }
 
@@ -170,7 +170,7 @@ async function testFlushReturnsSingleUint8Array() {
     if (chunks === null) return new Uint8Array([99]); // Flush returns single
     return chunks;
   };
-  const data = await bytes(pull(from('x'), tx));
+  const data = await bytes(pull(from("x"), tx));
   // Should contain both the original data and the flush byte
   assert.ok(data.includes(99));
 }
@@ -178,11 +178,11 @@ async function testFlushReturnsSingleUint8Array() {
 // Flush returns string
 async function testFlushReturnsString() {
   const tx = (chunks) => {
-    if (chunks === null) return 'trailer';
+    if (chunks === null) return "trailer";
     return chunks;
   };
-  const data = await bytes(pull(from('x'), tx));
-  const trailer = new TextEncoder().encode('trailer');
+  const data = await bytes(pull(from("x"), tx));
+  const trailer = new TextEncoder().encode("trailer");
   // Last bytes should be the trailer
   const tail = data.slice(data.length - trailer.length);
   assert.deepStrictEqual(tail, trailer);
@@ -194,7 +194,7 @@ async function testSyncFlushReturnsSingleUint8Array() {
     if (chunks === null) return new Uint8Array([88]);
     return chunks;
   };
-  const data = bytesSync(pullSync(fromSync('x'), tx));
+  const data = bytesSync(pullSync(fromSync("x"), tx));
   assert.ok(data.includes(88));
 }
 
@@ -207,9 +207,11 @@ async function testTransformReturnsInvalidType() {
   await assert.rejects(
     async () => {
       // eslint-disable-next-line no-unused-vars
-      for await (const batch of pull(from('x'), tx)) { /* consume */ }
+      for await (const batch of pull(from("x"), tx)) {
+        /* consume */
+      }
     },
-    { code: 'ERR_INVALID_ARG_TYPE' },
+    { code: "ERR_INVALID_ARG_TYPE" },
   );
 }
 
@@ -222,9 +224,11 @@ async function testSyncTransformReturnsInvalidType() {
   assert.throws(
     () => {
       // eslint-disable-next-line no-unused-vars
-      for (const batch of pullSync(fromSync('x'), tx)) { /* consume */ }
+      for (const batch of pullSync(fromSync("x"), tx)) {
+        /* consume */
+      }
     },
-    { code: 'ERR_INVALID_ARG_TYPE' },
+    { code: "ERR_INVALID_ARG_TYPE" },
   );
 }
 

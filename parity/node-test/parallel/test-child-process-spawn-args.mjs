@@ -4,16 +4,16 @@
 // caused the third argument (`options`) to be ignored.
 // See https://github.com/nodejs/node/issues/24912.
 
-import * as common from '../common/index.mjs';
-import tmpdir from '../common/tmpdir.js';
+import * as common from "../common/index.mjs";
+import tmpdir from "../common/tmpdir.js";
 
-import assert from 'node:assert';
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import assert from "node:assert";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 
 tmpdir.refresh();
 
-const command = common.isWindows ? 'cd' : 'pwd';
+const command = common.isWindows ? "cd" : "pwd";
 const options = { cwd: tmpdir.path };
 
 if (common.isWindows) {
@@ -22,11 +22,7 @@ if (common.isWindows) {
   options.shell = true;
 }
 
-const testCases = [
-  undefined,
-  null,
-  [],
-];
+const testCases = [undefined, null, []];
 
 const expectedResult = new Set([tmpdir.path.trim().toLowerCase()]);
 
@@ -35,14 +31,17 @@ const actualResults = new Set();
 for (const testCase of testCases) {
   const subprocess = spawn(command, testCase, options);
 
-  let accumulatedData = '';
+  let accumulatedData = "";
 
-  subprocess.stdout.setEncoding('utf8');
-  subprocess.stdout.on('data', common.mustCall((data) => {
-    accumulatedData += data;
-  }));
+  subprocess.stdout.setEncoding("utf8");
+  subprocess.stdout.on(
+    "data",
+    common.mustCall((data) => {
+      accumulatedData += data;
+    }),
+  );
 
-  await once(subprocess.stdout, 'end');
+  await once(subprocess.stdout, "end");
 
   actualResults.add(accumulatedData.trim().toLowerCase());
 }

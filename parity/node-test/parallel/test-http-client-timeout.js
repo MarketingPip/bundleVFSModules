@@ -19,36 +19,43 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
 const options = {
-  method: 'GET',
+  method: "GET",
   port: undefined,
-  host: '127.0.0.1',
-  path: '/'
+  host: "127.0.0.1",
+  path: "/",
 };
 
-const server = http.createServer(function(req, res) {
+const server = http.createServer(function (req, res) {
   // This space intentionally left blank
 });
 
-server.listen(0, options.host, common.mustCall(function() {
-  options.port = this.address().port;
-  const req = http.request(options, function(res) {
-    // This space intentionally left blank
-  });
-  req.on('close', common.mustCall(() => {
-    assert.strictEqual(req.destroyed, true);
-    server.close();
-  }));
-  function destroy() {
-    req.destroy();
-  }
-  const s = req.setTimeout(1, destroy);
-  assert.ok(s instanceof http.ClientRequest);
-  req.on('error', destroy);
-  req.end();
-}));
+server.listen(
+  0,
+  options.host,
+  common.mustCall(function () {
+    options.port = this.address().port;
+    const req = http.request(options, function (res) {
+      // This space intentionally left blank
+    });
+    req.on(
+      "close",
+      common.mustCall(() => {
+        assert.strictEqual(req.destroyed, true);
+        server.close();
+      }),
+    );
+    function destroy() {
+      req.destroy();
+    }
+    const s = req.setTimeout(1, destroy);
+    assert.ok(s instanceof http.ClientRequest);
+    req.on("error", destroy);
+    req.end();
+  }),
+);

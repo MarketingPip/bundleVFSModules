@@ -19,19 +19,18 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
-if (!common.hasCrypto)
-  common.skip('node compiled without OpenSSL.');
+if (!common.hasCrypto) common.skip("node compiled without OpenSSL.");
 
-const crypto = require('crypto');
+const crypto = require("crypto");
 
 // Pollution of global is intentional as part of test.
-common.allowGlobals(require('domain'));
+common.allowGlobals(require("domain"));
 // See https://github.com/nodejs/node/commit/d1eff9ab
-globalThis.domain = require('domain');
+globalThis.domain = require("domain");
 
 // Should not throw a 'TypeError: undefined is not a function' exception
 crypto.randomBytes(8);
@@ -40,4 +39,4 @@ const buf = Buffer.alloc(8);
 crypto.randomFillSync(buf);
 crypto.pseudoRandomBytes(8);
 crypto.pseudoRandomBytes(8, common.mustSucceed());
-crypto.pbkdf2('password', 'salt', 8, 8, 'sha1', common.mustSucceed());
+crypto.pbkdf2("password", "salt", 8, 8, "sha1", common.mustSucceed());

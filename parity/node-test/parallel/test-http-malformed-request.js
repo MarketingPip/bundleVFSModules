@@ -19,29 +19,31 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const net = require('net');
-const http = require('http');
-const url = require('url');
+"use strict";
+const common = require("../common");
+const net = require("net");
+const http = require("http");
+const url = require("url");
 
 // Make sure no exceptions are thrown when receiving malformed HTTP
 // requests.
-const server = http.createServer(common.mustCall((req, res) => {
-  console.log(`req: ${JSON.stringify(url.parse(req.url))}`);
+const server = http.createServer(
+  common.mustCall((req, res) => {
+    console.log(`req: ${JSON.stringify(url.parse(req.url))}`);
 
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.write('Hello World');
-  res.end();
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.write("Hello World");
+    res.end();
 
-  server.close();
-}));
+    server.close();
+  }),
+);
 server.listen(0);
 
-server.on('listening', function() {
+server.on("listening", function () {
   const c = net.createConnection(this.address().port);
-  c.on('connect', function() {
-    c.write('GET /hello?foo=%99bar HTTP/1.1\r\nHost: example.com\r\n\r\n');
+  c.on("connect", function () {
+    c.write("GET /hello?foo=%99bar HTTP/1.1\r\nHost: example.com\r\n\r\n");
     c.end();
   });
 });

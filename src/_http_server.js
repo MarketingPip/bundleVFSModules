@@ -9,17 +9,18 @@ export {
   ServerResponse,
   STATUS_CODES,
   _connectionListener,
-} from './http.js';
+} from "./http.js";
 import {
   Server,
   ServerResponse,
   STATUS_CODES,
   _connectionListener,
-} from './http.js';
+} from "./http.js";
 
-export const kServerResponse = Symbol('ServerResponse');
-export const kConnectionsCheckingInterval =
-  Symbol('http.server.connectionsCheckingInterval');
+export const kServerResponse = Symbol("ServerResponse");
+export const kConnectionsCheckingInterval = Symbol(
+  "http.server.connectionsCheckingInterval",
+);
 
 /** No-op: no connections to pre-close in the virtual server. */
 export function httpServerPreClose(/* server */) {}

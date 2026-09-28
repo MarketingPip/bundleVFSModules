@@ -1,1 +1,1 @@
-exports.string = '$NODE_PATH';
+exports.string = "$NODE_PATH";

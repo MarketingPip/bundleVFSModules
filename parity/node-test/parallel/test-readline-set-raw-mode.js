@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const readline = require('readline');
-const Stream = require('stream');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const readline = require("readline");
+const Stream = require("stream");
 
 const stream = new Stream();
 let expectedRawMode = true;
@@ -31,14 +31,14 @@ let rawModeCalled = false;
 let resumeCalled = false;
 let pauseCalled = false;
 
-stream.setRawMode = common.mustCallAtLeast(function(mode) {
+stream.setRawMode = common.mustCallAtLeast(function (mode) {
   rawModeCalled = true;
   assert.strictEqual(mode, expectedRawMode);
 });
-stream.resume = function() {
+stream.resume = function () {
   resumeCalled = true;
 };
-stream.pause = function() {
+stream.pause = function () {
   pauseCalled = true;
 };
 
@@ -47,13 +47,12 @@ stream.pause = function() {
 const rli = readline.createInterface({
   input: stream,
   output: stream,
-  terminal: true
+  terminal: true,
 });
 assert(rli.terminal);
 assert(rawModeCalled);
 assert(resumeCalled);
 assert(!pauseCalled);
-
 
 // pause() should call *not* call setRawMode()
 rawModeCalled = false;
@@ -64,7 +63,6 @@ assert(!rawModeCalled);
 assert(!resumeCalled);
 assert(pauseCalled);
 
-
 // resume() should *not* call setRawMode()
 rawModeCalled = false;
 resumeCalled = false;
@@ -73,7 +71,6 @@ rli.resume();
 assert(!rawModeCalled);
 assert(resumeCalled);
 assert(!pauseCalled);
-
 
 // close() should call setRawMode(false)
 expectedRawMode = false;
@@ -85,6 +82,6 @@ assert(rawModeCalled);
 assert(!resumeCalled);
 assert(pauseCalled);
 
-assert.deepStrictEqual(stream.listeners('keypress'), []);
+assert.deepStrictEqual(stream.listeners("keypress"), []);
 // One data listener for the keypress events.
-assert.strictEqual(stream.listeners('data').length, 1);
+assert.strictEqual(stream.listeners("data").length, 1);

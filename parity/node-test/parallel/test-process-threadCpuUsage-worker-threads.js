@@ -1,23 +1,29 @@
-'use strict';
+"use strict";
 
-const { mustCall, platformTimeout, hasCrypto, skip, isSunOS } = require('../common');
+const {
+  mustCall,
+  platformTimeout,
+  hasCrypto,
+  skip,
+  isSunOS,
+} = require("../common");
 
 if (!hasCrypto) {
-  skip('missing crypto');
-};
+  skip("missing crypto");
+}
 
 // This block can be removed once SmartOS support is fixed in
 // https://github.com/libuv/libuv/issues/4706
 // The behavior on SunOS is tested in
 // test/parallel/test-process-threadCpuUsage-main-thread.js
 if (isSunOS) {
-  skip('Operation not supported yet on SmartOS');
+  skip("Operation not supported yet on SmartOS");
 }
 
-const assert = require('assert');
-const { randomBytes, createHash } = require('crypto');
-const { once } = require('events');
-const { Worker, parentPort, workerData } = require('worker_threads');
+const assert = require("assert");
+const { randomBytes, createHash } = require("crypto");
+const { once } = require("events");
+const { Worker, parentPort, workerData } = require("worker_threads");
 
 const FREQUENCIES = [100, 500, 1000];
 
@@ -25,9 +31,12 @@ function performLoad() {
   const buffer = randomBytes(1e8);
 
   // Do some work
-  return setInterval(() => {
-    createHash('sha256').update(buffer).end(buffer);
-  }, platformTimeout(workerData?.frequency ?? 100));
+  return setInterval(
+    () => {
+      createHash("sha256").update(buffer).end(buffer);
+    },
+    platformTimeout(workerData?.frequency ?? 100),
+  );
 }
 
 function getUsages() {
@@ -40,47 +49,50 @@ function validateResults(results) {
   // Unfortunately, the real values are not really predictable on the CI so we
   // just check that all the values are positive numbers.
   for (let i = 0; i < 3; i++) {
-    assert.ok(typeof results[i].process.user === 'number');
+    assert.ok(typeof results[i].process.user === "number");
     assert.ok(results[i].process.user >= 0);
 
-    assert.ok(typeof results[i].process.system === 'number');
+    assert.ok(typeof results[i].process.system === "number");
     assert.ok(results[i].process.system >= 0);
 
-    assert.ok(typeof results[i].thread.user === 'number');
+    assert.ok(typeof results[i].thread.user === "number");
     assert.ok(results[i].thread.user >= 0);
 
-    assert.ok(typeof results[i].thread.system === 'number');
+    assert.ok(typeof results[i].thread.system === "number");
     assert.ok(results[i].thread.system >= 0);
   }
 }
 
 // The main thread will spawn three more threads, then after a while it will ask all of them to
 // report the thread CPU usage and exit.
-if (!workerData?.frequency) { // Do not use isMainThread here otherwise test will not run in --worker mode
+if (!workerData?.frequency) {
+  // Do not use isMainThread here otherwise test will not run in --worker mode
   const workers = [];
   for (const frequency of FREQUENCIES) {
     workers.push(new Worker(__filename, { workerData: { frequency } }));
   }
 
-  setTimeout(mustCall(async () => {
-    clearInterval(interval);
+  setTimeout(
+    mustCall(async () => {
+      clearInterval(interval);
 
-    const results = [getUsages()];
+      const results = [getUsages()];
 
-    for (const worker of workers) {
-      const statusPromise = once(worker, 'message');
+      for (const worker of workers) {
+        const statusPromise = once(worker, "message");
 
-      worker.postMessage('done');
-      const [status] = await statusPromise;
-      results.push(status);
-      worker.terminate();
-    }
+        worker.postMessage("done");
+        const [status] = await statusPromise;
+        results.push(status);
+        worker.terminate();
+      }
 
-    validateResults(results);
-  }), platformTimeout(5000));
-
+      validateResults(results);
+    }),
+    platformTimeout(5000),
+  );
 } else {
-  parentPort.on('message', () => {
+  parentPort.on("message", () => {
     clearInterval(interval);
     parentPort.postMessage(getUsages());
     process.exit(0);

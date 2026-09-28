@@ -1,9 +1,9 @@
+import { Symbol } from "./primordials.js";
 import {
-
-  Symbol,
-} from './primordials.js';
-import { AbortError,
-  aggregateTwoErrors, codes as errorsCodes } from './errors.js';
+  AbortError,
+  aggregateTwoErrors,
+  codes as errorsCodes,
+} from "./errors.js";
 import {
   kIsDestroyed,
   isDestroyed,
@@ -18,19 +18,13 @@ import {
   kDestroyed,
   kAutoDestroy,
   kErrored,
-} from './utils.js';
-import { nextTick } from './task-queues.js';
+} from "./utils.js";
+import { nextTick } from "./task-queues.js";
 
+const { ERR_MULTIPLE_CALLBACK } = errorsCodes;
 
-
-
-const {
-    ERR_MULTIPLE_CALLBACK,
-} = errorsCodes;
-
-
-const kDestroy = Symbol('kDestroy');
-const kConstruct = Symbol('kConstruct');
+const kDestroy = Symbol("kDestroy");
+const kConstruct = Symbol("kConstruct");
 
 function checkError(err, w, r) {
   if (err) {
@@ -58,13 +52,12 @@ function destroy(err, cb) {
     (w && (w[kState] & kDestroyed) !== 0) ||
     (r && (r[kState] & kDestroyed) !== 0)
   ) {
-    if (typeof cb === 'function') {
+    if (typeof cb === "function") {
       cb();
     }
 
     return this;
   }
-
 
   // We set destroyed to true before firing error callbacks in order
   // to make it re-entrance safe in case destroy() is called within callbacks
@@ -79,7 +72,7 @@ function destroy(err, cb) {
 
   // If still constructing then defer calling _destroy.
   if ((s[kState] & kConstructed) === 0) {
-    this.once(kDestroy, function(er) {
+    this.once(kDestroy, function (er) {
       _destroy(this, aggregateTwoErrors(er, err), cb);
     });
   } else {
@@ -110,7 +103,7 @@ function _destroy(self, err, cb) {
       r[kState] |= kClosed;
     }
 
-    if (typeof cb === 'function') {
+    if (typeof cb === "function") {
       cb(err);
     }
 
@@ -147,7 +140,7 @@ function emitCloseNT(self) {
     (w && (w[kState] & kEmitClose) !== 0) ||
     (r && (r[kState] & kEmitClose) !== 0)
   ) {
-    self.emit('close');
+    self.emit("close");
   }
 }
 
@@ -169,7 +162,7 @@ function emitErrorNT(self, err) {
     r[kState] |= kErrorEmitted;
   }
 
-  self.emit('error', err);
+  self.emit("error", err);
 }
 
 function undestroy() {
@@ -244,7 +237,7 @@ function errorOrDestroy(stream, err, sync) {
 }
 
 function construct(stream, cb) {
-  if (typeof stream._construct !== 'function') {
+  if (typeof stream._construct !== "function") {
     return;
   }
 
@@ -308,15 +301,15 @@ function constructNT(stream) {
 }
 
 function isRequest(stream) {
-  return stream?.setHeader && typeof stream.abort === 'function';
+  return stream?.setHeader && typeof stream.abort === "function";
 }
 
 function emitCloseLegacy(stream) {
-  stream.emit('close');
+  stream.emit("close");
 }
 
 function emitErrorCloseLegacy(stream, err) {
-  stream.emit('error', err);
+  stream.emit("error", err);
   nextTick(emitCloseLegacy, stream);
 }
 
@@ -338,9 +331,9 @@ function destroyer(stream, err) {
     stream.abort();
   } else if (isRequest(stream.req)) {
     stream.req.abort();
-  } else if (typeof stream.destroy === 'function') {
+  } else if (typeof stream.destroy === "function") {
     stream.destroy(err);
-  } else if (typeof stream.close === 'function') {
+  } else if (typeof stream.close === "function") {
     // TODO: Don't lose err?
     stream.close();
   } else if (err) {
@@ -354,10 +347,4 @@ function destroyer(stream, err) {
   }
 }
 
-export {
-  construct,
-  destroyer,
-  destroy,
-  undestroy,
-  errorOrDestroy,
-};
+export { construct, destroyer, destroy, undestroy, errorOrDestroy };

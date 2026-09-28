@@ -1,32 +1,45 @@
-import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import { createInterface, Interface, Readline } from '../src/readline.js';
-import { Readable, Writable } from '../src/stream.js';
+import {
+  jest,
+  describe,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+} from "@jest/globals";
+import { createInterface, Interface, Readline } from "../src/readline.js";
+import { Readable, Writable } from "../src/stream.js";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function lineReadable(lines) {
   const r = new Readable({ read() {} });
-  for (const l of lines) r.push(l + '\n');
+  for (const l of lines) r.push(l + "\n");
   r.push(null);
   return r;
 }
 
 function nullWritable() {
-  return new Writable({ write(_c, _e, cb) { cb(); } });
+  return new Writable({
+    write(_c, _e, cb) {
+      cb();
+    },
+  });
 }
 
 // ─── createInterface / Interface ──────────────────────────────────────────────
-describe('readline (callback version)', () => {
-
-  describe('createInterface()', () => {
-    test('returns an Interface instance', () => {
-      const rl = createInterface({ input: lineReadable([]), output: nullWritable() });
+describe("readline (callback version)", () => {
+  describe("createInterface()", () => {
+    test("returns an Interface instance", () => {
+      const rl = createInterface({
+        input: lineReadable([]),
+        output: nullWritable(),
+      });
       expect(rl).toBeInstanceOf(Interface);
       rl.close();
     });
   });
 
-  describe('Interface', () => {
+  describe("Interface", () => {
     let rl;
 
     afterEach(() => {
@@ -34,73 +47,73 @@ describe('readline (callback version)', () => {
     });
 
     // ── 'line' event ─────────────────────────────────────────────────────────
-    test("emits 'line' event for each line", done => {
-      rl = createInterface({ input: lineReadable(['foo', 'bar', 'baz']) });
+    test("emits 'line' event for each line", (done) => {
+      rl = createInterface({ input: lineReadable(["foo", "bar", "baz"]) });
 
       const lines = [];
-      rl.on('line', l => lines.push(l));
+      rl.on("line", (l) => lines.push(l));
 
-      rl.on('close', () => {
-        expect(lines).toEqual(['foo', 'bar', 'baz']);
+      rl.on("close", () => {
+        expect(lines).toEqual(["foo", "bar", "baz"]);
         done();
       });
     });
 
-    test('strips trailing newline', done => {
+    test("strips trailing newline", (done) => {
       const r = new Readable({ read() {} });
-      r.push('hello\nworld\n');
+      r.push("hello\nworld\n");
       r.push(null);
 
       rl = createInterface({ input: r });
 
       const lines = [];
-      rl.on('line', l => lines.push(l));
+      rl.on("line", (l) => lines.push(l));
 
-      rl.on('close', () => {
-        expect(lines).toEqual(['hello', 'world']);
+      rl.on("close", () => {
+        expect(lines).toEqual(["hello", "world"]);
         done();
       });
     });
 
-    test('handles EOF without newline', done => {
+    test("handles EOF without newline", (done) => {
       const r = new Readable({ read() {} });
-      r.push('no newline');
+      r.push("no newline");
       r.push(null);
 
       rl = createInterface({ input: r });
 
       const lines = [];
-      rl.on('line', l => lines.push(l));
+      rl.on("line", (l) => lines.push(l));
 
-      rl.on('close', () => {
-        expect(lines).toContain('no newline');
+      rl.on("close", () => {
+        expect(lines).toContain("no newline");
         done();
       });
     });
 
     // ── close ────────────────────────────────────────────────────────────────
-    test("emits 'close' after input ends", done => {
-      rl = createInterface({ input: lineReadable(['x']) });
-      rl.on('close', () => done());
+    test("emits 'close' after input ends", (done) => {
+      rl = createInterface({ input: lineReadable(["x"]) });
+      rl.on("close", () => done());
     });
 
-    test('close() emits close event', done => {
+    test("close() emits close event", (done) => {
       rl = createInterface({ input: lineReadable([]) });
-      rl.on('close', () => done());
+      rl.on("close", () => done());
       rl.close();
     });
 
     // ── question() (callback version) ────────────────────────────────────────
-    test('question() invokes callback with answer', done => {
-      rl = createInterface({ input: lineReadable(['my answer']) });
+    test("question() invokes callback with answer", (done) => {
+      rl = createInterface({ input: lineReadable(["my answer"]) });
 
-      rl.question('Prompt: ', (answer) => {
-        expect(answer).toBe('my answer');
+      rl.question("Prompt: ", (answer) => {
+        expect(answer).toBe("my answer");
         done();
       });
     });
 
-    test('question() writes prompt to output', done => {
+    test("question() writes prompt to output", (done) => {
       const chunks = [];
       const out = new Writable({
         write(c, _e, cb) {
@@ -109,59 +122,62 @@ describe('readline (callback version)', () => {
         },
       });
 
-      rl = createInterface({ input: lineReadable(['yes']), output: out });
+      rl = createInterface({ input: lineReadable(["yes"]), output: out });
 
-      rl.question('Continue? ', () => {
-        expect(chunks.join('')).toContain('Continue?');
+      rl.question("Continue? ", () => {
+        expect(chunks.join("")).toContain("Continue?");
         done();
       });
     });
 
     // ── pause / resume ───────────────────────────────────────────────────────
-    test('pause() and resume() do not throw', () => {
+    test("pause() and resume() do not throw", () => {
       rl = createInterface({ input: lineReadable([]) });
-      expect(() => { rl.pause(); rl.resume(); }).not.toThrow();
+      expect(() => {
+        rl.pause();
+        rl.resume();
+      }).not.toThrow();
     });
 
-    test("pause() emits 'pause' event", done => {
+    test("pause() emits 'pause' event", (done) => {
       rl = createInterface({ input: lineReadable([]) });
-      rl.on('pause', () => done());
+      rl.on("pause", () => done());
       rl.pause();
     });
 
-    test("resume() emits 'resume' event", done => {
+    test("resume() emits 'resume' event", (done) => {
       rl = createInterface({ input: lineReadable([]) });
       rl.pause();
-      rl.on('resume', () => done());
+      rl.on("resume", () => done());
       rl.resume();
     });
 
     // ── prompt ───────────────────────────────────────────────────────────────
-    test('setPrompt() / getPrompt()', () => {
+    test("setPrompt() / getPrompt()", () => {
       rl = createInterface({ input: lineReadable([]) });
-      rl.setPrompt('> ');
-      expect(rl.getPrompt()).toBe('> ');
+      rl.setPrompt("> ");
+      expect(rl.getPrompt()).toBe("> ");
     });
 
     // ── properties ───────────────────────────────────────────────────────────
-    test('terminal is false when no output', () => {
+    test("terminal is false when no output", () => {
       rl = createInterface({ input: lineReadable([]) });
       expect(rl.terminal).toBe(false);
     });
 
-    test('line is string', () => {
+    test("line is string", () => {
       rl = createInterface({ input: lineReadable([]) });
-      expect(typeof rl.line).toBe('string');
+      expect(typeof rl.line).toBe("string");
     });
 
-    test('cursor is number', () => {
+    test("cursor is number", () => {
       rl = createInterface({ input: lineReadable([]) });
-      expect(typeof rl.cursor).toBe('number');
+      expect(typeof rl.cursor).toBe("number");
     });
   });
 
   // ── Readline controller ────────────────────────────────────────────────────
-  describe('Readline', () => {
+  describe("Readline", () => {
     let rl, readline;
 
     beforeEach(() => {
@@ -173,28 +189,28 @@ describe('readline (callback version)', () => {
       rl.close();
     });
 
-    test('instantiates correctly', () => {
+    test("instantiates correctly", () => {
       expect(readline).toBeInstanceOf(Readline);
     });
 
-    test('clearLine() chains', () => {
+    test("clearLine() chains", () => {
       expect(readline.clearLine(0)).toBe(readline);
     });
 
-    test('clearScreenDown() chains', () => {
+    test("clearScreenDown() chains", () => {
       expect(readline.clearScreenDown()).toBe(readline);
     });
 
-    test('moveCursor() chains', () => {
+    test("moveCursor() chains", () => {
       expect(readline.moveCursor(0, 0)).toBe(readline);
     });
 
-    test('rollback() chains', () => {
+    test("rollback() chains", () => {
       expect(readline.rollback()).toBe(readline);
     });
 
     // non-promises version: commit might be sync
-    test('commit() does not throw', () => {
+    test("commit() does not throw", () => {
       expect(() => readline.commit()).not.toThrow();
     });
   });

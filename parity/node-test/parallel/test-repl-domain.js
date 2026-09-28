@@ -19,10 +19,10 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const { startNewREPLServer } = require('../common/repl');
-const ArrayStream = require('../common/arraystream');
+"use strict";
+require("../common");
+const { startNewREPLServer } = require("../common/repl");
+const ArrayStream = require("../common/arraystream");
 
 const stream = new ArrayStream();
 
@@ -32,11 +32,11 @@ startNewREPLServer({
   terminal: false,
 });
 
-stream.write = function(data) {
+stream.write = function (data) {
   // Don't use assert for this because the domain might catch it, and
   // give a false negative.  Don't throw, just print and exit.
-  if (data === 'OK\n') {
-    console.log('ok');
+  if (data === "OK\n") {
+    console.log("ok");
   } else {
     console.error(data);
     process.exit(1);
@@ -45,5 +45,5 @@ stream.write = function(data) {
 
 stream.run([
   'require("domain").create().on("error", function() { console.log("OK") })' +
-  '.run(function() { throw new Error("threw") })',
+    '.run(function() { throw new Error("threw") })',
 ]);

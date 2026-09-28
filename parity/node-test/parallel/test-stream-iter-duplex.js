@@ -1,9 +1,9 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { duplex, text, bytes } = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { duplex, text, bytes } = require("stream/iter");
 
 // =============================================================================
 // Basic duplex
@@ -13,11 +13,11 @@ async function testBasicDuplex() {
   const [channelA, channelB] = duplex();
 
   // A writes, B reads
-  await channelA.writer.write('hello from A');
+  await channelA.writer.write("hello from A");
   await channelA.close();
 
   const dataAtB = await text(channelB.readable);
-  assert.strictEqual(dataAtB, 'hello from A');
+  assert.strictEqual(dataAtB, "hello from A");
 }
 
 async function testBidirectional() {
@@ -25,12 +25,12 @@ async function testBidirectional() {
 
   // A writes to B, B writes to A concurrently
   const writeA = (async () => {
-    await channelA.writer.write('A to B');
+    await channelA.writer.write("A to B");
     await channelA.close();
   })();
 
   const writeB = (async () => {
-    await channelB.writer.write('B to A');
+    await channelB.writer.write("B to A");
     await channelB.close();
   })();
 
@@ -41,20 +41,20 @@ async function testBidirectional() {
 
   const [dataAtA, dataAtB] = await Promise.all([readAtA, readAtB]);
 
-  assert.strictEqual(dataAtB, 'A to B');
-  assert.strictEqual(dataAtA, 'B to A');
+  assert.strictEqual(dataAtB, "A to B");
+  assert.strictEqual(dataAtA, "B to A");
 }
 
 async function testMultipleWrites() {
   const [channelA, channelB] = duplex({ budget: 16384 });
 
-  await channelA.writer.write('one');
-  await channelA.writer.write('two');
-  await channelA.writer.write('three');
+  await channelA.writer.write("one");
+  await channelA.writer.write("two");
+  await channelA.writer.write("three");
   await channelA.close();
 
   const data = await text(channelB.readable);
-  assert.strictEqual(data, 'onetwothree');
+  assert.strictEqual(data, "onetwothree");
 }
 
 async function testChannelClose() {
@@ -76,14 +76,14 @@ async function testChannelClose() {
 async function testWithOptions() {
   const [channelA, channelB] = duplex({
     budget: 16384,
-    backpressure: 'strict',
+    backpressure: "strict",
   });
 
-  await channelA.writer.write('msg');
+  await channelA.writer.write("msg");
   await channelA.close();
 
   const data = await text(channelB.readable);
-  assert.strictEqual(data, 'msg');
+  assert.strictEqual(data, "msg");
 }
 
 async function testPerChannelOptions() {
@@ -94,10 +94,10 @@ async function testPerChannelOptions() {
 
   // Channel A -> B direction uses A's options
   // Channel B -> A direction uses B's options
-  await channelA.writer.write('from-a');
+  await channelA.writer.write("from-a");
   await channelA.close();
 
-  await channelB.writer.write('from-b');
+  await channelB.writer.write("from-b");
   await channelB.close();
 
   const [dataAtA, dataAtB] = await Promise.all([
@@ -105,8 +105,8 @@ async function testPerChannelOptions() {
     text(channelB.readable),
   ]);
 
-  assert.strictEqual(dataAtB, 'from-a');
-  assert.strictEqual(dataAtA, 'from-b');
+  assert.strictEqual(dataAtB, "from-a");
+  assert.strictEqual(dataAtA, "from-b");
 }
 
 async function testAbortSignal() {
@@ -120,25 +120,25 @@ async function testAbortSignal() {
     async () => {
       // eslint-disable-next-line no-unused-vars
       for await (const _ of channelA.readable) {
-        assert.fail('Should not reach here');
+        assert.fail("Should not reach here");
       }
     },
-    (err) => err.name === 'AbortError',
+    (err) => err.name === "AbortError",
   );
 }
 
 async function testWriterEndWithPreAbortedSignal() {
   const [channelA, channelB] = duplex();
-  const reason = new Error('end aborted');
+  const reason = new Error("end aborted");
 
   await assert.rejects(
     channelA.writer.end({ signal: AbortSignal.abort(reason) }),
     (error) => error === reason,
   );
 
-  await channelA.writer.write('still open');
+  await channelA.writer.write("still open");
   const completedEnd = channelA.writer.end();
-  assert.strictEqual(await text(channelB.readable), 'still open');
+  assert.strictEqual(await text(channelB.readable), "still open");
   assert.strictEqual(await completedEnd, 10);
   await channelB.close();
 }
@@ -160,11 +160,16 @@ async function testEmptyDuplex() {
 // Channel fail propagation
 async function testChannelFail() {
   const [a, b] = duplex();
-  a.writer.fail(new Error('channel failed'));
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of b.readable) { /* consume */ }
-  }, { message: 'channel failed' });
+  a.writer.fail(new Error("channel failed"));
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of b.readable) {
+        /* consume */
+      }
+    },
+    { message: "channel failed" },
+  );
   await b.close();
 }
 
@@ -175,19 +180,25 @@ async function testAbortSignalBothChannels() {
 
   ac.abort();
 
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of channelA.readable) {
-      assert.fail('Should not reach here');
-    }
-  }, (err) => err.name === 'AbortError');
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of channelA.readable) {
+        assert.fail("Should not reach here");
+      }
+    },
+    (err) => err.name === "AbortError",
+  );
 
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of channelB.readable) {
-      assert.fail('Should not reach here');
-    }
-  }, (err) => err.name === 'AbortError');
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of channelB.readable) {
+        assert.fail("Should not reach here");
+      }
+    },
+    (err) => err.name === "AbortError",
+  );
 }
 
 Promise.all([

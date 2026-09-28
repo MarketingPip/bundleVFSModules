@@ -19,90 +19,98 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 // Verify that the HTTP server implementation handles multiple instances
 // of the same header as per RFC2616: joining the handful of fields by ', '
 // that support it, and dropping duplicates for other fields.
 
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
 const multipleAllowed = [
-  'Accept',
-  'Accept-Charset',
-  'Accept-Encoding',
-  'Accept-Language',
-  'Connection',
-  'Cookie',
-  'DAV', // GH-2750
-  'Pragma', // GH-715
-  'Link', // GH-1187
-  'WWW-Authenticate', // GH-1083
-  'Proxy-Authenticate', // GH-4052
-  'Sec-Websocket-Extensions', // GH-2764
-  'Sec-Websocket-Protocol', // GH-2764
-  'Via', // GH-6660
+  "Accept",
+  "Accept-Charset",
+  "Accept-Encoding",
+  "Accept-Language",
+  "Connection",
+  "Cookie",
+  "DAV", // GH-2750
+  "Pragma", // GH-715
+  "Link", // GH-1187
+  "WWW-Authenticate", // GH-1083
+  "Proxy-Authenticate", // GH-4052
+  "Sec-Websocket-Extensions", // GH-2764
+  "Sec-Websocket-Protocol", // GH-2764
+  "Via", // GH-6660
 
   // not a special case, just making sure it's parsed correctly
-  'X-Forwarded-For',
+  "X-Forwarded-For",
 
   // Make sure that unspecified headers is treated as multiple
-  'Some-Random-Header',
-  'X-Some-Random-Header',
+  "Some-Random-Header",
+  "X-Some-Random-Header",
 ];
 
 const multipleForbidden = [
-  'Content-Type',
-  'User-Agent',
-  'Referer',
-  'Host',
-  'Authorization',
-  'Proxy-Authorization',
-  'If-Modified-Since',
-  'If-Unmodified-Since',
-  'From',
-  'Location',
-  'Max-Forwards',
+  "Content-Type",
+  "User-Agent",
+  "Referer",
+  "Host",
+  "Authorization",
+  "Proxy-Authorization",
+  "If-Modified-Since",
+  "If-Unmodified-Since",
+  "From",
+  "Location",
+  "Max-Forwards",
 
   // Special case, tested differently
   // 'Content-Length',
 ];
 
-const server = http.createServer(common.mustCallAtLeast(function(req, res) {
-  for (const header of multipleForbidden) {
-    assert.strictEqual(req.headers[header.toLowerCase()], 'foo',
-                       `header parsed incorrectly: ${header}`);
-  }
-  for (const header of multipleAllowed) {
-    const sep = (header.toLowerCase() === 'cookie' ? '; ' : ', ');
-    assert.strictEqual(req.headers[header.toLowerCase()], `foo${sep}bar`,
-                       `header parsed incorrectly: ${header}`);
-  }
+const server = http.createServer(
+  common.mustCallAtLeast(function (req, res) {
+    for (const header of multipleForbidden) {
+      assert.strictEqual(
+        req.headers[header.toLowerCase()],
+        "foo",
+        `header parsed incorrectly: ${header}`,
+      );
+    }
+    for (const header of multipleAllowed) {
+      const sep = header.toLowerCase() === "cookie" ? "; " : ", ";
+      assert.strictEqual(
+        req.headers[header.toLowerCase()],
+        `foo${sep}bar`,
+        `header parsed incorrectly: ${header}`,
+      );
+    }
 
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('EOF');
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("EOF");
 
-  server.close();
-}));
+    server.close();
+  }),
+);
 
 function makeHeader(value) {
-  return function(header) {
+  return function (header) {
     return [header, value];
   };
 }
 
 const headers = []
-  .concat(multipleAllowed.map(makeHeader('foo')))
-  .concat(multipleForbidden.map(makeHeader('foo')))
-  .concat(multipleAllowed.map(makeHeader('bar')))
-  .concat(multipleForbidden.map(makeHeader('bar')));
+  .concat(multipleAllowed.map(makeHeader("foo")))
+  .concat(multipleForbidden.map(makeHeader("foo")))
+  .concat(multipleAllowed.map(makeHeader("bar")))
+  .concat(multipleForbidden.map(makeHeader("bar")));
 
-server.listen(0, function() {
+server.listen(0, function () {
   http.get({
-    host: 'localhost',
+    host: "localhost",
     port: this.address().port,
-    path: '/',
+    path: "/",
     headers: headers,
   });
 });

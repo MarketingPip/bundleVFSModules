@@ -4,10 +4,10 @@
 // readStart/readStop helpers have no native parser in the browser and are
 // honest no-ops.
 
-export { IncomingMessage } from './http.js';
-import { IncomingMessage } from './http.js';
+export { IncomingMessage } from "./http.js";
+import { IncomingMessage } from "./http.js";
 
-export const kDetachAbortSignal = Symbol('kDetachAbortSignal');
+export const kDetachAbortSignal = Symbol("kDetachAbortSignal");
 
 /** No-op: no native HTTP parser to start in the browser. */
 export function readStart(/* socket */) {}

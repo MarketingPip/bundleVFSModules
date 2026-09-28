@@ -1,6 +1,6 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 const result = process.cpuUsage();
 
 // Validate the result of calling with no previous value argument.
@@ -33,46 +33,36 @@ for (let i = 0; i < 10; i++) {
 }
 
 // Ensure that an invalid shape for the previous value argument throws an error.
-assert.throws(
-  () => process.cpuUsage(1),
-  {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: 'The "prevValue" argument must be of type object. ' +
-             'Received type number (1)'
-  }
-);
+assert.throws(() => process.cpuUsage(1), {
+  code: "ERR_INVALID_ARG_TYPE",
+  name: "TypeError",
+  message:
+    'The "prevValue" argument must be of type object. ' +
+    "Received type number (1)",
+});
 
 // Check invalid types.
-[
-  {},
-  { user: 'a' },
-  { user: null, system: 'c' },
-].forEach((value) => {
-  assert.throws(
-    () => process.cpuUsage(value),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-      message: 'The "prevValue.user" property must be of type number.' +
-               common.invalidArgTypeHelper(value.user)
-    }
-  );
+[{}, { user: "a" }, { user: null, system: "c" }].forEach((value) => {
+  assert.throws(() => process.cpuUsage(value), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      'The "prevValue.user" property must be of type number.' +
+      common.invalidArgTypeHelper(value.user),
+  });
 });
 
 [
-  { user: 3, system: 'b' },
+  { user: 3, system: "b" },
   { user: 3, system: null },
 ].forEach((value) => {
-  assert.throws(
-    () => process.cpuUsage(value),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-      message: 'The "prevValue.system" property must be of type number.' +
-               common.invalidArgTypeHelper(value.system)
-    }
-  );
+  assert.throws(() => process.cpuUsage(value), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      'The "prevValue.system" property must be of type number.' +
+      common.invalidArgTypeHelper(value.system),
+  });
 });
 
 // Check invalid values.
@@ -80,30 +70,25 @@ assert.throws(
   { user: -1, system: 2 },
   { user: Number.POSITIVE_INFINITY, system: 4 },
 ].forEach((value) => {
-  assert.throws(
-    () => process.cpuUsage(value),
-    {
-      code: 'ERR_INVALID_ARG_VALUE',
-      name: 'RangeError',
-      message: "The property 'prevValue.user' is invalid. " +
-        `Received ${value.user}`,
-    }
-  );
+  assert.throws(() => process.cpuUsage(value), {
+    code: "ERR_INVALID_ARG_VALUE",
+    name: "RangeError",
+    message:
+      "The property 'prevValue.user' is invalid. " + `Received ${value.user}`,
+  });
 });
 
 [
   { user: 3, system: -2 },
   { user: 5, system: Number.NEGATIVE_INFINITY },
 ].forEach((value) => {
-  assert.throws(
-    () => process.cpuUsage(value),
-    {
-      code: 'ERR_INVALID_ARG_VALUE',
-      name: 'RangeError',
-      message: "The property 'prevValue.system' is invalid. " +
-        `Received ${value.system}`,
-    }
-  );
+  assert.throws(() => process.cpuUsage(value), {
+    code: "ERR_INVALID_ARG_VALUE",
+    name: "RangeError",
+    message:
+      "The property 'prevValue.system' is invalid. " +
+      `Received ${value.system}`,
+  });
 });
 
 // Ensure that the return value is the expected shape.

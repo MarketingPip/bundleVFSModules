@@ -1,9 +1,9 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { broadcast, text } = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { broadcast, text } = require("stream/iter");
 
 // =============================================================================
 // Backpressure policies
@@ -15,7 +15,7 @@ async function testDropOldest() {
   const chunk3 = new Uint8Array(16384).fill(51); // '3'
   const { writer, broadcast: bc } = broadcast({
     budget: 32768,
-    backpressure: 'drop-oldest',
+    backpressure: "drop-oldest",
   });
   const consumer = bc.push();
 
@@ -26,15 +26,15 @@ async function testDropOldest() {
   writer.endSync();
 
   const data = await text(consumer);
-  assert.strictEqual(data, '2'.repeat(16384) + '3'.repeat(16384));
+  assert.strictEqual(data, "2".repeat(16384) + "3".repeat(16384));
 }
 
 async function testDropNewest() {
-  const kept = new Uint8Array(16384).fill(75);    // 'K'
+  const kept = new Uint8Array(16384).fill(75); // 'K'
   const dropped = new Uint8Array(16384).fill(68); // 'D'
   const { writer, broadcast: bc } = broadcast({
     budget: 16384,
-    backpressure: 'drop-newest',
+    backpressure: "drop-newest",
   });
   const consumer = bc.push();
 
@@ -44,7 +44,7 @@ async function testDropNewest() {
   writer.endSync();
 
   const data = await text(consumer);
-  assert.strictEqual(data, 'K'.repeat(16384));
+  assert.strictEqual(data, "K".repeat(16384));
 }
 
 // =============================================================================
@@ -55,14 +55,16 @@ async function testBlockBackpressure() {
   const kChunk = new Uint8Array(16384);
   const { writer, broadcast: bc } = broadcast({
     budget: 16384,
-    backpressure: 'unbounded',
+    backpressure: "unbounded",
   });
   const consumer = bc.push();
   writer.writeSync(kChunk);
 
   // Next write should block
   let writeResolved = false;
-  const writePromise = writer.write(kChunk).then(() => { writeResolved = true; });
+  const writePromise = writer.write(kChunk).then(() => {
+    writeResolved = true;
+  });
   await new Promise(setImmediate);
   assert.strictEqual(writeResolved, false);
 
@@ -86,7 +88,7 @@ async function testBlockBackpressureContent() {
   const chunk2 = new Uint8Array(16384).fill(66); // 'B'
   const { writer, broadcast: bc } = broadcast({
     budget: 16384,
-    backpressure: 'unbounded',
+    backpressure: "unbounded",
   });
   const consumer = bc.push();
 
@@ -116,22 +118,22 @@ async function testBlockBackpressureContent() {
 async function testStrictBackpressureOverflow() {
   const { writer } = broadcast({
     budget: 16384,
-    backpressure: 'strict',
+    backpressure: "strict",
   });
 
   await writer.write(new Uint8Array(16384));
-  const pending = writer.write('b');
+  const pending = writer.write("b");
 
-  await assert.rejects(writer.write('c'), {
-    name: 'RangeError',
-    code: 'ERR_INVALID_STATE',
+  await assert.rejects(writer.write("c"), {
+    name: "RangeError",
+    code: "ERR_INVALID_STATE",
   });
 
   writer.fail();
   await assert.rejects(pending, {
-    name: 'TypeError',
-    code: 'ERR_INVALID_STATE',
-    message: 'Invalid state: Failed',
+    name: "TypeError",
+    code: "ERR_INVALID_STATE",
+    message: "Invalid state: Failed",
   });
 }
 
@@ -140,11 +142,11 @@ async function testWritevAsync() {
   const { writer, broadcast: bc } = broadcast({ budget: 16384 });
   const consumer = bc.push();
 
-  await writer.writev(['hello', ' ', 'world']);
+  await writer.writev(["hello", " ", "world"]);
   await writer.end();
 
   const data = await text(consumer);
-  assert.strictEqual(data, 'hello world');
+  assert.strictEqual(data, "hello world");
 }
 
 // Zero-byte writes do not consume buffer entries.
@@ -153,10 +155,10 @@ async function testZeroByteWrites() {
   const consumer = bc.push();
 
   for (let i = 0; i < 1000; i++) {
-    assert.strictEqual(writer.writeSync(''), true);
+    assert.strictEqual(writer.writeSync(""), true);
     assert.strictEqual(writer.writevSync([]), true);
   }
-  await writer.write('');
+  await writer.write("");
   await writer.writev([]);
   assert.strictEqual(writer.canWrite, true);
   writer.endSync();
@@ -172,8 +174,8 @@ async function testEndSyncReturnValue() {
   const { writer, broadcast: bc } = broadcast({ budget: 16384 });
   bc.push(); // Need a consumer to write to
 
-  writer.writeSync('hello'); // 5 bytes
-  writer.writeSync(' world'); // 6 bytes
+  writer.writeSync("hello"); // 5 bytes
+  writer.writeSync(" world"); // 6 bytes
   const total = writer.endSync();
   assert.strictEqual(total, 11);
 }

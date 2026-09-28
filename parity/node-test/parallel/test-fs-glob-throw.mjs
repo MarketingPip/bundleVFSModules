@@ -1,16 +1,22 @@
-import { mustCall } from '../common/index.mjs';
-import { glob } from 'node:fs';
-import process from 'node:process';
-import assert from 'node:assert';
+import { mustCall } from "../common/index.mjs";
+import { glob } from "node:fs";
+import process from "node:process";
+import assert from "node:assert";
 
 // One uncaught error is expected
-process.on('uncaughtException', mustCall((err) => {
-  assert.strictEqual(err.message, 'blep');
-}));
+process.on(
+  "uncaughtException",
+  mustCall((err) => {
+    assert.strictEqual(err.message, "blep");
+  }),
+);
 
 {
   // Test that if callback throws, it's not getting called again
-  glob('a/b/c', mustCall(() => {
-    throw new Error('blep');
-  }));
+  glob(
+    "a/b/c",
+    mustCall(() => {
+      throw new Error("blep");
+    }),
+  );
 }

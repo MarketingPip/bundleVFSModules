@@ -1,11 +1,11 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const fixtures = require('../common/fixtures');
-const tmpdir = require('../common/tmpdir');
-const assert = require('assert');
-const fs = require('fs');
-const { spawnSync } = require('child_process');
+const common = require("../common");
+const fixtures = require("../common/fixtures");
+const tmpdir = require("../common/tmpdir");
+const assert = require("assert");
+const fs = require("fs");
+const { spawnSync } = require("child_process");
 
 common.skipIfInspectorDisabled();
 
@@ -13,18 +13,22 @@ tmpdir.refresh();
 const intervals = 40;
 // Outputs coverage when v8.takeCoverage() is invoked.
 {
-  const output = spawnSync(process.execPath, [
-    '-r',
-    fixtures.path('v8-coverage', 'take-coverage'),
-    fixtures.path('v8-coverage', 'interval'),
-  ], {
-    env: {
-      ...process.env,
-      NODE_V8_COVERAGE: tmpdir.path,
-      NODE_DEBUG_NATIVE: 'INSPECTOR_PROFILER',
-      TEST_INTERVALS: intervals
+  const output = spawnSync(
+    process.execPath,
+    [
+      "-r",
+      fixtures.path("v8-coverage", "take-coverage"),
+      fixtures.path("v8-coverage", "interval"),
+    ],
+    {
+      env: {
+        ...process.env,
+        NODE_V8_COVERAGE: tmpdir.path,
+        NODE_DEBUG_NATIVE: "INSPECTOR_PROFILER",
+        TEST_INTERVALS: intervals,
+      },
     },
-  });
+  );
   console.log(output.stderr.toString());
   assert.strictEqual(output.status, 0);
   const coverageFiles = fs.readdirSync(tmpdir.path);
@@ -33,26 +37,28 @@ const intervals = 40;
   for (const coverageFile of coverageFiles) {
     const coverage = require(tmpdir.resolve(coverageFile));
     for (const result of coverage.result) {
-      if (result.url.includes('/interval')) {
+      if (result.url.includes("/interval")) {
         coverages.push({
           file: coverageFile,
-          func: result.functions.find((f) => f.functionName === 'interval'),
-          timestamp: coverage.timestamp
+          func: result.functions.find((f) => f.functionName === "interval"),
+          timestamp: coverage.timestamp,
         });
       }
     }
   }
 
-  coverages = coverages.sort((a, b) => { return a.timestamp - b.timestamp; });
+  coverages = coverages.sort((a, b) => {
+    return a.timestamp - b.timestamp;
+  });
   // There should be two coverages taken, one triggered by v8.takeCoverage(),
   // the other by process exit.
-  console.log('Coverages:', coverages);
+  console.log("Coverages:", coverages);
   assert.strictEqual(coverages.length, 3);
 
   let blockHitsTotal = 0;
   for (let i = 0; i < coverages.length; ++i) {
     const { ranges } = coverages[i].func;
-    console.log('coverage', i, ranges);
+    console.log("coverage", i, ranges);
 
     if (i !== coverages.length - 1) {
       // When the first two coverages are taken:

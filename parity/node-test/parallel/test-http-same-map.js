@@ -1,15 +1,16 @@
 // Flags: --allow_natives_syntax
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
-const server =
-    http.createServer(onrequest).listen(0, common.localhostIPv4, () => next(0));
+const server = http
+  .createServer(onrequest)
+  .listen(0, common.localhostIPv4, () => next(0));
 
 function onrequest(req, res) {
-  res.end('ok');
+  res.end("ok");
   onrequest.requests.push(req);
   onrequest.responses.push(res);
 }
@@ -19,14 +20,14 @@ onrequest.responses = [];
 function next(n) {
   const { address: host, port } = server.address();
   const req = http.get({ host, port });
-  req.once('response', (res) => onresponse(n, req, res));
+  req.once("response", (res) => onresponse(n, req, res));
 }
 
 function onresponse(n, req, res) {
   res.resume();
 
   if (n < 3) {
-    res.once('end', () => next(n + 1));
+    res.once("end", () => next(n + 1));
   } else {
     server.close();
   }
@@ -40,13 +41,13 @@ onresponse.responses = [];
 function allSame(list) {
   assert(list.length >= 2);
   // eslint-disable-next-line no-unused-vars
-  for (const elt of list) eval('%DebugPrint(elt)');
+  for (const elt of list) eval("%DebugPrint(elt)");
   // eslint-disable-next-line no-unused-vars
-  for (const elt of list) assert(eval('%HaveSameMap(list[0], elt)'));
+  for (const elt of list) assert(eval("%HaveSameMap(list[0], elt)"));
 }
 
-process.on('exit', () => {
-  eval('%CollectGarbage(0)');
+process.on("exit", () => {
+  eval("%CollectGarbage(0)");
   // TODO(bnoordhuis) Investigate why the first IncomingMessage ends up
   // with a deprecated map.  The map is stable after the first request.
   allSame(onrequest.requests.slice(1));

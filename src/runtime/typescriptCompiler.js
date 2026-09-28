@@ -2,7 +2,7 @@ import ts from "https://esm.sh/typescript";
 import {
   createDefaultMapFromCDN,
   createSystem,
-  createVirtualCompilerHost
+  createVirtualCompilerHost,
 } from "https://esm.sh/@typescript/vfs";
 
 const options = {
@@ -25,11 +25,13 @@ const fsMap = await createDefaultMapFromCDN(
   { target: ts.ScriptTarget.ES2020 },
   "5.4.5",
   false,
-  ts
+  ts,
 );
 
 // 2. Add files
-fsMap.set("/index.ts", `
+fsMap.set(
+  "/index.ts",
+  `
 import data from "./data.json";
 
 type ExpectedData = {
@@ -40,7 +42,8 @@ type ExpectedData = {
 const typedData: ExpectedData = data;
 
 console.log(typedData);
-`);
+`,
+);
 
 fsMap.set("/data.json", JSON.stringify({ value: 123 }));
 
@@ -49,11 +52,7 @@ const system = createSystem(fsMap);
 const host = createVirtualCompilerHost(system, options, ts);
 
 // 4. Program
-const program = ts.createProgram(
-  ["/index.ts"],
-  options,
-  host.compilerHost
-);
+const program = ts.createProgram(["/index.ts"], options, host.compilerHost);
 
 // 5. Diagnostics (pretty CLI-style)
 const diagnostics = ts.getPreEmitDiagnostics(program);
@@ -64,14 +63,12 @@ const formatHost = {
   getNewLine: () => "\n",
 };
 
-console.error(
-  ts.formatDiagnosticsWithColorAndContext(diagnostics, formatHost)
-);
+console.error(ts.formatDiagnosticsWithColorAndContext(diagnostics, formatHost));
 
 // 6. Structured diagnostics (machine-friendly)
 const structured = diagnostics
-  .filter(d => d.file && d.start != null)
-  .map(d => {
+  .filter((d) => d.file && d.start != null)
+  .map((d) => {
     const pos = d.file.getLineAndCharacterOfPosition(d.start);
     return {
       file: d.file.fileName,

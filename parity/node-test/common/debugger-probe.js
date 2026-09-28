@@ -1,7 +1,7 @@
-'use strict';
+"use strict";
 
-const assert = require('assert');
-const { spawnSyncAndExit } = require('./child_process');
+const assert = require("assert");
+const { spawnSyncAndExit } = require("./child_process");
 
 // Work around a pre-existing inspector issue: if the debuggee exits too quickly
 // the inspector can crash while tearing down. For now normalize the crash
@@ -11,24 +11,35 @@ const { spawnSyncAndExit } = require('./child_process');
 // https://github.com/nodejs/node/issues/58245
 // The crash shows up as with exit code 3221225477 on Windows, or signal
 // SIGSEGV on other platforms.
-const probeTargetExitSignal = 'SIGSEGV';
+const probeTargetExitSignal = "SIGSEGV";
 // 0xC0000005 STATUS_ACCESS_VIOLATION on Windows
 const probeTargetExitCode = 3221225477;
 
 function isProbeSegvTeardown(result) {
-  if (result?.event !== 'error') { return false; }
+  if (result?.event !== "error") {
+    return false;
+  }
   const error = result.error;
-  if (error?.signal !== probeTargetExitSignal && error?.exitCode !== probeTargetExitCode) { return false; }
-  return error.code === 'probe_target_exit' || error.code === 'probe_failure';
+  if (
+    error?.signal !== probeTargetExitSignal &&
+    error?.exitCode !== probeTargetExitCode
+  ) {
+    return false;
+  }
+  return error.code === "probe_target_exit" || error.code === "probe_failure";
 }
 
 function findProbeSegvTeardownLine(output) {
   const signalPrefix = `Target exited with signal ${probeTargetExitSignal}`;
   const codePrefix = `Target exited with code ${probeTargetExitCode}`;
   for (const prefix of [signalPrefix, codePrefix]) {
-    if (output.startsWith(prefix)) { return 0; }
+    if (output.startsWith(prefix)) {
+      return 0;
+    }
     const idx = output.indexOf(`\n${prefix}`);
-    if (idx !== -1) { return idx + 1; }
+    if (idx !== -1) {
+      return idx + 1;
+    }
   }
   return -1;
 }
@@ -36,21 +47,21 @@ function findProbeSegvTeardownLine(output) {
 // Replace volatile fields in a probe report (stack frames, Node.js version,
 // scriptId, callFrames) with stable placeholders for deepStrictEqual.
 function normalizeProbeReport(value) {
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     return value
-      .replace(/(?:\n[ \t]+at\s[^\n]*)+/g, '\n<stack>')
-      .replace(/\nNode\.js v[^\n]+/g, '\nNode.js <version>');
+      .replace(/(?:\n[ \t]+at\s[^\n]*)+/g, "\n<stack>")
+      .replace(/\nNode\.js v[^\n]+/g, "\nNode.js <version>");
   }
   if (Array.isArray(value)) {
     return value.map(normalizeProbeReport);
   }
-  if (value !== null && typeof value === 'object') {
+  if (value !== null && typeof value === "object") {
     const result = {};
     for (const key of Object.keys(value)) {
-      if (key === 'scriptId') {
-        result[key] = '<scriptId>';
-      } else if (key === 'callFrames') {
-        result[key] = '<callFrames>';
+      if (key === "scriptId") {
+        result[key] = "<scriptId>";
+      } else if (key === "callFrames") {
+        result[key] = "<callFrames>";
       } else {
         result[key] = normalizeProbeReport(value[key]);
       }
@@ -61,16 +72,19 @@ function normalizeProbeReport(value) {
 }
 
 function assertProbeJson(output, expected) {
-  const normalized = typeof output === 'string' ? JSON.parse(output) : output;
+  const normalized = typeof output === "string" ? JSON.parse(output) : output;
   const lastResult = normalized.results?.[normalized.results.length - 1];
 
   if (isProbeSegvTeardown(lastResult)) {
     // Log to facilitate debugging if this normalization is occurring.
-    console.log('Normalizing trailing SIGSEGV in JSON probe output');
+    console.log("Normalizing trailing SIGSEGV in JSON probe output");
     normalized.results[normalized.results.length - 1] = expected.results.at(-1);
   }
 
-  assert.deepStrictEqual(normalizeProbeReport(normalized), normalizeProbeReport(expected));
+  assert.deepStrictEqual(
+    normalizeProbeReport(normalized),
+    normalizeProbeReport(expected),
+  );
 }
 
 function assertProbeText(output, expected) {
@@ -78,10 +92,16 @@ function assertProbeText(output, expected) {
   let normalized;
   if (lineStart !== -1) {
     // Log to facilitate debugging if this normalization is occurring.
-    console.log('Normalizing trailing SIGSEGV in text probe output');
-    const expectedLineStart = expected.lastIndexOf('\n');
-    const terminalLine = expectedLineStart === -1 ? expected : expected.slice(expectedLineStart + 1);
-    normalized = lineStart === 0 ? terminalLine : `${output.slice(0, lineStart - 1)}\n${terminalLine}`;
+    console.log("Normalizing trailing SIGSEGV in text probe output");
+    const expectedLineStart = expected.lastIndexOf("\n");
+    const terminalLine =
+      expectedLineStart === -1
+        ? expected
+        : expected.slice(expectedLineStart + 1);
+    normalized =
+      lineStart === 0
+        ? terminalLine
+        : `${output.slice(0, lineStart - 1)}\n${terminalLine}`;
   } else {
     normalized = output;
   }
@@ -89,12 +109,17 @@ function assertProbeText(output, expected) {
 }
 
 function assertProbeCliError(inspectArgs, expectedStderr, { cwd } = {}) {
-  spawnSyncAndExit(process.execPath, ['inspect', ...inspectArgs], { cwd }, {
-    signal: null,
-    status: 9,
-    stderr: expectedStderr,
-    trim: true,
-  });
+  spawnSyncAndExit(
+    process.execPath,
+    ["inspect", ...inspectArgs],
+    { cwd },
+    {
+      signal: null,
+      status: 9,
+      stderr: expectedStderr,
+      trim: true,
+    },
+  );
 }
 
 module.exports = {

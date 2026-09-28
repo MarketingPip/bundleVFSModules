@@ -1,5 +1,5 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // Harden the thread interactions on the exit path.
 // Ensure workers are able to bail out safe at
@@ -8,19 +8,32 @@ const common = require('../common');
 // is that those will be at various control flow points
 // preferably in the C++ land.
 
-const { Worker } = require('worker_threads');
-const modules = [ 'fs', 'assert', 'async_hooks', 'buffer', 'child_process',
-                  'net', 'http', 'os', 'path', 'v8', 'vm',
+const { Worker } = require("worker_threads");
+const modules = [
+  "fs",
+  "assert",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "net",
+  "http",
+  "os",
+  "path",
+  "v8",
+  "vm",
 ];
 if (common.hasCrypto) {
-  modules.push('https');
+  modules.push("https");
 }
 
 for (let i = 0; i < 10; i++) {
-  new Worker(`const modules = [${modules.map((m) => `'${m}'`)}];` +
-    'modules.forEach((module) => {' +
-    'const m = require(module);' +
-    '});', { eval: true });
+  new Worker(
+    `const modules = [${modules.map((m) => `'${m}'`)}];` +
+      "modules.forEach((module) => {" +
+      "const m = require(module);" +
+      "});",
+    { eval: true },
+  );
 }
 
 // Allow workers to go live.

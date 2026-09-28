@@ -4,12 +4,10 @@
 // platform WHATWG Streams implementation; this port re-exports the host
 // globals (native in browsers and Node 16.5+), plus a spec-shaped
 // ReadableStreamTee helper. No polyfill dependency.
-import { codes } from './errors.js';
-import { validateBoolean } from './validators.js';
+import { codes } from "./errors.js";
+import { validateBoolean } from "./validators.js";
 
-const {
-  ERR_INVALID_ARG_TYPE,
-} = codes;
+const { ERR_INVALID_ARG_TYPE } = codes;
 
 const {
   TransformStream,
@@ -33,9 +31,9 @@ const {
 
 function ReadableStreamTee(stream, cloneForBranch2 = false) {
   if (!(stream instanceof ReadableStream)) {
-    throw new ERR_INVALID_ARG_TYPE('stream', 'ReadableStream', stream);
+    throw new ERR_INVALID_ARG_TYPE("stream", "ReadableStream", stream);
   }
-  validateBoolean(cloneForBranch2, 'cloneForBranch2');
+  validateBoolean(cloneForBranch2, "cloneForBranch2");
   return stream.tee();
 }
 

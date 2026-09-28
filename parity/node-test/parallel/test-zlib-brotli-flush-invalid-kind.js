@@ -1,11 +1,11 @@
-'use strict';
+"use strict";
 // Regression test for https://github.com/nodejs/node/issues/63701.
 // Invalid Brotli flush kinds used to spin in native code. flush(kind) should
 // reject invalid kinds before writing the fake flush chunk.
 
-require('../common');
-const assert = require('assert');
-const zlib = require('zlib');
+require("../common");
+const assert = require("assert");
+const zlib = require("zlib");
 
 const {
   BROTLI_OPERATION_PROCESS,
@@ -49,7 +49,7 @@ for (const { factories, validKinds } of flushKindTestCases) {
   for (const factory of factories) {
     for (const kind of validKinds) {
       const stream = factory();
-      stream.on('error', noop);
+      stream.on("error", noop);
       stream.flush(kind);
     }
   }
@@ -58,21 +58,21 @@ for (const { factories, validKinds } of flushKindTestCases) {
 for (const { factories, invalidKinds } of flushKindTestCases) {
   for (const factory of factories) {
     for (const kind of invalidKinds) {
-      assert.throws(
-        () => factory().flush(kind),
-        { code: 'ERR_OUT_OF_RANGE', name: 'RangeError' },
-      );
+      assert.throws(() => factory().flush(kind), {
+        code: "ERR_OUT_OF_RANGE",
+        name: "RangeError",
+      });
     }
   }
 }
 
 for (const { factories } of flushKindTestCases) {
   for (const factory of factories) {
-    for (const kind of ['foobar', null, {}]) {
-      assert.throws(
-        () => factory().flush(kind),
-        { code: 'ERR_INVALID_ARG_TYPE', name: 'TypeError' },
-      );
+    for (const kind of ["foobar", null, {}]) {
+      assert.throws(() => factory().flush(kind), {
+        code: "ERR_INVALID_ARG_TYPE",
+        name: "TypeError",
+      });
     }
   }
 }
@@ -81,12 +81,12 @@ for (const { factories } of flushKindTestCases) {
   for (const factory of factories) {
     for (const kind of [undefined, NaN]) {
       const stream = factory();
-      stream.on('error', noop);
+      stream.on("error", noop);
       stream.flush(kind);
     }
 
     const stream = factory();
-    stream.on('error', noop);
+    stream.on("error", noop);
     stream.flush(noop);
   }
 }

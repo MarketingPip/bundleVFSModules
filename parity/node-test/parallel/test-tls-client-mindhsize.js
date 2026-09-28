@@ -1,22 +1,21 @@
 // Flags: --expose-internals
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
 // OpenSSL has a set of security levels which affect what algorithms
 // are available by default. Different OpenSSL versions have different
 // default security levels and we use this value to adjust what a test
 // expects based on the security level. You can read more in
 // https://docs.openssl.org/1.1.1/man3/SSL_CTX_set_security_level/#default-callback-behaviour
-const secLevel = require('internal/crypto/util').getOpenSSLSecLevel();
-const assert = require('assert');
-const tls = require('tls');
-const fixtures = require('../common/fixtures');
-const { hasOpenSSL } = require('../common/crypto');
+const secLevel = require("internal/crypto/util").getOpenSSLSecLevel();
+const assert = require("assert");
+const tls = require("tls");
+const fixtures = require("../common/fixtures");
+const { hasOpenSSL } = require("../common/crypto");
 
-const key = fixtures.readKey('agent2-key.pem');
-const cert = fixtures.readKey('agent2-cert.pem');
+const key = fixtures.readKey("agent2-key.pem");
+const cert = fixtures.readKey("agent2-cert.pem");
 
 let nsuccess = 0;
 let nerror = 0;
@@ -30,41 +29,53 @@ function test(size, err, next, minDHSizeOverride) {
     key: key,
     cert: cert,
     dhparam: loadDHParam(size),
-    ciphers: 'DHE-RSA-AES128-GCM-SHA256'
+    ciphers: "DHE-RSA-AES128-GCM-SHA256",
   };
 
-  const server = tls.createServer(options, function(conn) {
+  const server = tls.createServer(options, function (conn) {
     conn.end();
   });
 
-  server.on('close', common.mustCall(function(isException) {
-    assert(!isException);
-    if (next) next();
-  }));
+  server.on(
+    "close",
+    common.mustCall(function (isException) {
+      assert(!isException);
+      if (next) next();
+    }),
+  );
 
-  server.listen(0, common.mustCall(function() {
-    // Client set minimum DH parameter size to 2048 or 3072 bits
-    // so that it fails when it makes a connection to the tls
-    // server where is too small. This depends on the openssl
-    // security level
-    const minDHSize = minDHSizeOverride ?? ((secLevel > 1) ? 3072 : 2048);
-    const client = tls.connect({
-      minDHSize: minDHSize,
-      port: this.address().port,
-      rejectUnauthorized: false,
-      maxVersion: 'TLSv1.2',
-    }, function() {
-      nsuccess++;
-      server.close();
-    });
-    if (err) {
-      client.on('error', common.mustCall((e) => {
-        nerror++;
-        assert.strictEqual(e.code, 'ERR_TLS_DH_PARAM_SIZE');
-        server.close();
-      }));
-    }
-  }));
+  server.listen(
+    0,
+    common.mustCall(function () {
+      // Client set minimum DH parameter size to 2048 or 3072 bits
+      // so that it fails when it makes a connection to the tls
+      // server where is too small. This depends on the openssl
+      // security level
+      const minDHSize = minDHSizeOverride ?? (secLevel > 1 ? 3072 : 2048);
+      const client = tls.connect(
+        {
+          minDHSize: minDHSize,
+          port: this.address().port,
+          rejectUnauthorized: false,
+          maxVersion: "TLSv1.2",
+        },
+        function () {
+          nsuccess++;
+          server.close();
+        },
+      );
+      if (err) {
+        client.on(
+          "error",
+          common.mustCall((e) => {
+            nerror++;
+            assert.strictEqual(e.code, "ERR_TLS_DH_PARAM_SIZE");
+            server.close();
+          }),
+        );
+      }
+    }),
+  );
 }
 
 // A client connection fails with an error when a client has an
@@ -98,32 +109,40 @@ if (!process.features.openssl_is_boringssl) {
     testDHE1024();
   }
 
-  assert.throws(() => test(512, true, common.mustNotCall()),
-                /DH parameter is less than 1024 bits/);
+  assert.throws(
+    () => test(512, true, common.mustNotCall()),
+    /DH parameter is less than 1024 bits/,
+  );
 } else {
-  require('../common/boringssl').assertFiniteFieldDheUnsupported();
+  require("../common/boringssl").assertFiniteFieldDheUnsupported();
 }
 
 for (const minDHSize of [0, -1, -Infinity, NaN]) {
-  assert.throws(() => {
-    tls.connect({ minDHSize });
-  }, {
-    code: 'ERR_OUT_OF_RANGE',
-    name: 'RangeError',
-  });
+  assert.throws(
+    () => {
+      tls.connect({ minDHSize });
+    },
+    {
+      code: "ERR_OUT_OF_RANGE",
+      name: "RangeError",
+    },
+  );
 }
 
-for (const minDHSize of [true, false, null, undefined, {}, [], '', '1']) {
-  assert.throws(() => {
-    tls.connect({ minDHSize });
-  }, {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-  });
+for (const minDHSize of [true, false, null, undefined, {}, [], "", "1"]) {
+  assert.throws(
+    () => {
+      tls.connect({ minDHSize });
+    },
+    {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    },
+  );
 }
 
 if (!process.features.openssl_is_boringssl) {
-  process.on('exit', function() {
+  process.on("exit", function () {
     assert.strictEqual(nsuccess, 1);
     assert.strictEqual(nerror, 1);
   });

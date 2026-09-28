@@ -10,7 +10,7 @@
 // Omitting it keeps require('dns/promises') === require('dns').promises
 // under CJS-style loading, exactly like real Node.
 
-'use strict';
+"use strict";
 
 import dns, {
   lookup as lookupCb,
@@ -34,19 +34,42 @@ import dns, {
   setServers,
   getDefaultResultOrder,
   setDefaultResultOrder,
-  NODATA, FORMERR, SERVFAIL, NOTFOUND, NOTIMP, REFUSED, BADQUERY,
-  BADNAME, BADFAMILY, BADRESP, CONNREFUSED, TIMEOUT, EOF, FILE, NOMEM,
-  DESTRUCTION, BADSTR, BADFLAGS, NONAME, BADHINTS, NOTINITIALIZED,
-  LOADIPHLPAPI, ADDRGETNETWORKPARAMS, CANCELLED,
-} from '../dns.js';
+  NODATA,
+  FORMERR,
+  SERVFAIL,
+  NOTFOUND,
+  NOTIMP,
+  REFUSED,
+  BADQUERY,
+  BADNAME,
+  BADFAMILY,
+  BADRESP,
+  CONNREFUSED,
+  TIMEOUT,
+  EOF,
+  FILE,
+  NOMEM,
+  DESTRUCTION,
+  BADSTR,
+  BADFLAGS,
+  NONAME,
+  BADHINTS,
+  NOTINITIALIZED,
+  LOADIPHLPAPI,
+  ADDRGETNETWORKPARAMS,
+  CANCELLED,
+} from "../dns.js";
 
 // Internal helpers shared from dns.js (not public node:dns API). dns.js
 // imports this module, so its default export is NOT initialized when this
 // module evaluates — never touch `dns` at module top level. These accessors
 // run only after the import cycle has resolved, when the bindings are live.
-function _internal(name) { return dns[name]; }
-const _invalidArgType = (...a) => _internal('invalidArgType')(...a);
-const _validateLookupServiceArgs = (...a) => _internal('validateLookupServiceArgs')(...a);
+function _internal(name) {
+  return dns[name];
+}
+const _invalidArgType = (...a) => _internal("invalidArgType")(...a);
+const _validateLookupServiceArgs = (...a) =>
+  _internal("validateLookupServiceArgs")(...a);
 
 // `Resolver` must work as a class (new/instanceof/extends) but its
 // implementation lives in dns.js, unavailable at our top level. A proxy
@@ -59,29 +82,31 @@ function _ensureBridge() {
   // the target's own non-configurable `prototype` for invariants).
   if (!_bridgeDone) {
     _bridgeDone = true;
-    Object.setPrototypeOf(_ResolverTarget.prototype,
-                          _internal('PromisesResolver').prototype);
+    Object.setPrototypeOf(
+      _ResolverTarget.prototype,
+      _internal("PromisesResolver").prototype,
+    );
   }
 }
 export const Resolver = new Proxy(_ResolverTarget, {
   construct(t, args, newTarget) {
     _ensureBridge();
-    const PR = _internal('PromisesResolver');
+    const PR = _internal("PromisesResolver");
     // `new Resolver()` → instance of PR; `class S extends Resolver` → keep S.
-    const nt = (newTarget === Resolver) ? PR : newTarget;
+    const nt = newTarget === Resolver ? PR : newTarget;
     return Reflect.construct(PR, args, nt);
   },
   get(t, prop, receiver) {
-    if (prop === 'prototype') {
+    if (prop === "prototype") {
       _ensureBridge();
       return Reflect.get(t, prop, receiver);
     }
-    const PR = _internal('PromisesResolver');
+    const PR = _internal("PromisesResolver");
     const v = PR[prop];
-    return typeof v === 'function' ? v.bind(PR) : v;
+    return typeof v === "function" ? v.bind(PR) : v;
   },
   getPrototypeOf() {
-    return _internal('PromisesResolver').prototype;
+    return _internal("PromisesResolver").prototype;
   },
 });
 
@@ -106,11 +131,11 @@ export function lookup(hostname, options) {
   // The promises API has no callback parameter, so a function in the options
   // slot is a type error (real node:dns/promises throws ERR_INVALID_ARG_TYPE
   // synchronously) rather than being shifted like the callback API does.
-  if (typeof options === 'function') {
-    throw _invalidArgType('options', 'of type object or integer', options);
+  if (typeof options === "function") {
+    throw _invalidArgType("options", "of type object or integer", options);
   }
   return asPromise(lookupCb, [hostname, options], ([address, family]) => {
-    if (options && typeof options === 'object' && options.all) return address;
+    if (options && typeof options === "object" && options.all) return address;
     return { address, family };
   });
 }
@@ -118,14 +143,17 @@ export function lookup(hostname, options) {
 export function lookupService(address, port) {
   // The promises API names only "address" and "port" in its missing-args
   // error, and it throws synchronously — unlike the callback API.
-  _validateLookupServiceArgs(address, port, undefined, ['address', 'port']);
-  return asPromise(lookupServiceCb, [address, port], ([hostname, service]) => ({ hostname, service }));
+  _validateLookupServiceArgs(address, port, undefined, ["address", "port"]);
+  return asPromise(lookupServiceCb, [address, port], ([hostname, service]) => ({
+    hostname,
+    service,
+  }));
 }
 
 export function resolve(hostname, rrtype) {
   // No callback shift in the promises API: a function rrtype is a type error.
-  if (typeof rrtype === 'function') {
-    throw _invalidArgType('rrtype', 'of type string', rrtype);
+  if (typeof rrtype === "function") {
+    throw _invalidArgType("rrtype", "of type string", rrtype);
   }
   return asPromise(resolveCb, [hostname, rrtype], ([records]) => records);
 }
@@ -133,12 +161,12 @@ export function resolve(hostname, rrtype) {
 export function resolve4(hostname, options) {
   // Real node:dns/promises ignores a function in the options slot (the query
   // runs with default options) instead of treating it as a callback.
-  if (typeof options === 'function') options = undefined;
+  if (typeof options === "function") options = undefined;
   return asPromise(resolve4Cb, [hostname, options], ([records]) => records);
 }
 
 export function resolve6(hostname, options) {
-  if (typeof options === 'function') options = undefined;
+  if (typeof options === "function") options = undefined;
   return asPromise(resolve6Cb, [hostname, options], ([records]) => records);
 }
 
@@ -196,9 +224,11 @@ export function reverse(ip) {
     rejectPromise = reject;
   });
   try {
-    reverseCb(ip, (err, hostnames) => (err ? rejectPromise(err) : resolvePromise(hostnames)));
+    reverseCb(ip, (err, hostnames) =>
+      err ? rejectPromise(err) : resolvePromise(hostnames),
+    );
   } catch (e) {
-    if (typeof ip === 'string') rejectPromise(e);
+    if (typeof ip === "string") rejectPromise(e);
     else throw e;
   }
   return promise;
@@ -214,22 +244,126 @@ export {
   setServers,
   getDefaultResultOrder,
   setDefaultResultOrder,
-  NODATA, FORMERR, SERVFAIL, NOTFOUND, NOTIMP, REFUSED, BADQUERY,
-  BADNAME, BADFAMILY, BADRESP, CONNREFUSED, TIMEOUT, EOF, FILE, NOMEM,
-  DESTRUCTION, BADSTR, BADFLAGS, NONAME, BADHINTS, NOTINITIALIZED,
-  LOADIPHLPAPI, ADDRGETNETWORKPARAMS, CANCELLED,
+  NODATA,
+  FORMERR,
+  SERVFAIL,
+  NOTFOUND,
+  NOTIMP,
+  REFUSED,
+  BADQUERY,
+  BADNAME,
+  BADFAMILY,
+  BADRESP,
+  CONNREFUSED,
+  TIMEOUT,
+  EOF,
+  FILE,
+  NOMEM,
+  DESTRUCTION,
+  BADSTR,
+  BADFLAGS,
+  NONAME,
+  BADHINTS,
+  NOTINITIALIZED,
+  LOADIPHLPAPI,
+  ADDRGETNETWORKPARAMS,
+  CANCELLED,
 };
 
 // Default export: the full named-export set (mirrors require('dns/promises')).
 export default {
   Resolver,
-  lookup, lookupService,
-  resolve, resolve4, resolve6, resolveAny, resolveCaa, resolveCname,
-  resolveMx, resolveNaptr, resolveNs, resolvePtr, resolveSoa, resolveSrv,
-  resolveTlsa, resolveTxt, reverse,
-  getServers, setServers, getDefaultResultOrder, setDefaultResultOrder,
-  get NODATA() { return NODATA; }, get FORMERR() { return FORMERR; }, get SERVFAIL() { return SERVFAIL; }, get NOTFOUND() { return NOTFOUND; }, get NOTIMP() { return NOTIMP; }, get REFUSED() { return REFUSED; }, get BADQUERY() { return BADQUERY; },
-  get BADNAME() { return BADNAME; }, get BADFAMILY() { return BADFAMILY; }, get BADRESP() { return BADRESP; }, get CONNREFUSED() { return CONNREFUSED; }, get TIMEOUT() { return TIMEOUT; }, get EOF() { return EOF; }, get FILE() { return FILE; }, get NOMEM() { return NOMEM; },
-  get DESTRUCTION() { return DESTRUCTION; }, get BADSTR() { return BADSTR; }, get BADFLAGS() { return BADFLAGS; }, get NONAME() { return NONAME; }, get BADHINTS() { return BADHINTS; }, get NOTINITIALIZED() { return NOTINITIALIZED; },
-  get LOADIPHLPAPI() { return LOADIPHLPAPI; }, get ADDRGETNETWORKPARAMS() { return ADDRGETNETWORKPARAMS; }, get CANCELLED() { return CANCELLED; },
+  lookup,
+  lookupService,
+  resolve,
+  resolve4,
+  resolve6,
+  resolveAny,
+  resolveCaa,
+  resolveCname,
+  resolveMx,
+  resolveNaptr,
+  resolveNs,
+  resolvePtr,
+  resolveSoa,
+  resolveSrv,
+  resolveTlsa,
+  resolveTxt,
+  reverse,
+  getServers,
+  setServers,
+  getDefaultResultOrder,
+  setDefaultResultOrder,
+  get NODATA() {
+    return NODATA;
+  },
+  get FORMERR() {
+    return FORMERR;
+  },
+  get SERVFAIL() {
+    return SERVFAIL;
+  },
+  get NOTFOUND() {
+    return NOTFOUND;
+  },
+  get NOTIMP() {
+    return NOTIMP;
+  },
+  get REFUSED() {
+    return REFUSED;
+  },
+  get BADQUERY() {
+    return BADQUERY;
+  },
+  get BADNAME() {
+    return BADNAME;
+  },
+  get BADFAMILY() {
+    return BADFAMILY;
+  },
+  get BADRESP() {
+    return BADRESP;
+  },
+  get CONNREFUSED() {
+    return CONNREFUSED;
+  },
+  get TIMEOUT() {
+    return TIMEOUT;
+  },
+  get EOF() {
+    return EOF;
+  },
+  get FILE() {
+    return FILE;
+  },
+  get NOMEM() {
+    return NOMEM;
+  },
+  get DESTRUCTION() {
+    return DESTRUCTION;
+  },
+  get BADSTR() {
+    return BADSTR;
+  },
+  get BADFLAGS() {
+    return BADFLAGS;
+  },
+  get NONAME() {
+    return NONAME;
+  },
+  get BADHINTS() {
+    return BADHINTS;
+  },
+  get NOTINITIALIZED() {
+    return NOTINITIALIZED;
+  },
+  get LOADIPHLPAPI() {
+    return LOADIPHLPAPI;
+  },
+  get ADDRGETNETWORKPARAMS() {
+    return ADDRGETNETWORKPARAMS;
+  },
+  get CANCELLED() {
+    return CANCELLED;
+  },
 };

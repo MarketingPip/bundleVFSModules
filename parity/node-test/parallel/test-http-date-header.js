@@ -19,37 +19,45 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
-const testResBody = 'other stuff!\n';
+const testResBody = "other stuff!\n";
 
-const server = http.createServer(common.mustCallAtLeast((req, res) => {
-  assert.ok(!('date' in req.headers),
-            'Request headers contained a Date.');
-  res.writeHead(200, {
-    'Content-Type': 'text/plain'
-  });
-  res.end(testResBody);
-}));
+const server = http.createServer(
+  common.mustCallAtLeast((req, res) => {
+    assert.ok(!("date" in req.headers), "Request headers contained a Date.");
+    res.writeHead(200, {
+      "Content-Type": "text/plain",
+    });
+    res.end(testResBody);
+  }),
+);
 server.listen(0);
 
-
-server.addListener('listening', common.mustCall(() => {
-  const options = {
-    port: server.address().port,
-    path: '/',
-    method: 'GET'
-  };
-  const req = http.request(options, common.mustCall((res) => {
-    assert.ok('date' in res.headers,
-              'Response headers didn\'t contain a Date.');
-    res.addListener('end', () => {
-      server.close();
-    });
-    res.resume();
-  }));
-  req.end();
-}));
+server.addListener(
+  "listening",
+  common.mustCall(() => {
+    const options = {
+      port: server.address().port,
+      path: "/",
+      method: "GET",
+    };
+    const req = http.request(
+      options,
+      common.mustCall((res) => {
+        assert.ok(
+          "date" in res.headers,
+          "Response headers didn't contain a Date.",
+        );
+        res.addListener("end", () => {
+          server.close();
+        });
+        res.resume();
+      }),
+    );
+    req.end();
+  }),
+);

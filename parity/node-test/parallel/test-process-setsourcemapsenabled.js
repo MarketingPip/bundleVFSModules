@@ -1,14 +1,8 @@
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
-const unexpectedValues = [
-  undefined,
-  null,
-  1,
-  {},
-  () => {},
-];
+const unexpectedValues = [undefined, null, 1, {}, () => {}];
 for (const it of unexpectedValues) {
   assert.throws(() => {
     process.setSourceMapsEnabled(it);

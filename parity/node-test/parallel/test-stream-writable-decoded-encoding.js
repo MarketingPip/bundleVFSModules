@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const stream = require('stream');
+const stream = require("stream");
 
 class MyWritable extends stream.Writable {
   constructor(fn, options) {
@@ -38,68 +38,85 @@ class MyWritable extends stream.Writable {
 }
 
 {
-  const m = new MyWritable(common.mustCall((isBuffer, type, enc) => {
-    assert(isBuffer);
-    assert.strictEqual(type, 'object');
-    assert.strictEqual(enc, 'buffer');
-  }), { decodeStrings: true });
-  m.write('some-text', 'utf8');
+  const m = new MyWritable(
+    common.mustCall((isBuffer, type, enc) => {
+      assert(isBuffer);
+      assert.strictEqual(type, "object");
+      assert.strictEqual(enc, "buffer");
+    }),
+    { decodeStrings: true },
+  );
+  m.write("some-text", "utf8");
   m.end();
 }
 
 {
-  const m = new MyWritable(common.mustCall((isBuffer, type, enc) => {
-    assert(!isBuffer);
-    assert.strictEqual(type, 'string');
-    assert.strictEqual(enc, 'utf8');
-  }), { decodeStrings: false });
-  m.write('some-text', 'utf8');
+  const m = new MyWritable(
+    common.mustCall((isBuffer, type, enc) => {
+      assert(!isBuffer);
+      assert.strictEqual(type, "string");
+      assert.strictEqual(enc, "utf8");
+    }),
+    { decodeStrings: false },
+  );
+  m.write("some-text", "utf8");
   m.end();
 }
 
 {
-  assert.throws(() => {
-    const m = new MyWritable(null, {
-      defaultEncoding: 'my invalid encoding',
-    });
-    m.end();
-  }, {
-    code: 'ERR_UNKNOWN_ENCODING',
-  });
+  assert.throws(
+    () => {
+      const m = new MyWritable(null, {
+        defaultEncoding: "my invalid encoding",
+      });
+      m.end();
+    },
+    {
+      code: "ERR_UNKNOWN_ENCODING",
+    },
+  );
 }
 
 {
-  const w = new MyWritable(common.mustCall((isBuffer, type, enc) => {
-    assert(!isBuffer);
-    assert.strictEqual(type, 'string');
-    assert.strictEqual(enc, 'hex');
-  }), {
-    defaultEncoding: 'hex',
-    decodeStrings: false
-  });
-  w.write('asd');
+  const w = new MyWritable(
+    common.mustCall((isBuffer, type, enc) => {
+      assert(!isBuffer);
+      assert.strictEqual(type, "string");
+      assert.strictEqual(enc, "hex");
+    }),
+    {
+      defaultEncoding: "hex",
+      decodeStrings: false,
+    },
+  );
+  w.write("asd");
   w.end();
 }
 
 {
-  const w = new MyWritable(common.mustCall((isBuffer, type, enc) => {
-    assert(!isBuffer);
-    assert.strictEqual(type, 'string');
-    assert.strictEqual(enc, 'utf8');
-  }), {
-    defaultEncoding: null,
-    decodeStrings: false
-  });
-  w.write('asd');
+  const w = new MyWritable(
+    common.mustCall((isBuffer, type, enc) => {
+      assert(!isBuffer);
+      assert.strictEqual(type, "string");
+      assert.strictEqual(enc, "utf8");
+    }),
+    {
+      defaultEncoding: null,
+      decodeStrings: false,
+    },
+  );
+  w.write("asd");
   w.end();
 }
 
 {
-  const m = new MyWritable(common.mustCall((isBuffer, type, enc) => {
-    assert.strictEqual(type, 'object');
-    assert.strictEqual(enc, 'utf8');
-  }), { defaultEncoding: 'hex',
-        objectMode: true });
-  m.write({ foo: 'bar' }, 'utf8');
+  const m = new MyWritable(
+    common.mustCall((isBuffer, type, enc) => {
+      assert.strictEqual(type, "object");
+      assert.strictEqual(enc, "utf8");
+    }),
+    { defaultEncoding: "hex", objectMode: true },
+  );
+  m.write({ foo: "bar" }, "utf8");
   m.end();
 }

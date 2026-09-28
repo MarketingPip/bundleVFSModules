@@ -19,15 +19,18 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const errorMsg = 'BAM!';
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const errorMsg = "BAM!";
 
 // The first timer throws...
-setTimeout(common.mustCall(function() {
-  throw new Error(errorMsg);
-}), 1);
+setTimeout(
+  common.mustCall(function () {
+    throw new Error(errorMsg);
+  }),
+  1,
+);
 
 // ...but the second one should still run
 setTimeout(common.mustCall(), 1);
@@ -36,4 +39,4 @@ function uncaughtException(err) {
   assert.strictEqual(err.message, errorMsg);
 }
 
-process.on('uncaughtException', common.mustCall(uncaughtException));
+process.on("uncaughtException", common.mustCall(uncaughtException));

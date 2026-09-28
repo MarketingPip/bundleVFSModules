@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 
-const common = require('../common');
-const net = require('net');
-const http = require('http');
+const common = require("../common");
+const net = require("net");
+const http = require("http");
 
 // This is a regression test for https://github.com/joyent/node/issues/44
 // It is separate from test-http-malformed-request.js because it is only
@@ -32,10 +32,13 @@ const http = require('http');
 const server = http.createServer(common.mustNotCall());
 server.listen(0);
 
-server.on('listening', function() {
-  net.createConnection(this.address().port).on('connect', function() {
-    this.destroy();
-  }).on('close', function() {
-    server.close();
-  });
+server.on("listening", function () {
+  net
+    .createConnection(this.address().port)
+    .on("connect", function () {
+      this.destroy();
+    })
+    .on("close", function () {
+      server.close();
+    });
 });

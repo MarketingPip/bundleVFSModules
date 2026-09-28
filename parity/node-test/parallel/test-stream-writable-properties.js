@@ -1,8 +1,8 @@
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
-const { Writable } = require('stream');
+const { Writable } = require("stream");
 
 {
   const w = new Writable();

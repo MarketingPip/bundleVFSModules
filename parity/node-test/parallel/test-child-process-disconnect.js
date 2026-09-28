@@ -19,96 +19,98 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fork = require('child_process').fork;
-const net = require('net');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fork = require("child_process").fork;
+const net = require("net");
 
 // child
-if (process.argv[2] === 'child') {
-
+if (process.argv[2] === "child") {
   // Check that the 'disconnect' event is deferred to the next event loop tick.
   const disconnect = process.disconnect;
-  process.disconnect = common.mustCall(function() {
+  process.disconnect = common.mustCall(function () {
     disconnect.apply(this, arguments);
     // If the event is emitted synchronously, we're too late by now.
-    process.once('disconnect', common.mustCall(disconnectIsNotAsync));
+    process.once("disconnect", common.mustCall(disconnectIsNotAsync));
     // The funky function name makes it show up legible in mustCall errors.
     function disconnectIsNotAsync() {}
   });
 
   const server = net.createServer();
 
-  server.on('connection', function(socket) {
-
+  server.on("connection", function (socket) {
     socket.resume();
 
-    process.on('disconnect', function() {
-      socket.end((process.connected).toString());
+    process.on("disconnect", function () {
+      socket.end(process.connected.toString());
     });
 
     // When the socket is closed, we will close the server
     // allowing the process to self terminate
-    socket.on('end', function() {
+    socket.on("end", function () {
       server.close();
     });
 
-    socket.write('ready');
+    socket.write("ready");
   });
 
   // When the server is ready tell parent
-  server.on('listening', function() {
-    process.send({ msg: 'ready', port: server.address().port });
+  server.on("listening", function () {
+    process.send({ msg: "ready", port: server.address().port });
   });
 
   server.listen(0);
-
 } else {
   // testcase
-  const child = fork(process.argv[1], ['child']);
+  const child = fork(process.argv[1], ["child"]);
 
   let childFlag = false;
   let parentFlag = false;
 
   // When calling .disconnect the event should emit
   // and the disconnected flag should be true.
-  child.on('disconnect', common.mustCall(function() {
-    parentFlag = child.connected;
-  }));
+  child.on(
+    "disconnect",
+    common.mustCall(function () {
+      parentFlag = child.connected;
+    }),
+  );
 
   // The process should also self terminate without using signals
-  child.on('exit', common.mustCall());
+  child.on("exit", common.mustCall());
 
   // When child is listening
-  child.on('message', common.mustCallAtLeast((obj) => {
-    if (obj && obj.msg === 'ready') {
+  child.on(
+    "message",
+    common.mustCallAtLeast((obj) => {
+      if (obj && obj.msg === "ready") {
+        // Connect to child using TCP to know if disconnect was emitted
+        const socket = net.connect(obj.port);
 
-      // Connect to child using TCP to know if disconnect was emitted
-      const socket = net.connect(obj.port);
+        socket.on(
+          "data",
+          common.mustCallAtLeast((data) => {
+            data = data.toString();
 
-      socket.on('data', common.mustCallAtLeast((data) => {
-        data = data.toString();
+            // Ready to be disconnected
+            if (data === "ready") {
+              child.disconnect();
+              assert.throws(child.disconnect.bind(child), {
+                code: "ERR_IPC_DISCONNECTED",
+              });
+              return;
+            }
 
-        // Ready to be disconnected
-        if (data === 'ready') {
-          child.disconnect();
-          assert.throws(
-            child.disconnect.bind(child),
-            {
-              code: 'ERR_IPC_DISCONNECTED'
-            });
-          return;
-        }
+            // 'disconnect' is emitted
+            childFlag = data === "true";
+          }),
+        );
+      }
+    }),
+  );
 
-        // 'disconnect' is emitted
-        childFlag = (data === 'true');
-      }));
-
-    }
-  }));
-
-  process.on('exit', function() {
+  process.on("exit", function () {
     assert.strictEqual(childFlag, false);
     assert.strictEqual(parentFlag, false);
   });

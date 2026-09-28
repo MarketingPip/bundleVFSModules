@@ -19,77 +19,94 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
 let complete;
 
-const server = http.createServer(common.mustCall((req, res) => {
-  // We should not see the queued /thatotherone request within the server
-  // as it should be aborted before it is sent.
-  assert.strictEqual(req.url, '/');
+const server = http.createServer(
+  common.mustCall((req, res) => {
+    // We should not see the queued /thatotherone request within the server
+    // as it should be aborted before it is sent.
+    assert.strictEqual(req.url, "/");
 
-  res.writeHead(200);
-  res.write('foo');
+    res.writeHead(200);
+    res.write("foo");
 
-  complete ??= function() {
-    res.end();
-  };
-}));
+    complete ??= function () {
+      res.end();
+    };
+  }),
+);
 
-server.listen(0, common.mustCall(() => {
-  const agent = new http.Agent({ maxSockets: 1 });
-  assert.strictEqual(Object.keys(agent.sockets).length, 0);
+server.listen(
+  0,
+  common.mustCall(() => {
+    const agent = new http.Agent({ maxSockets: 1 });
+    assert.strictEqual(Object.keys(agent.sockets).length, 0);
 
-  const options = {
-    hostname: 'localhost',
-    port: server.address().port,
-    method: 'GET',
-    path: '/',
-    agent: agent
-  };
-
-  const req1 = http.request(options);
-  req1.on('response', common.mustCall((res1) => {
-    assert.strictEqual(Object.keys(agent.sockets).length, 1);
-    assert.strictEqual(Object.keys(agent.requests).length, 0);
-
-    const req2 = http.request({
-      method: 'GET',
-      host: 'localhost',
+    const options = {
+      hostname: "localhost",
       port: server.address().port,
-      path: '/thatotherone',
-      agent: agent
-    });
-    assert.strictEqual(Object.keys(agent.sockets).length, 1);
-    assert.strictEqual(Object.keys(agent.requests).length, 1);
+      method: "GET",
+      path: "/",
+      agent: agent,
+    };
 
-    // TODO(jasnell): This event does not appear to currently be triggered.
-    // is this handler actually required?
-    req2.on('error', common.mustCallAtLeast((err) => {
-      // This is expected in response to our explicit abort call
-      assert.strictEqual(err.code, 'ECONNRESET');
-    }, 0));
-
-    req2.end();
-    req2.abort();
-
-    assert.strictEqual(Object.keys(agent.sockets).length, 1);
-    assert.strictEqual(Object.keys(agent.requests).length, 1);
-
-    res1.on('data', (chunk) => complete());
-
-    res1.on('end', common.mustCall(() => {
-      setTimeout(common.mustCall(() => {
-        assert.strictEqual(Object.keys(agent.sockets).length, 0);
+    const req1 = http.request(options);
+    req1.on(
+      "response",
+      common.mustCall((res1) => {
+        assert.strictEqual(Object.keys(agent.sockets).length, 1);
         assert.strictEqual(Object.keys(agent.requests).length, 0);
 
-        server.close();
-      }), 100);
-    }));
-  }));
+        const req2 = http.request({
+          method: "GET",
+          host: "localhost",
+          port: server.address().port,
+          path: "/thatotherone",
+          agent: agent,
+        });
+        assert.strictEqual(Object.keys(agent.sockets).length, 1);
+        assert.strictEqual(Object.keys(agent.requests).length, 1);
 
-  req1.end();
-}));
+        // TODO(jasnell): This event does not appear to currently be triggered.
+        // is this handler actually required?
+        req2.on(
+          "error",
+          common.mustCallAtLeast((err) => {
+            // This is expected in response to our explicit abort call
+            assert.strictEqual(err.code, "ECONNRESET");
+          }, 0),
+        );
+
+        req2.end();
+        req2.abort();
+
+        assert.strictEqual(Object.keys(agent.sockets).length, 1);
+        assert.strictEqual(Object.keys(agent.requests).length, 1);
+
+        res1.on("data", (chunk) => complete());
+
+        res1.on(
+          "end",
+          common.mustCall(() => {
+            setTimeout(
+              common.mustCall(() => {
+                assert.strictEqual(Object.keys(agent.sockets).length, 0);
+                assert.strictEqual(Object.keys(agent.requests).length, 0);
+
+                server.close();
+              }),
+              100,
+            );
+          }),
+        );
+      }),
+    );
+
+    req1.end();
+  }),
+);

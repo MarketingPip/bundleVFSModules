@@ -1,5 +1,5 @@
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
 // This test makes sure clearing timers with
 // objects doesn't throw

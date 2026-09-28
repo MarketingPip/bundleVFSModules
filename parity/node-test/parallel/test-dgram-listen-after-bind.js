@@ -19,13 +19,13 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const common = require('../common');
-const assert = require('assert');
-const dgram = require('dgram');
+"use strict";
+require("../common");
+const common = require("../common");
+const assert = require("assert");
+const dgram = require("dgram");
 
-const socket = dgram.createSocket('udp4');
+const socket = dgram.createSocket("udp4");
 
 socket.bind();
 
@@ -34,12 +34,18 @@ const timer = setTimeout(() => {
   socket.close();
 }, 100);
 
-socket.on('listening', common.mustCall(() => {
-  clearTimeout(timer);
-  fired = true;
-  socket.close();
-}));
+socket.on(
+  "listening",
+  common.mustCall(() => {
+    clearTimeout(timer);
+    fired = true;
+    socket.close();
+  }),
+);
 
-socket.on('close', common.mustCall(() => {
-  assert(fired, 'listening should fire after bind');
-}));
+socket.on(
+  "close",
+  common.mustCall(() => {
+    assert(fired, "listening should fire after bind");
+  }),
+);

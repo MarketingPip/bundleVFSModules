@@ -1,8 +1,8 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 const {
   from,
   fromSync,
@@ -15,49 +15,47 @@ const {
   array,
   arraySync,
   toAsyncStreamable,
-} = require('stream/iter');
+} = require("stream/iter");
 
 // =============================================================================
 // bytesSync / bytes
 // =============================================================================
 
 async function testBytesSyncBasic() {
-  const data = bytesSync(fromSync('hello'));
-  assert.deepStrictEqual(data, new TextEncoder().encode('hello'));
+  const data = bytesSync(fromSync("hello"));
+  assert.deepStrictEqual(data, new TextEncoder().encode("hello"));
 }
 
 async function testBytesSyncLimit() {
-  assert.throws(
-    () => bytesSync(fromSync('hello world'), { limit: 3 }),
-    { name: 'RangeError' },
-  );
+  assert.throws(() => bytesSync(fromSync("hello world"), { limit: 3 }), {
+    name: "RangeError",
+  });
 }
 
 async function testBytesAsync() {
-  const data = await bytes(from('hello-async'));
-  assert.deepStrictEqual(data, new TextEncoder().encode('hello-async'));
+  const data = await bytes(from("hello-async"));
+  assert.deepStrictEqual(data, new TextEncoder().encode("hello-async"));
 }
 
 async function testBytesAsyncLimit() {
-  await assert.rejects(
-    () => bytes(from('hello world'), { limit: 3 }),
-    { name: 'RangeError' },
-  );
+  await assert.rejects(() => bytes(from("hello world"), { limit: 3 }), {
+    name: "RangeError",
+  });
 }
 
 async function testBytesAsyncAbort() {
   await assert.rejects(
-    () => bytes(from('data'), { signal: AbortSignal.abort() }),
-    { name: 'AbortError' },
+    () => bytes(from("data"), { signal: AbortSignal.abort() }),
+    { name: "AbortError" },
   );
 }
 
 async function testAsyncConsumersAbortPendingNext() {
   const consumers = [
-    ['bytes', bytes],
-    ['text', text],
-    ['arrayBuffer', arrayBuffer],
-    ['array', array],
+    ["bytes", bytes],
+    ["text", text],
+    ["arrayBuffer", arrayBuffer],
+    ["array", array],
   ];
 
   for (const [name, consumer] of consumers) {
@@ -78,10 +76,10 @@ async function testAsyncConsumersAbortPendingNext() {
 
 async function testAsyncConsumersAbortPendingNormalization() {
   const consumers = [
-    ['bytes', bytes],
-    ['text', text],
-    ['arrayBuffer', arrayBuffer],
-    ['array', array],
+    ["bytes", bytes],
+    ["text", text],
+    ["arrayBuffer", arrayBuffer],
+    ["array", array],
   ];
 
   for (const [name, consumer] of consumers) {
@@ -150,10 +148,7 @@ async function testArraySyncLimit() {
     yield new Uint8Array(100);
   }
   const source = fromSync(gen());
-  assert.throws(
-    () => arraySync(source, { limit: 50 }),
-    { name: 'RangeError' },
-  );
+  assert.throws(() => arraySync(source, { limit: 50 }), { name: "RangeError" });
 }
 
 async function testArrayAsync() {
@@ -172,10 +167,9 @@ async function testArrayAsyncLimit() {
     yield [new Uint8Array(100)];
     yield [new Uint8Array(100)];
   }
-  await assert.rejects(
-    () => array(gen(), { limit: 50 }),
-    { name: 'RangeError' },
-  );
+  await assert.rejects(() => array(gen(), { limit: 50 }), {
+    name: "RangeError",
+  });
 }
 
 // =============================================================================
@@ -189,15 +183,15 @@ async function testConsumersNonArrayBatch() {
 
   // Source yields raw Uint8Array, not wrapped in an array
   async function* rawSource() {
-    yield encoder.encode('hello');
-    yield encoder.encode(' world');
+    yield encoder.encode("hello");
+    yield encoder.encode(" world");
   }
   const result = await text(rawSource());
-  assert.strictEqual(result, 'hello world');
+  assert.strictEqual(result, "hello world");
 
   // bytes() with raw chunks
   async function* rawSource2() {
-    yield encoder.encode('ab');
+    yield encoder.encode("ab");
   }
   const data = await bytes(rawSource2());
   assert.strictEqual(data.length, 2);
@@ -206,8 +200,8 @@ async function testConsumersNonArrayBatch() {
 
   // array() with raw chunks
   async function* rawSource3() {
-    yield encoder.encode('x');
-    yield encoder.encode('y');
+    yield encoder.encode("x");
+    yield encoder.encode("y");
   }
   const arr = await array(rawSource3());
   assert.strictEqual(arr.length, 2);
@@ -217,11 +211,11 @@ async function testConsumersNonArrayBatchSync() {
   const encoder = new TextEncoder();
 
   function* rawSyncSource() {
-    yield encoder.encode('sync');
-    yield encoder.encode('data');
+    yield encoder.encode("sync");
+    yield encoder.encode("data");
   }
   const result = textSync(rawSyncSource());
-  assert.strictEqual(result, 'syncdata');
+  assert.strictEqual(result, "syncdata");
 
   const data = bytesSync(rawSyncSource());
   assert.strictEqual(data.length, 8);
@@ -232,19 +226,19 @@ async function testConsumersNonArrayBatchSync() {
 
 // Consumers accept string sources directly (normalized via from/fromSync)
 async function testBytesStringSource() {
-  const result = await bytes('hello-bytes');
-  assert.strictEqual(new TextDecoder().decode(result), 'hello-bytes');
+  const result = await bytes("hello-bytes");
+  assert.strictEqual(new TextDecoder().decode(result), "hello-bytes");
 }
 
 function testBytesSyncStringSource() {
-  const result = bytesSync('hello-sync');
-  assert.strictEqual(new TextDecoder().decode(result), 'hello-sync');
+  const result = bytesSync("hello-sync");
+  assert.strictEqual(new TextDecoder().decode(result), "hello-sync");
 }
 
 async function testTextStringSource() {
-  const { text } = require('stream/iter');
-  const result = await text('direct-string');
-  assert.strictEqual(result, 'direct-string');
+  const { text } = require("stream/iter");
+  const result = await text("direct-string");
+  assert.strictEqual(result, "direct-string");
 }
 
 Promise.all([

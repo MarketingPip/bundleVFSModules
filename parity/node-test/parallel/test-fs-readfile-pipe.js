@@ -19,38 +19,46 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // Simulate `cat readfile.js | node readfile.js`
 
 if (common.isWindows || common.isAIX || common.isIBMi)
   common.skip(`No /dev/stdin on ${process.platform}.`);
 
-const assert = require('assert');
-const fs = require('fs');
+const assert = require("assert");
+const fs = require("fs");
 
-if (process.argv[2] === 'child') {
-  fs.readFile('/dev/stdin', common.mustSucceed((data) => {
-    process.stdout.write(data);
-  }));
+if (process.argv[2] === "child") {
+  fs.readFile(
+    "/dev/stdin",
+    common.mustSucceed((data) => {
+      process.stdout.write(data);
+    }),
+  );
   return;
 }
 
-const fixtures = require('../common/fixtures');
+const fixtures = require("../common/fixtures");
 
-const filename = fixtures.path('readfile_pipe_test.txt');
+const filename = fixtures.path("readfile_pipe_test.txt");
 const dataExpected = fs.readFileSync(filename).toString();
 
-const exec = require('child_process').exec;
-exec(...common.escapePOSIXShell`"${process.execPath}" "${__filename}" child < "${filename}"`, common.mustSucceed((stdout, stderr) => {
-  assert.strictEqual(
-    stdout,
-    dataExpected,
-    `expected to read: '${dataExpected}' but got: '${stdout}'`);
-  assert.strictEqual(
-    stderr,
-    '',
-    `expected not to read anything from stderr but got: '${stderr}'`);
-  console.log('ok');
-}));
+const exec = require("child_process").exec;
+exec(
+  ...common.escapePOSIXShell`"${process.execPath}" "${__filename}" child < "${filename}"`,
+  common.mustSucceed((stdout, stderr) => {
+    assert.strictEqual(
+      stdout,
+      dataExpected,
+      `expected to read: '${dataExpected}' but got: '${stdout}'`,
+    );
+    assert.strictEqual(
+      stderr,
+      "",
+      `expected not to read anything from stderr but got: '${stderr}'`,
+    );
+    console.log("ok");
+  }),
+);

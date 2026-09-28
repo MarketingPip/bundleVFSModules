@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
-const net = require('net');
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
+const net = require("net");
 
 // This test sends an invalid character to a HTTP server and purposely
 // does not handle clientError (even if it sets an event handler).
@@ -15,30 +15,33 @@ const net = require('net');
 {
   let i = 0;
   let socket;
-  process.on('warning', common.mustNotCall());
+  process.on("warning", common.mustNotCall());
 
   const server = http.createServer(common.mustNotCall());
 
-  server.on('clientError', common.mustCallAtLeast((err) => {
-    assert.strictEqual(err.code, 'HPE_INVALID_METHOD');
-    assert.strictEqual(err.rawPacket.toString(), '*');
+  server.on(
+    "clientError",
+    common.mustCallAtLeast((err) => {
+      assert.strictEqual(err.code, "HPE_INVALID_METHOD");
+      assert.strictEqual(err.rawPacket.toString(), "*");
 
-    if (i === 20) {
-      socket.end();
-    } else {
-      socket.write('*');
-      i++;
-    }
-  }, 1));
+      if (i === 20) {
+        socket.end();
+      } else {
+        socket.write("*");
+        i++;
+      }
+    }, 1),
+  );
 
   server.listen(0, () => {
     socket = net.createConnection({ port: server.address().port });
 
-    socket.on('connect', () => {
-      socket.write('*');
+    socket.on("connect", () => {
+      socket.write("*");
     });
 
-    socket.on('close', () => {
+    socket.on("close", () => {
       server.close();
     });
   });

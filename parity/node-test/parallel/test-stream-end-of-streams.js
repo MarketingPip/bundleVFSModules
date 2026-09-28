@@ -1,8 +1,8 @@
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
-const { Duplex, finished } = require('stream');
+const { Duplex, finished } = require("stream");
 
 assert.throws(
   () => {
@@ -10,7 +10,7 @@ assert.throws(
     // should throw error
     finished({}, () => {});
   },
-  { code: 'ERR_INVALID_ARG_TYPE' }
+  { code: "ERR_INVALID_ARG_TYPE" },
 );
 
 const streamObj = new Duplex();

@@ -1,33 +1,33 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
-const assert = require('assert');
-const fs = require('fs');
+const assert = require("assert");
+const fs = require("fs");
 
 // Check for Y2K38 support. For Windows, assume it's there. Windows
 // doesn't have `touch` and `date -r` which are used in the check for support.
 if (!common.isWindows) {
   const testFilePath = `${tmpdir.path}/y2k38-test`;
-  const testFileDate = '204001020304';
-  const { spawnSync } = require('child_process');
-  const touchResult = spawnSync('touch',
-                                ['-t', testFileDate, testFilePath],
-                                { encoding: 'utf8' });
+  const testFileDate = "204001020304";
+  const { spawnSync } = require("child_process");
+  const touchResult = spawnSync("touch", ["-t", testFileDate, testFilePath], {
+    encoding: "utf8",
+  });
   if (touchResult.status !== 0) {
-    common.skip('File system appears to lack Y2K38 support (touch failed)');
+    common.skip("File system appears to lack Y2K38 support (touch failed)");
   }
 
   // On some file systems that lack Y2K38 support, `touch` will succeed but
   // the time will be incorrect.
-  const dateResult = spawnSync('date',
-                               ['-r', testFilePath, '+%Y%m%d%H%M'],
-                               { encoding: 'utf8' });
+  const dateResult = spawnSync("date", ["-r", testFilePath, "+%Y%m%d%H%M"], {
+    encoding: "utf8",
+  });
   if (dateResult.status === 0) {
     if (dateResult.stdout.trim() !== testFileDate) {
-      common.skip('File system appears to lack Y2k38 support (date failed)');
+      common.skip("File system appears to lack Y2k38 support (date failed)");
     }
   } else {
     // On some platforms `date` may not support the `-r` option. Usually
@@ -40,7 +40,7 @@ if (!common.isWindows) {
 
 // Ref: https://github.com/nodejs/node/issues/13255
 const path = `${tmpdir.path}/test-utimes-precision`;
-fs.writeFileSync(path, '');
+fs.writeFileSync(path, "");
 
 const Y2K38_mtime = 2 ** 31;
 fs.utimesSync(path, Y2K38_mtime, Y2K38_mtime);

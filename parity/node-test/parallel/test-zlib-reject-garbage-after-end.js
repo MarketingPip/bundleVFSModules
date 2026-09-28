@@ -1,14 +1,14 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const test = require('node:test');
-const { finished } = require('stream/promises');
-const zlib = require('zlib');
+require("../common");
+const assert = require("assert");
+const test = require("node:test");
+const { finished } = require("stream/promises");
+const zlib = require("zlib");
 
 const trailingJunkError = {
-  code: 'ERR_TRAILING_JUNK_AFTER_STREAM_END',
-  name: 'TypeError',
+  code: "ERR_TRAILING_JUNK_AFTER_STREAM_END",
+  name: "TypeError",
 };
 
 function callAsync(fn, input, options) {
@@ -25,7 +25,7 @@ function callAsync(fn, input, options) {
 
 async function collect(stream, input) {
   const chunks = [];
-  stream.on('data', (chunk) => chunks.push(chunk));
+  stream.on("data", (chunk) => chunks.push(chunk));
   stream.end(input);
   await finished(stream);
   return Buffer.concat(chunks);
@@ -33,52 +33,52 @@ async function collect(stream, input) {
 
 const cases = [
   {
-    label: 'inflate',
+    label: "inflate",
     compress: zlib.deflateSync,
     decompress: zlib.inflate,
     decompressSync: zlib.inflateSync,
     createDecompress: zlib.createInflate,
-    defaultOutput: 'a',
+    defaultOutput: "a",
   },
   {
-    label: 'inflateRaw',
+    label: "inflateRaw",
     compress: zlib.deflateRawSync,
     decompress: zlib.inflateRaw,
     decompressSync: zlib.inflateRawSync,
     createDecompress: zlib.createInflateRaw,
-    defaultOutput: 'a',
+    defaultOutput: "a",
   },
   {
-    label: 'gunzip',
+    label: "gunzip",
     compress: zlib.gzipSync,
     decompress: zlib.gunzip,
     decompressSync: zlib.gunzipSync,
     createDecompress: zlib.createGunzip,
-    defaultOutput: 'aa',
+    defaultOutput: "aa",
   },
   {
-    label: 'unzip',
+    label: "unzip",
     compress: zlib.gzipSync,
     decompress: zlib.unzip,
     decompressSync: zlib.unzipSync,
     createDecompress: zlib.createUnzip,
-    defaultOutput: 'aa',
+    defaultOutput: "aa",
   },
   {
-    label: 'brotli',
+    label: "brotli",
     compress: zlib.brotliCompressSync,
     decompress: zlib.brotliDecompress,
     decompressSync: zlib.brotliDecompressSync,
     createDecompress: zlib.createBrotliDecompress,
-    defaultOutput: 'a',
+    defaultOutput: "a",
   },
   {
-    label: 'zstd',
+    label: "zstd",
     compress: zlib.zstdCompressSync,
     decompress: zlib.zstdDecompress,
     decompressSync: zlib.zstdDecompressSync,
     createDecompress: zlib.createZstdDecompress,
-    defaultOutput: 'a',
+    defaultOutput: "a",
   },
 ];
 
@@ -91,10 +91,13 @@ for (const {
   defaultOutput,
 } of cases) {
   test(`rejectGarbageAfterEnd rejects trailing input for ${label}`, async () => {
-    const compressed = compress(Buffer.from('a'));
+    const compressed = compress(Buffer.from("a"));
     const withTrailingInput = Buffer.concat([compressed, compressed]);
 
-    assert.strictEqual(decompressSync(withTrailingInput).toString(), defaultOutput);
+    assert.strictEqual(
+      decompressSync(withTrailingInput).toString(),
+      defaultOutput,
+    );
     assert.strictEqual(
       (await callAsync(decompress, withTrailingInput)).toString(),
       defaultOutput,
@@ -122,23 +125,20 @@ for (const {
   });
 }
 
-test('rejectGarbageAfterEnd must be a boolean', () => {
-  const compressed = zlib.deflateSync(Buffer.from('a'));
+test("rejectGarbageAfterEnd must be a boolean", () => {
+  const compressed = zlib.deflateSync(Buffer.from("a"));
 
-  for (const value of [1, 'true', null]) {
+  for (const value of [1, "true", null]) {
     assert.throws(
       () => zlib.inflateSync(compressed, { rejectGarbageAfterEnd: value }),
       {
-        code: 'ERR_INVALID_ARG_TYPE',
-        name: 'TypeError',
+        code: "ERR_INVALID_ARG_TYPE",
+        name: "TypeError",
       },
     );
-    assert.throws(
-      () => zlib.createInflate({ rejectGarbageAfterEnd: value }),
-      {
-        code: 'ERR_INVALID_ARG_TYPE',
-        name: 'TypeError',
-      },
-    );
+    assert.throws(() => zlib.createInflate({ rejectGarbageAfterEnd: value }), {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    });
   }
 });

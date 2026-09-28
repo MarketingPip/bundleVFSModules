@@ -1,10 +1,10 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { runInNewContext } = require('vm');
+const common = require("../common");
+const assert = require("assert");
+const { runInNewContext } = require("vm");
 
-const checkString = 'test';
+const checkString = "test";
 
 const check = Buffer.from(checkString);
 
@@ -30,15 +30,23 @@ assert.deepStrictEqual(Buffer.from(new String(checkString)), check);
 assert.deepStrictEqual(Buffer.from(new MyString()), check);
 assert.deepStrictEqual(Buffer.from(new MyPrimitive()), check);
 assert.deepStrictEqual(
-  Buffer.from(runInNewContext('new String(checkString)', { checkString })),
-  check
+  Buffer.from(runInNewContext("new String(checkString)", { checkString })),
+  check,
 );
 
 [
   {},
   new Boolean(true),
-  { valueOf() { return null; } },
-  { valueOf() { return undefined; } },
+  {
+    valueOf() {
+      return null;
+    },
+  },
+  {
+    valueOf() {
+      return undefined;
+    },
+  },
   { valueOf: null },
   { __proto__: null },
   new Number(true),
@@ -50,19 +58,19 @@ assert.deepStrictEqual(
   null,
 ].forEach((input) => {
   const errObj = {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: 'The first argument must be of type string or an instance of ' +
-             'Buffer, ArrayBuffer, or Array or an Array-like Object.' +
-             common.invalidArgTypeHelper(input)
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      "The first argument must be of type string or an instance of " +
+      "Buffer, ArrayBuffer, or Array or an Array-like Object." +
+      common.invalidArgTypeHelper(input),
   };
   assert.throws(() => Buffer.from(input), errObj);
-  assert.throws(() => Buffer.from(input, 'hex'), errObj);
+  assert.throws(() => Buffer.from(input, "hex"), errObj);
 });
 
 Buffer.allocUnsafe(10); // Should not throw.
-Buffer.from('deadbeaf', 'hex'); // Should not throw.
-
+Buffer.from("deadbeaf", "hex"); // Should not throw.
 
 {
   const u16 = new Uint16Array([0xffff]);
@@ -94,50 +102,69 @@ Buffer.from('deadbeaf', 'hex'); // Should not throw.
   assert.strictEqual(b32[3], 255);
 }
 
-assert.throws(() => {
-  Buffer.copyBytesFrom();
-}, {
-  code: 'ERR_INVALID_ARG_TYPE',
-});
-
-['', Symbol(), true, false, {}, [], () => {}, 1, 1n, null, undefined].forEach(
-  (notTypedArray) => assert.throws(() => {
-    Buffer.copyBytesFrom('nope');
-  }, {
-    code: 'ERR_INVALID_ARG_TYPE',
-  })
+assert.throws(
+  () => {
+    Buffer.copyBytesFrom();
+  },
+  {
+    code: "ERR_INVALID_ARG_TYPE",
+  },
 );
 
-['', Symbol(), true, false, {}, [], () => {}, 1n].forEach((notANumber) =>
-  assert.throws(() => {
-    Buffer.copyBytesFrom(new Uint8Array(1), notANumber);
-  }, {
-    code: 'ERR_INVALID_ARG_TYPE',
-  })
+["", Symbol(), true, false, {}, [], () => {}, 1, 1n, null, undefined].forEach(
+  (notTypedArray) =>
+    assert.throws(
+      () => {
+        Buffer.copyBytesFrom("nope");
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+      },
+    ),
 );
 
-[-1, NaN, 1.1, -Infinity].forEach((outOfRange) =>
-  assert.throws(() => {
-    Buffer.copyBytesFrom(new Uint8Array(1), outOfRange);
-  }, {
-    code: 'ERR_OUT_OF_RANGE',
-  })
-);
-
-['', Symbol(), true, false, {}, [], () => {}, 1n].forEach((notANumber) =>
-  assert.throws(() => {
-    Buffer.copyBytesFrom(new Uint8Array(1), 0, notANumber);
-  }, {
-    code: 'ERR_INVALID_ARG_TYPE',
-  })
+["", Symbol(), true, false, {}, [], () => {}, 1n].forEach((notANumber) =>
+  assert.throws(
+    () => {
+      Buffer.copyBytesFrom(new Uint8Array(1), notANumber);
+    },
+    {
+      code: "ERR_INVALID_ARG_TYPE",
+    },
+  ),
 );
 
 [-1, NaN, 1.1, -Infinity].forEach((outOfRange) =>
-  assert.throws(() => {
-    Buffer.copyBytesFrom(new Uint8Array(1), 0, outOfRange);
-  }, {
-    code: 'ERR_OUT_OF_RANGE',
-  })
+  assert.throws(
+    () => {
+      Buffer.copyBytesFrom(new Uint8Array(1), outOfRange);
+    },
+    {
+      code: "ERR_OUT_OF_RANGE",
+    },
+  ),
+);
+
+["", Symbol(), true, false, {}, [], () => {}, 1n].forEach((notANumber) =>
+  assert.throws(
+    () => {
+      Buffer.copyBytesFrom(new Uint8Array(1), 0, notANumber);
+    },
+    {
+      code: "ERR_INVALID_ARG_TYPE",
+    },
+  ),
+);
+
+[-1, NaN, 1.1, -Infinity].forEach((outOfRange) =>
+  assert.throws(
+    () => {
+      Buffer.copyBytesFrom(new Uint8Array(1), 0, outOfRange);
+    },
+    {
+      code: "ERR_OUT_OF_RANGE",
+    },
+  ),
 );
 
 // copyBytesFrom: length exceeds view (should clamp, not throw)
@@ -180,4 +207,4 @@ assert.throws(() => {
 }
 
 // Invalid encoding is allowed
-Buffer.from('asd', 1);
+Buffer.from("asd", 1);

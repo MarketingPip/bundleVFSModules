@@ -5,7 +5,7 @@
 // module and the public module can never drift apart. The browser has no
 // raw-TLS API; see src/tls.js for the documented emulation gaps.
 // Dependency-free ESM, browser-safe. No _RUNTIME_ access needed.
-export { TLSSocket, Server, createServer, connect } from './tls.js';
-import { TLSSocket, Server, createServer, connect } from './tls.js';
+export { TLSSocket, Server, createServer, connect } from "./tls.js";
+import { TLSSocket, Server, createServer, connect } from "./tls.js";
 
 export default { TLSSocket, Server, createServer, connect };

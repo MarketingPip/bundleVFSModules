@@ -62,30 +62,30 @@ import {
   OpenFile as ShimOpenFile,
   ConsoleStdout as ShimConsoleStdout,
   PreopenDirectory as ShimPreopenDirectory,
-} from '@bjorn3/browser_wasi_shim';
+} from "@bjorn3/browser_wasi_shim";
 
 // ---------------------------------------------------------------------------
 // Error factories — message text mirrors Node v24.20.0 lib/internal/errors.js
 // ---------------------------------------------------------------------------
 
 const kTypes = [
-  'string',
-  'function',
-  'number',
-  'object',
+  "string",
+  "function",
+  "number",
+  "object",
   // Accept 'Function' and 'Object' as alternative to the lower cased version.
-  'Function',
-  'Object',
-  'boolean',
-  'bigint',
-  'symbol',
+  "Function",
+  "Object",
+  "boolean",
+  "bigint",
+  "symbol",
 ];
 const classRegExp = /^[A-Z][a-zA-Z0-9_$]*$/;
 
 /** Minimal stand-in for util.inspect in error messages. */
 function inspectValue(value, maxLength = 128) {
   let str;
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     str = `'${value}'`;
   } else {
     try {
@@ -99,52 +99,57 @@ function inspectValue(value, maxLength = 128) {
   return str;
 }
 
-function formatList(array, type = 'and') {
+function formatList(array, type = "and") {
   switch (array.length) {
-    case 0: return '';
-    case 1: return `${array[0]}`;
-    case 2: return `${array[0]} ${type} ${array[1]}`;
-    case 3: return `${array[0]}, ${array[1]}, ${type} ${array[2]}`;
+    case 0:
+      return "";
+    case 1:
+      return `${array[0]}`;
+    case 2:
+      return `${array[0]} ${type} ${array[1]}`;
+    case 3:
+      return `${array[0]}, ${array[1]}, ${type} ${array[2]}`;
     default:
-      return `${array.slice(0, -1).join(', ')}, ${type} ${array[array.length - 1]}`;
+      return `${array.slice(0, -1).join(", ")}, ${type} ${array[array.length - 1]}`;
   }
 }
 
 function determineSpecificType(value) {
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
   const type = typeof value;
   switch (type) {
-    case 'bigint':
+    case "bigint":
       return `type bigint (${value}n)`;
-    case 'number':
+    case "number":
       if (value === 0) {
-        return 1 / value === -Infinity ? 'type number (-0)' : 'type number (0)';
-      } else if (value !== value) { // eslint-disable-line no-self-compare
+        return 1 / value === -Infinity ? "type number (-0)" : "type number (0)";
+      } else if (value !== value) {
+        // eslint-disable-line no-self-compare
         return `type number (NaN)`;
       } else if (value === Infinity) {
-        return 'type number (Infinity)';
+        return "type number (Infinity)";
       } else if (value === -Infinity) {
-        return 'type number (-Infinity)';
+        return "type number (-Infinity)";
       }
       return `type number (${value})`;
-    case 'boolean':
+    case "boolean":
       return `type boolean (${value})`;
-    case 'symbol':
+    case "symbol":
       return `type symbol (${String(value)})`;
-    case 'function':
+    case "function":
       return `function ${value.name}`;
-    case 'object': {
+    case "object": {
       let ctor;
       try {
         ctor = value.constructor;
       } catch {
         ctor = undefined;
       }
-      if (ctor && 'name' in ctor) return `an instance of ${ctor.name}`;
+      if (ctor && "name" in ctor) return `an instance of ${ctor.name}`;
       return inspectValue(value);
     }
-    case 'string': {
+    case "string": {
       let v = value;
       if (v.length > 28) v = `${v.slice(0, 25)}...`;
       if (!v.includes("'")) return `type string ('${v}')`;
@@ -161,13 +166,13 @@ function determineSpecificType(value) {
  */
 function errInvalidArgType(name, expected, actual) {
   const expectedArray = Array.isArray(expected) ? expected : [expected];
-  let msg = 'The ';
-  if (name.endsWith(' argument')) {
+  let msg = "The ";
+  if (name.endsWith(" argument")) {
     msg += `${name} `;
   } else {
-    msg += `"${name}" ${name.includes('.') ? 'property' : 'argument'} `;
+    msg += `"${name}" ${name.includes(".") ? "property" : "argument"} `;
   }
-  msg += 'must be ';
+  msg += "must be ";
 
   const types = [];
   const instances = [];
@@ -183,62 +188,63 @@ function errInvalidArgType(name, expected, actual) {
   }
 
   if (instances.length > 0) {
-    const pos = types.indexOf('object');
+    const pos = types.indexOf("object");
     if (pos !== -1) {
       types.splice(pos, 1);
-      instances.push('Object');
+      instances.push("Object");
     }
   }
 
   if (types.length > 0) {
-    msg += `${types.length > 1 ? 'one of type' : 'of type'} ${formatList(types, 'or')}`;
-    if (instances.length > 0 || other.length > 0) msg += ' or ';
+    msg += `${types.length > 1 ? "one of type" : "of type"} ${formatList(types, "or")}`;
+    if (instances.length > 0 || other.length > 0) msg += " or ";
   }
 
   if (instances.length > 0) {
-    msg += `an instance of ${formatList(instances, 'or')}`;
-    if (other.length > 0) msg += ' or ';
+    msg += `an instance of ${formatList(instances, "or")}`;
+    if (other.length > 0) msg += " or ";
   }
 
   if (other.length > 0) {
     if (other.length > 1) {
-      msg += `one of ${formatList(other, 'or')}`;
+      msg += `one of ${formatList(other, "or")}`;
     } else {
-      if (other[0].toLowerCase() !== other[0]) msg += 'an ';
+      if (other[0].toLowerCase() !== other[0]) msg += "an ";
       msg += `${other[0]}`;
     }
   }
 
   msg += `. Received ${determineSpecificType(actual)}`;
-  return Object.assign(new TypeError(msg), { code: 'ERR_INVALID_ARG_TYPE' });
+  return Object.assign(new TypeError(msg), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 /** Mirrors `ERR_INVALID_ARG_VALUE` (a TypeError in Node). */
-function errInvalidArgValue(name, value, reason = 'is invalid') {
-  const kind = name.includes('.') ? 'property' : 'argument';
+function errInvalidArgValue(name, value, reason = "is invalid") {
+  const kind = name.includes(".") ? "property" : "argument";
   const msg = `The ${kind} '${name}' ${reason}. Received ${inspectValue(value)}`;
-  return Object.assign(new TypeError(msg), { code: 'ERR_INVALID_ARG_VALUE' });
+  return Object.assign(new TypeError(msg), { code: "ERR_INVALID_ARG_VALUE" });
 }
 
 /** Mirrors `ERR_OUT_OF_RANGE` (a RangeError in Node). */
 function errOutOfRange(name, range, input) {
   const received = inspectValue(input, Infinity);
   const msg = `The value of "${name}" is out of range. It must be ${range}. Received ${received}`;
-  return Object.assign(new RangeError(msg), { code: 'ERR_OUT_OF_RANGE' });
+  return Object.assign(new RangeError(msg), { code: "ERR_OUT_OF_RANGE" });
 }
 
 function errWasiAlreadyStarted() {
-  return Object.assign(
-    new Error('WASI instance has already started'),
-    { code: 'ERR_WASI_ALREADY_STARTED' },
-  );
+  return Object.assign(new Error("WASI instance has already started"), {
+    code: "ERR_WASI_ALREADY_STARTED",
+  });
 }
 
 /** Raised for proc_exit when returnOnExit is false (no process to exit). */
 function errWasiExit(code) {
   return Object.assign(
-    new Error(`WASI proc_exit called with code ${code} (no process to exit in this environment)`),
-    { code: 'WASI_EXIT', exitCode: code },
+    new Error(
+      `WASI proc_exit called with code ${code} (no process to exit in this environment)`,
+    ),
+    { code: "WASI_EXIT", exitCode: code },
   );
 }
 
@@ -248,46 +254,39 @@ function errWasiExit(code) {
 
 /** @param {unknown} v @param {string} name */
 function validateObject(v, name) {
-  if (v === null || Array.isArray(v) || typeof v !== 'object')
-    throw errInvalidArgType(name, 'Object', v);
+  if (v === null || Array.isArray(v) || typeof v !== "object")
+    throw errInvalidArgType(name, "Object", v);
 }
 
 /** @param {unknown} v @param {string} name */
 function validateString(v, name) {
-  if (typeof v !== 'string')
-    throw errInvalidArgType(name, 'string', v);
+  if (typeof v !== "string") throw errInvalidArgType(name, "string", v);
 }
 
 /** @param {unknown} v @param {string} name */
 function validateArray(v, name) {
-  if (!Array.isArray(v))
-    throw errInvalidArgType(name, 'Array', v);
+  if (!Array.isArray(v)) throw errInvalidArgType(name, "Array", v);
 }
 
 /** @param {unknown} v @param {string} name */
 function validateBoolean(v, name) {
-  if (typeof v !== 'boolean')
-    throw errInvalidArgType(name, 'boolean', v);
+  if (typeof v !== "boolean") throw errInvalidArgType(name, "boolean", v);
 }
 
 /** @param {unknown} v @param {string} name */
 function validateFunction(v, name) {
-  if (typeof v !== 'function')
-    throw errInvalidArgType(name, 'Function', v);
+  if (typeof v !== "function") throw errInvalidArgType(name, "Function", v);
 }
 
 /** @param {unknown} v @param {string} name */
 function validateUndefined(v, name) {
-  if (v !== undefined)
-    throw errInvalidArgType(name, 'undefined', v);
+  if (v !== undefined) throw errInvalidArgType(name, "undefined", v);
 }
 
 /** @param {unknown} v @param {string} name @param {number} [min] @param {number} [max] */
 function validateInt32(v, name, min = -2147483648, max = 2147483647) {
-  if (typeof v !== 'number')
-    throw errInvalidArgType(name, 'number', v);
-  if (!Number.isInteger(v))
-    throw errOutOfRange(name, 'an integer', v);
+  if (typeof v !== "number") throw errInvalidArgType(name, "number", v);
+  if (!Number.isInteger(v)) throw errOutOfRange(name, "an integer", v);
   if (v < min || v > max)
     throw errOutOfRange(name, `>= ${min} && <= ${max}`, v);
 }
@@ -301,9 +300,9 @@ function validateInt32(v, name, min = -2147483648, max = 2147483647) {
  * @param {unknown} v
  */
 function isWasmMemoryObject(v) {
-  if (v === null || (typeof v !== 'object' && typeof v !== 'function'))
+  if (v === null || (typeof v !== "object" && typeof v !== "function"))
     return false;
-  return Object.prototype.toString.call(v) === '[object WebAssembly.Memory]';
+  return Object.prototype.toString.call(v) === "[object WebAssembly.Memory]";
 }
 
 // ---------------------------------------------------------------------------
@@ -311,9 +310,9 @@ function isWasmMemoryObject(v) {
 // ---------------------------------------------------------------------------
 
 const ERRNO_SUCCESS = 0; // __WASI_ERRNO_SUCCESS
-const ERRNO_BADF = 8;    // __WASI_ERRNO_BADF
-const ERRNO_INVAL = 28;  // __WASI_ERRNO_INVAL
-const ERRNO_NOSYS = 52;  // __WASI_ERRNO_NOSYS — "function not implemented"
+const ERRNO_BADF = 8; // __WASI_ERRNO_BADF
+const ERRNO_INVAL = 28; // __WASI_ERRNO_INVAL
+const ERRNO_NOSYS = 52; // __WASI_ERRNO_NOSYS — "function not implemented"
 
 const CLOCKID_REALTIME = 0;
 const CLOCKID_MONOTONIC = 1;
@@ -322,17 +321,17 @@ const CLOCKID_MONOTONIC = 1;
 // Private slots — mirror Node's internal symbol pattern
 // ---------------------------------------------------------------------------
 
-const kArgs = Symbol('kArgs');
-const kEnv = Symbol('kEnv');
-const kPreopens = Symbol('kPreopens');
-const kStdio = Symbol('kStdio');
-const kReturnOnExit = Symbol('kReturnOnExit');
-const kStarted = Symbol('kStarted');
-const kBound = Symbol('kBound');
-const kInstance = Symbol('kInstance');
-const kMemory = Symbol('kMemory');
-const kBindingName = Symbol('kBindingName');
-const kShim = Symbol('kShim');
+const kArgs = Symbol("kArgs");
+const kEnv = Symbol("kEnv");
+const kPreopens = Symbol("kPreopens");
+const kStdio = Symbol("kStdio");
+const kReturnOnExit = Symbol("kReturnOnExit");
+const kStarted = Symbol("kStarted");
+const kBound = Symbol("kBound");
+const kInstance = Symbol("kInstance");
+const kMemory = Symbol("kMemory");
+const kBindingName = Symbol("kBindingName");
+const kShim = Symbol("kShim");
 
 // ---------------------------------------------------------------------------
 // WASI class
@@ -370,26 +369,33 @@ export class WASI {
    * }} [options]
    */
   constructor(options = {}) {
-    validateObject(options, 'options');
+    validateObject(options, "options");
 
     // ── version (required, no default) ────────────────────────────────────
-    validateString(options.version, 'options.version');
+    validateString(options.version, "options.version");
     switch (options.version) {
-      case 'unstable': this[kBindingName] = 'wasi_unstable';          break;
-      case 'preview1': this[kBindingName] = 'wasi_snapshot_preview1'; break;
+      case "unstable":
+        this[kBindingName] = "wasi_unstable";
+        break;
+      case "preview1":
+        this[kBindingName] = "wasi_snapshot_preview1";
+        break;
       default:
-        throw errInvalidArgValue('options.version', options.version,
-                                 'unsupported WASI version');
+        throw errInvalidArgValue(
+          "options.version",
+          options.version,
+          "unsupported WASI version",
+        );
     }
 
     // ── args ──────────────────────────────────────────────────────────────
-    if (options.args !== undefined) validateArray(options.args, 'options.args');
+    if (options.args !== undefined) validateArray(options.args, "options.args");
     this[kArgs] = (options.args || []).map(String);
 
     // ── env — serialised as KEY=VALUE strings, like Node ──────────────────
     this[kEnv] = [];
     if (options.env !== undefined) {
-      validateObject(options.env, 'options.env');
+      validateObject(options.env, "options.env");
       for (const [key, value] of Object.entries(options.env)) {
         if (value !== undefined) this[kEnv].push(`${key}=${value}`);
       }
@@ -399,7 +405,7 @@ export class WASI {
     // (no host filesystem; the mapped host path is kept as a label only).
     this[kPreopens] = [];
     if (options.preopens !== undefined) {
-      validateObject(options.preopens, 'options.preopens');
+      validateObject(options.preopens, "options.preopens");
       for (const [key, value] of Object.entries(options.preopens)) {
         this[kPreopens].push([String(key), String(value)]);
       }
@@ -407,15 +413,15 @@ export class WASI {
 
     // ── stdio fd numbers — validated like Node ────────────────────────────
     const { stdin = 0, stdout = 1, stderr = 2 } = options;
-    validateInt32(stdin, 'options.stdin', 0);
-    validateInt32(stdout, 'options.stdout', 0);
-    validateInt32(stderr, 'options.stderr', 0);
+    validateInt32(stdin, "options.stdin", 0);
+    validateInt32(stdout, "options.stdout", 0);
+    validateInt32(stderr, "options.stderr", 0);
     this[kStdio] = [stdin, stdout, stderr];
 
     // ── returnOnExit ──────────────────────────────────────────────────────
     let returnOnExit = true;
     if (options.returnOnExit !== undefined) {
-      validateBoolean(options.returnOnExit, 'options.returnOnExit');
+      validateBoolean(options.returnOnExit, "options.returnOnExit");
       returnOnExit = options.returnOnExit;
     }
     this[kReturnOnExit] = returnOnExit;
@@ -450,38 +456,39 @@ export class WASI {
     const wasiImport = {};
     for (const name of Object.keys(rawImport)) {
       const fn = rawImport[name];
-      if (name === 'proc_exit') {
+      if (name === "proc_exit") {
         wasiImport[name] = (code) => {
           if (!self[kReturnOnExit]) throw errWasiExit(code);
           // Throws the shim's WASIProcExit; start() converts it to a code.
           return fn(code);
         };
-      } else if (name === 'proc_raise' || name.startsWith('sock_')) {
+      } else if (name === "proc_raise" || name.startsWith("sock_")) {
         // Sockets and signals are unavailable: errno, never a throw.
         wasiImport[name] = () => ERRNO_NOSYS;
-      } else if (name === 'sched_yield') {
+      } else if (name === "sched_yield") {
         wasiImport[name] = () => {
           fn();
           return ERRNO_SUCCESS;
         };
-      } else if (name === 'clock_time_get' || name === 'clock_res_get') {
+      } else if (name === "clock_time_get" || name === "clock_res_get") {
         wasiImport[name] = (clockid, ...rest) => {
           if (!self[kBound]) return ERRNO_NOSYS;
           if (clockid !== CLOCKID_REALTIME && clockid !== CLOCKID_MONOTONIC)
             return ERRNO_INVAL;
           return fn(clockid, ...rest) ?? ERRNO_SUCCESS;
         };
-      } else if (name === 'fd_write') {
+      } else if (name === "fd_write") {
         wasiImport[name] = (fd, ...rest) => {
           if (!self[kBound]) return ERRNO_NOSYS;
           if (fd === self[kStdio][0]) return ERRNO_BADF; // stdin is read-only
           return fn(fd, ...rest);
         };
-      } else if (name === 'fd_read') {
+      } else if (name === "fd_read") {
         wasiImport[name] = (fd, ...rest) => {
           if (!self[kBound]) return ERRNO_NOSYS;
           // stdout/stderr are write-only
-          if (fd === self[kStdio][1] || fd === self[kStdio][2]) return ERRNO_BADF;
+          if (fd === self[kStdio][1] || fd === self[kStdio][2])
+            return ERRNO_BADF;
           return fn(fd, ...rest);
         };
       } else {
@@ -506,19 +513,19 @@ export class WASI {
    * @param {WebAssembly.Instance} instance
    * @param {{ memory?: WebAssembly.Memory }} [options]
    */
-  finalizeBindings(instance, {
-    memory = instance?.exports?.memory,
-  } = {}) {
+  finalizeBindings(instance, { memory = instance?.exports?.memory } = {}) {
     if (this[kStarted]) throw errWasiAlreadyStarted();
 
-    validateObject(instance, 'instance');
-    validateObject(instance.exports, 'instance.exports');
+    validateObject(instance, "instance");
+    validateObject(instance.exports, "instance.exports");
 
     // Mirrors the C++ _setMemory brand check (works across VM contexts).
     if (!isWasmMemoryObject(memory)) {
       throw Object.assign(
-        new TypeError('"instance.exports.memory" property must be a WebAssembly.Memory object'),
-        { code: 'ERR_INVALID_ARG_TYPE' },
+        new TypeError(
+          '"instance.exports.memory" property must be a WebAssembly.Memory object',
+        ),
+        { code: "ERR_INVALID_ARG_TYPE" },
       );
     }
 
@@ -543,8 +550,8 @@ export class WASI {
     this.finalizeBindings(instance);
 
     const { _start, _initialize } = this[kInstance].exports;
-    validateFunction(_start, 'instance.exports._start');
-    validateUndefined(_initialize, 'instance.exports._initialize');
+    validateFunction(_start, "instance.exports._start");
+    validateUndefined(_initialize, "instance.exports._initialize");
 
     // The shim invokes _start and converts the guest's WASIProcExit into
     // the exit code. Our proc_exit wrapper already honoured returnOnExit.
@@ -561,10 +568,10 @@ export class WASI {
     this.finalizeBindings(instance);
 
     const { _start, _initialize } = this[kInstance].exports;
-    validateUndefined(_start, 'instance.exports._start');
+    validateUndefined(_start, "instance.exports._start");
 
     if (_initialize !== undefined) {
-      validateFunction(_initialize, 'instance.exports._initialize');
+      validateFunction(_initialize, "instance.exports._initialize");
     }
     this[kShim].initialize(instance);
   }

@@ -1,22 +1,17 @@
-'use strict';
-const common = require('./index');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
-const http = require('http');
-const crypto = require('crypto');
+"use strict";
+const common = require("./index");
+if (!common.hasCrypto) common.skip("missing crypto");
+const http = require("http");
+const crypto = require("crypto");
 
 class WebSocketServer {
-  constructor({
-    port = 0,
-    server,
-    customHandleUpgradeHeaders = [],
-  }) {
+  constructor({ port = 0, server, customHandleUpgradeHeaders = [] }) {
     this.port = port;
     this.server = server || http.createServer();
     this.clients = new Set();
     this.customHandleUpgradeHeaders = customHandleUpgradeHeaders;
 
-    this.server.on('upgrade', this.handleUpgrade.bind(this));
+    this.server.on("upgrade", this.handleUpgrade.bind(this));
   }
 
   start() {
@@ -26,25 +21,25 @@ class WebSocketServer {
         resolve();
       });
     }).catch((err) => {
-      console.error('Failed to start WebSocket server:', err);
+      console.error("Failed to start WebSocket server:", err);
     });
   }
 
   handleUpgrade(req, socket, head) {
-    const key = req.headers['sec-websocket-key'];
+    const key = req.headers["sec-websocket-key"];
     const acceptKey = this.generateAcceptValue(key);
     const responseHeaders = [
-      'HTTP/1.1 101 Switching Protocols',
-      'Upgrade: websocket',
-      'Connection: Upgrade',
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
       `Sec-WebSocket-Accept: ${acceptKey}`,
       ...this.customHandleUpgradeHeaders,
     ];
 
-    socket.write(responseHeaders.join('\r\n') + '\r\n\r\n');
+    socket.write(responseHeaders.join("\r\n") + "\r\n\r\n");
     this.clients.add(socket);
 
-    socket.on('data', (buffer) => {
+    socket.on("data", (buffer) => {
       const opcode = buffer[0] & 0x0f;
 
       if (opcode === 0x8) {
@@ -55,24 +50,27 @@ class WebSocketServer {
         return;
       }
 
-      socket.write(this.encodeMessage('Hello from server!'));
+      socket.write(this.encodeMessage("Hello from server!"));
     });
 
-    socket.on('close', () => {
+    socket.on("close", () => {
       this.clients.delete(socket);
     });
 
-    socket.on('error', (err) => {
-      console.error('Socket error:', err);
+    socket.on("error", (err) => {
+      console.error("Socket error:", err);
       this.clients.delete(socket);
     });
   }
 
   generateAcceptValue(secWebSocketKey) {
     return crypto
-      .createHash('sha1')
-      .update(secWebSocketKey + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11', 'binary')
-      .digest('base64');
+      .createHash("sha1")
+      .update(
+        secWebSocketKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+        "binary",
+      )
+      .digest("base64");
   }
 
   decodeMessage(buffer) {
@@ -101,7 +99,7 @@ class WebSocketServer {
     } else if (length < 65536) {
       frame.push(126, (length >> 8) & 0xff, length & 0xff);
     } else {
-      throw new Error('Message too long');
+      throw new Error("Message too long");
     }
 
     return Buffer.concat([Buffer.from(frame), msgBuffer]);

@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
-const net = require('net');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
+const net = require("net");
 
 // RFC 2616, section 10.2.5:
 //
@@ -37,31 +37,42 @@ test(204);
 test(304);
 
 function test(statusCode) {
-  const server = http.createServer(common.mustCall((req, res) => {
-    res.writeHead(statusCode, { 'Transfer-Encoding': 'chunked' });
-    res.end();
-    server.close();
-  }));
+  const server = http.createServer(
+    common.mustCall((req, res) => {
+      res.writeHead(statusCode, { "Transfer-Encoding": "chunked" });
+      res.end();
+      server.close();
+    }),
+  );
 
-  server.listen(0, common.mustCall(() => {
-    const conn = net.createConnection(
-      server.address().port,
-      common.mustCall(() => {
-        conn.write('GET / HTTP/1.1\r\nHost: example.com\r\n\r\n');
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const conn = net.createConnection(
+        server.address().port,
+        common.mustCall(() => {
+          conn.write("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n");
 
-        let resp = '';
-        conn.setEncoding('utf8');
-        conn.on('data', common.mustCall((data) => {
-          resp += data;
-        }));
+          let resp = "";
+          conn.setEncoding("utf8");
+          conn.on(
+            "data",
+            common.mustCall((data) => {
+              resp += data;
+            }),
+          );
 
-        conn.on('end', common.mustCall(() => {
-          // Connection: close should be in the response
-          assert.match(resp, /^Connection: close\r\n$/m);
-          // Make sure this doesn't end with 0\r\n\r\n
-          assert.doesNotMatch(resp, /^0\r\n$/m);
-        }));
-      })
-    );
-  }));
+          conn.on(
+            "end",
+            common.mustCall(() => {
+              // Connection: close should be in the response
+              assert.match(resp, /^Connection: close\r\n$/m);
+              // Make sure this doesn't end with 0\r\n\r\n
+              assert.doesNotMatch(resp, /^0\r\n$/m);
+            }),
+          );
+        }),
+      );
+    }),
+  );
 }

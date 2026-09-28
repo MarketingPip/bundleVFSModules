@@ -19,31 +19,40 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const net = require('net');
+"use strict";
+const common = require("../common");
+const net = require("net");
 
-process.once('beforeExit', common.mustCall(tryImmediate));
+process.once("beforeExit", common.mustCall(tryImmediate));
 
 function tryImmediate() {
-  setImmediate(common.mustCall(() => {
-    process.once('beforeExit', common.mustCall(tryTimer));
-  }));
+  setImmediate(
+    common.mustCall(() => {
+      process.once("beforeExit", common.mustCall(tryTimer));
+    }),
+  );
 }
 
 function tryTimer() {
-  setTimeout(common.mustCall(() => {
-    process.once('beforeExit', common.mustCall(tryListen));
-  }), 1);
+  setTimeout(
+    common.mustCall(() => {
+      process.once("beforeExit", common.mustCall(tryListen));
+    }),
+    1,
+  );
 }
 
 function tryListen() {
-  net.createServer()
+  net
+    .createServer()
     .listen(0)
-    .on('listening', common.mustCall(function() {
-      this.close();
-      process.once('beforeExit', common.mustCall(tryRepeatedTimer));
-    }));
+    .on(
+      "listening",
+      common.mustCall(function () {
+        this.close();
+        process.once("beforeExit", common.mustCall(tryRepeatedTimer));
+      }),
+    );
 }
 
 // Test that a function invoked from the beforeExit handler can use a timer
@@ -55,27 +64,33 @@ function tryListen() {
 function tryRepeatedTimer() {
   const N = 5;
   let n = 0;
-  const repeatedTimer = common.mustCall(function() {
-    if (++n < N)
-      setTimeout(repeatedTimer, 1);
-    else // n == N
-      process.once('beforeExit', common.mustCall(tryNextTickSetImmediate));
+  const repeatedTimer = common.mustCall(function () {
+    if (++n < N) setTimeout(repeatedTimer, 1);
+    else
+      // n == N
+      process.once("beforeExit", common.mustCall(tryNextTickSetImmediate));
   }, N);
   setTimeout(repeatedTimer, 1);
 }
 
 // Test if the callback of `process.nextTick` can be invoked.
 function tryNextTickSetImmediate() {
-  process.nextTick(common.mustCall(function() {
-    setImmediate(common.mustCall(() => {
-      process.once('beforeExit', common.mustCall(tryNextTick));
-    }));
-  }));
+  process.nextTick(
+    common.mustCall(function () {
+      setImmediate(
+        common.mustCall(() => {
+          process.once("beforeExit", common.mustCall(tryNextTick));
+        }),
+      );
+    }),
+  );
 }
 
 // Test that `process.nextTick` won't keep the event loop running by itself.
 function tryNextTick() {
-  process.nextTick(common.mustCall(function() {
-    process.once('beforeExit', common.mustNotCall());
-  }));
+  process.nextTick(
+    common.mustCall(function () {
+      process.once("beforeExit", common.mustNotCall());
+    }),
+  );
 }

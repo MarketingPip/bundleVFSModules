@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-const assert = require('assert');
-const { spawnSync, execFileSync } = require('child_process');
-const common = require('./');
-const util = require('util');
+const assert = require("assert");
+const { spawnSync, execFileSync } = require("child_process");
+const common = require("./");
+const util = require("util");
 
 // Workaround for Windows Server 2008R2
 // When CMD is used to launch a process and CMD is killed too quickly, the
@@ -12,15 +12,15 @@ function cleanupStaleProcess(filename) {
   if (!common.isWindows) {
     return;
   }
-  process.once('beforeExit', () => {
-    const basename = filename.replace(/.*[/\\]/g, '');
+  process.once("beforeExit", () => {
+    const basename = filename.replace(/.*[/\\]/g, "");
     try {
       execFileSync(`${process.env.SystemRoot}\\System32\\wbem\\WMIC.exe`, [
-        'process',
-        'where',
+        "process",
+        "where",
         `commandline like '%${basename}%child'`,
-        'delete',
-        '/nointeractive',
+        "delete",
+        "/nointeractive",
       ]);
     } catch {
       // Ignore failures, there might not be any stale process to clean up.
@@ -37,17 +37,19 @@ assert(kExpiringChildRunTime > kExpiringParentTimer);
 function logAfterTime(time) {
   setTimeout(() => {
     // The following console statements are part of the test.
-    console.log('child stdout');
-    console.error('child stderr');
+    console.log("child stdout");
+    console.error("child stderr");
   }, time);
 }
 
 function checkOutput(str, check) {
-  if ((check instanceof RegExp && !check.test(str)) ||
-    (typeof check === 'string' && check !== str)) {
+  if (
+    (check instanceof RegExp && !check.test(str)) ||
+    (typeof check === "string" && check !== str)
+  ) {
     return { passed: false, reason: `did not match ${util.inspect(check)}` };
   }
-  if (typeof check === 'function') {
+  if (typeof check === "function") {
     try {
       check(str);
     } catch (error) {
@@ -60,37 +62,47 @@ function checkOutput(str, check) {
   return { passed: true };
 }
 
-function expectSyncExit(caller, spawnArgs, {
-  status,
-  signal,
-  stderr: stderrCheck,
-  stdout: stdoutCheck,
-  trim = false,
-}) {
+function expectSyncExit(
+  caller,
+  spawnArgs,
+  { status, signal, stderr: stderrCheck, stdout: stdoutCheck, trim = false },
+) {
   const child = spawnSync(...spawnArgs);
   const failures = [];
   let stderrStr, stdoutStr;
   if (status !== undefined && child.status !== status) {
-    failures.push(`- process terminated with status ${child.status}, expected ${status}`);
+    failures.push(
+      `- process terminated with status ${child.status}, expected ${status}`,
+    );
   }
   if (signal !== undefined && child.signal !== signal) {
-    failures.push(`- process terminated with signal ${child.signal}, expected ${signal}`);
+    failures.push(
+      `- process terminated with signal ${child.signal}, expected ${signal}`,
+    );
   }
 
   function logAndThrow() {
     const tag = `[process ${child.pid}]:`;
     console.error(`${tag} --- stderr ---`);
-    console.error(stderrStr === undefined ? (child.stderr?.toString() ?? '') : stderrStr);
+    console.error(
+      stderrStr === undefined ? (child.stderr?.toString() ?? "") : stderrStr,
+    );
     console.error(`${tag} --- stdout ---`);
-    console.error(stdoutStr === undefined ? (child.stdout?.toString() ?? '') : stdoutStr);
+    console.error(
+      stdoutStr === undefined ? (child.stdout?.toString() ?? "") : stdoutStr,
+    );
     console.error(`${tag} status = ${child.status}, signal = ${child.signal}`);
 
-    const error = new Error(`${failures.join('\n')}`);
-    if (typeof spawnArgs[2] === 'object' && spawnArgs[2] !== null) {
+    const error = new Error(`${failures.join("\n")}`);
+    if (typeof spawnArgs[2] === "object" && spawnArgs[2] !== null) {
       const envInOptions = spawnArgs[2].env;
       // If the env is overridden in the spawn options, include it in the error
       // object for easier debugging.
-      if (typeof envInOptions === 'object' && envInOptions !== null && envInOptions !== process.env) {
+      if (
+        typeof envInOptions === "object" &&
+        envInOptions !== null &&
+        envInOptions !== process.env
+      ) {
         // Only include the environment variables that are different from
         // the current process.env to avoid cluttering the output.
         error.options = { ...spawnArgs[2], env: {} };
@@ -105,7 +117,7 @@ function expectSyncExit(caller, spawnArgs, {
     }
     let command = spawnArgs[0];
     if (Array.isArray(spawnArgs[1])) {
-      command += ' ' + spawnArgs[1].join(' ');
+      command += " " + spawnArgs[1].join(" ");
     }
     error.command = command;
     Error.captureStackTrace(error, caller);
@@ -119,14 +131,20 @@ function expectSyncExit(caller, spawnArgs, {
 
   if (stderrCheck !== undefined) {
     stderrStr = child.stderr.toString();
-    const { passed, reason } = checkOutput(trim ? stderrStr.trim() : stderrStr, stderrCheck);
+    const { passed, reason } = checkOutput(
+      trim ? stderrStr.trim() : stderrStr,
+      stderrCheck,
+    );
     if (!passed) {
       failures.push(`- stderr ${reason}`);
     }
   }
   if (stdoutCheck !== undefined) {
     stdoutStr = child.stdout.toString();
-    const { passed, reason } = checkOutput(trim ? stdoutStr.trim() : stdoutStr, stdoutCheck);
+    const { passed, reason } = checkOutput(
+      trim ? stdoutStr.trim() : stdoutStr,
+      stdoutCheck,
+    );
     if (!passed) {
       failures.push(`- stdout ${reason}`);
     }

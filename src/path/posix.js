@@ -8,7 +8,7 @@
  * OS; this module does the same.
  */
 
-import path from '../path.js';
+import path from "../path.js";
 
 // ---------------------------------------------------------------------------
 // Named exports — every member of the POSIX API
@@ -29,8 +29,8 @@ export const {
   format,
   parse,
   matchesGlob,
-  posix,    // self-referential, preserved for parity
-  win32,    // the win32 implementation, preserved for parity
+  posix, // self-referential, preserved for parity
+  win32, // the win32 implementation, preserved for parity
   _makeLong,
 } = path.posix;
 

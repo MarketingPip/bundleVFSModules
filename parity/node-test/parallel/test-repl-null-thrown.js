@@ -1,13 +1,16 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const { startNewREPLServer } = require('../common/repl');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const { startNewREPLServer } = require("../common/repl");
 
 const { replServer, output } = startNewREPLServer();
 
-replServer.emit('line', 'process.nextTick(() => { throw null; })');
-replServer.emit('line', '.exit');
+replServer.emit("line", "process.nextTick(() => { throw null; })");
+replServer.emit("line", ".exit");
 
-setTimeout(common.mustCall(() => {
-  assert(output.accumulator.includes('Uncaught null'));
-}), 0);
+setTimeout(
+  common.mustCall(() => {
+    assert(output.accumulator.includes("Uncaught null"));
+  }),
+  0,
+);
