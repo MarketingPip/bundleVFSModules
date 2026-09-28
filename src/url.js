@@ -5,9 +5,9 @@
 // the host globals where they exist — the same layering modern Node uses
 // (native bindings under the hood), so this stays browser-safe.
 
-import { win32 as win32Path, posix as posixPath, sep } from 'node:path';
-import { parse as qsParse, stringify as qsStringify } from 'node:querystring';
-import { Buffer } from 'buffer';
+import { win32 as win32Path, posix as posixPath, sep } from "node:path";
+import { parse as qsParse, stringify as qsStringify } from "node:querystring";
+import { Buffer } from "buffer";
 
 const kEmptyObject = { __proto__: null };
 
@@ -15,19 +15,29 @@ const kEmptyObject = { __proto__: null };
    WHATWG globals (host-provided)
 ================================ */
 
-const URLClass = typeof globalThis.URL !== 'undefined' ? globalThis.URL : undefined;
+const URLClass =
+  typeof globalThis.URL !== "undefined" ? globalThis.URL : undefined;
 const URLSearchParamsClass =
-  typeof globalThis.URLSearchParams !== 'undefined' ? globalThis.URLSearchParams : undefined;
+  typeof globalThis.URLSearchParams !== "undefined"
+    ? globalThis.URLSearchParams
+    : undefined;
 const URLPatternClass =
-  typeof globalThis.URLPattern !== 'undefined' ? globalThis.URLPattern : undefined;
+  typeof globalThis.URLPattern !== "undefined"
+    ? globalThis.URLPattern
+    : undefined;
 
 const isWindows =
-  typeof process !== 'undefined' && process !== null &&
-  typeof process.platform === 'string' && process.platform === 'win32';
+  typeof process !== "undefined" &&
+  process !== null &&
+  typeof process.platform === "string" &&
+  process.platform === "win32";
 
 function emitWarning(message, type, code) {
-  if (typeof process !== 'undefined' && process !== null &&
-      typeof process.emitWarning === 'function') {
+  if (
+    typeof process !== "undefined" &&
+    process !== null &&
+    typeof process.emitWarning === "function"
+  ) {
     process.emitWarning(message, type, code);
   }
 }
@@ -37,19 +47,26 @@ function emitWarning(message, type, code) {
 ================================ */
 
 const kTypeNames = [
-  'string', 'function', 'number', 'object',
-  'Function', 'Object', 'boolean', 'bigint', 'symbol',
+  "string",
+  "function",
+  "number",
+  "object",
+  "Function",
+  "Object",
+  "boolean",
+  "bigint",
+  "symbol",
 ];
 const classRegExp = /^[A-Z][a-zA-Z0-9]*$/;
 
 function inspectValue(value, truncate = 128) {
   let s;
   const t = typeof value;
-  if (t === 'string') {
+  if (t === "string") {
     s = `'${value}'`;
-  } else if (t === 'symbol') {
+  } else if (t === "symbol") {
     s = String(value);
-  } else if (t === 'bigint') {
+  } else if (t === "bigint") {
     s = `${value}n`;
   } else {
     try {
@@ -64,31 +81,32 @@ function inspectValue(value, truncate = 128) {
 }
 
 function determineSpecificType(value) {
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
   const type = typeof value;
   switch (type) {
-    case 'bigint':
+    case "bigint":
       return `type bigint (${value}n)`;
-    case 'number': {
-      if (value === 0) return 1 / value === -Infinity ? 'type number (-0)' : 'type number (0)';
-      if (value !== value) return 'type number (NaN)';
-      if (value === Infinity) return 'type number (Infinity)';
-      if (value === -Infinity) return 'type number (-Infinity)';
+    case "number": {
+      if (value === 0)
+        return 1 / value === -Infinity ? "type number (-0)" : "type number (0)";
+      if (value !== value) return "type number (NaN)";
+      if (value === Infinity) return "type number (Infinity)";
+      if (value === -Infinity) return "type number (-Infinity)";
       return `type number (${value})`;
     }
-    case 'boolean':
-      return value ? 'type boolean (true)' : 'type boolean (false)';
-    case 'symbol':
+    case "boolean":
+      return value ? "type boolean (true)" : "type boolean (false)";
+    case "symbol":
       return `type symbol (${String(value)})`;
-    case 'function':
+    case "function":
       return `function ${value.name}`;
-    case 'object':
-      if (value.constructor && 'name' in value.constructor) {
+    case "object":
+      if (value.constructor && "name" in value.constructor) {
         return `an instance of ${value.constructor.name}`;
       }
       return inspectValue(value, 28);
-    case 'string': {
+    case "string": {
       let v = value;
       if (v.length > 28) v = `${v.slice(0, 25)}...`;
       if (!v.includes("'")) return `type string ('${v}')`;
@@ -101,7 +119,7 @@ function determineSpecificType(value) {
 
 function formatList(arr, conj) {
   if (arr.length === 1) return arr[0];
-  return `${arr.slice(0, -1).join(', ')} ${conj} ${arr[arr.length - 1]}`;
+  return `${arr.slice(0, -1).join(", ")} ${conj} ${arr[arr.length - 1]}`;
 }
 
 function makeError(code, message, Base = TypeError) {
@@ -112,9 +130,9 @@ function makeError(code, message, Base = TypeError) {
 
 function ERR_INVALID_ARG_TYPE(name, expected, actual) {
   if (!Array.isArray(expected)) expected = [expected];
-  let msg = 'The ';
-  msg += name.endsWith(' argument') ? `${name} ` : `"${name}" argument `;
-  msg += 'must be ';
+  let msg = "The ";
+  msg += name.endsWith(" argument") ? `${name} ` : `"${name}" argument `;
+  msg += "must be ";
 
   const types = [];
   const instances = [];
@@ -131,97 +149,104 @@ function ERR_INVALID_ARG_TYPE(name, expected, actual) {
 
   // 'object' listed alongside class instances is reported as 'Object'.
   if (instances.length > 0) {
-    const pos = types.indexOf('object');
+    const pos = types.indexOf("object");
     if (pos !== -1) {
       types.splice(pos, 1);
-      instances.push('Object');
+      instances.push("Object");
     }
   }
 
   if (types.length > 0) {
-    msg += `${types.length > 1 ? 'one of type' : 'of type'} ${formatList(types, 'or')}`;
-    if (instances.length > 0 || other.length > 0) msg += ' or ';
+    msg += `${types.length > 1 ? "one of type" : "of type"} ${formatList(types, "or")}`;
+    if (instances.length > 0 || other.length > 0) msg += " or ";
   }
   if (instances.length > 0) {
-    msg += `an instance of ${formatList(instances, 'or')}`;
-    if (other.length > 0) msg += ' or ';
+    msg += `an instance of ${formatList(instances, "or")}`;
+    if (other.length > 0) msg += " or ";
   }
   if (other.length > 0) {
     if (other.length > 1) {
-      msg += `one of ${formatList(other, 'or')}`;
+      msg += `one of ${formatList(other, "or")}`;
     } else {
-      if (other[0].toLowerCase() !== other[0]) msg += 'an ';
+      if (other[0].toLowerCase() !== other[0]) msg += "an ";
       msg += `${other[0]}`;
     }
   }
 
   msg += `. Received ${determineSpecificType(actual)}`;
-  return makeError('ERR_INVALID_ARG_TYPE', msg);
+  return makeError("ERR_INVALID_ARG_TYPE", msg);
 }
 
-function ERR_INVALID_ARG_VALUE(name, value, reason = 'is invalid') {
+function ERR_INVALID_ARG_VALUE(name, value, reason = "is invalid") {
   return makeError(
-    'ERR_INVALID_ARG_VALUE',
+    "ERR_INVALID_ARG_VALUE",
     `The argument '${name}' ${reason}. Received ${inspectValue(value)}`,
     RangeError,
   );
 }
 
 function ERR_INVALID_FILE_URL_HOST() {
-  const platform = typeof process !== 'undefined' && process !== null &&
-    typeof process.platform === 'string' ? process.platform : 'browser';
+  const platform =
+    typeof process !== "undefined" &&
+    process !== null &&
+    typeof process.platform === "string"
+      ? process.platform
+      : "browser";
   return makeError(
-    'ERR_INVALID_FILE_URL_HOST',
+    "ERR_INVALID_FILE_URL_HOST",
     `File URL host must be "localhost" or empty on ${platform}`,
   );
 }
 
 function ERR_INVALID_FILE_URL_PATH(reason, input) {
-  const err = makeError('ERR_INVALID_FILE_URL_PATH', `File URL path ${reason}`);
+  const err = makeError("ERR_INVALID_FILE_URL_PATH", `File URL path ${reason}`);
   err.input = input;
   return err;
 }
 
 function ERR_INVALID_URL(input) {
-  const err = makeError('ERR_INVALID_URL', 'Invalid URL');
+  const err = makeError("ERR_INVALID_URL", "Invalid URL");
   err.input = input;
   return err;
 }
 
 function ERR_INVALID_URL_SCHEME(expected) {
-  if (typeof expected === 'string') expected = [expected];
-  const res = expected.length === 2 ?
-    `one of scheme ${expected[0]} or ${expected[1]}` :
-    `of scheme ${expected[0]}`;
-  return makeError('ERR_INVALID_URL_SCHEME', `The URL must be ${res}`);
+  if (typeof expected === "string") expected = [expected];
+  const res =
+    expected.length === 2
+      ? `one of scheme ${expected[0]} or ${expected[1]}`
+      : `of scheme ${expected[0]}`;
+  return makeError("ERR_INVALID_URL_SCHEME", `The URL must be ${res}`);
 }
 
 function ERR_MISSING_ARGS(...args) {
-  const wrap = (a) => (Array.isArray(a) ? a.map((x) => `"${x}"`).join(' or ') : `"${a}"`);
+  const wrap = (a) =>
+    Array.isArray(a) ? a.map((x) => `"${x}"`).join(" or ") : `"${a}"`;
   const mapped = args.map(wrap);
-  let msg = 'The ';
+  let msg = "The ";
   if (mapped.length > 1) {
-    msg += `${mapped.slice(0, -1).join(', ')} and ${mapped[mapped.length - 1]} arguments `;
+    msg += `${mapped.slice(0, -1).join(", ")} and ${mapped[mapped.length - 1]} arguments `;
   } else {
     msg += `${mapped[0]} argument `;
   }
-  msg += 'must be specified';
-  return makeError('ERR_MISSING_ARGS', msg);
+  msg += "must be specified";
+  return makeError("ERR_MISSING_ARGS", msg);
 }
 
 function validateString(value, name) {
-  if (typeof value !== 'string') throw ERR_INVALID_ARG_TYPE(name, 'string', value);
+  if (typeof value !== "string")
+    throw ERR_INVALID_ARG_TYPE(name, "string", value);
 }
 
 function validateObject(value, name, options = {}) {
   const allowArray = options.allowArray === true;
   const allowFunction = options.allowFunction === true;
-  if (value !== null && typeof value === 'object') {
+  if (value !== null && typeof value === "object") {
     if (!Array.isArray(value) || allowArray) return;
-  } else if (typeof value === 'function' && allowFunction) {
+  } else if (typeof value === "function" && allowFunction) {
     return;
   }
-  throw ERR_INVALID_ARG_TYPE(name, 'object', value);
+  throw ERR_INVALID_ARG_TYPE(name, "object", value);
 }
 
 /* ================================
@@ -255,18 +280,25 @@ const CHAR_NO_BREAK_SPACE = 160;
 const CHAR_ZERO_WIDTH_NOBREAK_SPACE = 65279;
 
 // Protocols that can allow "unsafe" and "unwise" chars.
-const unsafeProtocol = new Set(['javascript', 'javascript:']);
+const unsafeProtocol = new Set(["javascript", "javascript:"]);
 // Protocols that never have a hostname.
-const hostlessProtocol = new Set(['javascript', 'javascript:']);
+const hostlessProtocol = new Set(["javascript", "javascript:"]);
 // Protocols that always contain a // bit.
 const slashedProtocol = new Set([
-  'http', 'http:',
-  'https', 'https:',
-  'ftp', 'ftp:',
-  'gopher', 'gopher:',
-  'file', 'file:',
-  'ws', 'ws:',
-  'wss', 'wss:',
+  "http",
+  "http:",
+  "https",
+  "https:",
+  "ftp",
+  "ftp:",
+  "gopher",
+  "gopher:",
+  "file",
+  "file:",
+  "ws",
+  "ws:",
+  "wss",
+  "wss:",
 ]);
 
 // Reference: RFC 3986, RFC 1808, RFC 2396
@@ -287,7 +319,7 @@ function isInsideNodeModules() {
     return false;
   }
   if (!stack) return false;
-  return stack.split('\n').some((line) => line.includes('node_modules'));
+  return stack.split("\n").some((line) => line.includes("node_modules"));
 }
 
 function spliceOne(list, index) {
@@ -320,11 +352,11 @@ function urlParse(url, parseQueryString, slashesDenoteHost) {
   if (!urlParseWarned && !isInsideNodeModules()) {
     urlParseWarned = true;
     emitWarning(
-      '`url.parse()` behavior is not standardized and prone to ' +
-      'errors that have security implications. Use the WHATWG URL API ' +
-      'instead. CVEs are not issued for `url.parse()` vulnerabilities.',
-      'DeprecationWarning',
-      'DEP0169',
+      "`url.parse()` behavior is not standardized and prone to " +
+        "errors that have security implications. Use the WHATWG URL API " +
+        "instead. CVEs are not issued for `url.parse()` vulnerabilities.",
+      "DeprecationWarning",
+      "DEP0169",
     );
   }
 
@@ -349,7 +381,7 @@ function isIpv6Hostname(hostname) {
 function legacyToASCII(hostname) {
   let asciiOnly = true;
   for (let i = 0; i < hostname.length; i++) {
-    if (hostname.charCodeAt(i) > 0x7F) {
+    if (hostname.charCodeAt(i) > 0x7f) {
       asciiOnly = false;
       break;
     }
@@ -357,7 +389,7 @@ function legacyToASCII(hostname) {
   if (asciiOnly) {
     return hostname.toLowerCase();
   }
-  if (typeof URLClass === 'undefined') {
+  if (typeof URLClass === "undefined") {
     return fallbackPunycode.toASCII(hostname);
   }
   try {
@@ -370,9 +402,9 @@ function legacyToASCII(hostname) {
     // via the forbiddenHostChars check, exactly like Node).
     try {
       const probe = new URLClass(`http://${hostname}.x/`).hostname;
-      return probe.endsWith('.x') ? probe.slice(0, -2) : '';
+      return probe.endsWith(".x") ? probe.slice(0, -2) : "";
     } catch {
-      return '';
+      return "";
     }
   }
 }
@@ -386,7 +418,7 @@ const forbiddenHostChars = /[\0\t\n\r #%/:<>?@[\\\]^|]/;
 const forbiddenHostCharsIpv6 = /[\0\t\n\r #%/<>?@\\^|]/;
 
 Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
-  validateString(url, 'url');
+  validateString(url, "url");
 
   // Copy chrome, IE, opera backslash-handling behavior.
   // Back slashes before the query string get converted to forward slashes
@@ -395,18 +427,18 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
   let hasAt = false;
   let start = -1;
   let end = -1;
-  let rest = '';
+  let rest = "";
   let lastPos = 0;
   for (let i = 0, inWs = false, split = false; i < url.length; ++i) {
     const code = url.charCodeAt(i);
 
     // Find first and last non-whitespace characters for trimming
-    const isWs = code < 33 ||
-                 code === CHAR_NO_BREAK_SPACE ||
-                 code === CHAR_ZERO_WIDTH_NOBREAK_SPACE;
+    const isWs =
+      code < 33 ||
+      code === CHAR_NO_BREAK_SPACE ||
+      code === CHAR_ZERO_WIDTH_NOBREAK_SPACE;
     if (start === -1) {
-      if (isWs)
-        continue;
+      if (isWs) continue;
       lastPos = start = i;
     } else if (inWs) {
       if (!isWs) {
@@ -431,9 +463,8 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
           split = true;
           break;
         case CHAR_BACKWARD_SLASH:
-          if (i - lastPos > 0)
-            rest += url.slice(lastPos, i);
-          rest += '/';
+          if (i - lastPos > 0) rest += url.slice(lastPos, i);
+          rest += "/";
           lastPos = i + 1;
           break;
       }
@@ -447,10 +478,8 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
     if (lastPos === start) {
       // We didn't convert any backslashes
       if (end === -1) {
-        if (start === 0)
-          rest = url;
-        else
-          rest = url.slice(start);
+        if (start === 0) rest = url;
+        else rest = url.slice(start);
       } else {
         rest = url.slice(start, end);
       }
@@ -500,17 +529,19 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
   // how the browser resolves relative URLs.
   let slashes;
   if (slashesDenoteHost || proto || hostPattern.test(rest)) {
-    slashes = rest.charCodeAt(0) === CHAR_FORWARD_SLASH &&
-              rest.charCodeAt(1) === CHAR_FORWARD_SLASH;
+    slashes =
+      rest.charCodeAt(0) === CHAR_FORWARD_SLASH &&
+      rest.charCodeAt(1) === CHAR_FORWARD_SLASH;
     if (slashes && !(proto && hostlessProtocol.has(lowerProto))) {
       rest = rest.slice(2);
       this.slashes = true;
     }
   }
 
-  if (!hostlessProtocol.has(lowerProto) &&
-      (slashes || (proto && !slashedProtocol.has(proto)))) {
-
+  if (
+    !hostlessProtocol.has(lowerProto) &&
+    (slashes || (proto && !slashedProtocol.has(proto)))
+  ) {
     // there's a hostname.
     // the first instance of /, ?, ;, or # ends the host.
     //
@@ -549,15 +580,13 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
         case CHAR_VERTICAL_LINE:
         case CHAR_RIGHT_CURLY_BRACKET:
           // Characters that are never ever allowed in a hostname from RFC 2396
-          if (nonHost === -1)
-            nonHost = i;
+          if (nonHost === -1) nonHost = i;
           break;
         case CHAR_HASH:
         case CHAR_FORWARD_SLASH:
         case CHAR_QUESTION_MARK:
           // Find the first instance of any host-ending characters
-          if (nonHost === -1)
-            nonHost = i;
+          if (nonHost === -1) nonHost = i;
           hostEnd = i;
           break;
         case CHAR_AT:
@@ -567,8 +596,7 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
           nonHost = -1;
           break;
       }
-      if (hostEnd !== -1)
-        break;
+      if (hostEnd !== -1) break;
     }
     start = 0;
     if (atSign !== -1) {
@@ -577,7 +605,7 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
     }
     if (nonHost === -1) {
       this.host = rest.slice(start);
-      rest = '';
+      rest = "";
     } else {
       this.host = rest.slice(start, nonHost);
       rest = rest.slice(nonHost);
@@ -588,8 +616,7 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
 
     // We've indicated that there is a hostname,
     // so even if it's empty, it has to be present.
-    if (typeof this.hostname !== 'string')
-      this.hostname = '';
+    if (typeof this.hostname !== "string") this.hostname = "";
 
     const hostname = this.hostname;
 
@@ -603,13 +630,13 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
     }
 
     if (this.hostname.length > hostnameMaxLen) {
-      this.hostname = '';
+      this.hostname = "";
     } else {
       // Hostnames are always lower case.
       this.hostname = this.hostname.toLowerCase();
     }
 
-    if (this.hostname !== '') {
+    if (this.hostname !== "") {
       if (ipv6Hostname) {
         if (forbiddenHostCharsIpv6.test(this.hostname)) {
           throw ERR_INVALID_URL(url);
@@ -630,22 +657,22 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
         // Rather than trying to correct this by moving the non-host part into
         // the pathname as we've done in getHostname, throw an exception to
         // convey the severity of this issue.
-        if (this.hostname === '' || forbiddenHostChars.test(this.hostname)) {
+        if (this.hostname === "" || forbiddenHostChars.test(this.hostname)) {
           throw ERR_INVALID_URL(url);
         }
       }
     }
 
-    const p = this.port ? ':' + this.port : '';
-    const h = this.hostname || '';
+    const p = this.port ? ":" + this.port : "";
+    const h = this.hostname || "";
     this.host = h + p;
 
     // strip [ and ] from the hostname
     // the host field still retains them, though
     if (ipv6Hostname) {
       this.hostname = this.hostname.slice(1, -1);
-      if (rest[0] !== '/') {
-        rest = '/' + rest;
+      if (rest[0] !== "/") {
+        rest = "/" + rest;
       }
     }
   }
@@ -693,20 +720,18 @@ Url.prototype.parse = function parse(url, parseQueryString, slashesDenoteHost) {
     questionIdx !== -1 && (hashIdx === -1 || questionIdx < hashIdx);
   const firstIdx = useQuestionIdx ? questionIdx : hashIdx;
   if (firstIdx === -1) {
-    if (rest.length > 0)
-      this.pathname = rest;
+    if (rest.length > 0) this.pathname = rest;
   } else if (firstIdx > 0) {
     this.pathname = rest.slice(0, firstIdx);
   }
-  if (slashedProtocol.has(lowerProto) &&
-      this.hostname && !this.pathname) {
-    this.pathname = '/';
+  if (slashedProtocol.has(lowerProto) && this.hostname && !this.pathname) {
+    this.pathname = "/";
   }
 
   // To support http.request
   if (this.pathname || this.search) {
-    const p = this.pathname || '';
-    const s = this.search || '';
+    const p = this.pathname || "";
+    const s = this.search || "";
     this.path = p + s;
   }
 
@@ -719,11 +744,12 @@ let warnInvalidPort = true;
 function getHostname(self, rest, hostname, url) {
   for (let i = 0; i < hostname.length; ++i) {
     const code = hostname.charCodeAt(i);
-    const isValid = (code !== CHAR_FORWARD_SLASH &&
-                     code !== CHAR_BACKWARD_SLASH &&
-                     code !== CHAR_HASH &&
-                     code !== CHAR_QUESTION_MARK &&
-                     code !== CHAR_COLON);
+    const isValid =
+      code !== CHAR_FORWARD_SLASH &&
+      code !== CHAR_BACKWARD_SLASH &&
+      code !== CHAR_HASH &&
+      code !== CHAR_QUESTION_MARK &&
+      code !== CHAR_COLON;
 
     if (!isValid) {
       // If leftover starts with :, then it represents an invalid port.
@@ -731,7 +757,7 @@ function getHostname(self, rest, hostname, url) {
       // Issue a warning and continue.
       if (warnInvalidPort && code === CHAR_COLON) {
         const detail = `The URL ${url} is invalid. Future versions of Node.js will throw an error.`;
-        emitWarning(detail, 'DeprecationWarning', 'DEP0170');
+        emitWarning(detail, "DeprecationWarning", "DEP0170");
         warnInvalidPort = false;
       }
       self.hostname = hostname.slice(0, i);
@@ -743,44 +769,156 @@ function getHostname(self, rest, hostname, url) {
 
 // Escaped characters. Use empty strings to fill up unused entries.
 const escapedCodes = [
-  /* 0 - 9 */ '', '', '', '', '', '', '', '', '', '%09',
-  /* 10 - 19 */ '%0A', '', '', '%0D', '', '', '', '', '', '',
-  /* 20 - 29 */ '', '', '', '', '', '', '', '', '', '',
-  /* 30 - 39 */ '', '', '%20', '', '%22', '', '', '', '', '%27',
-  /* 40 - 49 */ '', '', '', '', '', '', '', '', '', '',
-  /* 50 - 59 */ '', '', '', '', '', '', '', '', '', '',
-  /* 60 - 69 */ '%3C', '', '%3E', '', '', '', '', '', '', '',
-  /* 70 - 79 */ '', '', '', '', '', '', '', '', '', '',
-  /* 80 - 89 */ '', '', '', '', '', '', '', '', '', '',
-  /* 90 - 99 */ '', '', '%5C', '', '%5E', '', '%60', '', '', '',
-  /* 100 - 109 */ '', '', '', '', '', '', '', '', '', '',
-  /* 110 - 119 */ '', '', '', '', '', '', '', '', '', '',
-  /* 120 - 125 */ '', '', '', '%7B', '%7C', '%7D',
+  /* 0 - 9 */ "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "%09",
+  /* 10 - 19 */ "%0A",
+  "",
+  "",
+  "%0D",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  /* 20 - 29 */ "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  /* 30 - 39 */ "",
+  "",
+  "%20",
+  "",
+  "%22",
+  "",
+  "",
+  "",
+  "",
+  "%27",
+  /* 40 - 49 */ "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  /* 50 - 59 */ "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  /* 60 - 69 */ "%3C",
+  "",
+  "%3E",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  /* 70 - 79 */ "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  /* 80 - 89 */ "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  /* 90 - 99 */ "",
+  "",
+  "%5C",
+  "",
+  "%5E",
+  "",
+  "%60",
+  "",
+  "",
+  "",
+  /* 100 - 109 */ "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  /* 110 - 119 */ "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  /* 120 - 125 */ "",
+  "",
+  "",
+  "%7B",
+  "%7C",
+  "%7D",
 ];
 
 // Automatically escape all delimiters and unwise characters from RFC 2396.
 // Also escape single quotes in case of an XSS attack.
 // Return the escaped string.
 function autoEscapeStr(rest) {
-  let escaped = '';
+  let escaped = "";
   let lastEscapedPos = 0;
   for (let i = 0; i < rest.length; ++i) {
     // `escaped` contains substring up to the last escaped character.
     const escapedChar = escapedCodes[rest.charCodeAt(i)];
     if (escapedChar) {
       // Concat if there are ordinary characters in the middle.
-      if (i > lastEscapedPos)
-        escaped += rest.slice(lastEscapedPos, i);
+      if (i > lastEscapedPos) escaped += rest.slice(lastEscapedPos, i);
       escaped += escapedChar;
       lastEscapedPos = i + 1;
     }
   }
-  if (lastEscapedPos === 0)  // Nothing has been escaped.
+  if (lastEscapedPos === 0)
+    // Nothing has been escaped.
     return rest;
 
   // There are ordinary characters at the end.
-  if (lastEscapedPos < rest.length)
-    escaped += rest.slice(lastEscapedPos);
+  if (lastEscapedPos < rest.length) escaped += rest.slice(lastEscapedPos);
 
   return escaped;
 }
@@ -791,73 +929,66 @@ function autoEscapeStr(rest) {
 
 const hexTable = new Array(256);
 for (let i = 0; i < 256; ++i) {
-  hexTable[i] = '%' + (i < 16 ? '0' : '') + i.toString(16).toUpperCase();
+  hexTable[i] = "%" + (i < 16 ? "0" : "") + i.toString(16).toUpperCase();
 }
 
 // `encodeStr` from internal/querystring, with a caller-supplied no-escape table.
 function encodeStr(str, noEscapeTable) {
   const len = str.length;
-  if (len === 0)
-    return '';
+  if (len === 0) return "";
 
-  let out = '';
+  let out = "";
   let lastPos = 0;
   let i = 0;
 
-  outer:
-  for (; i < len; i++) {
+  outer: for (; i < len; i++) {
     let c = str.charCodeAt(i);
 
     // ASCII
     while (c < 0x80) {
       if (noEscapeTable[c] !== 1) {
-        if (lastPos < i)
-          out += str.slice(lastPos, i);
+        if (lastPos < i) out += str.slice(lastPos, i);
         lastPos = i + 1;
         out += hexTable[c];
       }
 
-      if (++i === len)
-        break outer;
+      if (++i === len) break outer;
 
       c = str.charCodeAt(i);
     }
 
-    if (lastPos < i)
-      out += str.slice(lastPos, i);
+    if (lastPos < i) out += str.slice(lastPos, i);
 
     // Multi-byte characters ...
     if (c < 0x800) {
       lastPos = i + 1;
-      out += hexTable[0xC0 | (c >> 6)] +
-             hexTable[0x80 | (c & 0x3F)];
+      out += hexTable[0xc0 | (c >> 6)] + hexTable[0x80 | (c & 0x3f)];
       continue;
     }
-    if (c < 0xD800 || c >= 0xE000) {
+    if (c < 0xd800 || c >= 0xe000) {
       lastPos = i + 1;
-      out += hexTable[0xE0 | (c >> 12)] +
-             hexTable[0x80 | ((c >> 6) & 0x3F)] +
-             hexTable[0x80 | (c & 0x3F)];
+      out +=
+        hexTable[0xe0 | (c >> 12)] +
+        hexTable[0x80 | ((c >> 6) & 0x3f)] +
+        hexTable[0x80 | (c & 0x3f)];
       continue;
     }
     // Surrogate pair
     ++i;
 
-    if (i >= len)
-      throw makeError('ERR_INVALID_URI', 'URI malformed', URIError);
+    if (i >= len) throw makeError("ERR_INVALID_URI", "URI malformed", URIError);
 
-    const c2 = str.charCodeAt(i) & 0x3FF;
-    const cp = 0x10000 + (((c & 0x3FF) << 10) | c2);
+    const c2 = str.charCodeAt(i) & 0x3ff;
+    const cp = 0x10000 + (((c & 0x3ff) << 10) | c2);
     lastPos = i + 1;
-    out += hexTable[0xF0 | (cp >> 18)] +
-           hexTable[0x80 | ((cp >> 12) & 0x3F)] +
-           hexTable[0x80 | ((cp >> 6) & 0x3F)] +
-           hexTable[0x80 | (cp & 0x3F)];
+    out +=
+      hexTable[0xf0 | (cp >> 18)] +
+      hexTable[0x80 | ((cp >> 12) & 0x3f)] +
+      hexTable[0x80 | ((cp >> 6) & 0x3f)] +
+      hexTable[0x80 | (cp & 0x3f)];
   }
-  if (lastPos === 0)
-    return str;
-  if (lastPos < len)
-    out += str.slice(lastPos);
+  if (lastPos === 0) return str;
+  if (lastPos < len) out += str.slice(lastPos);
   return out;
 }
 
@@ -868,54 +999,174 @@ function encodeStr(str, noEscapeTable) {
 // alpha (uppercase)
 // alpha (lowercase)
 const noEscapeAuth = [
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x00 - 0x0F
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x10 - 0x1F
-  0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0, // 0x20 - 0x2F
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, // 0x30 - 0x3F
-  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x40 - 0x4F
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, // 0x50 - 0x5F
-  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x60 - 0x6F
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, // 0x70 - 0x7F
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 0x00 - 0x0F
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 0x10 - 0x1F
+  0,
+  1,
+  0,
+  0,
+  0,
+  0,
+  0,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  1,
+  1,
+  0, // 0x20 - 0x2F
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  0,
+  0,
+  0, // 0x30 - 0x3F
+  0,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1, // 0x40 - 0x4F
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  0,
+  0,
+  1, // 0x50 - 0x5F
+  0,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1, // 0x60 - 0x6F
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  0,
+  1,
+  0, // 0x70 - 0x7F
 ];
 
 Url.prototype.format = function format() {
-  let auth = this.auth || '';
+  let auth = this.auth || "";
   if (auth) {
     auth = encodeStr(auth, noEscapeAuth);
-    auth += '@';
+    auth += "@";
   }
 
-  let protocol = this.protocol || '';
+  let protocol = this.protocol || "";
   if (protocol && protocol.charCodeAt(protocol.length - 1) !== 58 /* : */) {
-    protocol += ':';
+    protocol += ":";
   }
 
-  let pathname = this.pathname || '';
-  let hash = this.hash || '';
-  let host = '';
-  let query = '';
+  let pathname = this.pathname || "";
+  let hash = this.hash || "";
+  let host = "";
+  let query = "";
 
   if (this.host) {
     host = auth + this.host;
   } else if (this.hostname) {
-    host = auth + (
-      this.hostname.indexOf(':') !== -1 && !isIpv6Hostname(this.hostname) ?
-        '[' + this.hostname + ']' :
-        this.hostname
-    );
+    host =
+      auth +
+      (this.hostname.indexOf(":") !== -1 && !isIpv6Hostname(this.hostname)
+        ? "[" + this.hostname + "]"
+        : this.hostname);
     if (this.port) {
-      host += ':' + this.port;
+      host += ":" + this.port;
     }
   }
 
-  if (this.query !== null && typeof this.query === 'object') {
+  if (this.query !== null && typeof this.query === "object") {
     query = qsStringify(this.query);
   }
-  const search = this.search || (query && ('?' + query)) || '';
+  const search = this.search || (query && "?" + query) || "";
 
   let searchOut = search;
-  if (pathname.indexOf('#') !== -1 || pathname.indexOf('?') !== -1) {
-    let newPathname = '';
+  if (pathname.indexOf("#") !== -1 || pathname.indexOf("?") !== -1) {
+    let newPathname = "";
     let lastPos = 0;
     const len = pathname.length;
     for (let i = 0; i < len; i++) {
@@ -924,7 +1175,7 @@ Url.prototype.format = function format() {
         if (i > lastPos) {
           newPathname += pathname.slice(lastPos, i);
         }
-        newPathname += (code === CHAR_HASH ? '%23' : '%3F');
+        newPathname += code === CHAR_HASH ? "%23" : "%3F";
         lastPos = i + 1;
       }
     }
@@ -939,27 +1190,29 @@ Url.prototype.format = function format() {
   if (this.slashes || slashedProtocol.has(protocol)) {
     if (this.slashes || host) {
       if (pathname && pathname.charCodeAt(0) !== CHAR_FORWARD_SLASH)
-        pathname = '/' + pathname;
-      host = '//' + host;
-    } else if (protocol.length >= 4 &&
-               protocol.charCodeAt(0) === 102/* f */ &&
-               protocol.charCodeAt(1) === 105/* i */ &&
-               protocol.charCodeAt(2) === 108/* l */ &&
-               protocol.charCodeAt(3) === 101/* e */) {
-      host = '//';
+        pathname = "/" + pathname;
+      host = "//" + host;
+    } else if (
+      protocol.length >= 4 &&
+      protocol.charCodeAt(0) === 102 /* f */ &&
+      protocol.charCodeAt(1) === 105 /* i */ &&
+      protocol.charCodeAt(2) === 108 /* l */ &&
+      protocol.charCodeAt(3) === 101 /* e */
+    ) {
+      host = "//";
     }
   }
 
   // Escape '#' in search.
-  if (searchOut.indexOf('#') !== -1) {
-    searchOut = searchOut.replaceAll('#', '%23');
+  if (searchOut.indexOf("#") !== -1) {
+    searchOut = searchOut.replaceAll("#", "%23");
   }
 
   if (hash && hash.charCodeAt(0) !== CHAR_HASH) {
-    hash = '#' + hash;
+    hash = "#" + hash;
   }
   if (searchOut && searchOut.charCodeAt(0) !== CHAR_QUESTION_MARK) {
-    searchOut = '?' + searchOut;
+    searchOut = "?" + searchOut;
   }
 
   return protocol + host + pathname + searchOut + hash;
@@ -971,12 +1224,11 @@ function urlFormat(urlObject, options) {
   // If it's an object, this is a no-op.
   // this way, you can call urlParse() on strings
   // to clean up potentially wonky urls.
-  if (typeof urlObject === 'string') {
+  if (typeof urlObject === "string") {
     urlObject = urlParse(urlObject);
-  } else if (typeof urlObject !== 'object' || urlObject === null) {
-    throw ERR_INVALID_ARG_TYPE('urlObject',
-                               ['Object', 'string'], urlObject);
-  } else if (typeof URLClass !== 'undefined' && urlObject instanceof URLClass) {
+  } else if (typeof urlObject !== "object" || urlObject === null) {
+    throw ERR_INVALID_ARG_TYPE("urlObject", ["Object", "string"], urlObject);
+  } else if (typeof URLClass !== "undefined" && urlObject instanceof URLClass) {
     return formatWhatwgURL(urlObject, options);
   }
 
@@ -993,7 +1245,7 @@ function formatWhatwgURL(urlObject, options) {
   let auth = true;
 
   if (options) {
-    validateObject(options, 'options');
+    validateObject(options, "options");
 
     if (options.fragment != null) {
       fragment = Boolean(options.fragment);
@@ -1015,31 +1267,34 @@ function formatWhatwgURL(urlObject, options) {
   const u = urlObject;
   let result = u.href;
 
-  if (!fragment && u.hash !== '') {
+  if (!fragment && u.hash !== "") {
     result = result.slice(0, result.length - u.hash.length);
   }
 
-  if (!search && u.search !== '') {
+  if (!search && u.search !== "") {
     const idx = result.lastIndexOf(u.search);
     if (idx !== -1) {
       result = result.slice(0, idx) + result.slice(idx + u.search.length);
     }
   }
 
-  if (!auth && (u.username !== '' || u.password !== '')) {
-    const userinfo = u.username + (u.password !== '' ? `:${u.password}` : '') + '@';
+  if (!auth && (u.username !== "" || u.password !== "")) {
+    const userinfo =
+      u.username + (u.password !== "" ? `:${u.password}` : "") + "@";
     const idx = result.indexOf(userinfo);
     if (idx !== -1) {
       result = result.slice(0, idx) + result.slice(idx + userinfo.length);
     }
   }
 
-  if (unicode && u.host !== '' && u.hostname !== '' && u.hostname[0] !== '[') {
+  if (unicode && u.host !== "" && u.hostname !== "" && u.hostname[0] !== "[") {
     const uni = domainToUnicode(u.hostname);
     if (uni !== u.hostname) {
       const idx = result.indexOf(u.host);
       if (idx !== -1) {
-        result = result.slice(0, idx) + uni +
+        result =
+          result.slice(0, idx) +
+          uni +
           u.host.slice(u.hostname.length) +
           result.slice(idx + u.host.length);
       }
@@ -1067,7 +1322,7 @@ function urlResolveObject(source, relative) {
 }
 
 Url.prototype.resolveObject = function resolveObject(relative) {
-  if (typeof relative === 'string') {
+  if (typeof relative === "string") {
     const rel = new Url();
     rel.parse(relative, false, true);
     relative = rel;
@@ -1081,7 +1336,7 @@ Url.prototype.resolveObject = function resolveObject(relative) {
   result.hash = relative.hash;
 
   // If the relative url is empty, then there's nothing left to do here.
-  if (relative.href === '') {
+  if (relative.href === "") {
     result.href = result.format();
     return result;
   }
@@ -1090,7 +1345,7 @@ Url.prototype.resolveObject = function resolveObject(relative) {
   if (relative.slashes && !relative.protocol) {
     // Take everything except the protocol from relative
     const relativeWithoutProtocol = Object.keys(relative).reduce((acc, key) => {
-      if (key !== 'protocol') {
+      if (key !== "protocol") {
         acc[key] = relative[key];
       }
       return acc;
@@ -1098,9 +1353,12 @@ Url.prototype.resolveObject = function resolveObject(relative) {
     Object.assign(result, relativeWithoutProtocol);
 
     // urlParse appends trailing / to urls like http://www.example.com
-    if (slashedProtocol.has(result.protocol) &&
-        result.hostname && !result.pathname) {
-      result.path = result.pathname = '/';
+    if (
+      slashedProtocol.has(result.protocol) &&
+      result.hostname &&
+      !result.pathname
+    ) {
+      result.path = result.pathname = "/";
     }
 
     result.href = result.format();
@@ -1123,29 +1381,31 @@ Url.prototype.resolveObject = function resolveObject(relative) {
     }
 
     result.protocol = relative.protocol;
-    if (!relative.host &&
-        !/^file:?$/.test(relative.protocol) &&
-        !hostlessProtocol.has(relative.protocol)) {
-      const relPath = (relative.pathname || '').split('/');
+    if (
+      !relative.host &&
+      !/^file:?$/.test(relative.protocol) &&
+      !hostlessProtocol.has(relative.protocol)
+    ) {
+      const relPath = (relative.pathname || "").split("/");
       while (relPath.length && !(relative.host = relPath.shift()));
-      relative.host ||= '';
-      relative.hostname ||= '';
-      if (relPath[0] !== '') relPath.unshift('');
-      if (relPath.length < 2) relPath.unshift('');
-      result.pathname = relPath.join('/');
+      relative.host ||= "";
+      relative.hostname ||= "";
+      if (relPath[0] !== "") relPath.unshift("");
+      if (relPath.length < 2) relPath.unshift("");
+      result.pathname = relPath.join("/");
     } else {
       result.pathname = relative.pathname;
     }
     result.search = relative.search;
     result.query = relative.query;
-    result.host = relative.host || '';
+    result.host = relative.host || "";
     result.auth = relative.auth;
     result.hostname = relative.hostname || relative.host;
     result.port = relative.port;
     // To support http.request
     if (result.pathname || result.search) {
-      const p = result.pathname || '';
-      const s = result.search || '';
+      const p = result.pathname || "";
+      const s = result.search || "";
       result.path = p + s;
     }
     result.slashes ||= relative.slashes;
@@ -1153,17 +1413,16 @@ Url.prototype.resolveObject = function resolveObject(relative) {
     return result;
   }
 
-  const isSourceAbs = (result.pathname && result.pathname.charAt(0) === '/');
-  const isRelAbs = (
-    relative.host || (relative.pathname && relative.pathname.charAt(0) === '/')
-  );
-  let mustEndAbs = (isRelAbs || isSourceAbs ||
-                    (result.host && relative.pathname));
+  const isSourceAbs = result.pathname && result.pathname.charAt(0) === "/";
+  const isRelAbs =
+    relative.host || (relative.pathname && relative.pathname.charAt(0) === "/");
+  let mustEndAbs =
+    isRelAbs || isSourceAbs || (result.host && relative.pathname);
   const removeAllDots = mustEndAbs;
-  let srcPath = (result.pathname && result.pathname.split('/')) || [];
-  const relPath = (relative.pathname && relative.pathname.split('/')) || [];
-  const noLeadingSlashes = result.protocol &&
-      !slashedProtocol.has(result.protocol);
+  let srcPath = (result.pathname && result.pathname.split("/")) || [];
+  const relPath = (relative.pathname && relative.pathname.split("/")) || [];
+  const noLeadingSlashes =
+    result.protocol && !slashedProtocol.has(result.protocol);
 
   // If the url is a non-slashed url, then relative
   // links like ../.. should be able
@@ -1171,34 +1430,34 @@ Url.prototype.resolveObject = function resolveObject(relative) {
   // result.protocol has already been set by now.
   // Later on, put the first path part into the host field.
   if (noLeadingSlashes) {
-    result.hostname = '';
+    result.hostname = "";
     result.port = null;
     if (result.host) {
-      if (srcPath[0] === '') srcPath[0] = result.host;
+      if (srcPath[0] === "") srcPath[0] = result.host;
       else srcPath.unshift(result.host);
     }
-    result.host = '';
+    result.host = "";
     if (relative.protocol) {
       relative.hostname = null;
       relative.port = null;
       result.auth = null;
       if (relative.host) {
-        if (relPath[0] === '') relPath[0] = relative.host;
+        if (relPath[0] === "") relPath[0] = relative.host;
         else relPath.unshift(relative.host);
       }
       relative.host = null;
     }
-    mustEndAbs &&= (relPath[0] === '' || srcPath[0] === '');
+    mustEndAbs &&= relPath[0] === "" || srcPath[0] === "";
   }
 
   if (isRelAbs) {
     // it's absolute.
-    if (relative.host || relative.host === '') {
+    if (relative.host || relative.host === "") {
       if (result.host !== relative.host) result.auth = null;
       result.host = relative.host;
       result.port = relative.port;
     }
-    if (relative.hostname || relative.hostname === '') {
+    if (relative.hostname || relative.hostname === "") {
       if (result.hostname !== relative.hostname) result.auth = null;
       result.hostname = relative.hostname;
     }
@@ -1224,7 +1483,7 @@ Url.prototype.resolveObject = function resolveObject(relative) {
       // This especially happens in cases like
       // url.resolveObject('mailto:local1@domain1', 'local2@domain2')
       const authInHost =
-        result.host && result.host.indexOf('@') > 0 && result.host.split('@');
+        result.host && result.host.indexOf("@") > 0 && result.host.split("@");
       if (authInHost) {
         result.auth = authInHost.shift();
         result.host = result.hostname = authInHost.shift();
@@ -1234,8 +1493,9 @@ Url.prototype.resolveObject = function resolveObject(relative) {
     result.query = relative.query;
     // To support http.request
     if (result.pathname !== null || result.search !== null) {
-      result.path = (result.pathname ? result.pathname : '') +
-                    (result.search ? result.search : '');
+      result.path =
+        (result.pathname ? result.pathname : "") +
+        (result.search ? result.search : "");
     }
     result.href = result.format();
     return result;
@@ -1246,7 +1506,7 @@ Url.prototype.resolveObject = function resolveObject(relative) {
     result.pathname = null;
     // To support http.request
     if (result.search) {
-      result.path = '/' + result.search;
+      result.path = "/" + result.search;
     } else {
       result.path = null;
     }
@@ -1258,18 +1518,19 @@ Url.prototype.resolveObject = function resolveObject(relative) {
   // however, if it ends in anything else non-slashy,
   // then it must NOT get a trailing slash.
   let last = srcPath[srcPath.length - 1];
-  const hasTrailingSlash = (
+  const hasTrailingSlash =
     ((result.host || relative.host || srcPath.length > 1) &&
-    (last === '.' || last === '..')) || last === '');
+      (last === "." || last === "..")) ||
+    last === "";
 
   // Strip single dots, resolve double dots to parent dir
   // if the path tries to go above the root, `up` ends up > 0
   let up = 0;
   for (let i = srcPath.length - 1; i >= 0; i--) {
     last = srcPath[i];
-    if (last === '.') {
+    if (last === ".") {
       spliceOne(srcPath, i);
-    } else if (last === '..') {
+    } else if (last === "..") {
       spliceOne(srcPath, i);
       up++;
     } else if (up) {
@@ -1281,54 +1542,63 @@ Url.prototype.resolveObject = function resolveObject(relative) {
   // If the path is allowed to go above the root, restore leading ..s
   if (!mustEndAbs && !removeAllDots) {
     while (up--) {
-      srcPath.unshift('..');
+      srcPath.unshift("..");
     }
   }
 
-  if (mustEndAbs && srcPath[0] !== '' &&
-      (!srcPath[0] || srcPath[0].charAt(0) !== '/')) {
-    srcPath.unshift('');
+  if (
+    mustEndAbs &&
+    srcPath[0] !== "" &&
+    (!srcPath[0] || srcPath[0].charAt(0) !== "/")
+  ) {
+    srcPath.unshift("");
   }
 
-  if (hasTrailingSlash && srcPath.join('/').at(-1) !== '/') {
-    srcPath.push('');
+  if (hasTrailingSlash && srcPath.join("/").at(-1) !== "/") {
+    srcPath.push("");
   }
 
-  const isAbsolute = srcPath[0] === '' ||
-      (srcPath[0] && srcPath[0].charAt(0) === '/');
+  const isAbsolute =
+    srcPath[0] === "" || (srcPath[0] && srcPath[0].charAt(0) === "/");
 
   // put the host back
   if (noLeadingSlashes) {
-    result.hostname =
-      result.host = isAbsolute ? '' : srcPath.length ? srcPath.shift() : '';
+    result.hostname = result.host = isAbsolute
+      ? ""
+      : srcPath.length
+        ? srcPath.shift()
+        : "";
     // Occasionally the auth can get stuck only in host.
     // This especially happens in cases like
     // url.resolveObject('mailto:local1@domain1', 'local2@domain2')
-    const authInHost = result.host && result.host.indexOf('@') > 0 ?
-      result.host.split('@') : false;
+    const authInHost =
+      result.host && result.host.indexOf("@") > 0
+        ? result.host.split("@")
+        : false;
     if (authInHost) {
       result.auth = authInHost.shift();
       result.host = result.hostname = authInHost.shift();
     }
   }
 
-  mustEndAbs ||= (result.host && srcPath.length);
+  mustEndAbs ||= result.host && srcPath.length;
 
   if (mustEndAbs && !isAbsolute) {
-    srcPath.unshift('');
+    srcPath.unshift("");
   }
 
   if (!srcPath.length) {
     result.pathname = null;
     result.path = null;
   } else {
-    result.pathname = srcPath.join('/');
+    result.pathname = srcPath.join("/");
   }
 
   // To support request.http
   if (result.pathname !== null || result.search !== null) {
-    result.path = (result.pathname ? result.pathname : '') +
-                  (result.search ? result.search : '');
+    result.path =
+      (result.pathname ? result.pathname : "") +
+      (result.search ? result.search : "");
   }
   result.auth = relative.auth || result.auth;
   result.slashes ||= relative.slashes;
@@ -1341,7 +1611,7 @@ Url.prototype.parseHost = function parseHost() {
   const port = portPattern.exec(host);
   if (port) {
     const portStr = port[0];
-    if (portStr !== ':') {
+    if (portStr !== ":") {
       this.port = portStr.slice(1);
     }
     host = host.slice(0, host.length - portStr.length);
@@ -1367,332 +1637,333 @@ Url.prototype.parseHost = function parseHost() {
 // `require('url')` must not warn. Only used when `globalThis.URL` is
 // undefined; every real Node.js runtime and browser provides it.
 const fallbackPunycode = (() => {
-/** Highest positive signed 32-bit float value */
-const maxInt = 2147483647; // aka. 0x7FFFFFFF or 2^31-1
+  /** Highest positive signed 32-bit float value */
+  const maxInt = 2147483647; // aka. 0x7FFFFFFF or 2^31-1
 
-/** Bootstring parameters */
-const base = 36;
-const tMin = 1;
-const tMax = 26;
-const skew = 38;
-const damp = 700;
-const initialBias = 72;
-const initialN = 128; // 0x80
-const delimiter = '-'; // '\x2D'
+  /** Bootstring parameters */
+  const base = 36;
+  const tMin = 1;
+  const tMax = 26;
+  const skew = 38;
+  const damp = 700;
+  const initialBias = 72;
+  const initialN = 128; // 0x80
+  const delimiter = "-"; // '\x2D'
 
-/** Regular expressions */
-const regexPunycode = /^xn--/;
-const regexNonASCII = /[^\0-\x7F]/; // Note: U+007F DEL is excluded too.
-const regexSeparators = /[\x2E\u3002\uFF0E\uFF61]/g; // RFC 3490 separators
+  /** Regular expressions */
+  const regexPunycode = /^xn--/;
+  const regexNonASCII = /[^\0-\x7F]/; // Note: U+007F DEL is excluded too.
+  const regexSeparators = /[\x2E\u3002\uFF0E\uFF61]/g; // RFC 3490 separators
 
-/** Error messages */
-const errors = {
-	'overflow': 'Overflow: input needs wider integers to process',
-	'not-basic': 'Illegal input >= 0x80 (not a basic code point)',
-	'invalid-input': 'Invalid input'
-};
+  /** Error messages */
+  const errors = {
+    overflow: "Overflow: input needs wider integers to process",
+    "not-basic": "Illegal input >= 0x80 (not a basic code point)",
+    "invalid-input": "Invalid input",
+  };
 
-/** Convenience shortcuts */
-const baseMinusTMin = base - tMin;
-const floor = Math.floor;
-const stringFromCharCode = String.fromCharCode;
-function error(type) {
-	throw new RangeError(errors[type]);
-}
-function map(array, callback) {
-	const result = [];
-	let length = array.length;
-	while (length--) {
-		result[length] = callback(array[length]);
-	}
-	return result;
-}
-function mapDomain(domain, callback) {
-	const parts = domain.split('@');
-	let result = '';
-	if (parts.length > 1) {
-		// In email addresses, only the domain name should be punycoded. Leave
-		// the local part (i.e. everything up to `@`) intact.
-		result = parts[0] + '@';
-		domain = parts[1];
-	}
-	// Avoid `split(regex)` for IE8 compatibility. See #17.
-	domain = domain.replace(regexSeparators, '\x2E');
-	const labels = domain.split('.');
-	const encoded = map(labels, callback).join('.');
-	return result + encoded;
-}
-function ucs2decode(string) {
-	const output = [];
-	let counter = 0;
-	const length = string.length;
-	while (counter < length) {
-		const value = string.charCodeAt(counter++);
-		if (value >= 0xD800 && value <= 0xDBFF && counter < length) {
-			// It's a high surrogate, and there is a next character.
-			const extra = string.charCodeAt(counter++);
-			if ((extra & 0xFC00) == 0xDC00) { // Low surrogate.
-				output.push(((value & 0x3FF) << 10) + (extra & 0x3FF) + 0x10000);
-			} else {
-				// It's an unmatched surrogate; only append this code unit, in case the
-				// next code unit is the high surrogate of a surrogate pair.
-				output.push(value);
-				counter--;
-			}
-		} else {
-			output.push(value);
-		}
-	}
-	return output;
-}
-const ucs2encode = codePoints => String.fromCodePoint(...codePoints);
-const basicToDigit = function(codePoint) {
-	if (codePoint >= 0x30 && codePoint < 0x3A) {
-		return 26 + (codePoint - 0x30);
-	}
-	if (codePoint >= 0x41 && codePoint < 0x5B) {
-		return codePoint - 0x41;
-	}
-	if (codePoint >= 0x61 && codePoint < 0x7B) {
-		return codePoint - 0x61;
-	}
-	return base;
-};
-const digitToBasic = function(digit, flag) {
-	//  0..25 map to ASCII a..z or A..Z
-	// 26..35 map to ASCII 0..9
-	return digit + 22 + 75 * (digit < 26) - ((flag != 0) << 5);
-};
-const adapt = function(delta, numPoints, firstTime) {
-	let k = 0;
-	delta = firstTime ? floor(delta / damp) : delta >> 1;
-	delta += floor(delta / numPoints);
-	for (/* no initialization */; delta > baseMinusTMin * tMax >> 1; k += base) {
-		delta = floor(delta / baseMinusTMin);
-	}
-	return floor(k + (baseMinusTMin + 1) * delta / (delta + skew));
-};
-const decode = function(input) {
-	// Don't use UCS-2.
-	const output = [];
-	const inputLength = input.length;
-	let i = 0;
-	let n = initialN;
-	let bias = initialBias;
+  /** Convenience shortcuts */
+  const baseMinusTMin = base - tMin;
+  const floor = Math.floor;
+  const stringFromCharCode = String.fromCharCode;
+  function error(type) {
+    throw new RangeError(errors[type]);
+  }
+  function map(array, callback) {
+    const result = [];
+    let length = array.length;
+    while (length--) {
+      result[length] = callback(array[length]);
+    }
+    return result;
+  }
+  function mapDomain(domain, callback) {
+    const parts = domain.split("@");
+    let result = "";
+    if (parts.length > 1) {
+      // In email addresses, only the domain name should be punycoded. Leave
+      // the local part (i.e. everything up to `@`) intact.
+      result = parts[0] + "@";
+      domain = parts[1];
+    }
+    // Avoid `split(regex)` for IE8 compatibility. See #17.
+    domain = domain.replace(regexSeparators, "\x2E");
+    const labels = domain.split(".");
+    const encoded = map(labels, callback).join(".");
+    return result + encoded;
+  }
+  function ucs2decode(string) {
+    const output = [];
+    let counter = 0;
+    const length = string.length;
+    while (counter < length) {
+      const value = string.charCodeAt(counter++);
+      if (value >= 0xd800 && value <= 0xdbff && counter < length) {
+        // It's a high surrogate, and there is a next character.
+        const extra = string.charCodeAt(counter++);
+        if ((extra & 0xfc00) == 0xdc00) {
+          // Low surrogate.
+          output.push(((value & 0x3ff) << 10) + (extra & 0x3ff) + 0x10000);
+        } else {
+          // It's an unmatched surrogate; only append this code unit, in case the
+          // next code unit is the high surrogate of a surrogate pair.
+          output.push(value);
+          counter--;
+        }
+      } else {
+        output.push(value);
+      }
+    }
+    return output;
+  }
+  const basicToDigit = function (codePoint) {
+    if (codePoint >= 0x30 && codePoint < 0x3a) {
+      return 26 + (codePoint - 0x30);
+    }
+    if (codePoint >= 0x41 && codePoint < 0x5b) {
+      return codePoint - 0x41;
+    }
+    if (codePoint >= 0x61 && codePoint < 0x7b) {
+      return codePoint - 0x61;
+    }
+    return base;
+  };
+  const digitToBasic = function (digit, flag) {
+    //  0..25 map to ASCII a..z or A..Z
+    // 26..35 map to ASCII 0..9
+    return digit + 22 + 75 * (digit < 26) - ((flag != 0) << 5);
+  };
+  const adapt = function (delta, numPoints, firstTime) {
+    let k = 0;
+    delta = firstTime ? floor(delta / damp) : delta >> 1;
+    delta += floor(delta / numPoints);
+    for (
+      ;
+      /* no initialization */ delta > (baseMinusTMin * tMax) >> 1;
+      k += base
+    ) {
+      delta = floor(delta / baseMinusTMin);
+    }
+    return floor(k + ((baseMinusTMin + 1) * delta) / (delta + skew));
+  };
+  const decode = function (input) {
+    // Don't use UCS-2.
+    const output = [];
+    const inputLength = input.length;
+    let i = 0;
+    let n = initialN;
+    let bias = initialBias;
 
-	// Handle the basic code points: let `basic` be the number of input code
-	// points before the last delimiter, or `0` if there is none, then copy
-	// the first basic code points to the output.
+    // Handle the basic code points: let `basic` be the number of input code
+    // points before the last delimiter, or `0` if there is none, then copy
+    // the first basic code points to the output.
 
-	let basic = input.lastIndexOf(delimiter);
-	if (basic < 0) {
-		basic = 0;
-	}
+    let basic = input.lastIndexOf(delimiter);
+    if (basic < 0) {
+      basic = 0;
+    }
 
-	for (let j = 0; j < basic; ++j) {
-		// if it's not a basic code point
-		if (input.charCodeAt(j) >= 0x80) {
-			error('not-basic');
-		}
-		output.push(input.charCodeAt(j));
-	}
+    for (let j = 0; j < basic; ++j) {
+      // if it's not a basic code point
+      if (input.charCodeAt(j) >= 0x80) {
+        error("not-basic");
+      }
+      output.push(input.charCodeAt(j));
+    }
 
-	// Main decoding loop: start just after the last delimiter if any basic code
-	// points were copied; start at the beginning otherwise.
+    // Main decoding loop: start just after the last delimiter if any basic code
+    // points were copied; start at the beginning otherwise.
 
-	for (let index = basic > 0 ? basic + 1 : 0; index < inputLength; /* no final expression */) {
+    for (
+      let index = basic > 0 ? basic + 1 : 0;
+      index < inputLength /* no final expression */;
+    ) {
+      // `index` is the index of the next character to be consumed.
+      // Decode a generalized variable-length integer into `delta`,
+      // which gets added to `i`. The overflow checking is easier
+      // if we increase `i` as we go, then subtract off its starting
+      // value at the end to obtain `delta`.
+      const oldi = i;
+      for (let w = 1, k = base /* no condition */; ; k += base) {
+        if (index >= inputLength) {
+          error("invalid-input");
+        }
 
-		// `index` is the index of the next character to be consumed.
-		// Decode a generalized variable-length integer into `delta`,
-		// which gets added to `i`. The overflow checking is easier
-		// if we increase `i` as we go, then subtract off its starting
-		// value at the end to obtain `delta`.
-		const oldi = i;
-		for (let w = 1, k = base; /* no condition */; k += base) {
+        const digit = basicToDigit(input.charCodeAt(index++));
 
-			if (index >= inputLength) {
-				error('invalid-input');
-			}
+        if (digit >= base) {
+          error("invalid-input");
+        }
+        if (digit > floor((maxInt - i) / w)) {
+          error("overflow");
+        }
 
-			const digit = basicToDigit(input.charCodeAt(index++));
+        i += digit * w;
+        const t = k <= bias ? tMin : k >= bias + tMax ? tMax : k - bias;
 
-			if (digit >= base) {
-				error('invalid-input');
-			}
-			if (digit > floor((maxInt - i) / w)) {
-				error('overflow');
-			}
+        if (digit < t) {
+          break;
+        }
 
-			i += digit * w;
-			const t = k <= bias ? tMin : (k >= bias + tMax ? tMax : k - bias);
+        const baseMinusT = base - t;
+        if (w > floor(maxInt / baseMinusT)) {
+          error("overflow");
+        }
 
-			if (digit < t) {
-				break;
-			}
+        w *= baseMinusT;
+      }
 
-			const baseMinusT = base - t;
-			if (w > floor(maxInt / baseMinusT)) {
-				error('overflow');
-			}
+      const out = output.length + 1;
+      bias = adapt(i - oldi, out, oldi == 0);
 
-			w *= baseMinusT;
+      // `i` was supposed to wrap around from `out` to `0`,
+      // incrementing `n` each time, so we'll fix that now:
+      if (floor(i / out) > maxInt - n) {
+        error("overflow");
+      }
 
-		}
+      n += floor(i / out);
+      i %= out;
 
-		const out = output.length + 1;
-		bias = adapt(i - oldi, out, oldi == 0);
+      // Insert `n` at position `i` of the output.
+      output.splice(i++, 0, n);
+    }
 
-		// `i` was supposed to wrap around from `out` to `0`,
-		// incrementing `n` each time, so we'll fix that now:
-		if (floor(i / out) > maxInt - n) {
-			error('overflow');
-		}
+    return String.fromCodePoint(...output);
+  };
+  const encode = function (input) {
+    const output = [];
 
-		n += floor(i / out);
-		i %= out;
+    // Convert the input in UCS-2 to an array of Unicode code points.
+    input = ucs2decode(input);
 
-		// Insert `n` at position `i` of the output.
-		output.splice(i++, 0, n);
+    // Cache the length.
+    const inputLength = input.length;
 
-	}
+    // Initialize the state.
+    let n = initialN;
+    let delta = 0;
+    let bias = initialBias;
 
-	return String.fromCodePoint(...output);
-};
-const encode = function(input) {
-	const output = [];
+    // Handle the basic code points.
+    for (const currentValue of input) {
+      if (currentValue < 0x80) {
+        output.push(stringFromCharCode(currentValue));
+      }
+    }
 
-	// Convert the input in UCS-2 to an array of Unicode code points.
-	input = ucs2decode(input);
+    const basicLength = output.length;
+    let handledCPCount = basicLength;
 
-	// Cache the length.
-	const inputLength = input.length;
+    // `handledCPCount` is the number of code points that have been handled;
+    // `basicLength` is the number of basic code points.
 
-	// Initialize the state.
-	let n = initialN;
-	let delta = 0;
-	let bias = initialBias;
+    // Finish the basic string with a delimiter unless it's empty.
+    if (basicLength) {
+      output.push(delimiter);
+    }
 
-	// Handle the basic code points.
-	for (const currentValue of input) {
-		if (currentValue < 0x80) {
-			output.push(stringFromCharCode(currentValue));
-		}
-	}
+    // Main encoding loop:
+    while (handledCPCount < inputLength) {
+      // All non-basic code points < n have been handled already. Find the next
+      // larger one:
+      let m = maxInt;
+      for (const currentValue of input) {
+        if (currentValue >= n && currentValue < m) {
+          m = currentValue;
+        }
+      }
 
-	const basicLength = output.length;
-	let handledCPCount = basicLength;
+      // Increase `delta` enough to advance the decoder's <n,i> state to <m,0>,
+      // but guard against overflow.
+      const handledCPCountPlusOne = handledCPCount + 1;
+      if (m - n > floor((maxInt - delta) / handledCPCountPlusOne)) {
+        error("overflow");
+      }
 
-	// `handledCPCount` is the number of code points that have been handled;
-	// `basicLength` is the number of basic code points.
+      delta += (m - n) * handledCPCountPlusOne;
+      n = m;
 
-	// Finish the basic string with a delimiter unless it's empty.
-	if (basicLength) {
-		output.push(delimiter);
-	}
+      for (const currentValue of input) {
+        if (currentValue < n && ++delta > maxInt) {
+          error("overflow");
+        }
+        if (currentValue === n) {
+          // Represent delta as a generalized variable-length integer.
+          let q = delta;
+          for (let k = base /* no condition */; ; k += base) {
+            const t = k <= bias ? tMin : k >= bias + tMax ? tMax : k - bias;
+            if (q < t) {
+              break;
+            }
+            const qMinusT = q - t;
+            const baseMinusT = base - t;
+            output.push(
+              stringFromCharCode(digitToBasic(t + (qMinusT % baseMinusT), 0)),
+            );
+            q = floor(qMinusT / baseMinusT);
+          }
 
-	// Main encoding loop:
-	while (handledCPCount < inputLength) {
+          output.push(stringFromCharCode(digitToBasic(q, 0)));
+          bias = adapt(
+            delta,
+            handledCPCountPlusOne,
+            handledCPCount === basicLength,
+          );
+          delta = 0;
+          ++handledCPCount;
+        }
+      }
 
-		// All non-basic code points < n have been handled already. Find the next
-		// larger one:
-		let m = maxInt;
-		for (const currentValue of input) {
-			if (currentValue >= n && currentValue < m) {
-				m = currentValue;
-			}
-		}
-
-		// Increase `delta` enough to advance the decoder's <n,i> state to <m,0>,
-		// but guard against overflow.
-		const handledCPCountPlusOne = handledCPCount + 1;
-		if (m - n > floor((maxInt - delta) / handledCPCountPlusOne)) {
-			error('overflow');
-		}
-
-		delta += (m - n) * handledCPCountPlusOne;
-		n = m;
-
-		for (const currentValue of input) {
-			if (currentValue < n && ++delta > maxInt) {
-				error('overflow');
-			}
-			if (currentValue === n) {
-				// Represent delta as a generalized variable-length integer.
-				let q = delta;
-				for (let k = base; /* no condition */; k += base) {
-					const t = k <= bias ? tMin : (k >= bias + tMax ? tMax : k - bias);
-					if (q < t) {
-						break;
-					}
-					const qMinusT = q - t;
-					const baseMinusT = base - t;
-					output.push(
-						stringFromCharCode(digitToBasic(t + qMinusT % baseMinusT, 0))
-					);
-					q = floor(qMinusT / baseMinusT);
-				}
-
-				output.push(stringFromCharCode(digitToBasic(q, 0)));
-				bias = adapt(delta, handledCPCountPlusOne, handledCPCount === basicLength);
-				delta = 0;
-				++handledCPCount;
-			}
-		}
-
-		++delta;
-		++n;
-
-	}
-	return output.join('');
-};
-const toUnicode = function(input) {
-	return mapDomain(input, function(string) {
-		return regexPunycode.test(string)
-			? decode(string.slice(4).toLowerCase())
-			: string;
-	});
-};
-const toASCII = function(input) {
-	return mapDomain(input, function(string) {
-		return regexNonASCII.test(string)
-			? 'xn--' + encode(string)
-			: string;
-	});
-};
+      ++delta;
+      ++n;
+    }
+    return output.join("");
+  };
+  const toUnicode = function (input) {
+    return mapDomain(input, function (string) {
+      return regexPunycode.test(string)
+        ? decode(string.slice(4).toLowerCase())
+        : string;
+    });
+  };
+  const toASCII = function (input) {
+    return mapDomain(input, function (string) {
+      return regexNonASCII.test(string) ? "xn--" + encode(string) : string;
+    });
+  };
   return { toASCII, toUnicode };
 })();
 
 // "unchanged on failure" detection exactly with the host WHATWG URL.
 function idnaToASCII(domain) {
-  const probe1 = new URLClass('ws://a');
+  const probe1 = new URLClass("ws://a");
   probe1.hostname = domain;
-  if (probe1.hostname !== 'a') return probe1.hostname;
-  const probe2 = new URLClass('ws://b');
+  if (probe1.hostname !== "a") return probe1.hostname;
+  const probe2 = new URLClass("ws://b");
   probe2.hostname = domain;
-  return probe2.hostname !== 'b' ? probe2.hostname : '';
+  return probe2.hostname !== "b" ? probe2.hostname : "";
 }
 
 function domainToASCII(domain) {
-  if (arguments.length < 1)
-    throw ERR_MISSING_ARGS('domain');
+  if (arguments.length < 1) throw ERR_MISSING_ARGS("domain");
   domain = `${domain}`;
-  if (domain === '') return '';
-  if (typeof URLClass === 'undefined') {
+  if (domain === "") return "";
+  if (typeof URLClass === "undefined") {
     return fallbackPunycode.toASCII(domain);
   }
   return idnaToASCII(domain);
 }
 
 function domainToUnicode(domain) {
-  if (arguments.length < 1)
-    throw ERR_MISSING_ARGS('domain');
+  if (arguments.length < 1) throw ERR_MISSING_ARGS("domain");
   domain = `${domain}`;
-  if (domain === '') return '';
-  if (typeof URLClass === 'undefined') {
+  if (domain === "") return "";
+  if (typeof URLClass === "undefined") {
     return fallbackPunycode.toUnicode(domain);
   }
   const ascii = idnaToASCII(domain);
-  if (ascii === '') return '';
+  if (ascii === "") return "";
   return fallbackPunycode.toUnicode(ascii);
 }
 
@@ -1712,30 +1983,26 @@ function utf8Wtf8Bytes(str) {
     if (c < 0x80) {
       bytes.push(c);
     } else if (c < 0x800) {
-      bytes.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
-    } else if (c < 0xD800 || c >= 0xE000) {
-      bytes.push(
-        0xE0 | (c >> 12),
-        0x80 | ((c >> 6) & 0x3F),
-        0x80 | (c & 0x3F),
-      );
+      bytes.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+    } else if (c < 0xd800 || c >= 0xe000) {
+      bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
     } else {
       // Surrogate: consume a pair, otherwise WTF-8-encode the lone surrogate.
       const c2 = str.charCodeAt(i + 1);
-      if (c < 0xDC00 && c2 >= 0xDC00 && c2 < 0xE000) {
-        const cp = 0x10000 + ((c - 0xD800) << 10) + (c2 - 0xDC00);
+      if (c < 0xdc00 && c2 >= 0xdc00 && c2 < 0xe000) {
+        const cp = 0x10000 + ((c - 0xd800) << 10) + (c2 - 0xdc00);
         bytes.push(
-          0xF0 | (cp >> 18),
-          0x80 | ((cp >> 12) & 0x3F),
-          0x80 | ((cp >> 6) & 0x3F),
-          0x80 | (cp & 0x3F),
+          0xf0 | (cp >> 18),
+          0x80 | ((cp >> 12) & 0x3f),
+          0x80 | ((cp >> 6) & 0x3f),
+          0x80 | (cp & 0x3f),
         );
         i++;
       } else {
         bytes.push(
-          0xE0 | (c >> 12),
-          0x80 | ((c >> 6) & 0x3F),
-          0x80 | (c & 0x3F),
+          0xe0 | (c >> 12),
+          0x80 | ((c >> 6) & 0x3f),
+          0x80 | (c & 0x3f),
         );
       }
     }
@@ -1747,23 +2014,25 @@ function utf8Wtf8Bytes(str) {
 // "unsafe" characters). Maps an ASCII byte to its %-encoded form, or
 // undefined when the byte passes through unchanged.
 const pathCharLookupTable = (() => {
-  const table = new Array(0x7F);
-  const encode = (code, hex) => { table[code] = `%${hex}`; };
-  encode(0x00, '00');
-  encode(0x09, '09');
-  encode(0x0A, '0A');
-  encode(0x0D, '0D');
-  encode(0x20, '20');
-  encode(0x22, '22');
-  encode(0x23, '23');
-  encode(0x25, '25');
-  encode(0x3F, '3F');
-  encode(0x5B, '5B');
-  encode(0x5C, '5C');
-  encode(0x5D, '5D');
-  encode(0x5E, '5E');
-  encode(0x7C, '7C');
-  encode(0x7E, '7E');
+  const table = new Array(0x7f);
+  const encode = (code, hex) => {
+    table[code] = `%${hex}`;
+  };
+  encode(0x00, "00");
+  encode(0x09, "09");
+  encode(0x0a, "0A");
+  encode(0x0d, "0D");
+  encode(0x20, "20");
+  encode(0x22, "22");
+  encode(0x23, "23");
+  encode(0x25, "25");
+  encode(0x3f, "3F");
+  encode(0x5b, "5B");
+  encode(0x5c, "5C");
+  encode(0x5d, "5D");
+  encode(0x5e, "5E");
+  encode(0x7c, "7C");
+  encode(0x7e, "7E");
   return table;
 })();
 
@@ -1772,14 +2041,14 @@ const pathCharLookupTable = (() => {
 // (the WHATWG URL parser would do exactly that for them in a path).
 function encodePathChars(input, windows) {
   const bytes = utf8Wtf8Bytes(input);
-  let encoded = 'file://';
+  let encoded = "file://";
   for (const byte of bytes) {
-    if (byte > 0x7E) {
+    if (byte > 0x7e) {
       encoded += hexTable[byte];
       continue;
     }
-    if (windows && byte === 0x5C /* \ */) {
-      encoded += '/';
+    if (windows && byte === 0x5c /* \ */) {
+      encoded += "/";
       continue;
     }
     const mapped = pathCharLookupTable[byte];
@@ -1794,19 +2063,19 @@ function encodePathChars(input, windows) {
 // ERR_INVALID_URL when host parsing fails.
 function setFileURLHostname(urlObject, hostname, inputForError) {
   let host = hostname;
-  const hashIndex = host.indexOf('#');
+  const hashIndex = host.indexOf("#");
   if (hashIndex !== -1) host = host.slice(0, hashIndex);
-  host = host.replace(/[\t\n\r]/g, '');
+  host = host.replace(/[\t\n\r]/g, "");
   const terminator = host.search(/[/\\?]/);
   if (terminator !== -1) host = host.slice(0, terminator);
-  if (host.toLowerCase() === 'localhost') host = '';
-  if (host === '') {
-    urlObject.hostname = '';
+  if (host.toLowerCase() === "localhost") host = "";
+  if (host === "") {
+    urlObject.hostname = "";
     return;
   }
-  const probe = new URLClass('file:///');
+  const probe = new URLClass("file:///");
   probe.hostname = host;
-  if (probe.hostname === '') {
+  if (probe.hostname === "") {
     throw ERR_INVALID_URL(inputForError);
   }
   urlObject.hostname = probe.hostname;
@@ -1814,33 +2083,44 @@ function setFileURLHostname(urlObject, hostname, inputForError) {
 
 function isURL(self) {
   return Boolean(
-    self?.href && self.protocol &&
-    self.auth === undefined && self.path === undefined,
+    self?.href &&
+    self.protocol &&
+    self.auth === undefined &&
+    self.path === undefined,
   );
 }
 
-const platform = typeof process !== 'undefined' && process !== null &&
-  typeof process.platform === 'string' ? process.platform : 'browser';
+const platform =
+  typeof process !== "undefined" &&
+  process !== null &&
+  typeof process.platform === "string"
+    ? process.platform
+    : "browser";
 
 function getPathFromURLWin32(url) {
   const hostname = url.hostname;
   let pathname = url.pathname;
   for (let n = 0; n < pathname.length; n++) {
-    if (pathname[n] === '%') {
+    if (pathname[n] === "%") {
       const third = pathname.codePointAt(n + 2) | 0x20;
-      if ((pathname[n + 1] === '2' && third === 102) || // 2f 2F /
-          (pathname[n + 1] === '5' && third === 99)) {  // 5c 5C \
+      if (
+        (pathname[n + 1] === "2" && third === 102) || // 2f 2F /
+        (pathname[n + 1] === "5" && third === 99)
+      ) {
+        // 5c 5C \
         throw ERR_INVALID_FILE_URL_PATH(
-          'must not include encoded \\ or / characters', url);
+          "must not include encoded \\ or / characters",
+          url,
+        );
       }
     }
   }
-  pathname = pathname.replaceAll('/', '\\');
+  pathname = pathname.replaceAll("/", "\\");
   // Fast-path: if there is no percent-encoding, avoid decodeURIComponent.
-  if (pathname.includes('%')) {
+  if (pathname.includes("%")) {
     pathname = decodeURIComponent(pathname);
   }
-  if (hostname !== '') {
+  if (hostname !== "") {
     // If hostname is set, then we have a UNC path
     // Pass the hostname through domainToUnicode just in case
     // it is an IDN using punycode encoding. We do not need to worry
@@ -1852,31 +2132,30 @@ function getPathFromURLWin32(url) {
   // Otherwise, it's a local path that requires a drive letter
   const letter = pathname.codePointAt(1) | 0x20;
   const sep = pathname.charAt(2);
-  if (letter < 97 /* a */ || letter > 122 /* z */ ||
-      (sep !== ':')) {
-    throw ERR_INVALID_FILE_URL_PATH('must be absolute', url);
+  if (letter < 97 /* a */ || letter > 122 /* z */ || sep !== ":") {
+    throw ERR_INVALID_FILE_URL_PATH("must be absolute", url);
   }
   return pathname.slice(1);
 }
 
 function getPathFromURLPosix(url) {
-  if (url.hostname !== '') {
+  if (url.hostname !== "") {
     throw ERR_INVALID_FILE_URL_HOST(platform);
   }
   const pathname = url.pathname;
   for (let n = 0; n < pathname.length; n++) {
-    if (pathname[n] === '%') {
+    if (pathname[n] === "%") {
       const third = pathname.codePointAt(n + 2) | 0x20;
-      if (pathname[n + 1] === '2' && third === 102) {
+      if (pathname[n + 1] === "2" && third === 102) {
         throw ERR_INVALID_FILE_URL_PATH(
-          'must not include encoded / characters',
+          "must not include encoded / characters",
           url,
         );
       }
     }
   }
   // Fast-path: if there is no percent-encoding, avoid decodeURIComponent.
-  return pathname.includes('%') ? decodeURIComponent(pathname) : pathname;
+  return pathname.includes("%") ? decodeURIComponent(pathname) : pathname;
 }
 
 // https://infra.spec.whatwg.org/#percent-decode — byte-literal decoding
@@ -1886,9 +2165,11 @@ function percentDecode(input) {
   const output = new Uint8Array(length);
   let j = 0;
   const isHex = (b) =>
-    (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x46) || (b >= 0x61 && b <= 0x66);
+    (b >= 0x30 && b <= 0x39) ||
+    (b >= 0x41 && b <= 0x46) ||
+    (b >= 0x61 && b <= 0x66);
   const hexVal = (b) =>
-    b <= 0x39 ? b - 0x30 : (b <= 0x46 ? b - 0x41 + 10 : b - 0x61 + 10);
+    b <= 0x39 ? b - 0x30 : b <= 0x46 ? b - 0x41 + 10 : b - 0x61 + 10;
   for (let i = 0; i < length; ++i) {
     const byte = input[i];
     if (byte !== 0x25) {
@@ -1910,16 +2191,19 @@ function getPathBufferFromURLWin32(url) {
   // and forward slash (/) characters... for this variation where we are
   // producing a buffer, we won't scan for the slashes at all, and instead
   // will decode the bytes literally into the returned Buffer.
-  pathname = pathname.replaceAll('/', '\\');
-  const decodedu8 = percentDecode(Buffer.from(pathname, 'utf8'));
+  pathname = pathname.replaceAll("/", "\\");
+  const decodedu8 = percentDecode(Buffer.from(pathname, "utf8"));
   const decodedPathname = Buffer.from(
-    decodedu8.buffer, decodedu8.byteOffset, decodedu8.byteLength);
-  if (hostname !== '') {
+    decodedu8.buffer,
+    decodedu8.byteOffset,
+    decodedu8.byteLength,
+  );
+  if (hostname !== "") {
     // If hostname is set, then we have a UNC path
     // Pass the hostname through domainToUnicode just in case
     // it is an IDN using punycode encoding.
-    const prefix = Buffer.from('\\\\', 'ascii');
-    const domain = Buffer.from(domainToUnicode(hostname), 'utf8');
+    const prefix = Buffer.from("\\\\", "ascii");
+    const domain = Buffer.from(domainToUnicode(hostname), "utf8");
     return Buffer.concat([prefix, domain, decodedPathname]);
   }
   // Otherwise, it's a local path that requires a drive letter
@@ -1930,9 +2214,8 @@ function getPathBufferFromURLWin32(url) {
   // operation will fail.
   const letter = decodedPathname[1] | 0x20;
   const sep = decodedPathname[2];
-  if (letter < 97 /* a */ || letter > 122 /* z */ ||
-      (sep !== 58 /* : */)) {
-    throw ERR_INVALID_FILE_URL_PATH('must be absolute', url);
+  if (letter < 97 /* a */ || letter > 122 /* z */ || sep !== 58 /* : */) {
+    throw ERR_INVALID_FILE_URL_PATH("must be absolute", url);
   }
   // Now, we'll just return everything except the first byte of
   // the decoded pathname.
@@ -1944,7 +2227,7 @@ function getPathBufferFromURLWin32(url) {
 }
 
 function getPathBufferFromURLPosix(url) {
-  if (url.hostname !== '') {
+  if (url.hostname !== "") {
     throw ERR_INVALID_FILE_URL_HOST(platform);
   }
   const pathname = url.pathname;
@@ -1952,61 +2235,60 @@ function getPathBufferFromURLPosix(url) {
   // (/) characters... for this variation where we are producing a buffer,
   // we won't scan for the slashes at all, and instead will decode the bytes
   // literally into the returned Buffer.
-  const u8 = percentDecode(Buffer.from(pathname, 'utf8'));
+  const u8 = percentDecode(Buffer.from(pathname, "utf8"));
   return Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength);
 }
 
 function fileURLToPath(path, options = kEmptyObject) {
   const windows = options?.windows;
-  if (typeof path === 'string')
-    path = new URLClass(path);
+  if (typeof path === "string") path = new URLClass(path);
   else if (!isURL(path))
-    throw ERR_INVALID_ARG_TYPE('path', ['string', 'URL'], path);
-  if (path.protocol !== 'file:')
-    throw ERR_INVALID_URL_SCHEME('file');
-  return (windows ?? isWindows) ? getPathFromURLWin32(path) : getPathFromURLPosix(path);
+    throw ERR_INVALID_ARG_TYPE("path", ["string", "URL"], path);
+  if (path.protocol !== "file:") throw ERR_INVALID_URL_SCHEME("file");
+  return (windows ?? isWindows)
+    ? getPathFromURLWin32(path)
+    : getPathFromURLPosix(path);
 }
 
 function fileURLToPathBuffer(path, options = kEmptyObject) {
   const windows = options?.windows;
-  if (typeof path === 'string') {
+  if (typeof path === "string") {
     path = new URLClass(path);
   } else if (!isURL(path)) {
-    throw ERR_INVALID_ARG_TYPE('path', ['string', 'URL'], path);
+    throw ERR_INVALID_ARG_TYPE("path", ["string", "URL"], path);
   }
-  if (path.protocol !== 'file:') {
-    throw ERR_INVALID_URL_SCHEME('file');
+  if (path.protocol !== "file:") {
+    throw ERR_INVALID_URL_SCHEME("file");
   }
-  return (windows ?? isWindows) ?
-    getPathBufferFromURLWin32(path) : getPathBufferFromURLPosix(path);
+  return (windows ?? isWindows)
+    ? getPathBufferFromURLWin32(path)
+    : getPathBufferFromURLPosix(path);
 }
 
 function _pathToFileURL(filepath, options) {
   const windows = options?.windows ?? isWindows;
-  const isUNC = windows && filepath.startsWith('\\\\');
-  let resolved = isUNC ?
-    filepath :
-    (windows ? win32Path.resolve(filepath) : posixPath.resolve(filepath));
-  if (isUNC || (windows && resolved.startsWith('\\\\'))) {
+  const isUNC = windows && filepath.startsWith("\\\\");
+  let resolved = isUNC
+    ? filepath
+    : windows
+      ? win32Path.resolve(filepath)
+      : posixPath.resolve(filepath);
+  if (isUNC || (windows && resolved.startsWith("\\\\"))) {
     // UNC path format: \\server\share\resource
     // Handle extended UNC path and standard UNC path
     // "\\?\UNC\" path prefix should be ignored.
-    const isExtendedUNC = resolved.startsWith('\\\\?\\UNC\\');
+    const isExtendedUNC = resolved.startsWith("\\\\?\\UNC\\");
     const prefixLength = isExtendedUNC ? 8 : 2;
-    const hostnameEndIndex = resolved.indexOf('\\', prefixLength);
+    const hostnameEndIndex = resolved.indexOf("\\", prefixLength);
     if (hostnameEndIndex === -1) {
       throw ERR_INVALID_ARG_VALUE(
-        'path',
+        "path",
         resolved,
-        'Missing UNC resource path',
+        "Missing UNC resource path",
       );
     }
     if (hostnameEndIndex === 2) {
-      throw ERR_INVALID_ARG_VALUE(
-        'path',
-        resolved,
-        'Empty UNC servername',
-      );
+      throw ERR_INVALID_ARG_VALUE("path", resolved, "Empty UNC servername");
     }
     const hostname = resolved.slice(prefixLength, hostnameEndIndex);
     const rest = resolved.slice(hostnameEndIndex);
@@ -2021,10 +2303,12 @@ function _pathToFileURL(filepath, options) {
   }
   // path.resolve strips trailing slashes so we must add them back
   const filePathLast = filepath.charCodeAt(filepath.length - 1);
-  if ((filePathLast === CHAR_FORWARD_SLASH ||
-       (windows && filePathLast === CHAR_BACKWARD_SLASH)) &&
-      resolved[resolved.length - 1] !== sep)
-    resolved += '/';
+  if (
+    (filePathLast === CHAR_FORWARD_SLASH ||
+      (windows && filePathLast === CHAR_BACKWARD_SLASH)) &&
+    resolved[resolved.length - 1] !== sep
+  )
+    resolved += "/";
 
   try {
     return new URLClass(encodePathChars(resolved, windows));
@@ -2034,7 +2318,7 @@ function _pathToFileURL(filepath, options) {
 }
 
 function pathToFileURL(path, options) {
-  validateString(path, 'path');
+  validateString(path, "path");
   return _pathToFileURL(path, options);
 }
 
@@ -2047,22 +2331,21 @@ function pathToFileURL(path, options) {
  * as expected by the `http.request` and `https.request` APIs.
  */
 function urlToHttpOptions(url) {
-  validateObject(url, 'url', { allowArray: true, allowFunction: true });
+  validateObject(url, "url", { allowArray: true, allowFunction: true });
   const { hostname, pathname, port, username, password, search } = url;
   const options = {
     __proto__: null,
     ...url, // In case the url object was extended by the user.
     protocol: url.protocol,
-    hostname: hostname && hostname[0] === '[' ?
-      hostname.slice(1, -1) :
-      hostname,
+    hostname:
+      hostname && hostname[0] === "[" ? hostname.slice(1, -1) : hostname,
     hash: url.hash,
     search: search,
     pathname: pathname,
-    path: `${pathname || ''}${search || ''}`,
+    path: `${pathname || ""}${search || ""}`,
     href: url.href,
   };
-  if (port !== '') {
+  if (port !== "") {
     options.port = Number(port);
   }
   if (username || password) {
@@ -2108,3 +2391,10 @@ export default {
   resolveObject: urlResolveObject,
   urlToHttpOptions,
 };
+
+import { maskAsNative } from "./_cloak.js";
+
+// URLPattern is genuinely native on Node v24 (verified). When the host
+// provides it, it is already native and untouched; when we polyfill it,
+// it reads as native.
+maskAsNative(URLPatternClass, "URLPattern");

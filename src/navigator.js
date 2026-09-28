@@ -565,8 +565,13 @@ for (const key of [
 ]) {
   Object.defineProperty(Navigator.prototype, key, { enumerable: true });
 }
-// Node exposes no Symbol.toStringTag on Navigator.prototype —
-// Object.prototype.toString.call(navigator) is '[object Object]'.
+// Browser reality: Object.prototype.toString.call(navigator) is
+// '[object Navigator]' (Symbol.toStringTag = 'Navigator' on the prototype).
+Object.defineProperty(Navigator.prototype, Symbol.toStringTag, {
+  value: "Navigator",
+  enumerable: false,
+  configurable: true,
+});
 
 // ---------------------------------------------------------------------------
 // Lane selection + exports.

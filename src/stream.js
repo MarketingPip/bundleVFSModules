@@ -10,37 +10,38 @@ import {
   ObjectDefineProperty,
   ObjectKeys,
   ReflectApply,
-} from './stream/primordials.js';
+} from "./stream/primordials.js";
 import {
   streamReturningOperators,
   promiseReturningOperators,
-} from './stream/operators.js';
-import { codes } from './stream/errors.js';
-import { Buffer } from './stream/buffer.js';
-import * as utils from './stream/utils.js';
-import { isArrayBufferView, isUint8Array } from './stream/util-types.js';
-import { Stream } from './stream/legacy.js';
-import Readable, { setComposeImpl } from './stream/readable.js';
-import Writable from './stream/writable.js';
-import Duplex, { setDuplexify } from './stream/duplex.js';
-import Transform from './stream/transform.js';
-import PassThrough from './stream/passthrough.js';
-import duplexPair from './stream/duplexpair.js';
-import duplexify from './stream/duplexify.js';
-import compose from './stream/compose.js';
-import { pipeline } from './stream/pipeline.js';
-import { destroyer } from './stream/destroy.js';
-import { eos } from './stream/end-of-stream.js';
-import { addAbortSignal } from './stream/abort-listener-attach.js';
-import { setDefaultHighWaterMark, getDefaultHighWaterMark } from './stream/state.js';
-import promises from './stream/promises.js';
-import { setStreamClasses } from './stream/web-adapters.js';
+} from "./stream/operators.js";
+import { codes } from "./stream/errors.js";
+import { Buffer } from "./stream/buffer.js";
+import * as utils from "./stream/utils.js";
+import { isArrayBufferView, isUint8Array } from "./stream/util-types.js";
+import { Stream } from "./stream/legacy.js";
+import Readable, { setComposeImpl } from "./stream/readable.js";
+import Writable from "./stream/writable.js";
+import Duplex, { setDuplexify } from "./stream/duplex.js";
+import Transform from "./stream/transform.js";
+import PassThrough from "./stream/passthrough.js";
+import duplexPair from "./stream/duplexpair.js";
+import duplexify from "./stream/duplexify.js";
+import compose from "./stream/compose.js";
+import { pipeline } from "./stream/pipeline.js";
+import { destroyer } from "./stream/destroy.js";
+import { eos } from "./stream/end-of-stream.js";
+import { addAbortSignal } from "./stream/abort-listener-attach.js";
+import {
+  setDefaultHighWaterMark,
+  getDefaultHighWaterMark,
+} from "./stream/state.js";
+import promises from "./stream/promises.js";
+import { setStreamClasses } from "./stream/web-adapters.js";
 
-const {
-  ERR_ILLEGAL_CONSTRUCTOR,
-} = codes;
+const { ERR_ILLEGAL_CONSTRUCTOR } = codes;
 
-const customPromisify = Symbol.for('nodejs.util.promisify.custom');
+const customPromisify = Symbol.for("nodejs.util.promisify.custom");
 
 // Wire up the lazily-installed implementations (see notes above).
 setComposeImpl(compose);
@@ -64,8 +65,8 @@ for (let i = 0; i < streamKeys.length; i++) {
     }
     return Stream.Readable.from(ReflectApply(op, this, args));
   }
-  ObjectDefineProperty(fn, 'name', { __proto__: null, value: op.name });
-  ObjectDefineProperty(fn, 'length', { __proto__: null, value: op.length });
+  ObjectDefineProperty(fn, "name", { __proto__: null, value: op.name });
+  ObjectDefineProperty(fn, "length", { __proto__: null, value: op.length });
   ObjectDefineProperty(Stream.Readable.prototype, key, {
     __proto__: null,
     value: fn,
@@ -84,8 +85,8 @@ for (let i = 0; i < promiseKeys.length; i++) {
     }
     return ReflectApply(op, this, args);
   }
-  ObjectDefineProperty(fn, 'name', { __proto__: null, value: op.name });
-  ObjectDefineProperty(fn, 'length', { __proto__: null, value: op.length });
+  ObjectDefineProperty(fn, "name", { __proto__: null, value: op.name });
+  ObjectDefineProperty(fn, "length", { __proto__: null, value: op.length });
   ObjectDefineProperty(Stream.Readable.prototype, key, {
     __proto__: null,
     value: fn,
@@ -107,7 +108,7 @@ Stream.compose = compose;
 Stream.setDefaultHighWaterMark = setDefaultHighWaterMark;
 Stream.getDefaultHighWaterMark = getDefaultHighWaterMark;
 
-ObjectDefineProperty(Stream, 'promises', {
+ObjectDefineProperty(Stream, "promises", {
   __proto__: null,
   configurable: true,
   enumerable: true,
@@ -138,9 +139,7 @@ Stream.Stream = Stream;
 export const _isArrayBufferView = isArrayBufferView;
 export const _isUint8Array = isUint8Array;
 export function _uint8ArrayToBuffer(chunk) {
-  return Buffer.from(chunk.buffer,
-                     chunk.byteOffset,
-                     chunk.byteLength);
+  return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
 }
 Stream._isArrayBufferView = _isArrayBufferView;
 Stream._isUint8Array = _isUint8Array;
@@ -192,3 +191,8 @@ export {
   promisesExport as promises,
 };
 export { Stream };
+
+import { maskAsNative } from "./_cloak.js";
+
+// stream._isArrayBufferView is genuinely native on Node v24 (verified).
+maskAsNative(_isArrayBufferView, "_isArrayBufferView");
