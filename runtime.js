@@ -2803,7 +2803,7 @@ function buildHtmlString(csp, code, hasImports, iframe) {
           console.error('[bvm:resolve] _dynamic_import failed for "' + specifier + '": ' + ((err && err.message) || err));
           throw err;
         }
-        if (data === null || data === undefined || data === '') {
+        if (!data || data.source === null || data.source === undefined || data.source === '') {
           var bvmNotFound = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + specifier + "'");
           bvmNotFound.code = 'ERR_MODULE_NOT_FOUND';
           console.error('[bvm:resolve] ' + bvmNotFound.message);
@@ -2812,7 +2812,7 @@ function buildHtmlString(csp, code, hasImports, iframe) {
         try {
           data = await bvmInterop.callParent(
             '_build_file',
-            data,
+            data.source,
             specifier,
             'import',
             '/',
@@ -3982,7 +3982,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
         // things like resolving sibling imports or source-map hints.
         
         const vfs = globalThis._RUNTIME${config.uuid}_.__USER_FILES__
-        let source = await interopChannel.callParent(
+        let importResult = await interopChannel.callParent(
           '_dynamic_import',
           modulePath,
           moduleType,
@@ -3994,10 +3994,18 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
         );
         
           
-        if(!source){
+        if(!importResult || !importResult.source){
         throw new Error(\`[ERR_MODULE_NOT_FOUND]: Cannot find module \${modulePath}\`)
         return;
         }  
+
+        let source = importResult.source;
+        // Vitest E2E gap #1: the host resolves the request to a VFS path.
+        // _build_file must receive the RESOLVED path as its fileName — it
+        // becomes the entryPoint that transformImportsToLoadModule stamps
+        // into nested imports. Passing the raw request string lost the VFS
+        // prefix at import depth >=2 (nested relative imports 404'd).
+        const buildFileName = importResult.resolvedPath || modulePath;
         
           // Save original source for fallback if transform breaks the module
           const originalSourceForFallback = source;
@@ -4006,7 +4014,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
         source = await interopChannel.callParent(
           '_build_file',
           source,
-          modulePath,
+          buildFileName,
           moduleType,
           entryPoint,
           parentEntryPoint,
@@ -7557,6 +7565,12 @@ function vfsLookup(path, vfs) {
   return tryPath(path) ?? tryPath(path.endsWith('.js') ? path : `${path}.js`) ?? undefined;
 }
       function toVFSPath(modulePath, fromFile) {
+  // IDEMPOTENT (vitest E2E gap #1): an already-resolved VFS path — anything
+  // not starting with ./ or ../ — is returned as-is. Re-joining it against
+  // the parent dir doubles the path ('a/b/x.js' resolved from 'a/b/y.js'
+  // became 'a/b/a/b/x.js'), which broke nested relative imports at depth ≥2.
+  const isRelativeRequest = modulePath.startsWith('./') || modulePath.startsWith('../');
+  if (!isRelativeRequest) return modulePath.replace(/^\.\//, '').replace(/^\/+/, '');
   const fromDir = fromFile ? fromFile.split('/').slice(0, -1).join('/') : '';
   const joined  = fromDir ? `${fromDir}/${modulePath}` : modulePath;
 
@@ -7668,9 +7682,12 @@ function vfsLookup(path, vfs) {
         
         vfs =  unflattenFileSystem(vfs)
         
-  // 1. For Node built-ins, hand off to your shim resolver as before
+  // 1. For Node built-ins, hand off to your shim resolver as before.
+  // resolvedPath is null: builtins aren't VFS files, so the sandbox keeps
+  // using the request path as the build fileName (unchanged behavior).
   if (isNodeBuiltIn) {
-    return await fetchBuiltinSource(path);
+    const builtinSource = await fetchBuiltinSource(path);
+    return { source: builtinSource, resolvedPath: null };
   }
 
   // 2. Determine the importer's VFS path
@@ -7685,7 +7702,7 @@ function vfsLookup(path, vfs) {
     const resolvedPackage = resolveNodeModule(path, importerVFSPath, vfs);
     if (resolvedPackage) {
       console.log(`Resolved from node_modules: ${path}`);
-      return resolvedPackage.source;
+      return { source: resolvedPackage.source, resolvedPath: resolvedPackage.resolvedPath };
     }
     return null; // Fall through if package is completely missing
   }
@@ -7696,7 +7713,9 @@ function vfsLookup(path, vfs) {
     throw new Error(`[ERR_MODULE_NOT_FOUND]: Cannot find module '${path}' (imported from '${importerVFSPath}')`);
   }
  
-  return result.source; 
+  // Gap #1: return the resolved VFS path alongside the source so the sandbox
+  // can thread it into _build_file as the nested entryPoint.
+  return { source: result.source, resolvedPath: result.resolvedPath }; 
 });
       
       function resolveNodeModule(importPath, importerPath, vfs) {
