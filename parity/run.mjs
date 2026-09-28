@@ -4,10 +4,11 @@
 // Usage:
 //   node parity/run.mjs [module]        e.g. node parity/run.mjs path
 //   PARITY_TARGET=path node parity/run.mjs
-//   PARITY_FORCE_SHIM=1 node parity/run.mjs child_process   # browser lane:
-//                           native bridges off, official tests run against
-//                           the code that actually executes in the sandbox
-//
+//   PARITY_NATIVE=1 node parity/run.mjs child_process   # bridge diagnostic:
+//                           native delegation on, official tests run against
+//                           Node itself (a tautology, not a shim test)
+// The default lane is the shim lane: native bridges stay off, official tests
+// run against the code that actually executes in the sandbox.
 // For each test/parallel/test-<module>*.js it spawns:
 //   node --import ./parity/preload.mjs <testfile>
 // with PARITY_TARGET set, so only that module's builtin is redirected to
@@ -25,16 +26,16 @@ const preload = path.join(repoRoot, "parity", "preload.mjs");
 const reportPath = path.join(repoRoot, "parity", "report.json");
 
 const target = process.argv[2] || process.env.PARITY_TARGET || "path";
-// Shim lane (PARITY_FORCE_SHIM=1) gets its own expectations file: the same
-// test file legitimately fails in the browser lane (e.g. real process
-// spawning is a noop by design) while passing via native delegation, so one
-// flat file cannot describe both lanes.
-const forceShim = process.env.PARITY_FORCE_SHIM === "1";
-const lane = forceShim ? "shim" : "native";
+// The shim lane is the default: the same test file legitimately fails in the
+// browser lane (e.g. real process spawning is a noop by design) while passing
+// via native delegation, so one flat file cannot describe both lanes.
+// PARITY_NATIVE=1 opts into the bridge diagnostic lane (native delegation);
+// PARITY_FORCE_SHIM=1 is accepted for backwards compatibility and is a no-op.
+const lane = process.env.PARITY_NATIVE === "1" ? "native" : "shim";
 const expectedPath = path.join(
   repoRoot,
   "parity",
-  forceShim ? "expected-failures.shim.json" : "expected-failures.json",
+  lane === "shim" ? "expected-failures.shim.json" : "expected-failures.json",
 );
 // Node names some test files with hyphens (test-string-decoder.js) while the
 // builtin uses an underscore; also pick up .mjs tests (e.g. events).

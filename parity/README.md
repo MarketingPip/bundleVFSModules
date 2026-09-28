@@ -36,23 +36,26 @@ npm run parity -- path        # or: node parity/run.mjs path
 name maps to `-` in test file names, so `node parity/run.mjs string_decoder`
 picks up `test-string-decoder*.js`.
 
-### `PARITY_FORCE_SHIM=1` — testing the browser lane
+### The shim lane is the default
 
 Some shims contain a *native bridge*: under genuine Node they delegate to
 the real builtin (`child_process` → `loadNativeChildProcess()`,
-`os` → `_nativeOs`). A default parity run therefore exercises the bridge and
-measures Node-vs-Node — a tautology, not a test of our code.
+`os` → `_nativeOs`). Letting a parity run exercise the bridge measures
+Node-vs-Node — a tautology, not a test of our code — so parity never uses
+the bridge. Every run defines the sandbox marker `globalThis._RUNTIME_`
+(non-enumerably, so Node's own global-leak detector stays quiet) before any
+test or shim loads. Every native bridge checks that marker first and stays
+off, so the official suite always runs against the browser fallback — the
+code that actually executes in Jared's sandbox.
 
 ```sh
-PARITY_FORCE_SHIM=1 node parity/run.mjs child_process
+PARITY_NATIVE=1 node parity/run.mjs child_process
 ```
 
-defines the sandbox marker `globalThis._RUNTIME_` (non-enumerably, so Node's
-own global-leak detector stays quiet) before any test or shim loads. Every
-native bridge checks that marker first and stays off, so the official suite
-runs against the browser fallback — the code that actually executes in
-Jared's sandbox. This is the honest compatibility number; the default run
-only proves export-surface identity.
+opts into the bridge diagnostic lane: native delegation on, official tests
+run against Node itself. It proves export-surface identity only — never
+quote it as a compatibility score. (`PARITY_FORCE_SHIM=1` is still accepted
+for backwards compatibility; it is now a no-op.)
 
 The shim lane gets its own expectations file,
 `parity/expected-failures.shim.json`: the same test file can legitimately
@@ -68,9 +71,9 @@ pinned to **v24.20.0** and vendored under `parity/node-test/parallel/`.
 "Repo tests" = hand-written suites in `tests/`.
 Every score below was produced (or re-verified) from this repo — no
 score is taken on trust. Modules with a native bridge report two numbers:
-**shim** = `PARITY_FORCE_SHIM=1` (the browser fallback — the code that runs
-in the sandbox; the honest number) and **bridge** = default run (native
-delegation — export-surface identity only).
+**shim** = the default run (the browser fallback — the code that runs in
+the sandbox; the honest number) and **bridge** = `PARITY_NATIVE=1`
+(native delegation — export-surface identity only).
 
 ### Full official parity (100% — strict CI gate)
 
@@ -80,7 +83,7 @@ delegation — export-surface identity only).
 | `punycode` | 1/1 | — | #3 | merged |
 | `querystring` | 4/4 | — | #4 | merged |
 | `string_decoder` | 3/3 | — | #5 | merged |
-| `events` | 9/9 | — | #6 | merged |
+| `events` | 1/9 | — | #6 | merged | `als-browser` (via `async_hooks`) patches the timer globals at import time; 8 tests trip Node's leak detector. Pre-existing in both lanes — a lazy import of `als-browser` (only when the native bridge is unavailable) would reclaim these |
 | `assert` (+`strict`) | 19/19 | 80/80 | #7 | merged |
 | `diagnostics_channel` | 26/26 | — | #11 | merged |
 | `os` | 5/7 shim · 7/7 bridge | — | #12 | merged |

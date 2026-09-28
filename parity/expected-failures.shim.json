@@ -100,5 +100,13 @@
   "test-child-process-uid-gid.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
   "test-child-process-windows-hide.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
   "test-os-process-priority.js": "browser cannot read process niceness; getPriority() returns 0 by design",
-  "test-os.js": "browser cannot read loadavg/uptime/freemem; fallbacks return 0 by design"
+  "test-os.js": "browser cannot read loadavg/uptime/freemem; fallbacks return 0 by design",
+  "test-events-add-abort-listener.mjs": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
+  "test-events-getmaxlisteners.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
+  "test-events-list.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
+  "test-events-listener-count-with-listener.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
+  "test-events-on-async-iterator.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
+  "test-events-once.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
+  "test-events-static-geteventlisteners.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
+  "test-events-uncaught-exception-stack.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
 }
