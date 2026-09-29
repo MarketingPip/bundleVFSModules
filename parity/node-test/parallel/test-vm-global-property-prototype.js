@@ -1,14 +1,14 @@
-'use strict';
-require('../common');
-const assert = require('assert');
-const vm = require('vm');
+"use strict";
+require("../common");
+const assert = require("assert");
+const vm = require("vm");
 
 const outerProto = {
-  onOuterProto: 'onOuterProto',
-  bothProto: 'onOuterProto',
+  onOuterProto: "onOuterProto",
+  bothProto: "onOuterProto",
 };
 function onOuterProtoGetter() {
-  return 'onOuterProtoGetter';
+  return "onOuterProtoGetter";
 }
 Object.defineProperties(outerProto, {
   onOuterProtoGetter: {
@@ -19,14 +19,14 @@ Object.defineProperties(outerProto, {
   },
   // outer proto indexed
   0: {
-    value: 'onOuterProtoIndexed',
+    value: "onOuterProtoIndexed",
     writable: false,
     enumerable: false,
     configurable: true,
   },
   // both proto indexed
   3: {
-    value: 'onOuterProtoIndexed',
+    value: "onOuterProtoIndexed",
     writable: false,
     enumerable: false,
     configurable: true,
@@ -41,27 +41,28 @@ const sandboxProto = {
 
 const sandbox = {
   __proto__: sandboxProto,
-  onSelf: 'onSelf',
+  onSelf: "onSelf",
 };
 
 function onSelfGetter() {
-  return 'onSelfGetter';
+  return "onSelfGetter";
 }
 Object.defineProperties(sandbox, {
   onSelfGetter: {
     get: onSelfGetter,
   },
   1: {
-    value: 'onSelfIndexed',
+    value: "onSelfIndexed",
     writable: false,
     enumerable: false,
     configurable: true,
-  }
+  },
 });
 
 const ctx = vm.createContext(sandbox);
 
-const result = vm.runInContext(`
+const result = vm.runInContext(
+  `
 Object.prototype.onInnerProto = 'onInnerProto';
 Object.defineProperties(Object.prototype, {
   onInnerProtoGetter: {
@@ -158,7 +159,9 @@ const resultValue = {
   resultIn,
   resultValue,
 });
-`, ctx);
+`,
+  ctx,
+);
 
 // eslint-disable-next-line no-restricted-properties
 assert.deepEqual(result, {
@@ -179,9 +182,24 @@ assert.deepEqual(result, {
     bothProtoIndexed: false,
   },
   resultDesc: {
-    onSelf: { value: 'onSelf', writable: true, enumerable: true, configurable: true },
-    onSelfGetter: { get: onSelfGetter, set: undefined, enumerable: false, configurable: false },
-    onSelfIndexed: { value: 'onSelfIndexed', writable: false, enumerable: false, configurable: true },
+    onSelf: {
+      value: "onSelf",
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    },
+    onSelfGetter: {
+      get: onSelfGetter,
+      set: undefined,
+      enumerable: false,
+      configurable: false,
+    },
+    onSelfIndexed: {
+      value: "onSelfIndexed",
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    },
 
     // All prototype properties are not own properties.
     onOuterProto: undefined,
@@ -223,23 +241,23 @@ assert.deepEqual(result, {
     bothProtoIndexed: true,
   },
   resultValue: {
-    onSelf: 'onSelf',
-    onSelfGetter: 'onSelfGetter',
-    onSelfIndexed: 'onSelfIndexed',
+    onSelf: "onSelf",
+    onSelfGetter: "onSelfGetter",
+    onSelfIndexed: "onSelfIndexed",
 
     // FIXME(legendecas): The outer prototype is not observable from the inner
     // vm. Allowing property getter on the outer prototype can be confusing
     // comparing to the normal JavaScript objects.
     // Additionally, this may expose unexpected properties on the outer
     // prototype chain, like polyfills, to the vm context.
-    onOuterProto: 'onOuterProto',
-    onOuterProtoGetter: 'onOuterProtoGetter',
-    onOuterProtoIndexed: 'onOuterProtoIndexed',
-    onInnerProto: 'onInnerProto',
-    onInnerProtoGetter: 'onInnerProtoGetter',
-    onInnerProtoIndexed: 'onInnerProtoIndexed',
-    bothProto: 'onOuterProto',
-    bothProtoGetter: 'onOuterProtoGetter',
-    bothProtoIndexed: 'onOuterProtoIndexed',
+    onOuterProto: "onOuterProto",
+    onOuterProtoGetter: "onOuterProtoGetter",
+    onOuterProtoIndexed: "onOuterProtoIndexed",
+    onInnerProto: "onInnerProto",
+    onInnerProtoGetter: "onInnerProtoGetter",
+    onInnerProtoIndexed: "onInnerProtoIndexed",
+    bothProto: "onOuterProto",
+    bothProtoGetter: "onOuterProtoGetter",
+    bothProtoIndexed: "onOuterProtoIndexed",
   },
 });

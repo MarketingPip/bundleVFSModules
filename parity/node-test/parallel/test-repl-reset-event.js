@@ -19,44 +19,54 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const util = require('util');
-const { startNewREPLServer } = require('../common/repl');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const util = require("util");
+const { startNewREPLServer } = require("../common/repl");
 
 common.allowGlobals(42);
 
 function testReset(cb) {
   const { replServer } = startNewREPLServer();
   replServer.context.foo = 42;
-  replServer.on('reset', common.mustCall(function(context) {
-    assert(!!context, 'REPL did not emit a context with reset event');
-    assert.strictEqual(context, replServer.context, 'REPL emitted incorrect context. ' +
-    `context is ${util.inspect(context)}, expected ${util.inspect(replServer.context)}`);
-    assert.strictEqual(
-      context.foo,
-      undefined,
-      'REPL emitted the previous context and is not using global as context. ' +
-      `context.foo is ${context.foo}, expected undefined.`
-    );
-    context.foo = 42;
-    cb();
-  }));
+  replServer.on(
+    "reset",
+    common.mustCall(function (context) {
+      assert(!!context, "REPL did not emit a context with reset event");
+      assert.strictEqual(
+        context,
+        replServer.context,
+        "REPL emitted incorrect context. " +
+          `context is ${util.inspect(context)}, expected ${util.inspect(replServer.context)}`,
+      );
+      assert.strictEqual(
+        context.foo,
+        undefined,
+        "REPL emitted the previous context and is not using global as context. " +
+          `context.foo is ${context.foo}, expected undefined.`,
+      );
+      context.foo = 42;
+      cb();
+    }),
+  );
   replServer.resetContext();
 }
 
 function testResetGlobal() {
   const { replServer } = startNewREPLServer({ useGlobal: true });
   replServer.context.foo = 42;
-  replServer.on('reset', common.mustCall(function(context) {
-    assert.strictEqual(
-      context.foo,
-      42,
-      '"foo" property is different from REPL using global as context. ' +
-      `context.foo is ${context.foo}, expected 42.`
-    );
-  }));
+  replServer.on(
+    "reset",
+    common.mustCall(function (context) {
+      assert.strictEqual(
+        context.foo,
+        42,
+        '"foo" property is different from REPL using global as context. ' +
+          `context.foo is ${context.foo}, expected 42.`,
+      );
+    }),
+  );
   replServer.resetContext();
 }
 

@@ -1,10 +1,10 @@
 // Flags: --expose-internals
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 
-const { myersDiff } = require('internal/assert/myers_diff');
+const { myersDiff } = require("internal/assert/myers_diff");
 
 {
   const arr1 = { length: 2 ** 31 - 1 };
@@ -15,11 +15,12 @@ const { myersDiff } = require('internal/assert/myers_diff');
       myersDiff(arr1, arr2);
     },
     common.expectsError({
-      code: 'ERR_OUT_OF_RANGE',
-      name: 'RangeError',
-      message: 'The value of "myersDiff input size" ' +
-                'is out of range. It must be < 2^31. ' +
-                `Received ${max}`
-    })
+      code: "ERR_OUT_OF_RANGE",
+      name: "RangeError",
+      message:
+        'The value of "myersDiff input size" ' +
+        "is out of range. It must be < 2^31. " +
+        `Received ${max}`,
+    }),
   );
 }

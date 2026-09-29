@@ -1,21 +1,24 @@
-'use strict';
+"use strict";
 
 if (require.main !== module) {
-  const { spawnSync } = require('child_process');
+  const { spawnSync } = require("child_process");
 
   function runModuleAs(filename, flags, spawnOptions, role) {
-    return spawnSync(process.execPath,
-                     [...flags, __filename, role, filename], spawnOptions);
+    return spawnSync(
+      process.execPath,
+      [...flags, __filename, role, filename],
+      spawnOptions,
+    );
   }
 
   module.exports = runModuleAs;
   return;
 }
 
-const { Worker, isMainThread, workerData } = require('worker_threads');
+const { Worker, isMainThread, workerData } = require("worker_threads");
 
 if (isMainThread) {
-  if (process.argv[2] === 'worker') {
+  if (process.argv[2] === "worker") {
     new Worker(__filename, {
       workerData: process.argv[3],
     });

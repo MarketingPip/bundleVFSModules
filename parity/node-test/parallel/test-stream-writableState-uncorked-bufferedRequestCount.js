@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const stream = require('stream');
+const common = require("../common");
+const assert = require("assert");
+const stream = require("stream");
 
 const writable = new stream.Writable();
 
@@ -25,7 +25,7 @@ writable.cork();
 assert.strictEqual(writable._writableState.corked, 2);
 
 // The first chunk is buffered
-writable.write('first chunk');
+writable.write("first chunk");
 assert.strictEqual(writable._writableState.bufferedRequestCount, 1);
 
 // First uncork does nothing
@@ -36,7 +36,7 @@ assert.strictEqual(writable._writableState.bufferedRequestCount, 1);
 process.nextTick(uncork);
 
 // The second chunk is buffered, because we uncork at the end of tick
-writable.write('second chunk');
+writable.write("second chunk");
 assert.strictEqual(writable._writableState.corked, 1);
 assert.strictEqual(writable._writableState.bufferedRequestCount, 2);
 
@@ -48,7 +48,7 @@ function uncork() {
 
   // Verify that end() uncorks correctly
   writable.cork();
-  writable.write('third chunk');
+  writable.write("third chunk");
   writable.end();
 
   // End causes an uncork() as well

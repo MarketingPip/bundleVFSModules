@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
-const assert = require('assert');
-const stream = require('stream');
+const assert = require("assert");
+const stream = require("stream");
 
 const writable = new stream.Writable();
 
@@ -13,10 +13,16 @@ writable._write = common.mustCall((chunk, encoding, cb) => {
   cb();
 });
 
-writable.on('finish', common.mustCall(() => {
-  assert.strictEqual(writable._writableState.finished, true);
-}));
+writable.on(
+  "finish",
+  common.mustCall(() => {
+    assert.strictEqual(writable._writableState.finished, true);
+  }),
+);
 
-writable.end('testing finished state', common.mustCall(() => {
-  assert.strictEqual(writable._writableState.finished, true);
-}));
+writable.end(
+  "testing finished state",
+  common.mustCall(() => {
+    assert.strictEqual(writable._writableState.finished, true);
+  }),
+);

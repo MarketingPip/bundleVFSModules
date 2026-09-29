@@ -19,30 +19,30 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
-const assert = require('assert');
+const assert = require("assert");
 
-const Script = require('vm').Script;
+const Script = require("vm").Script;
 
 {
-  const script = new Script('\'passed\';');
+  const script = new Script("'passed';");
   const result1 = script.runInNewContext();
   const result2 = script.runInNewContext();
-  assert.strictEqual(result1, 'passed');
-  assert.strictEqual(result2, 'passed');
+  assert.strictEqual(result1, "passed");
+  assert.strictEqual(result2, "passed");
 }
 
 {
-  const script = new Script('throw new Error(\'test\');');
+  const script = new Script("throw new Error('test');");
   assert.throws(() => {
     script.runInNewContext();
   }, /^Error: test$/);
 }
 
 {
-  const script = new Script('foo.bar = 5;');
+  const script = new Script("foo.bar = 5;");
   assert.throws(() => {
     script.runInNewContext();
   }, /^ReferenceError: foo is not defined$/);
@@ -50,7 +50,7 @@ const Script = require('vm').Script;
 
 {
   globalThis.hello = 5;
-  const script = new Script('hello = 2');
+  const script = new Script("hello = 2");
   script.runInNewContext();
   assert.strictEqual(globalThis.hello, 5);
 
@@ -59,9 +59,8 @@ const Script = require('vm').Script;
 }
 
 {
-  globalThis.code = 'foo = 1;' +
-                'bar = 2;' +
-                'if (baz !== 3) throw new Error(\'test fail\');';
+  globalThis.code =
+    "foo = 1;" + "bar = 2;" + "if (baz !== 3) throw new Error('test fail');";
   globalThis.foo = 2;
   globalThis.obj = { foo: 0, baz: 3 };
   const script = new Script(globalThis.code);
@@ -79,8 +78,10 @@ const Script = require('vm').Script;
 }
 
 {
-  const script = new Script('f()');
-  function changeFoo() { globalThis.foo = 100; }
+  const script = new Script("f()");
+  function changeFoo() {
+    globalThis.foo = 100;
+  }
   script.runInNewContext({ f: changeFoo });
   assert.strictEqual(globalThis.foo, 100);
 
@@ -89,7 +90,7 @@ const Script = require('vm').Script;
 }
 
 {
-  const script = new Script('f.a = 2');
+  const script = new Script("f.a = 2");
   const f = { a: 1 };
   script.runInNewContext({ f });
   assert.strictEqual(f.a, 2);
@@ -100,8 +101,8 @@ const Script = require('vm').Script;
 }
 
 {
-  const script = new Script('');
+  const script = new Script("");
   assert.throws(() => {
-    script.runInNewContext.call('\'hello\';');
+    script.runInNewContext.call("'hello';");
   }, /^TypeError: this\.runInContext is not a function$/);
 }

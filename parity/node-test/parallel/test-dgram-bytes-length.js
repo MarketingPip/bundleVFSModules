@@ -19,19 +19,19 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const dgram = require('dgram');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const dgram = require("dgram");
 
-const message = Buffer.from('Some bytes');
-const client = dgram.createSocket('udp4');
+const message = Buffer.from("Some bytes");
+const client = dgram.createSocket("udp4");
 client.send(
   message,
   0,
   message.length,
   41234,
-  'localhost',
+  "localhost",
   common.mustCall((err, bytes) => {
     assert.strictEqual(bytes, message.length);
     client.close();

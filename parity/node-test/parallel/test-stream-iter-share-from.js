@@ -1,8 +1,8 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 const {
   from,
   fromSync,
@@ -11,26 +11,22 @@ const {
   SyncShare,
   text,
   textSync,
-
-} = require('stream/iter');
+} = require("stream/iter");
 
 // =============================================================================
 // Share.from
 // =============================================================================
 
 async function testShareFrom() {
-  const shared = Share.from(from('share-from'));
+  const shared = Share.from(from("share-from"));
   const consumer = shared.pull();
 
   const data = await text(consumer);
-  assert.strictEqual(data, 'share-from');
+  assert.strictEqual(data, "share-from");
 }
 
 function testShareFromRejectsNonStreamable() {
-  assert.throws(
-    () => Share.from(12345),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
+  assert.throws(() => Share.from(12345), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 // =============================================================================
@@ -38,18 +34,17 @@ function testShareFromRejectsNonStreamable() {
 // =============================================================================
 
 async function testSyncShareFromSync() {
-  const shared = SyncShare.fromSync(fromSync('sync-share-from'));
+  const shared = SyncShare.fromSync(fromSync("sync-share-from"));
   const consumer = shared.pull();
 
   const data = textSync(consumer);
-  assert.strictEqual(data, 'sync-share-from');
+  assert.strictEqual(data, "sync-share-from");
 }
 
 function testSyncShareFromRejectsNonStreamable() {
-  assert.throws(
-    () => SyncShare.fromSync(12345),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
+  assert.throws(() => SyncShare.fromSync(12345), {
+    code: "ERR_INVALID_ARG_TYPE",
+  });
 }
 
 // =============================================================================
@@ -58,42 +53,42 @@ function testSyncShareFromRejectsNonStreamable() {
 
 function testShareProtocolReturnsNull() {
   const obj = {
-    [Symbol.for('Stream.shareProtocol')]() { return null; },
+    [Symbol.for("Stream.shareProtocol")]() {
+      return null;
+    },
   };
-  assert.throws(
-    () => Share.from(obj),
-    { code: 'ERR_INVALID_RETURN_VALUE' },
-  );
+  assert.throws(() => Share.from(obj), { code: "ERR_INVALID_RETURN_VALUE" });
 }
 
 function testShareProtocolReturnsNonObject() {
   const obj = {
-    [Symbol.for('Stream.shareProtocol')]() { return 42; },
+    [Symbol.for("Stream.shareProtocol")]() {
+      return 42;
+    },
   };
-  assert.throws(
-    () => Share.from(obj),
-    { code: 'ERR_INVALID_RETURN_VALUE' },
-  );
+  assert.throws(() => Share.from(obj), { code: "ERR_INVALID_RETURN_VALUE" });
 }
 
 function testSyncShareProtocolReturnsNull() {
   const obj = {
-    [Symbol.for('Stream.shareSyncProtocol')]() { return null; },
+    [Symbol.for("Stream.shareSyncProtocol")]() {
+      return null;
+    },
   };
-  assert.throws(
-    () => SyncShare.fromSync(obj),
-    { code: 'ERR_INVALID_RETURN_VALUE' },
-  );
+  assert.throws(() => SyncShare.fromSync(obj), {
+    code: "ERR_INVALID_RETURN_VALUE",
+  });
 }
 
 function testSyncShareProtocolReturnsNonObject() {
   const obj = {
-    [Symbol.for('Stream.shareSyncProtocol')]() { return 'bad'; },
+    [Symbol.for("Stream.shareSyncProtocol")]() {
+      return "bad";
+    },
   };
-  assert.throws(
-    () => SyncShare.fromSync(obj),
-    { code: 'ERR_INVALID_RETURN_VALUE' },
-  );
+  assert.throws(() => SyncShare.fromSync(obj), {
+    code: "ERR_INVALID_RETURN_VALUE",
+  });
 }
 
 // =============================================================================
@@ -111,18 +106,15 @@ async function testShareBlockBackpressure() {
       yield [enc.encode(`item${i}`)];
     }
   }
-  const shared = share(source(), { budget: 16384, backpressure: 'unbounded' });
+  const shared = share(source(), { budget: 16384, backpressure: "unbounded" });
   const fast = shared.pull();
   const slow = shared.pull();
 
   // Both consumers should ultimately receive all 5 items
-  const [fastData, slowData] = await Promise.all([
-    text(fast),
-    text(slow),
-  ]);
+  const [fastData, slowData] = await Promise.all([text(fast), text(slow)]);
 
-  assert.strictEqual(fastData, 'item0item1item2item3item4');
-  assert.strictEqual(slowData, 'item0item1item2item3item4');
+  assert.strictEqual(fastData, "item0item1item2item3item4");
+  assert.strictEqual(slowData, "item0item1item2item3item4");
 }
 
 // =============================================================================
@@ -140,7 +132,10 @@ async function testShareDropOldest() {
       yield [chunk];
     }
   }
-  const shared = share(source(), { budget: 32768, backpressure: 'drop-oldest' });
+  const shared = share(source(), {
+    budget: 32768,
+    backpressure: "drop-oldest",
+  });
   const fast = shared.pull();
   const slow = shared.pull();
 
@@ -161,10 +156,14 @@ async function testShareDropOldest() {
     }
   }
   // The slow consumer should see fewer items than were produced
-  assert.ok(slowIndices.length < 4,
-            `Expected < 4 items after drop-oldest, got ${slowIndices.length}`);
-  assert.ok(slowIndices.length > 0,
-            'Expected at least some items after drop-oldest');
+  assert.ok(
+    slowIndices.length < 4,
+    `Expected < 4 items after drop-oldest, got ${slowIndices.length}`,
+  );
+  assert.ok(
+    slowIndices.length > 0,
+    "Expected at least some items after drop-oldest",
+  );
   // The last item should always be present (most recent items kept)
   assert.strictEqual(slowIndices[slowIndices.length - 1], 3);
 }
@@ -181,7 +180,10 @@ async function testShareDropNewest() {
       yield [chunk];
     }
   }
-  const shared = share(source(), { budget: 32768, backpressure: 'drop-newest' });
+  const shared = share(source(), {
+    budget: 32768,
+    backpressure: "drop-newest",
+  });
   const fast = shared.pull();
   const slow = shared.pull();
 
@@ -216,7 +218,7 @@ async function testShareStrictBackpressure() {
       yield [new Uint8Array(16384)];
     }
   }
-  const shared = share(source(), { budget: 32768, backpressure: 'strict' });
+  const shared = share(source(), { budget: 32768, backpressure: "strict" });
   const fast = shared.pull();
   // Create a second consumer that never reads — this prevents buffer trimming
   shared.pull();
@@ -224,10 +226,15 @@ async function testShareStrictBackpressure() {
   // The fast consumer's pulls will eventually cause the buffer to exceed
   // the budget (since the slow consumer prevents trimming),
   // triggering an ERR_OUT_OF_RANGE error.
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of fast) { /* consume */ }
-  }, { code: 'ERR_OUT_OF_RANGE' });
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of fast) {
+        /* consume */
+      }
+    },
+    { code: "ERR_OUT_OF_RANGE" },
+  );
 }
 
 Promise.all([

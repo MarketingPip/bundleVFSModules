@@ -1,11 +1,10 @@
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
-const assert = require('assert');
-const http2 = require('http2');
-const { duplexPair } = require('stream');
-const { parentPort, Worker } = require('worker_threads');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
+const assert = require("assert");
+const http2 = require("http2");
+const { duplexPair } = require("stream");
+const { parentPort, Worker } = require("worker_threads");
 
 // This test ensures that workers can be terminated without error while
 // stream activity is ongoing, in particular the C++ function
@@ -20,15 +19,20 @@ if (!process.env.HAS_STARTED_WORKER) {
 
   function spinWorker(iter) {
     const w = new Worker(__filename);
-    w.on('message', common.mustCall((msg) => {
-      assert.strictEqual(msg, 'terminate');
-      w.terminate();
-    }));
+    w.on(
+      "message",
+      common.mustCall((msg) => {
+        assert.strictEqual(msg, "terminate");
+        w.terminate();
+      }),
+    );
 
-    w.on('exit', common.mustCall(() => {
-      if (iter < MAX_ITERATIONS)
-        spinWorker(++iter);
-    }));
+    w.on(
+      "exit",
+      common.mustCall(() => {
+        if (iter < MAX_ITERATIONS) spinWorker(++iter);
+      }),
+    );
   }
 
   for (let i = 0; i < MAX_THREADS; i++) {
@@ -37,19 +41,19 @@ if (!process.env.HAS_STARTED_WORKER) {
 } else {
   const server = http2.createServer();
   let i = 0;
-  server.on('stream', (stream, headers) => {
+  server.on("stream", (stream, headers) => {
     if (i === 1) {
-      parentPort.postMessage('terminate');
+      parentPort.postMessage("terminate");
     }
     i++;
 
-    stream.end('');
+    stream.end("");
   });
 
-  const [ clientSide, serverSide ] = duplexPair();
-  server.emit('connection', serverSide);
+  const [clientSide, serverSide] = duplexPair();
+  server.emit("connection", serverSide);
 
-  const client = http2.connect('http://localhost:80', {
+  const client = http2.connect("http://localhost:80", {
     createConnection: () => clientSide,
   });
 

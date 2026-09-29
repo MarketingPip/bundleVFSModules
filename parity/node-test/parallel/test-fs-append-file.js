@@ -19,37 +19,49 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 
-const currentFileData = 'ABCD';
-const fixtures = require('../common/fixtures');
+const currentFileData = "ABCD";
+const fixtures = require("../common/fixtures");
 const s = fixtures.utf8TestText;
 
 tmpdir.refresh();
 
-const throwNextTick = (e) => { process.nextTick(() => { throw e; }); };
+const throwNextTick = (e) => {
+  process.nextTick(() => {
+    throw e;
+  });
+};
 
 // Test that empty file will be created and have content added (callback API).
 {
-  const filename = tmpdir.resolve('append.txt');
+  const filename = tmpdir.resolve("append.txt");
 
-  fs.appendFile(filename, s, common.mustSucceed(() => {
-    fs.readFile(filename, common.mustSucceed((buffer) => {
-      assert.strictEqual(Buffer.byteLength(s), buffer.length);
-    }));
-  }));
+  fs.appendFile(
+    filename,
+    s,
+    common.mustSucceed(() => {
+      fs.readFile(
+        filename,
+        common.mustSucceed((buffer) => {
+          assert.strictEqual(Buffer.byteLength(s), buffer.length);
+        }),
+      );
+    }),
+  );
 }
 
 // Test that empty file will be created and have content added (promise API).
 {
-  const filename = tmpdir.resolve('append-promise.txt');
+  const filename = tmpdir.resolve("append-promise.txt");
 
-  fs.promises.appendFile(filename, s)
+  fs.promises
+    .appendFile(filename, s)
     .then(common.mustCall(() => fs.promises.readFile(filename)))
     .then((buffer) => {
       assert.strictEqual(Buffer.byteLength(s), buffer.length);
@@ -59,53 +71,76 @@ const throwNextTick = (e) => { process.nextTick(() => { throw e; }); };
 
 // Test that appends data to a non-empty file (callback API).
 {
-  const filename = tmpdir.resolve('append-non-empty.txt');
+  const filename = tmpdir.resolve("append-non-empty.txt");
   fs.writeFileSync(filename, currentFileData);
 
-  fs.appendFile(filename, s, common.mustSucceed(() => {
-    fs.readFile(filename, common.mustSucceed((buffer) => {
-      assert.strictEqual(Buffer.byteLength(s) + currentFileData.length,
-                         buffer.length);
-    }));
-  }));
+  fs.appendFile(
+    filename,
+    s,
+    common.mustSucceed(() => {
+      fs.readFile(
+        filename,
+        common.mustSucceed((buffer) => {
+          assert.strictEqual(
+            Buffer.byteLength(s) + currentFileData.length,
+            buffer.length,
+          );
+        }),
+      );
+    }),
+  );
 }
 
 // Test that appends data to a non-empty file (promise API).
 {
-  const filename = tmpdir.resolve('append-non-empty-promise.txt');
+  const filename = tmpdir.resolve("append-non-empty-promise.txt");
   fs.writeFileSync(filename, currentFileData);
 
-  fs.promises.appendFile(filename, s)
+  fs.promises
+    .appendFile(filename, s)
     .then(common.mustCall(() => fs.promises.readFile(filename)))
     .then((buffer) => {
-      assert.strictEqual(Buffer.byteLength(s) + currentFileData.length,
-                         buffer.length);
+      assert.strictEqual(
+        Buffer.byteLength(s) + currentFileData.length,
+        buffer.length,
+      );
     })
     .catch(throwNextTick);
 }
 
 // Test that appendFile accepts buffers (callback API).
 {
-  const filename = tmpdir.resolve('append-buffer.txt');
+  const filename = tmpdir.resolve("append-buffer.txt");
   fs.writeFileSync(filename, currentFileData);
 
-  const buf = Buffer.from(s, 'utf8');
+  const buf = Buffer.from(s, "utf8");
 
-  fs.appendFile(filename, buf, common.mustSucceed(() => {
-    fs.readFile(filename, common.mustSucceed((buffer) => {
-      assert.strictEqual(buf.length + currentFileData.length, buffer.length);
-    }));
-  }));
+  fs.appendFile(
+    filename,
+    buf,
+    common.mustSucceed(() => {
+      fs.readFile(
+        filename,
+        common.mustSucceed((buffer) => {
+          assert.strictEqual(
+            buf.length + currentFileData.length,
+            buffer.length,
+          );
+        }),
+      );
+    }),
+  );
 }
 
 // Test that appendFile accepts buffers (promises API).
 {
-  const filename = tmpdir.resolve('append-buffer-promises.txt');
+  const filename = tmpdir.resolve("append-buffer-promises.txt");
   fs.writeFileSync(filename, currentFileData);
 
-  const buf = Buffer.from(s, 'utf8');
+  const buf = Buffer.from(s, "utf8");
 
-  fs.promises.appendFile(filename, buf)
+  fs.promises
+    .appendFile(filename, buf)
     .then(common.mustCall(() => fs.promises.readFile(filename)))
     .then((buffer) => {
       assert.strictEqual(buf.length + currentFileData.length, buffer.length);
@@ -116,71 +151,83 @@ const throwNextTick = (e) => { process.nextTick(() => { throw e; }); };
 // Test that appendFile does not accept invalid data type (callback API).
 [false, 5, {}, null, undefined].forEach(async (data) => {
   const errObj = {
-    code: 'ERR_INVALID_ARG_TYPE',
-    message: /"data"|"buffer"/
+    code: "ERR_INVALID_ARG_TYPE",
+    message: /"data"|"buffer"/,
   };
-  const filename = tmpdir.resolve('append-invalid-data.txt');
+  const filename = tmpdir.resolve("append-invalid-data.txt");
 
   assert.throws(
     () => fs.appendFile(filename, data, common.mustNotCall()),
-    errObj
+    errObj,
   );
 
-  assert.throws(
-    () => fs.appendFileSync(filename, data),
-    errObj
-  );
+  assert.throws(() => fs.appendFileSync(filename, data), errObj);
 
-  await assert.rejects(
-    fs.promises.appendFile(filename, data),
-    errObj
-  );
+  await assert.rejects(fs.promises.appendFile(filename, data), errObj);
   // The filename shouldn't exist if throwing error.
-  assert.throws(
-    () => fs.statSync(filename),
-    {
-      code: 'ENOENT',
-      message: /no such file or directory/
-    }
-  );
+  assert.throws(() => fs.statSync(filename), {
+    code: "ENOENT",
+    message: /no such file or directory/,
+  });
 });
 
 // Test that appendFile accepts file descriptors (callback API).
 {
-  const filename = tmpdir.resolve('append-descriptors.txt');
+  const filename = tmpdir.resolve("append-descriptors.txt");
   fs.writeFileSync(filename, currentFileData);
 
-  fs.open(filename, 'a+', common.mustSucceed((fd) => {
-    fs.appendFile(fd, s, common.mustSucceed(() => {
-      fs.close(fd, common.mustSucceed(() => {
-        fs.readFile(filename, common.mustSucceed((buffer) => {
-          assert.strictEqual(Buffer.byteLength(s) + currentFileData.length,
-                             buffer.length);
-        }));
-      }));
-    }));
-  }));
+  fs.open(
+    filename,
+    "a+",
+    common.mustSucceed((fd) => {
+      fs.appendFile(
+        fd,
+        s,
+        common.mustSucceed(() => {
+          fs.close(
+            fd,
+            common.mustSucceed(() => {
+              fs.readFile(
+                filename,
+                common.mustSucceed((buffer) => {
+                  assert.strictEqual(
+                    Buffer.byteLength(s) + currentFileData.length,
+                    buffer.length,
+                  );
+                }),
+              );
+            }),
+          );
+        }),
+      );
+    }),
+  );
 }
 
 // Test that appendFile accepts file descriptors (promises API).
 {
-  const filename = tmpdir.resolve('append-descriptors-promises.txt');
+  const filename = tmpdir.resolve("append-descriptors-promises.txt");
   fs.writeFileSync(filename, currentFileData);
 
   let fd;
-  fs.promises.open(filename, 'a+')
+  fs.promises
+    .open(filename, "a+")
     .then((fileDescriptor) => {
       fd = fileDescriptor;
       return fs.promises.appendFile(fd, s);
     })
     .then(() => fd.close())
     .then(() => fs.promises.readFile(filename))
-    .then(common.mustCall((buffer) => {
-      assert.strictEqual(Buffer.byteLength(s) + currentFileData.length,
-                         buffer.length);
-    }));
+    .then(
+      common.mustCall((buffer) => {
+        assert.strictEqual(
+          Buffer.byteLength(s) + currentFileData.length,
+          buffer.length,
+        );
+      }),
+    );
 }
 
-assert.throws(
-  () => fs.appendFile(tmpdir.resolve('append6.txt'), console.log),
-  { code: 'ERR_INVALID_ARG_TYPE' });
+assert.throws(() => fs.appendFile(tmpdir.resolve("append6.txt"), console.log), {
+  code: "ERR_INVALID_ARG_TYPE",
+});

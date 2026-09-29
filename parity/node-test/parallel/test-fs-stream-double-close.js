@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const fs = require('fs');
+"use strict";
+const common = require("../common");
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
 test1(fs.createReadStream(__filename));
@@ -41,14 +41,20 @@ function test1(stream) {
 
 function test2(stream) {
   stream.destroy();
-  stream.on('open', common.mustCall(function(fd) {
-    stream.destroy();
-  }));
+  stream.on(
+    "open",
+    common.mustCall(function (fd) {
+      stream.destroy();
+    }),
+  );
 }
 
 function test3(stream) {
-  stream.on('open', common.mustCall(function(fd) {
-    stream.destroy();
-    stream.destroy();
-  }));
+  stream.on(
+    "open",
+    common.mustCall(function (fd) {
+      stream.destroy();
+      stream.destroy();
+    }),
+  );
 }

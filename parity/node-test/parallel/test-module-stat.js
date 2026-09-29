@@ -1,16 +1,16 @@
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
 // This tests Module._stat.
 
-const Module = require('module');
-const fs = require('fs');
-const tmpdir = require('../common/tmpdir');
-const assert = require('assert');
+const Module = require("module");
+const fs = require("fs");
+const tmpdir = require("../common/tmpdir");
+const assert = require("assert");
 
-const directory = tmpdir.resolve('directory');
-const doesNotExist = tmpdir.resolve('does-not-exist');
-const file = tmpdir.resolve('file.js');
+const directory = tmpdir.resolve("directory");
+const doesNotExist = tmpdir.resolve("does-not-exist");
+const file = tmpdir.resolve("file.js");
 
 tmpdir.refresh();
 fs.writeFileSync(file, "module.exports = { a: 'b' }");

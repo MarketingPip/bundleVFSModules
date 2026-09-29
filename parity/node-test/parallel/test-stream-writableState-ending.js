@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const assert = require('assert');
-const stream = require('stream');
+const assert = require("assert");
+const stream = require("stream");
 
 const writable = new stream.Writable();
 
@@ -19,12 +19,12 @@ writable._write = (chunk, encoding, cb) => {
   cb();
 };
 
-writable.on('finish', () => {
+writable.on("finish", () => {
   // Ending, finished, ended = true.
   testStates(true, true, true);
 });
 
-const result = writable.end('testing function end()', () => {
+const result = writable.end("testing function end()", () => {
   // Ending, finished, ended = true.
   testStates(true, true, true);
 });

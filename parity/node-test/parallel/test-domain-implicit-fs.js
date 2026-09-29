@@ -19,28 +19,30 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 // Simple tests of most basic domain functionality.
 
-const common = require('../common');
-const assert = require('assert');
-const domain = require('domain');
+const common = require("../common");
+const assert = require("assert");
+const domain = require("domain");
 
-process.on('warning', common.mustNotCall());
+process.on("warning", common.mustNotCall());
 
 const d = new domain.Domain();
 
-d.on('error', common.mustCall(function(er) {
-  console.error('caught', er);
+d.on(
+  "error",
+  common.mustCall(function (er) {
+    console.error("caught", er);
 
-  assert.strictEqual(er.domain, d);
-  assert.strictEqual(er.domainThrown, true);
-  assert.ok(!er.domainEmitter);
-  assert.strictEqual(er.actual.code, 'ENOENT');
-  assert.match(er.actual.path, /\bthis file does not exist\b/i);
-  assert.strictEqual(typeof er.actual.errno, 'number');
-}));
-
+    assert.strictEqual(er.domain, d);
+    assert.strictEqual(er.domainThrown, true);
+    assert.ok(!er.domainEmitter);
+    assert.strictEqual(er.actual.code, "ENOENT");
+    assert.match(er.actual.path, /\bthis file does not exist\b/i);
+    assert.strictEqual(typeof er.actual.errno, "number");
+  }),
+);
 
 // Implicit handling of thrown errors while in a domain, via the
 // single entry points of ReqWrap and MakeCallback.  Even if
@@ -49,15 +51,27 @@ d.on('error', common.mustCall(function(er) {
 // Everything that happens between the domain.enter() and domain.exit()
 // calls will be bound to the domain, even if multiple levels of
 // handles are created.
-d.run(common.mustCall(() => {
-  setTimeout(common.mustCall(() => {
-    const fs = require('fs');
-    fs.readdir(__dirname, common.mustCall(() => {
-      // eslint-disable-next-line node-core/prefer-common-mustsucceed
-      fs.open('this file does not exist', 'r', common.mustCall((er) => {
-        assert.ifError(er);
-        throw new Error('should not get here!');
-      }));
-    }));
-  }), 100);
-}));
+d.run(
+  common.mustCall(() => {
+    setTimeout(
+      common.mustCall(() => {
+        const fs = require("fs");
+        fs.readdir(
+          __dirname,
+          common.mustCall(() => {
+            // eslint-disable-next-line node-core/prefer-common-mustsucceed
+            fs.open(
+              "this file does not exist",
+              "r",
+              common.mustCall((er) => {
+                assert.ifError(er);
+                throw new Error("should not get here!");
+              }),
+            );
+          }),
+        );
+      }),
+      100,
+    );
+  }),
+);

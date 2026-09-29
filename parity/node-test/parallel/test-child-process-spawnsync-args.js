@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 
 // This test confirms that `undefined`, `null`, and `[]` can be used
 // as a placeholder for the second argument (`args`) of `spawnSync()`.
@@ -6,13 +6,13 @@
 // caused the third argument (`options`) to be ignored.
 // See https://github.com/nodejs/node/issues/24912.
 
-const common = require('../common');
-const tmpdir = require('../common/tmpdir');
+const common = require("../common");
+const tmpdir = require("../common/tmpdir");
 
-const assert = require('assert');
-const { spawnSync } = require('child_process');
+const assert = require("assert");
+const { spawnSync } = require("child_process");
 
-const command = common.isWindows ? 'cd' : 'pwd';
+const command = common.isWindows ? "cd" : "pwd";
 const options = { cwd: tmpdir.path };
 
 tmpdir.refresh();
@@ -24,25 +24,19 @@ if (common.isWindows) {
   options.shell = true;
 }
 
-const testCases = [
-  undefined,
-  null,
-  [],
-];
+const testCases = [undefined, null, []];
 
 const expectedResult = tmpdir.path.trim().toLowerCase();
 
-const results = testCases.map(common.mustCallAtLeast((testCase) => {
-  const { stdout, stderr, error } = spawnSync(
-    command,
-    testCase,
-    options
-  );
+const results = testCases.map(
+  common.mustCallAtLeast((testCase) => {
+    const { stdout, stderr, error } = spawnSync(command, testCase, options);
 
-  assert.ifError(error);
-  assert.deepStrictEqual(stderr, Buffer.alloc(0));
+    assert.ifError(error);
+    assert.deepStrictEqual(stderr, Buffer.alloc(0));
 
-  return stdout.toString().trim().toLowerCase();
-}));
+    return stdout.toString().trim().toLowerCase();
+  }),
+);
 
 assert.deepStrictEqual([...new Set(results)], [expectedResult]);

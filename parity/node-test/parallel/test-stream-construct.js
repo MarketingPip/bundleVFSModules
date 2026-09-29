@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { Writable, Readable, Duplex } = require('stream');
-const assert = require('assert');
+const common = require("../common");
+const { Writable, Readable, Duplex } = require("stream");
+const assert = require("assert");
 
 {
   // Multiple callback.
@@ -10,11 +10,14 @@ const assert = require('assert');
     construct: common.mustCall((callback) => {
       callback();
       callback();
-    })
-  }).on('error', common.expectsError({
-    name: 'Error',
-    code: 'ERR_MULTIPLE_CALLBACK'
-  }));
+    }),
+  }).on(
+    "error",
+    common.expectsError({
+      name: "Error",
+      code: "ERR_MULTIPLE_CALLBACK",
+    }),
+  );
 }
 
 {
@@ -23,11 +26,14 @@ const assert = require('assert');
     construct: common.mustCall((callback) => {
       callback();
       callback();
-    })
-  }).on('error', common.expectsError({
-    name: 'Error',
-    code: 'ERR_MULTIPLE_CALLBACK'
-  }));
+    }),
+  }).on(
+    "error",
+    common.expectsError({
+      name: "Error",
+      code: "ERR_MULTIPLE_CALLBACK",
+    }),
+  );
 }
 
 {
@@ -35,12 +41,15 @@ const assert = require('assert');
 
   new Writable({
     construct: common.mustCall((callback) => {
-      callback(new Error('test'));
-    })
-  }).on('error', common.expectsError({
-    name: 'Error',
-    message: 'test'
-  }));
+      callback(new Error("test"));
+    }),
+  }).on(
+    "error",
+    common.expectsError({
+      name: "Error",
+      message: "test",
+    }),
+  );
 }
 
 {
@@ -48,12 +57,15 @@ const assert = require('assert');
 
   new Readable({
     construct: common.mustCall((callback) => {
-      callback(new Error('test'));
-    })
-  }).on('error', common.expectsError({
-    name: 'Error',
-    message: 'test'
-  }));
+      callback(new Error("test"));
+    }),
+  }).on(
+    "error",
+    common.expectsError({
+      name: "Error",
+      message: "test",
+    }),
+  );
 }
 
 {
@@ -61,12 +73,15 @@ const assert = require('assert');
 
   new Writable({
     construct: common.mustCall((callback) => {
-      process.nextTick(callback, new Error('test'));
-    })
-  }).on('error', common.expectsError({
-    name: 'Error',
-    message: 'test'
-  }));
+      process.nextTick(callback, new Error("test"));
+    }),
+  }).on(
+    "error",
+    common.expectsError({
+      name: "Error",
+      message: "test",
+    }),
+  );
 }
 
 {
@@ -74,12 +89,15 @@ const assert = require('assert');
 
   new Readable({
     construct: common.mustCall((callback) => {
-      process.nextTick(callback, new Error('test'));
-    })
-  }).on('error', common.expectsError({
-    name: 'Error',
-    message: 'test'
-  }));
+      process.nextTick(callback, new Error("test"));
+    }),
+  }).on(
+    "error",
+    common.expectsError({
+      name: "Error",
+      message: "test",
+    }),
+  );
 }
 
 function testDestroy(factory) {
@@ -89,11 +107,14 @@ function testDestroy(factory) {
       construct: common.mustCall((cb) => {
         constructed = true;
         process.nextTick(cb);
-      })
+      }),
     });
-    s.on('close', common.mustCall(() => {
-      assert.strictEqual(constructed, true);
-    }));
+    s.on(
+      "close",
+      common.mustCall(() => {
+        assert.strictEqual(constructed, true);
+      }),
+    );
     s.destroy();
   }
 
@@ -103,14 +124,20 @@ function testDestroy(factory) {
       construct: common.mustCall((cb) => {
         constructed = true;
         process.nextTick(cb);
-      })
+      }),
     });
-    s.on('close', common.mustCall(() => {
-      assert.strictEqual(constructed, true);
-    }));
-    s.destroy(null, common.mustCall(() => {
-      assert.strictEqual(constructed, true);
-    }));
+    s.on(
+      "close",
+      common.mustCall(() => {
+        assert.strictEqual(constructed, true);
+      }),
+    );
+    s.destroy(
+      null,
+      common.mustCall(() => {
+        assert.strictEqual(constructed, true);
+      }),
+    );
   }
 
   {
@@ -119,33 +146,44 @@ function testDestroy(factory) {
       construct: common.mustCall((cb) => {
         constructed = true;
         process.nextTick(cb);
-      })
+      }),
     });
-    s.on('close', common.mustCall(() => {
-      assert.strictEqual(constructed, true);
-    }));
+    s.on(
+      "close",
+      common.mustCall(() => {
+        assert.strictEqual(constructed, true);
+      }),
+    );
     s.destroy();
   }
 
-
   {
     let constructed = false;
     const s = factory({
       construct: common.mustCall((cb) => {
         constructed = true;
         process.nextTick(cb);
-      })
+      }),
     });
-    s.on('close', common.mustCall(() => {
-      assert.strictEqual(constructed, true);
-    }));
-    s.on('error', common.mustCall((err) => {
-      assert.strictEqual(err.message, 'kaboom');
-    }));
-    s.destroy(new Error('kaboom'), common.mustCall((err) => {
-      assert.strictEqual(err.message, 'kaboom');
-      assert.strictEqual(constructed, true);
-    }));
+    s.on(
+      "close",
+      common.mustCall(() => {
+        assert.strictEqual(constructed, true);
+      }),
+    );
+    s.on(
+      "error",
+      common.mustCall((err) => {
+        assert.strictEqual(err.message, "kaboom");
+      }),
+    );
+    s.destroy(
+      new Error("kaboom"),
+      common.mustCall((err) => {
+        assert.strictEqual(err.message, "kaboom");
+        assert.strictEqual(constructed, true);
+      }),
+    );
   }
 
   {
@@ -154,26 +192,38 @@ function testDestroy(factory) {
       construct: common.mustCall((cb) => {
         constructed = true;
         process.nextTick(cb);
-      })
+      }),
     });
-    s.on('error', common.mustCall(() => {
-      assert.strictEqual(constructed, true);
-    }));
-    s.on('close', common.mustCall(() => {
-      assert.strictEqual(constructed, true);
-    }));
+    s.on(
+      "error",
+      common.mustCall(() => {
+        assert.strictEqual(constructed, true);
+      }),
+    );
+    s.on(
+      "close",
+      common.mustCall(() => {
+        assert.strictEqual(constructed, true);
+      }),
+    );
     s.destroy(new Error());
   }
 }
-testDestroy((opts) => new Readable({
-  read: common.mustNotCall(),
-  ...opts
-}));
-testDestroy((opts) => new Writable({
-  write: common.mustNotCall(),
-  final: common.mustNotCall(),
-  ...opts
-}));
+testDestroy(
+  (opts) =>
+    new Readable({
+      read: common.mustNotCall(),
+      ...opts,
+    }),
+);
+testDestroy(
+  (opts) =>
+    new Writable({
+      write: common.mustNotCall(),
+      final: common.mustNotCall(),
+      ...opts,
+    }),
+);
 
 {
   let constructed = false;
@@ -186,12 +236,15 @@ testDestroy((opts) => new Writable({
     read: common.mustCall(() => {
       assert.strictEqual(constructed, true);
       r.push(null);
-    })
+    }),
   });
-  r.on('close', common.mustCall(() => {
-    assert.strictEqual(constructed, true);
-  }));
-  r.on('data', common.mustNotCall());
+  r.on(
+    "close",
+    common.mustCall(() => {
+      assert.strictEqual(constructed, true);
+    }),
+  );
+  r.on("data", common.mustNotCall());
 }
 
 {
@@ -209,12 +262,15 @@ testDestroy((opts) => new Writable({
     final: common.mustCall((cb) => {
       assert.strictEqual(constructed, true);
       process.nextTick(cb);
-    })
+    }),
   });
-  w.on('close', common.mustCall(() => {
-    assert.strictEqual(constructed, true);
-  }));
-  w.end('data');
+  w.on(
+    "close",
+    common.mustCall(() => {
+      assert.strictEqual(constructed, true);
+    }),
+  );
+  w.end("data");
 }
 
 {
@@ -229,17 +285,20 @@ testDestroy((opts) => new Writable({
     final: common.mustCall((cb) => {
       assert.strictEqual(constructed, true);
       process.nextTick(cb);
-    })
+    }),
   });
-  w.on('close', common.mustCall(() => {
-    assert.strictEqual(constructed, true);
-  }));
+  w.on(
+    "close",
+    common.mustCall(() => {
+      assert.strictEqual(constructed, true);
+    }),
+  );
   w.end();
 }
 
 {
   new Duplex({
-    construct: common.mustCall()
+    construct: common.mustCall(),
   });
 }
 
@@ -250,23 +309,28 @@ testDestroy((opts) => new Writable({
   const d = new Duplex({
     readable: false,
     construct: common.mustCall((callback) => {
-      setImmediate(common.mustCall(() => {
-        constructed = true;
-        callback();
-      }));
+      setImmediate(
+        common.mustCall(() => {
+          constructed = true;
+          callback();
+        }),
+      );
     }),
     write(chunk, encoding, callback) {
       callback();
     },
     read() {
       this.push(null);
-    }
+    },
   });
   d.resume();
-  d.end('foo');
-  d.on('close', common.mustCall(() => {
-    assert.strictEqual(constructed, true);
-  }));
+  d.end("foo");
+  d.on(
+    "close",
+    common.mustCall(() => {
+      assert.strictEqual(constructed, true);
+    }),
+  );
 }
 
 {
@@ -275,6 +339,6 @@ testDestroy((opts) => new Writable({
     construct: common.mustCall((callback) => {
       callback();
     }),
-    read: common.mustNotCall()
+    read: common.mustNotCall(),
   });
 }

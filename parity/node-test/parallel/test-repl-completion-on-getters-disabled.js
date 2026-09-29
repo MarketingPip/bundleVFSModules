@@ -1,55 +1,61 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('node:assert');
-const { describe, test } = require('node:test');
+const common = require("../common");
+const assert = require("node:assert");
+const { describe, test } = require("node:test");
 
-const { startNewREPLServer } = require('../common/repl');
+const { startNewREPLServer } = require("../common/repl");
 
 function runCompletionTests(replInit, tests) {
   const { replServer: testRepl, input } = startNewREPLServer();
   input.run([replInit]);
 
   tests.forEach(([query, expectedCompletions]) => {
-    testRepl.complete(query, common.mustCall((error, data) => {
-      const actualCompletions = data[0];
-      if (expectedCompletions.length === 0) {
-        assert.deepStrictEqual(actualCompletions, []);
-      } else {
-        expectedCompletions.forEach((expectedCompletion) =>
-          assert(actualCompletions.includes(expectedCompletion), `completion '${expectedCompletion}' not found`)
-        );
-      }
-    }));
+    testRepl.complete(
+      query,
+      common.mustCall((error, data) => {
+        const actualCompletions = data[0];
+        if (expectedCompletions.length === 0) {
+          assert.deepStrictEqual(actualCompletions, []);
+        } else {
+          expectedCompletions.forEach((expectedCompletion) =>
+            assert(
+              actualCompletions.includes(expectedCompletion),
+              `completion '${expectedCompletion}' not found`,
+            ),
+          );
+        }
+      }),
+    );
   });
 }
 
-describe('REPL completion in relation of getters', () => {
-  describe('standard behavior without proxies/getters', () => {
-    test('completion of nested properties of an undeclared objects', () => {
-      runCompletionTests('', [
-        ['nonExisting.', []],
-        ['nonExisting.f', []],
-        ['nonExisting.foo', []],
-        ['nonExisting.foo.', []],
-        ['nonExisting.foo.bar.b', []],
+describe("REPL completion in relation of getters", () => {
+  describe("standard behavior without proxies/getters", () => {
+    test("completion of nested properties of an undeclared objects", () => {
+      runCompletionTests("", [
+        ["nonExisting.", []],
+        ["nonExisting.f", []],
+        ["nonExisting.foo", []],
+        ["nonExisting.foo.", []],
+        ["nonExisting.foo.bar.b", []],
       ]);
     });
 
-    test('completion of nested properties on plain objects', () => {
-      runCompletionTests('const plainObj = { foo: { bar: { baz: {} } } };', [
-        ['plainObj.', ['plainObj.foo']],
-        ['plainObj.f', ['plainObj.foo']],
-        ['plainObj.foo', ['plainObj.foo']],
-        ['plainObj.foo.', ['plainObj.foo.bar']],
-        ['plainObj.foo.bar.b', ['plainObj.foo.bar.baz']],
-        ['plainObj.fooBar.', []],
-        ['plainObj.fooBar.baz', []],
+    test("completion of nested properties on plain objects", () => {
+      runCompletionTests("const plainObj = { foo: { bar: { baz: {} } } };", [
+        ["plainObj.", ["plainObj.foo"]],
+        ["plainObj.f", ["plainObj.foo"]],
+        ["plainObj.foo", ["plainObj.foo"]],
+        ["plainObj.foo.", ["plainObj.foo.bar"]],
+        ["plainObj.foo.bar.b", ["plainObj.foo.bar.baz"]],
+        ["plainObj.fooBar.", []],
+        ["plainObj.fooBar.baz", []],
       ]);
     });
   });
 
-  describe('completions on an object with getters', () => {
+  describe("completions on an object with getters", () => {
     test(`completions are generated for properties that don't trigger getters`, () => {
       runCompletionTests(
         `
@@ -63,25 +69,36 @@ describe('REPL completion in relation of getters', () => {
           foo: { bar: { baz: { buz: {} } }, get gBar() { return { baz: {} } } },
           get gFoo() { return { bar: { baz: {} } }; }
         };
-        `, [
-          ['objWithGetters.', ['objWithGetters.foo']],
-          ['objWithGetters.f', ['objWithGetters.foo']],
-          ['objWithGetters.foo', ['objWithGetters.foo']],
+        `,
+        [
+          ["objWithGetters.", ["objWithGetters.foo"]],
+          ["objWithGetters.f", ["objWithGetters.foo"]],
+          ["objWithGetters.foo", ["objWithGetters.foo"]],
           ['objWithGetters["foo"].b', ['objWithGetters["foo"].bar']],
-          ['objWithGetters.foo.', ['objWithGetters.foo.bar']],
-          ['objWithGetters.foo.bar.b', ['objWithGetters.foo.bar.baz']],
-          ['objWithGetters.gFo', ['objWithGetters.gFoo']],
-          ['objWithGetters.foo.gB', ['objWithGetters.foo.gBar']],
+          ["objWithGetters.foo.", ["objWithGetters.foo.bar"]],
+          ["objWithGetters.foo.bar.b", ["objWithGetters.foo.bar.baz"]],
+          ["objWithGetters.gFo", ["objWithGetters.gFoo"]],
+          ["objWithGetters.foo.gB", ["objWithGetters.foo.gBar"]],
           ["objWithGetters.foo['bar'].b", ["objWithGetters.foo['bar'].baz"]],
-          ["objWithGetters['foo']['bar'].b", ["objWithGetters['foo']['bar'].baz"]],
-          ["objWithGetters['foo']['bar']['baz'].b", ["objWithGetters['foo']['bar']['baz'].buz"]],
-          ["objWithGetters[keys['foo key']].b", ["objWithGetters[keys['foo key']].bar"]],
-          ['objWithGetters[fooKey].b', ['objWithGetters[fooKey].bar']],
+          [
+            "objWithGetters['foo']['bar'].b",
+            ["objWithGetters['foo']['bar'].baz"],
+          ],
+          [
+            "objWithGetters['foo']['bar']['baz'].b",
+            ["objWithGetters['foo']['bar']['baz'].buz"],
+          ],
+          [
+            "objWithGetters[keys['foo key']].b",
+            ["objWithGetters[keys['foo key']].bar"],
+          ],
+          ["objWithGetters[fooKey].b", ["objWithGetters[fooKey].bar"]],
           ["objWithGetters['f' + 'oo'].b", ["objWithGetters['f' + 'oo'].bar"]],
-        ]);
+        ],
+      );
     });
 
-    test('no completions are generated for properties that trigger getters', () => {
+    test("no completions are generated for properties that trigger getters", () => {
       runCompletionTests(
         `
         function getGFooKey() {
@@ -100,37 +117,42 @@ describe('REPL completion in relation of getters', () => {
         };
         `,
         [
-          ['objWithGetters.gFoo.', []],
-          ['objWithGetters.gFoo.b', []],
+          ["objWithGetters.gFoo.", []],
+          ["objWithGetters.gFoo.b", []],
           ['objWithGetters["gFoo"].b', []],
-          ['objWithGetters.gFoo.bar.b', []],
-          ['objWithGetters.foo.gBar.', []],
-          ['objWithGetters.foo.gBar.b', []],
+          ["objWithGetters.gFoo.bar.b", []],
+          ["objWithGetters.foo.gBar.", []],
+          ["objWithGetters.foo.gBar.b", []],
           ["objWithGetters.foo['gBar'].b", []],
           ["objWithGetters['foo']['gBar'].b", []],
           ["objWithGetters['foo']['gBar']['gBuz'].", []],
           ["objWithGetters[keys['g-foo key']].b", []],
-          ['objWithGetters[gFooKey].b', []],
+          ["objWithGetters[gFooKey].b", []],
           ["objWithGetters['g' + 'Foo'].b", []],
-          ['objWithGetters[getGFooKey()].b', []],
-        ]);
+          ["objWithGetters[getGFooKey()].b", []],
+        ],
+      );
     });
 
-    test('no side effects are triggered for getters during completion', async () => {
+    test("no side effects are triggered for getters during completion", async () => {
       const { replServer } = startNewREPLServer();
 
       await new Promise((resolve, reject) => {
-        replServer.eval('const foo = { get name() { globalThis.nameGetterRun = true; throw new Error(); } };',
-                        replServer.context, '', (err) => {
-                          if (err) {
-                            reject(err);
-                          } else {
-                            resolve();
-                          }
-                        });
+        replServer.eval(
+          "const foo = { get name() { globalThis.nameGetterRun = true; throw new Error(); } };",
+          replServer.context,
+          "",
+          (err) => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve();
+            }
+          },
+        );
       });
 
-      ['foo.name.', 'foo["name"].'].forEach((test) => {
+      ["foo.name.", 'foo["name"].'].forEach((test) => {
         replServer.complete(
           test,
           common.mustCall((error, data) => {
@@ -138,14 +160,14 @@ describe('REPL completion in relation of getters', () => {
             assert.strictEqual(replServer.context.nameGetterRun, undefined);
             // No errors has been thrown
             assert.strictEqual(error, null);
-          })
+          }),
         );
       });
     });
   });
 
-  describe('completions on proxies', () => {
-    test('no completions are generated for a proxy object', () => {
+  describe("completions on proxies", () => {
+    test("no completions are generated for a proxy object", () => {
       runCompletionTests(
         `
         function getFooKey() {
@@ -159,30 +181,34 @@ describe('REPL completion in relation of getters', () => {
         };
 
         const proxyObj = new Proxy({ foo: { bar: { baz: {} } } }, {});
-        `, [
-          ['proxyObj.', []],
-          ['proxyObj.f', []],
-          ['proxyObj.foo', []],
-          ['proxyObj.foo.', []],
+        `,
+        [
+          ["proxyObj.", []],
+          ["proxyObj.f", []],
+          ["proxyObj.foo", []],
+          ["proxyObj.foo.", []],
           ['proxyObj.["foo"].', []],
           ['proxyObj.["f" + "oo"].', []],
-          ['proxyObj.[fooKey].', []],
-          ['proxyObj.[getFooKey()].', []],
+          ["proxyObj.[fooKey].", []],
+          ["proxyObj.[getFooKey()].", []],
           ['proxyObj.[keys["foo key"]].', []],
-          ['proxyObj.foo.bar.b', []],
-        ]);
+          ["proxyObj.foo.bar.b", []],
+        ],
+      );
     });
 
-    test('no completions are generated for a proxy present in a standard object', () => {
+    test("no completions are generated for a proxy present in a standard object", () => {
       runCompletionTests(
-        'const objWithProxy = { foo: { bar: new Proxy({ baz: {} }, {}) } };', [
-          ['objWithProxy.', ['objWithProxy.foo']],
-          ['objWithProxy.foo', ['objWithProxy.foo']],
-          ['objWithProxy.foo.', ['objWithProxy.foo.bar']],
-          ['objWithProxy.foo.b', ['objWithProxy.foo.bar']],
-          ['objWithProxy.foo.bar.', []],
+        "const objWithProxy = { foo: { bar: new Proxy({ baz: {} }, {}) } };",
+        [
+          ["objWithProxy.", ["objWithProxy.foo"]],
+          ["objWithProxy.foo", ["objWithProxy.foo"]],
+          ["objWithProxy.foo.", ["objWithProxy.foo.bar"]],
+          ["objWithProxy.foo.b", ["objWithProxy.foo.bar"]],
+          ["objWithProxy.foo.bar.", []],
           ['objWithProxy.foo["b" + "ar"].', []],
-        ]);
+        ],
+      );
     });
   });
 });

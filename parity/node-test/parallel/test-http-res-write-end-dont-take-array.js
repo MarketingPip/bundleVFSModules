@@ -19,48 +19,48 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
 const server = http.createServer();
 
-server.once('request', common.mustCall((req, res) => {
-  server.on('request', common.mustCall((req, res) => {
-    res.end(Buffer.from('asdf'));
-  }));
-  // `res.write()` should accept `string`.
-  res.write('string');
-  // `res.write()` should accept `buffer`.
-  res.write(Buffer.from('asdf'));
+server.once(
+  "request",
+  common.mustCall((req, res) => {
+    server.on(
+      "request",
+      common.mustCall((req, res) => {
+        res.end(Buffer.from("asdf"));
+      }),
+    );
+    // `res.write()` should accept `string`.
+    res.write("string");
+    // `res.write()` should accept `buffer`.
+    res.write(Buffer.from("asdf"));
 
-  const expectedError = {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-  };
+    const expectedError = {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    };
 
-  // `res.write()` should not accept an Array.
-  assert.throws(
-    () => {
-      res.write(['array']);
-    },
-    expectedError
-  );
+    // `res.write()` should not accept an Array.
+    assert.throws(() => {
+      res.write(["array"]);
+    }, expectedError);
 
-  // `res.end()` should not accept an Array.
-  assert.throws(
-    () => {
-      res.end(['moo']);
-    },
-    expectedError
-  );
+    // `res.end()` should not accept an Array.
+    assert.throws(() => {
+      res.end(["moo"]);
+    }, expectedError);
 
-  // `res.end()` should accept `string`.
-  res.end('string');
-}));
+    // `res.end()` should accept `string`.
+    res.end("string");
+  }),
+);
 
-server.listen(0, function() {
+server.listen(0, function () {
   // Just make a request, other tests handle responses.
   http.get({ port: this.address().port }, (res) => {
     res.resume();

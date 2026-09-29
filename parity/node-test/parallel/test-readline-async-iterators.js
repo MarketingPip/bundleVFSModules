@@ -1,23 +1,26 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const fs = require('fs');
-const readline = require('readline');
-const { Readable } = require('stream');
-const assert = require('assert');
+const common = require("../common");
+const fs = require("fs");
+const readline = require("readline");
+const { Readable } = require("stream");
+const assert = require("assert");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
-const filename = tmpdir.resolve('test.txt');
+const filename = tmpdir.resolve("test.txt");
 
 const testContents = [
-  '',
-  '\n',
-  'line 1',
-  'line 1\nline 2 南越国是前203年至前111年存在于岭南地区的一个国家\nline 3\ntrailing',
-  'line 1\nline 2\nline 3 ends with newline\n',
-  Array(1e4).fill(0).map((_, i) => i).join('\n'), // More that 2 * highWaterMark
+  "",
+  "\n",
+  "line 1",
+  "line 1\nline 2 南越国是前203年至前111年存在于岭南地区的一个国家\nline 3\ntrailing",
+  "line 1\nline 2\nline 3 ends with newline\n",
+  Array(1e4)
+    .fill(0)
+    .map((_, i) => i)
+    .join("\n"), // More that 2 * highWaterMark
 ];
 
 async function testSimple() {
@@ -27,7 +30,7 @@ async function testSimple() {
     const readable = fs.createReadStream(filename);
     const rli = readline.createInterface({
       input: readable,
-      crlfDelay: Infinity
+      crlfDelay: Infinity,
     });
 
     const iteratedLines = [];
@@ -35,12 +38,12 @@ async function testSimple() {
       iteratedLines.push(k);
     }
 
-    const expectedLines = fileContent.split('\n');
-    if (expectedLines[expectedLines.length - 1] === '') {
+    const expectedLines = fileContent.split("\n");
+    if (expectedLines[expectedLines.length - 1] === "") {
       expectedLines.pop();
     }
     assert.deepStrictEqual(iteratedLines, expectedLines);
-    assert.strictEqual(iteratedLines.join(''), fileContent.replace(/\n/g, ''));
+    assert.strictEqual(iteratedLines.join(""), fileContent.replace(/\n/g, ""));
   }
 }
 
@@ -50,7 +53,7 @@ async function testReadableFrom() {
     const readable = Readable.from([fileContent]);
     const rli = readline.createInterface({
       input: readable,
-      crlfDelay: Infinity
+      crlfDelay: Infinity,
     });
 
     const iteratedLines = [];
@@ -58,12 +61,12 @@ async function testReadableFrom() {
       iteratedLines.push(k);
     }
 
-    const expectedLines = fileContent.split('\n');
-    if (expectedLines[expectedLines.length - 1] === '') {
+    const expectedLines = fileContent.split("\n");
+    if (expectedLines[expectedLines.length - 1] === "") {
       expectedLines.pop();
     }
     assert.deepStrictEqual(iteratedLines, expectedLines);
-    assert.strictEqual(iteratedLines.join(''), fileContent.replace(/\n/g, ''));
+    assert.strictEqual(iteratedLines.join(""), fileContent.replace(/\n/g, ""));
   }
 }
 
@@ -74,11 +77,11 @@ async function testMutual() {
     const readable = fs.createReadStream(filename);
     const rli = readline.createInterface({
       input: readable,
-      crlfDelay: Infinity
+      crlfDelay: Infinity,
     });
 
-    const expectedLines = fileContent.split('\n');
-    if (expectedLines[expectedLines.length - 1] === '') {
+    const expectedLines = fileContent.split("\n");
+    if (expectedLines[expectedLines.length - 1] === "") {
       expectedLines.pop();
     }
     const iteratedLines = [];
@@ -98,11 +101,11 @@ async function testMutual() {
 }
 
 async function testSlowStreamForLeaks() {
-  const message = 'a\nb\nc\n';
+  const message = "a\nb\nc\n";
   const DELAY = 1;
   const REPETITIONS = 100;
   const warningCallback = common.mustNotCall();
-  process.on('warning', warningCallback);
+  process.on("warning", warningCallback);
 
   function getStream() {
     const readable = Readable({
@@ -135,7 +138,7 @@ async function testSlowStreamForLeaks() {
   }
 
   assert.strictEqual(lines, 3 * REPETITIONS);
-  process.off('warning', warningCallback);
+  process.off("warning", warningCallback);
 }
 
 testSimple()

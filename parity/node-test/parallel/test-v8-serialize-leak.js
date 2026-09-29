@@ -1,23 +1,22 @@
-'use strict';
+"use strict";
 // Flags: --expose-gc
 
-const common = require('../common');
-const { gcUntil } = require('../common/gc');
+const common = require("../common");
+const { gcUntil } = require("../common/gc");
 
 // On IBMi, the rss memory always returns zero
-if (common.isIBMi)
-  common.skip('On IBMi, the rss memory always returns zero');
+if (common.isIBMi) common.skip("On IBMi, the rss memory always returns zero");
 
-const v8 = require('v8');
+const v8 = require("v8");
 
 const before = process.memoryUsage.rss();
 
 for (let i = 0; i < 1000000; i++) {
-  v8.serialize('');
+  v8.serialize("");
 }
 
 async function main() {
-  await gcUntil('RSS should go down', () => {
+  await gcUntil("RSS should go down", () => {
     const after = process.memoryUsage.rss();
     if (common.isASan) {
       console.log(`ASan: before=${before} after=${after}`);

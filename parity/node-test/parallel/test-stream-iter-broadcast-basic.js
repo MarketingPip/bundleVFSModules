@@ -1,10 +1,10 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { setTimeout } = require('timers/promises');
-const { broadcast, text } = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { setTimeout } = require("timers/promises");
+const { broadcast, text } = require("stream/iter");
 
 // =============================================================================
 // Basic broadcast
@@ -19,16 +19,13 @@ async function testBasicBroadcast() {
 
   assert.strictEqual(bc.consumerCount, 2);
 
-  await writer.write('hello');
+  await writer.write("hello");
   await writer.end();
 
-  const [data1, data2] = await Promise.all([
-    text(consumer1),
-    text(consumer2),
-  ]);
+  const [data1, data2] = await Promise.all([text(consumer1), text(consumer2)]);
 
-  assert.strictEqual(data1, 'hello');
-  assert.strictEqual(data2, 'hello');
+  assert.strictEqual(data1, "hello");
+  assert.strictEqual(data2, "hello");
 }
 
 async function testMultipleWrites() {
@@ -36,13 +33,13 @@ async function testMultipleWrites() {
 
   const consumer = bc.push();
 
-  await writer.write('a');
-  await writer.write('b');
-  await writer.write('c');
+  await writer.write("a");
+  await writer.write("b");
+  await writer.write("c");
   await writer.end();
 
   const data = await text(consumer);
-  assert.strictEqual(data, 'abc');
+  assert.strictEqual(data, "abc");
 }
 
 async function testConsumerCount() {
@@ -92,29 +89,29 @@ async function testWritevSync() {
   const { writer, broadcast: bc } = broadcast({ budget: 16384 });
   const consumer = bc.push();
 
-  assert.strictEqual(writer.writevSync(['hello', ' ', 'world']), true);
+  assert.strictEqual(writer.writevSync(["hello", " ", "world"]), true);
   writer.endSync();
 
   const data = await text(consumer);
-  assert.strictEqual(data, 'hello world');
+  assert.strictEqual(data, "hello world");
 }
 
 async function testWriterEnd() {
   const { writer, broadcast: bc } = broadcast();
   const consumer = bc.push();
 
-  await writer.write('data');
+  await writer.write("data");
   const totalBytes = await writer.end();
   assert.strictEqual(totalBytes, 4); // 'data' = 4 UTF-8 bytes
 
   const data = await text(consumer);
-  assert.strictEqual(data, 'data');
+  assert.strictEqual(data, "data");
 }
 
 async function testWriterEndWithPreAbortedSignal() {
   const { writer, broadcast: bc } = broadcast();
   const consumer = bc.push();
-  const reason = new Error('end aborted');
+  const reason = new Error("end aborted");
 
   await assert.rejects(
     writer.end({ signal: AbortSignal.abort(reason) }),
@@ -122,25 +119,25 @@ async function testWriterEndWithPreAbortedSignal() {
   );
 
   // A rejected end must leave the writer open.
-  await writer.write('data');
+  await writer.write("data");
   assert.strictEqual(await writer.end(), 4);
-  assert.strictEqual(await text(consumer), 'data');
+  assert.strictEqual(await text(consumer), "data");
 }
 
 async function testWriterFail() {
   const { writer, broadcast: bc } = broadcast();
   const consumer = bc.push();
 
-  writer.fail(new Error('test error'));
+  writer.fail(new Error("test error"));
 
   await assert.rejects(
     async () => {
       // eslint-disable-next-line no-unused-vars
       for await (const _ of consumer) {
-        assert.fail('Should not reach here');
+        assert.fail("Should not reach here");
       }
     },
-    { message: 'test error' },
+    { message: "test error" },
   );
 }
 
@@ -171,11 +168,11 @@ async function testCancelWithReason() {
   // Give the consumer time to enter the waiting state
   await new Promise((resolve) => setImmediate(resolve));
 
-  bc.cancel(new Error('cancelled'));
+  bc.cancel(new Error("cancelled"));
 
   const result = await resultPromise;
   assert.ok(result instanceof Error);
-  assert.strictEqual(result.message, 'cancelled');
+  assert.strictEqual(result.message, "cancelled");
 }
 
 async function testPendingNextSettlesAfterReturn() {
@@ -192,7 +189,7 @@ async function testPendingNextSettlesAfterReturn() {
 
 async function testPushAbortSignalRejectsPendingNext() {
   const ac = new AbortController();
-  const reason = new Error('push aborted');
+  const reason = new Error("push aborted");
   const { broadcast: bc } = broadcast();
   const iter = bc.push({ signal: ac.signal })[Symbol.asyncIterator]();
 
@@ -215,8 +212,8 @@ async function testFailDetachesConsumers() {
   assert.strictEqual(bc.consumerCount, 2);
 
   // Write some data, then fail the writer
-  await writer.write('data');
-  await writer.fail(new Error('writer failed'));
+  await writer.write("data");
+  await writer.fail(new Error("writer failed"));
 
   // After fail, consumers are detached
   assert.strictEqual(bc.consumerCount, 0);
@@ -226,20 +223,20 @@ async function testFailDetachesConsumers() {
     async () => {
       // eslint-disable-next-line no-unused-vars
       for await (const _ of consumer1) {
-        assert.fail('Should not reach here');
+        assert.fail("Should not reach here");
       }
     },
-    { message: 'writer failed' },
+    { message: "writer failed" },
   );
 
   await assert.rejects(
     async () => {
       // eslint-disable-next-line no-unused-vars
       for await (const _ of consumer2) {
-        assert.fail('Should not reach here');
+        assert.fail("Should not reach here");
       }
     },
-    { message: 'writer failed' },
+    { message: "writer failed" },
   );
 }
 
@@ -250,14 +247,19 @@ async function testFailDetachesConsumers() {
 async function testWriterFailIdempotent() {
   const { writer, broadcast: bc } = broadcast();
   const consumer = bc.push();
-  writer.writeSync('hello');
-  writer.fail(new Error('fail!'));
+  writer.writeSync("hello");
+  writer.fail(new Error("fail!"));
   // Second call is a no-op (already errored)
-  writer.fail(new Error('fail2'));
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of consumer) { /* consume */ }
-  }, { message: 'fail!' });
+  writer.fail(new Error("fail2"));
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of consumer) {
+        /* consume */
+      }
+    },
+    { message: "fail!" },
+  );
 }
 
 // cancel() with falsy reason (0, "", false) should still treat as error
@@ -276,13 +278,13 @@ async function testLateJoinerSeesBufferedData() {
   const { writer, broadcast: bc } = broadcast({ budget: 16384 });
 
   // Write data before any consumer joins
-  writer.writeSync('before-join');
+  writer.writeSync("before-join");
   writer.endSync();
 
   // Consumer joins after data is written
   const consumer = bc.push();
   const result = await text(consumer);
-  assert.strictEqual(result, 'before-join');
+  assert.strictEqual(result, "before-join");
 }
 
 async function testOverlappingNextKeepsEarlierRead() {
@@ -292,12 +294,11 @@ async function testOverlappingNextKeepsEarlierRead() {
   const first = it.next();
   const second = it.next();
 
-  await writer.write('x');
+  await writer.write("x");
 
   const secondResult = await Promise.race([
     second.then((value) => ({ __proto__: null, settled: true, value })),
-    setTimeout(common.platformTimeout(50),
-               { __proto__: null, settled: false }),
+    setTimeout(common.platformTimeout(50), { __proto__: null, settled: false }),
   ]);
   assert.deepStrictEqual(secondResult, {
     __proto__: null,
@@ -306,7 +307,7 @@ async function testOverlappingNextKeepsEarlierRead() {
 
   const result = await first;
   assert.strictEqual(result.done, false);
-  assert.strictEqual(Buffer.concat(result.value).toString(), 'x');
+  assert.strictEqual(Buffer.concat(result.value).toString(), "x");
 
   writer.endSync();
   assert.deepStrictEqual(await second, {

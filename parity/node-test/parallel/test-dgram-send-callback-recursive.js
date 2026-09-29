@@ -1,10 +1,10 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const dgram = require('dgram');
-const client = dgram.createSocket('udp4');
-const chunk = 'abc';
+const dgram = require("dgram");
+const client = dgram.createSocket("udp4");
+const chunk = "abc";
 let received = 0;
 let sent = 0;
 const limit = 10;
@@ -19,7 +19,7 @@ function onsend() {
   }
 }
 
-client.on('listening', function() {
+client.on("listening", function () {
   port = this.address().port;
 
   process.nextTick(() => {
@@ -29,15 +29,18 @@ client.on('listening', function() {
   onsend();
 });
 
-client.on('message', (buf, info) => {
+client.on("message", (buf, info) => {
   received++;
   if (received === limit) {
     client.close();
   }
 });
 
-client.on('close', common.mustCall(function() {
-  assert.strictEqual(received, limit);
-}));
+client.on(
+  "close",
+  common.mustCall(function () {
+    assert.strictEqual(received, limit);
+  }),
+);
 
 client.bind(0);

@@ -1,22 +1,24 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const vm = require('vm');
-const assert = require('assert');
+const vm = require("vm");
+const assert = require("assert");
 
 let base = {
-  propBase: 1
+  propBase: 1,
 };
 
 let sandbox = Object.create(base, {
-  propSandbox: { value: 3 }
+  propSandbox: { value: 3 },
 });
 
 const context = vm.createContext(sandbox);
 
-let result = vm.runInContext('Object.hasOwnProperty(this, "propBase");',
-                             context);
+let result = vm.runInContext(
+  'Object.hasOwnProperty(this, "propBase");',
+  context,
+);
 
 assert.strictEqual(result, false);
 
@@ -28,11 +30,11 @@ base.y = 2;
 sandbox = { __proto__: base };
 sandbox.z = 3;
 
-assert.deepStrictEqual(Object.keys(sandbox), ['z']);
+assert.deepStrictEqual(Object.keys(sandbox), ["z"]);
 
-const code = 'x = 0; z = 4;';
+const code = "x = 0; z = 4;";
 result = vm.runInNewContext(code, sandbox);
 assert.strictEqual(result, 4);
 
 // Check that y is not an own property.
-assert.deepStrictEqual(Object.keys(sandbox), ['z', 'x']);
+assert.deepStrictEqual(Object.keys(sandbox), ["z", "x"]);

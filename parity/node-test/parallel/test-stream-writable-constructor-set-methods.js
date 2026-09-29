@@ -1,10 +1,10 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
-const assert = require('assert');
-const { Writable } = require('stream');
+const assert = require("assert");
+const { Writable } = require("stream");
 
-const bufferBlerg = Buffer.from('blerg');
+const bufferBlerg = Buffer.from("blerg");
 const w = new Writable();
 
 assert.throws(
@@ -12,10 +12,10 @@ assert.throws(
     w.end(bufferBlerg);
   },
   {
-    name: 'Error',
-    code: 'ERR_METHOD_NOT_IMPLEMENTED',
-    message: 'The _write() method is not implemented'
-  }
+    name: "Error",
+    code: "ERR_METHOD_NOT_IMPLEMENTED",
+    message: "The _write() method is not implemented",
+  },
 );
 
 const _write = common.mustCall((chunk, _, next) => {

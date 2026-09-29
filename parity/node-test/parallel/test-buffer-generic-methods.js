@@ -1,104 +1,101 @@
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
 function arrayOfNumbers(length) {
   return Array.from({ length }, (_, i) => i);
 }
 
-const customInspectSymbol = Symbol.for('nodejs.util.inspect.custom');
+const customInspectSymbol = Symbol.for("nodejs.util.inspect.custom");
 
 // Methods that are either internal or do not make sense to be generic.
 const ignoredMethods = [
-  'constructor',
-  'asciiSlice',
-  'base64Slice',
-  'base64urlSlice',
-  'latin1Slice',
-  'hexSlice',
-  'ucs2Slice',
-  'utf8Slice',
-  'asciiWrite',
-  'base64Write',
-  'base64urlWrite',
-  'latin1Write',
-  'hexWrite',
-  'ucs2Write',
-  'utf8Write',
-  'inspect',
+  "constructor",
+  "asciiSlice",
+  "base64Slice",
+  "base64urlSlice",
+  "latin1Slice",
+  "hexSlice",
+  "ucs2Slice",
+  "utf8Slice",
+  "asciiWrite",
+  "base64Write",
+  "base64urlWrite",
+  "latin1Write",
+  "hexWrite",
+  "ucs2Write",
+  "utf8Write",
+  "inspect",
 ];
 
 // Tested methods
 const testedMethods = [
-  'compare',
-  'copy',
-  'equals',
-  'fill',
-  'includes',
-  'indexOf',
-  'lastIndexOf',
-  'readBigInt64BE',
-  'readBigInt64LE',
-  'readBigUInt64BE',
-  'readBigUInt64LE',
-  'readDoubleBE',
-  'readDoubleLE',
-  'readFloatBE',
-  'readFloatLE',
-  'readInt8',
-  'readInt16BE',
-  'readInt16LE',
-  'readInt32BE',
-  'readInt32LE',
-  'readIntBE',
-  'readIntLE',
-  'readUInt8',
-  'readUInt16BE',
-  'readUInt16LE',
-  'readUInt32BE',
-  'readUInt32LE',
-  'readUIntBE',
-  'readUIntLE',
-  'subarray',
-  'slice',
-  'swap16',
-  'swap32',
-  'swap64',
-  'toJSON',
-  'toString',
-  'toLocaleString',
-  'write',
-  'writeBigInt64BE',
-  'writeBigInt64LE',
-  'writeBigUInt64BE',
-  'writeBigUInt64LE',
-  'writeDoubleBE',
-  'writeDoubleLE',
-  'writeFloatBE',
-  'writeFloatLE',
-  'writeInt8',
-  'writeInt16BE',
-  'writeInt16LE',
-  'writeInt32BE',
-  'writeInt32LE',
-  'writeIntBE',
-  'writeIntLE',
-  'writeUInt8',
-  'writeUInt16BE',
-  'writeUInt16LE',
-  'writeUInt32BE',
-  'writeUInt32LE',
-  'writeUIntBE',
-  'writeUIntLE',
+  "compare",
+  "copy",
+  "equals",
+  "fill",
+  "includes",
+  "indexOf",
+  "lastIndexOf",
+  "readBigInt64BE",
+  "readBigInt64LE",
+  "readBigUInt64BE",
+  "readBigUInt64LE",
+  "readDoubleBE",
+  "readDoubleLE",
+  "readFloatBE",
+  "readFloatLE",
+  "readInt8",
+  "readInt16BE",
+  "readInt16LE",
+  "readInt32BE",
+  "readInt32LE",
+  "readIntBE",
+  "readIntLE",
+  "readUInt8",
+  "readUInt16BE",
+  "readUInt16LE",
+  "readUInt32BE",
+  "readUInt32LE",
+  "readUIntBE",
+  "readUIntLE",
+  "subarray",
+  "slice",
+  "swap16",
+  "swap32",
+  "swap64",
+  "toJSON",
+  "toString",
+  "toLocaleString",
+  "write",
+  "writeBigInt64BE",
+  "writeBigInt64LE",
+  "writeBigUInt64BE",
+  "writeBigUInt64LE",
+  "writeDoubleBE",
+  "writeDoubleLE",
+  "writeFloatBE",
+  "writeFloatLE",
+  "writeInt8",
+  "writeInt16BE",
+  "writeInt16LE",
+  "writeInt32BE",
+  "writeInt32LE",
+  "writeIntBE",
+  "writeIntLE",
+  "writeUInt8",
+  "writeUInt16BE",
+  "writeUInt16LE",
+  "writeUInt32BE",
+  "writeUInt32LE",
+  "writeUIntBE",
+  "writeUIntLE",
   customInspectSymbol,
 ];
 
-const expectedMethods = [
-  ...ignoredMethods,
-  ...testedMethods,
-];
+const expectedMethods = [...ignoredMethods, ...testedMethods];
 
-const isMethod = (method) => typeof Buffer.prototype[method] === 'function';
+const isMethod = (method) => typeof Buffer.prototype[method] === "function";
 const addUnique = (names, newName) => {
   const nameMatches = (name) => name.toLowerCase() === newName.toLowerCase();
   if (!names.some(nameMatches)) names.push(newName);
@@ -106,14 +103,22 @@ const addUnique = (names, newName) => {
 };
 const actualMethods = [
   // The readXInt methods are provided as both upper & lower case names; reducing to only consider each once.
-  ...Object.getOwnPropertyNames(Buffer.prototype).filter(isMethod).reduce(addUnique, []),
+  ...Object.getOwnPropertyNames(Buffer.prototype)
+    .filter(isMethod)
+    .reduce(addUnique, []),
   ...Object.getOwnPropertySymbols(Buffer.prototype).filter(isMethod),
 ];
 
 // These methods are not accounted for in the generic tests.
-assert.deepStrictEqual(actualMethods.filter((v) => !expectedMethods.includes(v)), []);
+assert.deepStrictEqual(
+  actualMethods.filter((v) => !expectedMethods.includes(v)),
+  [],
+);
 // These methods have been removed, please update the table in this file.
-assert.deepStrictEqual(expectedMethods.filter((v) => !actualMethods.includes(v)), []);
+assert.deepStrictEqual(
+  expectedMethods.filter((v) => !actualMethods.includes(v)),
+  [],
+);
 
 const {
   compare,
@@ -187,7 +192,11 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   assert.ok(Buffer.isBuffer(expectedBuffer));
   assert.strictEqual(actualUint8Array.length, expectedBuffer.length);
   for (let i = 0; i < actualUint8Array.length; i++) {
-    assert.strictEqual(actualUint8Array[i], expectedBuffer[i], `Uint8Array and Buffer differ at ${i}`);
+    assert.strictEqual(
+      actualUint8Array[i],
+      expectedBuffer[i],
+      `Uint8Array and Buffer differ at ${i}`,
+    );
   }
 }
 
@@ -240,8 +249,8 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const buffer = Buffer.alloc(10);
 
   assertContentEqual(
-    fill.call(uint8array, '\u03a3', 0, 'utf16le'),
-    buffer.fill('\u03a3', 0, 'utf16le')
+    fill.call(uint8array, "\u03a3", 0, "utf16le"),
+    buffer.fill("\u03a3", 0, "utf16le"),
   );
 }
 
@@ -252,11 +261,10 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const buffer = Buffer.of(154, 3, 145, 3, 163, 3, 163, 3, 149, 3);
 
   assert.strictEqual(
-    includes.call(uint8array, '\u03a3', 0, 'utf16le'),
-    buffer.includes('\u03a3', 0, 'utf16le')
+    includes.call(uint8array, "\u03a3", 0, "utf16le"),
+    buffer.includes("\u03a3", 0, "utf16le"),
   );
 }
-
 
 {
   // buf.indexOf(value[, byteOffset][, encoding])
@@ -265,8 +273,8 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const buffer = Buffer.of(154, 3, 145, 3, 163, 3, 163, 3, 149, 3);
 
   assert.strictEqual(
-    indexOf.call(uint8array, '\u03a3', 0, 'utf16le'),
-    buffer.indexOf('\u03a3', 0, 'utf16le')
+    indexOf.call(uint8array, "\u03a3", 0, "utf16le"),
+    buffer.indexOf("\u03a3", 0, "utf16le"),
   );
 }
 
@@ -277,11 +285,10 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const buffer = Buffer.of(154, 3, 145, 3, 163, 3, 163, 3, 149, 3);
 
   assert.strictEqual(
-    lastIndexOf.call(uint8array, '\u03a3', -5, 'utf16le'),
-    buffer.lastIndexOf('\u03a3', -5, 'utf16le')
+    lastIndexOf.call(uint8array, "\u03a3", -5, "utf16le"),
+    buffer.lastIndexOf("\u03a3", -5, "utf16le"),
   );
 }
-
 
 {
   // buf.readBigInt64BE([offset])
@@ -291,7 +298,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assert.strictEqual(
     readBigInt64BE.call(uint8array, 0),
-    buffer.readBigInt64BE(0)
+    buffer.readBigInt64BE(0),
   );
 }
 
@@ -303,7 +310,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assert.strictEqual(
     readBigInt64LE.call(uint8array, 0),
-    buffer.readBigInt64LE(0)
+    buffer.readBigInt64LE(0),
   );
 }
 
@@ -315,7 +322,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assert.strictEqual(
     readBigUInt64BE.call(uint8array, 0),
-    buffer.readBigUInt64BE(0)
+    buffer.readBigUInt64BE(0),
   );
 }
 
@@ -327,7 +334,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assert.strictEqual(
     readBigUInt64LE.call(uint8array, 0),
-    buffer.readBigUInt64LE(0)
+    buffer.readBigUInt64LE(0),
   );
 }
 
@@ -337,10 +344,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0, 0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0, 0, 0, 1, 0);
 
-  assert.strictEqual(
-    readDoubleBE.call(uint8array, 0),
-    buffer.readDoubleBE(0)
-  );
+  assert.strictEqual(readDoubleBE.call(uint8array, 0), buffer.readDoubleBE(0));
 }
 
 {
@@ -349,10 +353,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0, 0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0, 0, 0, 1, 0);
 
-  assert.strictEqual(
-    readDoubleLE.call(uint8array, 0),
-    buffer.readDoubleLE(0)
-  );
+  assert.strictEqual(readDoubleLE.call(uint8array, 0), buffer.readDoubleLE(0));
 }
 
 {
@@ -361,10 +362,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readFloatBE.call(uint8array, 0),
-    buffer.readFloatBE(0)
-  );
+  assert.strictEqual(readFloatBE.call(uint8array, 0), buffer.readFloatBE(0));
 }
 
 {
@@ -373,10 +371,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readFloatLE.call(uint8array, 0),
-    buffer.readFloatLE(0)
-  );
+  assert.strictEqual(readFloatLE.call(uint8array, 0), buffer.readFloatLE(0));
 }
 
 {
@@ -385,10 +380,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readInt8.call(uint8array, 2),
-    buffer.readInt8(2)
-  );
+  assert.strictEqual(readInt8.call(uint8array, 2), buffer.readInt8(2));
 }
 
 {
@@ -397,10 +389,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readInt16BE.call(uint8array, 2),
-    buffer.readInt16BE(2)
-  );
+  assert.strictEqual(readInt16BE.call(uint8array, 2), buffer.readInt16BE(2));
 }
 
 {
@@ -409,10 +398,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readInt16LE.call(uint8array, 2),
-    buffer.readInt16LE(2)
-  );
+  assert.strictEqual(readInt16LE.call(uint8array, 2), buffer.readInt16LE(2));
 }
 
 {
@@ -421,10 +407,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readInt32BE.call(uint8array, 0),
-    buffer.readInt32BE(0)
-  );
+  assert.strictEqual(readInt32BE.call(uint8array, 0), buffer.readInt32BE(0));
 }
 
 {
@@ -433,10 +416,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readInt32LE.call(uint8array, 0),
-    buffer.readInt32LE(0)
-  );
+  assert.strictEqual(readInt32LE.call(uint8array, 0), buffer.readInt32LE(0));
 }
 
 {
@@ -445,10 +425,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readIntBE.call(uint8array, 2, 2),
-    buffer.readIntBE(2, 2)
-  );
+  assert.strictEqual(readIntBE.call(uint8array, 2, 2), buffer.readIntBE(2, 2));
 }
 
 {
@@ -457,10 +434,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readIntLE.call(uint8array, 2, 2),
-    buffer.readIntLE(2, 2)
-  );
+  assert.strictEqual(readIntLE.call(uint8array, 2, 2), buffer.readIntLE(2, 2));
 }
 
 {
@@ -469,10 +443,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readUInt8.call(uint8array, 2),
-    buffer.readUInt8(2)
-  );
+  assert.strictEqual(readUInt8.call(uint8array, 2), buffer.readUInt8(2));
 }
 
 {
@@ -481,10 +452,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readUInt16BE.call(uint8array, 2),
-    buffer.readUInt16BE(2)
-  );
+  assert.strictEqual(readUInt16BE.call(uint8array, 2), buffer.readUInt16BE(2));
 }
 
 {
@@ -493,10 +461,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readUInt16LE.call(uint8array, 2),
-    buffer.readUInt16LE(2)
-  );
+  assert.strictEqual(readUInt16LE.call(uint8array, 2), buffer.readUInt16LE(2));
 }
 
 {
@@ -505,10 +470,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readUInt32BE.call(uint8array, 0),
-    buffer.readUInt32BE(0)
-  );
+  assert.strictEqual(readUInt32BE.call(uint8array, 0), buffer.readUInt32BE(0));
 }
 
 {
@@ -517,10 +479,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(0, 0, 1, 0);
   const buffer = Buffer.of(0, 0, 1, 0);
 
-  assert.strictEqual(
-    readUInt32LE.call(uint8array, 0),
-    buffer.readUInt32LE(0)
-  );
+  assert.strictEqual(readUInt32LE.call(uint8array, 0), buffer.readUInt32LE(0));
 }
 
 {
@@ -531,7 +490,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assert.strictEqual(
     readUIntBE.call(uint8array, 2, 2),
-    buffer.readUIntBE(2, 2)
+    buffer.readUIntBE(2, 2),
   );
 }
 
@@ -543,7 +502,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assert.strictEqual(
     readUIntLE.call(uint8array, 2, 2),
-    buffer.readUIntLE(2, 2)
+    buffer.readUIntLE(2, 2),
   );
 }
 
@@ -555,10 +514,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   const array = subarray.call(uint8array, 2, 5);
   assert.ok(Buffer.isBuffer(array)); // Does convert the output type because it makes a new FastBuffer
-  assert.deepStrictEqual(
-    array,
-    buffer.subarray(2, 5)
-  );
+  assert.deepStrictEqual(array, buffer.subarray(2, 5));
 }
 
 {
@@ -569,7 +525,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assertContentEqual(
     slice.call(uint8array, 2, 5), // Does not convert the output type because it uses "this.subarray" internally
-    buffer.slice(2, 5)
+    buffer.slice(2, 5),
   );
 }
 
@@ -579,18 +535,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const smallUint8array = new Uint8Array(arrayOfNumbers(2));
   const smallBuffer = Buffer.from(arrayOfNumbers(2));
 
-  assertContentEqual(
-    swap16.call(smallUint8array),
-    smallBuffer.swap16()
-  );
+  assertContentEqual(swap16.call(smallUint8array), smallBuffer.swap16());
 
   const largeUint8array = new Uint8Array(arrayOfNumbers(2 * 500));
   const largeBuffer = Buffer.from(arrayOfNumbers(2 * 500));
 
-  assertContentEqual(
-    swap16.call(largeUint8array),
-    largeBuffer.swap16()
-  );
+  assertContentEqual(swap16.call(largeUint8array), largeBuffer.swap16());
 }
 
 {
@@ -599,18 +549,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const smallUint8array = new Uint8Array(arrayOfNumbers(4));
   const smallBuffer = Buffer.from(arrayOfNumbers(4));
 
-  assertContentEqual(
-    swap32.call(smallUint8array),
-    smallBuffer.swap32()
-  );
+  assertContentEqual(swap32.call(smallUint8array), smallBuffer.swap32());
 
   const largeUint8array = new Uint8Array(arrayOfNumbers(4 * 500));
   const largeBuffer = Buffer.from(arrayOfNumbers(4 * 500));
 
-  assertContentEqual(
-    swap32.call(largeUint8array),
-    largeBuffer.swap32()
-  );
+  assertContentEqual(swap32.call(largeUint8array), largeBuffer.swap32());
 }
 
 {
@@ -619,18 +563,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const smallUint8array = new Uint8Array(arrayOfNumbers(8));
   const smallBuffer = Buffer.from(arrayOfNumbers(8));
 
-  assertContentEqual(
-    swap64.call(smallUint8array),
-    smallBuffer.swap64()
-  );
+  assertContentEqual(swap64.call(smallUint8array), smallBuffer.swap64());
 
   const largeUint8array = new Uint8Array(arrayOfNumbers(8 * 500));
   const largeBuffer = Buffer.from(arrayOfNumbers(8 * 500));
 
-  assertContentEqual(
-    swap64.call(largeUint8array),
-    largeBuffer.swap64()
-  );
+  assertContentEqual(swap64.call(largeUint8array), largeBuffer.swap64());
 }
 
 {
@@ -639,10 +577,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(1, 2, 3, 4);
   const buffer = Buffer.of(1, 2, 3, 4);
 
-  assert.deepStrictEqual(
-    toJSON.call(uint8array),
-    buffer.toJSON()
-  );
+  assert.deepStrictEqual(toJSON.call(uint8array), buffer.toJSON());
 }
 
 {
@@ -652,54 +587,51 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const uint8array = Uint8Array.of(1, 2, 3, 4);
   const buffer = Buffer.of(1, 2, 3, 4);
 
+  assert.deepStrictEqual(toString.call(uint8array), buffer.toString());
+
   assert.deepStrictEqual(
-    toString.call(uint8array),
-    buffer.toString()
+    toString.call(uint8array, "utf8"),
+    buffer.toString("utf8"),
   );
 
   assert.deepStrictEqual(
-    toString.call(uint8array, 'utf8'),
-    buffer.toString('utf8')
+    toString.call(uint8array, "utf16le"),
+    buffer.toString("utf16le"),
   );
 
   assert.deepStrictEqual(
-    toString.call(uint8array, 'utf16le'),
-    buffer.toString('utf16le')
+    toString.call(uint8array, "latin1"),
+    buffer.toString("latin1"),
   );
 
   assert.deepStrictEqual(
-    toString.call(uint8array, 'latin1'),
-    buffer.toString('latin1')
+    toString.call(uint8array, "base64"),
+    buffer.toString("base64"),
   );
 
   assert.deepStrictEqual(
-    toString.call(uint8array, 'base64'),
-    buffer.toString('base64')
+    toString.call(uint8array, "base64url"),
+    buffer.toString("base64url"),
   );
 
   assert.deepStrictEqual(
-    toString.call(uint8array, 'base64url'),
-    buffer.toString('base64url')
+    toString.call(uint8array, "hex"),
+    buffer.toString("hex"),
   );
 
   assert.deepStrictEqual(
-    toString.call(uint8array, 'hex'),
-    buffer.toString('hex')
+    toString.call(uint8array, "ascii"),
+    buffer.toString("ascii"),
   );
 
   assert.deepStrictEqual(
-    toString.call(uint8array, 'ascii'),
-    buffer.toString('ascii')
+    toString.call(uint8array, "binary"),
+    buffer.toString("binary"),
   );
 
   assert.deepStrictEqual(
-    toString.call(uint8array, 'binary'),
-    buffer.toString('binary')
-  );
-
-  assert.deepStrictEqual(
-    toString.call(uint8array, 'ucs2'),
-    buffer.toString('ucs2')
+    toString.call(uint8array, "ucs2"),
+    buffer.toString("ucs2"),
   );
 }
 
@@ -708,12 +640,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
   const bufferSize = 16;
   // UTF-8 encoding
   {
-    const testString = 'Hello, world!';
+    const testString = "Hello, world!";
     const uint8array = new Uint8Array(bufferSize);
     const buffer = Buffer.alloc(bufferSize);
 
-    const returnValue = write.call(uint8array, testString, 0, 'utf8');
-    const expectedReturnValue = buffer.write(testString, 0, 'utf8');
+    const returnValue = write.call(uint8array, testString, 0, "utf8");
+    const expectedReturnValue = buffer.write(testString, 0, "utf8");
 
     assert.strictEqual(returnValue, expectedReturnValue);
     assertContentEqual(uint8array, buffer);
@@ -721,12 +653,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   // Hex encoding
   {
-    const testString = 'a1b2c3d4e5';
+    const testString = "a1b2c3d4e5";
     const uint8array = new Uint8Array(bufferSize);
     const buffer = Buffer.alloc(bufferSize);
 
-    const returnValue = write.call(uint8array, testString, 0, 'hex');
-    const expectedReturnValue = buffer.write(testString, 0, 'hex');
+    const returnValue = write.call(uint8array, testString, 0, "hex");
+    const expectedReturnValue = buffer.write(testString, 0, "hex");
 
     assert.strictEqual(returnValue, expectedReturnValue);
     assertContentEqual(uint8array, buffer);
@@ -734,12 +666,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   // Base64 encoding
   {
-    const testString = 'SGVsbG8gd29ybGQ=';
+    const testString = "SGVsbG8gd29ybGQ=";
     const uint8array = new Uint8Array(bufferSize);
     const buffer = Buffer.alloc(bufferSize);
 
-    const returnValue = write.call(uint8array, testString, 0, 'base64');
-    const expectedReturnValue = buffer.write(testString, 0, 'base64');
+    const returnValue = write.call(uint8array, testString, 0, "base64");
+    const expectedReturnValue = buffer.write(testString, 0, "base64");
 
     assertContentEqual(uint8array, buffer);
     assert.strictEqual(returnValue, expectedReturnValue);
@@ -747,12 +679,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   // Latin1 encoding
   {
-    const testString = '¡Hola!';
+    const testString = "¡Hola!";
     const uint8array = new Uint8Array(bufferSize);
     const buffer = Buffer.alloc(bufferSize);
 
-    const returnValue = write.call(uint8array, testString, 0, 'latin1');
-    const expectedReturnValue = buffer.write(testString, 0, 'latin1');
+    const returnValue = write.call(uint8array, testString, 0, "latin1");
+    const expectedReturnValue = buffer.write(testString, 0, "latin1");
 
     assert.strictEqual(returnValue, expectedReturnValue);
     assertContentEqual(uint8array, buffer);
@@ -760,12 +692,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   // Utf16le encoding
   {
-    const testString = '\uD835\uDC9C\uD835\uDCB7\uD835\uDCB8'; // Unicode string
+    const testString = "\uD835\uDC9C\uD835\uDCB7\uD835\uDCB8"; // Unicode string
     const uint8array = new Uint8Array(bufferSize);
     const buffer = Buffer.alloc(bufferSize);
 
-    const returnValue = write.call(uint8array, testString, 0, 'utf16le');
-    const expectedReturnValue = buffer.write(testString, 0, 'utf16le');
+    const returnValue = write.call(uint8array, testString, 0, "utf16le");
+    const expectedReturnValue = buffer.write(testString, 0, "utf16le");
 
     assert.strictEqual(returnValue, expectedReturnValue);
     assertContentEqual(uint8array, buffer);
@@ -773,12 +705,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   // Binary encoding
   {
-    const testString = '\x00\x01\x02\x03';
+    const testString = "\x00\x01\x02\x03";
     const uint8array = new Uint8Array(bufferSize);
     const buffer = Buffer.alloc(bufferSize);
 
-    const returnValue = write.call(uint8array, testString, 0, 'binary');
-    const expectedReturnValue = buffer.write(testString, 0, 'binary');
+    const returnValue = write.call(uint8array, testString, 0, "binary");
+    const expectedReturnValue = buffer.write(testString, 0, "binary");
 
     assert.strictEqual(returnValue, expectedReturnValue);
     assertContentEqual(uint8array, buffer);
@@ -786,12 +718,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   // Base64url encoding
   {
-    const testString = 'SGVsbG9fV29ybGQ'; // Valid base64url string
+    const testString = "SGVsbG9fV29ybGQ"; // Valid base64url string
     const uint8array = new Uint8Array(bufferSize);
     const buffer = Buffer.alloc(bufferSize);
 
-    const returnValue = write.call(uint8array, testString, 0, 'base64url');
-    const expectedReturnValue = buffer.write(testString, 0, 'base64url');
+    const returnValue = write.call(uint8array, testString, 0, "base64url");
+    const expectedReturnValue = buffer.write(testString, 0, "base64url");
 
     assert.strictEqual(returnValue, expectedReturnValue);
     assertContentEqual(uint8array, buffer);
@@ -799,12 +731,12 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   // Ascii encoding
   {
-    const testString = 'ASCII!';
+    const testString = "ASCII!";
     const uint8array = new Uint8Array(bufferSize);
     const buffer = Buffer.alloc(bufferSize);
 
-    const returnValue = write.call(uint8array, testString, 0, 'ascii');
-    const expectedReturnValue = buffer.write(testString, 0, 'ascii');
+    const returnValue = write.call(uint8array, testString, 0, "ascii");
+    const expectedReturnValue = buffer.write(testString, 0, "ascii");
 
     assert.strictEqual(returnValue, expectedReturnValue);
     assertContentEqual(uint8array, buffer);
@@ -812,17 +744,16 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   // Ucs2 encoding
   {
-    const testString = 'A\uD83D\uDC96B';
+    const testString = "A\uD83D\uDC96B";
     const uint8array = new Uint8Array(bufferSize);
     const buffer = Buffer.alloc(bufferSize);
 
-    const returnValue = write.call(uint8array, testString, 0, 'ucs2');
-    const expectedReturnValue = buffer.write(testString, 0, 'ucs2');
+    const returnValue = write.call(uint8array, testString, 0, "ucs2");
+    const expectedReturnValue = buffer.write(testString, 0, "ucs2");
 
     assert.strictEqual(returnValue, expectedReturnValue);
     assertContentEqual(uint8array, buffer);
   }
-
 }
 
 {
@@ -1098,7 +1029,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assert.strictEqual(
     customInspect.call(emptyUint8Array),
-    emptyBuffer[customInspectSymbol]().replace('Buffer', 'Uint8Array')
+    emptyBuffer[customInspectSymbol]().replace("Buffer", "Uint8Array"),
   );
 
   const smallUint8Array = Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8);
@@ -1106,7 +1037,7 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assert.strictEqual(
     customInspect.call(smallUint8Array),
-    smallBuffer[customInspectSymbol]().replace('Buffer', 'Uint8Array')
+    smallBuffer[customInspectSymbol]().replace("Buffer", "Uint8Array"),
   );
 
   const largeUint8Array = new Uint8Array(arrayOfNumbers(9000));
@@ -1114,6 +1045,6 @@ function assertContentEqual(actualUint8Array, expectedBuffer) {
 
   assert.strictEqual(
     customInspect.call(largeUint8Array),
-    largeBuffer[customInspectSymbol]().replace('Buffer', 'Uint8Array')
+    largeBuffer[customInspectSymbol]().replace("Buffer", "Uint8Array"),
   );
 }

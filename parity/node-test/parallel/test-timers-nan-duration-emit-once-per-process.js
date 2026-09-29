@@ -1,25 +1,25 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 
 const NOT_A_NUMBER = NaN;
 
 function timerNotCanceled() {
-  assert.fail('Timer should be canceled');
+  assert.fail("Timer should be canceled");
 }
 
 process.on(
-  'warning',
+  "warning",
   common.mustCall((warning) => {
-    if (warning.name === 'DeprecationWarning') return;
+    if (warning.name === "DeprecationWarning") return;
 
-    const lines = warning.message.split('\n');
+    const lines = warning.message.split("\n");
 
-    assert.strictEqual(warning.name, 'TimeoutNaNWarning');
+    assert.strictEqual(warning.name, "TimeoutNaNWarning");
     assert.strictEqual(lines[0], `${NOT_A_NUMBER} is not a number.`);
     assert.strictEqual(lines.length, 2);
-  }, 1)
+  }, 1),
 );
 
 {

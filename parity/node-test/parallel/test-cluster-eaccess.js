@@ -19,65 +19,77 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // Test that errors propagated from cluster workers are properly
 // received in their primary. Creates an EADDRINUSE condition by forking
 // a process in child cluster and propagates the error to the primary.
 
-const assert = require('assert');
-const cluster = require('cluster');
-const fork = require('child_process').fork;
-const net = require('net');
+const assert = require("assert");
+const cluster = require("cluster");
+const fork = require("child_process").fork;
+const net = require("net");
 
 if (cluster.isPrimary && process.argv.length !== 3) {
   // cluster.isPrimary
-  const tmpdir = require('../common/tmpdir');
+  const tmpdir = require("../common/tmpdir");
   tmpdir.refresh();
   const PIPE_NAME = common.PIPE;
   const worker = cluster.fork({ PIPE_NAME });
 
   // Makes sure primary is able to fork the worker
-  cluster.on('fork', common.mustCall());
+  cluster.on("fork", common.mustCall());
 
   // Makes sure the worker is ready
-  worker.on('online', common.mustCall());
+  worker.on("online", common.mustCall());
 
-  worker.on('message', common.mustCall(function(err) {
-    // Disconnect first, so that we will not leave zombies
-    worker.disconnect();
-    assert.strictEqual(err.code, 'EADDRINUSE');
-  }));
+  worker.on(
+    "message",
+    common.mustCall(function (err) {
+      // Disconnect first, so that we will not leave zombies
+      worker.disconnect();
+      assert.strictEqual(err.code, "EADDRINUSE");
+    }),
+  );
 } else if (process.argv.length !== 3) {
   // cluster.worker
   const PIPE_NAME = process.env.PIPE_NAME;
-  const cp = fork(__filename, [PIPE_NAME], { stdio: 'inherit' });
+  const cp = fork(__filename, [PIPE_NAME], { stdio: "inherit" });
 
   // Message from the child indicates it's ready and listening
-  cp.on('message', common.mustCall(function() {
-    const server = net.createServer().listen(PIPE_NAME, function() {
-      // Message child process so that it can exit
-      cp.send('end');
-      // Inform primary about the unexpected situation
-      process.send('PIPE should have been in use.');
-    });
+  cp.on(
+    "message",
+    common.mustCall(function () {
+      const server = net.createServer().listen(PIPE_NAME, function () {
+        // Message child process so that it can exit
+        cp.send("end");
+        // Inform primary about the unexpected situation
+        process.send("PIPE should have been in use.");
+      });
 
-    server.on('error', function(err) {
-      // Message to child process tells it to exit
-      cp.send('end');
-      // Propagate error to primary
-      process.send(err);
-    });
-  }));
+      server.on("error", function (err) {
+        // Message to child process tells it to exit
+        cp.send("end");
+        // Propagate error to primary
+        process.send(err);
+      });
+    }),
+  );
 } else if (process.argv.length === 3) {
   // Child process (of cluster.worker)
   const PIPE_NAME = process.argv[2];
 
-  const server = net.createServer().listen(PIPE_NAME, common.mustCall(() => {
-    process.send('listening');
-  }));
-  process.once('message', common.mustCall(() => server.close()));
+  const server = net.createServer().listen(
+    PIPE_NAME,
+    common.mustCall(() => {
+      process.send("listening");
+    }),
+  );
+  process.once(
+    "message",
+    common.mustCall(() => server.close()),
+  );
 } else {
-  assert.fail('Impossible state');
+  assert.fail("Impossible state");
 }

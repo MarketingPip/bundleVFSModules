@@ -20,21 +20,21 @@
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import {
-
   ObjectDefineProperties,
   ObjectGetOwnPropertyDescriptor,
   ObjectKeys,
   ObjectSetPrototypeOf,
-} from './primordials.js';
-import { Stream } from './legacy.js';
-import Readable from './readable.js';
-import Writable from './writable.js';
+} from "./primordials.js";
+import { Stream } from "./legacy.js";
+import Readable from "./readable.js";
+import Writable from "./writable.js";
+import { addAbortSignal } from "./abort-listener-attach.js";
+import * as destroyImpl from "./destroy.js";
+import { kOnConstructed } from "./utils.js";
 import {
-  addAbortSignal,
-} from './abort-listener-attach.js';
-import * as destroyImpl from './destroy.js';
-import { kOnConstructed } from './utils.js';
-import { newStreamDuplexFromReadableWritablePair, newReadableWritablePairFromDuplex } from './web-adapters.js';
+  newStreamDuplexFromReadableWritablePair,
+  newReadableWritablePairFromDuplex,
+} from "./web-adapters.js";
 
 // Installed by src/stream.js via setDuplexify() (kept lazy to avoid a
 // module cycle: duplexify.js extends Duplex at evaluation time, mirroring
@@ -49,19 +49,7 @@ export function setDuplexify(fn) {
 // prototypically inherits from Readable, and then parasitically from
 // Writable.
 
-
-
-
 export default Duplex;
-
-
-
-
-
-
-
-
-
 
 ObjectSetPrototypeOf(Duplex.prototype, Readable.prototype);
 ObjectSetPrototypeOf(Duplex, Readable);
@@ -79,8 +67,7 @@ ObjectSetPrototypeOf(Duplex, Readable);
 Duplex.prototype.destroy = Writable.prototype.destroy;
 
 function Duplex(options) {
-  if (!(this instanceof Duplex))
-    return new Duplex(options);
+  if (!(this instanceof Duplex)) return new Duplex(options);
 
   this._events ??= {
     close: undefined,
@@ -119,26 +106,20 @@ function Duplex(options) {
       this._writableState.finished = true;
     }
 
-    if (typeof options.read === 'function')
-      this._read = options.read;
+    if (typeof options.read === "function") this._read = options.read;
 
-    if (typeof options.write === 'function')
-      this._write = options.write;
+    if (typeof options.write === "function") this._write = options.write;
 
-    if (typeof options.writev === 'function')
-      this._writev = options.writev;
+    if (typeof options.writev === "function") this._writev = options.writev;
 
-    if (typeof options.destroy === 'function')
-      this._destroy = options.destroy;
+    if (typeof options.destroy === "function") this._destroy = options.destroy;
 
-    if (typeof options.final === 'function')
-      this._final = options.final;
+    if (typeof options.final === "function") this._final = options.final;
 
-    if (typeof options.construct === 'function')
+    if (typeof options.construct === "function")
       this._construct = options.construct;
 
-    if (options.signal)
-      addAbortSignal(options.signal, this);
+    if (options.signal) addAbortSignal(options.signal, this);
   } else {
     this.allowHalfOpen = true;
   }
@@ -154,30 +135,53 @@ function Duplex(options) {
 }
 
 ObjectDefineProperties(Duplex.prototype, {
-  writable:
-    { __proto__: null, ...ObjectGetOwnPropertyDescriptor(Writable.prototype, 'writable') },
-  writableHighWaterMark:
-    { __proto__: null, ...ObjectGetOwnPropertyDescriptor(Writable.prototype, 'writableHighWaterMark') },
-  writableObjectMode:
-    { __proto__: null, ...ObjectGetOwnPropertyDescriptor(Writable.prototype, 'writableObjectMode') },
-  writableBuffer:
-    { __proto__: null, ...ObjectGetOwnPropertyDescriptor(Writable.prototype, 'writableBuffer') },
-  writableLength:
-    { __proto__: null, ...ObjectGetOwnPropertyDescriptor(Writable.prototype, 'writableLength') },
-  writableFinished:
-    { __proto__: null, ...ObjectGetOwnPropertyDescriptor(Writable.prototype, 'writableFinished') },
-  writableCorked:
-    { __proto__: null, ...ObjectGetOwnPropertyDescriptor(Writable.prototype, 'writableCorked') },
-  writableEnded:
-    { __proto__: null, ...ObjectGetOwnPropertyDescriptor(Writable.prototype, 'writableEnded') },
-  writableNeedDrain:
-    { __proto__: null, ...ObjectGetOwnPropertyDescriptor(Writable.prototype, 'writableNeedDrain') },
+  writable: {
+    __proto__: null,
+    ...ObjectGetOwnPropertyDescriptor(Writable.prototype, "writable"),
+  },
+  writableHighWaterMark: {
+    __proto__: null,
+    ...ObjectGetOwnPropertyDescriptor(
+      Writable.prototype,
+      "writableHighWaterMark",
+    ),
+  },
+  writableObjectMode: {
+    __proto__: null,
+    ...ObjectGetOwnPropertyDescriptor(Writable.prototype, "writableObjectMode"),
+  },
+  writableBuffer: {
+    __proto__: null,
+    ...ObjectGetOwnPropertyDescriptor(Writable.prototype, "writableBuffer"),
+  },
+  writableLength: {
+    __proto__: null,
+    ...ObjectGetOwnPropertyDescriptor(Writable.prototype, "writableLength"),
+  },
+  writableFinished: {
+    __proto__: null,
+    ...ObjectGetOwnPropertyDescriptor(Writable.prototype, "writableFinished"),
+  },
+  writableCorked: {
+    __proto__: null,
+    ...ObjectGetOwnPropertyDescriptor(Writable.prototype, "writableCorked"),
+  },
+  writableEnded: {
+    __proto__: null,
+    ...ObjectGetOwnPropertyDescriptor(Writable.prototype, "writableEnded"),
+  },
+  writableNeedDrain: {
+    __proto__: null,
+    ...ObjectGetOwnPropertyDescriptor(Writable.prototype, "writableNeedDrain"),
+  },
 
   destroyed: {
     __proto__: null,
     get() {
-      if (this._readableState === undefined ||
-        this._writableState === undefined) {
+      if (
+        this._readableState === undefined ||
+        this._writableState === undefined
+      ) {
         return false;
       }
       return this._readableState.destroyed && this._writableState.destroyed;
@@ -193,16 +197,14 @@ ObjectDefineProperties(Duplex.prototype, {
   },
 });
 
-Duplex.fromWeb = function(pair, options) {
-  return newStreamDuplexFromReadableWritablePair(
-    pair,
-    options);
+Duplex.fromWeb = function (pair, options) {
+  return newStreamDuplexFromReadableWritablePair(pair, options);
 };
 
-Duplex.toWeb = function(duplex, options) {
+Duplex.toWeb = function (duplex, options) {
   return newReadableWritablePairFromDuplex(duplex, options);
 };
 
-Duplex.from = function(body) {
-  return duplexify(body, 'body');
+Duplex.from = function (body) {
+  return duplexify(body, "body");
 };

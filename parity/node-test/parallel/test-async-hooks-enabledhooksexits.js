@@ -1,10 +1,10 @@
 // Flags: --expose-internals
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const { createHook } = require('async_hooks');
-const { enabledHooksExist } = require('internal/async_hooks');
+require("../common");
+const assert = require("assert");
+const { createHook } = require("async_hooks");
+const { enabledHooksExist } = require("internal/async_hooks");
 
 assert.strictEqual(enabledHooksExist(), false);
 

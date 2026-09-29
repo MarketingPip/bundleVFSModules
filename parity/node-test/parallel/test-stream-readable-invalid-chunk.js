@@ -1,16 +1,19 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const stream = require('stream');
+const common = require("../common");
+const stream = require("stream");
 
 function testPushArg(val) {
   const readable = new stream.Readable({
-    read: () => {}
+    read: () => {},
   });
-  readable.on('error', common.expectsError({
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError'
-  }));
+  readable.on(
+    "error",
+    common.expectsError({
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    }),
+  );
   readable.push(val);
 }
 
@@ -20,12 +23,15 @@ testPushArg(0);
 
 function testUnshiftArg(val) {
   const readable = new stream.Readable({
-    read: () => {}
+    read: () => {},
   });
-  readable.on('error', common.expectsError({
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError'
-  }));
+  readable.on(
+    "error",
+    common.expectsError({
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    }),
+  );
   readable.unshift(val);
 }
 

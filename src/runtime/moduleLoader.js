@@ -2,6 +2,29 @@
 // Maps resolvedKey -> { status: 'loading' | 'done', exports, promise }
 const moduleRegistry = new Map();
 
+// Gap #6: single shared `node:`-prefix normalizer. Node treats `node:X`
+// and `X` identically for EVERY builtin; the old `isStrippable` check only
+// covered the four builtins whose listed names literally contain `node:`.
+// Keep in sync with normalizeBuiltinSpecifier in runtime.js (host scope)
+// and src/sandbox/20-module-loader.js.
+function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
+  var modulePath = specifier;
+  var bare =
+    typeof specifier === "string" && specifier.indexOf("node:") === 0
+      ? specifier.slice(5)
+      : specifier;
+  var listed = false;
+  for (var i = 0; i < nodeBuiltins.length; i++) {
+    if (nodeBuiltins[i] === specifier || nodeBuiltins[i] === bare)
+      listed = true;
+  }
+  var isNodeBuiltIn = listed;
+  if (isNodeBuiltIn) {
+    modulePath = String(bare).replace("/", "_").replace("RUNTIME:", "RUNTIME_");
+  }
+  return { isNodeBuiltIn: isNodeBuiltIn, modulePath: modulePath };
+}
+
 /**
  * @param {string} modulePath     - The import path as written (e.g. './foo', '../bar', or a URL)
  * @param {string} moduleType     - 'import' | 'require'
@@ -10,31 +33,36 @@ const moduleRegistry = new Map();
  *                                  so _build_file can resolve context-sensitive paths correctly.
  *                                  Defaults to modulePath when called at the root level.
  */
-export async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) {
-  const isDynamicModule = p => typeof p === 'string' && /^(data:text\/javascript|blob:)/.test(p);
-  
+export async function loadModule(
+  modulePath,
+  moduleType,
+  entryPoint,
+  parentEntryPoint,
+) {
+  const isDynamicModule = (p) =>
+    typeof p === "string" && /^(data:text\/javascript|blob:)/.test(p);
+
   if (isDynamicModule(modulePath)) {
     return await import(modulePath);
   }
 
   let relativeName = null;
   const node_builtin = JSON.parse(JSON.stringify(builtinModules));
-  const strippable_nodebuiltins = node_builtin.filter(m => m.includes('node:'));
-  const isStrippable = strippable_nodebuiltins.includes(modulePath) || node_builtin.includes(modulePath);
-  const isNodeBuiltIn = node_builtin.includes(modulePath) || isStrippable;
-
-  if (isStrippable) {
-    modulePath = modulePath.replace("node:", ""); // strip node:
-    modulePath = modulePath.replace("/", "_");
-  }
+  // Gap #6: normalize `node:` prefix generally (see normalizeBuiltinSpecifier
+  // above); the old isStrippable check missed every `node:X` not literally
+  // listed with the prefix.
+  const __builtinNorm = normalizeBuiltinSpecifier(modulePath, node_builtin);
+  const isNodeBuiltIn = __builtinNorm.isNodeBuiltIn;
+  modulePath = __builtinNorm.modulePath;
 
   if (entryPoint === undefined) entryPoint = modulePath;
   if (parentEntryPoint === undefined) parentEntryPoint = null;
 
   try {
-    const extension = modulePath.split('.').pop().toLowerCase();
-    const isRelative = modulePath.startsWith('./') || modulePath.startsWith('../');
-    const isAbsolute = modulePath.startsWith('./');
+    const extension = modulePath.split(".").pop().toLowerCase();
+    const isRelative =
+      modulePath.startsWith("./") || modulePath.startsWith("../");
+    const isAbsolute = modulePath.startsWith("./");
     let sourceResolvedError = false;
 
     // ─── Relative / interop-channel path ────────────────────────────────────
@@ -45,10 +73,10 @@ export async function loadModule(modulePath, moduleType, entryPoint, parentEntry
       // ── Circular reference guard ─────────────────────────────────────────
       if (moduleRegistry.has(registryKey)) {
         const record = moduleRegistry.get(registryKey);
-        if (record.status === 'loading') {
+        if (record.status === "loading") {
           console.warn(
             `[loadModule] Circular dependency detected for "${modulePath}" ` +
-            `(entry: "${entryPoint}"). Returning partial exports.`
+              `(entry: "${entryPoint}"). Returning partial exports.`,
           );
           return record.exports;
         }
@@ -56,69 +84,79 @@ export async function loadModule(modulePath, moduleType, entryPoint, parentEntry
       }
 
       const partialExports = {};
-      const record = { status: 'loading', exports: partialExports, promise: null };
+      const record = {
+        status: "loading",
+        exports: partialExports,
+        promise: null,
+      };
       moduleRegistry.set(registryKey, record);
 
       try {
         const cwd =
-          typeof process !== 'undefined' &&
+          typeof process !== "undefined" &&
           process &&
-          typeof process.cwd === 'function'
+          typeof process.cwd === "function"
             ? process.cwd()
             : undefined;
 
         let source = await interopChannel.callParent(
-          '_dynamic_import',
+          "_dynamic_import",
           modulePath,
           moduleType,
           entryPoint,
           parentEntryPoint,
           isNodeBuiltIn,
-          cwd
+          cwd,
         );
 
         if (!source) {
-          throw new Error(`[ERR_MODULE_NOT_FOUND]: Cannot find module ${modulePath}`);
+          throw new Error(
+            `[ERR_MODULE_NOT_FOUND]: Cannot find module ${modulePath}`,
+          );
         }
 
-        if (extension !== 'json' && extension !== 'css') {
+        if (extension !== "json" && extension !== "css") {
           source = await interopChannel.callParent(
-            '_build_file',
+            "_build_file",
             source,
             modulePath,
             moduleType,
             entryPoint,
             parentEntryPoint,
-            isNodeBuiltIn
+            isNodeBuiltIn,
           );
         }
 
         let resolved;
-        if (extension === 'json') {
+        if (extension === "json") {
           resolved = JSON.parse(source);
           return { default: resolved };
-        } else if (extension === 'css') {
+        } else if (extension === "css") {
           const sheet = new CSSStyleSheet();
           await sheet.replace(source);
           resolved = sheet;
           return { default: resolved };
         } else {
-          if (moduleType === 'require') {
+          if (moduleType === "require") {
             source = wrapCommonJS(source);
           }
           source = source + `\n //# sourceURL=${modulePath}`;
           const url = `data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`;
-          resolved = await importAndProxy(url, modulePath, relativeName, moduleType);
+          resolved = await importAndProxy(
+            url,
+            modulePath,
+            relativeName,
+            moduleType,
+          );
         }
 
-        if (resolved && typeof resolved === 'object') {
+        if (resolved && typeof resolved === "object") {
           Object.assign(partialExports, resolved);
         }
 
-        record.status = 'done';
+        record.status = "done";
         record.exports = resolved;
         return resolved;
-
       } catch (err) {
         moduleRegistry.delete(registryKey);
         throw err;
@@ -126,22 +164,30 @@ export async function loadModule(modulePath, moduleType, entryPoint, parentEntry
     }
 
     // ─── Asset handling (JSON / TXT / MD) ───────────────────────────────────
-    if (['json', 'txt', 'md'].includes(extension)) {
+    if (["json", "txt", "md"].includes(extension)) {
       const response = await fetch(modulePath);
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      if (!response.ok)
+        throw new Error(`HTTP error! status: ${response.status}`);
 
-      const contentType = response.headers.get('content-type');
-      if (extension === 'json' || (contentType && contentType.includes('application/json'))) {
-        try { return await response.json(); }
-        catch { return await response.text(); }
+      const contentType = response.headers.get("content-type");
+      if (
+        extension === "json" ||
+        (contentType && contentType.includes("application/json"))
+      ) {
+        try {
+          return await response.json();
+        } catch {
+          return await response.text();
+        }
       }
       return await response.text();
     }
 
     // ─── CSS (absolute URL) ──────────────────────────────────────────────────
-    if (extension === 'css') {
+    if (extension === "css") {
       const response = await fetch(modulePath);
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      if (!response.ok)
+        throw new Error(`HTTP error! status: ${response.status}`);
       const cssText = await response.text();
       const sheet = new CSSStyleSheet();
       await sheet.replace(cssText);
@@ -152,12 +198,14 @@ export async function loadModule(modulePath, moduleType, entryPoint, parentEntry
     const requiredSupportedYet = false;
     let data;
 
-    if (moduleType === 'require' && !isRelative && !isAbsolute) {
-      throw new Error(`[ERR_MODULE_NOT_FOUND]: Cannot find module ${modulePath}`);
+    if (moduleType === "require" && !isRelative && !isAbsolute) {
+      throw new Error(
+        `[ERR_MODULE_NOT_FOUND]: Cannot find module ${modulePath}`,
+      );
     }
 
-    if (moduleType === 'require' && requiredSupportedYet) {
-      let src = await fetch(modulePath).then(r => r.text());
+    if (moduleType === "require" && requiredSupportedYet) {
+      let src = await fetch(modulePath).then((r) => r.text());
       src = wrapCommonJS(src);
       const url = `data:text/javascript;charset=utf-8,${encodeURIComponent(src)}`;
       data = await import(url);
@@ -166,14 +214,14 @@ export async function loadModule(modulePath, moduleType, entryPoint, parentEntry
     }
 
     return buildModuleProxy(data, modulePath, relativeName, moduleType);
-
   } catch (error) {
     if (relativeName) {
       const displayPath = relativeName || modulePath;
       const alreadyWrapped = error.message.match(" in \\./");
       error.stack = `${error.message}`;
       if (alreadyWrapped) throw error;
-      if (entryPoint) throw new Error(`${error.message} in ${displayPath} at ${entryPoint}`);
+      if (entryPoint)
+        throw new Error(`${error.message} in ${displayPath} at ${entryPoint}`);
       throw new Error(`${error.message} in ${displayPath}`);
     }
 

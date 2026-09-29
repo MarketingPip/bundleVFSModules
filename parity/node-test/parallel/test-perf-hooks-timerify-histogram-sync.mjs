@@ -1,8 +1,8 @@
 // Test that timerify works with histogram option for synchronous functions.
 
-import { sleepSync } from '../common/index.mjs';
-import assert from 'assert';
-import { createHistogram, timerify } from 'perf_hooks';
+import { sleepSync } from "../common/index.mjs";
+import assert from "assert";
+import { createHistogram, timerify } from "perf_hooks";
 
 const histogram = createHistogram();
 

@@ -19,29 +19,29 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 if (!common.hasCrypto) {
-  common.skip('missing crypto');
+  common.skip("missing crypto");
 }
 
-const { opensslCli } = require('../common/crypto');
+const { opensslCli } = require("../common/crypto");
 
 if (!opensslCli) {
-  common.skip('node compiled without OpenSSL CLI.');
+  common.skip("node compiled without OpenSSL CLI.");
 }
 
 if (process.features.openssl_is_boringssl) {
-  require('../common/boringssl').testRenegotiationUnsupported();
+  require("../common/boringssl").testRenegotiationUnsupported();
   return;
 }
 
-const assert = require('assert');
-const tls = require('tls');
-const fixtures = require('../common/fixtures');
+const assert = require("assert");
+const tls = require("tls");
+const fixtures = require("../common/fixtures");
 
 // Renegotiation as a protocol feature was dropped after TLS1.2.
-tls.DEFAULT_MAX_VERSION = 'TLSv1.2';
+tls.DEFAULT_MAX_VERSION = "TLSv1.2";
 
 // Renegotiation limits to test
 const LIMITS = [0, 1, 2, 3, 5, 10, 16];
@@ -58,50 +58,68 @@ const LIMITS = [0, 1, 2, 3, 5, 10, 16];
 
 function test(next) {
   const options = {
-    cert: fixtures.readKey('rsa_cert.crt'),
-    key: fixtures.readKey('rsa_private.pem'),
+    cert: fixtures.readKey("rsa_cert.crt"),
+    key: fixtures.readKey("rsa_private.pem"),
   };
 
-  const server = tls.createServer(options, common.mustCall((conn) => {
-    conn.on('error', common.mustCall((err) => {
-      console.error(`Caught exception: ${err}`);
-      assert.match(err.message, /TLS session renegotiation attack/);
-      conn.destroy();
-    }));
-    conn.pipe(conn);
-  }));
+  const server = tls.createServer(
+    options,
+    common.mustCall((conn) => {
+      conn.on(
+        "error",
+        common.mustCall((err) => {
+          console.error(`Caught exception: ${err}`);
+          assert.match(err.message, /TLS session renegotiation attack/);
+          conn.destroy();
+        }),
+      );
+      conn.pipe(conn);
+    }),
+  );
 
-  server.listen(0, common.mustCall(() => {
-    const options = {
-      host: server.address().host,
-      port: server.address().port,
-      rejectUnauthorized: false,
-    };
-    const client = tls.connect(options, spam);
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const options = {
+        host: server.address().host,
+        port: server.address().port,
+        rejectUnauthorized: false,
+      };
+      const client = tls.connect(options, spam);
 
-    let renegs = 0;
+      let renegs = 0;
 
-    client.on('close', common.mustCall(() => {
-      assert.strictEqual(renegs, tls.CLIENT_RENEG_LIMIT + 1);
-      server.close();
-      process.nextTick(next);
-    }));
+      client.on(
+        "close",
+        common.mustCall(() => {
+          assert.strictEqual(renegs, tls.CLIENT_RENEG_LIMIT + 1);
+          server.close();
+          process.nextTick(next);
+        }),
+      );
 
-    client.on('error', common.mustNotCall('CLIENT ERR'));
+      client.on("error", common.mustNotCall("CLIENT ERR"));
 
-    client.on('close', common.mustCall((hadErr) => {
-      assert.strictEqual(hadErr, false);
-    }));
+      client.on(
+        "close",
+        common.mustCall((hadErr) => {
+          assert.strictEqual(hadErr, false);
+        }),
+      );
 
-    // Simulate renegotiation attack
-    function spam() {
-      client.write('');
-      client.renegotiate({}, common.mustCallAtLeast((err) => {
-        assert.ifError(err);
-        assert.ok(renegs <= tls.CLIENT_RENEG_LIMIT);
-        spam();
-      }, 0));
-      renegs++;
-    }
-  }));
+      // Simulate renegotiation attack
+      function spam() {
+        client.write("");
+        client.renegotiate(
+          {},
+          common.mustCallAtLeast((err) => {
+            assert.ifError(err);
+            assert.ok(renegs <= tls.CLIENT_RENEG_LIMIT);
+            spam();
+          }, 0),
+        );
+        renegs++;
+      }
+    }),
+  );
 }

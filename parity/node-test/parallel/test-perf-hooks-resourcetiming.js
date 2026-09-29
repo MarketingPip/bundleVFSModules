@@ -1,25 +1,35 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const util = require('util');
+const common = require("../common");
+const assert = require("assert");
+const util = require("util");
 const {
   PerformanceObserver,
   PerformanceEntry,
   PerformanceResourceTiming,
   performance,
-} = require('perf_hooks');
+} = require("perf_hooks");
 
 assert(PerformanceObserver);
 assert(PerformanceEntry);
-assert.throws(() => new PerformanceEntry(), { code: 'ERR_ILLEGAL_CONSTRUCTOR' });
+assert.throws(() => new PerformanceEntry(), {
+  code: "ERR_ILLEGAL_CONSTRUCTOR",
+});
 assert(PerformanceResourceTiming);
 assert(performance.clearResourceTimings);
 assert(performance.markResourceTiming);
 
 assert.deepStrictEqual(
-  Object.getOwnPropertyDescriptor(PerformanceResourceTiming.prototype, Symbol.toStringTag),
-  { configurable: true, enumerable: false, value: 'PerformanceResourceTiming', writable: false },
+  Object.getOwnPropertyDescriptor(
+    PerformanceResourceTiming.prototype,
+    Symbol.toStringTag,
+  ),
+  {
+    configurable: true,
+    enumerable: false,
+    value: "PerformanceResourceTiming",
+    writable: false,
+  },
 );
 
 function createTimingInfo({
@@ -33,7 +43,7 @@ function createTimingInfo({
   endTime = 0,
   encodedBodySize = 0,
   decodedBodySize = 0,
-  finalConnectionTimingInfo = null
+  finalConnectionTimingInfo = null,
 }) {
   if (finalConnectionTimingInfo !== null) {
     finalConnectionTimingInfo.domainLookupStartTime ||= 0;
@@ -61,9 +71,9 @@ function createTimingInfo({
 // PerformanceResourceTiming should not be initialized externally
 {
   assert.throws(() => new PerformanceResourceTiming(), {
-    name: 'TypeError',
-    message: 'Illegal constructor',
-    code: 'ERR_ILLEGAL_CONSTRUCTOR',
+    name: "TypeError",
+    message: "Illegal constructor",
+    code: "ERR_ILLEGAL_CONSTRUCTOR",
   });
 }
 
@@ -71,9 +81,9 @@ function createTimingInfo({
 {
   const timingInfo = createTimingInfo({ finalConnectionTimingInfo: {} });
   const customGlobal = {};
-  const requestedUrl = 'http://localhost:8080';
-  const cacheMode = 'local';
-  const initiatorType = 'fetch';
+  const requestedUrl = "http://localhost:8080";
+  const cacheMode = "local";
+  const initiatorType = "fetch";
   const resource = performance.markResourceTiming(
     timingInfo,
     requestedUrl,
@@ -82,7 +92,7 @@ function createTimingInfo({
     cacheMode,
     {},
     200,
-    '',
+    "",
   );
 
   assert(resource instanceof PerformanceEntry);
@@ -95,7 +105,7 @@ function createTimingInfo({
   }
 
   {
-    const entries = performance.getEntriesByType('resource');
+    const entries = performance.getEntriesByType("resource");
     assert.strictEqual(entries.length, 1);
     assert(entries[0] instanceof PerformanceResourceTiming);
   }
@@ -116,9 +126,9 @@ function createTimingInfo({
 {
   const timingInfo = createTimingInfo({ finalConnectionTimingInfo: {} });
   const customGlobal = {};
-  const requestedUrl = 'http://localhost:8080';
-  const cacheMode = 'local';
-  const initiatorType = 'fetch';
+  const requestedUrl = "http://localhost:8080";
+  const cacheMode = "local";
+  const initiatorType = "fetch";
   const resource = performance.markResourceTiming(
     timingInfo,
     requestedUrl,
@@ -127,15 +137,18 @@ function createTimingInfo({
     cacheMode,
     {},
     200,
-    '',
+    "",
   );
 
   assert(resource instanceof PerformanceEntry);
   assert(resource instanceof PerformanceResourceTiming);
 
-  assert.strictEqual(resource.entryType, 'resource');
+  assert.strictEqual(resource.entryType, "resource");
   assert.strictEqual(resource.name, requestedUrl);
-  assert.ok(typeof resource.cacheMode === 'undefined', 'cacheMode does not have a getter');
+  assert.ok(
+    typeof resource.cacheMode === "undefined",
+    "cacheMode does not have a getter",
+  );
   assert.strictEqual(resource.startTime, timingInfo.startTime);
   assert.strictEqual(resource.duration, 0);
   assert.strictEqual(resource.initiatorType, initiatorType);
@@ -155,11 +168,11 @@ function createTimingInfo({
   assert.strictEqual(resource.encodedBodySize, 0);
   assert.strictEqual(resource.decodedBodySize, 0);
   assert.strictEqual(resource.transferSize, 0);
-  assert.strictEqual(resource.deliveryType, '');
+  assert.strictEqual(resource.deliveryType, "");
   assert.strictEqual(resource.responseStatus, 200);
   assert.deepStrictEqual(resource.toJSON(), {
     name: requestedUrl,
-    entryType: 'resource',
+    entryType: "resource",
     startTime: 0,
     duration: 0,
     initiatorType,
@@ -180,9 +193,11 @@ function createTimingInfo({
     encodedBodySize: 0,
     decodedBodySize: 0,
     responseStatus: 200,
-    deliveryType: '',
+    deliveryType: "",
   });
-  assert.strictEqual(util.inspect(performance.getEntries()), `[
+  assert.strictEqual(
+    util.inspect(performance.getEntries()),
+    `[
   PerformanceResourceTiming {
     name: 'http://localhost:8080',
     entryType: 'resource',
@@ -208,8 +223,11 @@ function createTimingInfo({
     deliveryType: '',
     responseStatus: 200
   }
-]`);
-  assert.strictEqual(util.inspect(resource), `PerformanceResourceTiming {
+]`,
+  );
+  assert.strictEqual(
+    util.inspect(resource),
+    `PerformanceResourceTiming {
   name: 'http://localhost:8080',
   entryType: 'resource',
   startTime: 0,
@@ -233,7 +251,8 @@ function createTimingInfo({
   decodedBodySize: 0,
   deliveryType: '',
   responseStatus: 200
-}`);
+}`,
+  );
 
   assert(resource instanceof PerformanceEntry);
   assert(resource instanceof PerformanceResourceTiming);
@@ -251,9 +270,9 @@ function createTimingInfo({
     encodedBodySize: 150,
   });
   const customGlobal = {};
-  const requestedUrl = 'http://localhost:8080';
-  const cacheMode = '';
-  const initiatorType = 'fetch';
+  const requestedUrl = "http://localhost:8080";
+  const cacheMode = "";
+  const initiatorType = "fetch";
   const resource = performance.markResourceTiming(
     timingInfo,
     requestedUrl,
@@ -262,15 +281,18 @@ function createTimingInfo({
     cacheMode,
     {},
     200,
-    '',
+    "",
   );
 
   assert(resource instanceof PerformanceEntry);
   assert(resource instanceof PerformanceResourceTiming);
 
-  assert.strictEqual(resource.entryType, 'resource');
+  assert.strictEqual(resource.entryType, "resource");
   assert.strictEqual(resource.name, requestedUrl);
-  assert.ok(typeof resource.cacheMode === 'undefined', 'cacheMode does not have a getter');
+  assert.ok(
+    typeof resource.cacheMode === "undefined",
+    "cacheMode does not have a getter",
+  );
   assert.strictEqual(resource.startTime, timingInfo.startTime);
   // Duration should be the timingInfo endTime - startTime
   assert.strictEqual(resource.duration, 50);
@@ -287,31 +309,33 @@ function createTimingInfo({
 
 // Using PerformanceObserver
 {
-  const obs = new PerformanceObserver(common.mustCall((list) => {
-    {
-      const entries = list.getEntries();
-      assert.strictEqual(entries.length, 1);
-      assert(entries[0] instanceof PerformanceResourceTiming);
-    }
-    {
-      const entries = list.getEntriesByType('resource');
-      assert.strictEqual(entries.length, 1);
-      assert(entries[0] instanceof PerformanceResourceTiming);
-    }
-    {
-      const entries = list.getEntriesByName('http://localhost:8080');
-      assert.strictEqual(entries.length, 1);
-      assert(entries[0] instanceof PerformanceResourceTiming);
-    }
-    obs.disconnect();
-  }));
-  obs.observe({ entryTypes: ['resource'] });
+  const obs = new PerformanceObserver(
+    common.mustCall((list) => {
+      {
+        const entries = list.getEntries();
+        assert.strictEqual(entries.length, 1);
+        assert(entries[0] instanceof PerformanceResourceTiming);
+      }
+      {
+        const entries = list.getEntriesByType("resource");
+        assert.strictEqual(entries.length, 1);
+        assert(entries[0] instanceof PerformanceResourceTiming);
+      }
+      {
+        const entries = list.getEntriesByName("http://localhost:8080");
+        assert.strictEqual(entries.length, 1);
+        assert(entries[0] instanceof PerformanceResourceTiming);
+      }
+      obs.disconnect();
+    }),
+  );
+  obs.observe({ entryTypes: ["resource"] });
 
   const timingInfo = createTimingInfo({ finalConnectionTimingInfo: {} });
   const customGlobal = {};
-  const requestedUrl = 'http://localhost:8080';
-  const cacheMode = 'local';
-  const initiatorType = 'fetch';
+  const requestedUrl = "http://localhost:8080";
+  const cacheMode = "local";
+  const initiatorType = "fetch";
   const resource = performance.markResourceTiming(
     timingInfo,
     requestedUrl,
@@ -320,7 +344,7 @@ function createTimingInfo({
     cacheMode,
     {},
     200,
-    ''
+    "",
   );
 
   assert(resource instanceof PerformanceEntry);

@@ -6,5 +6,5 @@
 // truth without leaking them as named ESM exports of `node:http`.
 //
 // This is NOT a bundled module and NOT public API.
-export const kUniqueHeaders = Symbol('kUniqueHeaders');
-export const kHighWaterMark = Symbol('kHighWaterMark');
+export const kUniqueHeaders = Symbol("kUniqueHeaders");
+export const kHighWaterMark = Symbol("kHighWaterMark");

@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const { GCProfiler } = require('v8');
+require("../common");
+const assert = require("assert");
+const { GCProfiler } = require("v8");
 
 {
   const profiler = new GCProfiler();

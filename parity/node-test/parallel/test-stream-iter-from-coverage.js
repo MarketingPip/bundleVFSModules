@@ -1,22 +1,19 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
 // Coverage tests for from.js: sub-batching >128, DataView in generator,
 // non-Uint8Array TypedArray normalization.
 
-const common = require('../common');
-const assert = require('assert');
-const {
-  from,
-  fromSync,
-  bytes,
-  bytesSync,
-} = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { from, fromSync, bytes, bytesSync } = require("stream/iter");
 
 // fromSync: Uint8Array[] with > 128 elements triggers sub-batching
 async function testFromSyncSubBatching() {
-  const bigBatch = Array.from({ length: 200 },
-                              (_, i) => new Uint8Array([i & 0xFF]));
+  const bigBatch = Array.from(
+    { length: 200 },
+    (_, i) => new Uint8Array([i & 0xff]),
+  );
   const batches = [];
   for (const batch of fromSync(bigBatch)) {
     batches.push(batch);
@@ -35,7 +32,7 @@ async function testFromSyncSubBatching() {
 async function testFromSyncIterableSubBatching() {
   function* gen() {
     for (let i = 0; i < 200; i++) {
-      yield new Uint8Array([i & 0xFF]);
+      yield new Uint8Array([i & 0xff]);
     }
   }
   const batches = [];
@@ -49,8 +46,10 @@ async function testFromSyncIterableSubBatching() {
 
 // from: Uint8Array[] with > 128 elements triggers sub-batching (async)
 async function testFromAsyncSubBatching() {
-  const bigBatch = Array.from({ length: 200 },
-                              (_, i) => new Uint8Array([i & 0xFF]));
+  const bigBatch = Array.from(
+    { length: 200 },
+    (_, i) => new Uint8Array([i & 0xff]),
+  );
   const batches = [];
   for await (const batch of from(bigBatch)) {
     batches.push(batch);
@@ -64,7 +63,7 @@ async function testFromAsyncSubBatching() {
 async function testFromAsyncSyncIterableSubBatching() {
   function* gen() {
     for (let i = 0; i < 200; i++) {
-      yield new Uint8Array([i & 0xFF]);
+      yield new Uint8Array([i & 0xff]);
     }
   }
   const batches = [];
@@ -78,8 +77,7 @@ async function testFromAsyncSyncIterableSubBatching() {
 
 // Exact boundary: 128 elements → single batch (no split)
 async function testFromSubBatchingBoundary() {
-  const exactBatch = Array.from({ length: 128 },
-                                (_, i) => new Uint8Array([i]));
+  const exactBatch = Array.from({ length: 128 }, (_, i) => new Uint8Array([i]));
   const batches = [];
   for (const batch of fromSync(exactBatch)) {
     batches.push(batch);
@@ -90,8 +88,10 @@ async function testFromSubBatchingBoundary() {
 
 // 129 elements → 2 batches (128 + 1)
 async function testFromSubBatchingBoundaryPlus1() {
-  const batch129 = Array.from({ length: 129 },
-                              (_, i) => new Uint8Array([i & 0xFF]));
+  const batch129 = Array.from(
+    { length: 129 },
+    (_, i) => new Uint8Array([i & 0xff]),
+  );
   const batches = [];
   for await (const batch of from(batch129)) {
     batches.push(batch);
@@ -157,9 +157,11 @@ async function testFromSyncInvalidYield() {
   assert.throws(
     () => {
       // eslint-disable-next-line no-unused-vars
-      for (const batch of fromSync(gen())) { /* consume */ }
+      for (const batch of fromSync(gen())) {
+        /* consume */
+      }
     },
-    { code: 'ERR_INVALID_ARG_TYPE' },
+    { code: "ERR_INVALID_ARG_TYPE" },
   );
 }
 

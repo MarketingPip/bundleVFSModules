@@ -1,1 +1,1 @@
-require('./warning-b.js');
+require("./warning-b.js");

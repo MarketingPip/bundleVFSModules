@@ -20,20 +20,21 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const zlib = require('zlib');
-const stream = require('stream');
-const fs = require('fs');
-const fixtures = require('../common/fixtures');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const zlib = require("zlib");
+const stream = require("stream");
+const fs = require("fs");
+const fixtures = require("../common/fixtures");
 
 // Should not segfault.
 assert.throws(() => zlib.gzipSync(Buffer.alloc(0), { windowBits: 8 }), {
-  code: 'ERR_OUT_OF_RANGE',
-  name: 'RangeError',
-  message: 'The value of "options.windowBits" is out of range. ' +
-           'It must be >= 9 and <= 15. Received 8',
+  code: "ERR_OUT_OF_RANGE",
+  name: "RangeError",
+  message:
+    'The value of "options.windowBits" is out of range. ' +
+    "It must be >= 9 and <= 15. Received 8",
 });
 
 let zlibPairs = [
@@ -71,18 +72,19 @@ if (!process.env.PUMMEL) {
   strategy = [0];
 }
 
-let testFiles = ['person.jpg', 'elipses.txt', 'empty.txt'];
+let testFiles = ["person.jpg", "elipses.txt", "empty.txt"];
 
 if (process.env.FAST) {
   zlibPairs = [[zlib.Gzip, zlib.Unzip]];
-  testFiles = ['person.jpg'];
+  testFiles = ["person.jpg"];
 }
 
 const tests = {};
-testFiles.forEach(common.mustCall((file) => {
-  tests[file] = fixtures.readSync(file);
-}, testFiles.length));
-
+testFiles.forEach(
+  common.mustCall((file) => {
+    tests[file] = fixtures.readSync(file);
+  }, testFiles.length),
+);
 
 // Stream that saves everything
 class BufferStream extends stream.Stream {
@@ -109,8 +111,8 @@ class BufferStream extends stream.Stream {
       c.copy(buf, i);
       i += c.length;
     });
-    this.emit('data', buf);
-    this.emit('end');
+    this.emit("data", buf);
+    this.emit("end");
     return true;
   }
 }
@@ -124,12 +126,12 @@ class SlowStream extends stream.Stream {
   }
 
   write() {
-    throw new Error('not implemented, just call ss.end(chunk)');
+    throw new Error("not implemented, just call ss.end(chunk)");
   }
 
   pause() {
     this.paused = true;
-    this.emit('pause');
+    this.emit("pause");
   }
 
   resume() {
@@ -137,17 +139,17 @@ class SlowStream extends stream.Stream {
       if (this.paused) return;
       if (this.offset >= this.length) {
         this.ended = true;
-        return this.emit('end');
+        return this.emit("end");
       }
       const end = Math.min(this.offset + this.trickle, this.length);
       const c = this.chunk.slice(this.offset, end);
       this.offset += c.length;
-      this.emit('data', c);
+      this.emit("data", c);
       process.nextTick(emit);
     };
 
     if (this.ended) return;
-    this.emit('resume');
+    this.emit("resume");
     if (!this.chunk) return;
     this.paused = false;
     emit();
@@ -166,10 +168,10 @@ class SlowStream extends stream.Stream {
 zlib.createDeflateRaw({ windowBits: 8 });
 
 {
-  const node = fs.createReadStream(fixtures.path('person.jpg'));
+  const node = fs.createReadStream(fixtures.path("person.jpg"));
   const raw = [];
   const reinflated = [];
-  node.on('data', (chunk) => raw.push(chunk));
+  node.on("data", (chunk) => raw.push(chunk));
 
   // Usually, the inflate windowBits parameter needs to be at least the
   // value of the matching deflate’s windowBits. However, inflate raw with
@@ -177,12 +179,17 @@ zlib.createDeflateRaw({ windowBits: 8 });
   // that does not know about the silent 8-to-9 upgrade of windowBits
   // that most versions of zlib/Node perform, and which *still* results in
   // a valid 8-bit-window zlib stream.
-  node.pipe(zlib.createDeflateRaw({ windowBits: 9 }))
-      .pipe(zlib.createInflateRaw({ windowBits: 8 }))
-      .on('data', (chunk) => reinflated.push(chunk))
-      .on('end', common.mustCall(
-        () => assert(Buffer.concat(raw).equals(Buffer.concat(reinflated)))))
-      .on('close', common.mustCall(1));
+  node
+    .pipe(zlib.createDeflateRaw({ windowBits: 9 }))
+    .pipe(zlib.createInflateRaw({ windowBits: 8 }))
+    .on("data", (chunk) => reinflated.push(chunk))
+    .on(
+      "end",
+      common.mustCall(() =>
+        assert(Buffer.concat(raw).equals(Buffer.concat(reinflated))),
+      ),
+    )
+    .on("close", common.mustCall(1));
 }
 
 // For each of the files, make sure that compressing and
@@ -190,52 +197,85 @@ zlib.createDeflateRaw({ windowBits: 8 });
 // of the options set above.
 
 const testKeys = Object.keys(tests);
-testKeys.forEach(common.mustCall((file) => {
-  const test = tests[file];
-  chunkSize.forEach(common.mustCall((chunkSize) => {
-    trickle.forEach(common.mustCall((trickle) => {
-      windowBits.forEach(common.mustCall((windowBits) => {
-        level.forEach(common.mustCall((level) => {
-          memLevel.forEach(common.mustCall((memLevel) => {
-            strategy.forEach(common.mustCall((strategy) => {
-              zlibPairs.forEach(common.mustCall((pair) => {
-                const Def = pair[0];
-                const Inf = pair[1];
-                const opts = { level, windowBits, memLevel, strategy };
+testKeys.forEach(
+  common.mustCall((file) => {
+    const test = tests[file];
+    chunkSize.forEach(
+      common.mustCall((chunkSize) => {
+        trickle.forEach(
+          common.mustCall((trickle) => {
+            windowBits.forEach(
+              common.mustCall((windowBits) => {
+                level.forEach(
+                  common.mustCall((level) => {
+                    memLevel.forEach(
+                      common.mustCall((memLevel) => {
+                        strategy.forEach(
+                          common.mustCall((strategy) => {
+                            zlibPairs.forEach(
+                              common.mustCall((pair) => {
+                                const Def = pair[0];
+                                const Inf = pair[1];
+                                const opts = {
+                                  level,
+                                  windowBits,
+                                  memLevel,
+                                  strategy,
+                                };
 
-                const def = new Def(opts);
-                const inf = new Inf(opts);
-                const ss = new SlowStream(trickle);
-                const buf = new BufferStream();
+                                const def = new Def(opts);
+                                const inf = new Inf(opts);
+                                const ss = new SlowStream(trickle);
+                                const buf = new BufferStream();
 
-                // Verify that the same exact buffer comes out the other end.
-                buf.on('data', common.mustCall((c) => {
-                  const msg = `${file} ${chunkSize} ${
-                    JSON.stringify(opts)} ${Def.name} -> ${Inf.name}`;
-                  let i;
-                  for (i = 0; i < Math.max(c.length, test.length); i++) {
-                    if (c[i] !== test[i]) {
-                      assert.fail(msg);
-                      break;
-                    }
-                  }
-                }));
+                                // Verify that the same exact buffer comes out the other end.
+                                buf.on(
+                                  "data",
+                                  common.mustCall((c) => {
+                                    const msg = `${file} ${chunkSize} ${JSON.stringify(
+                                      opts,
+                                    )} ${Def.name} -> ${Inf.name}`;
+                                    let i;
+                                    for (
+                                      i = 0;
+                                      i < Math.max(c.length, test.length);
+                                      i++
+                                    ) {
+                                      if (c[i] !== test[i]) {
+                                        assert.fail(msg);
+                                        break;
+                                      }
+                                    }
+                                  }),
+                                );
 
-                // The magic happens here.
-                ss.pipe(def).pipe(inf).pipe(buf);
-                ss.end(test);
-              }, zlibPairs.length));
-            }, strategy.length));
-          }, memLevel.length));
-        }, level.length));
-      }, windowBits.length));
-    }, trickle.length));
-  }, chunkSize.length));
-}, testKeys.length));
+                                // The magic happens here.
+                                ss.pipe(def).pipe(inf).pipe(buf);
+                                ss.end(test);
+                              }, zlibPairs.length),
+                            );
+                          }, strategy.length),
+                        );
+                      }, memLevel.length),
+                    );
+                  }, level.length),
+                );
+              }, windowBits.length),
+            );
+          }, trickle.length),
+        );
+      }, chunkSize.length),
+    );
+  }, testKeys.length),
+);
 
 {
   // Test instantiation without 'new'
-  common.expectWarning('DeprecationWarning', `Instantiating Gzip without the 'new' keyword has been deprecated.`, 'DEP0184');
+  common.expectWarning(
+    "DeprecationWarning",
+    `Instantiating Gzip without the 'new' keyword has been deprecated.`,
+    "DEP0184",
+  );
   const gzip = zlib.Gzip();
   assert.ok(gzip instanceof zlib.Gzip);
 }

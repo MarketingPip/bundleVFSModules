@@ -19,58 +19,56 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 
 // The purpose of this test is to make sure that when forking a process,
 // sending a fd representing a UDP socket to the child and sending messages
 // to this endpoint, these messages are distributed to the parent and the
 // child process.
 
-
-const common = require('../common');
+const common = require("../common");
 if (common.isWindows)
-  common.skip('Sending dgram sockets to child processes is not supported');
+  common.skip("Sending dgram sockets to child processes is not supported");
 
-const dgram = require('dgram');
-const fork = require('child_process').fork;
-const assert = require('assert');
+const dgram = require("dgram");
+const fork = require("child_process").fork;
+const assert = require("assert");
 
-if (process.argv[2] === 'child') {
+if (process.argv[2] === "child") {
   let childServer;
 
-  process.once('message', (msg, clusterServer) => {
+  process.once("message", (msg, clusterServer) => {
     childServer = clusterServer;
 
-    childServer.once('message', () => {
-      process.send('gotMessage');
+    childServer.once("message", () => {
+      process.send("gotMessage");
       childServer.close();
     });
 
-    process.send('handleReceived');
+    process.send("handleReceived");
   });
-
 } else {
-  const parentServer = dgram.createSocket('udp4');
-  const client = dgram.createSocket('udp4');
-  const child = fork(__filename, ['child']);
+  const parentServer = dgram.createSocket("udp4");
+  const client = dgram.createSocket("udp4");
+  const child = fork(__filename, ["child"]);
 
-  const msg = Buffer.from('Some bytes');
+  const msg = Buffer.from("Some bytes");
 
   let childGotMessage = false;
   let parentGotMessage = false;
 
-  parentServer.once('message', (msg, rinfo) => {
+  parentServer.once("message", (msg, rinfo) => {
     parentGotMessage = true;
     parentServer.close();
   });
 
-  parentServer.on('listening', () => {
-    child.send('server', parentServer);
+  parentServer.on("listening", () => {
+    child.send("server", parentServer);
 
-    child.on('message', (msg) => {
-      if (msg === 'gotMessage') {
+    child.on("message", (msg) => {
+      if (msg === "gotMessage") {
         childGotMessage = true;
-      } else if (msg === 'handleReceived') {
+      } else if (msg === "handleReceived") {
         sendMessages();
       }
     });
@@ -91,16 +89,16 @@ if (process.argv[2] === 'child') {
           0,
           msg.length,
           serverPort,
-          '127.0.0.1',
+          "127.0.0.1",
           common.mustSucceed(),
         );
       }
     }, 1);
   }
 
-  parentServer.bind(0, '127.0.0.1');
+  parentServer.bind(0, "127.0.0.1");
 
-  process.once('exit', () => {
+  process.once("exit", () => {
     assert(parentGotMessage);
     assert(childGotMessage);
   });

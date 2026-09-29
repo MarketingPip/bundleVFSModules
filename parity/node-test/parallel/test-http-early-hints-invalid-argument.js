@@ -1,90 +1,123 @@
-'use strict';
-const common = require('../common');
-const assert = require('node:assert');
-const http = require('node:http');
-const debug = require('node:util').debuglog('test');
+"use strict";
+const common = require("../common");
+const assert = require("node:assert");
+const http = require("node:http");
+const debug = require("node:util").debuglog("test");
 
-const testResBody = 'response content\n';
+const testResBody = "response content\n";
 
 {
-  const server = http.createServer(common.mustCall((req, res) => {
-    debug('Server sending early hints...');
-    assert.throws(() => {
-      res.writeEarlyHints('bad argument type');
-    }, (err) => err.code === 'ERR_INVALID_ARG_TYPE');
+  const server = http.createServer(
+    common.mustCall((req, res) => {
+      debug("Server sending early hints...");
+      assert.throws(
+        () => {
+          res.writeEarlyHints("bad argument type");
+        },
+        (err) => err.code === "ERR_INVALID_ARG_TYPE",
+      );
 
-    assert.throws(() => {
-      res.writeEarlyHints({
-        link: '</>; '
+      assert.throws(
+        () => {
+          res.writeEarlyHints({
+            link: "</>; ",
+          });
+        },
+        (err) => err.code === "ERR_INVALID_ARG_VALUE",
+      );
+
+      assert.throws(
+        () => {
+          res.writeEarlyHints({
+            link: "rel=preload; </scripts.js>",
+          });
+        },
+        (err) => err.code === "ERR_INVALID_ARG_VALUE",
+      );
+
+      assert.throws(
+        () => {
+          res.writeEarlyHints({
+            link: "invalid string",
+          });
+        },
+        (err) => err.code === "ERR_INVALID_ARG_VALUE",
+      );
+
+      debug("Server sending full response...");
+      res.end(testResBody);
+      server.close();
+    }),
+  );
+
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const req = http.request({
+        port: server.address().port,
+        path: "/",
       });
-    }, (err) => err.code === 'ERR_INVALID_ARG_VALUE');
 
-    assert.throws(() => {
-      res.writeEarlyHints({
-        link: 'rel=preload; </scripts.js>'
-      });
-    }, (err) => err.code === 'ERR_INVALID_ARG_VALUE');
+      req.end();
+      debug("Client sending request...");
 
-    assert.throws(() => {
-      res.writeEarlyHints({
-        link: 'invalid string'
-      });
-    }, (err) => err.code === 'ERR_INVALID_ARG_VALUE');
-
-    debug('Server sending full response...');
-    res.end(testResBody);
-    server.close();
-  }));
-
-  server.listen(0, common.mustCall(() => {
-    const req = http.request({
-      port: server.address().port, path: '/'
-    });
-
-    req.end();
-    debug('Client sending request...');
-
-    req.on('information', common.mustNotCall());
-  }));
+      req.on("information", common.mustNotCall());
+    }),
+  );
 }
 
 {
-  const server = http.createServer(common.mustCall((req, res) => {
-    debug('Server sending early hints with CRLF injection...');
+  const server = http.createServer(
+    common.mustCall((req, res) => {
+      debug("Server sending early hints with CRLF injection...");
 
-    assert.throws(() => {
-      res.writeEarlyHints({
-        'link': '</styles.css>; rel=preload; as=style',
-        'X-Custom': 'valid\r\nSet-Cookie: session=evil',
+      assert.throws(
+        () => {
+          res.writeEarlyHints({
+            link: "</styles.css>; rel=preload; as=style",
+            "X-Custom": "valid\r\nSet-Cookie: session=evil",
+          });
+        },
+        (err) => err.code === "ERR_INVALID_CHAR",
+      );
+
+      assert.throws(
+        () => {
+          res.writeEarlyHints({
+            link: "</styles.css>; rel=preload; as=style",
+            "X-Custom\r\nSet-Cookie: session=evil": "value",
+          });
+        },
+        (err) => err.code === "ERR_INVALID_HTTP_TOKEN",
+      );
+
+      assert.throws(
+        () => {
+          res.writeEarlyHints({
+            link: "</styles.css\r\nSet-Cookie: session=evil>; rel=preload; as=style",
+          });
+        },
+        (err) => err.code === "ERR_INVALID_ARG_VALUE",
+      );
+
+      debug("Server sending full response...");
+      res.end(testResBody);
+      server.close();
+    }),
+  );
+
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const req = http.request({
+        port: server.address().port,
+        path: "/",
       });
-    }, (err) => err.code === 'ERR_INVALID_CHAR');
 
-    assert.throws(() => {
-      res.writeEarlyHints({
-        'link': '</styles.css>; rel=preload; as=style',
-        'X-Custom\r\nSet-Cookie: session=evil': 'value',
-      });
-    }, (err) => err.code === 'ERR_INVALID_HTTP_TOKEN');
+      req.end();
+      debug("Client sending request...");
 
-    assert.throws(() => {
-      res.writeEarlyHints({
-        link: '</styles.css\r\nSet-Cookie: session=evil>; rel=preload; as=style',
-      });
-    }, (err) => err.code === 'ERR_INVALID_ARG_VALUE');
-
-    debug('Server sending full response...');
-    res.end(testResBody);
-    server.close();
-  }));
-
-  server.listen(0, common.mustCall(() => {
-    const req = http.request({
-      port: server.address().port, path: '/'
-    });
-
-    req.end();
-    debug('Client sending request...');
-
-    req.on('information', common.mustNotCall());
-  }));
+      req.on("information", common.mustNotCall());
+    }),
+  );
 }

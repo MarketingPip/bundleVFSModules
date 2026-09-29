@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { Readable } = require('stream');
-const assert = require('assert');
+const common = require("../common");
+const { Readable } = require("stream");
+const assert = require("assert");
 
 // basic
 {
   // Find it on Readable.prototype
-  assert(Object.hasOwn(Readable.prototype, 'readableEnded'));
+  assert(Object.hasOwn(Readable.prototype, "readableEnded"));
 }
 
 // event
@@ -17,30 +17,38 @@ const assert = require('assert');
   readable._read = common.mustCall(() => {
     // The state ended should start in false.
     assert.strictEqual(readable.readableEnded, false);
-    readable.push('asd');
+    readable.push("asd");
     assert.strictEqual(readable.readableEnded, false);
     readable.push(null);
     assert.strictEqual(readable.readableEnded, false);
   });
 
-  readable.on('end', common.mustCall(() => {
-    assert.strictEqual(readable.readableEnded, true);
-  }));
+  readable.on(
+    "end",
+    common.mustCall(() => {
+      assert.strictEqual(readable.readableEnded, true);
+    }),
+  );
 
-  readable.on('data', common.mustCall(() => {
-    assert.strictEqual(readable.readableEnded, false);
-  }));
+  readable.on(
+    "data",
+    common.mustCall(() => {
+      assert.strictEqual(readable.readableEnded, false);
+    }),
+  );
 }
 
 // Verifies no `error` triggered on multiple .push(null) invocations
 {
   const readable = new Readable();
 
-  readable.on('readable', () => { readable.read(); });
-  readable.on('error', common.mustNotCall());
-  readable.on('end', common.mustCall());
+  readable.on("readable", () => {
+    readable.read();
+  });
+  readable.on("error", common.mustNotCall());
+  readable.on("end", common.mustCall());
 
-  readable.push('a');
+  readable.push("a");
   readable.push(null);
   readable.push(null);
 }

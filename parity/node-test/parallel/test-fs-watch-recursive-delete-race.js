@@ -1,27 +1,26 @@
 // Flags: --expose-internals
-'use strict';
+"use strict";
 
-const common = require('../common');
-const tmpdir = require('../common/tmpdir');
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
-const { kFSWatchStart } = require('internal/fs/watchers');
-const { FSWatcher } = require('internal/fs/recursive_watch');
+const common = require("../common");
+const tmpdir = require("../common/tmpdir");
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+const { kFSWatchStart } = require("internal/fs/watchers");
+const { FSWatcher } = require("internal/fs/recursive_watch");
 
-if (common.isIBMi)
-  common.skip('IBMi does not support `fs.watch()`');
+if (common.isIBMi) common.skip("IBMi does not support `fs.watch()`");
 
 tmpdir.refresh();
 
-const parent = tmpdir.resolve('parent');
-const child = path.join(parent, 'child');
+const parent = tmpdir.resolve("parent");
+const child = path.join(parent, "child");
 fs.mkdirSync(child, { recursive: true });
-fs.writeFileSync(path.join(child, 'test.tmp'), 'test');
+fs.writeFileSync(path.join(child, "test.tmp"), "test");
 
 const watch = fs.watch;
 let deletedChild = false;
-fs.watch = function(filename, ...args) {
+fs.watch = function (filename, ...args) {
   const watcher = Reflect.apply(watch, this, [filename, ...args]);
 
   if (filename === child) {
@@ -33,7 +32,7 @@ fs.watch = function(filename, ...args) {
 };
 
 const watcher = new FSWatcher({ recursive: true });
-watcher.on('error', common.mustNotCall());
+watcher.on("error", common.mustNotCall());
 
 try {
   watcher[kFSWatchStart](parent);

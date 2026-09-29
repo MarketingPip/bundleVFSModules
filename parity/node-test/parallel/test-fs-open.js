@@ -19,19 +19,19 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
 
 let caughtException = false;
 
 try {
   // Should throw ENOENT, not EBADF
   // see https://github.com/joyent/node/pull/1228
-  fs.openSync('/8hvftyuncxrt/path/to/file/that/does/not/exist', 'r');
+  fs.openSync("/8hvftyuncxrt/path/to/file/that/does/not/exist", "r");
 } catch (e) {
-  assert.strictEqual(e.code, 'ENOENT');
+  assert.strictEqual(e.code, "ENOENT");
   caughtException = true;
 }
 assert.strictEqual(caughtException, true);
@@ -40,81 +40,64 @@ fs.openSync(__filename);
 
 fs.open(__filename, common.mustSucceed());
 
-fs.open(__filename, 'r', common.mustSucceed());
+fs.open(__filename, "r", common.mustSucceed());
 
-fs.open(__filename, 'rs', common.mustSucceed());
+fs.open(__filename, "rs", common.mustSucceed());
 
-fs.open(__filename, 'r', 0, common.mustSucceed());
+fs.open(__filename, "r", 0, common.mustSucceed());
 
-fs.open(__filename, 'r', null, common.mustSucceed());
+fs.open(__filename, "r", null, common.mustSucceed());
 
 async function promise() {
   await (await fs.promises.open(__filename)).close();
-  await (await fs.promises.open(__filename, 'r')).close();
+  await (await fs.promises.open(__filename, "r")).close();
 }
 
 promise().then(common.mustCall());
 
-assert.throws(
-  () => fs.open(__filename, 'r', 'boom', common.mustNotCall()),
-  {
-    code: 'ERR_INVALID_ARG_VALUE',
-    name: 'TypeError'
-  }
-);
+assert.throws(() => fs.open(__filename, "r", "boom", common.mustNotCall()), {
+  code: "ERR_INVALID_ARG_VALUE",
+  name: "TypeError",
+});
 
-for (const extra of [[], ['r'], ['r', 0], ['r', 0, 'bad callback']]) {
-  assert.throws(
-    () => fs.open(__filename, ...extra),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError'
-    }
-  );
+for (const extra of [[], ["r"], ["r", 0], ["r", 0, "bad callback"]]) {
+  assert.throws(() => fs.open(__filename, ...extra), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+  });
 }
 
 [false, 1, [], {}, null, undefined].forEach((i) => {
-  assert.throws(
-    () => fs.open(i, 'r', common.mustNotCall()),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError'
-    }
-  );
-  assert.throws(
-    () => fs.openSync(i, 'r', common.mustNotCall()),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError'
-    }
-  );
-  assert.rejects(
-    fs.promises.open(i, 'r'),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError'
-    }
-  ).then(common.mustCall());
+  assert.throws(() => fs.open(i, "r", common.mustNotCall()), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+  });
+  assert.throws(() => fs.openSync(i, "r", common.mustNotCall()), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+  });
+  assert
+    .rejects(fs.promises.open(i, "r"), {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    })
+    .then(common.mustCall());
 });
 
 // Check invalid modes.
 [false, [], {}].forEach((mode) => {
+  assert.throws(() => fs.open(__filename, "r", mode, common.mustNotCall()), {
+    code: "ERR_INVALID_ARG_TYPE",
+  });
   assert.throws(
-    () => fs.open(__filename, 'r', mode, common.mustNotCall()),
+    () => fs.openSync(__filename, "r", mode, common.mustNotCall()),
     {
-      code: 'ERR_INVALID_ARG_TYPE'
-    }
+      code: "ERR_INVALID_ARG_TYPE",
+    },
   );
-  assert.throws(
-    () => fs.openSync(__filename, 'r', mode, common.mustNotCall()),
-    {
-      code: 'ERR_INVALID_ARG_TYPE'
-    }
-  );
-  assert.rejects(
-    fs.promises.open(__filename, 'r', mode),
-    {
-      code: 'ERR_INVALID_ARG_TYPE'
-    }
-  ).then(common.mustCall());
+  assert
+    .rejects(fs.promises.open(__filename, "r", mode), {
+      code: "ERR_INVALID_ARG_TYPE",
+    })
+    .then(common.mustCall());
 });

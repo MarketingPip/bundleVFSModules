@@ -19,59 +19,67 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
 const stream = fs.createWriteStream(`${tmpdir.path}/out`, {
-  highWaterMark: 10
+  highWaterMark: 10,
 });
-const err = new Error('BAM');
+const err = new Error("BAM");
 
 const write = fs.write;
 let writeCalls = 0;
-fs.write = function() {
+fs.write = function () {
   switch (writeCalls++) {
     case 0:
-      console.error('first write');
+      console.error("first write");
       // First time is ok.
       return write.apply(fs, arguments);
     case 1: {
       // Then it breaks.
-      console.error('second write');
+      console.error("second write");
       const cb = arguments[arguments.length - 1];
-      return process.nextTick(function() {
+      return process.nextTick(function () {
         cb(err);
       });
     }
     default:
       // It should not be called again!
-      throw new Error('BOOM!');
+      throw new Error("BOOM!");
   }
 };
 
-fs.close = common.mustCall(function(fd_, cb) {
-  console.error('fs.close', fd_, stream.fd);
+fs.close = common.mustCall(function (fd_, cb) {
+  console.error("fs.close", fd_, stream.fd);
   assert.strictEqual(fd_, stream.fd);
   fs.closeSync(fd_);
   process.nextTick(cb);
 });
 
-stream.on('error', common.mustCall(function(err_) {
-  console.error('error handler');
-  assert.strictEqual(stream.fd, null);
-  assert.strictEqual(err_, err);
-}));
-
-
-stream.write(Buffer.allocUnsafe(256), common.mustCall(() => {
-  console.error('first cb');
-  stream.write(Buffer.allocUnsafe(256), common.mustCall(function(err_) {
-    console.error('second cb');
+stream.on(
+  "error",
+  common.mustCall(function (err_) {
+    console.error("error handler");
+    assert.strictEqual(stream.fd, null);
     assert.strictEqual(err_, err);
-  }));
-}));
+  }),
+);
+
+stream.write(
+  Buffer.allocUnsafe(256),
+  common.mustCall(() => {
+    console.error("first cb");
+    stream.write(
+      Buffer.allocUnsafe(256),
+      common.mustCall(function (err_) {
+        console.error("second cb");
+        assert.strictEqual(err_, err);
+      }),
+    );
+  }),
+);

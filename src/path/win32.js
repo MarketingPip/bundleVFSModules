@@ -8,7 +8,7 @@
  * OS; this module does the same.
  */
 
-import path from '../path.js';
+import path from "../path.js";
 
 // ---------------------------------------------------------------------------
 // Named exports — every member of the Win32 API
@@ -29,8 +29,8 @@ export const {
   format,
   parse,
   matchesGlob,
-  posix,    // the posix implementation, preserved for parity
-  win32,    // self-referential, preserved for parity
+  posix, // the posix implementation, preserved for parity
+  win32, // self-referential, preserved for parity
   _makeLong,
 } = path.win32;
 

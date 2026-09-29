@@ -1,1 +1,1 @@
-require('./warning-moduleexports-b.js').missingPropModuleExportsB;
+require("./warning-moduleexports-b.js").missingPropModuleExportsB;

@@ -1,19 +1,19 @@
-'use strict';
+"use strict";
 
-require('./');
-const fs = require('fs');
-const path = require('path');
-const assert = require('assert');
+require("./");
+const fs = require("fs");
+const path = require("path");
+const assert = require("assert");
 
 function getCpuProfiles(dir) {
   const list = fs.readdirSync(dir);
   return list
-    .filter((file) => file.endsWith('.cpuprofile'))
+    .filter((file) => file.endsWith(".cpuprofile"))
     .map((file) => path.join(dir, file));
 }
 
 function getFrames(file, suffix) {
-  const data = fs.readFileSync(file, 'utf8');
+  const data = fs.readFileSync(file, "utf8");
   const profile = JSON.parse(data);
   const frames = profile.nodes.filter((i) => {
     const frame = i.callFrame;
@@ -38,7 +38,7 @@ function verifyFrames(output, file, suffix) {
 const kCpuProfInterval = 50;
 const env = {
   ...process.env,
-  NODE_DEBUG_NATIVE: 'INSPECTOR_PROFILER',
+  NODE_DEBUG_NATIVE: "INSPECTOR_PROFILER",
 };
 
 module.exports = {

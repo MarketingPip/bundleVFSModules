@@ -1,9 +1,5 @@
-import {
-
-  FunctionPrototypeCall,
-  PromiseWithResolvers,
-} from './primordials.js';
-import { AbortError, codes as errorsCodes } from './errors.js';
+import { FunctionPrototypeCall, PromiseWithResolvers } from "./primordials.js";
+import { AbortError, codes as errorsCodes } from "./errors.js";
 import {
   isReadable,
   isWritable,
@@ -14,30 +10,17 @@ import {
   isDuplexNodeStream,
   isReadableStream,
   isWritableStream,
-} from './utils.js';
-import { isBlob } from './util-types.js';
-import { eos } from './end-of-stream.js';
-import { destroyer } from './destroy.js';
-import Duplex from './duplex.js';
-import Readable from './readable.js';
-import Writable from './writable.js';
-import from from './from.js';
-import { nextTick } from './task-queues.js';
+} from "./utils.js";
+import { isBlob } from "./util-types.js";
+import { eos } from "./end-of-stream.js";
+import { destroyer } from "./destroy.js";
+import Duplex from "./duplex.js";
+import Readable from "./readable.js";
+import Writable from "./writable.js";
+import from from "./from.js";
+import { nextTick } from "./task-queues.js";
 
-
-
-
-
-
-const {
-    ERR_INVALID_ARG_TYPE,
-    ERR_INVALID_RETURN_VALUE,
-} = errorsCodes;
-
-
-
-
-
+const { ERR_INVALID_ARG_TYPE, ERR_INVALID_RETURN_VALUE } = errorsCodes;
 
 const { Blob } = globalThis;
 const { AbortController, AbortSignal } = globalThis;
@@ -89,7 +72,7 @@ export default function duplexify(body, name) {
     return _duplexify({ __proto__: null, writable: Writable.fromWeb(body) });
   }
 
-  if (typeof body === 'function') {
+  if (typeof body === "function") {
     const { value, write, final, destroy } = fromAsyncGen(body);
 
     // Body might be a constructor function instead of an async generator function.
@@ -108,7 +91,7 @@ export default function duplexify(body, name) {
     }
 
     const then = value?.then;
-    if (typeof then === 'function') {
+    if (typeof then === "function") {
       let d;
 
       const promise = FunctionPrototypeCall(
@@ -116,7 +99,7 @@ export default function duplexify(body, name) {
         value,
         (val) => {
           if (val != null) {
-            throw new ERR_INVALID_RETURN_VALUE('nully', 'body', val);
+            throw new ERR_INVALID_RETURN_VALUE("nully", "body", val);
           }
         },
         (err) => {
@@ -124,7 +107,7 @@ export default function duplexify(body, name) {
         },
       );
 
-      return d = new Duplexify({
+      return (d = new Duplexify({
         // TODO (ronag): highWaterMark?
         objectMode: true,
         readable: false,
@@ -140,11 +123,14 @@ export default function duplexify(body, name) {
           });
         },
         destroy,
-      });
+      }));
     }
 
     throw new ERR_INVALID_RETURN_VALUE(
-      'Iterable, AsyncIterable or AsyncFunction', name, value);
+      "Iterable, AsyncIterable or AsyncFunction",
+      name,
+      value,
+    );
   }
 
   if (isBlob(body)) {
@@ -159,32 +145,31 @@ export default function duplexify(body, name) {
     });
   }
 
-  if (
-    isReadableStream(body?.readable) &&
-    isWritableStream(body?.writable)
-  ) {
+  if (isReadableStream(body?.readable) && isWritableStream(body?.writable)) {
     return Duplexify.fromWeb(body);
   }
 
   if (
-    typeof body?.writable === 'object' ||
-    typeof body?.readable === 'object'
+    typeof body?.writable === "object" ||
+    typeof body?.readable === "object"
   ) {
-    const readable = body?.readable ?
-      isReadableNodeStream(body?.readable) ? body?.readable :
-        duplexify(body.readable) :
-      undefined;
+    const readable = body?.readable
+      ? isReadableNodeStream(body?.readable)
+        ? body?.readable
+        : duplexify(body.readable)
+      : undefined;
 
-    const writable = body?.writable ?
-      isWritableNodeStream(body?.writable) ? body?.writable :
-        duplexify(body.writable) :
-      undefined;
+    const writable = body?.writable
+      ? isWritableNodeStream(body?.writable)
+        ? body?.writable
+        : duplexify(body.writable)
+      : undefined;
 
     return _duplexify({ __proto__: null, readable, writable });
   }
 
   const then = body?.then;
-  if (typeof then === 'function') {
+  if (typeof then === "function") {
     let d;
 
     FunctionPrototypeCall(
@@ -201,37 +186,50 @@ export default function duplexify(body, name) {
       },
     );
 
-    return d = new Duplexify({
+    return (d = new Duplexify({
       objectMode: true,
       writable: false,
       read() {},
-    });
+    }));
   }
 
   throw new ERR_INVALID_ARG_TYPE(
     name,
-    ['Blob', 'ReadableStream', 'WritableStream', 'Stream', 'Iterable',
-     'AsyncIterable', 'Function', '{ readable, writable } pair', 'Promise'],
-    body);
-};
+    [
+      "Blob",
+      "ReadableStream",
+      "WritableStream",
+      "Stream",
+      "Iterable",
+      "AsyncIterable",
+      "Function",
+      "{ readable, writable } pair",
+      "Promise",
+    ],
+    body,
+  );
+}
 
 function fromAsyncGen(fn) {
   let { promise, resolve } = PromiseWithResolvers();
   const ac = new AbortController();
   const signal = ac.signal;
-  const value = fn(async function*() {
-    while (true) {
-      const _promise = promise;
-      promise = null;
-      const { chunk, done, cb } = await _promise;
-      nextTick(cb);
-      if (done) return;
-      if (signal.aborted)
-        throw new AbortError(undefined, { cause: signal.reason });
-      ({ promise, resolve } = PromiseWithResolvers());
-      yield chunk;
-    }
-  }(), { signal });
+  const value = fn(
+    (async function* () {
+      while (true) {
+        const _promise = promise;
+        promise = null;
+        const { chunk, done, cb } = await _promise;
+        nextTick(cb);
+        if (done) return;
+        if (signal.aborted)
+          throw new AbortError(undefined, { cause: signal.reason });
+        ({ promise, resolve } = PromiseWithResolvers());
+        yield chunk;
+      }
+    })(),
+    { signal },
+  );
 
   return {
     value,
@@ -263,8 +261,10 @@ function fromAsyncGen(fn) {
 }
 
 function _duplexify(pair) {
-  const r = pair.readable && typeof pair.readable.read !== 'function' ?
-    Readable.wrap(pair.readable) : pair.readable;
+  const r =
+    pair.readable && typeof pair.readable.read !== "function"
+      ? Readable.wrap(pair.readable)
+      : pair.readable;
   const w = pair.writable;
 
   let readable = !!isReadable(r);
@@ -307,7 +307,7 @@ function _duplexify(pair) {
       onfinished(err);
     });
 
-    d._write = function(chunk, encoding, callback) {
+    d._write = function (chunk, encoding, callback) {
       if (w.write(chunk, encoding)) {
         callback();
       } else {
@@ -315,12 +315,12 @@ function _duplexify(pair) {
       }
     };
 
-    d._final = function(callback) {
+    d._final = function (callback) {
       w.end();
       onfinish = callback;
     };
 
-    w.on('drain', function() {
+    w.on("drain", function () {
       if (ondrain) {
         const cb = ondrain;
         ondrain = null;
@@ -328,7 +328,7 @@ function _duplexify(pair) {
       }
     });
 
-    w.on('finish', function() {
+    w.on("finish", function () {
       if (onfinish) {
         const cb = onfinish;
         onfinish = null;
@@ -346,7 +346,7 @@ function _duplexify(pair) {
       onfinished(err);
     });
 
-    r.on('readable', function() {
+    r.on("readable", function () {
       if (onreadable) {
         const cb = onreadable;
         onreadable = null;
@@ -354,11 +354,11 @@ function _duplexify(pair) {
       }
     });
 
-    r.on('end', function() {
+    r.on("end", function () {
       d.push(null);
     });
 
-    d._read = function() {
+    d._read = function () {
       while (true) {
         const buf = r.read();
 
@@ -374,7 +374,7 @@ function _duplexify(pair) {
     };
   }
 
-  d._destroy = function(err, callback) {
+  d._destroy = function (err, callback) {
     if (!err && onclose !== null) {
       err = new AbortError();
     }

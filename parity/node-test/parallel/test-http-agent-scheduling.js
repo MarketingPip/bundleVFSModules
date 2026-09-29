@@ -1,25 +1,28 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
 function createServer(count) {
-  return http.createServer(common.mustCallAtLeast((req, res) => {
-    // Return the remote port number used for this connection.
-    res.end(req.socket.remotePort.toString(10));
-  }), count);
+  return http.createServer(
+    common.mustCallAtLeast((req, res) => {
+      // Return the remote port number used for this connection.
+      res.end(req.socket.remotePort.toString(10));
+    }),
+    count,
+  );
 }
 
 function makeRequest(url, agent, callback) {
   http
     .request(url, { agent }, (res) => {
-      let data = '';
-      res.setEncoding('ascii');
-      res.on('data', (c) => {
+      let data = "";
+      res.setEncoding("ascii");
+      res.on("data", (c) => {
         data += c;
       });
-      res.on('end', () => {
+      res.on("end", () => {
         process.nextTick(callback, data);
       });
     })
@@ -51,22 +54,38 @@ function defaultTest() {
     const url = `http://localhost:${server.address().port}`;
     const agent = new http.Agent({
       keepAlive: true,
-      maxSockets: 5
+      maxSockets: 5,
     });
 
-    bulkRequest(url, agent, common.mustCall((ports) => {
-      makeRequest(url, agent, common.mustCall((port) => {
-        assert.strictEqual(ports[ports.length - 1], port);
-        makeRequest(url, agent, common.mustCall((port) => {
-          assert.strictEqual(ports[ports.length - 1], port);
-          makeRequest(url, agent, common.mustCall((port) => {
+    bulkRequest(
+      url,
+      agent,
+      common.mustCall((ports) => {
+        makeRequest(
+          url,
+          agent,
+          common.mustCall((port) => {
             assert.strictEqual(ports[ports.length - 1], port);
-            server.close();
-            agent.destroy();
-          }));
-        }));
-      }));
-    }));
+            makeRequest(
+              url,
+              agent,
+              common.mustCall((port) => {
+                assert.strictEqual(ports[ports.length - 1], port);
+                makeRequest(
+                  url,
+                  agent,
+                  common.mustCall((port) => {
+                    assert.strictEqual(ports[ports.length - 1], port);
+                    server.close();
+                    agent.destroy();
+                  }),
+                );
+              }),
+            );
+          }),
+        );
+      }),
+    );
   }
 }
 
@@ -79,22 +98,38 @@ function fifoTest() {
     const agent = new http.Agent({
       keepAlive: true,
       maxSockets: 5,
-      scheduling: 'fifo'
+      scheduling: "fifo",
     });
 
-    bulkRequest(url, agent, common.mustCall((ports) => {
-      makeRequest(url, agent, common.mustCall((port) => {
-        assert.strictEqual(ports[0], port);
-        makeRequest(url, agent, common.mustCall((port) => {
-          assert.strictEqual(ports[1], port);
-          makeRequest(url, agent, common.mustCall((port) => {
-            assert.strictEqual(ports[2], port);
-            server.close();
-            agent.destroy();
-          }));
-        }));
-      }));
-    }));
+    bulkRequest(
+      url,
+      agent,
+      common.mustCall((ports) => {
+        makeRequest(
+          url,
+          agent,
+          common.mustCall((port) => {
+            assert.strictEqual(ports[0], port);
+            makeRequest(
+              url,
+              agent,
+              common.mustCall((port) => {
+                assert.strictEqual(ports[1], port);
+                makeRequest(
+                  url,
+                  agent,
+                  common.mustCall((port) => {
+                    assert.strictEqual(ports[2], port);
+                    server.close();
+                    agent.destroy();
+                  }),
+                );
+              }),
+            );
+          }),
+        );
+      }),
+    );
   }
 }
 
@@ -107,22 +142,38 @@ function lifoTest() {
     const agent = new http.Agent({
       keepAlive: true,
       maxSockets: 5,
-      scheduling: 'lifo'
+      scheduling: "lifo",
     });
 
-    bulkRequest(url, agent, common.mustCall((ports) => {
-      makeRequest(url, agent, common.mustCall((port) => {
-        assert.strictEqual(ports[ports.length - 1], port);
-        makeRequest(url, agent, common.mustCall((port) => {
-          assert.strictEqual(ports[ports.length - 1], port);
-          makeRequest(url, agent, common.mustCall((port) => {
+    bulkRequest(
+      url,
+      agent,
+      common.mustCall((ports) => {
+        makeRequest(
+          url,
+          agent,
+          common.mustCall((port) => {
             assert.strictEqual(ports[ports.length - 1], port);
-            server.close();
-            agent.destroy();
-          }));
-        }));
-      }));
-    }));
+            makeRequest(
+              url,
+              agent,
+              common.mustCall((port) => {
+                assert.strictEqual(ports[ports.length - 1], port);
+                makeRequest(
+                  url,
+                  agent,
+                  common.mustCall((port) => {
+                    assert.strictEqual(ports[ports.length - 1], port);
+                    server.close();
+                    agent.destroy();
+                  }),
+                );
+              }),
+            );
+          }),
+        );
+      }),
+    );
   }
 }
 
@@ -131,14 +182,14 @@ function badSchedulingOptionTest() {
     new http.Agent({
       keepAlive: true,
       maxSockets: 5,
-      scheduling: 'filo'
+      scheduling: "filo",
     });
   } catch (err) {
-    assert.strictEqual(err.code, 'ERR_INVALID_ARG_VALUE');
+    assert.strictEqual(err.code, "ERR_INVALID_ARG_VALUE");
     assert.strictEqual(
       err.message,
       "The argument 'scheduling' must be one of: 'fifo', 'lifo'. " +
-        "Received 'filo'"
+        "Received 'filo'",
     );
   }
 }

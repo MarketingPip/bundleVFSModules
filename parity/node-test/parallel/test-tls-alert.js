@@ -19,69 +19,95 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 if (!common.hasCrypto) {
-  common.skip('missing crypto');
+  common.skip("missing crypto");
 }
 
-const {
-  hasOpenSSL,
-  opensslCli,
-} = require('../common/crypto');
+const { hasOpenSSL, opensslCli } = require("../common/crypto");
 
 if (!opensslCli) {
-  common.skip('node compiled without OpenSSL CLI.');
+  common.skip("node compiled without OpenSSL CLI.");
 }
 
-const assert = require('assert');
-const { execFile } = require('child_process');
-const tls = require('tls');
-const fixtures = require('../common/fixtures');
+const assert = require("assert");
+const { execFile } = require("child_process");
+const tls = require("tls");
+const fixtures = require("../common/fixtures");
 
 function loadPEM(n) {
   return fixtures.readKey(`${n}.pem`);
 }
 
-const server = tls.Server({
-  secureProtocol: 'TLSv1_2_server_method',
-  key: loadPEM('agent2-key'),
-  cert: loadPEM('agent2-cert')
-}, null).listen(0, common.mustCall(() => {
-  if (process.features.openssl_is_boringssl) {
-    let gotClientError = false;
-    let gotServerError = false;
-    function maybeClose() {
-      if (gotClientError && gotServerError)
-        server.close();
-    }
+const server = tls
+  .Server(
+    {
+      secureProtocol: "TLSv1_2_server_method",
+      key: loadPEM("agent2-key"),
+      cert: loadPEM("agent2-cert"),
+    },
+    null,
+  )
+  .listen(
+    0,
+    common.mustCall(() => {
+      if (process.features.openssl_is_boringssl) {
+        let gotClientError = false;
+        let gotServerError = false;
+        function maybeClose() {
+          if (gotClientError && gotServerError) server.close();
+        }
 
-    server.once('tlsClientError', common.mustCall((err) => {
-      assert.strictEqual(err.code, 'ERR_SSL_UNSUPPORTED_PROTOCOL');
-      gotServerError = true;
-      maybeClose();
-    }));
+        server.once(
+          "tlsClientError",
+          common.mustCall((err) => {
+            assert.strictEqual(err.code, "ERR_SSL_UNSUPPORTED_PROTOCOL");
+            gotServerError = true;
+            maybeClose();
+          }),
+        );
 
-    const client = tls.connect({
-      port: server.address().port,
-      rejectUnauthorized: false,
-      secureProtocol: 'TLSv1_1_method',
-    }, common.mustNotCall());
-    client.once('error', common.mustCall((err) => {
-      assert.strictEqual(err.code, 'ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION');
-      gotClientError = true;
-      maybeClose();
-    }));
-    return;
-  }
+        const client = tls.connect(
+          {
+            port: server.address().port,
+            rejectUnauthorized: false,
+            secureProtocol: "TLSv1_1_method",
+          },
+          common.mustNotCall(),
+        );
+        client.once(
+          "error",
+          common.mustCall((err) => {
+            assert.strictEqual(
+              err.code,
+              "ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION",
+            );
+            gotClientError = true;
+            maybeClose();
+          }),
+        );
+        return;
+      }
 
-  const args = ['s_client', '-quiet', '-tls1_1',
-                '-cipher', (hasOpenSSL(3, 1) ? 'DEFAULT:@SECLEVEL=0' : 'DEFAULT'),
-                '-connect', `127.0.0.1:${server.address().port}`];
+      const args = [
+        "s_client",
+        "-quiet",
+        "-tls1_1",
+        "-cipher",
+        hasOpenSSL(3, 1) ? "DEFAULT:@SECLEVEL=0" : "DEFAULT",
+        "-connect",
+        `127.0.0.1:${server.address().port}`,
+      ];
 
-  execFile(opensslCli, args, common.mustCall((err, _, stderr) => {
-    assert.strictEqual(err.code, 1);
-    assert.match(stderr, /SSL alert number 70/);
-    server.close();
-  }));
-}));
+      execFile(
+        opensslCli,
+        args,
+        common.mustCall((err, _, stderr) => {
+          assert.strictEqual(err.code, 1);
+          assert.match(stderr, /SSL alert number 70/);
+          server.close();
+        }),
+      );
+    }),
+  );

@@ -25,7 +25,9 @@ const ArrayPrototypePop = uncurry(Array.prototype.pop);
 const ArrayPrototypePush = uncurry(Array.prototype.push);
 const ArrayPrototypeSlice = uncurry(Array.prototype.slice);
 const FunctionPrototypeCall = uncurry(Function.prototype.call);
-const FunctionPrototypeSymbolHasInstance = uncurry(Function.prototype[Symbol.hasInstance]);
+const FunctionPrototypeSymbolHasInstance = uncurry(
+  Function.prototype[Symbol.hasInstance],
+);
 const JSONParse = JSON.parse;
 const MathFloor = Math.floor;
 const NumberIsInteger = Number.isInteger;
@@ -44,21 +46,31 @@ const ReflectApply = Reflect.apply;
 const ReflectOwnKeys = Reflect.ownKeys;
 const StringPrototypeToLowerCase = uncurry(String.prototype.toLowerCase);
 // TypedArray.prototype.set, uncurried via the %TypedArray% prototype.
-const TypedArrayPrototypeSet = uncurry(Object.getPrototypeOf(Uint8Array.prototype).set);
+const TypedArrayPrototypeSet = uncurry(
+  Object.getPrototypeOf(Uint8Array.prototype).set,
+);
 
 const SymbolAsyncDispose =
-  typeof Symbol.asyncDispose === 'symbol' ? Symbol.asyncDispose : Symbol('Symbol.asyncDispose');
+  typeof Symbol.asyncDispose === "symbol"
+    ? Symbol.asyncDispose
+    : Symbol("Symbol.asyncDispose");
 const SymbolDispose =
-  typeof Symbol.dispose === 'symbol' ? Symbol.dispose : Symbol('Symbol.dispose');
+  typeof Symbol.dispose === "symbol"
+    ? Symbol.dispose
+    : Symbol("Symbol.dispose");
 
 // Aliases that exist in Node's primordials under these exact names.
 const SafeSet = Set;
-const PromiseWithResolvers = typeof Promise.withResolvers === 'function' ?
-  Promise.withResolvers.bind(Promise) :
-  ((promise, resolve, reject) => {
-    promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-    return { promise, resolve, reject };
-  });
+const PromiseWithResolvers =
+  typeof Promise.withResolvers === "function"
+    ? Promise.withResolvers.bind(Promise)
+    : (promise, resolve, reject) => {
+        promise = new Promise((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
+        return { promise, resolve, reject };
+      };
 
 export {
   ArrayIsArray,

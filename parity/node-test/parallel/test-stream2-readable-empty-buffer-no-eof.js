@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
-const Readable = require('stream').Readable;
+const Readable = require("stream").Readable;
 
 test1();
 test2();
@@ -41,9 +41,9 @@ function test1() {
   // r.read(0) again later, otherwise there is no more work being done
   // and the process just exits.
 
-  const buf = Buffer.alloc(5, 'x');
+  const buf = Buffer.alloc(5, "x");
   let reads = 5;
-  r._read = function(n) {
+  r._read = function (n) {
     switch (reads--) {
       case 5:
         return setImmediate(() => {
@@ -67,51 +67,48 @@ function test1() {
       case 0:
         return r.push(null); // EOF
       default:
-        throw new Error('unreachable');
+        throw new Error("unreachable");
     }
   };
 
   const results = [];
   function flow() {
     let chunk;
-    while (null !== (chunk = r.read()))
-      results.push(String(chunk));
+    while (null !== (chunk = r.read())) results.push(String(chunk));
   }
-  r.on('readable', flow);
-  r.on('end', () => {
-    results.push('EOF');
+  r.on("readable", flow);
+  r.on("end", () => {
+    results.push("EOF");
   });
   flow();
 
-  process.on('exit', () => {
-    assert.deepStrictEqual(results, [ 'xxxxx', 'xxxxx', 'EOF' ]);
-    console.log('ok');
+  process.on("exit", () => {
+    assert.deepStrictEqual(results, ["xxxxx", "xxxxx", "EOF"]);
+    console.log("ok");
   });
 }
 
 function test2() {
-  const r = new Readable({ encoding: 'base64' });
+  const r = new Readable({ encoding: "base64" });
   let reads = 5;
-  r._read = function(n) {
-    if (!reads--)
-      return r.push(null); // EOF
-    return r.push(Buffer.from('x'));
+  r._read = function (n) {
+    if (!reads--) return r.push(null); // EOF
+    return r.push(Buffer.from("x"));
   };
 
   const results = [];
   function flow() {
     let chunk;
-    while (null !== (chunk = r.read()))
-      results.push(String(chunk));
+    while (null !== (chunk = r.read())) results.push(String(chunk));
   }
-  r.on('readable', flow);
-  r.on('end', () => {
-    results.push('EOF');
+  r.on("readable", flow);
+  r.on("end", () => {
+    results.push("EOF");
   });
   flow();
 
-  process.on('exit', () => {
-    assert.deepStrictEqual(results, [ 'eHh4', 'eHg=', 'EOF' ]);
-    console.log('ok');
+  process.on("exit", () => {
+    assert.deepStrictEqual(results, ["eHh4", "eHg=", "EOF"]);
+    console.log("ok");
   });
 }

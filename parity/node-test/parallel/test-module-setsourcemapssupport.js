@@ -1,19 +1,13 @@
-'use strict';
-require('../common');
-const assert = require('node:assert');
-const Module = require('node:module');
+"use strict";
+require("../common");
+const assert = require("node:assert");
+const Module = require("node:module");
 
 // This test verifies that the `Module.setSourceMapsSupport` throws on invalid
 // argument inputs.
 
 {
-  const unexpectedValues = [
-    undefined,
-    null,
-    1,
-    {},
-    () => {},
-  ];
+  const unexpectedValues = [undefined, null, 1, {}, () => {}];
   for (const it of unexpectedValues) {
     assert.throws(() => {
       Module.setSourceMapsSupport(it);
@@ -22,12 +16,7 @@ const Module = require('node:module');
 }
 
 {
-  const unexpectedValues = [
-    null,
-    1,
-    {},
-    () => {},
-  ];
+  const unexpectedValues = [null, 1, {}, () => {}];
   for (const it of unexpectedValues) {
     assert.throws(() => {
       Module.setSourceMapsSupport(true, {

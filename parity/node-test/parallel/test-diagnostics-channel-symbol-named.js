@@ -1,24 +1,26 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const dc = require('diagnostics_channel');
-const assert = require('assert');
+const common = require("../common");
+const dc = require("diagnostics_channel");
+const assert = require("assert");
 
 const input = {
-  foo: 'bar'
+  foo: "bar",
 };
 
-const symbol = Symbol('test');
+const symbol = Symbol("test");
 
 // Individual channel objects can be created to avoid future lookups
 const channel = dc.channel(symbol);
-assert.strictEqual(Object.hasOwn(channel, '_index'), true);
+assert.strictEqual(Object.hasOwn(channel, "_index"), true);
 
 // Expect two successful publishes later
-channel.subscribe(common.mustCall((message, name) => {
-  assert.strictEqual(name, symbol);
-  assert.deepStrictEqual(message, input);
-}));
+channel.subscribe(
+  common.mustCall((message, name) => {
+    assert.strictEqual(name, symbol);
+    assert.deepStrictEqual(message, input);
+  }),
+);
 
 channel.publish(input);
 

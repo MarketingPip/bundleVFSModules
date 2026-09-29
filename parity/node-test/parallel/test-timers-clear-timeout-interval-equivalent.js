@@ -1,5 +1,5 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // This test makes sure that timers created with setTimeout can be disarmed by
 // clearInterval and that timers created with setInterval can be disarmed by

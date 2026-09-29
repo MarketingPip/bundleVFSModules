@@ -9,7 +9,7 @@
  *   strict === strict.strict  // true (self-referential, matches Node)
  */
 
-import assert from '../assert.js';
+import assert from "../assert.js";
 
 // `assert.strict` is the strict-mode view: deepEqual → deepStrictEqual,
 // equal → strictEqual, etc. It is also self-referential: strict.strict === strict.

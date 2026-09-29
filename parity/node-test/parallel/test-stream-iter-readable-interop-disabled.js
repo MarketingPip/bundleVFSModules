@@ -1,15 +1,15 @@
-'use strict';
+"use strict";
 
 // Tests that toAsyncStreamable throws ERR_STREAM_ITER_MISSING_FLAG
 // when --experimental-stream-iter is not enabled.
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 const { spawnPromisified } = common;
 
 async function testToAsyncStreamableWithoutFlag() {
   const { stderr, code } = await spawnPromisified(process.execPath, [
-    '-e',
+    "-e",
     `
       const { Readable } = require('stream');
       const r = new Readable({ read() {} });
@@ -22,8 +22,8 @@ async function testToAsyncStreamableWithoutFlag() {
 
 async function testToAsyncStreamableWithFlag() {
   const { code } = await spawnPromisified(process.execPath, [
-    '--experimental-stream-iter',
-    '-e',
+    "--experimental-stream-iter",
+    "-e",
     `
       const { Readable } = require('stream');
       const r = new Readable({
@@ -42,7 +42,7 @@ async function testStreamIterModuleWithoutFlag() {
   // Requiring 'stream/iter' without the flag should not be possible
   // since the module is gated behind --experimental-stream-iter.
   const { code } = await spawnPromisified(process.execPath, [
-    '-e',
+    "-e",
     `
       require('stream/iter');
     `,

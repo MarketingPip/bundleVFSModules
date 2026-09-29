@@ -1,13 +1,14 @@
-'use strict';
-const common = require('../common');
-const { Worker } = require('worker_threads');
+"use strict";
+const common = require("../common");
+const { Worker } = require("worker_threads");
 
 // Like test-async-hooks-worker-promise.js but with the `await` and `createHook`
 // lines switched, because that resulted in different assertion failures
 // (one a Node.js assertion and one a V8 DCHECK) and it seems prudent to
 // cover both of those failures.
 
-const w = new Worker(`
+const w = new Worker(
+  `
 const { createHook } = require('async_hooks');
 
 setImmediate(async () => {
@@ -15,7 +16,9 @@ setImmediate(async () => {
   createHook({ init() {} }).enable();
   process.exit();
 });
-`, { eval: true });
+`,
+  { eval: true },
+);
 
 w.postMessage({});
-w.on('exit', common.mustCall());
+w.on("exit", common.mustCall());

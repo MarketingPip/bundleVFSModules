@@ -19,63 +19,78 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 // This test requires the program 'ab'
-const http = require('http');
-const exec = require('child_process').exec;
+const http = require("http");
+const exec = require("child_process").exec;
 
 const bodyLength = 12345;
 
-const body = 'c'.repeat(bodyLength);
+const body = "c".repeat(bodyLength);
 
-const server = http.createServer(function(req, res) {
+const server = http.createServer(function (req, res) {
   res.writeHead(200, {
-    'Content-Length': bodyLength,
-    'Content-Type': 'text/plain'
+    "Content-Length": bodyLength,
+    "Content-Type": "text/plain",
   });
   res.end(body);
 });
 
 function runAb(opts, callback) {
   const command = `ab ${opts} http://127.0.0.1:${server.address().port}/`;
-  exec(command, common.mustCall(function(err, stdout, stderr) {
-    if (err) {
-      if (/ab|apr/i.test(stderr)) {
-        common.printSkipMessage(`problem spawning \`ab\`.\n${stderr}`);
-        process.reallyExit(0);
+  exec(
+    command,
+    common.mustCall(function (err, stdout, stderr) {
+      if (err) {
+        if (/ab|apr/i.test(stderr)) {
+          common.printSkipMessage(`problem spawning \`ab\`.\n${stderr}`);
+          process.reallyExit(0);
+        }
+        throw err;
       }
-      throw err;
-    }
 
-    let m = /Document Length:\s*(\d+) bytes/i.exec(stdout);
-    const documentLength = parseInt(m[1]);
+      let m = /Document Length:\s*(\d+) bytes/i.exec(stdout);
+      const documentLength = parseInt(m[1]);
 
-    m = /Complete requests:\s*(\d+)/i.exec(stdout);
-    const completeRequests = parseInt(m[1]);
+      m = /Complete requests:\s*(\d+)/i.exec(stdout);
+      const completeRequests = parseInt(m[1]);
 
-    m = /HTML transferred:\s*(\d+) bytes/i.exec(stdout);
-    const htmlTransferred = parseInt(m[1]);
+      m = /HTML transferred:\s*(\d+) bytes/i.exec(stdout);
+      const htmlTransferred = parseInt(m[1]);
 
-    assert.strictEqual(bodyLength, documentLength);
-    assert.strictEqual(completeRequests * documentLength, htmlTransferred);
+      assert.strictEqual(bodyLength, documentLength);
+      assert.strictEqual(completeRequests * documentLength, htmlTransferred);
 
-    if (callback) callback();
-  }));
+      if (callback) callback();
+    }),
+  );
 }
 
-server.listen(0, common.mustCall(function() {
-  runAb('-c 1 -n 10', common.mustCall(function() {
-    console.log('-c 1 -n 10 okay');
+server.listen(
+  0,
+  common.mustCall(function () {
+    runAb(
+      "-c 1 -n 10",
+      common.mustCall(function () {
+        console.log("-c 1 -n 10 okay");
 
-    runAb('-c 1 -n 100', common.mustCall(function() {
-      console.log('-c 1 -n 100 okay');
+        runAb(
+          "-c 1 -n 100",
+          common.mustCall(function () {
+            console.log("-c 1 -n 100 okay");
 
-      runAb('-c 1 -n 1000', common.mustCall(function() {
-        console.log('-c 1 -n 1000 okay');
-        server.close();
-      }));
-    }));
-  }));
-}));
+            runAb(
+              "-c 1 -n 1000",
+              common.mustCall(function () {
+                console.log("-c 1 -n 1000 okay");
+                server.close();
+              }),
+            );
+          }),
+        );
+      }),
+    );
+  }),
+);

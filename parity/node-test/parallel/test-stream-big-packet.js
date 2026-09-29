@@ -19,17 +19,17 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
-const stream = require('stream');
+"use strict";
+require("../common");
+const assert = require("assert");
+const stream = require("stream");
 
 let passed = false;
 
 class TestStream extends stream.Transform {
   _transform(chunk, encoding, done) {
     // Char 'a' only exists in the last write
-    passed ||= chunk.toString().includes('a');
+    passed ||= chunk.toString().includes("a");
     done();
   }
 }
@@ -37,7 +37,7 @@ class TestStream extends stream.Transform {
 const s1 = new stream.Transform({
   transform(chunk, encoding, cb) {
     process.nextTick(cb, null, chunk);
-  }
+  },
 });
 const s2 = new stream.PassThrough();
 const s3 = new TestStream();
@@ -46,18 +46,18 @@ s1.pipe(s3);
 s2.pipe(s3, { end: false });
 
 // We must write a buffer larger than highWaterMark
-const big = Buffer.alloc(s1.writableHighWaterMark + 1, 'x');
+const big = Buffer.alloc(s1.writableHighWaterMark + 1, "x");
 
 // Since big is larger than highWaterMark, it will be buffered internally.
 assert(!s1.write(big));
 // 'tiny' is small enough to pass through internal buffer.
-assert(s2.write('tiny'));
+assert(s2.write("tiny"));
 
 // Write some small data in next IO loop, which will never be written to s3
 // Because 'drain' event is not emitted from s1 and s1 is still paused
-setImmediate(s1.write.bind(s1), 'later');
+setImmediate(s1.write.bind(s1), "later");
 
 // Assert after two IO loops when all operations have been done.
-process.on('exit', function() {
-  assert(passed, 'Large buffer is not handled properly by Writable Stream');
+process.on("exit", function () {
+  assert(passed, "Large buffer is not handled properly by Writable Stream");
 });

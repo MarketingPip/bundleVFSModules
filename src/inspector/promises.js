@@ -44,6 +44,13 @@ export { Network, DOMStorage, NetworkResources };
 
 // Default export: the full named-export set (mirrors require('inspector/promises')).
 export default {
-  Session, open, close, url, waitForDebugger,
-  console: inspectorConsole, Network, DOMStorage, NetworkResources,
+  Session,
+  open,
+  close,
+  url,
+  waitForDebugger,
+  console: inspectorConsole,
+  Network,
+  DOMStorage,
+  NetworkResources,
 };

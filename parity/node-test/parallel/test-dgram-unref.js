@@ -19,20 +19,20 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const dgram = require('dgram');
+"use strict";
+const common = require("../common");
+const dgram = require("dgram");
 
 {
   // Test the case of unref()'ing a socket with a handle.
-  const s = dgram.createSocket('udp4');
+  const s = dgram.createSocket("udp4");
   s.bind();
   s.unref();
 }
 
 {
   // Test the case of unref()'ing a socket with no handle.
-  const s = dgram.createSocket('udp4');
+  const s = dgram.createSocket("udp4");
 
   s.close(common.mustCall(() => s.unref()));
 }

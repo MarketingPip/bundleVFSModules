@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-const { isSunOS } = require('../common');
+const { isSunOS } = require("../common");
 
-const assert = require('assert');
+const assert = require("assert");
 
 function validateResult(result) {
   assert.notStrictEqual(result, null);
@@ -37,51 +37,39 @@ if (!isSunOS) {
     lastUsage = thisUsage;
   }
 } else {
-  assert.throws(
-    () => process.threadCpuUsage(),
-    {
-      code: 'ERR_OPERATION_FAILED',
-      name: 'Error',
-      message: 'Operation failed: threadCpuUsage is not available on SunOS'
-    }
-  );
+  assert.throws(() => process.threadCpuUsage(), {
+    code: "ERR_OPERATION_FAILED",
+    name: "Error",
+    message: "Operation failed: threadCpuUsage is not available on SunOS",
+  });
 }
 
 // Test argument validation
 {
-  assert.throws(
-    () => process.threadCpuUsage(123),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-      message: 'The "prevValue" argument must be of type object. Received type number (123)'
-    }
-  );
+  assert.throws(() => process.threadCpuUsage(123), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      'The "prevValue" argument must be of type object. Received type number (123)',
+  });
 
-  assert.throws(
-    () => process.threadCpuUsage([]),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-      message: 'The "prevValue" argument must be of type object. Received an instance of Array'
-    }
-  );
+  assert.throws(() => process.threadCpuUsage([]), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      'The "prevValue" argument must be of type object. Received an instance of Array',
+  });
 
-  assert.throws(
-    () => process.threadCpuUsage({ user: -123 }),
-    {
-      code: 'ERR_INVALID_ARG_VALUE',
-      name: 'RangeError',
-      message: "The property 'prevValue.user' is invalid. Received -123"
-    }
-  );
+  assert.throws(() => process.threadCpuUsage({ user: -123 }), {
+    code: "ERR_INVALID_ARG_VALUE",
+    name: "RangeError",
+    message: "The property 'prevValue.user' is invalid. Received -123",
+  });
 
-  assert.throws(
-    () => process.threadCpuUsage({ user: 0, system: 'bar' }),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-      message: "The \"prevValue.system\" property must be of type number. Received type string ('bar')"
-    }
-  );
+  assert.throws(() => process.threadCpuUsage({ user: 0, system: "bar" }), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      "The \"prevValue.system\" property must be of type number. Received type string ('bar')",
+  });
 }

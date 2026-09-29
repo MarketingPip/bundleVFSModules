@@ -19,28 +19,31 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // Test that unlink succeeds immediately after readFile completes.
 
-const assert = require('assert');
-const fs = require('fs');
+const assert = require("assert");
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 
-const fileName = tmpdir.resolve('test.bin');
+const fileName = tmpdir.resolve("test.bin");
 const buf = Buffer.alloc(512 * 1024, 42);
 
 tmpdir.refresh();
 
 fs.writeFileSync(fileName, buf);
 
-fs.readFile(fileName, common.mustSucceed((data) => {
-  assert.strictEqual(data.length, buf.length);
-  assert.strictEqual(buf[0], 42);
+fs.readFile(
+  fileName,
+  common.mustSucceed((data) => {
+    assert.strictEqual(data.length, buf.length);
+    assert.strictEqual(buf[0], 42);
 
-  // Unlink should not throw. This is part of the test. It used to throw on
-  // Windows due to a bug.
-  fs.unlinkSync(fileName);
-}));
+    // Unlink should not throw. This is part of the test. It used to throw on
+    // Windows due to a bug.
+    fs.unlinkSync(fileName);
+  }),
+);

@@ -1,14 +1,14 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 common.skipIfInspectorDisabled();
 
-const { isMainThread, workerData, Worker } = require('node:worker_threads');
+const { isMainThread, workerData, Worker } = require("node:worker_threads");
 if (!workerData && !isMainThread) {
-  common.skip('This test only works on a main thread');
+  common.skip("This test only works on a main thread");
 }
 
-const assert = require('node:assert');
+const assert = require("node:assert");
 
 let TIMEOUT = common.platformTimeout(5000);
 if (common.isWindows) {
@@ -24,24 +24,24 @@ if (common.isWindows) {
     // ["--inspect-brk"].
     {
       const worker = new Worker(__filename, {
-        execArgv: ['--inspect-brk=0'],
+        execArgv: ["--inspect-brk=0"],
         workerData: {},
       });
       await new Promise((r) => setTimeout(r, TIMEOUT));
-      worker.on('exit', common.mustCall());
+      worker.on("exit", common.mustCall());
       await worker.terminate();
     }
     // process.exit() should kill the process.
     {
       new Worker(__filename, {
-        execArgv: ['--inspect-brk=0'],
+        execArgv: ["--inspect-brk=0"],
         workerData: {},
       });
       await new Promise((r) => setTimeout(r, TIMEOUT));
-      process.on('exit', (status) => assert.strictEqual(status, 0));
+      process.on("exit", (status) => assert.strictEqual(status, 0));
       setImmediate(() => process.exit());
     }
   } else {
-    console.log('Worker running!');
+    console.log("Worker running!");
   }
 })().then(common.mustCall());

@@ -14,24 +14,24 @@
 
 // ─── ANSI colour helpers (mirrors internal/util/colors) ──────────────────────
 const CLR = {
-  red:    s => `\x1b[31m${s}\x1b[39m`,
-  green:  s => `\x1b[32m${s}\x1b[39m`,
-  blue:   s => `\x1b[34m${s}\x1b[39m`,
-  yellow: s => `\x1b[33m${s}\x1b[39m`,
-  gray:   s => `\x1b[90m${s}\x1b[39m`,
-  white:  s => `\x1b[37m${s}\x1b[39m`,
-  reset:  '\x1b[0m',
+  red: (s) => `\x1b[31m${s}\x1b[39m`,
+  green: (s) => `\x1b[32m${s}\x1b[39m`,
+  blue: (s) => `\x1b[34m${s}\x1b[39m`,
+  yellow: (s) => `\x1b[33m${s}\x1b[39m`,
+  gray: (s) => `\x1b[90m${s}\x1b[39m`,
+  white: (s) => `\x1b[37m${s}\x1b[39m`,
+  reset: "\x1b[0m",
 };
 
 // Unicode symbols — mirrors reporterUnicodeSymbolMap in Node internals
 const SYM = {
-  pass:      '✔ ',
-  fail:      '✖ ',
-  arrow:     '→ ',
-  info:      'ℹ ',
-  warn:      '⚠ ',
-  suite:     '▶ ',
-  suiteEnd:  '▶ ',
+  pass: "✔ ",
+  fail: "✖ ",
+  arrow: "→ ",
+  info: "ℹ ",
+  warn: "⚠ ",
+  suite: "▶ ",
+  suiteEnd: "▶ ",
 };
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -41,16 +41,21 @@ const SYM = {
  * Suites (isSuite / _isSuite) are not counted — only leaf tests are.
  */
 function countAll(root) {
-  let tests = 0, pass = 0, fail = 0, skip = 0, todo = 0, cancelled = 0;
+  let tests = 0,
+    pass = 0,
+    fail = 0,
+    skip = 0,
+    todo = 0,
+    cancelled = 0;
   function walk(node) {
     for (const c of node.children) {
       if (!c.isSuite && !c._isSuite) {
         tests++;
         const oc = outcomeOf(c);
-        if      (oc === 'pass') pass++;
-        else if (oc === 'fail') fail++;
-        else if (oc === 'skip') skip++;
-        else if (oc === 'todo') todo++;
+        if (oc === "pass") pass++;
+        else if (oc === "fail") fail++;
+        else if (oc === "skip") skip++;
+        else if (oc === "todo") todo++;
       }
       walk(c);
     }
@@ -67,29 +72,31 @@ function countAll(root) {
  */
 function outcomeOf(node) {
   if (!node || node.isSuite || node._isSuite) return null;
-  if (node.result === 'fail') return 'fail';
-  if (node.skip !== undefined) return 'skip';
-  if (node.todo !== undefined) return 'todo';
-  return 'pass';
+  if (node.result === "fail") return "fail";
+  if (node.skip !== undefined) return "skip";
+  if (node.todo !== undefined) return "todo";
+  return "pass";
 }
 
 function skipReason(node) {
-  return typeof node.skip === 'string' && node.skip ? node.skip : '';
+  return typeof node.skip === "string" && node.skip ? node.skip : "";
 }
 
 function todoReason(node) {
-  return typeof node.todo === 'string' && node.todo ? node.todo : '';
+  return typeof node.todo === "string" && node.todo ? node.todo : "";
 }
 
 /** Round to 3 decimal places, matching Node's NumberPrototypeToFixed(..., 3). */
-function ms(n) { return typeof n === 'number' ? +n.toFixed(3) : 0; }
+function ms(n) {
+  return typeof n === "number" ? +n.toFixed(3) : 0;
+}
 
 /** Recursively sum duration of a node and all descendants. */
 function nodeDuration(node) {
   if (node.isSuite || node._isSuite) {
     return (node.children ?? []).reduce((a, c) => a + nodeDuration(c), 0);
   }
-  return typeof node.duration === 'number' ? node.duration : 0;
+  return typeof node.duration === "number" ? node.duration : 0;
 }
 
 /** Total wall-time across all top-level children of root. */
@@ -98,7 +105,9 @@ function totalMs(root) {
 }
 
 /** Flatten events array; accepts undefined gracefully. */
-function evtList(events) { return Array.isArray(events) ? events : []; }
+function evtList(events) {
+  return Array.isArray(events) ? events : [];
+}
 
 /**
  * Consume an async iterable of { type, data } test events (the stream run()
@@ -108,7 +117,7 @@ function evtList(events) { return Array.isArray(events) ? events : []; }
  */
 async function _collectRoot(source) {
   const events = [];
-  if (source && typeof source[Symbol.asyncIterator] === 'function') {
+  if (source && typeof source[Symbol.asyncIterator] === "function") {
     for await (const e of source) events.push(e);
   } else if (Array.isArray(source)) {
     events.push(...source);
@@ -117,10 +126,13 @@ async function _collectRoot(source) {
   for (const e of events) {
     let n = e?.data?.node;
     while (n?.parent) n = n.parent;
-    if (n) { root = n; break; }
+    if (n) {
+      root = n;
+      break;
+    }
   }
   // No events (or no node links): an empty tree the renderers can walk.
-  if (!root) root = { name: '<root>', children: [] };
+  if (!root) root = { name: "<root>", children: [] };
   return { root, events };
 }
 
@@ -138,15 +150,19 @@ export async function* dot(source) {
 function _renderDot({ root, events }) {
   // Node uses process.stdout.columns ?? 20, clamped to minimum 20.
   const COLS = 20;
-  const rows  = [];
-  let   line  = '';
-  let   col   = 0;
+  const rows = [];
+  let line = "";
+  let col = 0;
   const failed = [];
 
   function addChar(ch, failData) {
     line += ch;
     if (failData) failed.push(failData);
-    if (++col >= COLS) { rows.push(line); line = ''; col = 0; }
+    if (++col >= COLS) {
+      rows.push(line);
+      line = "";
+      col = 0;
+    }
   }
 
   // Prefer event stream (matches Node's own ordering precisely); fall back to
@@ -154,15 +170,15 @@ function _renderDot({ root, events }) {
   const evts = evtList(events);
   if (evts.length) {
     for (const { type, data } of evts) {
-      if (type === 'test:pass') addChar(CLR.green('.'), null);
-      if (type === 'test:fail') addChar(CLR.red('X'), data);
+      if (type === "test:pass") addChar(CLR.green("."), null);
+      if (type === "test:fail") addChar(CLR.red("X"), data);
     }
   } else {
     (function walk(node) {
       for (const c of node.children) {
         if (!c.isSuite && !c._isSuite) {
-          if      (c.result === 'pass') addChar(CLR.green('.'), null);
-          else if (c.result === 'fail') addChar(CLR.red('X'),   c);
+          if (c.result === "pass") addChar(CLR.green("."), null);
+          else if (c.result === "fail") addChar(CLR.red("X"), c);
         }
         walk(c);
       }
@@ -170,28 +186,31 @@ function _renderDot({ root, events }) {
   }
 
   if (line) rows.push(line);
-  rows.push(''); // trailing newline after the dot grid
+  rows.push(""); // trailing newline after the dot grid
 
   if (failed.length) {
-    rows.push('');
-    rows.push(`${CLR.red('Failed tests:')}${CLR.white('')}`);
-    rows.push('');
+    rows.push("");
+    rows.push(`${CLR.red("Failed tests:")}${CLR.white("")}`);
+    rows.push("");
     for (const data of failed) {
       // data may be a raw event payload or a tree node — normalise both.
-      const name = data.name ?? data.data?.name ?? '(unknown)';
-      const err  = data.details?.error ?? data.error;
+      const name = data.name ?? data.data?.name ?? "(unknown)";
+      const err = data.details?.error ?? data.error;
       rows.push(`${SYM.fail}${name}`);
       if (err) {
-        rows.push(`  ${err.name ?? 'Error'}: ${err.message ?? err}`);
+        rows.push(`  ${err.name ?? "Error"}: ${err.message ?? err}`);
         if (err.stack) {
-          for (const f of err.stack.split('\n').filter(l => /^\s+at /.test(l)).slice(0, 3))
+          for (const f of err.stack
+            .split("\n")
+            .filter((l) => /^\s+at /.test(l))
+            .slice(0, 3))
             rows.push(`    ${f.trim()}`);
         }
       }
     }
   }
 
-  return rows.join('\n');
+  return rows.join("\n");
 }
 
 // ─── SPEC reporter ────────────────────────────────────────────────────────────
@@ -206,38 +225,38 @@ export async function* spec(source) {
 }
 
 function _renderSpec({ root, events }) {
-  const rows        = [];
+  const rows = [];
   const failedNodes = [];
 
-  function indent(depth) { return '  '.repeat(depth); }
-
+  function indent(depth) {
+    return "  ".repeat(depth);
+  }
 
   function formatError(node, depth) {
-  const err = node.error;
-  if (!err) return;
+    const err = node.error;
+    if (!err) return;
 
-  const pad = indent(depth + 1);
-  let msg = err.message ?? String(err);
+    const pad = indent(depth + 1);
+    let msg = err.message ?? String(err);
 
-  // Transform "4 == 56" → "Expected 4 to equal 56"
-  const m = msg.match(/^(.+)\s*==\s*(.+)$/);
-  if (m) {
-    msg = `Expected ${m[1]} to equal ${m[2]}`;
-  }
+    // Transform "4 == 56" → "Expected 4 to equal 56"
+    const m = msg.match(/^(.+)\s*==\s*(.+)$/);
+    if (m) {
+      msg = `Expected ${m[1]} to equal ${m[2]}`;
+    }
 
-  rows.push(`${pad}${CLR.red(msg)}`);
+    rows.push(`${pad}${CLR.red(msg)}`);
 
-  if (err.stack) {
-    for (const f of err.stack
-      .split('\n')
-      .filter(l => /^\s+at /.test(l))
-      .slice(0, 5)
-    ) {
-      rows.push(`${pad}  ${f.trim()}`);
+    if (err.stack) {
+      for (const f of err.stack
+        .split("\n")
+        .filter((l) => /^\s+at /.test(l))
+        .slice(0, 5)) {
+        rows.push(`${pad}  ${f.trim()}`);
+      }
     }
   }
-}
-  
+
   function renderNode(node, depth) {
     const pad = indent(depth);
     const isSuite = node.isSuite || node._isSuite;
@@ -250,32 +269,42 @@ function _renderSpec({ root, events }) {
       // Suite close — always includes duration
       const dur = nodeDuration(node);
       const outcome = (node.children ?? []).some(
-        c => !c.isSuite && !c._isSuite && c.result === 'fail'
+        (c) => !c.isSuite && !c._isSuite && c.result === "fail",
       );
       const sym = outcome ? CLR.red(SYM.suiteEnd) : CLR.blue(SYM.suiteEnd);
       rows.push(`${pad}${sym}${node.name} ${CLR.gray(`(${ms(dur)}ms)`)}`);
-      rows.push('');
+      rows.push("");
     } else {
       switch (outcomeOf(node)) {
-        case 'pass':
-          rows.push(`${pad}${CLR.green(SYM.pass)}${node.name} ${CLR.gray(`(${ms(node.duration)}ms)`)}`);
+        case "pass":
+          rows.push(
+            `${pad}${CLR.green(SYM.pass)}${node.name} ${CLR.gray(`(${ms(node.duration)}ms)`)}`,
+          );
           break;
 
-        case 'fail':
-          rows.push(`${pad}${CLR.red(SYM.fail)}${node.name} ${CLR.gray(`(${ms(node.duration)}ms)`)}`);
+        case "fail":
+          rows.push(
+            `${pad}${CLR.red(SYM.fail)}${node.name} ${CLR.gray(`(${ms(node.duration)}ms)`)}`,
+          );
           formatError(node, depth);
           failedNodes.push({ node, depth });
           break;
 
-        case 'skip': {
-          const reason = skipReason(node) ? ` # SKIP ${skipReason(node)}` : ' # SKIP';
-          rows.push(`${pad}${CLR.gray(`- ${node.name}${reason} (${ms(node.duration)}ms)`)}`);
+        case "skip": {
+          const reason = skipReason(node)
+            ? ` # SKIP ${skipReason(node)}`
+            : " # SKIP";
+          rows.push(
+            `${pad}${CLR.gray(`- ${node.name}${reason} (${ms(node.duration)}ms)`)}`,
+          );
           break;
         }
 
-        case 'todo': {
-          const reason = todoReason(node) ? ` ${todoReason(node)}` : '';
-          rows.push(`${pad}${CLR.gray(`# TODO ${node.name}${reason} (${ms(node.duration)}ms)`)}`);
+        case "todo": {
+          const reason = todoReason(node) ? ` ${todoReason(node)}` : "";
+          rows.push(
+            `${pad}${CLR.gray(`# TODO ${node.name}${reason} (${ms(node.duration)}ms)`)}`,
+          );
           break;
         }
 
@@ -289,7 +318,7 @@ function _renderSpec({ root, events }) {
 
   // Summary block — mirrors the ℹ diagnostic lines Node emits at the end.
   const counts = countAll(root);
-  const total  = totalMs(root);
+  const total = totalMs(root);
   rows.push(`${CLR.blue(SYM.info)}tests ${counts.tests}`);
   rows.push(`${CLR.blue(SYM.info)}pass ${counts.pass}`);
   rows.push(`${CLR.blue(SYM.info)}fail ${counts.fail}`);
@@ -300,22 +329,25 @@ function _renderSpec({ root, events }) {
 
   // "▶ failing tests:" reprise — mirrors #formatFailedTestResults().
   if (failedNodes.length) {
-    rows.push('');
+    rows.push("");
     rows.push(`${CLR.red(SYM.fail)}failing tests:`);
-    rows.push('');
+    rows.push("");
     for (const { node } of failedNodes) {
       rows.push(`${CLR.red(SYM.fail)}${node.name}`);
       if (node.error) {
         rows.push(`  ${node.error.message ?? node.error}`);
         if (node.error.stack) {
-          for (const f of node.error.stack.split('\n').filter(l => /^\s+at /.test(l)).slice(0, 5))
+          for (const f of node.error.stack
+            .split("\n")
+            .filter((l) => /^\s+at /.test(l))
+            .slice(0, 5))
             rows.push(`    ${f.trim()}`);
         }
       }
     }
   }
 
-  return rows.join('\n');
+  return rows.join("\n");
 }
 
 // ─── TAP reporter ─────────────────────────────────────────────────────────────
@@ -331,30 +363,32 @@ export async function* tap(source) {
 }
 
 function _renderTap({ root, events }) {
-  const rows = ['TAP version 13'];
+  const rows = ["TAP version 13"];
 
   // Escape special TAP characters — mirrors tapEscape() in Node's reporter.
   function tapEsc(s) {
-    return String(s ?? '')
-      .replace(/\\/g, '\\\\')
-      .replace(/#/g, '\\#')
-      .replace(/\t/g, '\\t')
-      .replace(/\n/g, '\\n')
-      .replace(/\r/g, '\\r');
+    return String(s ?? "")
+      .replace(/\\/g, "\\\\")
+      .replace(/#/g, "\\#")
+      .replace(/\t/g, "\\t")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r");
   }
 
   // YAML block — mirrors reportDetails() + jsToYaml() in tap.js.
   function yamlBlock(obj, indentSpaces) {
-    const pad = ' '.repeat(indentSpaces);
-    const entries = Object.entries(obj).filter(([, v]) => v !== undefined && v !== null);
+    const pad = " ".repeat(indentSpaces);
+    const entries = Object.entries(obj).filter(
+      ([, v]) => v !== undefined && v !== null,
+    );
     if (!entries.length) return `${pad}---\n${pad}...`;
-    return `${pad}---\n${entries.map(([k, v]) => `${pad}  ${k}: ${v}`).join('\n')}\n${pad}...`;
+    return `${pad}---\n${entries.map(([k, v]) => `${pad}  ${k}: ${v}`).join("\n")}\n${pad}...`;
   }
 
   function renderNode(node, depth, localNum) {
-    const pad      = ' '.repeat(depth * 4);
-    const innerPad = ' '.repeat((depth + 1) * 4);
-    const isSuite  = node.isSuite || node._isSuite;
+    const pad = " ".repeat(depth * 4);
+    const innerPad = " ".repeat((depth + 1) * 4);
+    const isSuite = node.isSuite || node._isSuite;
 
     if (isSuite) {
       rows.push(`${pad}# Subtest: ${tapEsc(node.name)}`);
@@ -365,46 +399,48 @@ function _renderTap({ root, events }) {
       const dur = nodeDuration(node);
       const suiteDirective =
         node.skip !== undefined
-          ? ` # SKIP${skipReason(node) ? ' ' + tapEsc(skipReason(node)) : ''}`
-        : node.todo !== undefined
-          ? ` # TODO${todoReason(node) ? ' ' + tapEsc(todoReason(node)) : ''}`
-        : '';
+          ? ` # SKIP${skipReason(node) ? " " + tapEsc(skipReason(node)) : ""}`
+          : node.todo !== undefined
+            ? ` # TODO${todoReason(node) ? " " + tapEsc(todoReason(node)) : ""}`
+            : "";
       rows.push(`${pad}ok ${localNum} - ${tapEsc(node.name)}${suiteDirective}`);
       rows.push(yamlBlock({ duration_ms: ms(dur) }, depth * 4 + 2));
     } else {
       const oc = outcomeOf(node);
-      const ok = oc === 'fail' ? 'not ok' : 'ok';
+      const ok = oc === "fail" ? "not ok" : "ok";
 
       // # EXPECTED FAILURE — mirrors node's expectFailure TAP directive.
-      const expectedFailure = node._expectedFailure === true ||
-        node.error?.failureType === 'expectedFailure';
+      const expectedFailure =
+        node._expectedFailure === true ||
+        node.error?.failureType === "expectedFailure";
 
       const directive =
         node.skip !== undefined
-          ? ` # SKIP${skipReason(node) ? ' ' + tapEsc(skipReason(node)) : ''}`
-        : node.todo !== undefined
-          ? ` # TODO${todoReason(node) ? ' ' + tapEsc(todoReason(node)) : ''}`
-        : expectedFailure
-          ? ' # EXPECTED FAILURE'
-        : '';
+          ? ` # SKIP${skipReason(node) ? " " + tapEsc(skipReason(node)) : ""}`
+          : node.todo !== undefined
+            ? ` # TODO${todoReason(node) ? " " + tapEsc(todoReason(node)) : ""}`
+            : expectedFailure
+              ? " # EXPECTED FAILURE"
+              : "";
 
       rows.push(`${pad}${ok} ${localNum} - ${tapEsc(node.name)}${directive}`);
 
       // YAML detail block — matches reportDetails() structure.
       const meta = { duration_ms: ms(node.duration ?? 0) };
-      if (oc === 'fail' && node.error) {
+      if (oc === "fail" && node.error) {
         const err = node.error;
-        meta.failureType = err.failureType ?? 'testCodeFailure';
+        meta.failureType = err.failureType ?? "testCodeFailure";
         // Node wraps the message in single quotes in the YAML output.
-        meta.error    = `'${String(err.message ?? '').replace(/'/g, "\\'")}'`;
-        meta.code     = err.code  ?? 'ERR_TEST_FAILURE';
-        meta.name     = err.name  ?? 'Error';
+        meta.error = `'${String(err.message ?? "").replace(/'/g, "\\'")}'`;
+        meta.code = err.code ?? "ERR_TEST_FAILURE";
+        meta.name = err.name ?? "Error";
         if (err.stack) {
-          const frames = err.stack.split('\n')
-            .filter(l => /^\s+at /.test(l))
-            .map(l => l.trim());
+          const frames = err.stack
+            .split("\n")
+            .filter((l) => /^\s+at /.test(l))
+            .map((l) => l.trim());
           if (frames.length)
-            meta.stack = `|-\n${' '.repeat(depth * 4 + 4)}${frames.join(`\n${' '.repeat(depth * 4 + 4)}`)}`;
+            meta.stack = `|-\n${" ".repeat(depth * 4 + 4)}${frames.join(`\n${" ".repeat(depth * 4 + 4)}`)}`;
         }
       }
       rows.push(yamlBlock(meta, depth * 4 + 2));
@@ -417,7 +453,7 @@ function _renderTap({ root, events }) {
 
   // Trailing diagnostic comment block — matches Node's final summary lines.
   const counts = countAll(root);
-  const total  = totalMs(root);
+  const total = totalMs(root);
   rows.push(`# tests ${counts.tests}`);
   rows.push(`# pass ${counts.pass}`);
   rows.push(`# fail ${counts.fail}`);
@@ -426,7 +462,7 @@ function _renderTap({ root, events }) {
   rows.push(`# todo ${counts.todo}`);
   rows.push(`# duration_ms ${ms(total)}`);
 
-  return rows.join('\n');
+  return rows.join("\n");
 }
 
 // ─── JUnit reporter ───────────────────────────────────────────────────────────
@@ -444,82 +480,87 @@ export async function* junit(source) {
 
 function _renderJunit({ root, events }) {
   function escAttr(s) {
-    return String(s ?? '')
-      .replace(/&(?!#\d{1,7};)/g, '&amp;')
-      .replace(/</g,  '&lt;')
-      .replace(/"/g,  '&quot;')
-      .replace(/\n/g, '&#10;');
+    return String(s ?? "")
+      .replace(/&(?!#\d{1,7};)/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/"/g, "&quot;")
+      .replace(/\n/g, "&#10;");
   }
   function escContent(s) {
-    return String(s ?? '')
-      .replace(/&(?!#\d{1,7};)/g, '&amp;')
-      .replace(/</g, '&lt;');
+    return String(s ?? "")
+      .replace(/&(?!#\d{1,7};)/g, "&amp;")
+      .replace(/</g, "&lt;");
   }
   function escComment(s) {
-    return String(s ?? '').replace(/--/g, '&#45;&#45;');
+    return String(s ?? "").replace(/--/g, "&#45;&#45;");
   }
 
-  const HOSTNAME = 'localhost';
-  const out = ['<?xml version="1.0" encoding="utf-8"?>', '<testsuites>'];
+  const HOSTNAME = "localhost";
+  const out = ['<?xml version="1.0" encoding="utf-8"?>', "<testsuites>"];
 
-  function tabs(depth) { return '\t'.repeat(depth + 1); }
+  function tabs(depth) {
+    return "\t".repeat(depth + 1);
+  }
 
   function renderSuite(node, depth) {
-    const t        = tabs(depth);
+    const t = tabs(depth);
     const children = node.children ?? [];
-    const cases    = children.filter(c => !c.isSuite && !c._isSuite);
-    const nested   = children.filter(c =>  c.isSuite ||  c._isSuite);
-    const failures = cases.filter(c => c.result === 'fail').length;
-    const skipped  = cases.filter(c => { const oc = outcomeOf(c); return oc === 'skip' || oc === 'todo'; }).length;
-    const dur      = (nodeDuration(node) / 1000).toFixed(6);
+    const cases = children.filter((c) => !c.isSuite && !c._isSuite);
+    const nested = children.filter((c) => c.isSuite || c._isSuite);
+    const failures = cases.filter((c) => c.result === "fail").length;
+    const skipped = cases.filter((c) => {
+      const oc = outcomeOf(c);
+      return oc === "skip" || oc === "todo";
+    }).length;
+    const dur = (nodeDuration(node) / 1000).toFixed(6);
 
     out.push(
       `${t}<testsuite` +
-      ` name="${escAttr(node.name)}"` +
-      ` tests="${cases.length}"` +
-      ` failures="${failures}"` +
-      ` skipped="${skipped}"` +
-      ` errors="0"` +
-      ` time="${dur}"` +
-      ` hostname="${HOSTNAME}">`
+        ` name="${escAttr(node.name)}"` +
+        ` tests="${cases.length}"` +
+        ` failures="${failures}"` +
+        ` skipped="${skipped}"` +
+        ` errors="0"` +
+        ` time="${dur}"` +
+        ` hostname="${HOSTNAME}">`,
     );
 
     for (const child of children) {
       if (child.isSuite || child._isSuite) renderSuite(child, depth + 1);
-      else                                  renderTestcase(child, depth + 1);
+      else renderTestcase(child, depth + 1);
     }
     out.push(`${t}</testsuite>`);
   }
 
   function renderTestcase(node, depth) {
-    const t   = tabs(depth);
+    const t = tabs(depth);
     const dur = ((node.duration ?? 0) / 1000).toFixed(6);
     const attrs =
       `name="${escAttr(node.name)}"` +
-      ` classname="${escAttr(node.classname ?? 'test')}"` +
+      ` classname="${escAttr(node.classname ?? "test")}"` +
       ` time="${dur}"`;
 
     const isLeaf = !node.children?.length;
 
     const oc = outcomeOf(node);
 
-    if (isLeaf && oc === 'pass') {
+    if (isLeaf && oc === "pass") {
       out.push(`${t}<testcase ${attrs}/>`);
       return;
     }
 
     out.push(`${t}<testcase ${attrs}>`);
 
-    if (oc === 'skip') {
-      const msg = skipReason(node) || 'skipped';
+    if (oc === "skip") {
+      const msg = skipReason(node) || "skipped";
       out.push(`${t}\t<skipped type="skipped" message="${escAttr(msg)}"/>`);
-    } else if (oc === 'todo') {
-      const msg = todoReason(node) || 'todo';
+    } else if (oc === "todo") {
+      const msg = todoReason(node) || "todo";
       out.push(`${t}\t<skipped type="todo" message="${escAttr(msg)}"/>`);
-    } else if (oc === 'fail' && node.error) {
-      const err  = node.error;
-      const type = escAttr(err.failureType ?? err.code ?? 'Error');
-      const msg  = escAttr(err.message ?? '');
+    } else if (oc === "fail" && node.error) {
+      const err = node.error;
+      const type = escAttr(err.failureType ?? err.code ?? "Error");
+      const msg = escAttr(err.message ?? "");
       out.push(`${t}\t<failure type="${type}" message="${msg}">`);
       out.push(escContent(err.stack ?? String(err)));
       out.push(`${t}\t</failure>`);
@@ -529,32 +570,37 @@ function _renderJunit({ root, events }) {
   }
 
   // Separate top-level suites from top-level leaf tests.
-  const topSuites = root.children.filter(c => c.isSuite || c._isSuite);
-  const topTests  = root.children.filter(c => !c.isSuite && !c._isSuite);
+  const topSuites = root.children.filter((c) => c.isSuite || c._isSuite);
+  const topTests = root.children.filter((c) => !c.isSuite && !c._isSuite);
 
   for (const s of topSuites) renderSuite(s, 0);
 
   // Lone top-level tests are wrapped in an anonymous "root" testsuite —
   // this matches Node's behaviour where all events share a common ancestor.
   if (topTests.length) {
-    const failures = topTests.filter(c => c.result === 'fail').length;
-    const skipped  = topTests.filter(c => { const oc = outcomeOf(c); return oc === 'skip' || oc === 'todo'; }).length;
-    const dur      = (topTests.reduce((a, c) => a + nodeDuration(c), 0) / 1000).toFixed(6);
+    const failures = topTests.filter((c) => c.result === "fail").length;
+    const skipped = topTests.filter((c) => {
+      const oc = outcomeOf(c);
+      return oc === "skip" || oc === "todo";
+    }).length;
+    const dur = (
+      topTests.reduce((a, c) => a + nodeDuration(c), 0) / 1000
+    ).toFixed(6);
     out.push(
       `\t<testsuite name="root"` +
-      ` tests="${topTests.length}"` +
-      ` failures="${failures}"` +
-      ` skipped="${skipped}"` +
-      ` errors="0"` +
-      ` time="${dur}"` +
-      ` hostname="${HOSTNAME}">`
+        ` tests="${topTests.length}"` +
+        ` failures="${failures}"` +
+        ` skipped="${skipped}"` +
+        ` errors="0"` +
+        ` time="${dur}"` +
+        ` hostname="${HOSTNAME}">`,
     );
     for (const t of topTests) renderTestcase(t, 1);
-    out.push('\t</testsuite>');
+    out.push("\t</testsuite>");
   }
 
-  out.push('</testsuites>');
-  return out.join('\n');
+  out.push("</testsuites>");
+  return out.join("\n");
 }
 
 // ─── LCOV reporter ────────────────────────────────────────────────────────────
@@ -571,33 +617,34 @@ export async function* lcov(source) {
 }
 
 function _renderLcov({ root, events }) {
-  const coverageEvt = evtList(events).find(e => e.type === 'test:coverage');
-  if (!coverageEvt) return ''; // no coverage data — mirrors Node's silent no-op
+  const coverageEvt = evtList(events).find((e) => e.type === "test:coverage");
+  if (!coverageEvt) return ""; // no coverage data — mirrors Node's silent no-op
 
   const { summary } = coverageEvt.data;
   const { workingDirectory, files } = summary;
 
   // Portable relative-path calculation (no node:path available here).
   function relativePath(filePath) {
-    const base = workingDirectory.endsWith('/') || workingDirectory.endsWith('\\')
-      ? workingDirectory
-      : workingDirectory + '/';
+    const base =
+      workingDirectory.endsWith("/") || workingDirectory.endsWith("\\")
+        ? workingDirectory
+        : workingDirectory + "/";
     if (filePath.startsWith(base)) return filePath.slice(base.length);
     return filePath;
   }
 
-  let out = 'TN:\n'; // TN: (test name) — empty since we have no named test
+  let out = "TN:\n"; // TN: (test name) — empty since we have no named test
 
   for (const file of files) {
     // SF: — source file path, relative to workingDirectory
     out += `SF:${relativePath(file.path)}\n`;
 
     // FN: / FNDA: — function definitions and execution counts
-    let fnda = '';
+    let fnda = "";
     for (let j = 0; j < file.functions.length; j++) {
       const func = file.functions[j];
       const name = func.name || `anonymous_${j}`;
-      out  += `FN:${func.line},${name}\n`;
+      out += `FN:${func.line},${name}\n`;
       fnda += `FNDA:${func.count},${name}\n`;
     }
     out += fnda;
@@ -616,13 +663,12 @@ function _renderLcov({ root, events }) {
 
     // DA: — line execution counts, sorted ascending (mirrors toSorted in lcov.js)
     const sortedLines = [...file.lines].sort((a, b) => a.line - b.line);
-    for (const l of sortedLines)
-      out += `DA:${l.line},${l.count}\n`;
+    for (const l of sortedLines) out += `DA:${l.line},${l.count}\n`;
 
     // LH: / LF: — lines hit / found
     out += `LH:${file.coveredLineCount}\n`;
     out += `LF:${file.totalLineCount}\n`;
-    out += 'end_of_record\n';
+    out += "end_of_record\n";
   }
 
   return out;

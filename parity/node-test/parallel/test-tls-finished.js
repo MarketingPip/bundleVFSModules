@@ -1,10 +1,9 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const fixtures = require('../common/fixtures');
+const common = require("../common");
+const fixtures = require("../common/fixtures");
 
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+if (!common.hasCrypto) common.skip("missing crypto");
 
 // This test ensures that tlsSocket.getFinished() and
 // tlsSocket.getPeerFinished() return undefined before
@@ -13,43 +12,54 @@ if (!common.hasCrypto)
 // verifying alice.getFinished() == bob.getPeerFinished()
 // and alice.getPeerFinished() == bob.getFinished().
 
-const assert = require('assert');
-const tls = require('tls');
+const assert = require("assert");
+const tls = require("tls");
 
 const msg = {};
 const pem = (n) => fixtures.readKey(`${n}.pem`);
-const server = tls.createServer({
-  key: pem('agent1-key'),
-  cert: pem('agent1-cert'),
-  ...(process.features.openssl_is_boringssl ? { maxVersion: 'TLSv1.2' } : {}),
-}, common.mustCall((alice) => {
-  msg.server = {
-    alice: alice.getFinished(),
-    bob: alice.getPeerFinished()
-  };
-  server.close();
-}));
-
-server.listen(0, common.mustCall(() => {
-  const bob = tls.connect({
-    port: server.address().port,
-    rejectUnauthorized: false,
-    ...(process.features.openssl_is_boringssl ? { maxVersion: 'TLSv1.2' } : {}),
-  }, common.mustCall(() => {
-    msg.client = {
-      alice: bob.getPeerFinished(),
-      bob: bob.getFinished()
+const server = tls.createServer(
+  {
+    key: pem("agent1-key"),
+    cert: pem("agent1-cert"),
+    ...(process.features.openssl_is_boringssl ? { maxVersion: "TLSv1.2" } : {}),
+  },
+  common.mustCall((alice) => {
+    msg.server = {
+      alice: alice.getFinished(),
+      bob: alice.getPeerFinished(),
     };
-    bob.end();
-  }));
+    server.close();
+  }),
+);
 
-  msg.before = {
-    alice: bob.getPeerFinished(),
-    bob: bob.getFinished()
-  };
-}));
+server.listen(
+  0,
+  common.mustCall(() => {
+    const bob = tls.connect(
+      {
+        port: server.address().port,
+        rejectUnauthorized: false,
+        ...(process.features.openssl_is_boringssl
+          ? { maxVersion: "TLSv1.2" }
+          : {}),
+      },
+      common.mustCall(() => {
+        msg.client = {
+          alice: bob.getPeerFinished(),
+          bob: bob.getFinished(),
+        };
+        bob.end();
+      }),
+    );
 
-process.on('exit', () => {
+    msg.before = {
+      alice: bob.getPeerFinished(),
+      bob: bob.getFinished(),
+    };
+  }),
+);
+
+process.on("exit", () => {
   assert.strictEqual(undefined, msg.before.alice);
   assert.strictEqual(undefined, msg.before.bob);
 

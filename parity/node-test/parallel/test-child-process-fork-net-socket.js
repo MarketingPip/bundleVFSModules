@@ -19,78 +19,90 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const {
-  mustCall,
-  mustCallAtLeast,
-} = require('../common');
-const assert = require('assert');
-const fork = require('child_process').fork;
-const net = require('net');
-const debug = require('util').debuglog('test');
+"use strict";
+const { mustCall, mustCallAtLeast } = require("../common");
+const assert = require("assert");
+const fork = require("child_process").fork;
+const net = require("net");
+const debug = require("util").debuglog("test");
 
-if (process.argv[2] === 'child') {
-
+if (process.argv[2] === "child") {
   const onSocket = mustCall((msg, socket) => {
-    if (msg.what !== 'socket') return;
-    process.removeListener('message', onSocket);
-    socket.end('echo');
-    debug('CHILD: got socket');
+    if (msg.what !== "socket") return;
+    process.removeListener("message", onSocket);
+    socket.end("echo");
+    debug("CHILD: got socket");
   });
 
-  process.on('message', onSocket);
+  process.on("message", onSocket);
 
-  process.send({ what: 'ready' });
+  process.send({ what: "ready" });
 } else {
+  const child = fork(process.argv[1], ["child"]);
 
-  const child = fork(process.argv[1], ['child']);
-
-  child.on('exit', mustCall((code, signal) => {
-    const message = `CHILD: died with ${code}, ${signal}`;
-    assert.strictEqual(code, 0, message);
-  }));
+  child.on(
+    "exit",
+    mustCall((code, signal) => {
+      const message = `CHILD: died with ${code}, ${signal}`;
+      assert.strictEqual(code, 0, message);
+    }),
+  );
 
   // Send net.Socket to child.
   function testSocket() {
-
     // Create a new server and connect to it,
     // but the socket will be handled by the child.
     const server = net.createServer();
-    server.on('connection', mustCall((socket) => {
-      // TODO(@jasnell): Close does not seem to actually be called.
-      // It is not clear if it is needed.
-      socket.on('close', () => {
-        debug('CLIENT: socket closed');
-      });
-      child.send({ what: 'socket' }, socket);
-    }));
-    server.on('close', mustCall(() => {
-      debug('PARENT: server closed');
-    }));
+    server.on(
+      "connection",
+      mustCall((socket) => {
+        // TODO(@jasnell): Close does not seem to actually be called.
+        // It is not clear if it is needed.
+        socket.on("close", () => {
+          debug("CLIENT: socket closed");
+        });
+        child.send({ what: "socket" }, socket);
+      }),
+    );
+    server.on(
+      "close",
+      mustCall(() => {
+        debug("PARENT: server closed");
+      }),
+    );
 
-    server.listen(0, mustCall(() => {
-      debug('testSocket, listening');
-      const connect = net.connect(server.address().port);
-      let store = '';
-      connect.on('data', mustCallAtLeast((chunk) => {
-        store += chunk;
-        debug('CLIENT: got data');
-      }));
-      connect.on('close', mustCall(() => {
-        debug('CLIENT: closed');
-        assert.strictEqual(store, 'echo');
-        server.close();
-      }));
-    }));
+    server.listen(
+      0,
+      mustCall(() => {
+        debug("testSocket, listening");
+        const connect = net.connect(server.address().port);
+        let store = "";
+        connect.on(
+          "data",
+          mustCallAtLeast((chunk) => {
+            store += chunk;
+            debug("CLIENT: got data");
+          }),
+        );
+        connect.on(
+          "close",
+          mustCall(() => {
+            debug("CLIENT: closed");
+            assert.strictEqual(store, "echo");
+            server.close();
+          }),
+        );
+      }),
+    );
   }
 
   const onReady = mustCall((msg) => {
-    if (msg.what !== 'ready') return;
-    child.removeListener('message', onReady);
+    if (msg.what !== "ready") return;
+    child.removeListener("message", onReady);
 
     testSocket();
   });
 
   // Create socket and send it to child.
-  child.on('message', onReady);
+  child.on("message", onReady);
 }

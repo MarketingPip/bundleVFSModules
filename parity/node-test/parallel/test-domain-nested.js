@@ -19,25 +19,28 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 // Make sure that the nested domains don't cause the domain stack to grow
 
-require('../common');
-const assert = require('assert');
-const domain = require('domain');
+require("../common");
+const assert = require("assert");
+const domain = require("domain");
 
-process.on('exit', function(c) {
+process.on("exit", function (c) {
   assert.strictEqual(domain._stack.length, 0);
 });
 
-domain.create().run(function() {
-  domain.create().run(function() {
-    domain.create().run(function() {
-      domain.create().on('error', function(e) {
-        // Don't need to do anything here
-      }).run(function() {
-        throw new Error('died');
-      });
+domain.create().run(function () {
+  domain.create().run(function () {
+    domain.create().run(function () {
+      domain
+        .create()
+        .on("error", function (e) {
+          // Don't need to do anything here
+        })
+        .run(function () {
+          throw new Error("died");
+        });
     });
   });
 });

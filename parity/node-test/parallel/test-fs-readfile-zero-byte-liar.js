@@ -19,15 +19,15 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // Test that readFile works even when stat returns size 0.
 
-const assert = require('assert');
-const fs = require('fs');
+const assert = require("assert");
+const fs = require("fs");
 
-const dataExpected = fs.readFileSync(__filename, 'utf8');
+const dataExpected = fs.readFileSync(__filename, "utf8");
 
 // Sometimes stat returns size=0, but it's a lie.
 fs._fstat = fs.fstat;
@@ -47,9 +47,13 @@ fs.fstatSync = (fd) => {
   return st;
 };
 
-const d = fs.readFileSync(__filename, 'utf8');
+const d = fs.readFileSync(__filename, "utf8");
 assert.strictEqual(d, dataExpected);
 
-fs.readFile(__filename, 'utf8', common.mustCall((er, d) => {
-  assert.strictEqual(d, dataExpected);
-}));
+fs.readFile(
+  __filename,
+  "utf8",
+  common.mustCall((er, d) => {
+    assert.strictEqual(d, dataExpected);
+  }),
+);

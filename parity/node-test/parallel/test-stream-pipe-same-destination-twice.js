@@ -1,19 +1,19 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // Regression test for https://github.com/nodejs/node/issues/12718.
 // Tests that piping a source stream twice to the same destination stream
 // works, and that a subsequent unpipe() call only removes the pipe *once*.
-const assert = require('assert');
-const { PassThrough, Writable } = require('stream');
+const assert = require("assert");
+const { PassThrough, Writable } = require("stream");
 
 {
   const passThrough = new PassThrough();
   const dest = new Writable({
     write: common.mustCall((chunk, encoding, cb) => {
-      assert.strictEqual(`${chunk}`, 'foobar');
+      assert.strictEqual(`${chunk}`, "foobar");
       cb();
-    })
+    }),
   });
 
   passThrough.pipe(dest);
@@ -30,7 +30,7 @@ const { PassThrough, Writable } = require('stream');
   assert.strictEqual(passThrough._readableState.pipes.length, 1);
   assert.deepStrictEqual(passThrough._readableState.pipes, [dest]);
 
-  passThrough.write('foobar');
+  passThrough.write("foobar");
   passThrough.pipe(dest);
 }
 
@@ -38,9 +38,9 @@ const { PassThrough, Writable } = require('stream');
   const passThrough = new PassThrough();
   const dest = new Writable({
     write: common.mustCall((chunk, encoding, cb) => {
-      assert.strictEqual(`${chunk}`, 'foobar');
+      assert.strictEqual(`${chunk}`, "foobar");
       cb();
-    }, 2)
+    }, 2),
   });
 
   passThrough.pipe(dest);
@@ -51,13 +51,13 @@ const { PassThrough, Writable } = require('stream');
   assert.strictEqual(passThrough._readableState.pipes[0], dest);
   assert.strictEqual(passThrough._readableState.pipes[1], dest);
 
-  passThrough.write('foobar');
+  passThrough.write("foobar");
 }
 
 {
   const passThrough = new PassThrough();
   const dest = new Writable({
-    write: common.mustNotCall()
+    write: common.mustNotCall(),
   });
 
   passThrough.pipe(dest);
@@ -74,5 +74,5 @@ const { PassThrough, Writable } = require('stream');
   assert.strictEqual(passThrough._events.data, undefined);
   assert.strictEqual(passThrough._readableState.pipes.length, 0);
 
-  passThrough.write('foobar');
+  passThrough.write("foobar");
 }

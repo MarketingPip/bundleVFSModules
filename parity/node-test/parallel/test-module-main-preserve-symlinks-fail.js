@@ -1,10 +1,10 @@
-'use strict';
-require('../common');
-const assert = require('assert');
-const { execFileSync } = require('child_process');
+"use strict";
+require("../common");
+const assert = require("assert");
+const { execFileSync } = require("child_process");
 
-const entryPoints = ['iDoNotExist', 'iDoNotExist.js', 'iDoNotExist.mjs'];
-const flags = [[], ['--preserve-symlinks']];
+const entryPoints = ["iDoNotExist", "iDoNotExist.js", "iDoNotExist.mjs"];
+const flags = [[], ["--preserve-symlinks"]];
 const node = process.argv[0];
 
 for (const args of flags) {
@@ -15,7 +15,9 @@ for (const args of flags) {
       assert(e.toString().match(/Error: Cannot find module/));
       continue;
     }
-    assert.fail('Executing node with inexistent entry point should ' +
-                `fail. Entry point: ${entryPoint}, Flags: [${args}]`);
+    assert.fail(
+      "Executing node with inexistent entry point should " +
+        `fail. Entry point: ${entryPoint}, Flags: [${args}]`,
+    );
   }
 }

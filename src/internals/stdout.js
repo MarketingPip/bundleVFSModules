@@ -3,14 +3,16 @@
 //export default browserStdout({ label: false });
 
 class EventEmitter {
-  constructor() { this._events = {}; }
+  constructor() {
+    this._events = {};
+  }
   on(type, listener) {
     (this._events[type] || (this._events[type] = [])).push(listener);
     return this;
   }
   emit(type, ...args) {
     if (!this._events[type]) return false;
-    this._events[type].forEach(fn => fn.apply(this, args));
+    this._events[type].forEach((fn) => fn.apply(this, args));
     return true;
   }
   once(type, listener) {
@@ -22,7 +24,7 @@ class EventEmitter {
   }
   off(type, listener) {
     if (!this._events[type]) return this;
-    this._events[type] = this._events[type].filter(fn => fn !== listener);
+    this._events[type] = this._events[type].filter((fn) => fn !== listener);
     return this;
   }
 }
@@ -30,15 +32,14 @@ class EventEmitter {
 EventEmitter.prototype.addListener = EventEmitter.prototype.on;
 EventEmitter.prototype.removeListener = EventEmitter.prototype.off;
 
-
 function _makeOutputShim(name) {
   const stream = new EventEmitter();
-  let _buffer = ''; // Internal storage for partial lines
+  let _buffer = ""; // Internal storage for partial lines
 
   Object.assign(stream, {
     isTTY: true,
     writable: true,
-    fd: name === 'stderr' ? 2 : 1,
+    fd: name === "stderr" ? 2 : 1,
     columns: 80,
     rows: 24,
     write(chunk) {
@@ -46,14 +47,14 @@ function _makeOutputShim(name) {
       _buffer += str;
 
       // Split by newline and handle each complete line
-      const lines = _buffer.split('\n');
-      
-      // The last element is either an empty string (if ended in \n) 
-      // or a partial line (if it didn't). Keep it for next time.
-      _buffer = lines.pop(); 
+      const lines = _buffer.split("\n");
 
-      lines.forEach(line => {
-        console[name === 'stderr' ? 'error' : 'log'](line);
+      // The last element is either an empty string (if ended in \n)
+      // or a partial line (if it didn't). Keep it for next time.
+      _buffer = lines.pop();
+
+      lines.forEach((line) => {
+        console[name === "stderr" ? "error" : "log"](line);
       });
 
       return true;
@@ -61,14 +62,14 @@ function _makeOutputShim(name) {
     end() {
       // If there is anything left in the buffer when ending, flush it
       if (_buffer) {
-        console[name === 'stderr' ? 'error' : 'log'](_buffer);
-        _buffer = '';
+        console[name === "stderr" ? "error" : "log"](_buffer);
+        _buffer = "";
       }
-      this.emit('finish');
+      this.emit("finish");
     },
     destroy() {
-      _buffer = '';
-    }
+      _buffer = "";
+    },
   });
   return stream;
 }

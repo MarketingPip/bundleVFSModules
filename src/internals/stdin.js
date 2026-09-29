@@ -24,7 +24,7 @@
  *                       calls read() directly).
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from "events";
 
 // ---------------------------------------------------------------------------
 // _parseKey  — minimal ANSI key parser for the 'keypress' events emitted in
@@ -38,24 +38,51 @@ import { EventEmitter } from 'events';
  */
 function _parseKey(s) {
   // ANSI escape sequences — delegate name parsing to a small table
-  if (s.startsWith('\x1b[') || s.startsWith('\x1bO')) {
-    return { name: 'ansi', ctrl: false, meta: true, shift: false, sequence: s };
+  if (s.startsWith("\x1b[") || s.startsWith("\x1bO")) {
+    return { name: "ansi", ctrl: false, meta: true, shift: false, sequence: s };
   }
-  if (s === '\r' || s === '\n')  return { name: 'return',    ctrl: false, meta: false, shift: false, sequence: s };
-  if (s === '\t')                return { name: 'tab',       ctrl: false, meta: false, shift: false, sequence: s };
-  if (s === '\x03')              return { name: 'c',         ctrl: true,  meta: false, shift: false, sequence: s };
-  if (s === '\x1b')              return { name: 'escape',    ctrl: false, meta: false, shift: false, sequence: s };
-  if (s === '\x7f' || s === '\b')return { name: 'backspace', ctrl: false, meta: false, shift: false, sequence: s };
-  if (s.length === 1 && s <= '\x1a') {
+  if (s === "\r" || s === "\n")
+    return {
+      name: "return",
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: s,
+    };
+  if (s === "\t")
+    return { name: "tab", ctrl: false, meta: false, shift: false, sequence: s };
+  if (s === "\x03")
+    return { name: "c", ctrl: true, meta: false, shift: false, sequence: s };
+  if (s === "\x1b")
+    return {
+      name: "escape",
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: s,
+    };
+  if (s === "\x7f" || s === "\b")
+    return {
+      name: "backspace",
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: s,
+    };
+  if (s.length === 1 && s <= "\x1a") {
     // Ctrl+A … Ctrl+Z
     return {
       name: String.fromCharCode(s.charCodeAt(0) + 96), // 'a'..'z'
-      ctrl: true, meta: false, shift: false, sequence: s,
+      ctrl: true,
+      meta: false,
+      shift: false,
+      sequence: s,
     };
   }
   return {
     name: s.toLowerCase(),
-    ctrl: false, meta: false,
+    ctrl: false,
+    meta: false,
     shift: s.length === 1 && s !== s.toLowerCase(),
     sequence: s,
   };
@@ -68,20 +95,20 @@ function _parseKey(s) {
 const stdin = new EventEmitter();
 
 // ── Public properties matching Node's process.stdin ──────────────────────────
-stdin.isTTY    = true;
+stdin.isTTY = true;
 stdin.readable = true;
-stdin.fd       = 0;
+stdin.fd = 0;
 
 // ── Private state ─────────────────────────────────────────────────────────────
-stdin._isRaw   = false;
-stdin._paused  = false;
-stdin._ended   = false;
+stdin._isRaw = false;
+stdin._paused = false;
+stdin._ended = false;
 /** Cooked-mode line accumulator. @type {string} */
-stdin._cookedBuf = '';
+stdin._cookedBuf = "";
 /** Promise/resolve pair for waitUntilDrained(). @type {null | () => void} */
-stdin._drainResolve  = null;
+stdin._drainResolve = null;
 /** @type {null | Promise<void>} */
-stdin._drainPromise  = null;
+stdin._drainPromise = null;
 
 // ── Encoding (readline's StringDecoder takes over; this is informational) ─────
 stdin._encoding = null;
@@ -105,14 +132,18 @@ stdin.setRawMode = function setRawMode(value) {
   if (value && !this._isRaw && this._cookedBuf.length > 0) {
     // Flush the partial line as a data event before entering raw mode
     const pending = this._cookedBuf;
-    this._cookedBuf = '';
+    this._cookedBuf = "";
     this._emitData(pending);
   }
   this._isRaw = value;
   return this;
 };
 
-Object.defineProperty(stdin, 'isRaw', { get() { return this._isRaw; } });
+Object.defineProperty(stdin, "isRaw", {
+  get() {
+    return this._isRaw;
+  },
+});
 
 // ── Flow control ──────────────────────────────────────────────────────────────
 
@@ -128,7 +159,9 @@ stdin.pause = function pause() {
 
 // Node's readable.isPaused() is a METHOD. Define as a method (not a getter)
 // so `stdin.isPaused()` works. Also keep a getter for the property form.
-stdin.isPaused = function isPaused() { return !!this._paused; };
+stdin.isPaused = function isPaused() {
+  return !!this._paused;
+};
 
 // ── Stream termination ────────────────────────────────────────────────────────
 
@@ -137,33 +170,37 @@ stdin.end = function end() {
   // Flush any remaining cooked buffer as a final line (no trailing newline)
   if (this._cookedBuf.length > 0) {
     const pending = this._cookedBuf;
-    this._cookedBuf = '';
+    this._cookedBuf = "";
     this._emitData(pending);
   }
-  this._ended   = true;
+  this._ended = true;
   this.readable = false;
-  this.emit('end');
-  this.emit('close');
+  this.emit("end");
+  this.emit("close");
   this._checkDrain();
 };
 
 stdin.destroy = function destroy(err) {
-  if (err) this.emit('error', err);
+  if (err) this.emit("error", err);
   this.end();
 };
 
 // ── Minimal Readable API ──────────────────────────────────────────────────────
 
 /** readline never calls read() directly; flowing mode only. */
-stdin.read = function read() { return null; };
+stdin.read = function read() {
+  return null;
+};
 
 stdin.pipe = function pipe(dest) {
-  this.on('data', chunk => dest.write && dest.write(chunk));
-  this.on('end',  ()    => dest.end   && dest.end());
+  this.on("data", (chunk) => dest.write && dest.write(chunk));
+  this.on("end", () => dest.end && dest.end());
   return dest;
 };
 
-stdin.unpipe = function unpipe() { return this; };
+stdin.unpipe = function unpipe() {
+  return this;
+};
 stdin.unshift = function unshift() {};
 
 // ── Core data emission ────────────────────────────────────────────────────────
@@ -180,20 +217,27 @@ stdin.unshift = function unshift() {};
 stdin._emitData = function _emitData(str) {
   if (this._isRaw) {
     // Deliver one code point at a time
-    for (const cp of str) {         // String iterator yields code points
-      this.emit('data', cp);
+    for (const cp of str) {
+      // String iterator yields code points
+      this.emit("data", cp);
       // Only emit keypress if no emitKeypressEvents is installed
       // (emitKeypressEvents installs its own 'data' listener that calls
       // stream.emit('keypress', …) via the generator).
-      if (this.listenerCount('keypress') > 0 &&
-          !this['__keypressInstalled__']) {
-        this.emit('keypress', cp === '\r' || cp === '\n' ? undefined : cp, _parseKey(cp));
+      if (
+        this.listenerCount("keypress") > 0 &&
+        !this["__keypressInstalled__"]
+      ) {
+        this.emit(
+          "keypress",
+          cp === "\r" || cp === "\n" ? undefined : cp,
+          _parseKey(cp),
+        );
       }
     }
   } else {
     // Cooked mode: deliver the whole string as a single 'data' chunk.
     // readline's kNormalWrite state machine handles \r/\n splitting.
-    this.emit('data', str);
+    this.emit("data", str);
   }
 };
 
@@ -216,11 +260,12 @@ stdin._emitData = function _emitData(str) {
 stdin.pushData = function pushData(chunk) {
   if (this._ended || this._paused) return;
 
-  const str = typeof chunk === 'string'
-    ? chunk
-    : Buffer.isBuffer(chunk) || ArrayBuffer.isView(chunk)
-      ? Buffer.from(chunk).toString('utf8')
-      : String(chunk);
+  const str =
+    typeof chunk === "string"
+      ? chunk
+      : Buffer.isBuffer(chunk) || ArrayBuffer.isView(chunk)
+        ? Buffer.from(chunk).toString("utf8")
+        : String(chunk);
 
   if (this._isRaw) {
     this._emitData(str);
@@ -233,7 +278,7 @@ stdin.pushData = function pushData(chunk) {
   let start = 0;
   for (let i = 0; i < this._cookedBuf.length; i++) {
     const ch = this._cookedBuf[i];
-    if (ch === '\n' || ch === '\r') {
+    if (ch === "\n" || ch === "\r") {
       // Include the terminator in the emitted chunk (readline's state machine
       // uses it to detect line boundaries via crlfDelay).
       const line = this._cookedBuf.slice(start, i + 1);
@@ -242,7 +287,11 @@ stdin.pushData = function pushData(chunk) {
       // Peek ahead: if this was \r and the next char is \n, skip it now
       // to avoid emitting a spurious empty line from the \n half.
       // (readline's crlfDelay timer handles the inter-chunk case.)
-      if (ch === '\r' && i + 1 < this._cookedBuf.length && this._cookedBuf[i + 1] === '\n') {
+      if (
+        ch === "\r" &&
+        i + 1 < this._cookedBuf.length &&
+        this._cookedBuf[i + 1] === "\n"
+      ) {
         i++;
       }
       start = i + 1;
@@ -262,11 +311,13 @@ stdin.pushData = function pushData(chunk) {
  */
 stdin.waitUntilDrained = function waitUntilDrained() {
   if (this._ended) return Promise.resolve();
-  const relevant = ['data', 'end', 'close', 'error', 'keypress'];
+  const relevant = ["data", "end", "close", "error", "keypress"];
   const count = relevant.reduce((n, ev) => n + this.listenerCount(ev), 0);
   if (count === 0) return Promise.resolve();
   if (!this._drainPromise) {
-    this._drainPromise = new Promise(res => { this._drainResolve = res; });
+    this._drainPromise = new Promise((res) => {
+      this._drainResolve = res;
+    });
   }
   return this._drainPromise;
 };
@@ -278,7 +329,7 @@ stdin.waitUntilDrained = function waitUntilDrained() {
  */
 stdin._checkDrain = function _checkDrain() {
   if (!this._drainResolve) return;
-  const relevant = ['data', 'end', 'close', 'error', 'keypress'];
+  const relevant = ["data", "end", "close", "error", "keypress"];
   const count = relevant.reduce((n, ev) => n + this.listenerCount(ev), 0);
   if (this._ended || count === 0) {
     const res = this._drainResolve;
@@ -288,7 +339,7 @@ stdin._checkDrain = function _checkDrain() {
   }
 };
 
-stdin.on('removeListener', () => stdin._checkDrain());
+stdin.on("removeListener", () => stdin._checkDrain());
 
 // ── emitKeypressEvents integration marker ────────────────────────────────────
 // emitKeypressEvents (readline/emitKeypressEvents.js) installs a 'data'
@@ -296,9 +347,11 @@ stdin.on('removeListener', () => stdin._checkDrain());
 // ownership of keypress emission, so _emitData must not double-emit.
 // We detect installation via the KEYPRESS_DECODER symbol it attaches.
 
-const KEYPRESS_DECODER = Symbol.for('keypress-decoder');
-Object.defineProperty(stdin, '__keypressInstalled__', {
-  get() { return !!this[KEYPRESS_DECODER]; },
+const KEYPRESS_DECODER = Symbol.for("keypress-decoder");
+Object.defineProperty(stdin, "__keypressInstalled__", {
+  get() {
+    return !!this[KEYPRESS_DECODER];
+  },
 });
 
 // ---------------------------------------------------------------------------

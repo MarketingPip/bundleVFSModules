@@ -4,7 +4,7 @@
 // surface so `node:_http_agent` stays consistent with `node:http`.
 // Browser note: socket pooling is metadata-only; fetch() owns connections.
 
-export { Agent, globalAgent } from './http.js';
-import { Agent, globalAgent } from './http.js';
+export { Agent, globalAgent } from "./http.js";
+import { Agent, globalAgent } from "./http.js";
 
 export default { Agent, globalAgent };

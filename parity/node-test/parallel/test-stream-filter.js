@@ -1,12 +1,10 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const {
-  Readable,
-} = require('stream');
-const assert = require('assert');
-const { once } = require('events');
-const { setTimeout } = require('timers/promises');
+const common = require("../common");
+const { Readable } = require("stream");
+const assert = require("assert");
+const { once } = require("events");
+const { setTimeout } = require("timers/promises");
 
 {
   // Filter works on synchronous streams with a synchronous predicate
@@ -35,10 +33,12 @@ const { setTimeout } = require('timers/promises');
 
 {
   // Map works on asynchronous streams with a asynchronous mapper
-  const stream = Readable.from([1, 2, 3, 4, 5]).map(async (x) => {
-    await Promise.resolve();
-    return x + x;
-  }).filter((x) => x > 5);
+  const stream = Readable.from([1, 2, 3, 4, 5])
+    .map(async (x) => {
+      await Promise.resolve();
+      return x + x;
+    })
+    .filter((x) => x > 5);
   const result = [6, 8, 10];
   (async () => {
     for await (const item of stream) {
@@ -49,11 +49,15 @@ const { setTimeout } = require('timers/promises');
 
 {
   // Filter works on an infinite stream
-  const stream = Readable.from(async function* () {
-    while (true) yield 1;
-  }()).filter(common.mustCall(async (x) => {
-    return x < 3;
-  }, 5));
+  const stream = Readable.from(
+    (async function* () {
+      while (true) yield 1;
+    })(),
+  ).filter(
+    common.mustCall(async (x) => {
+      return x < 3;
+    }, 5),
+  );
   (async () => {
     let i = 1;
     for await (const item of stream) {
@@ -76,9 +80,11 @@ const { setTimeout } = require('timers/promises');
       i++;
     },
     highWaterMark: 0,
-  }).filter(common.mustCall(async ([x]) => {
-    return x !== 5;
-  }, 10));
+  }).filter(
+    common.mustCall(async ([x]) => {
+      return x !== 5;
+    }, 10),
+  );
   (async () => {
     const result = (await stream.toArray()).map((x) => x[0]);
     const expected = [...Array(10).keys()].filter((x) => x !== 5);
@@ -90,60 +96,71 @@ const { setTimeout } = require('timers/promises');
   // Throwing an error during `filter` (sync)
   const stream = Readable.from([1, 2, 3, 4, 5]).filter((x) => {
     if (x === 3) {
-      throw new Error('boom');
+      throw new Error("boom");
     }
     return true;
   });
-  assert.rejects(
-    stream.map((x) => x + x).toArray(),
-    /boom/,
-  ).then(common.mustCall());
+  assert
+    .rejects(stream.map((x) => x + x).toArray(), /boom/)
+    .then(common.mustCall());
 }
 
 {
   // Throwing an error during `filter` (async)
   const stream = Readable.from([1, 2, 3, 4, 5]).filter(async (x) => {
     if (x === 3) {
-      throw new Error('boom');
+      throw new Error("boom");
     }
     return true;
   });
-  assert.rejects(
-    stream.filter(() => true).toArray(),
-    /boom/,
-  ).then(common.mustCall());
+  assert
+    .rejects(stream.filter(() => true).toArray(), /boom/)
+    .then(common.mustCall());
 }
 
 {
   // Concurrency + AbortSignal
   const ac = new AbortController();
   let calls = 0;
-  const stream = Readable.from([1, 2, 3, 4]).filter(async (_, { signal }) => {
-    calls++;
-    await once(signal, 'abort');
-  }, { signal: ac.signal, concurrency: 2 });
+  const stream = Readable.from([1, 2, 3, 4]).filter(
+    async (_, { signal }) => {
+      calls++;
+      await once(signal, "abort");
+    },
+    { signal: ac.signal, concurrency: 2 },
+  );
   // pump
-  assert.rejects(async () => {
-    for await (const item of stream) {
-      // nope
-      console.log(item);
-    }
-  }, {
-    name: 'AbortError',
-  }).then(common.mustCall());
+  assert
+    .rejects(
+      async () => {
+        for await (const item of stream) {
+          // nope
+          console.log(item);
+        }
+      },
+      {
+        name: "AbortError",
+      },
+    )
+    .then(common.mustCall());
 
-  setImmediate(common.mustCall(() => {
-    ac.abort();
-    assert.strictEqual(calls, 2);
-  }));
+  setImmediate(
+    common.mustCall(() => {
+      ac.abort();
+      assert.strictEqual(calls, 2);
+    }),
+  );
 }
 
 {
   // Concurrency result order
-  const stream = Readable.from([1, 2]).filter(async (item, { signal }) => {
-    await setTimeout(10 - item, { signal });
-    return true;
-  }, { concurrency: 2 });
+  const stream = Readable.from([1, 2]).filter(
+    async (item, { signal }) => {
+      await setTimeout(10 - item, { signal });
+      return true;
+    },
+    { concurrency: 2 },
+  );
 
   (async () => {
     const expected = [1, 2];
@@ -156,10 +173,17 @@ const { setTimeout } = require('timers/promises');
 {
   // Error cases
   assert.throws(() => Readable.from([1]).filter(1), /ERR_INVALID_ARG_TYPE/);
-  assert.throws(() => Readable.from([1]).filter((x) => x, {
-    concurrency: 'Foo'
-  }), /ERR_OUT_OF_RANGE/);
-  assert.throws(() => Readable.from([1]).filter((x) => x, 1), /ERR_INVALID_ARG_TYPE/);
+  assert.throws(
+    () =>
+      Readable.from([1]).filter((x) => x, {
+        concurrency: "Foo",
+      }),
+    /ERR_OUT_OF_RANGE/,
+  );
+  assert.throws(
+    () => Readable.from([1]).filter((x) => x, 1),
+    /ERR_INVALID_ARG_TYPE/,
+  );
 }
 {
   // Test result is a Readable
@@ -168,7 +192,7 @@ const { setTimeout } = require('timers/promises');
 }
 {
   const stream = Readable.from([1, 2, 3, 4, 5]);
-  Object.defineProperty(stream, 'map', {
+  Object.defineProperty(stream, "map", {
     value: common.mustNotCall(),
   });
   // Check that map isn't getting called.

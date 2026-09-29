@@ -13,7 +13,7 @@ import {
   clearTimeout as cbClearTimeout,
   clearInterval as cbClearInterval,
   clearImmediate as cbClearImmediate,
-} from '../timers.js';
+} from "../timers.js";
 import {
   AbortError,
   ERR_ILLEGAL_CONSTRUCTOR,
@@ -22,7 +22,7 @@ import {
   validateBoolean,
   validateNumber,
   validateObject,
-} from './errors.js';
+} from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // ESM/CJS interop marker.
@@ -48,14 +48,14 @@ const __esModule = true;
 export function setTimeout(after, value, options = {}) {
   try {
     if (after !== undefined) {
-      validateNumber(after, 'delay');
+      validateNumber(after, "delay");
     }
-    validateObject(options, 'options');
+    validateObject(options, "options");
     if (options.signal !== undefined) {
-      validateAbortSignal(options.signal, 'options.signal');
+      validateAbortSignal(options.signal, "options.signal");
     }
     if (options.ref !== undefined) {
-      validateBoolean(options.ref, 'options.ref');
+      validateBoolean(options.ref, "options.ref");
     }
   } catch (err) {
     return Promise.reject(err);
@@ -81,10 +81,10 @@ export function setTimeout(after, value, options = {}) {
       cbClearTimeout(timeout);
       doReject(new AbortError(undefined, { cause: signal.reason }));
     };
-    signal.addEventListener('abort', oncancel);
+    signal.addEventListener("abort", oncancel);
   }
   return oncancel !== undefined
-    ? promise.finally(() => signal.removeEventListener('abort', oncancel))
+    ? promise.finally(() => signal.removeEventListener("abort", oncancel))
     : promise;
 }
 
@@ -94,12 +94,12 @@ export function setTimeout(after, value, options = {}) {
 
 export function setImmediate(value, options = {}) {
   try {
-    validateObject(options, 'options');
+    validateObject(options, "options");
     if (options.signal !== undefined) {
-      validateAbortSignal(options.signal, 'options.signal');
+      validateAbortSignal(options.signal, "options.signal");
     }
     if (options.ref !== undefined) {
-      validateBoolean(options.ref, 'options.ref');
+      validateBoolean(options.ref, "options.ref");
     }
   } catch (err) {
     return Promise.reject(err);
@@ -125,10 +125,10 @@ export function setImmediate(value, options = {}) {
       cbClearImmediate(immediate);
       doReject(new AbortError(undefined, { cause: signal.reason }));
     };
-    signal.addEventListener('abort', oncancel);
+    signal.addEventListener("abort", oncancel);
   }
   return oncancel !== undefined
-    ? promise.finally(() => signal.removeEventListener('abort', oncancel))
+    ? promise.finally(() => signal.removeEventListener("abort", oncancel))
     : promise;
 }
 
@@ -138,14 +138,14 @@ export function setImmediate(value, options = {}) {
 
 export async function* setInterval(after, value, options = {}) {
   if (after !== undefined) {
-    validateNumber(after, 'delay');
+    validateNumber(after, "delay");
   }
-  validateObject(options, 'options');
+  validateObject(options, "options");
   if (options.signal !== undefined) {
-    validateAbortSignal(options.signal, 'options.signal');
+    validateAbortSignal(options.signal, "options.signal");
   }
   if (options.ref !== undefined) {
-    validateBoolean(options.ref, 'options.ref');
+    validateBoolean(options.ref, "options.ref");
   }
 
   const { signal, ref = true } = options;
@@ -176,10 +176,12 @@ export async function* setInterval(after, value, options = {}) {
           callback = undefined;
           // Resolve the parked promise with a rejected one so the `await`
           // below throws the AbortError (mirrors Node's implementation).
-          cb(Promise.reject(new AbortError(undefined, { cause: signal.reason })));
+          cb(
+            Promise.reject(new AbortError(undefined, { cause: signal.reason })),
+          );
         }
       };
-      signal.addEventListener('abort', onCancel, { once: true });
+      signal.addEventListener("abort", onCancel, { once: true });
     }
 
     while (!signal?.aborted) {
@@ -195,7 +197,7 @@ export async function* setInterval(after, value, options = {}) {
     throw new AbortError(undefined, { cause: signal?.reason });
   } finally {
     if (interval !== undefined) cbClearInterval(interval);
-    signal?.removeEventListener('abort', onCancel);
+    signal?.removeEventListener("abort", onCancel);
   }
 }
 
@@ -203,7 +205,7 @@ export async function* setInterval(after, value, options = {}) {
 // scheduler
 // ---------------------------------------------------------------------------
 
-const kScheduler = Symbol('kScheduler');
+const kScheduler = Symbol("kScheduler");
 
 class Scheduler {
   constructor() {
@@ -211,12 +213,12 @@ class Scheduler {
   }
 
   yield() {
-    if (!this[kScheduler]) throw ERR_INVALID_THIS('Scheduler');
+    if (!this[kScheduler]) throw ERR_INVALID_THIS("Scheduler");
     return setImmediate();
   }
 
   wait(delay, options) {
-    if (!this[kScheduler]) throw ERR_INVALID_THIS('Scheduler');
+    if (!this[kScheduler]) throw ERR_INVALID_THIS("Scheduler");
     return setTimeout(delay, undefined, options);
   }
 }

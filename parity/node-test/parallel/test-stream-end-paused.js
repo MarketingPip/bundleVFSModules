@@ -19,30 +19,33 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
 // Make sure we don't miss the end event for paused 0-length streams
 
-const Readable = require('stream').Readable;
+const Readable = require("stream").Readable;
 const stream = new Readable();
 let calledRead = false;
-stream._read = common.mustCall(function() {
+stream._read = common.mustCall(function () {
   assert(!calledRead);
   calledRead = true;
   this.push(null);
 });
 
-stream.on('data', common.mustNotCall());
+stream.on("data", common.mustNotCall());
 stream.pause();
 
-setTimeout(common.mustCall(function() {
-  stream.on('end', common.mustCall());
-  stream.resume();
-}), 1);
+setTimeout(
+  common.mustCall(function () {
+    stream.on("end", common.mustCall());
+    stream.resume();
+  }),
+  1,
+);
 
-process.on('exit', function() {
+process.on("exit", function () {
   assert(calledRead);
-  console.log('ok');
+  console.log("ok");
 });

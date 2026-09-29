@@ -1,5 +1,4 @@
 import {
-
   ArrayPrototypePush,
   Boolean,
   MathFloor,
@@ -10,40 +9,31 @@ import {
   PromiseReject,
   PromiseResolve,
   Symbol,
-} from './primordials.js';
-import { AbortError, codes as errorsCodes } from './errors.js';
+} from "./primordials.js";
+import { AbortError, codes as errorsCodes } from "./errors.js";
 import {
   validateAbortSignal,
   validateInteger,
   validateObject,
   validateFunction,
-} from './validators.js';
-import { kWeakHandler, kResistStopPropagation } from './event-target.js';
-import { finished } from './end-of-stream.js';
-
-
-
+} from "./validators.js";
+import { kWeakHandler, kResistStopPropagation } from "./event-target.js";
+import { finished } from "./end-of-stream.js";
 
 const { AbortController, AbortSignal } = globalThis;
 
-const {
-    ERR_MISSING_ARGS,
-    ERR_OUT_OF_RANGE,
-} = errorsCodes;
+const { ERR_MISSING_ARGS, ERR_OUT_OF_RANGE } = errorsCodes;
 
-
-
-
-const kEmpty = Symbol('kEmpty');
-const kEof = Symbol('kEof');
+const kEmpty = Symbol("kEmpty");
+const kEof = Symbol("kEof");
 
 function map(fn, options) {
-  validateFunction(fn, 'fn');
+  validateFunction(fn, "fn");
   if (options != null) {
-    validateObject(options, 'options');
+    validateObject(options, "options");
   }
   if (options?.signal != null) {
-    validateAbortSignal(options.signal, 'options.signal');
+    validateAbortSignal(options.signal, "options.signal");
   }
 
   let concurrency = 1;
@@ -56,8 +46,8 @@ function map(fn, options) {
     highWaterMark = MathFloor(options.highWaterMark);
   }
 
-  validateInteger(concurrency, 'options.concurrency', 1);
-  validateInteger(highWaterMark, 'options.highWaterMark', 0);
+  validateInteger(concurrency, "options.concurrency", 1);
+  validateInteger(highWaterMark, "options.highWaterMark", 0);
 
   highWaterMark += concurrency;
 
@@ -192,11 +182,15 @@ async function some(fn, options = undefined) {
 }
 
 async function every(fn, options = undefined) {
-  validateFunction(fn, 'fn');
+  validateFunction(fn, "fn");
   // https://en.wikipedia.org/wiki/De_Morgan%27s_laws
-  return !(await some.call(this, async (...args) => {
-    return !(await fn(...args));
-  }, options));
+  return !(await some.call(
+    this,
+    async (...args) => {
+      return !(await fn(...args));
+    },
+    options,
+  ));
 }
 
 async function find(fn, options) {
@@ -207,7 +201,7 @@ async function find(fn, options) {
 }
 
 async function forEach(fn, options) {
-  validateFunction(fn, 'fn');
+  validateFunction(fn, "fn");
   async function forEachFn(value, options) {
     await fn(value, options);
     return kEmpty;
@@ -217,7 +211,7 @@ async function forEach(fn, options) {
 }
 
 function filter(fn, options) {
-  validateFunction(fn, 'fn');
+  validateFunction(fn, "fn");
   async function filterFn(value, options) {
     if (await fn(value, options)) {
       return value;
@@ -231,32 +225,36 @@ function filter(fn, options) {
 // missing if the stream has no items in it - but the code is still appropriate
 class ReduceAwareErrMissingArgs extends ERR_MISSING_ARGS {
   constructor() {
-    super('reduce');
-    this.message = 'Reduce of an empty stream requires an initial value';
+    super("reduce");
+    this.message = "Reduce of an empty stream requires an initial value";
   }
 }
 
 async function reduce(reducer, initialValue, options) {
-  validateFunction(reducer, 'reducer');
+  validateFunction(reducer, "reducer");
   if (options != null) {
-    validateObject(options, 'options');
+    validateObject(options, "options");
   }
   if (options?.signal != null) {
-    validateAbortSignal(options.signal, 'options.signal');
+    validateAbortSignal(options.signal, "options.signal");
   }
 
   let hasInitialValue = arguments.length > 1;
   if (options?.signal?.aborted) {
     const err = new AbortError(undefined, { cause: options.signal.reason });
-    this.once('error', () => {}); // The error is already propagated
+    this.once("error", () => {}); // The error is already propagated
     await finished(this.destroy(err));
     throw err;
   }
   const ac = new AbortController();
   const signal = ac.signal;
   if (options?.signal) {
-    const opts = { once: true, [kWeakHandler]: this, [kResistStopPropagation]: true };
-    options.signal.addEventListener('abort', () => ac.abort(), opts);
+    const opts = {
+      once: true,
+      [kWeakHandler]: this,
+      [kResistStopPropagation]: true,
+    };
+    options.signal.addEventListener("abort", () => ac.abort(), opts);
   }
   let gotAnyItemFromStream = false;
   try {
@@ -283,10 +281,10 @@ async function reduce(reducer, initialValue, options) {
 
 async function toArray(options) {
   if (options != null) {
-    validateObject(options, 'options');
+    validateObject(options, "options");
   }
   if (options?.signal != null) {
-    validateAbortSignal(options.signal, 'options.signal');
+    validateAbortSignal(options.signal, "options.signal");
   }
 
   const result = [];
@@ -316,17 +314,17 @@ function toIntegerOrInfinity(number) {
     return 0;
   }
   if (number < 0) {
-    throw new ERR_OUT_OF_RANGE('number', '>= 0', number);
+    throw new ERR_OUT_OF_RANGE("number", ">= 0", number);
   }
   return number;
 }
 
 function drop(number, options = undefined) {
   if (options != null) {
-    validateObject(options, 'options');
+    validateObject(options, "options");
   }
   if (options?.signal != null) {
-    validateAbortSignal(options.signal, 'options.signal');
+    validateAbortSignal(options.signal, "options.signal");
   }
 
   number = toIntegerOrInfinity(number);
@@ -347,10 +345,10 @@ function drop(number, options = undefined) {
 
 function take(number, options = undefined) {
   if (options != null) {
-    validateObject(options, 'options');
+    validateObject(options, "options");
   }
   if (options?.signal != null) {
-    validateAbortSignal(options.signal, 'options.signal');
+    validateAbortSignal(options.signal, "options.signal");
   }
 
   number = toIntegerOrInfinity(number);

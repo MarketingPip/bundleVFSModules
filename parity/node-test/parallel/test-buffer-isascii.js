@@ -1,30 +1,38 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const { isAscii, Buffer } = require('buffer');
-const { TextEncoder } = require('util');
+require("../common");
+const assert = require("assert");
+const { isAscii, Buffer } = require("buffer");
+const { TextEncoder } = require("util");
 
 const encoder = new TextEncoder();
 
-assert.strictEqual(isAscii(encoder.encode('hello')), true);
-assert.strictEqual(isAscii(encoder.encode('ğ')), false);
+assert.strictEqual(isAscii(encoder.encode("hello")), true);
+assert.strictEqual(isAscii(encoder.encode("ğ")), false);
 assert.strictEqual(isAscii(Buffer.from([])), true);
 
 [
   undefined,
-  '', 'hello',
-  false, true,
-  0, 1,
-  0n, 1n,
+  "",
+  "hello",
+  false,
+  true,
+  0,
+  1,
+  0n,
+  1n,
   Symbol(),
   () => {},
-  {}, [], null,
+  {},
+  [],
+  null,
 ].forEach((input) => {
   assert.throws(
-    () => { isAscii(input); },
+    () => {
+      isAscii(input);
+    },
     {
-      code: 'ERR_INVALID_ARG_TYPE',
+      code: "ERR_INVALID_ARG_TYPE",
     },
   );
 });
@@ -34,9 +42,11 @@ assert.strictEqual(isAscii(Buffer.from([])), true);
   const arrayBuffer = new ArrayBuffer(1024);
   structuredClone(arrayBuffer, { transfer: [arrayBuffer] });
   assert.throws(
-    () => { isAscii(arrayBuffer); },
+    () => {
+      isAscii(arrayBuffer);
+    },
     {
-      code: 'ERR_INVALID_STATE'
-    }
+      code: "ERR_INVALID_STATE",
+    },
   );
 }

@@ -16,9 +16,10 @@ import { EventEmitter } from "events";
 // undefined under real Node / direct import). Today the sandbox exposes no
 // inspector bridge, so RT stays unused; it is the documented attachment
 // point if one ever appears — nothing is invented around it.
-const RT = (typeof globalThis._RUNTIME_ !== "undefined")
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 
 // Keep the hook referenced so its purpose is explicit: if a future
 // globalThis._RUNTIME_ ever exposes an inspector bridge, Session.post() and
@@ -66,10 +67,29 @@ export function waitForDebugger() {}
 // (Node v24.20.0), each delegating to the host console. Methods the host
 // console lacks are stable noops; the shape never changes.
 const CONSOLE_METHODS = [
-  "assert", "clear", "context", "count", "countReset", "debug", "dir",
-  "dirxml", "error", "group", "groupCollapsed", "groupEnd", "info", "log",
-  "profile", "profileEnd", "table", "time", "timeEnd", "timeLog", "timeStamp",
-  "trace", "warn",
+  "assert",
+  "clear",
+  "context",
+  "count",
+  "countReset",
+  "debug",
+  "dir",
+  "dirxml",
+  "error",
+  "group",
+  "groupCollapsed",
+  "groupEnd",
+  "info",
+  "log",
+  "profile",
+  "profileEnd",
+  "table",
+  "time",
+  "timeEnd",
+  "timeLog",
+  "timeStamp",
+  "trace",
+  "warn",
 ];
 
 function makeInspectorConsole() {

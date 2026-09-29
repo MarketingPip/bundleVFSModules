@@ -19,45 +19,45 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 
-const {
-  mustCall,
-  mustNotCall,
-} = require('../common');
-const assert = require('assert');
-const debug = require('util').debuglog('test');
+const { mustCall, mustNotCall } = require("../common");
+const assert = require("assert");
+const debug = require("util").debuglog("test");
 
-const { spawn } = require('child_process');
-const fixtures = require('../common/fixtures');
+const { spawn } = require("child_process");
+const fixtures = require("../common/fixtures");
 
-const sub = fixtures.path('echo.js');
+const sub = fixtures.path("echo.js");
 
 const child = spawn(process.argv[0], [sub]);
 
-child.stderr.on('data', mustNotCall());
+child.stderr.on("data", mustNotCall());
 
-child.stdout.setEncoding('utf8');
+child.stdout.setEncoding("utf8");
 
-const messages = [
-  'hello world\r\n',
-  'echo me\r\n',
-];
+const messages = ["hello world\r\n", "echo me\r\n"];
 
-child.stdout.on('data', mustCall((data) => {
-  debug(`child said: ${JSON.stringify(data)}`);
-  const test = messages.shift();
-  debug(`testing for '${test}'`);
-  assert.strictEqual(data, test);
-  if (messages.length) {
-    debug(`writing '${messages[0]}'`);
-    child.stdin.write(messages[0]);
-  } else {
-    assert.strictEqual(messages.length, 0);
-    child.stdin.end();
-  }
-}, messages.length));
+child.stdout.on(
+  "data",
+  mustCall((data) => {
+    debug(`child said: ${JSON.stringify(data)}`);
+    const test = messages.shift();
+    debug(`testing for '${test}'`);
+    assert.strictEqual(data, test);
+    if (messages.length) {
+      debug(`writing '${messages[0]}'`);
+      child.stdin.write(messages[0]);
+    } else {
+      assert.strictEqual(messages.length, 0);
+      child.stdin.end();
+    }
+  }, messages.length),
+);
 
-child.stdout.on('end', mustCall((data) => {
-  debug('child end');
-}));
+child.stdout.on(
+  "end",
+  mustCall((data) => {
+    debug("child end");
+  }),
+);

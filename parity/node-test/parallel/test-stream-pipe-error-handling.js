@@ -19,10 +19,10 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const { Stream, PassThrough } = require('stream');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const { Stream, PassThrough } = require("stream");
 
 {
   const source = new Stream();
@@ -31,12 +31,12 @@ const { Stream, PassThrough } = require('stream');
   source.pipe(dest);
 
   let gotErr = null;
-  source.on('error', function(err) {
+  source.on("error", function (err) {
     gotErr = err;
   });
 
-  const err = new Error('This stream turned into bacon.');
-  source.emit('error', err);
+  const err = new Error("This stream turned into bacon.");
+  source.emit("error", err);
   assert.strictEqual(gotErr, err);
 }
 
@@ -46,11 +46,11 @@ const { Stream, PassThrough } = require('stream');
 
   source.pipe(dest);
 
-  const err = new Error('This stream turned into bacon.');
+  const err = new Error("This stream turned into bacon.");
 
   let gotErr = null;
   try {
-    source.emit('error', err);
+    source.emit("error", err);
   } catch (e) {
     gotErr = e;
   }
@@ -66,22 +66,25 @@ const { Stream, PassThrough } = require('stream');
   const w = new W({ autoDestroy: false });
   let removed = false;
 
-  r._read = common.mustCall(function() {
-    setTimeout(common.mustCall(function() {
-      assert(removed);
-      assert.throws(function() {
-        w.emit('error', new Error('fail'));
-      }, /^Error: fail$/);
-    }), 1);
+  r._read = common.mustCall(function () {
+    setTimeout(
+      common.mustCall(function () {
+        assert(removed);
+        assert.throws(function () {
+          w.emit("error", new Error("fail"));
+        }, /^Error: fail$/);
+      }),
+      1,
+    );
   });
 
-  w.on('error', myOnError);
+  w.on("error", myOnError);
   r.pipe(w);
-  w.removeListener('error', myOnError);
+  w.removeListener("error", myOnError);
   removed = true;
 
   function myOnError() {
-    throw new Error('this should not happen');
+    throw new Error("this should not happen");
   }
 }
 
@@ -93,32 +96,37 @@ const { Stream, PassThrough } = require('stream');
   const w = new W();
   let removed = false;
 
-  r._read = common.mustCall(function() {
-    setTimeout(common.mustCall(function() {
-      assert(removed);
-      w.emit('error', new Error('fail'));
-    }), 1);
+  r._read = common.mustCall(function () {
+    setTimeout(
+      common.mustCall(function () {
+        assert(removed);
+        w.emit("error", new Error("fail"));
+      }),
+      1,
+    );
   });
 
-  w.on('error', common.mustCall());
+  w.on("error", common.mustCall());
   w._write = () => {};
 
   r.pipe(w);
   // Removing some OTHER random listener should not do anything
-  w.removeListener('error', () => {});
+  w.removeListener("error", () => {});
   removed = true;
 }
 
 {
-  const _err = new Error('this should be handled');
+  const _err = new Error("this should be handled");
   const destination = new PassThrough();
-  destination.once('error', common.mustCall((err) => {
-    assert.strictEqual(err, _err);
-  }));
+  destination.once(
+    "error",
+    common.mustCall((err) => {
+      assert.strictEqual(err, _err);
+    }),
+  );
 
   const stream = new Stream();
-  stream
-    .pipe(destination);
+  stream.pipe(destination);
 
   destination.destroy(_err);
 }

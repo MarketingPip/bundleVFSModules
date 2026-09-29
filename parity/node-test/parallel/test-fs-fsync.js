@@ -19,37 +19,48 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fixtures = require('../common/fixtures');
-const tmpdir = require('../common/tmpdir');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fixtures = require("../common/fixtures");
+const tmpdir = require("../common/tmpdir");
 
-const fs = require('fs');
+const fs = require("fs");
 
-const fileFixture = fixtures.path('a.js');
-const fileTemp = tmpdir.resolve('a.js');
+const fileFixture = fixtures.path("a.js");
+const fileTemp = tmpdir.resolve("a.js");
 
 // Copy fixtures to temp.
 tmpdir.refresh();
 fs.copyFileSync(fileFixture, fileTemp);
 
-fs.open(fileTemp, 'a', 0o777, common.mustSucceed((fd) => {
-  fs.fdatasyncSync(fd);
+fs.open(
+  fileTemp,
+  "a",
+  0o777,
+  common.mustSucceed((fd) => {
+    fs.fdatasyncSync(fd);
 
-  fs.fsyncSync(fd);
+    fs.fsyncSync(fd);
 
-  fs.fdatasync(fd, common.mustSucceed(() => {
-    fs.fsync(fd, common.mustSucceed(() => {
-      fs.closeSync(fd);
-    }));
-  }));
-}));
+    fs.fdatasync(
+      fd,
+      common.mustSucceed(() => {
+        fs.fsync(
+          fd,
+          common.mustSucceed(() => {
+            fs.closeSync(fd);
+          }),
+        );
+      }),
+    );
+  }),
+);
 
-['', false, null, undefined, {}, []].forEach((input) => {
+["", false, null, undefined, {}, []].forEach((input) => {
   const errObj = {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError'
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
   };
   assert.throws(() => fs.fdatasync(input), errObj);
   assert.throws(() => fs.fdatasyncSync(input), errObj);

@@ -1,6 +1,6 @@
-'use strict';
-const common = require('../common');
-const stream = require('stream');
+"use strict";
+const common = require("../common");
+const stream = require("stream");
 
 class Writable extends stream.Writable {
   constructor() {
@@ -20,7 +20,7 @@ class Readable extends stream.Readable {
 }
 
 const w = new Writable();
-w.on('pipe', common.mustCall());
+w.on("pipe", common.mustCall());
 
 const r = new Readable();
 r.pipe(w);

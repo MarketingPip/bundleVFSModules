@@ -1,17 +1,17 @@
-'use strict';
+"use strict";
 
-const { spawnSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const { pathToFileURL } = require('url');
-const { isMainThread } = require('worker_threads');
-const isUnixLike = process.platform !== 'win32';
+const { spawnSync } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const { pathToFileURL } = require("url");
+const { isMainThread } = require("worker_threads");
+const isUnixLike = process.platform !== "win32";
 let escapePOSIXShell;
 
 function rmSync(pathname, useSpawn) {
   if (useSpawn) {
     if (isUnixLike) {
-      escapePOSIXShell ??= require('./index.js').escapePOSIXShell;
+      escapePOSIXShell ??= require("./index.js").escapePOSIXShell;
       for (let i = 0; i < 3; i++) {
         const { status } = spawnSync(...escapePOSIXShell`rm -rf "${pathname}"`);
         if (status === 0) {
@@ -19,26 +19,24 @@ function rmSync(pathname, useSpawn) {
         }
       }
     } else {
-      spawnSync(
-        process.execPath,
-        [
-          '-e',
-          `fs.rmSync(${JSON.stringify(pathname)}, { maxRetries: 3, recursive: true, force: true });`,
-        ],
-      );
+      spawnSync(process.execPath, [
+        "-e",
+        `fs.rmSync(${JSON.stringify(pathname)}, { maxRetries: 3, recursive: true, force: true });`,
+      ]);
     }
   } else {
     fs.rmSync(pathname, { maxRetries: 3, recursive: true, force: true });
   }
 }
 
-const testRoot = process.env.NODE_TEST_DIR ?
-  fs.realpathSync(process.env.NODE_TEST_DIR) : path.resolve(__dirname, '..');
+const testRoot = process.env.NODE_TEST_DIR
+  ? fs.realpathSync(process.env.NODE_TEST_DIR)
+  : path.resolve(__dirname, "..");
 
 // Using a `.` prefixed name, which is the convention for "hidden" on POSIX,
 // gets tools to ignore it by default or by simple rules, especially eslint.
-const tmpdirName = '.tmp.' +
-  (process.env.TEST_SERIAL_ID || process.env.TEST_THREAD_ID || '0');
+const tmpdirName =
+  ".tmp." + (process.env.TEST_SERIAL_ID || process.env.TEST_THREAD_ID || "0");
 let tmpPath = path.join(testRoot, tmpdirName);
 
 let firstRefresh = true;
@@ -50,7 +48,7 @@ function refresh(useSpawn = false) {
     firstRefresh = false;
     // Clean only when a test uses refresh. This allows for child processes to
     // use the tmpdir and only the parent will clean on exit.
-    process.on('exit', () => {
+    process.on("exit", () => {
       return onexit(useSpawn);
     });
   }
@@ -58,22 +56,23 @@ function refresh(useSpawn = false) {
 
 function onexit(useSpawn) {
   // Change directory to avoid possible EBUSY
-  if (isMainThread)
-    process.chdir(testRoot);
+  if (isMainThread) process.chdir(testRoot);
 
   try {
     rmSync(tmpPath, useSpawn);
   } catch (e) {
-    console.error('Can\'t clean tmpdir:', tmpPath);
+    console.error("Can't clean tmpdir:", tmpPath);
 
     const files = fs.readdirSync(tmpPath);
-    console.error('Files blocking:', files);
+    console.error("Files blocking:", files);
 
-    if (files.some((f) => f.startsWith('.nfs'))) {
+    if (files.some((f) => f.startsWith(".nfs"))) {
       // Warn about NFS "silly rename"
-      console.error('Note: ".nfs*" might be files that were open and ' +
-                    'unlinked but not closed.');
-      console.error('See http://nfs.sourceforge.net/#faq_d2 for details.');
+      console.error(
+        'Note: ".nfs*" might be files that were open and ' +
+          "unlinked but not closed.",
+      );
+      console.error("See http://nfs.sourceforge.net/#faq_d2 for details.");
     }
 
     console.error();

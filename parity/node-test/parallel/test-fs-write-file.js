@@ -19,58 +19,90 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
-const filename = tmpdir.resolve('test.txt');
-const fixtures = require('../common/fixtures');
+const filename = tmpdir.resolve("test.txt");
+const fixtures = require("../common/fixtures");
 const s = fixtures.utf8TestText;
 
-fs.writeFile(filename, s, common.mustSucceed(() => {
-  fs.readFile(filename, common.mustSucceed((buffer) => {
-    assert.strictEqual(Buffer.byteLength(s), buffer.length);
-  }));
-}));
+fs.writeFile(
+  filename,
+  s,
+  common.mustSucceed(() => {
+    fs.readFile(
+      filename,
+      common.mustSucceed((buffer) => {
+        assert.strictEqual(Buffer.byteLength(s), buffer.length);
+      }),
+    );
+  }),
+);
 
 // Test that writeFile accepts buffers.
-const filename2 = tmpdir.resolve('test2.txt');
-const buf = Buffer.from(s, 'utf8');
+const filename2 = tmpdir.resolve("test2.txt");
+const buf = Buffer.from(s, "utf8");
 
-fs.writeFile(filename2, buf, common.mustSucceed(() => {
-  fs.readFile(filename2, common.mustSucceed((buffer) => {
-    assert.strictEqual(buf.length, buffer.length);
-  }));
-}));
+fs.writeFile(
+  filename2,
+  buf,
+  common.mustSucceed(() => {
+    fs.readFile(
+      filename2,
+      common.mustSucceed((buffer) => {
+        assert.strictEqual(buf.length, buffer.length);
+      }),
+    );
+  }),
+);
 
 // Test that writeFile accepts file descriptors.
-const filename4 = tmpdir.resolve('test4.txt');
+const filename4 = tmpdir.resolve("test4.txt");
 
-fs.open(filename4, 'w+', common.mustSucceed((fd) => {
-  fs.writeFile(fd, s, common.mustSucceed(() => {
-    fs.close(fd, common.mustSucceed(() => {
-      fs.readFile(filename4, common.mustSucceed((buffer) => {
-        assert.strictEqual(Buffer.byteLength(s), buffer.length);
-      }));
-    }));
-  }));
-}));
-
+fs.open(
+  filename4,
+  "w+",
+  common.mustSucceed((fd) => {
+    fs.writeFile(
+      fd,
+      s,
+      common.mustSucceed(() => {
+        fs.close(
+          fd,
+          common.mustSucceed(() => {
+            fs.readFile(
+              filename4,
+              common.mustSucceed((buffer) => {
+                assert.strictEqual(Buffer.byteLength(s), buffer.length);
+              }),
+            );
+          }),
+        );
+      }),
+    );
+  }),
+);
 
 {
   // Test that writeFile is cancellable with an AbortSignal.
   // Before the operation has started
   const controller = new AbortController();
   const signal = controller.signal;
-  const filename3 = tmpdir.resolve('test3.txt');
+  const filename3 = tmpdir.resolve("test3.txt");
 
-  fs.writeFile(filename3, s, { signal }, common.mustCall((err) => {
-    assert.strictEqual(err.name, 'AbortError');
-  }));
+  fs.writeFile(
+    filename3,
+    s,
+    { signal },
+    common.mustCall((err) => {
+      assert.strictEqual(err.name, "AbortError");
+    }),
+  );
 
   controller.abort();
 }
@@ -80,18 +112,23 @@ fs.open(filename4, 'w+', common.mustSucceed((fd) => {
   // After the operation has started
   const controller = new AbortController();
   const signal = controller.signal;
-  const filename4 = tmpdir.resolve('test5.txt');
+  const filename4 = tmpdir.resolve("test5.txt");
 
-  fs.writeFile(filename4, s, { signal }, common.mustCall((err) => {
-    assert.strictEqual(err.name, 'AbortError');
-  }));
+  fs.writeFile(
+    filename4,
+    s,
+    { signal },
+    common.mustCall((err) => {
+      assert.strictEqual(err.name, "AbortError");
+    }),
+  );
 
   process.nextTick(() => controller.abort());
 }
 
 {
   // Test read-only mode
-  const filename = tmpdir.resolve('test6.txt');
-  fs.writeFileSync(filename, '');
-  fs.writeFile(filename, s, { flag: 'r' }, common.expectsError(/EBADF/));
+  const filename = tmpdir.resolve("test6.txt");
+  fs.writeFileSync(filename, "");
+  fs.writeFile(filename, s, { flag: "r" }, common.expectsError(/EBADF/));
 }

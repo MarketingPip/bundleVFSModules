@@ -1,15 +1,15 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const assert = require('node:assert');
+const assert = require("node:assert");
 const {
   setDefaultHighWaterMark,
   getDefaultHighWaterMark,
   Writable,
   Readable,
-  Transform
-} = require('stream');
+  Transform,
+} = require("stream");
 
 assert.notStrictEqual(getDefaultHighWaterMark(false), 32 * 1000);
 setDefaultHighWaterMark(false, 32 * 1000);
@@ -20,17 +20,17 @@ setDefaultHighWaterMark(true, 32);
 assert.strictEqual(getDefaultHighWaterMark(true), 32);
 
 const w = new Writable({
-  write() {}
+  write() {},
 });
 assert.strictEqual(w.writableHighWaterMark, 32 * 1000);
 
 const r = new Readable({
-  read() {}
+  read() {},
 });
 assert.strictEqual(r.readableHighWaterMark, 32 * 1000);
 
 const t = new Transform({
-  transform() {}
+  transform() {},
 });
 assert.strictEqual(t.writableHighWaterMark, 32 * 1000);
 assert.strictEqual(t.readableHighWaterMark, 32 * 1000);

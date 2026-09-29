@@ -1,8 +1,8 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 const {
   from,
   fromSync,
@@ -16,7 +16,7 @@ const {
   pipeToSync,
   pull,
   pullSync,
-} = require('stream/iter');
+} = require("stream/iter");
 
 // =============================================================================
 // from() / fromSync() with SharedArrayBuffer
@@ -68,14 +68,14 @@ function testTextSyncSAB() {
   const sab = new SharedArrayBuffer(5);
   new Uint8Array(sab).set([104, 101, 108, 108, 111]); // 'hello'
   const result = textSync(fromSync(sab));
-  assert.strictEqual(result, 'hello');
+  assert.strictEqual(result, "hello");
 }
 
 async function testTextAsyncSAB() {
   const sab = new SharedArrayBuffer(5);
   new Uint8Array(sab).set([104, 101, 108, 108, 111]); // 'hello'
   const result = await text(from(sab));
-  assert.strictEqual(result, 'hello');
+  assert.strictEqual(result, "hello");
 }
 
 function testArrayBufferSyncSAB() {
@@ -103,8 +103,13 @@ function testPipeToSyncSAB() {
   new Uint8Array(sab).set([65, 66, 67]); // 'ABC'
   const written = [];
   const writer = {
-    writeSync(chunk) { written.push(chunk); return true; },
-    endSync() { return written.length; },
+    writeSync(chunk) {
+      written.push(chunk);
+      return true;
+    },
+    endSync() {
+      return written.length;
+    },
   };
   const totalBytes = pipeToSync(fromSync(sab), writer);
   assert.strictEqual(totalBytes, 3);
@@ -116,8 +121,12 @@ async function testPipeToAsyncSAB() {
   new Uint8Array(sab).set([65, 66, 67]); // 'ABC'
   const written = [];
   const writer = {
-    async write(chunk) { written.push(chunk); },
-    async end() { return written.length; },
+    async write(chunk) {
+      written.push(chunk);
+    },
+    async end() {
+      return written.length;
+    },
   };
   await pipeTo(from(sab), writer);
   assert.deepStrictEqual(written[0], new Uint8Array([65, 66, 67]));

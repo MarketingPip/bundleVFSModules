@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const { createServer } = require('http');
+require("../common");
+const assert = require("assert");
+const { createServer } = require("http");
 
 // This test validates that the HTTP server timeouts are properly validated and set.
 
@@ -45,6 +45,6 @@ const { createServer } = require('http');
 {
   assert.throws(
     () => createServer({ headersTimeout: 10000, requestTimeout: 1000 }),
-    { code: 'ERR_OUT_OF_RANGE' }
+    { code: "ERR_OUT_OF_RANGE" },
   );
 }

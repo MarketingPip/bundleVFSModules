@@ -19,10 +19,10 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const { Readable } = require('stream');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const { Readable } = require("stream");
 
 let len = 0;
 const chunks = new Array(10);
@@ -33,20 +33,20 @@ for (let i = 1; i <= 10; i++) {
 
 const test = new Readable();
 let n = 0;
-test._read = function(size) {
+test._read = function (size) {
   const chunk = chunks[n++];
-  setTimeout(function() {
+  setTimeout(function () {
     test.push(chunk === undefined ? null : chunk);
   }, 1);
 };
 
-test.on('end', thrower);
+test.on("end", thrower);
 function thrower() {
-  throw new Error('this should not happen!');
+  throw new Error("this should not happen!");
 }
 
 let bytesread = 0;
-test.on('readable', function() {
+test.on("readable", function () {
   const b = len - bytesread - 1;
   const res = test.read(b);
   if (res) {
@@ -60,8 +60,8 @@ test.read(0);
 
 function next() {
   // Now let's make 'end' happen
-  test.removeListener('end', thrower);
-  test.on('end', common.mustCall());
+  test.removeListener("end", thrower);
+  test.on("end", common.mustCall());
 
   // One to get the last byte
   let r = test.read();

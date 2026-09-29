@@ -19,14 +19,14 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 
-const file = tmpdir.resolve('write.txt');
+const file = tmpdir.resolve("write.txt");
 
 tmpdir.refresh();
 
@@ -37,20 +37,20 @@ const _fs_open = fs.open;
 // Change the fs.open with an identical function after the WriteStream
 // has pushed it onto its internal action queue, but before it's
 // returned.  This simulates AOP-style extension of the fs lib.
-fs.open = function() {
+fs.open = function () {
   return _fs_open.apply(fs, arguments);
 };
 
-fs.close = common.mustCall(function(fd) {
-  assert.ok(fd, 'fs.close must not be called with an undefined fd.');
+fs.close = common.mustCall(function (fd) {
+  assert.ok(fd, "fs.close must not be called with an undefined fd.");
   fs.close = _fs_close;
   fs.open = _fs_open;
   fs.closeSync(fd);
 });
 
-stream.write('foo');
+stream.write("foo");
 stream.end();
 
-process.on('exit', function() {
+process.on("exit", function () {
   assert.strictEqual(fs.open, _fs_open);
 });

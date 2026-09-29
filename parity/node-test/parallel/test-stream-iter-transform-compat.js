@@ -1,16 +1,11 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const zlib = require('zlib');
-const { promisify } = require('util');
-const {
-  from,
-  pull,
-  bytes,
-  text,
-} = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const zlib = require("zlib");
+const { promisify } = require("util");
+const { from, pull, bytes, text } = require("stream/iter");
 const {
   compressGzip,
   compressDeflate,
@@ -20,7 +15,7 @@ const {
   decompressDeflate,
   decompressBrotli,
   decompressZstd,
-} = require('zlib/iter');
+} = require("zlib/iter");
 
 // =============================================================================
 // Cross-compatibility: verify gzip/deflate output is compatible with zlib
@@ -29,7 +24,7 @@ const {
 async function testGzipCompatWithZlib() {
   const gunzip = promisify(zlib.gunzip);
 
-  const input = 'Cross-compat test with node:zlib. '.repeat(100);
+  const input = "Cross-compat test with node:zlib. ".repeat(100);
   const compressed = await bytes(pull(from(input), compressGzip()));
 
   // Decompress with standard zlib
@@ -40,7 +35,7 @@ async function testGzipCompatWithZlib() {
 async function testDeflateCompatWithZlib() {
   const inflate = promisify(zlib.inflate);
 
-  const input = 'Cross-compat deflate test. '.repeat(100);
+  const input = "Cross-compat deflate test. ".repeat(100);
   const compressed = await bytes(pull(from(input), compressDeflate()));
 
   // Decompress with standard zlib
@@ -51,7 +46,7 @@ async function testDeflateCompatWithZlib() {
 async function testBrotliCompatWithZlib() {
   const brotliDecompress = promisify(zlib.brotliDecompress);
 
-  const input = 'Cross-compat brotli test. '.repeat(100);
+  const input = "Cross-compat brotli test. ".repeat(100);
   const compressed = await bytes(pull(from(input), compressBrotli()));
 
   const decompressed = await brotliDecompress(compressed);
@@ -61,7 +56,7 @@ async function testBrotliCompatWithZlib() {
 async function testZstdCompatWithZlib() {
   const zstdDecompress = promisify(zlib.zstdDecompress);
 
-  const input = 'Cross-compat zstd test. '.repeat(100);
+  const input = "Cross-compat zstd test. ".repeat(100);
   const compressed = await bytes(pull(from(input), compressZstd()));
 
   const decompressed = await zstdDecompress(compressed);
@@ -75,7 +70,7 @@ async function testZstdCompatWithZlib() {
 async function testZlibGzipToNewStreams() {
   const gzip = promisify(zlib.gzip);
 
-  const input = 'Reverse compat gzip test. '.repeat(100);
+  const input = "Reverse compat gzip test. ".repeat(100);
   const compressed = await gzip(input);
   const result = await text(pull(from(compressed), decompressGzip()));
   assert.strictEqual(result, input);
@@ -84,7 +79,7 @@ async function testZlibGzipToNewStreams() {
 async function testZlibDeflateToNewStreams() {
   const deflate = promisify(zlib.deflate);
 
-  const input = 'Reverse compat deflate test. '.repeat(100);
+  const input = "Reverse compat deflate test. ".repeat(100);
   const compressed = await deflate(input);
   const result = await text(pull(from(compressed), decompressDeflate()));
   assert.strictEqual(result, input);
@@ -93,7 +88,7 @@ async function testZlibDeflateToNewStreams() {
 async function testZlibBrotliToNewStreams() {
   const brotliCompress = promisify(zlib.brotliCompress);
 
-  const input = 'Reverse compat brotli test. '.repeat(100);
+  const input = "Reverse compat brotli test. ".repeat(100);
   const compressed = await brotliCompress(input);
   const result = await text(pull(from(compressed), decompressBrotli()));
   assert.strictEqual(result, input);
@@ -102,7 +97,7 @@ async function testZlibBrotliToNewStreams() {
 async function testZlibZstdToNewStreams() {
   const zstdCompress = promisify(zlib.zstdCompress);
 
-  const input = 'Reverse compat zstd test. '.repeat(100);
+  const input = "Reverse compat zstd test. ".repeat(100);
   const compressed = await zstdCompress(input);
   const result = await text(pull(from(compressed), decompressZstd()));
   assert.strictEqual(result, input);

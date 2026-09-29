@@ -1,14 +1,14 @@
 // Flags: --expose-gc --expose-internals
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { checkIfCollectableByCounting } = require('../common/gc');
-const assert = require('assert');
-const fs = require('node:fs');
-const path = require('node:path');
-const tmpdir = require('../common/tmpdir');
-const { internalBinding } = require('internal/test/binding');
-const { FSReqCallback } = internalBinding('fs');
+const common = require("../common");
+const { checkIfCollectableByCounting } = require("../common/gc");
+const assert = require("assert");
+const fs = require("node:fs");
+const path = require("node:path");
+const tmpdir = require("../common/tmpdir");
+const { internalBinding } = require("internal/test/binding");
+const { FSReqCallback } = internalBinding("fs");
 
 // The CVE primarily affects Windows but we should test on all platforms
 
@@ -17,12 +17,14 @@ const { FSReqCallback } = internalBinding('fs');
 }
 
 {
-  const longFileNamePart = 'a'.repeat(200);
-  const fileName = tmpdir.resolve(`long-file-name-${longFileNamePart}-for-memory-leak-test.txt`);
-  fs.writeFileSync(fileName, 'test content', 'utf8');
+  const longFileNamePart = "a".repeat(200);
+  const fileName = tmpdir.resolve(
+    `long-file-name-${longFileNamePart}-for-memory-leak-test.txt`,
+  );
+  fs.writeFileSync(fileName, "test content", "utf8");
   const fullPath = path.resolve(fileName);
 
-  assert(fs.existsSync(fullPath), 'Test file should exist');
+  assert(fs.existsSync(fullPath), "Test file should exist");
 
   async function runTest() {
     try {
@@ -34,10 +36,13 @@ const { FSReqCallback } = internalBinding('fs');
           return 10;
         },
         FSReqCallback,
-        10
+        10,
       );
     } catch (err) {
-      assert.ifError(err, 'Memory leak detected: FSReqCallback objects were not collected');
+      assert.ifError(
+        err,
+        "Memory leak detected: FSReqCallback objects were not collected",
+      );
     } finally {
       tmpdir.refresh();
     }

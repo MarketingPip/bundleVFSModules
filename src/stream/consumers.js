@@ -1,20 +1,9 @@
-import {
-
-  JSONParse,
-  Uint8Array,
-} from './primordials.js';
-import {
-  Buffer,
-} from './buffer.js';
-
-
-
+import { JSONParse, Uint8Array } from "./primordials.js";
+import { Buffer } from "./buffer.js";
 
 const { TextDecoder } = globalThis;
 
 const { Blob } = globalThis;
-
-
 
 /**
  * @typedef {import('../internal/webstreams/readablestream').ReadableStream
@@ -28,8 +17,7 @@ const { Blob } = globalThis;
  */
 async function blob(stream) {
   const chunks = [];
-  for await (const chunk of stream)
-    chunks.push(chunk);
+  for await (const chunk of stream) chunks.push(chunk);
   return new Blob(chunks);
 }
 
@@ -64,12 +52,10 @@ async function bytes(stream) {
  */
 async function text(stream) {
   const dec = new TextDecoder();
-  let str = '';
+  let str = "";
   for await (const chunk of stream) {
-    if (typeof chunk === 'string')
-      str += chunk;
-    else
-      str += dec.decode(chunk, { stream: true });
+    if (typeof chunk === "string") str += chunk;
+    else str += dec.decode(chunk, { stream: true });
   }
   // Flush the streaming TextDecoder so that any pending
   // incomplete multibyte characters are handled.

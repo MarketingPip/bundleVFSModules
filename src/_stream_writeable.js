@@ -6,6 +6,6 @@
 // NOTE: the file keeps Node's historical "writeable" spelling; the bundle key
 // is `_stream_writable` (see BUNDLED_MODULES in src/build-vfs.mjs), matching
 // the runtime's builtin-module key normalization.
-import { Writable } from './stream.js';
+import { Writable } from "./stream.js";
 export default Writable;
 export const { WritableState, fromWeb, toWeb } = Writable;

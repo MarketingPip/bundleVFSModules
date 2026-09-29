@@ -1,9 +1,9 @@
 // Flags: --expose-gc
-'use strict';
+"use strict";
 
-require('../common');
-const asyncHooks = require('async_hooks');
-const vm = require('vm');
+require("../common");
+const asyncHooks = require("async_hooks");
+const vm = require("vm");
 
 // This is a regression test for https://github.com/nodejs/node/issues/39019
 //

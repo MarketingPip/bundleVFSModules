@@ -1,18 +1,15 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const assert = require('assert');
-const {
-  randomUUIDv7,
-} = require('crypto');
+const assert = require("assert");
+const { randomUUIDv7 } = require("crypto");
 
 {
   const uuid = randomUUIDv7();
-  assert.strictEqual(typeof uuid, 'string');
+  assert.strictEqual(typeof uuid, "string");
   assert.strictEqual(uuid.length, 36);
 
   // UUIDv7 format: xxxxxxxx-xxxx-7xxx-[89ab]xxx-xxxxxxxxxxxx
@@ -25,12 +22,11 @@ const {
 {
   const uuid = randomUUIDv7();
 
-  assert.strictEqual(
-    Buffer.from(uuid.slice(14, 16), 'hex')[0] & 0xf0, 0x70,
-  );
+  assert.strictEqual(Buffer.from(uuid.slice(14, 16), "hex")[0] & 0xf0, 0x70);
 
   assert.strictEqual(
-    Buffer.from(uuid.slice(19, 21), 'hex')[0] & 0b1100_0000, 0b1000_0000,
+    Buffer.from(uuid.slice(19, 21), "hex")[0] & 0b1100_0000,
+    0b1000_0000,
   );
 }
 
@@ -51,7 +47,7 @@ const {
 
   // Extract the 48-bit timestamp from the UUID.
   // Bytes 0-3 (chars 0-8) and bytes 4-5 (chars 9-13, skipping the dash).
-  const hex = uuid.replace(/-/g, '');
+  const hex = uuid.replace(/-/g, "");
   const timestampHex = hex.slice(0, 12); // first 48 bits = 12 hex chars
   const timestamp = parseInt(timestampHex, 16);
 
@@ -66,10 +62,9 @@ const {
     // UUIDs with later timestamps must sort after earlier ones.
     // Within the same millisecond, ordering depends on random bits,
     // so we only assert >= on the timestamp portion.
-    const prevTs = parseInt(prev.replace(/-/g, '').slice(0, 12), 16);
-    const currTs = parseInt(curr.replace(/-/g, '').slice(0, 12), 16);
-    assert(currTs >= prevTs,
-           `Timestamp went backwards: ${currTs} < ${prevTs}`);
+    const prevTs = parseInt(prev.replace(/-/g, "").slice(0, 12), 16);
+    const currTs = parseInt(curr.replace(/-/g, "").slice(0, 12), 16);
+    assert(currTs >= prevTs, `Timestamp went backwards: ${currTs} < ${prevTs}`);
     prev = curr;
   }
 }
@@ -93,11 +88,11 @@ const {
   assert.match(randomUUIDv7({ disableEntropyCache: true }), uuidv7Regex);
 
   assert.throws(() => randomUUIDv7(1), {
-    code: 'ERR_INVALID_ARG_TYPE',
+    code: "ERR_INVALID_ARG_TYPE",
   });
 
-  assert.throws(() => randomUUIDv7({ disableEntropyCache: '' }), {
-    code: 'ERR_INVALID_ARG_TYPE',
+  assert.throws(() => randomUUIDv7({ disableEntropyCache: "" }), {
+    code: "ERR_INVALID_ARG_TYPE",
   });
 }
 

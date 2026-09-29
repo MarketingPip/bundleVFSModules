@@ -19,10 +19,10 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
 
 let mode_async;
 let mode_sync;
@@ -60,93 +60,105 @@ function closeSync() {
   return fs._closeSync.apply(fs, arguments);
 }
 
-
 // On Windows chmod is only able to manipulate write permission
 if (common.isWindows) {
-  mode_async = 0o400;   // read-only
-  mode_sync = 0o600;    // read-write
+  mode_async = 0o400; // read-only
+  mode_sync = 0o600; // read-write
 } else {
   mode_async = 0o777;
   mode_sync = 0o644;
 }
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
-const file1 = tmpdir.resolve('a.js');
-const file2 = tmpdir.resolve('a1.js');
+const file1 = tmpdir.resolve("a.js");
+const file2 = tmpdir.resolve("a1.js");
 
 // Create file1.
-fs.closeSync(fs.openSync(file1, 'w'));
+fs.closeSync(fs.openSync(file1, "w"));
 
-fs.chmod(file1, mode_async.toString(8), common.mustSucceed(() => {
-  if (common.isWindows) {
-    assert.ok((fs.statSync(file1).mode & 0o777) & mode_async);
-  } else {
-    assert.strictEqual(fs.statSync(file1).mode & 0o777, mode_async);
-  }
-
-  fs.chmodSync(file1, mode_sync);
-  if (common.isWindows) {
-    assert.ok((fs.statSync(file1).mode & 0o777) & mode_sync);
-  } else {
-    assert.strictEqual(fs.statSync(file1).mode & 0o777, mode_sync);
-  }
-}));
-
-fs.open(file2, 'w', common.mustSucceed((fd) => {
-  fs.fchmod(fd, mode_async.toString(8), common.mustSucceed(() => {
+fs.chmod(
+  file1,
+  mode_async.toString(8),
+  common.mustSucceed(() => {
     if (common.isWindows) {
-      assert.ok((fs.fstatSync(fd).mode & 0o777) & mode_async);
+      assert.ok(fs.statSync(file1).mode & 0o777 & mode_async);
     } else {
-      assert.strictEqual(fs.fstatSync(fd).mode & 0o777, mode_async);
+      assert.strictEqual(fs.statSync(file1).mode & 0o777, mode_async);
     }
 
-    assert.throws(
-      () => fs.fchmod(fd, {}),
-      {
-        code: 'ERR_INVALID_ARG_TYPE',
-      }
+    fs.chmodSync(file1, mode_sync);
+    if (common.isWindows) {
+      assert.ok(fs.statSync(file1).mode & 0o777 & mode_sync);
+    } else {
+      assert.strictEqual(fs.statSync(file1).mode & 0o777, mode_sync);
+    }
+  }),
+);
+
+fs.open(
+  file2,
+  "w",
+  common.mustSucceed((fd) => {
+    fs.fchmod(
+      fd,
+      mode_async.toString(8),
+      common.mustSucceed(() => {
+        if (common.isWindows) {
+          assert.ok(fs.fstatSync(fd).mode & 0o777 & mode_async);
+        } else {
+          assert.strictEqual(fs.fstatSync(fd).mode & 0o777, mode_async);
+        }
+
+        assert.throws(() => fs.fchmod(fd, {}), {
+          code: "ERR_INVALID_ARG_TYPE",
+        });
+
+        fs.fchmodSync(fd, mode_sync);
+        if (common.isWindows) {
+          assert.ok(fs.fstatSync(fd).mode & 0o777 & mode_sync);
+        } else {
+          assert.strictEqual(fs.fstatSync(fd).mode & 0o777, mode_sync);
+        }
+
+        fs.close(fd, assert.ifError);
+      }),
     );
-
-    fs.fchmodSync(fd, mode_sync);
-    if (common.isWindows) {
-      assert.ok((fs.fstatSync(fd).mode & 0o777) & mode_sync);
-    } else {
-      assert.strictEqual(fs.fstatSync(fd).mode & 0o777, mode_sync);
-    }
-
-    fs.close(fd, assert.ifError);
-  }));
-}));
+  }),
+);
 
 // lchmod
 if (fs.lchmod) {
-  const link = tmpdir.resolve('symbolic-link');
+  const link = tmpdir.resolve("symbolic-link");
 
   fs.symlinkSync(file2, link);
 
-  fs.lchmod(link, mode_async, common.mustSucceed(() => {
-    assert.strictEqual(fs.lstatSync(link).mode & 0o777, mode_async);
+  fs.lchmod(
+    link,
+    mode_async,
+    common.mustSucceed(() => {
+      assert.strictEqual(fs.lstatSync(link).mode & 0o777, mode_async);
 
-    fs.lchmodSync(link, mode_sync);
-    assert.strictEqual(fs.lstatSync(link).mode & 0o777, mode_sync);
-
-  }));
+      fs.lchmodSync(link, mode_sync);
+      assert.strictEqual(fs.lstatSync(link).mode & 0o777, mode_sync);
+    }),
+  );
 }
 
 [false, 1, {}, [], null, undefined].forEach((input) => {
   const errObj = {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: 'The "path" argument must be of type string or an instance ' +
-             'of Buffer or URL.' +
-             common.invalidArgTypeHelper(input)
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      'The "path" argument must be of type string or an instance ' +
+      "of Buffer or URL." +
+      common.invalidArgTypeHelper(input),
   };
   assert.throws(() => fs.chmod(input, 1, common.mustNotCall()), errObj);
   assert.throws(() => fs.chmodSync(input, 1), errObj);
 });
 
-process.on('exit', function() {
+process.on("exit", function () {
   assert.strictEqual(openCount, 0);
 });

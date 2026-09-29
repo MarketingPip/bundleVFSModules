@@ -1,11 +1,10 @@
 import {
-
   Symbol,
   SymbolAsyncIterator,
   SymbolFor,
   SymbolIterator,
-} from './primordials.js';
-import { Buffer } from './buffer.js';
+} from "./primordials.js";
+import { Buffer } from "./buffer.js";
 
 // Buffer identity check. Buffer is the adaptive Buffer (host in Node,
 // repo port in browsers), so a single instanceof covers both realms.
@@ -13,25 +12,24 @@ export function isBuffer(b) {
   return b instanceof Buffer;
 }
 
-
-
-
 // We need to use SymbolFor to make these globally available
 // for interoperability with readable-stream, i.e. readable-stream
 // and node core needs to be able to read/write private state
 // from each other for proper interoperability.
-const kIsDestroyed = SymbolFor('nodejs.stream.destroyed');
-const kIsErrored = SymbolFor('nodejs.stream.errored');
-const kIsReadable = SymbolFor('nodejs.stream.readable');
-const kIsWritable = SymbolFor('nodejs.stream.writable');
-const kIsDisturbed = SymbolFor('nodejs.stream.disturbed');
+const kIsDestroyed = SymbolFor("nodejs.stream.destroyed");
+const kIsErrored = SymbolFor("nodejs.stream.errored");
+const kIsReadable = SymbolFor("nodejs.stream.readable");
+const kIsWritable = SymbolFor("nodejs.stream.writable");
+const kIsDisturbed = SymbolFor("nodejs.stream.disturbed");
 
-const kOnConstructed = Symbol('kOnConstructed');
+const kOnConstructed = Symbol("kOnConstructed");
 
-const kIsClosedPromise = SymbolFor('nodejs.webstream.isClosedPromise');
-const kControllerErrorFunction = SymbolFor('nodejs.webstream.controllerErrorFunction');
+const kIsClosedPromise = SymbolFor("nodejs.webstream.isClosedPromise");
+const kControllerErrorFunction = SymbolFor(
+  "nodejs.webstream.controllerErrorFunction",
+);
 
-const kState = Symbol('kState');
+const kState = Symbol("kState");
 const kObjectMode = 1 << 0;
 const kErrorEmitted = 1 << 1;
 const kAutoDestroy = 1 << 2;
@@ -45,12 +43,10 @@ const kConstructed = 1 << 8;
 function isReadableNodeStream(obj, strict = false) {
   return !!(
     obj &&
-    typeof obj.pipe === 'function' &&
-    typeof obj.on === 'function' &&
-    (
-      !strict ||
-      (typeof obj.pause === 'function' && typeof obj.resume === 'function')
-    ) &&
+    typeof obj.pipe === "function" &&
+    typeof obj.on === "function" &&
+    (!strict ||
+      (typeof obj.pause === "function" && typeof obj.resume === "function")) &&
     (!obj._writableState || obj._readableState?.readable !== false) && // Duplex
     (!obj._writableState || obj._readableState) // Writable has .pipe.
   );
@@ -59,8 +55,8 @@ function isReadableNodeStream(obj, strict = false) {
 function isWritableNodeStream(obj) {
   return !!(
     obj &&
-    typeof obj.write === 'function' &&
-    typeof obj.on === 'function' &&
+    typeof obj.write === "function" &&
+    typeof obj.on === "function" &&
     (!obj._readableState || obj._writableState?.writable !== false) // Duplex
   );
 }
@@ -68,21 +64,20 @@ function isWritableNodeStream(obj) {
 function isDuplexNodeStream(obj) {
   return !!(
     obj &&
-    (typeof obj.pipe === 'function' && obj._readableState) &&
-    typeof obj.on === 'function' &&
-    typeof obj.write === 'function'
+    typeof obj.pipe === "function" &&
+    obj._readableState &&
+    typeof obj.on === "function" &&
+    typeof obj.write === "function"
   );
 }
 
 function isNodeStream(obj) {
   return (
     obj &&
-    (
-      obj._readableState ||
+    (obj._readableState ||
       obj._writableState ||
-      (typeof obj.write === 'function' && typeof obj.on === 'function') ||
-      (typeof obj.pipe === 'function' && typeof obj.on === 'function')
-    )
+      (typeof obj.write === "function" && typeof obj.on === "function") ||
+      (typeof obj.pipe === "function" && typeof obj.on === "function"))
   );
 }
 
@@ -90,9 +85,9 @@ function isReadableStream(obj) {
   return !!(
     obj &&
     !isNodeStream(obj) &&
-    typeof obj.pipeThrough === 'function' &&
-    typeof obj.getReader === 'function' &&
-    typeof obj.cancel === 'function'
+    typeof obj.pipeThrough === "function" &&
+    typeof obj.getReader === "function" &&
+    typeof obj.cancel === "function"
   );
 }
 
@@ -100,8 +95,8 @@ function isWritableStream(obj) {
   return !!(
     obj &&
     !isNodeStream(obj) &&
-    typeof obj.getWriter === 'function' &&
-    typeof obj.abort === 'function'
+    typeof obj.getWriter === "function" &&
+    typeof obj.abort === "function"
   );
 }
 
@@ -109,21 +104,25 @@ function isTransformStream(obj) {
   return !!(
     obj &&
     !isNodeStream(obj) &&
-    typeof obj.readable === 'object' &&
-    typeof obj.writable === 'object'
+    typeof obj.readable === "object" &&
+    typeof obj.writable === "object"
   );
 }
 
 function isWebStream(obj) {
-  return isReadableStream(obj) || isWritableStream(obj) || isTransformStream(obj);
+  return (
+    isReadableStream(obj) || isWritableStream(obj) || isTransformStream(obj)
+  );
 }
 
 function isIterable(obj, isAsync) {
   if (obj == null) return false;
-  if (isAsync === true) return typeof obj[SymbolAsyncIterator] === 'function';
-  if (isAsync === false) return typeof obj[SymbolIterator] === 'function';
-  return typeof obj[SymbolAsyncIterator] === 'function' ||
-    typeof obj[SymbolIterator] === 'function';
+  if (isAsync === true) return typeof obj[SymbolAsyncIterator] === "function";
+  if (isAsync === false) return typeof obj[SymbolIterator] === "function";
+  return (
+    typeof obj[SymbolAsyncIterator] === "function" ||
+    typeof obj[SymbolIterator] === "function"
+  );
 }
 
 function isDestroyed(stream) {
@@ -140,7 +139,7 @@ function isWritableEnded(stream) {
   if (stream.writableEnded === true) return true;
   const wState = stream._writableState;
   if (wState?.errored) return false;
-  if (typeof wState?.ended !== 'boolean') return null;
+  if (typeof wState?.ended !== "boolean") return null;
   return wState.ended;
 }
 
@@ -150,7 +149,7 @@ function isWritableFinished(stream, strict) {
   if (stream.writableFinished === true) return true;
   const wState = stream._writableState;
   if (wState?.errored) return false;
-  if (typeof wState?.finished !== 'boolean') return null;
+  if (typeof wState?.finished !== "boolean") return null;
   return !!(
     wState.finished ||
     (strict === false && wState.ended === true && wState.length === 0)
@@ -163,7 +162,7 @@ function isReadableEnded(stream) {
   if (stream.readableEnded === true) return true;
   const rState = stream._readableState;
   if (!rState || rState.errored) return false;
-  if (typeof rState?.ended !== 'boolean') return null;
+  if (typeof rState?.ended !== "boolean") return null;
   return rState.ended;
 }
 
@@ -172,7 +171,7 @@ function isReadableFinished(stream, strict) {
   if (!isReadableNodeStream(stream)) return null;
   const rState = stream._readableState;
   if (rState?.errored) return false;
-  if (typeof rState?.endEmitted !== 'boolean') return null;
+  if (typeof rState?.endEmitted !== "boolean") return null;
   return !!(
     rState.endEmitted ||
     (strict === false && rState.ended === true && rState.length === 0)
@@ -181,20 +180,22 @@ function isReadableFinished(stream, strict) {
 
 function isReadable(stream) {
   if (stream && stream[kIsReadable] != null) return stream[kIsReadable];
-  if (typeof stream?.readable !== 'boolean') return null;
+  if (typeof stream?.readable !== "boolean") return null;
   if (isDestroyed(stream)) return false;
-  return isReadableNodeStream(stream) &&
+  return (
+    isReadableNodeStream(stream) &&
     stream.readable &&
-    !isReadableFinished(stream);
+    !isReadableFinished(stream)
+  );
 }
 
 function isWritable(stream) {
   if (stream && stream[kIsWritable] != null) return stream[kIsWritable];
-  if (typeof stream?.writable !== 'boolean') return null;
+  if (typeof stream?.writable !== "boolean") return null;
   if (isDestroyed(stream)) return false;
-  return isWritableNodeStream(stream) &&
-    stream.writable &&
-    !isWritableEnded(stream);
+  return (
+    isWritableNodeStream(stream) && stream.writable && !isWritableEnded(stream)
+  );
 }
 
 function isFinished(stream, opts) {
@@ -246,7 +247,7 @@ function isClosed(stream) {
     return null;
   }
 
-  if (typeof stream.closed === 'boolean') {
+  if (typeof stream.closed === "boolean") {
     return stream.closed;
   }
 
@@ -254,13 +255,13 @@ function isClosed(stream) {
   const rState = stream._readableState;
 
   if (
-    typeof wState?.closed === 'boolean' ||
-    typeof rState?.closed === 'boolean'
+    typeof wState?.closed === "boolean" ||
+    typeof rState?.closed === "boolean"
   ) {
     return wState?.closed || rState?.closed;
   }
 
-  if (typeof stream._closed === 'boolean' && isOutgoingMessage(stream)) {
+  if (typeof stream._closed === "boolean" && isOutgoingMessage(stream)) {
     return stream._closed;
   }
 
@@ -269,24 +270,21 @@ function isClosed(stream) {
 
 function isOutgoingMessage(stream) {
   return (
-    typeof stream._closed === 'boolean' &&
-    typeof stream._defaultKeepAlive === 'boolean' &&
-    typeof stream._removedConnection === 'boolean' &&
-    typeof stream._removedContLen === 'boolean'
+    typeof stream._closed === "boolean" &&
+    typeof stream._defaultKeepAlive === "boolean" &&
+    typeof stream._removedConnection === "boolean" &&
+    typeof stream._removedContLen === "boolean"
   );
 }
 
 function isServerResponse(stream) {
-  return (
-    typeof stream._sent100 === 'boolean' &&
-    isOutgoingMessage(stream)
-  );
+  return typeof stream._sent100 === "boolean" && isOutgoingMessage(stream);
 }
 
 function isServerRequest(stream) {
   return (
-    typeof stream._consuming === 'boolean' &&
-    typeof stream._dumped === 'boolean' &&
+    typeof stream._consuming === "boolean" &&
+    typeof stream._dumped === "boolean" &&
     stream.req?.upgradeOrConnect === undefined
   );
 }
@@ -298,30 +296,30 @@ function willEmitClose(stream) {
   const rState = stream._readableState;
   const state = wState || rState;
 
-  return (!state && isServerResponse(stream)) || !!(
-    state?.autoDestroy &&
-    state.emitClose &&
-    state.closed === false
+  return (
+    (!state && isServerResponse(stream)) ||
+    !!(state?.autoDestroy && state.emitClose && state.closed === false)
   );
 }
 
 function isDisturbed(stream) {
-  return !!(stream && (
-    stream[kIsDisturbed] ??
-    (stream.readableDidRead || stream.readableAborted)
-  ));
+  return !!(
+    stream &&
+    (stream[kIsDisturbed] ?? (stream.readableDidRead || stream.readableAborted))
+  );
 }
 
 function isErrored(stream) {
-  return !!(stream && (
-    stream[kIsErrored] ??
-    stream.readableErrored ??
-    stream.writableErrored ??
-    stream._readableState?.errorEmitted ??
-    stream._writableState?.errorEmitted ??
-    stream._readableState?.errored ??
-    stream._writableState?.errored
-  ));
+  return !!(
+    stream &&
+    (stream[kIsErrored] ??
+      stream.readableErrored ??
+      stream.writableErrored ??
+      stream._readableState?.errorEmitted ??
+      stream._writableState?.errorEmitted ??
+      stream._readableState?.errored ??
+      stream._writableState?.errored)
+  );
 }
 
 export {

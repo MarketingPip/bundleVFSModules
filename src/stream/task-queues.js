@@ -4,26 +4,22 @@
 // fall back to queueMicrotask, then setTimeout(0).
 
 const proc =
-  typeof process === 'object' && process !== null ? process : undefined;
+  typeof process === "object" && process !== null ? process : undefined;
 
-const nextTick = (proc && typeof proc.nextTick === 'function') ?
-  proc.nextTick.bind(proc) :
-  (typeof queueMicrotask === 'function' ?
-    // queueMicrotask takes only a callback: forward extra args manually so
-    // nextTick(fn, ...args) keeps working off-Node (was silently dropping
-    // them, breaking stream internals like resume_(stream, state)).
-    (fn, ...args) => queueMicrotask(() => fn(...args)) :
-    (fn, ...args) => setTimeout(() => fn(...args), 0));
+const nextTick =
+  proc && typeof proc.nextTick === "function"
+    ? proc.nextTick.bind(proc)
+    : typeof queueMicrotask === "function"
+      ? // queueMicrotask takes only a callback: forward extra args manually so
+        // nextTick(fn, ...args) keeps working off-Node (was silently dropping
+        // them, breaking stream internals like resume_(stream, state)).
+        (fn, ...args) => queueMicrotask(() => fn(...args))
+      : (fn, ...args) => setTimeout(() => fn(...args), 0);
 
 // process.stdout / process.stderr only appear in a pipe-cleanup comparison;
 // default to nullish so the comparison simply never matches off-Node.
 const procStdout = proc?.stdout;
 const procStderr = proc?.stderr;
-const procPlatform = typeof proc?.platform === 'string' ? proc.platform : '';
+const procPlatform = typeof proc?.platform === "string" ? proc.platform : "";
 
-export {
-  nextTick,
-  procStdout,
-  procStderr,
-  procPlatform,
-};
+export { nextTick, procStdout, procStderr, procPlatform };

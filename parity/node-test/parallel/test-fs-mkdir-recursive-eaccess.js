@@ -1,34 +1,34 @@
-'use strict';
+"use strict";
 
 // Test that mkdir with recursive option returns appropriate error
 // when executed on folder it does not have permission to access.
 // Ref: https://github.com/nodejs/node/issues/31481
 
-const common = require('../common');
+const common = require("../common");
 
 if (!common.isWindows && process.getuid() === 0)
-  common.skip('as this test should not be run as `root`');
+  common.skip("as this test should not be run as `root`");
 
 if (common.isIBMi)
-  common.skip('IBMi has a different access permission mechanism');
+  common.skip("IBMi has a different access permission mechanism");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
-const assert = require('assert');
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+const assert = require("assert");
+const { execSync } = require("child_process");
+const fs = require("fs");
+const path = require("path");
 
 let n = 0;
 
 function makeDirectoryReadOnly(dir) {
-  let accessErrorCode = 'EACCES';
+  let accessErrorCode = "EACCES";
   if (common.isWindows) {
-    accessErrorCode = 'EPERM';
+    accessErrorCode = "EPERM";
     execSync(`icacls ${dir} /deny "everyone:(OI)(CI)(DE,DC,AD,WD)"`);
   } else {
-    fs.chmodSync(dir, '444');
+    fs.chmodSync(dir, "444");
   }
   return accessErrorCode;
 }
@@ -46,7 +46,7 @@ function makeDirectoryWritable(dir) {
   const codeExpected = makeDirectoryReadOnly(dir);
   let err = null;
   try {
-    fs.mkdirSync(path.join(dir, '/foo'), { recursive: true });
+    fs.mkdirSync(path.join(dir, "/foo"), { recursive: true });
   } catch (_err) {
     err = _err;
   }
@@ -61,10 +61,14 @@ function makeDirectoryWritable(dir) {
   const dir = tmpdir.resolve(`mkdirp_${n++}`);
   fs.mkdirSync(dir);
   const codeExpected = makeDirectoryReadOnly(dir);
-  fs.mkdir(path.join(dir, '/bar'), { recursive: true }, common.mustCall((err) => {
-    makeDirectoryWritable(dir);
-    assert(err);
-    assert.strictEqual(err.code, codeExpected);
-    assert(err.path);
-  }));
+  fs.mkdir(
+    path.join(dir, "/bar"),
+    { recursive: true },
+    common.mustCall((err) => {
+      makeDirectoryWritable(dir);
+      assert(err);
+      assert.strictEqual(err.code, codeExpected);
+      assert(err.path);
+    }),
+  );
 }

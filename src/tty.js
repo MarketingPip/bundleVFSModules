@@ -13,14 +13,15 @@
 // import is external and rewritten to `loadModule("readline")`, i.e. this
 // repo's own readline shim, which emits the same escape sequences.
 
-import { Readable, Writable } from './stream.js';
-import readline from 'readline';
+import { Readable, Writable } from "./stream.js";
+import readline from "readline";
 
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
-const RT = (typeof globalThis._RUNTIME_ !== 'undefined')
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 
 // ─── Coded errors (shapes mirror Node's internal/errors) ────────────────────
 
@@ -46,15 +47,15 @@ class TTYTypeError extends TypeError {
 
 // Node's E() helper names the generated classes after their base (e.g.
 // `err.constructor.name === 'RangeError'`); match that observable detail.
-Object.defineProperty(TTYRangeError, 'name', { value: 'RangeError' });
-Object.defineProperty(TTYTypeError, 'name', { value: 'TypeError' });
+Object.defineProperty(TTYRangeError, "name", { value: "RangeError" });
+Object.defineProperty(TTYTypeError, "name", { value: "TypeError" });
 
 // Node reports tty-init failures as a SystemError carrying the uv result.
 class TTYSystemError extends Error {
   constructor(message, info) {
     super(message);
-    this.name = 'SystemError';
-    this.code = 'ERR_TTY_INIT_FAILED';
+    this.name = "SystemError";
+    this.code = "ERR_TTY_INIT_FAILED";
     this.info = info;
     this.errno = info.errno;
     this.syscall = info.syscall;
@@ -66,12 +67,12 @@ class TTYSystemError extends Error {
 
 // Real tty-init failures report `constructor.name === 'NodeError'` with
 // `name === 'SystemError'`.
-Object.defineProperty(TTYSystemError, 'name', { value: 'NodeError' });
+Object.defineProperty(TTYSystemError, "name", { value: "NodeError" });
 
 function addNumericalSeparator(val) {
-  let res = '';
+  let res = "";
   let i = val.length;
-  const start = val[0] === '-' ? 1 : 0;
+  const start = val[0] === "-" ? 1 : 0;
   for (; i >= start + 4; i -= 3) {
     res = `_${val.slice(i - 3, i)}${res}`;
   }
@@ -80,30 +81,31 @@ function addNumericalSeparator(val) {
 
 // Mirrors Node's determineSpecificType() for error "Received ..." rendering.
 function specificType(value) {
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
   const type = typeof value;
   switch (type) {
-    case 'bigint':
+    case "bigint":
       return `type bigint (${value}n)`;
-    case 'number':
-      if (value === 0) return 1 / value === -Infinity ? 'type number (-0)' : 'type number (0)';
-      if (value !== value) return 'type number (NaN)';
-      if (value === Infinity) return 'type number (Infinity)';
-      if (value === -Infinity) return 'type number (-Infinity)';
+    case "number":
+      if (value === 0)
+        return 1 / value === -Infinity ? "type number (-0)" : "type number (0)";
+      if (value !== value) return "type number (NaN)";
+      if (value === Infinity) return "type number (Infinity)";
+      if (value === -Infinity) return "type number (-Infinity)";
       return `type number (${value})`;
-    case 'boolean':
+    case "boolean":
       return `type boolean (${value})`;
-    case 'symbol':
+    case "symbol":
       return `type symbol (${String(value)})`;
-    case 'function':
+    case "function":
       return `function ${value.name}`;
-    case 'object':
-      if (value.constructor && 'name' in value.constructor) {
+    case "object":
+      if (value.constructor && "name" in value.constructor) {
         return `an instance of ${value.constructor.name}`;
       }
       return String(value);
-    case 'string': {
+    case "string": {
       let s = value;
       if (s.length > 28) s = `${s.slice(0, 25)}...`;
       if (!s.includes("'")) return `type string ('${s}')`;
@@ -115,23 +117,28 @@ function specificType(value) {
 }
 
 // Mirrors internal/validators validateInteger(value, name, min, max).
-function validateInteger(value, name, min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER) {
-  if (typeof value !== 'number') {
+function validateInteger(
+  value,
+  name,
+  min = Number.MIN_SAFE_INTEGER,
+  max = Number.MAX_SAFE_INTEGER,
+) {
+  if (typeof value !== "number") {
     throw new TTYTypeError(
-      'ERR_INVALID_ARG_TYPE',
+      "ERR_INVALID_ARG_TYPE",
       `The "${name}" argument must be of type number. Received ${specificType(value)}`,
     );
   }
   if (!Number.isInteger(value)) {
     throw new TTYRangeError(
-      'ERR_OUT_OF_RANGE',
+      "ERR_OUT_OF_RANGE",
       `The value of "${name}" is out of range. It must be an integer. ` +
         `Received ${formatOutOfRangeReceived(value)}`,
     );
   }
   if (value < min || value > max) {
     throw new TTYRangeError(
-      'ERR_OUT_OF_RANGE',
+      "ERR_OUT_OF_RANGE",
       `The value of "${name}" is out of range. It must be >= ${min} && <= ${max}. ` +
         `Received ${formatOutOfRangeReceived(value)}`,
     );
@@ -143,7 +150,7 @@ function formatOutOfRangeReceived(input) {
   if (Number.isInteger(input) && Math.abs(input) > 2 ** 32) {
     return addNumericalSeparator(String(input));
   }
-  if (Object.is(input, -0)) return '-0';
+  if (Object.is(input, -0)) return "-0";
   return String(input);
 }
 
@@ -152,21 +159,25 @@ function formatOutOfRangeReceived(input) {
 function defaultEnv() {
   try {
     const rtEnv = RT && RT.process && RT.process.env;
-    if (rtEnv && typeof rtEnv === 'object') return rtEnv;
-  } catch { /* ignore */ }
+    if (rtEnv && typeof rtEnv === "object") return rtEnv;
+  } catch {
+    /* ignore */
+  }
   const gp = globalThis.process;
-  if (gp && typeof gp.env === 'object' && gp.env !== null) return gp.env;
+  if (gp && typeof gp.env === "object" && gp.env !== null) return gp.env;
   return {};
 }
 
 function currentPlatform() {
   try {
     const rtPlatform = RT && RT.process && RT.process.platform;
-    if (typeof rtPlatform === 'string') return rtPlatform;
-  } catch { /* ignore */ }
+    if (typeof rtPlatform === "string") return rtPlatform;
+  } catch {
+    /* ignore */
+  }
   const gp = globalThis.process;
-  if (gp && typeof gp.platform === 'string') return gp.platform;
-  return 'browser';
+  if (gp && typeof gp.platform === "string") return gp.platform;
+  return "browser";
 }
 
 // The real Node builtin, when we are genuinely running under Node. Used ONLY
@@ -175,7 +186,8 @@ function currentPlatform() {
 function nativeModule(name) {
   try {
     const p = globalThis.process;
-    const gbm = p && typeof p.getBuiltinModule === 'function' ? p.getBuiltinModule : null;
+    const gbm =
+      p && typeof p.getBuiltinModule === "function" ? p.getBuiltinModule : null;
     return gbm ? gbm.call(p, name) : undefined;
   } catch {
     return undefined;
@@ -183,8 +195,8 @@ function nativeModule(name) {
 }
 
 function nativeIsTTY(fd) {
-  const tty = nativeModule('tty');
-  if (!tty || typeof tty.isatty !== 'function') return false;
+  const tty = nativeModule("tty");
+  if (!tty || typeof tty.isatty !== "function") return false;
   try {
     return tty.isatty(fd) === true;
   } catch {
@@ -197,7 +209,10 @@ function nativeIsTTY(fd) {
 function validateFd(fd) {
   // Matches lib/tty.js: `if (fd >> 0 !== fd || fd < 0) throw new ERR_INVALID_FD(fd)`.
   if (fd >> 0 !== fd || fd < 0) {
-    throw new TTYRangeError('ERR_INVALID_FD', `"fd" must be a positive integer: ${String(fd)}`);
+    throw new TTYRangeError(
+      "ERR_INVALID_FD",
+      `"fd" must be a positive integer: ${String(fd)}`,
+    );
   }
 }
 
@@ -206,8 +221,8 @@ function validateFd(fd) {
 // browser the probe is unavailable and every fd yields a working non-TTY
 // stream (there are no OS fds to be invalid).
 function assertTtyInitOk(fd) {
-  const fs = nativeModule('fs');
-  if (!fs || typeof fs.fstatSync !== 'function') return;
+  const fs = nativeModule("fs");
+  if (!fs || typeof fs.fstatSync !== "function") return;
   let bad = false;
   try {
     fs.fstatSync(fd);
@@ -215,11 +230,23 @@ function assertTtyInitOk(fd) {
     bad = true;
   }
   if (!bad) return;
-  const isWindows = currentPlatform() === 'win32';
+  const isWindows = currentPlatform() === "win32";
   const info = isWindows
-    ? { errno: -9, code: 'EBADF', message: 'bad file descriptor', syscall: 'uv_tty_init' }
-    : { errno: -22, code: 'EINVAL', message: 'invalid argument', syscall: 'uv_tty_init' };
-  const suffix = isWindows ? 'EBADF (bad file descriptor)' : 'EINVAL (invalid argument)';
+    ? {
+        errno: -9,
+        code: "EBADF",
+        message: "bad file descriptor",
+        syscall: "uv_tty_init",
+      }
+    : {
+        errno: -22,
+        code: "EINVAL",
+        message: "invalid argument",
+        syscall: "uv_tty_init",
+      };
+  const suffix = isWindows
+    ? "EBADF (bad file descriptor)"
+    : "EINVAL (invalid argument)";
   throw new TTYSystemError(
     `TTY initialization failed: uv_tty_init returned ${suffix}`,
     info,
@@ -243,37 +270,39 @@ const COLORS_16m = 24;
 // (https://linux.die.net/man/1/dircolors). The corresponding terminals might
 // support more than 16 colors, but this was not tested for.
 const TERM_ENVS = {
-  'eterm': COLORS_16,
-  'cons25': COLORS_16,
-  'console': COLORS_16,
-  'cygwin': COLORS_16,
-  'dtterm': COLORS_16,
-  'gnome': COLORS_16,
-  'hurd': COLORS_16,
-  'jfbterm': COLORS_16,
-  'konsole': COLORS_16,
-  'kterm': COLORS_16,
-  'mlterm': COLORS_16,
-  'mosh': COLORS_16m,
-  'putty': COLORS_16,
-  'st': COLORS_16,
+  eterm: COLORS_16,
+  cons25: COLORS_16,
+  console: COLORS_16,
+  cygwin: COLORS_16,
+  dtterm: COLORS_16,
+  gnome: COLORS_16,
+  hurd: COLORS_16,
+  jfbterm: COLORS_16,
+  konsole: COLORS_16,
+  kterm: COLORS_16,
+  mlterm: COLORS_16,
+  mosh: COLORS_16m,
+  putty: COLORS_16,
+  st: COLORS_16,
   // http://lists.schmorp.de/pipermail/rxvt-unicode/2016q2/002261.html
-  'rxvt-unicode-24bit': COLORS_16m,
+  "rxvt-unicode-24bit": COLORS_16m,
   // https://bugs.launchpad.net/terminator/+bug/1030562
-  'terminator': COLORS_16m,
-  'xterm-kitty': COLORS_16m,
+  terminator: COLORS_16m,
+  "xterm-kitty": COLORS_16m,
 };
 
-const CI_ENVS_MAP = new Map(Object.entries({
-  APPVEYOR: COLORS_256,
-  BUILDKITE: COLORS_256,
-  CIRCLECI: COLORS_16m,
-  DRONE: COLORS_256,
-  GITEA_ACTIONS: COLORS_16m,
-  GITHUB_ACTIONS: COLORS_16m,
-  GITLAB_CI: COLORS_256,
-  TRAVIS: COLORS_256,
-}));
+const CI_ENVS_MAP = new Map(
+  Object.entries({
+    APPVEYOR: COLORS_256,
+    BUILDKITE: COLORS_256,
+    CIRCLECI: COLORS_16m,
+    DRONE: COLORS_256,
+    GITEA_ACTIONS: COLORS_16m,
+    GITHUB_ACTIONS: COLORS_16m,
+    GITLAB_CI: COLORS_256,
+    TRAVIS: COLORS_256,
+  }),
+);
 
 const TERM_ENVS_REG_EXP = [
   /ansi/,
@@ -291,23 +320,23 @@ const TERM_ENVS_REG_EXP = [
 let warned = false;
 function warnOnDeactivatedColors(env) {
   if (warned) return;
-  let name = '';
-  if (env.NODE_DISABLE_COLORS !== undefined && env.NODE_DISABLE_COLORS !== '') {
-    name = 'NODE_DISABLE_COLORS';
+  let name = "";
+  if (env.NODE_DISABLE_COLORS !== undefined && env.NODE_DISABLE_COLORS !== "") {
+    name = "NODE_DISABLE_COLORS";
   }
-  if (env.NO_COLOR !== undefined && env.NO_COLOR !== '') {
-    if (name !== '') {
+  if (env.NO_COLOR !== undefined && env.NO_COLOR !== "") {
+    if (name !== "") {
       name += "' and '";
     }
-    name += 'NO_COLOR';
+    name += "NO_COLOR";
   }
 
-  if (name !== '') {
+  if (name !== "") {
     const p = globalThis.process;
-    if (p && typeof p.emitWarning === 'function') {
+    if (p && typeof p.emitWarning === "function") {
       p.emitWarning(
         `The '${name}' env is ignored due to the 'FORCE_COLOR' env being set.`,
-        'Warning',
+        "Warning",
       );
     }
     warned = true;
@@ -322,15 +351,15 @@ function getColorDepth(env = defaultEnv()) {
   // consistency throughout the ecosystem.
   if (env.FORCE_COLOR !== undefined) {
     switch (env.FORCE_COLOR) {
-      case '':
-      case '1':
-      case 'true':
+      case "":
+      case "1":
+      case "true":
         warnOnDeactivatedColors(env);
         return COLORS_16;
-      case '2':
+      case "2":
         warnOnDeactivatedColors(env);
         return COLORS_256;
-      case '3':
+      case "3":
         warnOnDeactivatedColors(env);
         return COLORS_16m;
       default:
@@ -338,26 +367,33 @@ function getColorDepth(env = defaultEnv()) {
     }
   }
 
-  if ((env.NODE_DISABLE_COLORS !== undefined && env.NODE_DISABLE_COLORS !== '') ||
-      // See https://no-color.org/
-      (env.NO_COLOR !== undefined && env.NO_COLOR !== '') ||
-      // The "dumb" special terminal, as defined by terminfo, doesn't support
-      // ANSI color control codes.
-      // See https://invisible-island.net/ncurses/terminfo.ti.html#toc-_Specials
-      env.TERM === 'dumb') {
+  if (
+    (env.NODE_DISABLE_COLORS !== undefined && env.NODE_DISABLE_COLORS !== "") ||
+    // See https://no-color.org/
+    (env.NO_COLOR !== undefined && env.NO_COLOR !== "") ||
+    // The "dumb" special terminal, as defined by terminfo, doesn't support
+    // ANSI color control codes.
+    // See https://invisible-island.net/ncurses/terminfo.ti.html#toc-_Specials
+    env.TERM === "dumb"
+  ) {
     return COLORS_2;
   }
 
-  if (currentPlatform() === 'win32') {
+  if (currentPlatform() === "win32") {
     // Best effort: without os.release() we cannot know the Windows build
     // number; fall back to the pre-10586 level like very old Windows.
     let build;
     try {
-      const osMod = nativeModule('os');
-      const release = osMod && typeof osMod.release === 'function' ? osMod.release() : undefined;
-      const parts = typeof release === 'string' ? release.split('.', 3) : [];
+      const osMod = nativeModule("os");
+      const release =
+        osMod && typeof osMod.release === "function"
+          ? osMod.release()
+          : undefined;
+      const parts = typeof release === "string" ? release.split(".", 3) : [];
       if (parts.length === 3 && +parts[0] >= 10) build = +parts[2];
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     if (build !== undefined) {
       // Windows 10 build 14931 is the first release that supports 16m/TrueColor.
       if (build >= 14931) return COLORS_16m;
@@ -372,44 +408,48 @@ function getColorDepth(env = defaultEnv()) {
   }
 
   // Azure DevOps
-  if (Object.prototype.hasOwnProperty.call(env, 'TF_BUILD') &&
-      Object.prototype.hasOwnProperty.call(env, 'AGENT_NAME')) {
+  if (
+    Object.prototype.hasOwnProperty.call(env, "TF_BUILD") &&
+    Object.prototype.hasOwnProperty.call(env, "AGENT_NAME")
+  ) {
     return COLORS_16;
   }
 
-  if (Object.prototype.hasOwnProperty.call(env, 'CI')) {
+  if (Object.prototype.hasOwnProperty.call(env, "CI")) {
     for (const [envName, colors] of CI_ENVS_MAP) {
       if (Object.prototype.hasOwnProperty.call(env, envName)) {
         return colors;
       }
     }
-    if (env.CI_NAME === 'codeship') {
+    if (env.CI_NAME === "codeship") {
       return COLORS_256;
     }
     return COLORS_2;
   }
 
-  if ('TEAMCITY_VERSION' in env) {
-    return /^(9\.(0*[1-9]\d*)\.|\d{2,}\.)/.test(env.TEAMCITY_VERSION) ?
-      COLORS_16 : COLORS_2;
+  if ("TEAMCITY_VERSION" in env) {
+    return /^(9\.(0*[1-9]\d*)\.|\d{2,}\.)/.test(env.TEAMCITY_VERSION)
+      ? COLORS_16
+      : COLORS_2;
   }
 
   switch (env.TERM_PROGRAM) {
-    case 'iTerm.app':
-      if (!env.TERM_PROGRAM_VERSION ||
+    case "iTerm.app":
+      if (
+        !env.TERM_PROGRAM_VERSION ||
         /^[0-2]\./.test(env.TERM_PROGRAM_VERSION)
       ) {
         return COLORS_256;
       }
       return COLORS_16m;
-    case 'HyperTerm':
-    case 'MacTerm':
+    case "HyperTerm":
+    case "MacTerm":
       return COLORS_16m;
-    case 'Apple_Terminal':
+    case "Apple_Terminal":
       return COLORS_256;
   }
 
-  if (env.COLORTERM === 'truecolor' || env.COLORTERM === '24bit') {
+  if (env.COLORTERM === "truecolor" || env.COLORTERM === "24bit") {
     return COLORS_16m;
   }
 
@@ -439,12 +479,14 @@ function getColorDepth(env = defaultEnv()) {
 }
 
 function hasColors(count, env) {
-  if (env === undefined &&
-      (count === undefined || (typeof count === 'object' && count !== null))) {
+  if (
+    env === undefined &&
+    (count === undefined || (typeof count === "object" && count !== null))
+  ) {
     env = count;
     count = 16;
   } else {
-    validateInteger(count, 'count', 2);
+    validateInteger(count, "count", 2);
   }
 
   return count <= 2 ** getColorDepth(env);
@@ -479,7 +521,7 @@ export function ReadStream(fd, options) {
 Object.setPrototypeOf(ReadStream, Readable);
 ReadStream.prototype = ReadStreamImpl.prototype;
 ReadStream.prototype.constructor = ReadStream;
-Object.defineProperty(ReadStreamImpl, 'name', { value: 'ReadStream' });
+Object.defineProperty(ReadStreamImpl, "name", { value: "ReadStream" });
 
 // ─── WriteStream ─────────────────────────────────────────────────────────────
 
@@ -537,7 +579,7 @@ export function WriteStream(fd) {
 Object.setPrototypeOf(WriteStream, Writable);
 WriteStream.prototype = WriteStreamImpl.prototype;
 WriteStream.prototype.constructor = WriteStream;
-Object.defineProperty(WriteStreamImpl, 'name', { value: 'WriteStream' });
+Object.defineProperty(WriteStreamImpl, "name", { value: "WriteStream" });
 
 // Matches lib/tty.js (`WriteStream.prototype.isTTY = true`) — the honest
 // browser value is false (no real TTY).

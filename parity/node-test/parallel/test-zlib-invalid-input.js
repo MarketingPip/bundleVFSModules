@@ -19,19 +19,14 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 // Test uncompressing invalid input
 
-const common = require('../common');
-const assert = require('assert');
-const zlib = require('zlib');
+const common = require("../common");
+const assert = require("assert");
+const zlib = require("zlib");
 
-const nonStringInputs = [
-  1,
-  true,
-  { a: 1 },
-  ['a'],
-];
+const nonStringInputs = [1, true, { a: 1 }, ["a"]];
 
 // zlib.Unzip classes need to get valid data, or else they'll throw.
 const unzips = [
@@ -43,18 +38,23 @@ const unzips = [
   new zlib.ZstdDecompress(),
 ];
 
-nonStringInputs.forEach(common.mustCall((input) => {
-  assert.throws(() => {
-    zlib.gunzip(input);
-  }, {
-    name: 'TypeError',
-    code: 'ERR_INVALID_ARG_TYPE'
-  });
-}, nonStringInputs.length));
+nonStringInputs.forEach(
+  common.mustCall((input) => {
+    assert.throws(
+      () => {
+        zlib.gunzip(input);
+      },
+      {
+        name: "TypeError",
+        code: "ERR_INVALID_ARG_TYPE",
+      },
+    );
+  }, nonStringInputs.length),
+);
 
 const spoofedLength = new Uint8Array(1).fill(0x41);
-Object.defineProperty(spoofedLength, 'length', { get: () => 5000 });
-Object.defineProperty(spoofedLength, 'byteLength', { get: () => 5000 });
+Object.defineProperty(spoofedLength, "length", { get: () => 5000 });
+Object.defineProperty(spoofedLength, "byteLength", { get: () => 5000 });
 
 [
   zlib.deflateSync,
@@ -69,30 +69,38 @@ Object.defineProperty(spoofedLength, 'byteLength', { get: () => 5000 });
   zlib.zstdCompressSync,
   zlib.zstdDecompressSync,
 ].forEach((method) => {
-  assert.throws(() => {
-    method(spoofedLength);
-  }, {
-    name: 'RangeError',
-    code: 'ERR_OUT_OF_RANGE',
-  });
+  assert.throws(
+    () => {
+      method(spoofedLength);
+    },
+    {
+      name: "RangeError",
+      code: "ERR_OUT_OF_RANGE",
+    },
+  );
 });
 
 {
   const deflate = zlib.createDeflate();
   deflate._outOffset = deflate._chunkSize + 1;
-  assert.throws(() => {
-    deflate._processChunk(Buffer.alloc(1), zlib.constants.Z_FINISH);
-  }, {
-    name: 'RangeError',
-    code: 'ERR_OUT_OF_RANGE',
-  });
+  assert.throws(
+    () => {
+      deflate._processChunk(Buffer.alloc(1), zlib.constants.Z_FINISH);
+    },
+    {
+      name: "RangeError",
+      code: "ERR_OUT_OF_RANGE",
+    },
+  );
   deflate.close();
 }
 
-unzips.forEach(common.mustCall((uz, i) => {
-  uz.on('error', common.mustCall());
-  uz.on('end', common.mustNotCall());
+unzips.forEach(
+  common.mustCall((uz, i) => {
+    uz.on("error", common.mustCall());
+    uz.on("end", common.mustNotCall());
 
-  // This will trigger error event
-  uz.write('this is not valid compressed data.');
-}, unzips.length));
+    // This will trigger error event
+    uz.write("this is not valid compressed data.");
+  }, unzips.length),
+);
