@@ -6112,6 +6112,10 @@ Object.defineProperty(window, 'process', {
   });
    
    globalThis.process = processFinal;
+   // Node.js global alias for browser runtime (vite needs it)
+   if (typeof globalThis.global === 'undefined') {
+     globalThis.global = globalThis;
+   }
   }catch(err){
   
   }
