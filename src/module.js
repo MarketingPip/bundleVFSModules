@@ -40,6 +40,8 @@
 // Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 // undefined under real Node / direct import).
 // ---------------------------------------------------------------------------
+import { interceptNativeSpecifier } from "./browser-builds.js";
+
 function getRT() {
   return typeof globalThis._RUNTIME_ !== "undefined"
     ? globalThis._RUNTIME_
@@ -999,6 +1001,15 @@ function _resolveFilename(request, parent, isMain, options) {
   const normalized = normalizeRequirableId(request);
   if (normalized !== undefined) {
     return request;
+  }
+
+  // Browser-build substitution (src/browser-builds.js): when the browser
+  // runtime VFS is present, native-only packages (rollup, esbuild) resolve
+  // to the vendors' own browser/WASM builds. Returns an absolute VFS path,
+  // so no further lookup is needed. No-op under real Node (parity lane).
+  const intercepted = interceptNativeSpecifier(request);
+  if (intercepted !== null) {
+    return intercepted;
   }
 
   let paths;

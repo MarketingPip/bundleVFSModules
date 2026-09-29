@@ -3,6 +3,12 @@ import { importAssertions } from "https://esm.sh/acorn-import-assertions";
 import { escape, split, join } from "https://esm.sh/shellwords?target=node";
 import { v4 as uuid } from "https://esm.sh/uuid";
 import { Terminal } from "https://esm.sh/xterm@5.3.0";
+// Vendor browser/WASM builds for native-only packages (real Vite 7:
+// rollup → @rollup/browser, esbuild → esbuild-wasm shim). Used by the
+// parent `_dynamic_import` handler so ESM `import 'rollup'` resolves
+// exactly like CJS require('rollup') (src/module.js). Ungated lookup: the
+// handler only runs when serving the browser runtime's VFS.
+import { lookupNativeInterception } from "./src/browser-builds.js";
 /**
  * Inlined IIFE bundle of src/cookieJar.js (RFC 6265 virtual cookie jar).
  * The sandbox cannot fetch dist files at runtime without a network round
@@ -8459,6 +8465,21 @@ function _parseKey(s) {
 
           // 3. Handle Bare Specifiers (node_modules lookup)
           if (!isRelative) {
+            // Vendor browser/WASM builds for native-only packages (real
+            // Vite 7: rollup → @rollup/browser, esbuild → esbuild-wasm
+            // shim). Specifier-based, so ESM `import 'rollup'` resolves
+            // exactly like CJS require('rollup') (src/module.js). The table
+            // is static — no VFS-presence gate needed: this handler only
+            // runs when serving the browser runtime's VFS.
+            const intercepted = lookupNativeInterception(path);
+            if (intercepted) {
+              const hit = resolveVFS(intercepted, "", vfs);
+              if (hit) {
+                return { source: hit.source, resolvedPath: hit.resolvedPath };
+              }
+              // Target not seeded in this VFS: fall through to the normal
+              // lookup so the miss stays an honest MODULE_NOT_FOUND.
+            }
             const resolvedPackage = resolveNodeModule(
               path,
               importerVFSPath,
