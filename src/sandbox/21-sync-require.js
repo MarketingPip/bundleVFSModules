@@ -174,7 +174,7 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
   // CJS marker (see convertCjsToEsm): named ESM imports from a CJS module
   // resolve against module.exports (Node cjs-module-lexer parity). Keep the
   // marker out of the visible namespace.
-  const isCjs = !!data.__bvm_cjs__;
+  const isCjs = !!moduleObject.__bvm_cjs__;
   delete moduleObject.__bvm_cjs__;
 
   if (moduleType === "require") {
