@@ -1,17 +1,26 @@
 import {
+
   PromisePrototypeThen,
   SymbolAsyncIterator,
   SymbolIterator,
-} from "./primordials.js";
-import { aggregateTwoErrors, codes as errorsCodes } from "./errors.js";
-import { isBuffer } from "./utils.js";
-import { nextTick } from "./task-queues.js";
+} from './primordials.js';
+import { aggregateTwoErrors, codes as errorsCodes } from './errors.js';
+import { Buffer } from './buffer.js';
+import { isBuffer } from './utils.js';
+import { nextTick } from './task-queues.js';
 
-const { ERR_INVALID_ARG_TYPE, ERR_STREAM_NULL_VALUES } = errorsCodes;
+
+
+
+
+const {
+    ERR_INVALID_ARG_TYPE,
+    ERR_STREAM_NULL_VALUES,
+} = errorsCodes;
 
 function from(Readable, iterable, opts) {
   let iterator;
-  if (typeof iterable === "string" || isBuffer(iterable)) {
+  if (typeof iterable === 'string' || isBuffer(iterable)) {
     return new Readable({
       objectMode: true,
       ...opts,
@@ -30,8 +39,9 @@ function from(Readable, iterable, opts) {
     isAsync = false;
     iterator = iterable[SymbolIterator]();
   } else {
-    throw new ERR_INVALID_ARG_TYPE("iterable", ["Iterable"], iterable);
+    throw new ERR_INVALID_ARG_TYPE('iterable', ['Iterable'], iterable);
   }
+
 
   const readable = new Readable({
     objectMode: true,
@@ -46,7 +56,7 @@ function from(Readable, iterable, opts) {
   let reading = false;
   let isAsyncValues = false;
 
-  readable._read = function () {
+  readable._read = function() {
     if (!reading) {
       reading = true;
 
@@ -60,22 +70,24 @@ function from(Readable, iterable, opts) {
     }
   };
 
-  readable._destroy = function (error, cb) {
+  readable._destroy = function(error, cb) {
     originalDestroy.call(this, error, (destroyError) => {
       const combinedError = destroyError || error;
       PromisePrototypeThen(
         close(combinedError),
         // nextTick is here in case cb throws
         () => nextTick(cb, combinedError),
-        (closeError) =>
-          nextTick(cb, aggregateTwoErrors(combinedError, closeError)),
+        (closeError) => nextTick(
+          cb,
+          aggregateTwoErrors(combinedError, closeError),
+        ),
       );
     });
   };
 
   async function close(error) {
-    const hadError = error !== undefined && error !== null;
-    const hasThrow = typeof iterator.throw === "function";
+    const hadError = (error !== undefined) && (error !== null);
+    const hasThrow = typeof iterator.throw === 'function';
     if (hadError && hasThrow) {
       const { value, done } = await iterator.throw(error);
       await value;
@@ -83,7 +95,7 @@ function from(Readable, iterable, opts) {
         return;
       }
     }
-    if (typeof iterator.return === "function") {
+    if (typeof iterator.return === 'function') {
       const { value } = await iterator.return();
       await value;
     }
@@ -102,7 +114,8 @@ function from(Readable, iterable, opts) {
           return;
         }
 
-        if (value && typeof value.then === "function") {
+        if (value &&
+          typeof value.then === 'function') {
           return changeToAsyncValues(value);
         }
 
@@ -155,8 +168,10 @@ function from(Readable, iterable, opts) {
           return;
         }
 
-        const res =
-          value && typeof value.then === "function" ? await value : value;
+        const res = (value &&
+          typeof value.then === 'function') ?
+          await value :
+          value;
 
         if (res === null) {
           reading = false;
@@ -204,4 +219,4 @@ function from(Readable, iterable, opts) {
   return readable;
 }
 
-export { from as default };
+export default from;
