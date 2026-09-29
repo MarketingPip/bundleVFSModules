@@ -1183,7 +1183,7 @@ function detectModuleSystem(code) {
       sourceType: "module",
     });
 
-    function walk(node) {
+    function walk(node, parent) {
       if (!node) return;
 
       // --- ESM DETECTION ---
@@ -1216,17 +1216,71 @@ function detectModuleSystem(code) {
         }
       }
 
+      // Check for bare `exports` references (not just assignments), e.g.
+      // TypeScript's Object.defineProperty(exports, "__esModule", ...) marker,
+      // which tsc emits in every compiled file — including files with no
+      // exports at all. A free `exports` identifier only occurs in CJS output.
+      // Excludes property keys ({ exports: 1 }), member properties (a.exports),
+      // and declared bindings (var/function/import named exports).
+      if (
+        node.type === "Identifier" &&
+        node.name === "exports" &&
+        !isExportsPropertyOrBinding(node, parent)
+      ) {
+        result.isCJS = true;
+      }
+
       // Standard AST traversal
       for (const key in node) {
         const child = node[key];
         if (child && typeof child === "object") {
           if (Array.isArray(child)) {
-            child.forEach(walk);
+            child.forEach((c) => walk(c, node));
           } else {
-            walk(child);
+            walk(child, node);
           }
         }
       }
+    }
+
+    // True when an `exports` Identifier is a property key/member name or a
+    // locally declared binding rather than the CJS free variable.
+    function isExportsPropertyOrBinding(node, parent) {
+      if (!parent) return false;
+      if (parent.type === "Property" && parent.key === node && !parent.computed)
+        return true;
+      if (
+        parent.type === "MemberExpression" &&
+        parent.property === node &&
+        !parent.computed
+      )
+        return true;
+      if (parent.type === "VariableDeclarator" && parent.id === node)
+        return true;
+      if (
+        (parent.type === "FunctionDeclaration" ||
+          parent.type === "FunctionExpression" ||
+          parent.type === "ArrowFunctionExpression") &&
+        parent.params.includes(node)
+      )
+        return true;
+      if (
+        (parent.type === "FunctionDeclaration" ||
+          parent.type === "FunctionExpression" ||
+          parent.type === "ClassDeclaration" ||
+          parent.type === "ClassExpression") &&
+        parent.id === node
+      )
+        return true;
+      if (
+        (parent.type === "ImportSpecifier" ||
+          parent.type === "ImportDefaultSpecifier" ||
+          parent.type === "ImportNamespaceSpecifier") &&
+        parent.local === node
+      )
+        return true;
+      if (parent.type === "CatchClause" && parent.param === node) return true;
+      return false;
     }
 
     walk(ast);

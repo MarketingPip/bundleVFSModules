@@ -281,3 +281,57 @@ describe("real expect-type package", () => {
     expect(typeof mod.expectTypeOf({})).toBe("object");
   });
 });
+
+describe("detectModuleSystem: TS __esModule marker", () => {
+  const detectSrc = extractFunction(RUNTIME_SRC, "detectModuleSystem");
+  const detectModuleSystem = new Function(
+    "acorn",
+    `${detectSrc}; return detectModuleSystem;`,
+  )(acorn);
+
+  // TypeScript emits Object.defineProperty(exports, "__esModule", ...) in
+  // EVERY compiled file — including files with no exports at all (e.g.
+  // expect-type's branding.js). detectModuleSystem must flag these as CJS,
+  // otherwise _build_file skips convertCjsToEsm and the browser throws
+  // "exports is not defined".
+  test("bare exports reference (TS marker) is CJS", () => {
+    const r = detectModuleSystem(
+      '"use strict";\nObject.defineProperty(exports, "__esModule", { value: true });',
+    );
+    expect(r.isCJS).toBe(true);
+    expect(r.isESM).toBe(false);
+  });
+
+  test("real expect-type submodules detect as CJS", () => {
+    for (const sub of ["branding", "messages", "overloads", "utils"]) {
+      const code = fs.readFileSync(
+        path.join(
+          __dirname,
+          "..",
+          "node_modules",
+          "expect-type",
+          "dist",
+          `${sub}.js`,
+        ),
+        "utf8",
+      );
+      const r = detectModuleSystem(code);
+      expect(r.isCJS).toBe(true);
+    }
+  });
+
+  test("no false positive on pure ESM", () => {
+    const r = detectModuleSystem(
+      'import { x } from "./y";\nexport const z = x;',
+    );
+    expect(r.isCJS).toBe(false);
+    expect(r.isESM).toBe(true);
+  });
+
+  test("no false positive on exports as object key", () => {
+    const r = detectModuleSystem(
+      "const o = { exports: 42 };\nexport default o;",
+    );
+    expect(r.isCJS).toBe(false);
+  });
+});
