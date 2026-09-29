@@ -52,11 +52,14 @@ function readWasmBytes() {
 function ensureInitialized() {
   if (!initPromise) {
     initPromise = (async () => {
-      const wasmModule = await WebAssembly.compile(readWasmBytes());
-      // worker:false — run the Go service on this thread. The runtime has
-      // no Worker/Blob-URL plumbing; the vendor build supports main-thread
-      // operation and this keeps init to one await.
-      await vendor.initialize({ wasmModule, worker: false });
+      const wasmBytes = readWasmBytes();
+      // Create a Blob URL for the WASM: the worker fetches it via wasmURL.
+      // Passing wasmModule via postMessage may fail to transfer in the sandbox.
+      const blob = new Blob([wasmBytes], { type: "application/wasm" });
+      const wasmURL = URL.createObjectURL(blob);
+      // worker:true — the vendor's standard path: Go service runs in a Web
+      // Worker. The sandbox is a real iframe, so Workers are available.
+      await vendor.initialize({ wasmURL, worker: true });
     })();
   }
   return initPromise;

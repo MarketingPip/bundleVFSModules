@@ -4132,6 +4132,11 @@ class SandboxRuntime {
 
 
 globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}, __SEA_ASSETS__:${JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined)}};
+// Stable alias for platform shims: they write globalThis._RUNTIME_ expecting the
+// sandbox-scoped object, but the AST rewrite only applies to Node builtins, not
+// VFS-loaded CJS. Per-realm (each sandbox has its own globalThis), so isolation
+// is preserved.
+globalThis._RUNTIME_ = globalThis._RUNTIME${config.uuid}_;
 
 // Builtin manifest for the sandbox-side sync require: createSyncRequire
 // checks _builtinManifest/_builtinCache, but the parent-scope originals are
