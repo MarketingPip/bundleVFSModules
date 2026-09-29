@@ -2198,6 +2198,97 @@ function defaultExecArgv() {
   return [];
 }
 
+// ─── fork() process-slot stack ──────────────────────────────────────────────
+// In-realm forks share the single globalThis.process slot. Each fork pushes
+// an entry when its module starts loading and removes it on disconnect or
+// finalization (child exit / kill). Sequential forks (the Vitest case) each
+// see their own process object; the slot is restored to the still-active
+// fork beneath, or to the original parent process when the stack drains.
+// LIMITATION: truly concurrent forks interleave on this one slot — a
+// child's ASYNC continuations read globalThis.process at call time, so a
+// second fork started while the first is mid-load can clobber what the
+// first one's continuations see. Per-module lexical isolation needs the
+// runtime's module transform to inject the binding (runtime.js change,
+// out of scope here); sequential forks are fully correct.
+const forkProcessStack = [];
+let forkBaseProcess = null;
+let forkSeq = 0;
+
+function pushForkProcess(entry) {
+  if (forkProcessStack.length === 0) {
+    forkBaseProcess = globalThis.process;
+  }
+  forkProcessStack.push(entry);
+  globalThis.process = entry.childProcess;
+}
+
+function removeForkProcess(entry) {
+  const i = forkProcessStack.lastIndexOf(entry);
+  if (i === -1) return false;
+  forkProcessStack.splice(i, 1);
+  if (forkProcessStack.length === 0) {
+    globalThis.process = forkBaseProcess;
+    forkBaseProcess = null;
+  } else {
+    globalThis.process =
+      forkProcessStack[forkProcessStack.length - 1].childProcess;
+  }
+  return true;
+}
+
+// Node coerces process.exit(code): exit("3") -> 3, exit() -> 0, negative
+// wraps to the uint8 the OS reports.
+function normalizeForkExitCode(code) {
+  if (code === undefined) return 0;
+  const n = Number(code);
+  if (!Number.isFinite(n)) return 0;
+  const i = n | 0;
+  return ((i % 256) + 256) % 256;
+}
+
+// The runtime's loadModule caches by `${entryPoint}::${modulePath}`, so a
+// second fork() of the same module would be served from cache and never
+// re-execute. A unique '/'-less entryPoint per fork defeats the cache while
+// keeping VFS resolution identical (an importer without '/' resolves the
+// relative request from the VFS root, as before).
+function forkEntryPoint(forkId) {
+  return `fork:${forkId}`;
+}
+
+// The runtime loads the child with `import(data:URL)` where the URL is the
+// encoded source. The JS engine caches modules by URL, so two forks
+// requesting the same path share ONE module instance: the second fork's
+// top-level code never re-runs (no IPC, no exit) — even with a unique
+// runtime entryPoint. Vary the request path per fork with a no-op segment:
+// the VFS resolver normalizes `./__fork_<id>_/../` away (the same file
+// loads), but the runtime appends `//# sourceURL=<modulePath>` before
+// encoding, so each fork gets a distinct data: URL and a fresh evaluation.
+// (The durable platform fix belongs in runtime.js's importAndProxy — e.g. a
+// per-entryPoint URL fragment — but runtime.js is out of scope for this
+// change; this keeps the variation inside the shim.)
+function forkModulePath(modulePath, forkId) {
+  if (typeof modulePath !== "string") return modulePath;
+  const m = modulePath.match(/^(\.\.?\/)(.*)$/);
+  if (!m) return modulePath;
+  return `${m[1]}__fork_${forkId}_/../${m[2]}`;
+}
+
+// Parity-test fallback (no runtime): defeat the ESM cache the same way.
+function freshForkSpecifier(modulePath, forkId) {
+  if (typeof modulePath !== "string") return modulePath;
+  if (modulePath.startsWith("data:")) return modulePath;
+  if (
+    !modulePath.startsWith("./") &&
+    !modulePath.startsWith("../") &&
+    !modulePath.startsWith("/") &&
+    !modulePath.startsWith("file:")
+  ) {
+    return modulePath;
+  }
+  const sep = modulePath.includes("?") ? "&" : "?";
+  return `${modulePath}${sep}__bvm_fork=${forkId}`;
+}
+
 export function fork(modulePath, args, options) {
   modulePath = getValidatedPath(modulePath, "modulePath");
 
@@ -2290,8 +2381,26 @@ export function fork(modulePath, args, options) {
       child.connected = false;
       child.emit("disconnect");
     },
+    // A forked child's process.exit() ends ONLY the fork — it must never
+    // terminate the host realm (the spread above would otherwise inherit
+    // the parent's exit). Pending child->parent IPC is flushed first: Node
+    // drains the IPC channel before reaping, so send() immediately followed
+    // by exit() still arrives. The parent then sees 'disconnect', 'exit'
+    // and 'close' with the code, in that order (Node parity).
+    // In-realm limitation: the child's remaining synchronous code still
+    // runs after exit() returns — one realm cannot unwind another
+    // "process's" stack. The fork is finalized exactly once regardless.
+    exit: (code) => {
+      const exitCode = normalizeForkExitCode(code);
+      ipcQueue = ipcQueue.then(() => {
+        if (!child._finalised) {
+          child._finalise("", "", exitCode, null);
+        }
+      });
+    },
     connected: true,
   };
+  const forkEntry = { id: ++forkSeq, child, childProcess };
 
   // Parent-side: child.send(message) -> child's process 'message' event
   // We need an EventEmitter for the child's process 'message' listeners.
@@ -2351,9 +2460,22 @@ export function fork(modulePath, args, options) {
     return true;
   };
   child.connected = true;
-  const _prevProcess = globalThis.process;
-  // Store prevProcess for restoration (set in the queueMicrotask below,
-  // but capture the reference now for the disconnect closure)
+  // Fork-aware finalization: Node tears the IPC channel down before reaping,
+  // so the parent sees 'disconnect' before 'exit'/'close', and the fork's
+  // claim on the single process slot is released back to the stack.
+  const baseFinalise = child._finalise.bind(child);
+  child._finalise = (stdout = "", stderr = "", code = null, sig = null) => {
+    if (child._finalised) return false;
+    if (child.connected) {
+      child.connected = false;
+      childProcess.connected = false;
+      child.emit("disconnect");
+    }
+    const finalised = baseFinalise(stdout, stderr, code, sig);
+    if (finalised) removeForkProcess(forkEntry);
+    return finalised;
+  };
+
   child.disconnect = () => {
     // Match Node.js: second disconnect() emits 'error' with ERR_IPC_DISCONNECTED (does not throw)
     // See lib/internal/child_process.js: target.disconnect = function() { if (!this.connected) { this.emit('error', new ERR_IPC_DISCONNECTED()); return; } ... }
@@ -2368,41 +2490,46 @@ export function fork(modulePath, args, options) {
     }
     child.connected = false;
     childProcess.connected = false;
-    // Restore parent process if this fork's process is still active
-    if (globalThis.process === childProcess) {
-      globalThis.process = _prevProcessForRestore;
-    }
+    // The child may keep running after disconnect (Node parity) — but its
+    // claim on the single process slot is released to the stack.
+    removeForkProcess(forkEntry);
     child.emit("disconnect");
   };
-  // Updated in queueMicrotask to the actual previous process
-  let _prevProcessForRestore = _prevProcess;
 
   // Load the worker entry in a fresh module scope with the child's process.
-  // We temporarily swap globalThis.process; the module's top-level code
-  // runs synchronously during import(), so the swap is safe for init.
-  // Async continuations use the child's process via closure (childProcess).
+  // Every fork loads under a unique entryPoint so the runtime's module
+  // registry (keyed `${entryPoint}::${modulePath}`) cannot serve a second
+  // fork() of the same module from cache — that cache hit is what swallowed
+  // the second fork's IPC.
+  // NOTE: Do NOT restore globalThis.process here. The worker's async
+  // message handlers reference the global `process`, so the child's
+  // process must remain active for the lifetime of the fork. It is released
+  // on child.disconnect(), child exit, or child.kill() (process-slot stack
+  // above).
   queueMicrotask(async () => {
-    const prevProcess = globalThis.process;
-    _prevProcessForRestore = prevProcess;
-    globalThis.process = childProcess;
+    // Aborted/killed before the module loaded: never start it.
+    if (child._finalised) return;
+    pushForkProcess(forkEntry);
     try {
       const rt = getRuntime();
       if (rt && typeof rt.loadModule === "function") {
-        await rt.loadModule(modulePath, "import", null, null);
+        await rt.loadModule(
+          forkModulePath(modulePath, forkEntry.id),
+          "import",
+          forkEntryPoint(forkEntry.id),
+          null,
+        );
       } else {
         // Fallback: dynamic import (for parity tests under real Node)
-        await import(modulePath);
+        await import(freshForkSpecifier(modulePath, forkEntry.id));
       }
       child.emit("spawn");
-    } catch (err) {
-      child.emit("error", err);
+    } catch {
+      // Node parity: a forked child whose module fails to load crashes with
+      // exit code 1. The parent sees 'disconnect'/'exit'/'close' — not an
+      // 'error' event (the stack goes to the child's stderr).
+      child._finalise("", "", 1, null);
     }
-    // NOTE: Do NOT restore globalThis.process here. The worker's async
-    // message handlers reference the global `process`, so the child's
-    // process must remain active for the lifetime of the fork.
-    // It is restored on child.disconnect() or child.kill().
-    // LIMITATION (v1): Only one fork's process can be active at a time.
-    // A second fork() will overwrite the first's process object.
   });
 
   return child;

@@ -3683,6 +3683,7 @@ child.on('error', (err) => {
           logs: [...data.logs, "Process Exited"],
           // output: [...data.logs, 'Process Exited'],
           executionTime: data.executionTime,
+          exitCode: data?.exitCode ?? null,
         };
         resolve(results);
       } else if (data.type === "function_error") {
@@ -5847,7 +5848,7 @@ hrtime.bigint = () => {
     const endTime = performance.now();
     const executionTime = (endTime - startTime).toFixed(2); 
      
-      window.parent.postMessage({ type: 'kill', logs: logs || [], executionTime: parseFloat(executionTime) }, '*');
+      window.parent.postMessage({ type: 'kill', logs: logs || [], executionTime: parseFloat(executionTime), exitCode: code }, '*');
     },
     
     abort() {
