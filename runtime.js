@@ -3268,7 +3268,9 @@ ${code}
         // garbage data: URL that fails later with a cryptic SyntaxError.
         var bvmInterop = globalThis[Symbol.for("bvm.interop")];
         var bvmCwd = globalThis._RUNTIME${iframe.sandbox.uuid}_.cwd;
-        var bvmVfs = globalThis._RUNTIME${iframe.sandbox.uuid}_.__USER_FILES__;
+        // The seed is served host-side (pickDynamicImportVfs): never post
+        // __USER_FILES__ across the boundary — structured-cloning ~22MB per
+        // call stalled bootstrap for minutes.
         var data;
         try {
           data = await bvmInterop.callParent(
@@ -3279,7 +3281,7 @@ ${code}
             '/',
             true,
             bvmCwd,
-            bvmVfs
+            undefined
           );
         } catch (err) {
           console.error('[bvm:resolve] _dynamic_import failed for "' + specifier + '": ' + ((err && err.message) || err));
@@ -4486,8 +4488,9 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
             : undefined;
         // Pass the entry point to the parent so _build_file can use it for
         // things like resolving sibling imports or source-map hints.
-        
-        const vfs = globalThis._RUNTIME${config.uuid}_.__USER_FILES__
+        // The seed is served host-side (pickDynamicImportVfs): pass undefined
+        // instead of __USER_FILES__ — structured-cloning ~22MB per call
+        // stalled bootstrap for minutes.
         let importResult = await interopChannel.callParent(
           '_dynamic_import',
           modulePath,
@@ -4496,7 +4499,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
           parentEntryPoint,
           isNodeBuiltIn, 
           cwd,
-          vfs   
+          undefined   
         );
         
           
@@ -8447,6 +8450,57 @@ function _parseKey(s) {
         },
       );
 
+      // Hoisted VFS helpers for the real `_dynamic_import` below. The sandbox
+      // used to post its entire __USER_FILES__ seed (~22MB with the WASM
+      // shims) on every call; structured-cloning that through postMessage
+      // stalled bootstrap for minutes (~30 eager builtin preloads x ~7s).
+      // The iframe copy is never mutated at runtime (fs writes land in the
+      // memfs Volume, not __USER_FILES__), so it is always identical to the
+      // host's config.fs. Serve from the host seed (zero clone); honor an
+      // explicitly-passed VFS only when the host has no seed of its own.
+      function unflattenFileSystem(flatObj) {
+        const result = {};
+
+        for (const [rawPath, value] of Object.entries(flatObj)) {
+          // User file keys may be '/lib/util.js' or 'lib/util.js'; resolution
+          // walks segments without a leading slash, so normalize here. Without
+          // this, '/lib/util.js'.split('/') yields a phantom '' root segment and
+          // every lookup misses (MODULE_NOT_FOUND).
+          const parts = String(rawPath).replace(/^\/+/, "").split("/");
+          let current = result;
+
+          // Traverse (or create) folders until the last segment (the file name)
+          for (let i = 0; i < parts.length - 1; i++) {
+            const part = parts[i];
+            if (!current[part] || typeof current[part] !== "object") {
+              current[part] = {};
+            }
+            current = current[part];
+          }
+
+          // Assign the file content to the final key
+          current[parts[parts.length - 1]] = value;
+        }
+
+        return result;
+      }
+
+      function pickDynamicImportVfs(passedVfs, hostSeed, unflatten) {
+        const hostEmpty =
+          !hostSeed ||
+          typeof hostSeed !== "object" ||
+          Object.keys(hostSeed).length === 0;
+        if (
+          hostEmpty &&
+          passedVfs &&
+          typeof passedVfs === "object" &&
+          Object.keys(passedVfs).length > 0
+        ) {
+          return unflatten(passedVfs);
+        }
+        return unflatten(hostSeed || {});
+      }
+
       this.registerInterop(
         "_dynamic_import",
         async (
@@ -8458,34 +8512,10 @@ function _parseKey(s) {
           cwd,
           vfs = {},
         ) => {
-          function unflattenFileSystem(flatObj) {
-            const result = {};
-
-            for (const [rawPath, value] of Object.entries(flatObj)) {
-              // User file keys may be '/lib/util.js' or 'lib/util.js'; resolution
-              // walks segments without a leading slash, so normalize here. Without
-              // this, '/lib/util.js'.split('/') yields a phantom '' root segment and
-              // every lookup misses (MODULE_NOT_FOUND).
-              const parts = String(rawPath).replace(/^\/+/, "").split("/");
-              let current = result;
-
-              // Traverse (or create) folders until the last segment (the file name)
-              for (let i = 0; i < parts.length - 1; i++) {
-                const part = parts[i];
-                if (!current[part] || typeof current[part] !== "object") {
-                  current[part] = {};
-                }
-                current = current[part];
-              }
-
-              // Assign the file content to the final key
-              current[parts[parts.length - 1]] = value;
-            }
-
-            return result;
-          }
-
-          vfs = unflattenFileSystem(vfs);
+          // Serve from the host's own seed: the sandbox no longer ships its
+          // __USER_FILES__ across postMessage (see pickDynamicImportVfs).
+          // `this` is the CodeSandbox instance (arrow closure over execute()).
+          vfs = pickDynamicImportVfs(vfs, this.config.fs, unflattenFileSystem);
 
           // 1. For Node built-ins, hand off to your shim resolver as before.
           // resolvedPath is null: builtins aren't VFS files, so the sandbox keeps

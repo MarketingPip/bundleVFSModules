@@ -115,6 +115,18 @@ function realNeighbors() {
 function loadHandler(deps) {
   const handlerSrc = extractLiveHandler(RUNTIME_SRC);
   const { resolveVFSSrc, vfsLookupSrc, toVFSPathSrc } = realNeighbors();
+  // The live handler now serves the VFS host-side via pickDynamicImportVfs
+  // (unflattenFileSystem + this.config.fs); wire the real helpers in and
+  // bind a fake host `this` with an empty seed so the handler falls back to
+  // the explicitly-passed VFS, as these tests have always done.
+  const pickVfsSrc = extractFunction(
+    RUNTIME_SRC,
+    "function pickDynamicImportVfs(",
+  );
+  const unflattenSrc = extractFunction(
+    RUNTIME_SRC,
+    "function unflattenFileSystem(",
+  );
   const factory = new Function(
     "fetchBuiltinSource",
     "toVFSPath",
@@ -122,9 +134,10 @@ function loadHandler(deps) {
     "resolveNodeModule",
     "resolveVFS",
     "lookupNativeInterception",
-    `${resolveVFSSrc}\n${vfsLookupSrc}\n${toVFSPathSrc}\nreturn (${handlerSrc});`,
+    `${resolveVFSSrc}\n${vfsLookupSrc}\n${toVFSPathSrc}\n${pickVfsSrc}\n${unflattenSrc}\nreturn (${handlerSrc});`,
   );
-  return factory(
+  return factory.call(
+    { config: { fs: {} } },
     deps.fetchBuiltinSource,
     deps.toVFSPath,
     deps.resolvePackageImports,
