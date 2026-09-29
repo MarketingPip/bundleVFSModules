@@ -25,12 +25,16 @@ unimplementable-in-browser APIs stay honest noop stubs, never throws.
   exposes a stable `globalThis._RUNTIME_` alias per realm so platform shims
   (`esbuild-shim.cjs`, `fs.js`) find the VFS. `build.minify` is `false` —
   esbuild-wasm `transform()` hangs in the sandbox worker (init succeeds).
-  Full writeup: `docs/VITE_BROWSER.md`.
+  **Update 2026-09-29:** `minify: "terser"` now works (PR #133) — real
+  Terser 5.51.2 minifies in Firefox (6530 ms, 41 chars vs 100 unminified,
+  chunk executes). Full writeup: `docs/VITE_BROWSER.md`.
 - **Vite 7 browser E2E — M4** (2026-09-29, `feat/vite7-browser`): real
   Vitest 5.0.2 runs in headed Firefox — 1 suite, 1 test, 1 passed, via
   genuine `expect(add(1,2)).toBe(3)` through Vitest's actual matcher code.
-  `expect-type` is stubbed with a minimal ESM shim in the harness (sandbox
-  CJS transformer cannot handle its `__exportStar`) — proper fix still open.
+  **Update 2026-09-29:** stub removed — general TypeScript CJS interop
+  (`__exportStar`, multi-assignment exports, bare-`exports` detection) in
+  the transformer; M4 re-verified stub-free with real `expect-type@1.4.0`
+  (PR #132).
 
 - **http.js virtual-network round trip — phase 1** (PR #99, merged
   2026-09-26): incremental HTTP/1.x parser (`src/_http_parser.js`); real
@@ -114,11 +118,11 @@ bytes" and "run wasm bytes on my VFS".
   routes through the runtime's `node`) plus sample code. Clearly marked
   demo; never on the product path (AGENTS.md rule 11).
 - **Vite 7 browser E2E gaps** (follow-ups to M3/M4, `docs/VITE_BROWSER.md`):
-  - esbuild-wasm `transform()` hang → evaluate `terser` (pure JS, no WASM)
-    for the minify path instead of fixing esbuild-wasm; only revisit
-    esbuild if a real TS fixture needs `vite:esbuild-transpile`.
-  - Proper `expect-type` support — the M4 harness stubs it with minimal
-    ESM; the sandbox CJS transformer must handle `__exportStar`.
+  - ~~esbuild-wasm `transform()` hang → terser~~ — **done 2026-09-29**
+    (PR #133): `minify: "terser"` works; only revisit esbuild if a real TS
+    fixture needs `vite:esbuild-transpile`.
+  - ~~Proper `expect-type` support~~ — **done 2026-09-29** (PR #132):
+    general TS CJS interop; M4 re-verified stub-free.
   - Canonicalize Rollup WASM data-URL loading into the runtime
     package-loading path (currently harness-only).
   - Red-first test proving the `@rollup/browser` ESM interception target

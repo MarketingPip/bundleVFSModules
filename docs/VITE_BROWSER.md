@@ -70,17 +70,26 @@ runtime/package-loading mechanism (open item).
 `worker: true` and a Blob worker URL — the main-thread Go runtime hangs in
 the sandbox; the worker path initializes (all 6 init steps complete).
 
-## Minification status (2026-09-29)
+## Minification status (2026-09-29, updated)
 
-`build.minify` is set to `false`. Reason: `esbuild-wasm`'s `initialize()`
-succeeds but `transform()` never resolves inside the sandbox worker — a deep
-issue in esbuild-wasm's Go runtime worker communication, not in our shim.
-The `worker: false` path also hangs (during init).
+`build.minify: "esbuild"` hangs: `esbuild-wasm`'s `initialize()` succeeds
+but `transform()` never resolves inside the sandbox worker — a deep issue in
+esbuild-wasm's Go runtime worker communication, not in our shim. The
+`worker: false` path also hangs (during init).
 
-**Plan:** use `minify: false` for the E2E path; evaluate `terser` (pure JS,
-no WASM, no worker) for minification instead of fixing esbuild-wasm. Only
-revisit esbuild-wasm if a real TS fixture demands the transpile path —
-`vite:esbuild-transpile` never fires for plain JS.
+**Resolved via terser (2026-09-29):** `vite.build({ minify: "terser" })`
+works in headed Firefox — 6530 ms, emits a minified chunk (41 chars vs 100
+unminified, comments stripped), and the chunk executes the fixture's real
+behavior. Real Terser 5.51.2 (pure JS, no WASM, no worker). Three
+platform-general fixes were needed (PR #133): absolute VFS paths in
+`loadModule`/`_dynamic_import`, `file://` URL normalization, and the
+es-module-shims resolve hook now intercepts `file://` URLs (any `file://`
+import was broken, not just terser's).
+
+`minify: false` remains the known-working plain-JS path; `minify: "terser"`
+is the minification path. Only revisit esbuild-wasm if a real TS fixture
+demands the transpile path — `vite:esbuild-transpile` never fires for plain
+JS.
 
 ## The `_RUNTIME_` alias (M3 blocker, fixed 2026-09-29)
 
@@ -113,10 +122,10 @@ Each sandbox has its own realm, so isolation is preserved. TDD'd in
 
 ## Open items
 
-- `minify: "esbuild"` hangs (see above) → terser evaluation.
-- `expect-type` is stubbed with a minimal ESM shim in the M4 harness (the
-  sandbox CJS transformer cannot handle its `__exportStar`); needs a proper
-  fix since `vitest` re-exports from it.
+- ~~`minify: "esbuild"` hangs → terser evaluation~~ — **done 2026-09-29:**
+  `minify: "terser"` works (PR #133).
+- ~~`expect-type` stubbed~~ — **done 2026-09-29:** general TypeScript CJS
+  interop in the transformer; M4 re-verified stub-free (PR #132).
 - Rollup WASM data-URL embedding should move from the harness seed
   generator into the canonical runtime package-loading path.
 - Red-first test proving the Rollup ESM interception target and named
