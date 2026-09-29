@@ -163,6 +163,11 @@ function buildTemplate() {
     // Section files carry "__LOG_X__"; (with ;) so they read as statements;
     // the template keeps %%LOG_X%% bare because the statement already ends in ;.
     template = template.split(`"__LOG_${suffix}__";`).join(`%%LOG_${suffix}%%`);
+    // 70-fetch.js wraps the placeholder as ("__LOG_X__"); — same statement,
+    // same replacement.
+    template = template
+      .split(`("__LOG_${suffix}__");`)
+      .join(`%%LOG_${suffix}%%`);
   }
 
   // Inline the cookie jar from source (no more hand-pasted IIFE).

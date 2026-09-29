@@ -4525,14 +4525,17 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
           return resolved;
         } else {
           if (moduleType === 'require') {
-            // Provide sync require bound to THIS module's own path
-            // (modulePath), so its relative require() calls resolve against
-            // its own directory. Binding to the entry point instead would
-            // break nested requires (e.g. '../util.js' from lib/deep/x.js).
+            // Provide sync require bound to THIS module's own RESOLVED path
+            // (buildFileName: importResult.resolvedPath, always an absolute
+            // VFS path), so its relative require() calls resolve against its
+            // own directory. Binding to modulePath (the as-written request,
+            // which may be relative like './lib/picomatch') broke nested
+            // requires — e.g. picomatch's require('./scan') resolving to
+            // lib/scan.js instead of /node_modules/picomatch/lib/scan.js.
             // vfsLookup walks a nested tree, so unflatten the flat
             // __USER_FILES__ map first (keys may carry a leading slash).
             const vfsForRequire = unflattenUserFiles(globalThis._RUNTIME${config.uuid}_.__USER_FILES__ || {});
-            globalThis.__syncRequire__ = createSyncRequire(modulePath, vfsForRequire);
+            globalThis.__syncRequire__ = createSyncRequire(buildFileName, vfsForRequire);
             source = wrapCommonJS(source, modulePath, vfsForRequire);
           }
  
@@ -4821,15 +4824,23 @@ function createSyncRequire(parentPath, vfs, cache) {
     // 2. Resolve path (relative/absolute)
     let resolved;
     if (request.startsWith('./') || request.startsWith('../') || request.startsWith('/')) {
-      const fromDir = parentPath ? parentPath.split('/').slice(0, -1).join('/') : '';
-      const joined = fromDir ? fromDir + '/' + request : request;
+      // Absolute requests ignore the parent directory (Node semantics: an
+      // absolute require() path is used as-is).
+      const joined = request.startsWith('/')
+        ? request
+        : (parentPath ? parentPath.split('/').slice(0, -1).join('/') : '') + '/' + request;
+      const isAbs = joined.charAt(0) === '/';
       const parts = joined.split('/');
       const normalized = [];
       for (const p of parts) {
         if (p === '..') normalized.pop();
         else if (p !== '.' && p !== '') normalized.push(p);
       }
-      resolved = normalized.join('/');
+      // Preserve the leading slash. VFS paths are absolute; dropping it
+      // produced relative resolved paths and non-canonical __filename
+      // values (e.g. picomatch's require('./scan') resolving to lib/scan.js
+      // instead of /node_modules/picomatch/lib/scan.js).
+      resolved = (isAbs ? '/' : '') + normalized.join('/');
       // Try .js extension
       if (!resolved.endsWith('.js')) {
         const withJs = resolved + '.js';
