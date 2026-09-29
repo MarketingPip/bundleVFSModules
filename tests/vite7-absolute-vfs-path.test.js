@@ -13,7 +13,11 @@
 // specifier branch (resolveNodeModule), which split it into packageName=""
 // and failed.
 //
-// The platform fix: isAbsolute must check for a leading `/`.
+// Vite's terser plugin does `await import(pathToFileURL(terserPath).href)`
+// which produces `file:///node_modules/...` URLs. These must also be
+// recognized as absolute VFS paths (strip the `file://` scheme).
+//
+// The platform fix: isAbsolute must check for a leading `/` or `file://`.
 // This is a platform bug, not a library-specific workaround (AGENTS.md rule 6):
 // any absolute VFS path import was broken, not just terser's.
 
@@ -43,6 +47,16 @@ describe("loadModule absolute VFS path classification", () => {
       // Every isAbsolute classification must use '/' — './' is isRelative's job.
       expect(m[1].trim()).toBe("'/'");
     }
+  });
+
+  test("file:// URLs are normalized to absolute VFS paths", () => {
+    // Vite's terser plugin does `await import(pathToFileURL(p).href)` which
+    // produces `file:///node_modules/...`. The sandbox must strip the scheme
+    // and treat it as an absolute VFS path (not a network URL).
+    const hasFileHandling =
+      RUNTIME_SRC.includes('startsWith("file://")') ||
+      RUNTIME_SRC.includes("startsWith('file://')");
+    expect(hasFileHandling).toBe(true);
   });
 
   test("absolute VFS path takes the relative/interop branch, not bare-specifier", () => {

@@ -4675,6 +4675,13 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
   if (parentEntryPoint === undefined) parentEntryPoint = null;
 
   try {
+    // Normalize file:// URLs (e.g. from pathToFileURL) to absolute VFS paths.
+    // Vite's terser plugin does await import(pathToFileURL(p).href).
+    if (modulePath.startsWith("file://")) {
+      modulePath = modulePath.slice("file://".length);
+      // file:///x → /x (keep the leading slash); file://host/x → /x (VFS has no hosts)
+      if (!modulePath.startsWith("/")) modulePath = "/" + modulePath;
+    }
     const extension = modulePath.split('.').pop().toLowerCase();
     const isRelative = modulePath.startsWith('./') || modulePath.startsWith('../');
   const isAbsolute = modulePath.startsWith('/')
@@ -8782,6 +8789,13 @@ function _parseKey(s) {
           // 'this' is the CodeSandbox instance (arrow closure over execute()).
           vfs = pickDynamicImportVfs(vfs, this.config.fs, unflattenFileSystem);
 
+          // Normalize file:// URLs (e.g. Vite's await import(pathToFileURL(p).href))
+          // to absolute VFS paths before classification.
+          if (path.startsWith("file://")) {
+            path = path.slice("file://".length);
+            if (!path.startsWith("/")) path = "/" + path;
+          }
+
           // 1. For Node built-ins, hand off to your shim resolver as before.
           // resolvedPath is null: builtins aren't VFS files, so the sandbox keeps
           // using the request path as the build fileName (unchanged behavior).
@@ -8851,7 +8865,7 @@ function _parseKey(s) {
 
           // 3b. Handle Absolute VFS Paths (e.g. '/node_modules/terser/...').
           // Resolve directly against the VFS root, ignoring the importer.
-          // (Vite's loadTerserPath does `await import(pathToFileURL(...))`
+          // (Vite's loadTerserPath does await import(pathToFileURL(...))
           // which the sandbox normalizes to an absolute VFS path.)
           if (isAbsolute) {
             const absResult = resolveVFS(path, "", vfs);
