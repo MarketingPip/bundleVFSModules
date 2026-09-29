@@ -816,7 +816,15 @@ export function convertCjsToEsm(code, options = {}) {
     hires: true,
     includeContent: true,
   });
-  return { code: outCode, map };
+  // Mark CJS-converted modules so the sandbox's ESM interop (buildModuleProxy)
+  // can resolve named imports against module.exports — Node's cjs-module-lexer
+  // parity. Without this, `import { build } from "esbuild"` (a CJS shim)
+  // throws "does not provide an export named 'build'".
+  const converted = lastModuleExport !== null || exportsProps.length > 0;
+  const finalCode = converted
+    ? outCode + "\nexport const __bvm_cjs__ = true;\n"
+    : outCode;
+  return { code: finalCode, map };
 }
 
 export function convertCjsToEsm_backup(code) {
@@ -4941,6 +4949,12 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
     enumerable: false,
   });
 
+  // CJS marker (see convertCjsToEsm): named ESM imports from a CJS module
+  // resolve against module.exports (Node cjs-module-lexer parity). Keep the
+  // marker out of the visible namespace.
+  const isCjs = !!data.__bvm_cjs__;
+  delete moduleObject.__bvm_cjs__;
+
   if (moduleType === 'require') {
     return moduleObject.default ?? moduleObject;
   }
@@ -4970,6 +4984,20 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
       if (prop === '__esModule') return true;
 
       if (!(prop in target)) {
+        // CJS interop (Node parity): a named import from a CJS module
+        // resolves against module.exports, including keys it inherited
+        // via spread (which static analysis cannot see).
+        if (isCjs) {
+          const cjsExports = target.default;
+          if (
+            cjsExports !== null &&
+            (typeof cjsExports === 'object' ||
+              typeof cjsExports === 'function') &&
+            prop in cjsExports
+          ) {
+            return cjsExports[prop];
+          }
+        }
         const displayPath = relativeName ?? modulePath;
         throw new SyntaxError(
           \`The requested module '\${displayPath}' does not provide an export named '\${String(prop)}'\`

@@ -197,8 +197,13 @@ export function convertCjsToEsm(code) {
     });
   }
 
-  return s
+  // Mark CJS-converted modules so the sandbox's ESM interop (buildModuleProxy)
+  // can resolve named imports against module.exports — Node's cjs-module-lexer
+  // parity (see runtime.js convertCjsToEsm).
+  const converted = lastModuleExport !== null || exportsProps.length > 0;
+  const outCode = s
     .toString()
     .trim()
-    .replace(/\n\s*\n/g, "\n"); // clean empty lines
+    .replace(/\n\s*\n/g, "\n");
+  return converted ? outCode + "\nexport const __bvm_cjs__ = true;\n" : outCode;
 }
