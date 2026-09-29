@@ -278,11 +278,34 @@ function getUmask() {
   return 0o022;
 }
 
+// Decode a { encoding: 'utf8'|'base64', data: string } seed envelope back to
+// its file content. The envelope is the JSON-safe form flattenFileTree
+// (runtime.js) produces for binary seeds: raw bytes cannot survive the
+// JSON.stringify of __USER_FILES__ into the sandbox bootstrap. Strict shape
+// (exactly two keys) so a user directory that merely happens to contain
+// `encoding`/`data` files is never silently reinterpreted.
+function decodeSeedValue(data) {
+  if (
+    data !== null &&
+    typeof data === "object" &&
+    !ArrayBuffer.isView(data) &&
+    (data.encoding === "utf8" || data.encoding === "base64") &&
+    typeof data.data === "string" &&
+    Object.keys(data).length === 2
+  ) {
+    if (data.encoding === "utf8") return data.data;
+    const bin = atob(data.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  return data;
+}
 function seedVolume(vol, files) {
   if (!files || typeof files !== "object") return;
   for (const rawPath of Object.keys(files)) {
     const p = toPathString(rawPath);
-    const data = files[rawPath];
+    const data = decodeSeedValue(files[rawPath]);
     try {
       const dir = posixDirname(p);
       if (dir !== "/") vol.mkdirSync(dir, { recursive: true });

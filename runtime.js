@@ -10247,6 +10247,40 @@ function base64EncodeBytes(bytes) {
   return btoa(binary);
 }
 
+// A file-seed value of exactly { encoding: 'utf8'|'base64', data: string }
+// is a binary/text envelope, NOT a directory (mirrors the normalizeSeaAssets
+// convention, which documents these shapes as the fs -> __USER_FILES__
+// leniency). flattenFileTree must keep it as a leaf so seedVolume in the
+// sandbox can decode it; recursing would create bogus `encoding`/`data`
+// files. The two-key strictness keeps a user directory that merely happens
+// to contain encoding/data files from being reinterpreted.
+function isSeedEnvelope(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !(value instanceof Uint8Array) &&
+    !(value instanceof Blob) &&
+    (value.encoding === "utf8" || value.encoding === "base64") &&
+    typeof value.data === "string" &&
+    Object.keys(value).length === 2
+  );
+}
+
+// Normalize raw bytes (Uint8Array/Buffer/ArrayBuffer) to a JSON-safe
+// { encoding: 'base64', data } envelope. __USER_FILES__ is JSON-serialized
+// into the sandbox bootstrap, where raw bytes would corrupt to {"0":..}.
+function seedBytesToBase64(value) {
+  const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+  if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
+    return Buffer.from(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength,
+    ).toString("base64");
+  }
+  return base64EncodeBytes(bytes);
+}
+
 function flattenFileTree(obj, parentPath = "") {
   let flat = {};
   if (!obj || typeof obj !== "object") return flat;
@@ -10256,11 +10290,14 @@ function flattenFileTree(obj, parentPath = "") {
 
     if (value === null) {
       continue;
-    } else if (
-      typeof value === "object" &&
-      !(value instanceof Uint8Array) &&
-      !(value instanceof Blob)
-    ) {
+    } else if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+      // Binary leaf: JSON-safe envelope (raw bytes cannot survive
+      // JSON.stringify into the bootstrap).
+      flat[fullPath] = { encoding: "base64", data: seedBytesToBase64(value) };
+    } else if (isSeedEnvelope(value)) {
+      // Already an envelope: keep as a leaf for seedVolume to decode.
+      flat[fullPath] = value;
+    } else if (typeof value === "object" && !(value instanceof Blob)) {
       Object.assign(flat, flattenFileTree(value, fullPath));
     } else {
       flat[fullPath] = value;
