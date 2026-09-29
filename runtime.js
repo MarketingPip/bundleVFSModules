@@ -5,7 +5,7 @@ import { v4 as uuid } from "https://esm.sh/uuid";
 import { Terminal } from "https://esm.sh/xterm@5.3.0";
 // Vendor browser/WASM builds for native-only packages (real Vite 7:
 // rollup → @rollup/browser, esbuild → esbuild-wasm shim). Used by the
-// parent `_dynamic_import` handler so ESM `import 'rollup'` resolves
+// parent '_dynamic_import' handler so ESM 'import 'rollup'' resolves
 // exactly like CJS require('rollup') (src/module.js). Ungated lookup: the
 // handler only runs when serving the browser runtime's VFS.
 import { lookupNativeInterception } from "./src/browser-builds.js";
@@ -111,22 +111,22 @@ async function fetchBuiltinSource(specifier) {
 }
 // --- begin node: builtin normalization (gap #6) ---
 // Single source of truth for "is this specifier a Node builtin, and what
-// bundle-key form does the interop layer expect?". Node treats `node:X` and
-// `X` identically for EVERY builtin; the sandbox-side loader used to
-// recognize `node:` only for the four builtins whose listed names literally
-// contain `node:` (node:sea, node:sqlite, node:test, node:test/reporters),
-// so `import('node:child_process')` fell through to the esm.sh CDN path and
+// bundle-key form does the interop layer expect?". Node treats 'node:X' and
+// 'X' identically for EVERY builtin; the sandbox-side loader used to
+// recognize 'node:' only for the four builtins whose listed names literally
+// contain 'node:' (node:sea, node:sqlite, node:test, node:test/reporters),
+// so 'import('node:child_process')' fell through to the esm.sh CDN path and
 // died with a 400. This normalizes the prefix generally.
 //
 // Returns { isNodeBuiltIn, modulePath } where modulePath is the form the
-// interop `_dynamic_import` expects: `node:` stripped, `/` -> `_`,
-// `RUNTIME:` -> `RUNTIME_` (e.g. `node:test/reporters` -> `test_reporters`,
-// `RUNTIME:NODE_GLOBALS` -> `RUNTIME_NODE_GLOBALS`).
+// interop '_dynamic_import' expects: 'node:' stripped, '/' -> '_',
+// 'RUNTIME:' -> 'RUNTIME_' (e.g. 'node:test/reporters' -> 'test_reporters',
+// 'RUNTIME:NODE_GLOBALS' -> 'RUNTIME_NODE_GLOBALS').
 //
 // NOTE: this function's source is inlined into generated sandbox scripts
-// via `normalizeBuiltinSpecifier.toString()`, so it must stay
+// via 'normalizeBuiltinSpecifier.toString()', so it must stay
 // self-contained (no closure references) and must not contain backticks or
-// `${` (it is embedded inside outer template literals).
+// '${' (it is embedded inside outer template literals).
 function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
   var modulePath = specifier;
   var bare =
@@ -138,9 +138,9 @@ function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
     if (nodeBuiltins[i] === specifier || nodeBuiltins[i] === bare)
       listed = true;
   }
-  // `listed` covers the old `isStrippable` cases too: the legacy
-  // `node:`-prefixed list entries (node:sea, node:sqlite, node:test,
-  // node:test/reporters) match `specifier` directly.
+  // 'listed' covers the old 'isStrippable' cases too: the legacy
+  // 'node:'-prefixed list entries (node:sea, node:sqlite, node:test,
+  // node:test/reporters) match 'specifier' directly.
   var isNodeBuiltIn = listed;
   if (isNodeBuiltIn) {
     modulePath = String(bare).replace("/", "_").replace("RUNTIME:", "RUNTIME_");
@@ -743,8 +743,11 @@ export function convertCjsToEsm(code, options = {}) {
   let lastModuleExport = null;
   const exportsProps = [];
   const deadZones = [];
+  const exportStars = [];
+  const exportsReads = [];
+  const esModuleMarkers = [];
 
-  // Pass 1: detect module.exports and exports.*
+  // Pass 1: detect module.exports, exports.*, and __exportStar
   walk.ancestor(ast, {
     AssignmentExpression(node, ancestors) {
       const isTopLevel = !ancestors.some((a) =>
@@ -771,8 +774,100 @@ export function convertCjsToEsm(code, options = {}) {
       }
       // exports.prop = ...
       else if (left.object?.name === "exports") {
-        exportsProps.push({ node, name: left.property.name });
+        const propName = left.property?.name;
+        // TypeScript placeholder: 'exports.X = void 0;' emitted before the
+        // real definition. Removed below when a later assignment exists.
+        const isVoid0 =
+          node.right.type === "UnaryExpression" &&
+          node.right.operator === "void" &&
+          node.right.argument.type === "Literal" &&
+          node.right.argument.value === 0;
+        // Self-reference: 'exports.X = X;' re-exports a local binding.
+        const isSelfRef =
+          node.right.type === "Identifier" && node.right.name === propName;
+        exportsProps.push({ node, name: propName, isVoid0, isSelfRef });
       }
+    },
+    // TypeScript 'export *' in CJS: __exportStar(require("x"), exports).
+    // Rewritten to ESM 'export * from "x"' below; the downstream
+    // transformImportsToLoadModule lifts it through loadModule().
+    CallExpression(node, ancestors) {
+      const isTopLevel = !ancestors.some((a) =>
+        [
+          "FunctionDeclaration",
+          "FunctionExpression",
+          "ArrowFunctionExpression",
+        ].includes(a.type),
+      );
+      if (!isTopLevel) return;
+      if (
+        node.callee.type === "Identifier" &&
+        node.callee.name === "__exportStar" &&
+        node.arguments.length === 2 &&
+        node.arguments[0].type === "CallExpression" &&
+        node.arguments[0].callee.type === "Identifier" &&
+        node.arguments[0].callee.name === "require" &&
+        node.arguments[0].arguments.length === 1 &&
+        node.arguments[0].arguments[0].type === "Literal" &&
+        typeof node.arguments[0].arguments[0].value === "string" &&
+        node.arguments[1].type === "Identifier" &&
+        node.arguments[1].name === "exports"
+      ) {
+        exportStars.push({
+          node,
+          path: node.arguments[0].arguments[0].value,
+        });
+      }
+      // TypeScript's __esModule marker: Object.defineProperty(exports,
+      // "__esModule", { value: true }). Meaningless in ESM; drop it.
+      if (
+        node.callee.type === "MemberExpression" &&
+        node.callee.object.type === "Identifier" &&
+        node.callee.object.name === "Object" &&
+        node.callee.property.type === "Identifier" &&
+        node.callee.property.name === "defineProperty" &&
+        node.arguments.length >= 2 &&
+        node.arguments[0].type === "Identifier" &&
+        node.arguments[0].name === "exports" &&
+        node.arguments[1].type === "Literal" &&
+        node.arguments[1].value === "__esModule"
+      ) {
+        // ancestors includes the node itself as the last element.
+        const stmt = ancestors[ancestors.length - 2];
+        if (stmt && stmt.type === "ExpressionStatement") {
+          esModuleMarkers.push(stmt);
+        }
+      }
+    },
+    // Reads of the CJS exports object: 'exports.X' (not an assignment
+    // target). In the ESM output there is no 'exports' binding, so rewrite
+    // to the local/exported binding 'X' (or 'undefined' when X is not a
+    // known export, matching CJS read-before-assign semantics). Skipped when
+    // 'exports' is shadowed (e.g. the __exportStar helper's parameter).
+    MemberExpression(node, ancestors) {
+      if (
+        node.object.type !== "Identifier" ||
+        node.object.name !== "exports" ||
+        node.computed ||
+        node.property.type !== "Identifier"
+      ) {
+        return;
+      }
+      // ancestors includes the node itself as the last element; the parent
+      // is second-to-last.
+      const parent = ancestors[ancestors.length - 2];
+      if (parent.type === "AssignmentExpression" && parent.left === node) {
+        return;
+      }
+      const shadowed = ancestors.some(
+        (a) =>
+          (a.type === "FunctionDeclaration" ||
+            a.type === "FunctionExpression" ||
+            a.type === "ArrowFunctionExpression") &&
+          a.params.some((p) => p.type === "Identifier" && p.name === "exports"),
+      );
+      if (shadowed) return;
+      exportsReads.push({ node, name: node.property.name });
     },
   });
 
@@ -792,6 +887,7 @@ export function convertCjsToEsm(code, options = {}) {
   }
 
   // Pass 3: transform the last module.exports to default
+  const declared = new Set();
   if (lastModuleExport) {
     s.overwrite(
       lastModuleExport.start,
@@ -801,13 +897,80 @@ export function convertCjsToEsm(code, options = {}) {
   }
   // Otherwise, transform exports.* to named exports
   else {
-    exportsProps.forEach((exp) => {
-      s.overwrite(
-        exp.node.start,
-        exp.node.right.start,
-        `export const ${exp.name} = `,
-      );
-    });
+    // Group by export name to handle TypeScript's multi-assignment patterns:
+    // 'exports.X = void 0' (placeholder) and 'exports.X = X' (local re-export).
+    const byName = new Map();
+    for (const exp of exportsProps) {
+      if (!byName.has(exp.name)) byName.set(exp.name, []);
+      byName.get(exp.name).push(exp);
+    }
+    const removeNode = (node) => {
+      s.remove(node.start, node.end + (code[node.end] === ";" ? 1 : 0));
+    };
+    for (const [, props] of byName) {
+      const realProps = props.filter((p) => !p.isVoid0);
+      // Drop void-0 placeholders when a real assignment follows.
+      if (realProps.length > 0) {
+        for (const p of props) {
+          if (p.isVoid0) removeNode(p.node);
+        }
+      }
+      const effective = realProps.length > 0 ? realProps : props;
+      for (const exp of effective) {
+        if (exp.isSelfRef) {
+          if (declared.has(exp.name)) {
+            // Already exported; 'exports.X = X' is a no-op.
+            removeNode(exp.node);
+          } else {
+            // Re-export the local binding X.
+            s.overwrite(
+              exp.node.start,
+              exp.node.end,
+              `export { ${exp.name} };`,
+            );
+            declared.add(exp.name);
+          }
+        } else if (!declared.has(exp.name)) {
+          s.overwrite(
+            exp.node.start,
+            exp.node.right.start,
+            `export const ${exp.name} = `,
+          );
+          declared.add(exp.name);
+        } else {
+          // Reassignment of an already-exported binding (live binding update).
+          s.overwrite(exp.node.start, exp.node.right.start, `${exp.name} = `);
+        }
+      }
+    }
+  }
+
+  // Pass 3b: rewrite 'exports.X' reads (no 'exports' binding in ESM).
+  // X → the exported/local binding when known, else 'undefined' (CJS
+  // read-before-assign / discarded-exports semantics).
+  for (const read of exportsReads) {
+    s.overwrite(
+      read.node.start,
+      read.node.end,
+      declared.has(read.name) ? read.name : "undefined",
+    );
+  }
+
+  // Pass 3c: drop TypeScript's __esModule marker (meaningless in ESM).
+  for (const stmt of esModuleMarkers) {
+    s.remove(stmt.start, stmt.end + (code[stmt.end] === ";" ? 1 : 0));
+  }
+
+  // Pass 4: __exportStar(require("x"), exports) → export * from "x".
+  // The ESM star-export is resolved downstream by transformImportsToLoadModule
+  // (ExportAllDeclaration) through loadModule(); buildModuleProxy re-exports
+  // the lifted namespace, skipping 'default' per ESM semantics.
+  for (const star of exportStars) {
+    s.overwrite(
+      star.node.start,
+      star.node.end,
+      `export * from ${JSON.stringify(star.path)};`,
+    );
   }
 
   const outCode = s.toString();
@@ -818,7 +981,7 @@ export function convertCjsToEsm(code, options = {}) {
   });
   // Mark CJS-converted modules so the sandbox's ESM interop (buildModuleProxy)
   // can resolve named imports against module.exports — Node's cjs-module-lexer
-  // parity. Without this, `import { build } from "esbuild"` (a CJS shim)
+  // parity. Without this, 'import { build } from "esbuild"' (a CJS shim)
   // throws "does not provide an export named 'build'".
   const converted = lastModuleExport !== null || exportsProps.length > 0;
   const finalCode = converted
@@ -1020,7 +1183,7 @@ function detectModuleSystem(code) {
       sourceType: "module",
     });
 
-    function walk(node) {
+    function walk(node, parent) {
       if (!node) return;
 
       // --- ESM DETECTION ---
@@ -1053,17 +1216,71 @@ function detectModuleSystem(code) {
         }
       }
 
+      // Check for bare `exports` references (not just assignments), e.g.
+      // TypeScript's Object.defineProperty(exports, "__esModule", ...) marker,
+      // which tsc emits in every compiled file — including files with no
+      // exports at all. A free `exports` identifier only occurs in CJS output.
+      // Excludes property keys ({ exports: 1 }), member properties (a.exports),
+      // and declared bindings (var/function/import named exports).
+      if (
+        node.type === "Identifier" &&
+        node.name === "exports" &&
+        !isExportsPropertyOrBinding(node, parent)
+      ) {
+        result.isCJS = true;
+      }
+
       // Standard AST traversal
       for (const key in node) {
         const child = node[key];
         if (child && typeof child === "object") {
           if (Array.isArray(child)) {
-            child.forEach(walk);
+            child.forEach((c) => walk(c, node));
           } else {
-            walk(child);
+            walk(child, node);
           }
         }
       }
+    }
+
+    // True when an `exports` Identifier is a property key/member name or a
+    // locally declared binding rather than the CJS free variable.
+    function isExportsPropertyOrBinding(node, parent) {
+      if (!parent) return false;
+      if (parent.type === "Property" && parent.key === node && !parent.computed)
+        return true;
+      if (
+        parent.type === "MemberExpression" &&
+        parent.property === node &&
+        !parent.computed
+      )
+        return true;
+      if (parent.type === "VariableDeclarator" && parent.id === node)
+        return true;
+      if (
+        (parent.type === "FunctionDeclaration" ||
+          parent.type === "FunctionExpression" ||
+          parent.type === "ArrowFunctionExpression") &&
+        parent.params.includes(node)
+      )
+        return true;
+      if (
+        (parent.type === "FunctionDeclaration" ||
+          parent.type === "FunctionExpression" ||
+          parent.type === "ClassDeclaration" ||
+          parent.type === "ClassExpression") &&
+        parent.id === node
+      )
+        return true;
+      if (
+        (parent.type === "ImportSpecifier" ||
+          parent.type === "ImportDefaultSpecifier" ||
+          parent.type === "ImportNamespaceSpecifier") &&
+        parent.local === node
+      )
+        return true;
+      if (parent.type === "CatchClause" && parent.param === node) return true;
+      return false;
     }
 
     walk(ast);
@@ -1238,6 +1455,7 @@ export function transformImportsToLoadModule(
 
   // --- Utilities ---
   const liftedModules = new Map();
+  let starSeq = 0;
   const importBindings = [];
   const functionsToMakeAsync = new Set();
   const moduleImportType = new Map();
@@ -1348,7 +1566,7 @@ export function transformImportsToLoadModule(
         const modulePath = node.source.value;
         // Dynamic import() is transformed in-situ only: it must NOT be
         // registered as a lifted module. The preamble
-        // `const __lm_xxx = await loadModule(...)` was dead code for dynamic
+        // 'const __lm_xxx = await loadModule(...)' was dead code for dynamic
         // imports (the in-situ call below never references a lifted var) but
         // its await still ran before any user code — stalling the whole
         // module on slow loads (real vite@7: ~30 chunks through interop
@@ -1424,7 +1642,7 @@ export function transformImportsToLoadModule(
         // When building a CommonJS module for require(), leave require()
         // calls intact: the runtime executes them synchronously via
         // __syncRequire__ inside wrapCommonJS. Rewriting them to awaited
-        // loadModule() calls here would place `await` inside the sync IIFE
+        // loadModule() calls here would place 'await' inside the sync IIFE
         // wrapper -> SyntaxError: Unexpected reserved word.
         if (preserveRequireCalls) return;
         const modulePath = node.arguments[0].value;
@@ -1437,6 +1655,18 @@ export function transformImportsToLoadModule(
 
         s.overwrite(node.start, node.end, interop(v));
       }
+    },
+
+    // export * from "./x" (emitted by convertCjsToEsm for __exportStar).
+    // ESM 'export *' cannot target a runtime-loaded module from a data: URL,
+    // so export the lifted namespace under a marker key; buildModuleProxy
+    // treats __bvm_star_* as star re-export sources (skipping 'default').
+    ExportAllDeclaration(node) {
+      const modulePath = node.source.value;
+      const v = getLiftedVar(modulePath);
+      setImportType(modulePath, "import");
+      const starKey = `__bvm_star_${starSeq++}`;
+      s.overwrite(node.start, node.end, `export const ${starKey} = ${v};`);
     },
   });
 
@@ -2019,7 +2249,7 @@ function checkForReferenceErrors(code, options = {}) {
       // ── Arrow Function ──────────────────────────────────────────────────
       case "ArrowFunctionExpression": {
         pushScope("function");
-        // Arrow functions do NOT have their own `arguments`
+        // Arrow functions do NOT have their own 'arguments'
         node.params.forEach((p) =>
           extractIdentifiers(p).forEach(({ name, loc }) =>
             addBinding(name, "param", loc),
@@ -2121,7 +2351,7 @@ function checkForReferenceErrors(code, options = {}) {
         const line = node.loc?.start?.line;
         const col = node.loc?.start?.column;
 
-        // `self` bare (not self.x) is always an error
+        // 'self' bare (not self.x) is always an error
         if (name === "self") {
           if (!(
             parent?.type === "MemberExpression" && parent.object === node
@@ -2190,7 +2420,7 @@ function checkForReferenceErrors(code, options = {}) {
           break;
         }
 
-        // In strict mode, `this` at the top-level (global scope) is undefined — flag bare this
+        // In strict mode, 'this' at the top-level (global scope) is undefined — flag bare this
         if (isStrictMode()) {
           const inFunction = scopeStack.some((s) => s.type === "function");
           if (!inFunction) {
@@ -2205,7 +2435,7 @@ function checkForReferenceErrors(code, options = {}) {
           }
         }
 
-        // Bare `this` (not this.x) outside any function in sloppy mode is valid (window),
+        // Bare 'this' (not this.x) outside any function in sloppy mode is valid (window),
         // so no error there.
         break;
       }
@@ -2842,9 +3072,9 @@ export class ImportResolver {
       return transformed;
     }
 
-    // Gap #6/#5: builtins are not CDN packages. esm.sh 400s on `node:`-style
+    // Gap #6/#5: builtins are not CDN packages. esm.sh 400s on 'node:'-style
     // specifiers and would serve its own shim for bare names instead of our
-    // dist shims. Node treats `node:X` and `X` identically for every builtin,
+    // dist shims. Node treats 'node:X' and 'X' identically for every builtin,
     // so pass recognized ones (prefixed or bare) through untouched — the
     // sandbox loader resolves them via the builtin interop path (the same
     // path VFS-file imports already use). Unrecognized specifiers keep the old
@@ -2885,9 +3115,9 @@ export class ImportResolver {
 
 // VFS_FETCH_BRIDGE_START
 // ── Host virtual-server fetch bridge ───────────────────────────────────────
-// Patches the real parent/host `fetch` (once) so requests to loopback URLs
-// (`localhost`, `127.0.0.1`, `[::1]`) on a port owned by a sandbox route to
-// that sandbox's virtual HTTP server via `invoke('__serverRequest__', …)`.
+// Patches the real parent/host 'fetch' (once) so requests to loopback URLs
+// ('localhost', '127.0.0.1', '[::1]') on a port owned by a sandbox route to
+// that sandbox's virtual HTTP server via 'invoke('__serverRequest__', …)'.
 // One host-global registry: first claim wins, a colliding second claim is
 // rejected so the host can revoke the loser. The patch is removed only after
 // the final route disappears. Tested by tests/host-fetch-bridge.test.js,
@@ -3313,9 +3543,70 @@ ${code}
           throw bvmBuildEmpty;
         }
         return "data:text/javascript;charset=utf-8," + encodeURIComponent(data);
-       } 
-          
-       
+       }
+
+       // Platform fix (AGENTS.md rule 6): intercept file:// URLs and absolute
+       // VFS paths. Vite's terser plugin does await import(pathToFileURL(p).href)
+       // which produces file:///node_modules/...; es-module-shims would try to
+       // fetch these as network URLs and die with a NetworkError. Route them
+       // through the parent _dynamic_import + _build_file interop instead — the
+       // parent already normalizes file:// → absolute VFS path. Any file://
+       // import was broken, not just Vite's terser path.
+       if (specifier.startsWith("file://") || specifier.startsWith("/")) {
+         var bvmFilePath = specifier;
+         if (bvmFilePath.startsWith("file://")) {
+           bvmFilePath = bvmFilePath.slice("file://".length);
+           // file:///x -> /x (keep the leading slash); file://host/x -> /x (VFS has no hosts)
+           if (!bvmFilePath.startsWith("/")) bvmFilePath = "/" + bvmFilePath;
+         }
+         var bvmFileInterop = globalThis[Symbol.for("bvm.interop")];
+         var bvmFileCwd = globalThis._RUNTIME${iframe.sandbox.uuid}_.cwd;
+         var bvmFileData;
+         try {
+           bvmFileData = await bvmFileInterop.callParent(
+             '_dynamic_import',
+             bvmFilePath,
+             'import',
+             '/',
+             '/',
+             false,
+             bvmFileCwd,
+             undefined
+           );
+         } catch (err) {
+           console.error('[bvm:resolve] _dynamic_import failed for file URL "' + specifier + '": ' + ((err && err.message) || err));
+           throw err;
+         }
+         if (!bvmFileData || bvmFileData.source === null || bvmFileData.source === undefined || bvmFileData.source === '') {
+           var bvmFileNotFound = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + specifier + "'");
+           bvmFileNotFound.code = 'ERR_MODULE_NOT_FOUND';
+           console.error('[bvm:resolve] ' + bvmFileNotFound.message);
+           throw bvmFileNotFound;
+         }
+         var bvmFileName = (bvmFileData && bvmFileData.resolvedPath) || bvmFilePath;
+         try {
+           bvmFileData = await bvmFileInterop.callParent(
+             '_build_file',
+             bvmFileData.source,
+             bvmFileName,
+             'import',
+             '/',
+             '/',
+             false
+           );
+         } catch (err) {
+           console.error('[bvm:resolve] _build_file failed for file URL "' + specifier + '": ' + ((err && err.message) || err));
+           throw err;
+         }
+         if (bvmFileData === null || bvmFileData === undefined || bvmFileData === '') {
+           var bvmFileBuildEmpty = new Error("[bvm:resolve] _build_file returned empty source for file URL '" + specifier + "'");
+           console.error('[bvm:resolve] ' + bvmFileBuildEmpty.message);
+           throw bvmFileBuildEmpty;
+         }
+         return "data:text/javascript;charset=utf-8," + encodeURIComponent(bvmFileData);
+       }
+
+
         return defaultResolve(specifier, parentURL);
       }
     };
@@ -4000,7 +4291,7 @@ child.on('error', (err) => {
 
 // To hide your internal runtime logic and prevent user code from tampering with your patches, you need to use **lexical scoping (closures)** and **Shadow Realms** (or the pattern of "Localizing Globals").
 //
-// If you just define `originalFetch` in the global scope, a clever user can find it, delete it, or bypass your tracking.
+// If you just define 'originalFetch' in the global scope, a clever user can find it, delete it, or bypass your tracking.
 //
 // Here are the three best ways to "cloak" your runtime:
 //
@@ -4008,11 +4299,11 @@ child.on('error', (err) => {
 //
 // ### 1. The IIFE Wrapper (Closure Isolation)
 //
-// By wrapping your entire runtime in an **Immediately Invoked Function Expression (IIFE)**, all your `original` variables and `pendingMaps` exist only in a private scope that the user code cannot physically reach.
+// By wrapping your entire runtime in an **Immediately Invoked Function Expression (IIFE)**, all your 'original' variables and 'pendingMaps' exist only in a private scope that the user code cannot physically reach.
 //
-// ```javascript
+// '''javascript
 // static generate(code, config = {}) {
-//   return `
+//   return '
 //   (() => {
 //     // --- PRIVATE SCOPE START ---
 //     // User code cannot see these variables
@@ -4038,15 +4329,15 @@ child.on('error', (err) => {
 //     })();
 //     // --- PRIVATE SCOPE END ---
 //   })();
-//   `;
+//   ';
 // }
-// ```
+// '''
 //
 // ### 2. The "Hidden Property" Pattern (Using Symbols)
 //
-// If you must attach something to a global object but don't want the user to see it when they run `Object.keys(window)`, use **Symbols**. Symbols are non-enumerable and "invisible" to standard loops.
+// If you must attach something to a global object but don't want the user to see it when they run 'Object.keys(window)', use **Symbols**. Symbols are non-enumerable and "invisible" to standard loops.
 //
-// ```javascript
+// '''javascript
 // const INTERNAL_STATE = Symbol("runtimeState");
 //
 // window[INTERNAL_STATE] = {
@@ -4058,13 +4349,13 @@ child.on('error', (err) => {
 // for (let key in window) { console.log(key); }
 // // Your symbol will NOT show up.
 //
-// ```
+// '''
 //
 // ### 3. Object Shielding (Freezing the Prototype)
 //
-// Users can often bypass patches by going to the prototype (e.g., `HTMLAnchorElement.prototype.click`). To prevent them from un-patching your work, you can **freeze** the descriptors of the functions you’ve patched.
+// Users can often bypass patches by going to the prototype (e.g., 'HTMLAnchorElement.prototype.click'). To prevent them from un-patching your work, you can **freeze** the descriptors of the functions you’ve patched.
 //
-// ```javascript
+// '''javascript
 // Object.defineProperty(window, 'fetch', {
 //   value: myPatchedFetch,
 //   writable: false,     // User can't do: window.fetch = ...
@@ -4072,15 +4363,15 @@ child.on('error', (err) => {
 //   enumerable: true
 // });
 //
-// ```
+// '''
 //
 // ---
 //
 // ### 4. Advanced: The "Clean Room" Helper
 //
-// When patching, users can sometimes detect your "traps" by checking `fetch.toString()`. A truly hidden runtime will "mask" the function string to look native.
+// When patching, users can sometimes detect your "traps" by checking 'fetch.toString()'. A truly hidden runtime will "mask" the function string to look native.
 //
-// ```javascript
+// '''javascript
 // function maskFunction(patchedFn, originalFn) {
 //   Object.defineProperty(patchedFn, 'name', { value: originalFn.name });
 //   patchedFn.toString = () => originalFn.toString();
@@ -4089,17 +4380,17 @@ child.on('error', (err) => {
 // // Now console.log(fetch.toString()) prints "function fetch() { [native code] }"
 // // instead of your internal source code.
 //
-// ```
+// '''
 //
 // ### Recommendation for your Sandbox
 //
 // I suggest combining **Method 1 (IIFE)** and **Method 4 (Masking)**.
 //
-// 1. Put all your `originalFetch`, `pendingModules`, and `asyncRegistry` variables at the very top of the IIFE.
-// 2. Only expose the final "public" API (the patched `fetch`, `setTimeout`, etc.).
-// 3. Mask the `toString` so the user can't inspect your tracking logic.
+// 1. Put all your 'originalFetch', 'pendingModules', and 'asyncRegistry' variables at the very top of the IIFE.
+// 2. Only expose the final "public" API (the patched 'fetch', 'setTimeout', etc.).
+// 3. Mask the 'toString' so the user can't inspect your tracking logic.
 //
-// **Would you like me to update the `SandboxRuntime` class to wrap everything in this secure "Private Closure" structure?**
+// **Would you like me to update the 'SandboxRuntime' class to wrap everything in this secure "Private Closure" structure?**
 
 // Parse one V8 stack-frame line into {file, line, column}.
 // Handles "at fn (https://host/app.js:10:15)", "at async fn (...)", and
@@ -4445,9 +4736,16 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
   if (parentEntryPoint === undefined) parentEntryPoint = null;
 
   try {
+    // Normalize file:// URLs (e.g. from pathToFileURL) to absolute VFS paths.
+    // Vite's terser plugin does await import(pathToFileURL(p).href).
+    if (modulePath.startsWith("file://")) {
+      modulePath = modulePath.slice("file://".length);
+      // file:///x → /x (keep the leading slash); file://host/x → /x (VFS has no hosts)
+      if (!modulePath.startsWith("/")) modulePath = "/" + modulePath;
+    }
     const extension = modulePath.split('.').pop().toLowerCase();
     const isRelative = modulePath.startsWith('./') || modulePath.startsWith('../');
-  const isAbsolute = modulePath.startsWith('./')
+  const isAbsolute = modulePath.startsWith('/')
 
   let sourceResolvedError = false;
   
@@ -4707,7 +5005,7 @@ err.stack = \`Error: Something broke
   // Check if this error has already been wrapped by checking for our pattern
   const alreadyWrapped = error.message.match(" in \\./");
   
-  //error.stack = \`\${error.message}\`
+  //error.stack = \'\${error.message}\'
  
   
   if (alreadyWrapped) {
@@ -4963,6 +5261,24 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
   const isCjs = !!moduleObject.__bvm_cjs__;
   delete moduleObject.__bvm_cjs__;
 
+  // Star re-exports (see convertCjsToEsm __exportStar -> export * from).
+  // __bvm_star_* hold lifted module namespaces to re-export (all keys
+  // except default, per ESM semantics). Collected for proxy fallback and
+  // hidden from the visible namespace like __bvm_cjs__.
+  const starSources = [];
+  for (const key of Object.keys(moduleObject)) {
+    if (key.startsWith('__bvm_star_')) {
+      const starMod = moduleObject[key];
+      if (
+        starMod &&
+        (typeof starMod === 'object' || typeof starMod === 'function')
+      ) {
+        starSources.push(starMod);
+      }
+      delete moduleObject[key];
+    }
+  }
+
   if (moduleType === 'require') {
     return moduleObject.default ?? moduleObject;
   }
@@ -4972,8 +5288,8 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
   
    // Keep .default enumerable and accessible when the module exported one.
   // If there's no default export, define it as undefined (non-enumerable)
-  // so \`import { default as x }\` still resolves without a throw, but
-  // Object.keys() / for..in won't surface a spurious \`default\` key.
+  // so \'import { default as x }\' still resolves without a throw, but
+  // Object.keys() / for..in won't surface a spurious \'default\' key.
   /* if (!hasDefault) {
     Object.defineProperty(moduleObject, 'default', {
       value: undefined,
@@ -4992,6 +5308,18 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
       if (prop === '__esModule') return true;
 
       if (!(prop in target)) {
+        // Star re-export fallback (ESM 'export *' semantics): check each
+        // star source, skipping 'default'. Star modules are proxied and
+        // throw SyntaxError for missing exports; try the next source.
+        for (const starMod of starSources) {
+          if (prop === 'default') break;
+          try {
+            return starMod[prop];
+          } catch (e) {
+            if (e instanceof SyntaxError) continue;
+            throw e;
+          }
+        }
         // CJS interop (Node parity): a named import from a CJS module
         // resolves against module.exports, including keys it inherited
         // via spread (which static analysis cannot see).
@@ -7367,7 +7695,7 @@ export class CodeSandbox extends EventEmitter {
       process: options?.process || PROCESS_OBJECT, // array
       fileName: options?.fileName || "index.js", // string,
       fs: options?.fs || {},
-      // Virtual node:sea asset store (mirrors `fs` -> __USER_FILES__).
+      // Virtual node:sea asset store (mirrors 'fs' -> __USER_FILES__).
       // { [key]: string | Uint8Array | ArrayBuffer | { encoding: 'utf8'|'base64', data: string } }
       // Normalized by normalizeSeaAssets() and published as __SEA_ASSETS__.
       seaAssets: options?.seaAssets || {},
@@ -7748,7 +8076,7 @@ export class CodeSandbox extends EventEmitter {
 
           // Todo track parent entry module (in loadModule() & transformModules)
           if (fileName != entryPoint) {
-            // console.log(`Building ${fileName} for ${entryPoint} - for imported module: ${parentEntryPoint}`)
+            // console.log('Building ${fileName} for ${entryPoint} - for imported module: ${parentEntryPoint}')
           }
 
           // For CommonJS modules loaded via require(), keep require() calls
@@ -8223,7 +8551,7 @@ function _parseKey(s) {
       // --- Package exports/imports resolution (gap #2) ---
       // Node's PACKAGE_EXPORTS_RESOLVE / PACKAGE_IMPORTS_RESOLVE, browser-VFS
       // edition. Condition order mirrors Node's ESM-import defaults — the
-      // runtime emulates Node in the browser, so `node` wins over `browser`.
+      // runtime emulates Node in the browser, so 'node' wins over 'browser'.
       const PACKAGE_CONDITIONS = ["node", "import", "default"];
 
       function splitPackageSpecifier(importPath) {
@@ -8319,7 +8647,7 @@ function _parseKey(s) {
 
       function resolvePackageImports(importPath, importerPath, vfs) {
         // Nearest parent package.json scope wins; a scope without an
-        // `imports` field means the specifier is unresolvable (Node parity).
+        // 'imports' field means the specifier is unresolvable (Node parity).
         const segments = importerPath ? importerPath.split("/") : [];
         segments.pop();
         while (true) {
@@ -8455,7 +8783,7 @@ function _parseKey(s) {
         },
       );
 
-      // Hoisted VFS helpers for the real `_dynamic_import` below. The sandbox
+      // Hoisted VFS helpers for the real '_dynamic_import' below. The sandbox
       // used to post its entire __USER_FILES__ seed (~22MB with the WASM
       // shims) on every call; structured-cloning that through postMessage
       // stalled bootstrap for minutes (~30 eager builtin preloads x ~7s).
@@ -8519,8 +8847,15 @@ function _parseKey(s) {
         ) => {
           // Serve from the host's own seed: the sandbox no longer ships its
           // __USER_FILES__ across postMessage (see pickDynamicImportVfs).
-          // `this` is the CodeSandbox instance (arrow closure over execute()).
+          // 'this' is the CodeSandbox instance (arrow closure over execute()).
           vfs = pickDynamicImportVfs(vfs, this.config.fs, unflattenFileSystem);
+
+          // Normalize file:// URLs (e.g. Vite's await import(pathToFileURL(p).href))
+          // to absolute VFS paths before classification.
+          if (path.startsWith("file://")) {
+            path = path.slice("file://".length);
+            if (!path.startsWith("/")) path = "/" + path;
+          }
 
           // 1. For Node built-ins, hand off to your shim resolver as before.
           // resolvedPath is null: builtins aren't VFS files, so the sandbox keeps
@@ -8536,9 +8871,10 @@ function _parseKey(s) {
             : (parentEntryPoint ?? "");
 
           const isRelative = path.startsWith("./") || path.startsWith("../");
+          const isAbsolute = path.startsWith("/");
 
           // 3a. Package-internal # imports (gap #2): resolve via the nearest
-          // package.json `imports` field before the node_modules walk.
+          // package.json 'imports' field before the node_modules walk.
           if (path.startsWith("#")) {
             const resolvedImport = resolvePackageImports(
               path,
@@ -8555,10 +8891,12 @@ function _parseKey(s) {
           }
 
           // 3. Handle Bare Specifiers (node_modules lookup)
-          if (!isRelative) {
+          // Absolute VFS paths (isAbsolute) bypass this branch — they are
+          // resolved directly against the VFS, not via package lookup.
+          if (!isRelative && !isAbsolute) {
             // Vendor browser/WASM builds for native-only packages (real
             // Vite 7: rollup → @rollup/browser, esbuild → esbuild-wasm
-            // shim). Specifier-based, so ESM `import 'rollup'` resolves
+            // shim). Specifier-based, so ESM 'import 'rollup'' resolves
             // exactly like CJS require('rollup') (src/module.js). The table
             // is static — no VFS-presence gate needed: this handler only
             // runs when serving the browser runtime's VFS.
@@ -8586,6 +8924,24 @@ function _parseKey(s) {
             return null; // Fall through if package is completely missing
           }
 
+          // 3b. Handle Absolute VFS Paths (e.g. '/node_modules/terser/...').
+          // Resolve directly against the VFS root, ignoring the importer.
+          // (Vite's loadTerserPath does await import(pathToFileURL(...))
+          // which the sandbox normalizes to an absolute VFS path.)
+          if (isAbsolute) {
+            const absResult = resolveVFS(path, "", vfs);
+            if (!absResult) {
+              throw new Error(
+                `[ERR_MODULE_NOT_FOUND]: Cannot find module '${path}' (absolute VFS path)`,
+              );
+            }
+            // Gap #1: return the resolved VFS path alongside the source.
+            return {
+              source: absResult.source,
+              resolvedPath: absResult.resolvedPath,
+            };
+          }
+
           // 4. Handle Relative Paths
           const result = resolveVFS(path, importerVFSPath, vfs);
           if (!result) {
@@ -8601,7 +8957,7 @@ function _parseKey(s) {
       );
 
       function resolveNodeModule(importPath, importerPath, vfs) {
-        // Split off any subpath so package.json `exports` can resolve it (gap #2).
+        // Split off any subpath so package.json 'exports' can resolve it (gap #2).
         const { packageName, subpath } = splitPackageSpecifier(importPath);
 
         // Extract directory path from the importer
@@ -8634,10 +8990,10 @@ function _parseKey(s) {
         );
       }
 
-      // Helper to resolve a package root + subpath. The `exports` field wins when
+      // Helper to resolve a package root + subpath. The 'exports' field wins when
       // present (gap #2 — the only legal route per Node); otherwise legacy
       // file/main/index.js probing. (Legacy order also corrected to Node parity:
-      // package.json `main` now beats a sibling index.js.)
+      // package.json 'main' now beats a sibling index.js.)
       function tryResolveFileOrPackage(packageRoot, subpath, vfs) {
         const pkgJsonCheck = resolveVFS(`${packageRoot}/package.json`, "", vfs);
         let pkg = null;
@@ -8649,7 +9005,7 @@ function _parseKey(s) {
           }
         }
 
-        // 1. Package `exports` field (gap #2).
+        // 1. Package 'exports' field (gap #2).
         if (pkg && pkg.exports) {
           const target = resolvePackageExports(pkg, subpath);
           if (typeof target === "string" && target.startsWith("./")) {
@@ -9117,7 +9473,7 @@ Execution time gets very slow when appllying clases.
 async function upgateProgressArgv() {
   sandbox.config.process.argv = split(getArgv());
 
-  // sandbox.config.iframeElement = document.querySelector(`#preview`);
+  // sandbox.config.iframeElement = document.querySelector('#preview');
 }
 
 //
@@ -10279,9 +10635,9 @@ function detectMimeType(uint8) {
 
 // 2. Then declare your helper function and main function
 
-// Normalize the `seaAssets` sandbox option into a JSON-safe map for the
+// Normalize the 'seaAssets' sandbox option into a JSON-safe map for the
 // bootstrap object: { [key]: { encoding: 'utf8'|'base64', data: string } }.
-// Accepted value shapes (mirrors the leniency of `fs` -> __USER_FILES__):
+// Accepted value shapes (mirrors the leniency of 'fs' -> __USER_FILES__):
 //   string                                   -> utf8 text
 //   Uint8Array / ArrayBuffer / SharedArrayBuffer -> base64 bytes
 //   { encoding: 'utf8'|'base64', data: string }  -> used as-is
@@ -10342,7 +10698,7 @@ function base64EncodeBytes(bytes) {
 // is a binary/text envelope, NOT a directory (mirrors the normalizeSeaAssets
 // convention, which documents these shapes as the fs -> __USER_FILES__
 // leniency). flattenFileTree must keep it as a leaf so seedVolume in the
-// sandbox can decode it; recursing would create bogus `encoding`/`data`
+// sandbox can decode it; recursing would create bogus 'encoding'/'data'
 // files. The two-key strictness keeps a user directory that merely happens
 // to contain encoding/data files from being reinterpreted.
 function isSeedEnvelope(value) {
