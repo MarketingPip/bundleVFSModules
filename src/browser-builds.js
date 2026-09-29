@@ -28,8 +28,12 @@
 
 // Absolute VFS paths of the substitution targets. These live in the
 // runtime's node_modules (seeded into the VFS at build/test time).
+// Use the ESM build (dist/es/) — it provides named exports (VERSION,
+// defineConfig, rollup) required for ESM `import` linkage. The CJS build
+// (dist/rollup.browser.js) lacks ESM named exports. WASM is embedded as
+// a data: URL in the seed (see make-seed.mjs) so no HTTP fetch is needed.
 const ROLLUP_BROWSER_MAIN =
-  "/node_modules/@rollup/browser/dist/rollup.browser.js";
+  "/node_modules/@rollup/browser/dist/es/rollup.browser.js";
 const ROLLUP_BROWSER_DIR = "/node_modules/@rollup/browser";
 // @rollup/browser does not ship the `rollup/parseAst` subpath (its export
 // list is exactly { VERSION, defineConfig, rollup }), but vite 7 imports

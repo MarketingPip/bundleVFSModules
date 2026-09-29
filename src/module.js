@@ -1095,7 +1095,11 @@ function loadBuiltinModule(normalizedId, originalRequest) {
       typeof process.getBuiltinModule === "function"
     ) {
       const mod = process.getBuiltinModule(normalizedId);
-      if (mod !== undefined) return mod;
+      // CJS interop: require() unwraps the default export, exactly like the
+      // RT.loadModule branch above. (Vite's ws does
+      // `class WebSocket extends require("events")` — the namespace object
+      // is not a constructor.)
+      if (mod !== undefined) return interopDefault(mod);
     }
   } catch {
     /* browser-fallback lane: no native delegation */
@@ -1182,7 +1186,17 @@ function createRequire(filenameOrURL) {
       // If it's a relative path, it would not parse and would be considered
       // invalid per the documented contract.
       fileURL = new URL(filenameOrURL);
-      filepath = fileURLToPathShim(fileURL);
+      if (fileURL.protocol === "file:") {
+        filepath = fileURLToPathShim(fileURL);
+      } else {
+        // Browser-platform divergence: VFS modules load from data:/blob:/
+        // http(s): URLs, so import.meta.url is never a file: URL (e.g.
+        // vite's bundled chunk.js does createRequire(import.meta.url)).
+        // A non-file base has no filesystem path, but builtin requires need
+        // none — keep the URL href as the base instead of throwing
+        // ERR_INVALID_URL_SCHEME like Node does.
+        filepath = fileURL.href;
+      }
     } catch {
       throw errInvalidArgValue("filename", filenameOrURL, createRequireError);
     }
