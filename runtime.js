@@ -1338,8 +1338,17 @@ export function transformImportsToLoadModule(
         typeof node.source.value === "string"
       ) {
         const modulePath = node.source.value;
-        const v = getLiftedVar(modulePath); // always create/reuse lifted variable
-        setImportType(modulePath, "import");
+        // Dynamic import() is transformed in-situ only: it must NOT be
+        // registered as a lifted module. The preamble
+        // `const __lm_xxx = await loadModule(...)` was dead code for dynamic
+        // imports (the in-situ call below never references a lifted var) but
+        // its await still ran before any user code — stalling the whole
+        // module on slow loads (real vite@7: ~30 chunks through interop
+        // _dynamic_import/_build_file) before the user's own drain-hold timer
+        // was even registered, so execute() resolved early with no output.
+        // Static ImportDeclarations keep their preamble hoist; dynamic
+        // import() keeps real import() semantics (lazy, returns a promise).
+        void modulePath;
 
         const enclosingFunc = findEnclosingFunction(node);
 
