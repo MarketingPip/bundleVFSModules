@@ -8105,9 +8105,13 @@ function _parseKey(s) {
           if (part === "..") resolved.pop();
           else if (part !== ".") resolved.push(part);
         }
-        const resolvedPath = resolved.join("/");
+        // 3. Ensure absolute VFS path (leading slash) for consistency.
+        // Without this, relative resolvedPaths cascade: a relative importer
+        // produces a relative resolvedPath, which becomes the next importer.
+        let resolvedPath = resolved.join("/");
+        if (!resolvedPath.startsWith("/")) resolvedPath = "/" + resolvedPath;
 
-        // 3. Walk the VFS tree
+        // 4. Walk the VFS tree
         const source = vfsLookup(resolvedPath, vfs);
         return source != null ? { resolvedPath, source } : null;
       }
