@@ -1,14 +1,17 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
 // Test ensures that the function receives the url argument.
 
-const assert = require('node:assert');
+const assert = require("node:assert");
 
-assert.throws(() => {
-  URL.revokeObjectURL();
-}, {
-  code: 'ERR_MISSING_ARGS',
-  name: 'TypeError',
-});
+assert.throws(
+  () => {
+    URL.revokeObjectURL();
+  },
+  {
+    code: "ERR_MISSING_ARGS",
+    name: "TypeError",
+  },
+);

@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const assert = require('assert');
-const zlib = require('zlib');
+const assert = require("assert");
+const zlib = require("zlib");
 
-assert.strictEqual(zlib.crc32('', -0), zlib.crc32('', 0));
+assert.strictEqual(zlib.crc32("", -0), zlib.crc32("", 0));

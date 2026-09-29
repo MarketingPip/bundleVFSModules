@@ -19,35 +19,43 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const http = require('http');
-const fork = require('child_process').fork;
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const http = require("http");
+const fork = require("child_process").fork;
+const assert = require("assert");
 
 if (process.env.NODE_TEST_FORK_PORT) {
-  const req = http.request({
-    headers: { 'Content-Length': '42' },
-    method: 'POST',
-    host: '127.0.0.1',
-    port: +process.env.NODE_TEST_FORK_PORT,
-  }, process.exit);
-  req.write('BAM');
+  const req = http.request(
+    {
+      headers: { "Content-Length": "42" },
+      method: "POST",
+      host: "127.0.0.1",
+      port: +process.env.NODE_TEST_FORK_PORT,
+    },
+    process.exit,
+  );
+  req.write("BAM");
   req.end();
 } else {
-  const server = http.createServer(common.mustCallAtLeast((req, res) => {
-    res.writeHead(200, { 'Content-Length': '42' });
-    req.pipe(res);
-    assert.strictEqual(req.destroyed, false);
-    req.on('close', common.mustCall(() => {
-      assert.strictEqual(req.destroyed, true);
-      server.close();
-      res.end();
-    }));
-  }));
-  server.listen(0, function() {
+  const server = http.createServer(
+    common.mustCallAtLeast((req, res) => {
+      res.writeHead(200, { "Content-Length": "42" });
+      req.pipe(res);
+      assert.strictEqual(req.destroyed, false);
+      req.on(
+        "close",
+        common.mustCall(() => {
+          assert.strictEqual(req.destroyed, true);
+          server.close();
+          res.end();
+        }),
+      );
+    }),
+  );
+  server.listen(0, function () {
     fork(__filename, {
-      env: { ...process.env, NODE_TEST_FORK_PORT: this.address().port }
+      env: { ...process.env, NODE_TEST_FORK_PORT: this.address().port },
     });
   });
 }

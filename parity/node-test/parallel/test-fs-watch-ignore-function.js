@@ -1,38 +1,41 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { skipIfNoWatch } = require('../common/watch.js');
+const common = require("../common");
+const { skipIfNoWatch } = require("../common/watch.js");
 
 skipIfNoWatch();
 
-const assert = require('assert');
-const path = require('path');
-const fs = require('fs');
+const assert = require("assert");
+const path = require("path");
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 
 tmpdir.refresh();
 
-const testFileName = 'visible.txt';
+const testFileName = "visible.txt";
 const testFilePath = path.join(tmpdir.path, testFileName);
-const ignoredFileName = '.hidden';
+const ignoredFileName = ".hidden";
 const ignoredFilePath = path.join(tmpdir.path, ignoredFileName);
 
 const watcher = fs.watch(tmpdir.path, {
-  ignore: (filename) => filename.startsWith('.'),
+  ignore: (filename) => filename.startsWith("."),
 });
 
-watcher.on('change', common.mustCallAtLeast((event, filename) => {
-  assert.notStrictEqual(filename, ignoredFileName);
+watcher.on(
+  "change",
+  common.mustCallAtLeast((event, filename) => {
+    assert.notStrictEqual(filename, ignoredFileName);
 
-  if (filename === testFileName) {
-    watcher.close();
-  }
-}, 1));
+    if (filename === testFileName) {
+      watcher.close();
+    }
+  }, 1),
+);
 
 function writeFiles() {
-  fs.writeFileSync(ignoredFilePath, 'ignored');
-  fs.writeFileSync(testFilePath, 'content');
+  fs.writeFileSync(ignoredFilePath, "ignored");
+  fs.writeFileSync(testFilePath, "content");
 }
 
 if (common.isMacOS) {

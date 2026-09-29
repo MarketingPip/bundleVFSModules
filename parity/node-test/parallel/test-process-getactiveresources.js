@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const assert = require('assert');
+const assert = require("assert");
 
 setTimeout(() => {}, 0);
 
-assert.deepStrictEqual(process.getActiveResourcesInfo(), ['Timeout']);
+assert.deepStrictEqual(process.getActiveResourcesInfo(), ["Timeout"]);

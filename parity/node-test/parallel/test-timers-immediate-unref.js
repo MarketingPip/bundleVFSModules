@@ -1,7 +1,7 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 
 const immediate = setImmediate(() => {});
 assert.strictEqual(immediate.hasRef(), true);
@@ -17,7 +17,12 @@ function firstStep() {
   // Unrefed setImmediate executes if it was unrefed but something else keeps
   // the loop open
   setImmediate(common.mustCall()).unref();
-  setTimeout(common.mustCall(() => { setImmediate(secondStep); }), 0);
+  setTimeout(
+    common.mustCall(() => {
+      setImmediate(secondStep);
+    }),
+    0,
+  );
 }
 
 function secondStep() {

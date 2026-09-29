@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 let counter = 0;
 let result;
 const TEST_INTERVALS = parseInt(process.env.TEST_INTERVALS) || 1;

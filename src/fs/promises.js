@@ -6,7 +6,7 @@
  * `node:fs/promises` resolves here, mirroring Node's own layout.
  */
 
-import fs from '../fs.js';
+import fs from "../fs.js";
 
 const p = fs.promises;
 
@@ -46,11 +46,39 @@ export const writeFile = p.writeFile.bind(p);
 export const constants = p.constants;
 
 const fsPromises = {
-  access, appendFile, chmod, chown, copyFile, cp, glob,
-  lchmod, lchown, link, lstat, lutimes, mkdir, mkdtemp,
-  mkdtempDisposable, open, opendir, readdir, readFile, readlink, realpath,
-  rename, rm, rmdir, stat, statfs, symlink, truncate, unlink,
-  utimes, watch, writeFile, constants,
+  access,
+  appendFile,
+  chmod,
+  chown,
+  copyFile,
+  cp,
+  glob,
+  lchmod,
+  lchown,
+  link,
+  lstat,
+  lutimes,
+  mkdir,
+  mkdtemp,
+  mkdtempDisposable,
+  open,
+  opendir,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  statfs,
+  symlink,
+  truncate,
+  unlink,
+  utimes,
+  watch,
+  writeFile,
+  constants,
 };
 
 export default p;

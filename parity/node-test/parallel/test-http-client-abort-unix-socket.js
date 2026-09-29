@@ -1,25 +1,28 @@
-'use strict';
-const common = require('../common');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const http = require("http");
 
 const server = http.createServer(common.mustNotCall());
 
 class Agent extends http.Agent {
   createConnection(options, oncreate) {
     const socket = super.createConnection(options, oncreate);
-    socket.once('close', () => server.close());
+    socket.once("close", () => server.close());
     return socket;
   }
 }
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
-server.listen(common.PIPE, common.mustCall(() => {
-  const req = http.get({
-    agent: new Agent(),
-    socketPath: common.PIPE
-  });
+server.listen(
+  common.PIPE,
+  common.mustCall(() => {
+    const req = http.get({
+      agent: new Agent(),
+      socketPath: common.PIPE,
+    });
 
-  req.abort();
-}));
+    req.abort();
+  }),
+);

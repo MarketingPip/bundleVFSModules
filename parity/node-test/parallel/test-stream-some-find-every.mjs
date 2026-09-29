@@ -1,8 +1,7 @@
-import * as common from '../common/index.mjs';
-import { setTimeout } from 'timers/promises';
-import { Readable } from 'stream';
-import assert from 'assert';
-
+import * as common from "../common/index.mjs";
+import { setTimeout } from "timers/promises";
+import { Readable } from "stream";
+import assert from "assert";
 
 function oneTo5() {
   return Readable.from([1, 2, 3, 4, 5]);
@@ -106,64 +105,101 @@ function oneTo5Async() {
 
 {
   // Concurrency doesn't affect which value is found.
-  const found = await Readable.from([1, 2]).find(async (val) => {
-    if (val === 1) {
-      await setTimeout(100);
-    }
-    return true;
-  }, { concurrency: 2 });
+  const found = await Readable.from([1, 2]).find(
+    async (val) => {
+      if (val === 1) {
+        await setTimeout(100);
+      }
+      return true;
+    },
+    { concurrency: 2 },
+  );
   assert.strictEqual(found, 1);
 }
 
 {
   // Support for AbortSignal
-  for (const op of ['some', 'every', 'find']) {
+  for (const op of ["some", "every", "find"]) {
     {
       const ac = new AbortController();
-      assert.rejects(Readable.from([1, 2, 3])[op](
-        () => new Promise(() => { }),
-        { signal: ac.signal }
-      ), {
-        name: 'AbortError',
-      }, `${op} should abort correctly with sync abort`).then(common.mustCall());
+      assert
+        .rejects(
+          Readable.from([1, 2, 3])[op](() => new Promise(() => {}), {
+            signal: ac.signal,
+          }),
+          {
+            name: "AbortError",
+          },
+          `${op} should abort correctly with sync abort`,
+        )
+        .then(common.mustCall());
       ac.abort();
     }
     {
       // Support for pre-aborted AbortSignal
-      assert.rejects(Readable.from([1, 2, 3])[op](
-        () => new Promise(() => { }),
-        { signal: AbortSignal.abort() }
-      ), {
-        name: 'AbortError',
-      }, `${op} should abort with pre-aborted abort controller`).then(common.mustCall());
+      assert
+        .rejects(
+          Readable.from([1, 2, 3])[op](() => new Promise(() => {}), {
+            signal: AbortSignal.abort(),
+          }),
+          {
+            name: "AbortError",
+          },
+          `${op} should abort with pre-aborted abort controller`,
+        )
+        .then(common.mustCall());
     }
   }
 }
 {
   // Error cases
-  for (const op of ['some', 'every', 'find']) {
-    assert.rejects(async () => {
-      await Readable.from([1])[op](1);
-    }, /ERR_INVALID_ARG_TYPE/, `${op} should throw for invalid function`).then(common.mustCall());
-    assert.rejects(async () => {
-      await Readable.from([1])[op]((x) => x, {
-        concurrency: 'Foo'
-      });
-    }, /ERR_OUT_OF_RANGE/, `${op} should throw for invalid concurrency`).then(common.mustCall());
-    assert.rejects(async () => {
-      await Readable.from([1])[op]((x) => x, 1);
-    }, /ERR_INVALID_ARG_TYPE/, `${op} should throw for invalid concurrency`).then(common.mustCall());
-    assert.rejects(async () => {
-      await Readable.from([1])[op]((x) => x, {
-        signal: true
-      });
-    }, /ERR_INVALID_ARG_TYPE/, `${op} should throw for invalid signal`).then(common.mustCall());
+  for (const op of ["some", "every", "find"]) {
+    assert
+      .rejects(
+        async () => {
+          await Readable.from([1])[op](1);
+        },
+        /ERR_INVALID_ARG_TYPE/,
+        `${op} should throw for invalid function`,
+      )
+      .then(common.mustCall());
+    assert
+      .rejects(
+        async () => {
+          await Readable.from([1])[op]((x) => x, {
+            concurrency: "Foo",
+          });
+        },
+        /ERR_OUT_OF_RANGE/,
+        `${op} should throw for invalid concurrency`,
+      )
+      .then(common.mustCall());
+    assert
+      .rejects(
+        async () => {
+          await Readable.from([1])[op]((x) => x, 1);
+        },
+        /ERR_INVALID_ARG_TYPE/,
+        `${op} should throw for invalid concurrency`,
+      )
+      .then(common.mustCall());
+    assert
+      .rejects(
+        async () => {
+          await Readable.from([1])[op]((x) => x, {
+            signal: true,
+          });
+        },
+        /ERR_INVALID_ARG_TYPE/,
+        `${op} should throw for invalid signal`,
+      )
+      .then(common.mustCall());
   }
 }
 {
-  for (const op of ['some', 'every', 'find']) {
+  for (const op of ["some", "every", "find"]) {
     const stream = oneTo5();
-    Object.defineProperty(stream, 'map', {
+    Object.defineProperty(stream, "map", {
       value: common.mustNotCall(),
     });
     // Check that map isn't getting called.

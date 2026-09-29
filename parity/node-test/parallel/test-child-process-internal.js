@@ -19,31 +19,36 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
 // Messages
-const PREFIX = 'NODE_';
+const PREFIX = "NODE_";
 const normal = { cmd: `foo${PREFIX}` };
 const internal = { cmd: `${PREFIX}bar` };
 
-if (process.argv[2] === 'child') {
+if (process.argv[2] === "child") {
   // Send non-internal message containing PREFIX at a non prefix position
   process.send(normal);
 
   // Send internal message
   process.send(internal);
 } else {
+  const fork = require("child_process").fork;
+  const child = fork(process.argv[1], ["child"]);
 
-  const fork = require('child_process').fork;
-  const child = fork(process.argv[1], ['child']);
+  child.once(
+    "message",
+    common.mustCall(function (data) {
+      assert.deepStrictEqual(data, normal);
+    }),
+  );
 
-  child.once('message', common.mustCall(function(data) {
-    assert.deepStrictEqual(data, normal);
-  }));
-
-  child.once('internalMessage', common.mustCall(function(data) {
-    assert.deepStrictEqual(data, internal);
-  }));
+  child.once(
+    "internalMessage",
+    common.mustCall(function (data) {
+      assert.deepStrictEqual(data, internal);
+    }),
+  );
 }

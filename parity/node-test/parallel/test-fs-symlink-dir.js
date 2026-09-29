@@ -1,29 +1,24 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // Test creating a symbolic link pointing to a directory.
 // Ref: https://github.com/nodejs/node/pull/23724
 // Ref: https://github.com/nodejs/node/issues/23596
 
+if (!common.canCreateSymLink()) common.skip("insufficient privileges");
 
-if (!common.canCreateSymLink())
-  common.skip('insufficient privileges');
-
-const assert = require('assert');
-const path = require('path');
-const fs = require('fs');
+const assert = require("assert");
+const path = require("path");
+const fs = require("fs");
 const fsPromises = fs.promises;
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
-const linkTargets = [
-  'relative-target',
-  tmpdir.resolve('absolute-target'),
-];
+const linkTargets = ["relative-target", tmpdir.resolve("absolute-target")];
 const linkPaths = [
-  path.relative(process.cwd(), tmpdir.resolve('relative-path')),
-  tmpdir.resolve('absolute-path'),
+  path.relative(process.cwd(), tmpdir.resolve("relative-path")),
+  tmpdir.resolve("absolute-path"),
 ];
 
 function testSync(target, path) {
@@ -32,9 +27,13 @@ function testSync(target, path) {
 }
 
 function testAsync(target, path) {
-  fs.symlink(target, path, common.mustSucceed(() => {
-    fs.readdirSync(path);
-  }));
+  fs.symlink(
+    target,
+    path,
+    common.mustSucceed(() => {
+      fs.readdirSync(path);
+    }),
+  );
 }
 
 async function testPromises(target, path) {
@@ -47,8 +46,10 @@ for (const linkTarget of linkTargets) {
   for (const linkPath of linkPaths) {
     testSync(linkTarget, `${linkPath}-${path.basename(linkTarget)}-sync`);
     testAsync(linkTarget, `${linkPath}-${path.basename(linkTarget)}-async`);
-    testPromises(linkTarget, `${linkPath}-${path.basename(linkTarget)}-promises`)
-      .then(common.mustCall());
+    testPromises(
+      linkTarget,
+      `${linkPath}-${path.basename(linkTarget)}-promises`,
+    ).then(common.mustCall());
   }
 }
 
@@ -60,9 +61,13 @@ for (const linkTarget of linkTargets) {
   }
 
   function testAsync(target, path) {
-    fs.symlink(target, path, common.mustSucceed(() => {
-      assert(!fs.existsSync(path));
-    }));
+    fs.symlink(
+      target,
+      path,
+      common.mustSucceed(() => {
+        assert(!fs.existsSync(path));
+      }),
+    );
   }
 
   async function testPromises(target, path) {
@@ -70,12 +75,14 @@ for (const linkTarget of linkTargets) {
     assert(!fs.existsSync(path));
   }
 
-  for (const linkTarget of linkTargets.map((p) => p + '-broken')) {
+  for (const linkTarget of linkTargets.map((p) => p + "-broken")) {
     for (const linkPath of linkPaths) {
       testSync(linkTarget, `${linkPath}-${path.basename(linkTarget)}-sync`);
       testAsync(linkTarget, `${linkPath}-${path.basename(linkTarget)}-async`);
-      testPromises(linkTarget, `${linkPath}-${path.basename(linkTarget)}-promises`)
-        .then(common.mustCall());
+      testPromises(
+        linkTarget,
+        `${linkPath}-${path.basename(linkTarget)}-promises`,
+      ).then(common.mustCall());
     }
   }
 }

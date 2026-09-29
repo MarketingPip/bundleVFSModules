@@ -19,9 +19,9 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
 // setImmediate should run clear its queued cbs once per event loop turn
 // but immediates queued while processing the current queue should happen
@@ -37,7 +37,9 @@ const QUEUE = 10;
 
 function run() {
   if (hit === 0) {
-    setTimeout(() => { ticked = true; }, 1);
+    setTimeout(() => {
+      ticked = true;
+    }, 1);
     const now = Date.now();
     while (Date.now() - now < 2);
   }
@@ -48,9 +50,8 @@ function run() {
   setImmediate(run);
 }
 
-for (let i = 0; i < QUEUE; i++)
-  setImmediate(run);
+for (let i = 0; i < QUEUE; i++) setImmediate(run);
 
-process.on('exit', function() {
+process.on("exit", function () {
   assert.strictEqual(hit, QUEUE);
 });

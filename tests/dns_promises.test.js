@@ -1,9 +1,16 @@
-import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
-import http from 'node:http';
-import dnsPacket from 'dns-packet';
-import { toRcode } from 'dns-packet/rcodes.js';
+import {
+  jest,
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+} from "@jest/globals";
+import http from "node:http";
+import dnsPacket from "dns-packet";
+import { toRcode } from "dns-packet/rcodes.js";
 
-import * as dnsPromisesNS from '../src/dns/promises.js';
+import * as dnsPromisesNS from "../src/dns/promises.js";
 import {
   Resolver,
   lookup,
@@ -27,52 +34,63 @@ import {
   getServers,
   getDefaultResultOrder,
   setDefaultResultOrder,
-} from '../src/dns/promises.js';
+} from "../src/dns/promises.js";
 
 // Deterministic stub DoH server (RFC 8484 wire format, like the callback suite).
 const STUB_ANSWERS = {
-  'A|stub.test': [
-    { name: 'stub.test', type: 'A', ttl: 100, data: '93.184.216.34' },
+  "A|stub.test": [
+    { name: "stub.test", type: "A", ttl: 100, data: "93.184.216.34" },
   ],
-  'MX|stub.test': [
-    { name: 'stub.test', type: 'MX', ttl: 300, data: { preference: 5, exchange: 'mail.stub.test.' } },
+  "MX|stub.test": [
+    {
+      name: "stub.test",
+      type: "MX",
+      ttl: 300,
+      data: { preference: 5, exchange: "mail.stub.test." },
+    },
   ],
-  'A|gone.stub.test': { rcode: 'NXDOMAIN' },
-  'A|empty.stub.test': { rcode: 'NOERROR', answers: [] },
+  "A|gone.stub.test": { rcode: "NXDOMAIN" },
+  "A|empty.stub.test": { rcode: "NOERROR", answers: [] },
 };
 
 let stubServer;
 let stubBase;
 
-describe('dns/promises', () => {
+describe("dns/promises", () => {
   beforeAll(async () => {
     await new Promise((resolveStart) => {
       stubServer = http.createServer((req, res) => {
-        const u = new URL(req.url, 'http://x');
+        const u = new URL(req.url, "http://x");
         let query;
         try {
-          query = dnsPacket.decode(Buffer.from(
-            (u.searchParams.get('dns') || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64'));
+          query = dnsPacket.decode(
+            Buffer.from(
+              (u.searchParams.get("dns") || "")
+                .replace(/-/g, "+")
+                .replace(/_/g, "/"),
+              "base64",
+            ),
+          );
         } catch {
           res.statusCode = 400;
           res.end();
           return;
         }
         const q = (query.questions && query.questions[0]) || {};
-        if (q.name === 'hang.stub.test') return; // hang → cancel
+        if (q.name === "hang.stub.test") return; // hang → cancel
         const key = `${q.type}|${q.name}`;
-        const spec = STUB_ANSWERS[key] || { rcode: 'NXDOMAIN' };
+        const spec = STUB_ANSWERS[key] || { rcode: "NXDOMAIN" };
         const wire = dnsPacket.encode({
-          type: 'response',
+          type: "response",
           id: query.id,
-          flags: toRcode(spec.rcode || 'NOERROR'),
+          flags: toRcode(spec.rcode || "NOERROR"),
           questions: query.questions,
-          answers: Array.isArray(spec) ? spec : (spec.answers || []),
+          answers: Array.isArray(spec) ? spec : spec.answers || [],
         });
-        res.setHeader('content-type', 'application/dns-message');
+        res.setHeader("content-type", "application/dns-message");
         res.end(wire);
       });
-      stubServer.listen(0, '127.0.0.1', () => {
+      stubServer.listen(0, "127.0.0.1", () => {
         stubBase = `http://127.0.0.1:${stubServer.address().port}/dns-query`;
         resolveStart();
       });
@@ -81,153 +99,190 @@ describe('dns/promises', () => {
   });
 
   afterAll(async () => {
-    setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']);
+    setServers([
+      "https://cloudflare-dns.com/dns-query",
+      "https://dns.google/dns-query",
+    ]);
     await new Promise((r) => stubServer.close(r));
   });
 
-  test('module namespace holds the promises API', () => {
-    expect(typeof dnsPromisesNS.lookup).toBe('function');
+  test("module namespace holds the promises API", () => {
+    expect(typeof dnsPromisesNS.lookup).toBe("function");
     expect(dnsPromisesNS.resolve4).toBe(resolve4);
     expect(dnsPromisesNS.Resolver).toBe(Resolver);
     // Real node:dns/promises has a default export (the full API object).
     expect(dnsPromisesNS.default).toBeDefined();
-    expect(typeof dnsPromisesNS.default.lookup).toBe('function');
+    expect(typeof dnsPromisesNS.default.lookup).toBe("function");
   });
 
-  test('argument validation throws synchronously (like node:dns/promises)', () => {
+  test("argument validation throws synchronously (like node:dns/promises)", () => {
     // These must throw — not return rejected promises.
     expect(() => resolveNs([])).toThrow(
-      expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' }));
+      expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }),
+    );
     expect(() => resolve4(123)).toThrow(
-      expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' }));
-    expect(() => resolve('stub.test', 'BOGUS')).toThrow(
-      expect.objectContaining({ code: 'ERR_INVALID_ARG_VALUE' }));
+      expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }),
+    );
+    expect(() => resolve("stub.test", "BOGUS")).toThrow(
+      expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }),
+    );
     expect(() => lookupService()).toThrow(
       expect.objectContaining({
-        code: 'ERR_MISSING_ARGS',
+        code: "ERR_MISSING_ARGS",
         message: 'The "address" and "port" arguments must be specified',
-      }));
-    expect(() => lookupService('0.0.0.0')).toThrow(
-      expect.objectContaining({ code: 'ERR_MISSING_ARGS' }));
+      }),
+    );
+    expect(() => lookupService("0.0.0.0")).toThrow(
+      expect.objectContaining({ code: "ERR_MISSING_ARGS" }),
+    );
     // A function in the options/rrtype slot is a sync type error (no callback
     // shift in the promises API) — matches node:dns/promises.
-    expect(() => lookup('127.0.0.1', () => {})).toThrow(
-      expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE', message: expect.stringContaining('"options"') }));
-    expect(() => resolve('127.0.0.1', () => {})).toThrow(
-      expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE', message: expect.stringContaining('"rrtype"') }));
+    expect(() => lookup("127.0.0.1", () => {})).toThrow(
+      expect.objectContaining({
+        code: "ERR_INVALID_ARG_TYPE",
+        message: expect.stringContaining('"options"'),
+      }),
+    );
+    expect(() => resolve("127.0.0.1", () => {})).toThrow(
+      expect.objectContaining({
+        code: "ERR_INVALID_ARG_TYPE",
+        message: expect.stringContaining('"rrtype"'),
+      }),
+    );
   });
 
-  test('resolve4 ignores a function options arg like node:dns/promises', async () => {
-    const p = resolve4('stub.test', () => {});
-    expect(typeof p.then).toBe('function');
-    await expect(p).resolves.toEqual(['93.184.216.34']);
+  test("resolve4 ignores a function options arg like node:dns/promises", async () => {
+    const p = resolve4("stub.test", () => {});
+    expect(typeof p.then).toBe("function");
+    await expect(p).resolves.toEqual(["93.184.216.34"]);
   });
 
-  test('lookup: falsy hostnames resolve { address: null, family: 4 }', async () => {
-    for (const v of ['', 0, NaN, null, undefined, false]) {
+  test("lookup: falsy hostnames resolve { address: null, family: 4 }", async () => {
+    for (const v of ["", 0, NaN, null, undefined, false]) {
       await expect(lookup(v)).resolves.toEqual({ address: null, family: 4 });
     }
   });
 
-  test('lookup returns { address, family }', async () => {
-    const res = await lookup('stub.test');
-    expect(res).toEqual({ address: '93.184.216.34', family: 4 });
+  test("lookup returns { address, family }", async () => {
+    const res = await lookup("stub.test");
+    expect(res).toEqual({ address: "93.184.216.34", family: 4 });
   });
 
-  test('lookup with all:true returns the array', async () => {
-    const res = await lookup('stub.test', { all: true });
-    expect(res).toEqual([{ address: '93.184.216.34', family: 4 }]);
+  test("lookup with all:true returns the array", async () => {
+    const res = await lookup("stub.test", { all: true });
+    expect(res).toEqual([{ address: "93.184.216.34", family: 4 }]);
   });
 
-  test('lookup rejects ENOTFOUND for NXDOMAIN', async () => {
-    await expect(lookup('gone.stub.test')).rejects.toMatchObject({ code: 'ENOTFOUND' });
-  });
-
-  test('lookup validation throws like Node', () => {
-    expect(() => lookup('stub.test', { family: 7 })).toThrow(
-      expect.objectContaining({ code: 'ERR_INVALID_ARG_VALUE' }));
-  });
-
-  test('resolve4 / resolveMx shapes', async () => {
-    expect(await resolve4('stub.test')).toEqual(['93.184.216.34']);
-    expect(await resolveMx('stub.test')).toEqual([{ priority: 5, exchange: 'mail.stub.test' }]);
-  });
-
-  test('resolve dispatches rrtype, defaults to A', async () => {
-    expect(await resolve('stub.test')).toEqual(['93.184.216.34']);
-    expect(await resolve('stub.test', 'MX')).toEqual([{ priority: 5, exchange: 'mail.stub.test' }]);
-    expect(() => resolve('stub.test', 'BOGUS')).toThrow(
-      expect.objectContaining({ code: 'ERR_INVALID_ARG_VALUE' }));
-  });
-
-  test('resolveAny rejects ENOTIMP like real Node (c-ares deprecated ANY)', async () => {
-    await expect(resolveAny('stub.test')).rejects.toMatchObject({
-      code: 'ENOTIMP', syscall: 'queryAny', hostname: 'stub.test',
+  test("lookup rejects ENOTFOUND for NXDOMAIN", async () => {
+    await expect(lookup("gone.stub.test")).rejects.toMatchObject({
+      code: "ENOTFOUND",
     });
   });
 
-  test('ENODATA for NOERROR-without-answers', async () => {
-    await expect(resolve4('empty.stub.test')).rejects.toMatchObject({ code: 'ENODATA' });
+  test("lookup validation throws like Node", () => {
+    expect(() => lookup("stub.test", { family: 7 })).toThrow(
+      expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }),
+    );
   });
 
-  test('Resolver instance is scoped and cancellable', async () => {
+  test("resolve4 / resolveMx shapes", async () => {
+    expect(await resolve4("stub.test")).toEqual(["93.184.216.34"]);
+    expect(await resolveMx("stub.test")).toEqual([
+      { priority: 5, exchange: "mail.stub.test" },
+    ]);
+  });
+
+  test("resolve dispatches rrtype, defaults to A", async () => {
+    expect(await resolve("stub.test")).toEqual(["93.184.216.34"]);
+    expect(await resolve("stub.test", "MX")).toEqual([
+      { priority: 5, exchange: "mail.stub.test" },
+    ]);
+    expect(() => resolve("stub.test", "BOGUS")).toThrow(
+      expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }),
+    );
+  });
+
+  test("resolveAny rejects ENOTIMP like real Node (c-ares deprecated ANY)", async () => {
+    await expect(resolveAny("stub.test")).rejects.toMatchObject({
+      code: "ENOTIMP",
+      syscall: "queryAny",
+      hostname: "stub.test",
+    });
+  });
+
+  test("ENODATA for NOERROR-without-answers", async () => {
+    await expect(resolve4("empty.stub.test")).rejects.toMatchObject({
+      code: "ENODATA",
+    });
+  });
+
+  test("Resolver instance is scoped and cancellable", async () => {
     const r = new Resolver();
     // Fresh instances use the default DoH servers, independent of the
     // module-level setServers (mirrors Node: instances use system DNS).
     expect(r.getServers()).toEqual([
-      'https://cloudflare-dns.com/dns-query',
-      'https://dns.google/dns-query',
+      "https://cloudflare-dns.com/dns-query",
+      "https://dns.google/dns-query",
     ]);
-    r.setServers(['https://dns.google/dns-query']);
-    expect(r.getServers()).toEqual(['https://dns.google/dns-query']);
+    r.setServers(["https://dns.google/dns-query"]);
+    expect(r.getServers()).toEqual(["https://dns.google/dns-query"]);
 
     const r2 = new Resolver();
     r2.setServers([stubBase]);
-    const p = r2.resolve4('hang.stub.test');
+    const p = r2.resolve4("hang.stub.test");
     r2.cancel();
-    await expect(p).rejects.toMatchObject({ code: 'ECANCELLED' });
+    await expect(p).rejects.toMatchObject({ code: "ECANCELLED" });
   });
 
-  test('setServers keeps callback and promises APIs in sync', () => {
+  test("setServers keeps callback and promises APIs in sync", () => {
     const prev = getServers();
     try {
-      setServers(['https://dns.google/dns-query']);
-      expect(getServers()).toEqual(['https://dns.google/dns-query']);
+      setServers(["https://dns.google/dns-query"]);
+      expect(getServers()).toEqual(["https://dns.google/dns-query"]);
     } finally {
       setServers(prev);
     }
   });
 
-  test('getDefaultResultOrder/setDefaultResultOrder', () => {
-    expect(getDefaultResultOrder()).toBe('verbatim');
-    setDefaultResultOrder('ipv6first');
-    expect(getDefaultResultOrder()).toBe('ipv6first');
-    setDefaultResultOrder('verbatim');
-    expect(() => setDefaultResultOrder('nope')).toThrow(
-      expect.objectContaining({ code: 'ERR_INVALID_ARG_VALUE' }));
+  test("getDefaultResultOrder/setDefaultResultOrder", () => {
+    expect(getDefaultResultOrder()).toBe("verbatim");
+    setDefaultResultOrder("ipv6first");
+    expect(getDefaultResultOrder()).toBe("ipv6first");
+    setDefaultResultOrder("verbatim");
+    expect(() => setDefaultResultOrder("nope")).toThrow(
+      expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }),
+    );
   });
 
-  test('reverse validation', async () => {
+  test("reverse validation", async () => {
     // non-IP literal → rejected promise (like node:dns/promises); non-string → sync throw
-    await expect(reverse('not-an-ip')).rejects.toMatchObject({ code: 'EINVAL' });
-    expect(() => reverse(123)).toThrow(expect.objectContaining({ code: 'ERR_INVALID_ARG_TYPE' }));
+    await expect(reverse("not-an-ip")).rejects.toMatchObject({
+      code: "EINVAL",
+    });
+    expect(() => reverse(123)).toThrow(
+      expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }),
+    );
   });
 
-  test('lookupService validation', () => {
-    expect(() => lookupService('notip', 80)).toThrow(
-      expect.objectContaining({ code: 'ERR_INVALID_ARG_VALUE' }));
+  test("lookupService validation", () => {
+    expect(() => lookupService("notip", 80)).toThrow(
+      expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }),
+    );
   });
 
-  test('live: resolve4 + resolveTxt + reverse', async () => {
+  test("live: resolve4 + resolveTxt + reverse", async () => {
     const prev = getServers();
-    setServers(['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']);
+    setServers([
+      "https://cloudflare-dns.com/dns-query",
+      "https://dns.google/dns-query",
+    ]);
     try {
-      const ips = await resolve4('example.com');
+      const ips = await resolve4("example.com");
       expect(ips.length).toBeGreaterThan(0);
-      const txt = await resolveTxt('example.com');
+      const txt = await resolveTxt("example.com");
       expect(Array.isArray(txt[0])).toBe(true);
-      const hostnames = await reverse('8.8.8.8');
-      expect(hostnames).toContain('dns.google');
+      const hostnames = await reverse("8.8.8.8");
+      expect(hostnames).toContain("dns.google");
     } finally {
       setServers(prev);
     }

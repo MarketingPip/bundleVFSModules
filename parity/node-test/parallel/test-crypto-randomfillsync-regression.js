@@ -1,18 +1,17 @@
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const { randomFillSync } = require('crypto');
-const assert = require('assert');
+const { randomFillSync } = require("crypto");
+const assert = require("assert");
 
 const ab = new ArrayBuffer(20);
 const buf = Buffer.from(ab, 10);
 
-const before = buf.toString('hex');
+const before = buf.toString("hex");
 
 randomFillSync(buf);
 
-const after = buf.toString('hex');
+const after = buf.toString("hex");
 
 assert.notStrictEqual(before, after);

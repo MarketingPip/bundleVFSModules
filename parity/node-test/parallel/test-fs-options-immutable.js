@@ -1,15 +1,15 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // These tests make sure that the `options` object passed to these functions are
 // never altered.
 //
 // Refer: https://github.com/nodejs/node/issues/7655
 
-const fs = require('fs');
+const fs = require("fs");
 
 const options = common.mustNotMutateObjectDeep({});
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
 fs.readFile(__filename, options, common.mustSucceed());
@@ -19,10 +19,10 @@ fs.readdir(__dirname, options, common.mustSucceed());
 fs.readdirSync(__dirname, options);
 
 if (common.canCreateSymLink()) {
-  const sourceFile = tmpdir.resolve('test-readlink');
-  const linkFile = tmpdir.resolve('test-readlink-link');
+  const sourceFile = tmpdir.resolve("test-readlink");
+  const linkFile = tmpdir.resolve("test-readlink-link");
 
-  fs.writeFileSync(sourceFile, '');
+  fs.writeFileSync(sourceFile, "");
   fs.symlinkSync(sourceFile, linkFile);
 
   fs.readlink(linkFile, options, common.mustSucceed());
@@ -30,18 +30,19 @@ if (common.canCreateSymLink()) {
 }
 
 {
-  const fileName = tmpdir.resolve('writeFile');
-  fs.writeFileSync(fileName, 'ABCD', options);
-  fs.writeFile(fileName, 'ABCD', options, common.mustSucceed());
+  const fileName = tmpdir.resolve("writeFile");
+  fs.writeFileSync(fileName, "ABCD", options);
+  fs.writeFile(fileName, "ABCD", options, common.mustSucceed());
 }
 
 {
-  const fileName = tmpdir.resolve('appendFile');
-  fs.appendFileSync(fileName, 'ABCD', options);
-  fs.appendFile(fileName, 'ABCD', options, common.mustSucceed());
+  const fileName = tmpdir.resolve("appendFile");
+  fs.appendFileSync(fileName, "ABCD", options);
+  fs.appendFile(fileName, "ABCD", options, common.mustSucceed());
 }
 
-if (!common.isIBMi) { // IBMi does not support fs.watch()
+if (!common.isIBMi) {
+  // IBMi does not support fs.watch()
   const watch = fs.watch(__filename, options, common.mustNotCall());
   watch.close();
 }
@@ -57,14 +58,19 @@ if (!common.isIBMi) { // IBMi does not support fs.watch()
 }
 
 {
-  const tempFileName = tmpdir.resolve('mkdtemp-');
+  const tempFileName = tmpdir.resolve("mkdtemp-");
   fs.mkdtempSync(tempFileName, options);
   fs.mkdtemp(tempFileName, options, common.mustSucceed());
 }
 
 {
-  const fileName = tmpdir.resolve('streams');
-  fs.WriteStream(fileName, options).once('open', common.mustCall(() => {
-    fs.ReadStream(fileName, options).destroy();
-  })).end();
+  const fileName = tmpdir.resolve("streams");
+  fs.WriteStream(fileName, options)
+    .once(
+      "open",
+      common.mustCall(() => {
+        fs.ReadStream(fileName, options).destroy();
+      }),
+    )
+    .end();
 }

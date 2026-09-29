@@ -1,7 +1,7 @@
-'use strict';
-const common = require('../common');
-const { spawnSync } = require('child_process');
+"use strict";
+const common = require("../common");
+const { spawnSync } = require("child_process");
 const stateful = {
-  toString: common.mustCall(() => ';'),
+  toString: common.mustCall(() => ";"),
 };
-spawnSync(process.execPath, ['-e', stateful], { stdio: 'ignore' });
+spawnSync(process.execPath, ["-e", stateful], { stdio: "ignore" });

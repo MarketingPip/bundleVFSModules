@@ -1,7 +1,7 @@
-'use strict';
-require('../common');
-const assert = require('assert');
-const vm = require('vm');
+"use strict";
+require("../common");
+const assert = require("assert");
+const vm = require("vm");
 
 // Assert that accessor descriptors are not flattened on the sandbox.
 // Issue: https://github.com/nodejs/node/issues/2734
@@ -15,4 +15,4 @@ const code = `Object.defineProperty(
              var desc = Object.getOwnPropertyDescriptor(this, 'foo');`;
 
 vm.runInContext(code, sandbox);
-assert.strictEqual(typeof sandbox.desc.get, 'function');
+assert.strictEqual(typeof sandbox.desc.get, "function");

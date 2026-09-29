@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { Duplex } = require('stream');
-const assert = require('assert');
+const common = require("../common");
+const { Duplex } = require("stream");
+const assert = require("assert");
 
 // basic
 {
   // Find it on Duplex.prototype
-  assert(Object.hasOwn(Duplex.prototype, 'writableFinished'));
+  assert(Object.hasOwn(Duplex.prototype, "writableFinished"));
 }
 
 // event
@@ -20,11 +20,17 @@ const assert = require('assert');
     cb();
   });
 
-  duplex.on('finish', common.mustCall(() => {
-    assert.strictEqual(duplex.writableFinished, true);
-  }));
+  duplex.on(
+    "finish",
+    common.mustCall(() => {
+      assert.strictEqual(duplex.writableFinished, true);
+    }),
+  );
 
-  duplex.end('testing finished state', common.mustCall(() => {
-    assert.strictEqual(duplex.writableFinished, true);
-  }));
+  duplex.end(
+    "testing finished state",
+    common.mustCall(() => {
+      assert.strictEqual(duplex.writableFinished, true);
+    }),
+  );
 }

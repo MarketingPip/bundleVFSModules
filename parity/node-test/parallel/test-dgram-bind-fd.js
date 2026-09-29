@@ -1,14 +1,13 @@
 // Flags: --expose-internals
-'use strict';
-const common = require('../common');
-if (common.isWindows)
-  common.skip('Does not support binding fd on Windows');
+"use strict";
+const common = require("../common");
+if (common.isWindows) common.skip("Does not support binding fd on Windows");
 
-const assert = require('assert');
-const dgram = require('dgram');
-const { internalBinding } = require('internal/test/binding');
-const { UDP } = internalBinding('udp_wrap');
-const { UV_UDP_REUSEADDR } = require('os').constants;
+const assert = require("assert");
+const dgram = require("dgram");
+const { internalBinding } = require("internal/test/binding");
+const { UDP } = internalBinding("udp_wrap");
+const { UV_UDP_REUSEADDR } = require("os").constants;
 
 const BUFFER_SIZE = 4096;
 
@@ -16,8 +15,7 @@ const BUFFER_SIZE = 4096;
 {
   function createHandle(reuseAddr, udp4, bindAddress) {
     let flags = 0;
-    if (reuseAddr)
-      flags |= UV_UDP_REUSEADDR;
+    if (reuseAddr) flags |= UV_UDP_REUSEADDR;
 
     const handle = new UDP();
     let err = 0;
@@ -33,8 +31,8 @@ const BUFFER_SIZE = 4096;
   }
 
   function testWithOptions(reuseAddr, udp4) {
-    const type = udp4 ? 'udp4' : 'udp6';
-    const bindAddress = udp4 ? common.localhostIPv4 : '::1';
+    const type = udp4 ? "udp4" : "udp6";
+    const bindAddress = udp4 ? common.localhostIPv4 : "::1";
 
     let fd;
 
@@ -42,74 +40,87 @@ const BUFFER_SIZE = 4096;
       type,
     });
 
-    receiver.bind({
-      port: 0,
-      address: bindAddress,
-    }, common.mustCall(() => {
-      const { port, address } = receiver.address();
-      // Create a handle to reuse its fd.
-      const handle = createHandle(reuseAddr, udp4, bindAddress);
-
-      fd = handle.fd;
-      assert.notStrictEqual(handle.fd, -1);
-
-      const socket = dgram.createSocket({
-        type,
-        recvBufferSize: BUFFER_SIZE,
-        sendBufferSize: BUFFER_SIZE,
-      });
-
-      socket.bind({
+    receiver.bind(
+      {
         port: 0,
         address: bindAddress,
-        fd,
-      }, common.mustCall(() => {
-        // Test address().
-        const rinfo = {};
-        const err = handle.getsockname(rinfo);
-        assert.strictEqual(err, 0);
-        const socketRInfo = socket.address();
-        assert.strictEqual(rinfo.address, socketRInfo.address);
-        assert.strictEqual(rinfo.port, socketRInfo.port);
+      },
+      common.mustCall(() => {
+        const { port, address } = receiver.address();
+        // Create a handle to reuse its fd.
+        const handle = createHandle(reuseAddr, udp4, bindAddress);
 
-        // Test buffer size.
-        const recvBufferSize = socket.getRecvBufferSize();
-        const sendBufferSize = socket.getSendBufferSize();
+        fd = handle.fd;
+        assert.notStrictEqual(handle.fd, -1);
 
-        // note: linux will double the buffer size
-        const expectedBufferSize = common.isLinux ?
-          BUFFER_SIZE * 2 : BUFFER_SIZE;
-        assert.strictEqual(recvBufferSize, expectedBufferSize);
-        assert.strictEqual(sendBufferSize, expectedBufferSize);
+        const socket = dgram.createSocket({
+          type,
+          recvBufferSize: BUFFER_SIZE,
+          sendBufferSize: BUFFER_SIZE,
+        });
 
-        socket.send(String(fd), port, address);
-      }));
+        socket.bind(
+          {
+            port: 0,
+            address: bindAddress,
+            fd,
+          },
+          common.mustCall(() => {
+            // Test address().
+            const rinfo = {};
+            const err = handle.getsockname(rinfo);
+            assert.strictEqual(err, 0);
+            const socketRInfo = socket.address();
+            assert.strictEqual(rinfo.address, socketRInfo.address);
+            assert.strictEqual(rinfo.port, socketRInfo.port);
 
-      socket.on('message', common.mustCall((data) => {
-        assert.strictEqual(data.toString('utf8'), String(fd));
-        socket.close();
-      }));
+            // Test buffer size.
+            const recvBufferSize = socket.getRecvBufferSize();
+            const sendBufferSize = socket.getSendBufferSize();
 
-      socket.on('error', (err) => {
-        console.error(err.message);
-        assert.fail(err.message);
-      });
+            // note: linux will double the buffer size
+            const expectedBufferSize = common.isLinux
+              ? BUFFER_SIZE * 2
+              : BUFFER_SIZE;
+            assert.strictEqual(recvBufferSize, expectedBufferSize);
+            assert.strictEqual(sendBufferSize, expectedBufferSize);
 
-      socket.on('close', common.mustCall());
-    }));
+            socket.send(String(fd), port, address);
+          }),
+        );
 
-    receiver.on('message', common.mustCall((data, { address, port }) => {
-      assert.strictEqual(data.toString('utf8'), String(fd));
-      receiver.send(String(fd), port, address);
-      process.nextTick(() => receiver.close());
-    }));
+        socket.on(
+          "message",
+          common.mustCall((data) => {
+            assert.strictEqual(data.toString("utf8"), String(fd));
+            socket.close();
+          }),
+        );
 
-    receiver.on('error', (err) => {
+        socket.on("error", (err) => {
+          console.error(err.message);
+          assert.fail(err.message);
+        });
+
+        socket.on("close", common.mustCall());
+      }),
+    );
+
+    receiver.on(
+      "message",
+      common.mustCall((data, { address, port }) => {
+        assert.strictEqual(data.toString("utf8"), String(fd));
+        receiver.send(String(fd), port, address);
+        process.nextTick(() => receiver.close());
+      }),
+    );
+
+    receiver.on("error", (err) => {
       console.error(err.message);
       assert.fail(err.message);
     });
 
-    receiver.on('close', common.mustCall());
+    receiver.on("close", common.mustCall());
   }
 
   testWithOptions(true, true);

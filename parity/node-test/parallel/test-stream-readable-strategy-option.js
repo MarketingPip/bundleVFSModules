@@ -1,11 +1,11 @@
-'use strict';
-const common = require('../common');
-const { Readable } = require('stream');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const { Readable } = require("stream");
+const assert = require("assert");
 
 {
   // Strategy 2
-  const streamData = ['a', 'b', 'c', null];
+  const streamData = ["a", "b", "c", null];
 
   // Fulfill a Readable object
   const readable = new Readable({
@@ -27,7 +27,7 @@ const assert = require('assert');
 
 {
   // Strategy 2
-  const streamData = ['a', 'b', 'c', null];
+  const streamData = ["a", "b", "c", null];
 
   // Fulfill a Readable object
   const readable = new Readable({
@@ -55,20 +55,23 @@ const assert = require('assert');
       start: common.mustCall((controller) => {
         // Check if the strategy is being assigned on the init of the ReadableStream
         assert.strictEqual(controller.desiredSize, desireSizeExpected);
-        controller.enqueue('a');
-        controller.enqueue('b');
+        controller.enqueue("a");
+        controller.enqueue("b");
         controller.close();
       }),
     },
-    new CountQueuingStrategy({ highWaterMark: desireSizeExpected })
+    new CountQueuingStrategy({ highWaterMark: desireSizeExpected }),
   );
 
   const reader = stringStream.getReader();
 
   reader.read().then(common.mustCall());
   reader.read().then(common.mustCall());
-  reader.read().then(({ value, done }) => {
-    assert.strictEqual(value, undefined);
-    assert.strictEqual(done, true);
-  }).then(common.mustCall());
+  reader
+    .read()
+    .then(({ value, done }) => {
+      assert.strictEqual(value, undefined);
+      assert.strictEqual(done, true);
+    })
+    .then(common.mustCall());
 }

@@ -1,7 +1,7 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 
 // We don't really care about the calling results here.
 // So, this makes the test less fragile.
@@ -19,7 +19,7 @@ setTimeout(common.mustCall(), 1);
 clearTimeout(t1);
 clearInterval(i1);
 
-process.on('exit', () => {
+process.on("exit", () => {
   assert.strictEqual(t1._destroyed, true);
   assert.strictEqual(t2._destroyed, true);
   assert.strictEqual(i1._destroyed, true);

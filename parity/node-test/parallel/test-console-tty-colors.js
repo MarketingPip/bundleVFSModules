@@ -1,29 +1,26 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const util = require('util');
-const { Writable } = require('stream');
-const { Console } = require('console');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const util = require("util");
+const { Writable } = require("stream");
+const { Console } = require("console");
 
 function check(isTTY, colorMode, expectedColorMode, inspectOptions) {
-  const items = [
-    1,
-    { a: 2 },
-    [ 'foo' ],
-    { '\\a': '\\bar' },
-  ];
+  const items = [1, { a: 2 }, ["foo"], { "\\a": "\\bar" }];
 
   let i = 0;
   const stream = new Writable({
     write: common.mustCall((chunk, enc, cb) => {
-      assert.strictEqual(chunk.trim(),
-                         util.inspect(items[i++], {
-                           colors: expectedColorMode,
-                           ...inspectOptions
-                         }));
+      assert.strictEqual(
+        chunk.trim(),
+        util.inspect(items[i++], {
+          colors: expectedColorMode,
+          ...inspectOptions,
+        }),
+      );
       cb();
     }, items.length),
-    decodeStrings: false
+    decodeStrings: false,
   });
   stream.isTTY = isTTY;
 
@@ -33,17 +30,17 @@ function check(isTTY, colorMode, expectedColorMode, inspectOptions) {
     stdout: stream,
     ignoreErrors: false,
     colorMode,
-    inspectOptions
+    inspectOptions,
   });
   for (const item of items) {
     testConsole.log(item);
   }
 }
 
-check(true, 'auto', true);
-check(false, 'auto', false);
+check(true, "auto", true);
+check(false, "auto", false);
 check(false, undefined, true, { colors: true, compact: false });
-check(true, 'auto', true, { compact: false });
+check(true, "auto", true, { compact: false });
 check(true, undefined, false, { colors: false });
 check(true, true, true);
 check(false, true, true);
@@ -53,27 +50,27 @@ check(false, false, false);
 // Check invalid options.
 {
   const stream = new Writable({
-    write: common.mustNotCall()
+    write: common.mustNotCall(),
   });
 
-  [0, 'true', null, {}, [], () => {}].forEach((colorMode) => {
+  [0, "true", null, {}, [], () => {}].forEach((colorMode) => {
     const received = util.inspect(colorMode);
     assert.throws(
       () => {
         new Console({
           stdout: stream,
           ignoreErrors: false,
-          colorMode: colorMode
+          colorMode: colorMode,
         });
       },
       {
         message: `The argument 'colorMode' must be one of: 'auto', true, false. Received ${received}`,
-        code: 'ERR_INVALID_ARG_VALUE'
-      }
+        code: "ERR_INVALID_ARG_VALUE",
+      },
     );
   });
 
-  [true, false, 'auto'].forEach((colorMode) => {
+  [true, false, "auto"].forEach((colorMode) => {
     assert.throws(
       () => {
         new Console({
@@ -81,15 +78,16 @@ check(false, false, false);
           ignoreErrors: false,
           colorMode: colorMode,
           inspectOptions: {
-            colors: false
-          }
+            colors: false,
+          },
         });
       },
       {
-        message: 'Option "options.inspectOptions.color" cannot be used in ' +
-                 'combination with option "colorMode"',
-        code: 'ERR_INCOMPATIBLE_OPTION_PAIR'
-      }
+        message:
+          'Option "options.inspectOptions.color" cannot be used in ' +
+          'combination with option "colorMode"',
+        code: "ERR_INCOMPATIBLE_OPTION_PAIR",
+      },
     );
   });
 }

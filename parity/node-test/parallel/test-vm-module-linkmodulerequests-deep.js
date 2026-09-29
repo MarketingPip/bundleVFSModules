@@ -1,16 +1,16 @@
-'use strict';
+"use strict";
 
 // Flags: --experimental-vm-modules --js-source-phase-imports
 
-require('../common');
+require("../common");
 
-const assert = require('assert');
+const assert = require("assert");
 
-const { SourceTextModule } = require('vm');
-const test = require('node:test');
+const { SourceTextModule } = require("vm");
+const test = require("node:test");
 
-test('deep linking', async function depth() {
-  const foo = new SourceTextModule('export default 5');
+test("deep linking", async function depth() {
+  const foo = new SourceTextModule("export default 5");
   foo.linkRequests([]);
   foo.instantiate();
 
@@ -24,9 +24,9 @@ test('deep linking', async function depth() {
     return mod;
   }
 
-  const bar = getProxy('foo', foo);
-  const baz = getProxy('bar', bar);
-  const barz = getProxy('baz', baz);
+  const bar = getProxy("foo", foo);
+  const baz = getProxy("bar", bar);
+  const barz = getProxy("baz", baz);
 
   await barz.evaluate();
 

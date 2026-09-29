@@ -1,5 +1,5 @@
 // moduleLoader.js
-import {parse} from "https://esm.sh/acorn";
+import { parse } from "https://esm.sh/acorn";
 import { simple } from "https://esm.sh/acorn-walk";
 
 // ─── Fetch cache ─────────────────────────────────────────────────────────────
@@ -21,7 +21,8 @@ function fetchModule(url) {
 function resolveImport(spec, importer) {
   if (/^https?:\/\//.test(spec)) return spec;
   if (spec.startsWith("/")) return new URL(spec, new URL(importer).origin).href;
-  if (spec.startsWith("./") || spec.startsWith("../")) return new URL(spec, importer).href;
+  if (spec.startsWith("./") || spec.startsWith("../"))
+    return new URL(spec, importer).href;
   throw new Error(`Bare specifier "${spec}" — supply a full URL or CDN prefix`);
 }
 
@@ -38,7 +39,11 @@ function extractImports(code, baseUrl) {
   const record = (node) => {
     const src = node.source;
     if (!src || src.type !== "Literal" || typeof src.value !== "string") return;
-    hits.push({ start: src.start, end: src.end, url: resolveImport(src.value, baseUrl) });
+    hits.push({
+      start: src.start,
+      end: src.end,
+      url: resolveImport(src.value, baseUrl),
+    });
   };
   simple(ast, {
     ImportDeclaration: record,
@@ -47,7 +52,11 @@ function extractImports(code, baseUrl) {
     ImportExpression(node) {
       const src = node.source;
       if (src?.type === "Literal" && typeof src.value === "string")
-        hits.push({ start: src.start, end: src.end, url: resolveImport(src.value, baseUrl) });
+        hits.push({
+          start: src.start,
+          end: src.end,
+          url: resolveImport(src.value, baseUrl),
+        });
     },
   });
   return hits.sort((a, b) => a.start - b.start);
@@ -95,7 +104,7 @@ function topoSort(entryUrl, deps) {
     if (recursionStack.has(url)) {
       // Circular dependency detected!
       console.warn(`Circular dependency detected: ${url} is part of a loop.`);
-      return; 
+      return;
     }
     if (visited.has(url)) return;
 
@@ -142,10 +151,10 @@ export async function bundle(entryUrl) {
 
     /**
      * Precise Rewriting:
-     * Instead of replaceAll (which might corrupt string literals), 
-     * we should ideally use the AST offsets. However, since we already 
-     * performed one pass of rewriting in collectModules, the offsets 
-     * have shifted. 
+     * Instead of replaceAll (which might corrupt string literals),
+     * we should ideally use the AST offsets. However, since we already
+     * performed one pass of rewriting in collectModules, the offsets
+     * have shifted.
      * * To be safe, we replace the absolute URLs generated in collectModules
      * with their final blob: equivalents.
      */
@@ -160,7 +169,7 @@ export async function bundle(entryUrl) {
 
     const blob = new Blob([code], { type: "application/javascript" });
     const blobUrl = URL.createObjectURL(blob);
-    
+
     blobUrls.set(url, blobUrl);
     created.push(blobUrl);
   }

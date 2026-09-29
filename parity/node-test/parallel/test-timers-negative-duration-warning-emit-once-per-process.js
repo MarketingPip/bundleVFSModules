@@ -1,25 +1,25 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 
 const NEGATIVE_NUMBER = -1;
 
 function timerNotCanceled() {
-  assert.fail('Timer should be canceled');
+  assert.fail("Timer should be canceled");
 }
 
 process.on(
-  'warning',
+  "warning",
   common.mustCall((warning) => {
-    if (warning.name === 'DeprecationWarning') return;
+    if (warning.name === "DeprecationWarning") return;
 
-    const lines = warning.message.split('\n');
+    const lines = warning.message.split("\n");
 
-    assert.strictEqual(warning.name, 'TimeoutNegativeWarning');
+    assert.strictEqual(warning.name, "TimeoutNegativeWarning");
     assert.strictEqual(lines[0], `${NEGATIVE_NUMBER} is a negative number.`);
     assert.strictEqual(lines.length, 2);
-  }, 1)
+  }, 1),
 );
 
 {

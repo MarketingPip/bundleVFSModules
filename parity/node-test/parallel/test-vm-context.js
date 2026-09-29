@@ -19,58 +19,61 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
-const vm = require('vm');
+"use strict";
+require("../common");
+const assert = require("assert");
+const vm = require("vm");
 const Script = vm.Script;
 let script = new Script('"passed";');
 
 // Run in a new empty context
 let context = vm.createContext();
 let result = script.runInContext(context);
-assert.strictEqual(result, 'passed');
+assert.strictEqual(result, "passed");
 
 // Create a new pre-populated context
-context = vm.createContext({ 'foo': 'bar', 'thing': 'lala' });
-assert.strictEqual(context.foo, 'bar');
-assert.strictEqual(context.thing, 'lala');
+context = vm.createContext({ foo: "bar", thing: "lala" });
+assert.strictEqual(context.foo, "bar");
+assert.strictEqual(context.thing, "lala");
 
 // Test updating context
-script = new Script('foo = 3;');
+script = new Script("foo = 3;");
 result = script.runInContext(context);
 assert.strictEqual(context.foo, 3);
-assert.strictEqual(context.thing, 'lala');
+assert.strictEqual(context.thing, "lala");
 
 // Issue GH-227:
-assert.throws(() => {
-  vm.runInNewContext('', null, 'some.js');
-}, {
-  code: 'ERR_INVALID_ARG_TYPE',
-  name: 'TypeError'
-});
+assert.throws(
+  () => {
+    vm.runInNewContext("", null, "some.js");
+  },
+  {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+  },
+);
 
 // Issue GH-1140:
 // Test runInContext signature
 let gh1140Exception;
 try {
-  vm.runInContext('throw new Error()', context, 'expected-filename.js');
+  vm.runInContext("throw new Error()", context, "expected-filename.js");
 } catch (e) {
   gh1140Exception = e;
   assert.match(e.stack, /expected-filename/);
 }
 // This is outside of catch block to confirm catch block ran.
-assert.strictEqual(gh1140Exception.toString(), 'Error');
+assert.strictEqual(gh1140Exception.toString(), "Error");
 
 const nonContextualObjectError = {
-  code: 'ERR_INVALID_ARG_TYPE',
-  name: 'TypeError',
-  message: /must be of type object/
+  code: "ERR_INVALID_ARG_TYPE",
+  name: "TypeError",
+  message: /must be of type object/,
 };
 const contextifiedObjectError = {
-  code: 'ERR_INVALID_ARG_TYPE',
-  name: 'TypeError',
-  message: /The "contextifiedObject" argument must be an vm\.Context/
+  code: "ERR_INVALID_ARG_TYPE",
+  name: "TypeError",
+  message: /The "contextifiedObject" argument must be an vm\.Context/,
 };
 
 [
@@ -78,25 +81,31 @@ const contextifiedObjectError = {
   [null, nonContextualObjectError],
   [0, nonContextualObjectError],
   [0.0, nonContextualObjectError],
-  ['', nonContextualObjectError],
+  ["", nonContextualObjectError],
   [{}, contextifiedObjectError],
   [[], contextifiedObjectError],
 ].forEach((e) => {
-  assert.throws(() => { script.runInContext(e[0]); }, e[1]);
-  assert.throws(() => { vm.runInContext('', e[0]); }, e[1]);
+  assert.throws(() => {
+    script.runInContext(e[0]);
+  }, e[1]);
+  assert.throws(() => {
+    vm.runInContext("", e[0]);
+  }, e[1]);
 });
 
 // Issue GH-693:
 // Test RegExp as argument to assert.throws
-script = vm.createScript('const assert = require(\'assert\'); assert.throws(' +
-                         'function() { throw "hello world"; }, /hello/);',
-                         'some.js');
+script = vm.createScript(
+  "const assert = require('assert'); assert.throws(" +
+    'function() { throw "hello world"; }, /hello/);',
+  "some.js",
+);
 script.runInNewContext({ require });
 
 // Issue GH-7529
-script = vm.createScript('delete b');
+script = vm.createScript("delete b");
 let ctx = {};
-Object.defineProperty(ctx, 'b', { configurable: false });
+Object.defineProperty(ctx, "b", { configurable: false });
 ctx = vm.createContext(ctx);
 assert.strictEqual(script.runInContext(ctx), false);
 
@@ -104,19 +113,22 @@ assert.strictEqual(script.runInContext(ctx), false);
 // number.
 {
   let stack = null;
-  assert.throws(() => {
-    vm.runInContext(' throw new Error()', context, {
-      filename: 'expected-filename.js',
-      lineOffset: 32,
-      columnOffset: 123
-    });
-  }, (err) => {
-    stack = err.stack;
-    return /^ \^/m.test(stack) &&
-           /expected-filename\.js:33:131/.test(stack);
-  }, `stack not formatted as expected: ${stack}`);
+  assert.throws(
+    () => {
+      vm.runInContext(" throw new Error()", context, {
+        filename: "expected-filename.js",
+        lineOffset: 32,
+        columnOffset: 123,
+      });
+    },
+    (err) => {
+      stack = err.stack;
+      return /^ \^/m.test(stack) && /expected-filename\.js:33:131/.test(stack);
+    },
+    `stack not formatted as expected: ${stack}`,
+  );
 }
 
 // https://github.com/nodejs/node/issues/6158
 ctx = new Proxy({}, {});
-assert.strictEqual(typeof vm.runInNewContext('String', ctx), 'function');
+assert.strictEqual(typeof vm.runInNewContext("String", ctx), "function");

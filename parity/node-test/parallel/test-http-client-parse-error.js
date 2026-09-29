@@ -19,37 +19,46 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const http = require('http');
-const net = require('net');
-const assert = require('assert');
-const Countdown = require('../common/countdown');
+"use strict";
+const common = require("../common");
+const http = require("http");
+const net = require("net");
+const assert = require("assert");
+const Countdown = require("../common/countdown");
 
 const countdown = new Countdown(2, () => server.close());
 
 const payloads = [
-  'HTTP/1.1 302 Object Moved\r\nContent-Length: 0\r\n\r\nhi world',
-  'bad http = should trigger parse error',
+  "HTTP/1.1 302 Object Moved\r\nContent-Length: 0\r\n\r\nhi world",
+  "bad http = should trigger parse error",
 ];
 
 // Create a TCP server
-const server =
-  net.createServer(common.mustCall((c) => c.end(payloads.shift()), 2));
+const server = net.createServer(
+  common.mustCall((c) => c.end(payloads.shift()), 2),
+);
 
-server.listen(0, common.mustCall(() => {
-  for (let i = 0; i < 2; i++) {
-    const req = http.get({
-      port: server.address().port,
-      path: '/'
-    }).on('error', common.mustCall((e) => {
-      assert.strictEqual(req.socket.listenerCount('data'), 0);
-      assert.strictEqual(req.socket.listenerCount('end'), 1);
-      common.expectsError({
-        code: 'HPE_INVALID_CONSTANT',
-        message: 'Parse Error: Expected HTTP/, RTSP/ or ICE/'
-      })(e);
-      countdown.dec();
-    }));
-  }
-}));
+server.listen(
+  0,
+  common.mustCall(() => {
+    for (let i = 0; i < 2; i++) {
+      const req = http
+        .get({
+          port: server.address().port,
+          path: "/",
+        })
+        .on(
+          "error",
+          common.mustCall((e) => {
+            assert.strictEqual(req.socket.listenerCount("data"), 0);
+            assert.strictEqual(req.socket.listenerCount("end"), 1);
+            common.expectsError({
+              code: "HPE_INVALID_CONSTANT",
+              message: "Parse Error: Expected HTTP/, RTSP/ or ICE/",
+            })(e);
+            countdown.dec();
+          }),
+        );
+    }
+  }),
+);

@@ -1,14 +1,14 @@
-'use strict';
-const common = require('../common');
-const assert = require('node:assert');
-const fs = require('node:fs');
-const tmpdir = require('../common/tmpdir');
+"use strict";
+const common = require("../common");
+const assert = require("node:assert");
+const fs = require("node:fs");
+const tmpdir = require("../common/tmpdir");
 
-const testPath = tmpdir.resolve('assert-encoding-error');
-const options = 'test';
+const testPath = tmpdir.resolve("assert-encoding-error");
+const options = "test";
 const expectedError = {
-  code: 'ERR_INVALID_ARG_VALUE',
-  name: 'TypeError',
+  code: "ERR_INVALID_ARG_VALUE",
+  name: "TypeError",
 };
 
 assert.throws(() => {
@@ -36,19 +36,19 @@ assert.throws(() => {
 }, expectedError);
 
 assert.throws(() => {
-  fs.writeFile(testPath, 'data', options, common.mustNotCall());
+  fs.writeFile(testPath, "data", options, common.mustNotCall());
 }, expectedError);
 
 assert.throws(() => {
-  fs.writeFileSync(testPath, 'data', options);
+  fs.writeFileSync(testPath, "data", options);
 }, expectedError);
 
 assert.throws(() => {
-  fs.appendFile(testPath, 'data', options, common.mustNotCall());
+  fs.appendFile(testPath, "data", options, common.mustNotCall());
 }, expectedError);
 
 assert.throws(() => {
-  fs.appendFileSync(testPath, 'data', options);
+  fs.appendFileSync(testPath, "data", options);
 }, expectedError);
 
 assert.throws(() => {

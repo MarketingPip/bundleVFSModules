@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-const assert = require('assert');
-const fork = require('child_process').fork;
-const path = require('path');
+const assert = require("assert");
+const fork = require("child_process").fork;
+const path = require("path");
 
-const runjs = path.join(__dirname, '..', '..', 'benchmark', 'run.js');
+const runjs = path.join(__dirname, "..", "..", "benchmark", "run.js");
 
 function runBenchmark(name, env) {
-  const argv = ['test'];
+  const argv = ["test"];
 
   argv.push(name);
 
@@ -15,16 +15,16 @@ function runBenchmark(name, env) {
 
   const child = fork(runjs, argv, {
     env: mergedEnv,
-    stdio: ['inherit', 'pipe', 'inherit', 'ipc'],
+    stdio: ["inherit", "pipe", "inherit", "ipc"],
   });
-  child.stdout.setEncoding('utf8');
+  child.stdout.setEncoding("utf8");
 
-  let stdout = '';
-  child.stdout.on('data', (line) => {
+  let stdout = "";
+  child.stdout.on("data", (line) => {
     stdout += line;
   });
 
-  child.on('exit', (code, signal) => {
+  child.on("exit", (code, signal) => {
     assert.strictEqual(code, 0);
     assert.strictEqual(signal, null);
 
@@ -41,11 +41,15 @@ function runBenchmark(name, env) {
     const splitTests = stdout.split(/\n\s*\n/);
 
     for (let testIdx = 1; testIdx < splitTests.length - 1; testIdx++) {
-      const lines = splitTests[testIdx].split('\n');
+      const lines = splitTests[testIdx].split("\n");
       assert.match(lines[0], /.+/);
 
       if (!lines[1].includes('group="')) {
-        assert.strictEqual(lines.length, 2, `benchmark file not running exactly one configuration in test: ${stdout}`);
+        assert.strictEqual(
+          lines.length,
+          2,
+          `benchmark file not running exactly one configuration in test: ${stdout}`,
+        );
       }
     }
   });

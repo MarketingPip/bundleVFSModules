@@ -19,37 +19,37 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
 // This test ensures `dns.resolveNs()` does not raise a C++-land assertion error
 // and throw a JavaScript TypeError instead.
 // Issue https://github.com/nodejs/node-v0.x-archive/issues/7070
 
-const assert = require('assert');
-const dns = require('dns');
+const assert = require("assert");
+const dns = require("dns");
 const dnsPromises = dns.promises;
 
 assert.throws(
   () => dnsPromises.resolveNs([]), // bad name
   {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: /^The "name" argument must be of type string/
-  }
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message: /^The "name" argument must be of type string/,
+  },
 );
 assert.throws(
   () => dns.resolveNs([]), // bad name
   {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: /^The "name" argument must be of type string/
-  }
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message: /^The "name" argument must be of type string/,
+  },
 );
 assert.throws(
-  () => dns.resolveNs(''), // bad callback
+  () => dns.resolveNs(""), // bad callback
   {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError'
-  }
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+  },
 );

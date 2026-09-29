@@ -19,40 +19,42 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
 // Checks that the internal process.config is equivalent to the config.gypi file
 // created when we run configure.
 
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 
 // Check for existence of `process.config`.
-assert(Object.hasOwn(process, 'config'));
+assert(Object.hasOwn(process, "config"));
 
 // Ensure that `process.config` is an Object.
 assert.strictEqual(Object(process.config), process.config);
 
 // Ensure that you can't change config values
-assert.throws(() => { process.config.variables = 42; }, TypeError);
+assert.throws(() => {
+  process.config.variables = 42;
+}, TypeError);
 
-const configPath = path.resolve(__dirname, '..', '..', 'config.gypi');
+const configPath = path.resolve(__dirname, "..", "..", "config.gypi");
 
 if (!fs.existsSync(configPath)) {
-  common.skip('config.gypi does not exist.');
+  common.skip("config.gypi does not exist.");
 }
 
-let config = fs.readFileSync(configPath, 'utf8');
+let config = fs.readFileSync(configPath, "utf8");
 
 // Clean up comment at the first line.
-config = config.split('\n').slice(1).join('\n');
+config = config.split("\n").slice(1).join("\n");
 // Turn pseudo-booleans strings into booleans.
 config = JSON.parse(config, (key, value) => {
-  if (value === 'true') return true;
-  if (value === 'false') return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
   return value;
 });
 
@@ -61,8 +63,8 @@ try {
 } catch (e) {
   // If the assert fails, it only shows 3 lines. We need all the output to
   // compare.
-  console.log('config:', config);
-  console.log('process.config:', process.config);
+  console.log("config:", config);
+  console.log("process.config:", process.config);
 
   throw e;
 }

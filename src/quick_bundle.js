@@ -7,7 +7,8 @@ const cache = new Map();
 async function fetchModule(url) {
   if (cache.has(url)) return cache.get(url);
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
+  if (!res.ok)
+    throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
   const text = await res.text();
   cache.set(url, text);
   return text;
@@ -15,9 +16,13 @@ async function fetchModule(url) {
 
 function resolveImport(importPath, importer) {
   if (/^https?:\/\//.test(importPath)) return importPath;
-  if (importPath.startsWith("/")) return new URL(importPath, new URL(importer).origin).toString();
-  if (importPath.startsWith("./") || importPath.startsWith("../")) return new URL(importPath, importer).toString();
-  throw new Error(`Bare specifier "${importPath}" — pass a full URL or CDN prefix`);
+  if (importPath.startsWith("/"))
+    return new URL(importPath, new URL(importer).origin).toString();
+  if (importPath.startsWith("./") || importPath.startsWith("../"))
+    return new URL(importPath, importer).toString();
+  throw new Error(
+    `Bare specifier "${importPath}" — pass a full URL or CDN prefix`,
+  );
 }
 
 /**
@@ -26,13 +31,21 @@ function resolveImport(importPath, importer) {
  *   modules  — { url: rewrittenCode }   (import specifiers → absolute URLs)
  *   deps     — { url: [depUrl, …] }     (adjacency list for topo sort)
  */
-async function collectModules(entryUrl, modules = {}, deps = {}, seen = new Set()) {
+async function collectModules(
+  entryUrl,
+  modules = {},
+  deps = {},
+  seen = new Set(),
+) {
   if (seen.has(entryUrl)) return { modules, deps };
   seen.add(entryUrl);
 
   const code = await fetchModule(entryUrl);
-  const ast = acorn.parse(code, { ecmaVersion: "latest", sourceType: "module" });
-  const rewrites = [];  // { start, end, url }
+  const ast = acorn.parse(code, {
+    ecmaVersion: "latest",
+    sourceType: "module",
+  });
+  const rewrites = []; // { start, end, url }
   const depUrls = [];
 
   const handleSource = (node) => {
@@ -83,7 +96,7 @@ function topoSort(entryUrl, deps) {
     if (visited.has(url)) return;
     visited.add(url);
     for (const dep of deps[url] ?? []) visit(dep);
-    order.push(url);           // push AFTER children → leaves first
+    order.push(url); // push AFTER children → leaves first
   }
 
   visit(entryUrl);
@@ -105,9 +118,9 @@ function topoSort(entryUrl, deps) {
  */
 export async function bundle(entryUrl) {
   const { modules, deps } = await collectModules(entryUrl);
-  const order = topoSort(entryUrl, deps);     // e.g. [lodash.mjs, lodash-entry]
+  const order = topoSort(entryUrl, deps); // e.g. [lodash.mjs, lodash-entry]
 
-  const dataUrls = {};   // absUrl → data: URL
+  const dataUrls = {}; // absUrl → data: URL
 
   for (const url of order) {
     let code = modules[url];
@@ -116,9 +129,10 @@ export async function bundle(entryUrl) {
     for (const [abs, data] of Object.entries(dataUrls)) {
       code = code.split(`"${abs}"`).join(`"${data}"`);
     }
- 
-    dataUrls[url] = `data:application/javascript;base64,${btoa(unescape(encodeURIComponent(code)))}`;
+
+    dataUrls[url] =
+      `data:application/javascript;base64,${btoa(unescape(encodeURIComponent(code)))}`;
   }
- 
+
   return dataUrls[entryUrl];
 }

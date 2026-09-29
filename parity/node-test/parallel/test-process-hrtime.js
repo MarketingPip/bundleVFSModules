@@ -20,11 +20,11 @@
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 // Flags: --allow-natives-syntax --expose-internals --no-warnings
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const { internalBinding } = require('internal/test/binding');
+const { internalBinding } = require("internal/test/binding");
 
 // The default behavior, return an Array "tuple" of numbers
 const tuple = process.hrtime();
@@ -36,35 +36,48 @@ validateTuple(tuple);
 validateTuple(process.hrtime(tuple));
 
 // Test that only an Array may be passed to process.hrtime()
-assert.throws(() => {
-  process.hrtime(1);
-}, {
-  code: 'ERR_INVALID_ARG_TYPE',
-  name: 'TypeError',
-  message: 'The "time" argument must be an instance of Array. Received type ' +
-           'number (1)'
-});
-assert.throws(() => {
-  process.hrtime([]);
-}, {
-  code: 'ERR_OUT_OF_RANGE',
-  name: 'RangeError',
-  message: 'The value of "time" is out of range. It must be 2. Received 0'
-});
-assert.throws(() => {
-  process.hrtime([1]);
-}, {
-  code: 'ERR_OUT_OF_RANGE',
-  name: 'RangeError',
-  message: 'The value of "time" is out of range. It must be 2. Received 1'
-});
-assert.throws(() => {
-  process.hrtime([1, 2, 3]);
-}, {
-  code: 'ERR_OUT_OF_RANGE',
-  name: 'RangeError',
-  message: 'The value of "time" is out of range. It must be 2. Received 3'
-});
+assert.throws(
+  () => {
+    process.hrtime(1);
+  },
+  {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      'The "time" argument must be an instance of Array. Received type ' +
+      "number (1)",
+  },
+);
+assert.throws(
+  () => {
+    process.hrtime([]);
+  },
+  {
+    code: "ERR_OUT_OF_RANGE",
+    name: "RangeError",
+    message: 'The value of "time" is out of range. It must be 2. Received 0',
+  },
+);
+assert.throws(
+  () => {
+    process.hrtime([1]);
+  },
+  {
+    code: "ERR_OUT_OF_RANGE",
+    name: "RangeError",
+    message: 'The value of "time" is out of range. It must be 2. Received 1',
+  },
+);
+assert.throws(
+  () => {
+    process.hrtime([1, 2, 3]);
+  },
+  {
+    code: "ERR_OUT_OF_RANGE",
+    name: "RangeError",
+    message: 'The value of "time" is out of range. It must be 2. Received 3',
+  },
+);
 
 function validateTuple(tuple) {
   assert(Array.isArray(tuple));
@@ -76,12 +89,12 @@ function validateTuple(tuple) {
 const diff = process.hrtime([0, 1e9 - 1]);
 assert(diff[1] >= 0); // https://github.com/nodejs/node/issues/4751
 
-eval('%PrepareFunctionForOptimization(process.hrtime)');
+eval("%PrepareFunctionForOptimization(process.hrtime)");
 assert(process.hrtime());
-eval('%OptimizeFunctionOnNextCall(process.hrtime)');
+eval("%OptimizeFunctionOnNextCall(process.hrtime)");
 assert(process.hrtime());
 
 if (common.isDebug) {
-  const { getV8FastApiCallCount } = internalBinding('debug');
-  assert.strictEqual(getV8FastApiCallCount('process.hrtime'), 1);
+  const { getV8FastApiCallCount } = internalBinding("debug");
+  assert.strictEqual(getV8FastApiCallCount("process.hrtime"), 1);
 }

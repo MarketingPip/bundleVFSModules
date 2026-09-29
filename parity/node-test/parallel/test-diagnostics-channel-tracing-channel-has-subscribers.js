@@ -1,17 +1,17 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const dc = require('diagnostics_channel');
-const assert = require('assert');
+const common = require("../common");
+const dc = require("diagnostics_channel");
+const assert = require("assert");
 
 const handler = common.mustNotCall();
 
 {
   const handlers = {
-    start: common.mustNotCall()
+    start: common.mustNotCall(),
   };
 
-  const channel = dc.tracingChannel('test');
+  const channel = dc.tracingChannel("test");
 
   assert.strictEqual(channel.hasSubscribers, false);
 
@@ -30,10 +30,10 @@ const handler = common.mustNotCall();
 
 {
   const handlers = {
-    asyncEnd: common.mustNotCall()
+    asyncEnd: common.mustNotCall(),
   };
 
-  const channel = dc.tracingChannel('test');
+  const channel = dc.tracingChannel("test");
 
   assert.strictEqual(channel.hasSubscribers, false);
 

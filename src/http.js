@@ -21,27 +21,25 @@
 //   * No raw TCP to the outside world: external client requests stay on
 //     fetch(). Trailers are unsupported.
 
-import { EventEmitter } from 'events';
-import { Readable, Writable } from 'stream';
-import { Buffer } from 'buffer';
+import { EventEmitter } from "events";
+import { Readable, Writable } from "stream";
+import { Buffer } from "buffer";
+import { _checkInvalidHeaderChar, _checkIsHttpToken } from "./_http_common.js";
+import { kUniqueHeaders, kHighWaterMark } from "./internals/http-symbols.js";
+import { HTTPParser } from "./_http_parser.js";
 import {
-  _checkInvalidHeaderChar,
-  _checkIsHttpToken,
-} from './_http_common.js';
-import {
-  kUniqueHeaders,
-  kHighWaterMark,
-} from './internals/http-symbols.js';
-import { HTTPParser } from './_http_parser.js';
-import { connect as netConnect, createServer as createNetServer } from './net.js';
+  connect as netConnect,
+  createServer as createNetServer,
+} from "./net.js";
 
 // ---------------------------------------------------------------------------
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
 // ---------------------------------------------------------------------------
-const RT = (typeof globalThis._RUNTIME_ !== "undefined")
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 
 // Guarded host-call pattern: forward lifecycle events to the host when the
 // runtime provides an emitter, silently skip otherwise.
@@ -63,41 +61,60 @@ function makeError(code, message) {
 }
 
 const ERR_INVALID_HTTP_TOKEN = (kind, val) =>
-  makeError('ERR_INVALID_HTTP_TOKEN',
-    `${kind} must be a valid HTTP token [${JSON.stringify(String(val))}]`);
+  makeError(
+    "ERR_INVALID_HTTP_TOKEN",
+    `${kind} must be a valid HTTP token [${JSON.stringify(String(val))}]`,
+  );
 const ERR_INVALID_CHAR = (kind, val) =>
-  makeError('ERR_INVALID_CHAR',
+  makeError(
+    "ERR_INVALID_CHAR",
     val === undefined
       ? `Invalid character in ${kind}`
-      : `Invalid character in ${kind} [${JSON.stringify(String(val))}]`);
+      : `Invalid character in ${kind} [${JSON.stringify(String(val))}]`,
+  );
 const ERR_HTTP_INVALID_HEADER_VALUE = (value, name) =>
-  makeError('ERR_HTTP_INVALID_HEADER_VALUE',
-    `Invalid value ${JSON.stringify(String(value))} for header ${JSON.stringify(String(name))}`);
+  makeError(
+    "ERR_HTTP_INVALID_HEADER_VALUE",
+    `Invalid value ${JSON.stringify(String(value))} for header ${JSON.stringify(String(name))}`,
+  );
 const ERR_HTTP_HEADERS_SENT = (op) =>
-  makeError('ERR_HTTP_HEADERS_SENT',
-    op === 'write'
-      ? 'Cannot write headers after they are sent to the client'
-      : `Cannot ${op} headers after they are sent to the client`);
+  makeError(
+    "ERR_HTTP_HEADERS_SENT",
+    op === "write"
+      ? "Cannot write headers after they are sent to the client"
+      : `Cannot ${op} headers after they are sent to the client`,
+  );
 const ERR_HTTP_INVALID_STATUS_CODE = (code) =>
-  makeError('ERR_HTTP_INVALID_STATUS_CODE', `Invalid status code: ${code}`);
+  makeError("ERR_HTTP_INVALID_STATUS_CODE", `Invalid status code: ${code}`);
 const ERR_INVALID_ARG_TYPE = (name, expected, actual) =>
-  makeError('ERR_INVALID_ARG_TYPE',
-    `The "${name}" argument must be ${expected}. Received type ${typeof actual} (${String(actual)})`);
+  makeError(
+    "ERR_INVALID_ARG_TYPE",
+    `The "${name}" argument must be ${expected}. Received type ${typeof actual} (${String(actual)})`,
+  );
 const ERR_INVALID_ARG_VALUE = (name, value, reason) =>
-  makeError('ERR_INVALID_ARG_VALUE',
-    `The argument '${name}' is invalid.${reason ? ` ${reason}` : ''} Received ${JSON.stringify(value)}`);
+  makeError(
+    "ERR_INVALID_ARG_VALUE",
+    `The argument '${name}' is invalid.${reason ? ` ${reason}` : ""} Received ${JSON.stringify(value)}`,
+  );
 const ERR_OUT_OF_RANGE = (name, range, received) =>
-  makeError('ERR_OUT_OF_RANGE',
-    `The value of "${name}" is out of range. It must be ${range}. Received ${received}`);
+  makeError(
+    "ERR_OUT_OF_RANGE",
+    `The value of "${name}" is out of range. It must be ${range}. Received ${received}`,
+  );
 const ERR_INVALID_PROTOCOL = (protocol, expected) =>
-  makeError('ERR_INVALID_PROTOCOL',
-    `Protocol "${protocol}" not supported. Expected "${expected}"`);
+  makeError(
+    "ERR_INVALID_PROTOCOL",
+    `Protocol "${protocol}" not supported. Expected "${expected}"`,
+  );
 const ERR_UNESCAPED_CHARACTERS = (what) =>
-  makeError('ERR_UNESCAPED_CHARACTERS', `${what} contains unescaped characters`);
+  makeError(
+    "ERR_UNESCAPED_CHARACTERS",
+    `${what} contains unescaped characters`,
+  );
 
 function validateString(value, name) {
-  if (typeof value !== 'string') {
-    throw ERR_INVALID_ARG_TYPE(name, 'of type string', value);
+  if (typeof value !== "string") {
+    throw ERR_INVALID_ARG_TYPE(name, "of type string", value);
   }
 }
 
@@ -106,77 +123,107 @@ function validateString(value, name) {
 //    verbatim from Node v24.20.0.
 // ---------------------------------------------------------------------------
 export const STATUS_CODES = {
-  100: 'Continue',
-  101: 'Switching Protocols',
-  102: 'Processing',
-  103: 'Early Hints',
-  200: 'OK',
-  201: 'Created',
-  202: 'Accepted',
-  203: 'Non-Authoritative Information',
-  204: 'No Content',
-  205: 'Reset Content',
-  206: 'Partial Content',
-  207: 'Multi-Status',
-  208: 'Already Reported',
-  226: 'IM Used',
-  300: 'Multiple Choices',
-  301: 'Moved Permanently',
-  302: 'Found',
-  303: 'See Other',
-  304: 'Not Modified',
-  305: 'Use Proxy',
-  307: 'Temporary Redirect',
-  308: 'Permanent Redirect',
-  400: 'Bad Request',
-  401: 'Unauthorized',
-  402: 'Payment Required',
-  403: 'Forbidden',
-  404: 'Not Found',
-  405: 'Method Not Allowed',
-  406: 'Not Acceptable',
-  407: 'Proxy Authentication Required',
-  408: 'Request Timeout',
-  409: 'Conflict',
-  410: 'Gone',
-  411: 'Length Required',
-  412: 'Precondition Failed',
-  413: 'Payload Too Large',
-  414: 'URI Too Long',
-  415: 'Unsupported Media Type',
-  416: 'Range Not Satisfiable',
-  417: 'Expectation Failed',
+  100: "Continue",
+  101: "Switching Protocols",
+  102: "Processing",
+  103: "Early Hints",
+  200: "OK",
+  201: "Created",
+  202: "Accepted",
+  203: "Non-Authoritative Information",
+  204: "No Content",
+  205: "Reset Content",
+  206: "Partial Content",
+  207: "Multi-Status",
+  208: "Already Reported",
+  226: "IM Used",
+  300: "Multiple Choices",
+  301: "Moved Permanently",
+  302: "Found",
+  303: "See Other",
+  304: "Not Modified",
+  305: "Use Proxy",
+  307: "Temporary Redirect",
+  308: "Permanent Redirect",
+  400: "Bad Request",
+  401: "Unauthorized",
+  402: "Payment Required",
+  403: "Forbidden",
+  404: "Not Found",
+  405: "Method Not Allowed",
+  406: "Not Acceptable",
+  407: "Proxy Authentication Required",
+  408: "Request Timeout",
+  409: "Conflict",
+  410: "Gone",
+  411: "Length Required",
+  412: "Precondition Failed",
+  413: "Payload Too Large",
+  414: "URI Too Long",
+  415: "Unsupported Media Type",
+  416: "Range Not Satisfiable",
+  417: "Expectation Failed",
   418: "I'm a Teapot",
-  421: 'Misdirected Request',
-  422: 'Unprocessable Entity',
-  423: 'Locked',
-  424: 'Failed Dependency',
-  425: 'Too Early',
-  426: 'Upgrade Required',
-  428: 'Precondition Required',
-  429: 'Too Many Requests',
-  431: 'Request Header Fields Too Large',
-  451: 'Unavailable For Legal Reasons',
-  500: 'Internal Server Error',
-  501: 'Not Implemented',
-  502: 'Bad Gateway',
-  503: 'Service Unavailable',
-  504: 'Gateway Timeout',
-  505: 'HTTP Version Not Supported',
-  506: 'Variant Also Negotiates',
-  507: 'Insufficient Storage',
-  508: 'Loop Detected',
-  509: 'Bandwidth Limit Exceeded',
-  510: 'Not Extended',
-  511: 'Network Authentication Required',
+  421: "Misdirected Request",
+  422: "Unprocessable Entity",
+  423: "Locked",
+  424: "Failed Dependency",
+  425: "Too Early",
+  426: "Upgrade Required",
+  428: "Precondition Required",
+  429: "Too Many Requests",
+  431: "Request Header Fields Too Large",
+  451: "Unavailable For Legal Reasons",
+  500: "Internal Server Error",
+  501: "Not Implemented",
+  502: "Bad Gateway",
+  503: "Service Unavailable",
+  504: "Gateway Timeout",
+  505: "HTTP Version Not Supported",
+  506: "Variant Also Negotiates",
+  507: "Insufficient Storage",
+  508: "Loop Detected",
+  509: "Bandwidth Limit Exceeded",
+  510: "Not Extended",
+  511: "Network Authentication Required",
 };
 
 export const METHODS = [
-  'ACL', 'BIND', 'CHECKOUT', 'CONNECT', 'COPY', 'DELETE', 'GET', 'HEAD',
-  'LINK', 'LOCK', 'M-SEARCH', 'MERGE', 'MKACTIVITY', 'MKCALENDAR', 'MKCOL',
-  'MOVE', 'NOTIFY', 'OPTIONS', 'PATCH', 'POST', 'PROPFIND', 'PROPPATCH',
-  'PURGE', 'PUT', 'QUERY', 'REBIND', 'REPORT', 'SEARCH', 'SOURCE',
-  'SUBSCRIBE', 'TRACE', 'UNBIND', 'UNLINK', 'UNLOCK', 'UNSUBSCRIBE',
+  "ACL",
+  "BIND",
+  "CHECKOUT",
+  "CONNECT",
+  "COPY",
+  "DELETE",
+  "GET",
+  "HEAD",
+  "LINK",
+  "LOCK",
+  "M-SEARCH",
+  "MERGE",
+  "MKACTIVITY",
+  "MKCALENDAR",
+  "MKCOL",
+  "MOVE",
+  "NOTIFY",
+  "OPTIONS",
+  "PATCH",
+  "POST",
+  "PROPFIND",
+  "PROPPATCH",
+  "PURGE",
+  "PUT",
+  "QUERY",
+  "REBIND",
+  "REPORT",
+  "SEARCH",
+  "SOURCE",
+  "SUBSCRIBE",
+  "TRACE",
+  "UNBIND",
+  "UNLINK",
+  "UNLOCK",
+  "UNSUBSCRIBE",
 ];
 
 /** Default --max-http-header-size in Node v24 (no CLI flags in a browser). */
@@ -186,14 +233,14 @@ let maxIdleHTTPParsers = 1000;
 
 /** Matches Node: validates and stores the parser-cache size (no pool here). */
 export function setMaxIdleHTTPParsers(max) {
-  if (typeof max !== 'number') {
-    throw ERR_INVALID_ARG_TYPE('max', 'number', max);
+  if (typeof max !== "number") {
+    throw ERR_INVALID_ARG_TYPE("max", "number", max);
   }
   if (!Number.isInteger(max)) {
-    throw ERR_OUT_OF_RANGE('max', 'an integer', max);
+    throw ERR_OUT_OF_RANGE("max", "an integer", max);
   }
   if (max < 1 || max > Number.MAX_SAFE_INTEGER) {
-    throw ERR_OUT_OF_RANGE('max', '>= 1 && <= 9007199254740991', max);
+    throw ERR_OUT_OF_RANGE("max", ">= 1 && <= 9007199254740991", max);
   }
   maxIdleHTTPParsers = max;
 }
@@ -206,8 +253,8 @@ export function setGlobalProxyFromEnv() {}
 
 /** Throw unless name is a valid HTTP token (Node's validateHeaderName). */
 export function validateHeaderName(name) {
-  if (typeof name !== 'string' || !name || !_checkIsHttpToken(name)) {
-    throw ERR_INVALID_HTTP_TOKEN('Header name', name);
+  if (typeof name !== "string" || !name || !_checkIsHttpToken(name)) {
+    throw ERR_INVALID_HTTP_TOKEN("Header name", name);
   }
 }
 
@@ -217,7 +264,7 @@ export function validateHeaderValue(name, value) {
     throw ERR_HTTP_INVALID_HEADER_VALUE(value, name);
   }
   if (_checkInvalidHeaderChar(String(value))) {
-    throw ERR_INVALID_CHAR('header content', name);
+    throw ERR_INVALID_CHAR("header content", name);
   }
 }
 
@@ -231,13 +278,13 @@ class FakeSocket extends EventEmitter {
     this.destroyed = false;
     this.writable = true;
     this.readable = true;
-    this.remoteAddress = '127.0.0.1';
+    this.remoteAddress = "127.0.0.1";
     this.remotePort = 0;
-    this.localAddress = '127.0.0.1';
+    this.localAddress = "127.0.0.1";
     this.localPort = 0;
   }
   write(chunk, encoding, cb) {
-    const callback = typeof encoding === 'function' ? encoding : cb;
+    const callback = typeof encoding === "function" ? encoding : cb;
     if (callback) queueMicrotask(() => callback(null));
     return true;
   }
@@ -251,19 +298,29 @@ class FakeSocket extends EventEmitter {
     this.writable = false;
     this.readable = false;
     queueMicrotask(() => {
-      if (err) this.emit('error', err);
-      this.emit('close', false);
+      if (err) this.emit("error", err);
+      this.emit("close", false);
     });
     return this;
   }
   address() {
-    return { address: this.localAddress, family: 'IPv4', port: this.localPort };
+    return { address: this.localAddress, family: "IPv4", port: this.localPort };
   }
-  setTimeout() { return this; }
-  setNoDelay() { return this; }
-  setKeepAlive() { return this; }
-  ref() { return this; }
-  unref() { return this; }
+  setTimeout() {
+    return this;
+  }
+  setNoDelay() {
+    return this;
+  }
+  setKeepAlive() {
+    return this;
+  }
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
   cork() {}
   uncork() {}
 }
@@ -271,8 +328,8 @@ class FakeSocket extends EventEmitter {
 // Module-local symbols mirroring Node's internal slots.
 // (kUniqueHeaders / kHighWaterMark live in ./internals/http-symbols.js so the
 // http module family shares them without exposing them on the public surface.)
-const kOutHeaders = Symbol('kOutHeaders');
-const kPath = Symbol('kPath');
+const kOutHeaders = Symbol("kOutHeaders");
+const kPath = Symbol("kPath");
 
 const INVALID_PATH_REGEX = /[^\u0021-\u00ff]/;
 
@@ -305,7 +362,7 @@ export class OutgoingMessage extends Writable {
   // Buffer written chunks until the message is finished (no real socket).
   _write(chunk, encoding, callback) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    this.outputData.push({ data: buf, encoding: 'buffer' });
+    this.outputData.push({ data: buf, encoding: "buffer" });
     this.outputSize += buf.length;
     callback();
   }
@@ -324,14 +381,16 @@ export class OutgoingMessage extends Writable {
 
   setHeader(name, value) {
     if (this._header) {
-      throw ERR_HTTP_HEADERS_SENT('set');
+      throw ERR_HTTP_HEADERS_SENT("set");
     }
     validateHeaderName(name);
     if (value === undefined) {
       throw ERR_HTTP_INVALID_HEADER_VALUE(value, name);
     }
-    if (_checkInvalidHeaderChar(String(value), this._isLenientHeaderValidation())) {
-      throw ERR_INVALID_CHAR('header content', name);
+    if (
+      _checkInvalidHeaderChar(String(value), this._isLenientHeaderValidation())
+    ) {
+      throw ERR_INVALID_CHAR("header content", name);
     }
 
     let headers = this[kOutHeaders];
@@ -344,21 +403,25 @@ export class OutgoingMessage extends Writable {
 
   setHeaders(headers) {
     if (this._header) {
-      throw ERR_HTTP_HEADERS_SENT('set');
+      throw ERR_HTTP_HEADERS_SENT("set");
     }
     if (
       !headers ||
       Array.isArray(headers) ||
-      typeof headers.keys !== 'function' ||
-      typeof headers.get !== 'function'
+      typeof headers.keys !== "function" ||
+      typeof headers.get !== "function"
     ) {
-      throw ERR_INVALID_ARG_TYPE('headers', 'an instance of Headers or Map', headers);
+      throw ERR_INVALID_ARG_TYPE(
+        "headers",
+        "an instance of Headers or Map",
+        headers,
+      );
     }
 
     // set-cookie values are collected so setHeader does not overwrite them.
     let cookies = null;
     for (const { 0: key, 1: value } of headers) {
-      if (String(key).toLowerCase() === 'set-cookie') {
+      if (String(key).toLowerCase() === "set-cookie") {
         cookies ??= [];
         if (Array.isArray(value)) cookies.push(...value);
         else cookies.push(value);
@@ -367,21 +430,23 @@ export class OutgoingMessage extends Writable {
       this.setHeader(key, value);
     }
     if (cookies !== null) {
-      this.setHeader('set-cookie', cookies);
+      this.setHeader("set-cookie", cookies);
     }
     return this;
   }
 
   appendHeader(name, value) {
     if (this._header) {
-      throw ERR_HTTP_HEADERS_SENT('append');
+      throw ERR_HTTP_HEADERS_SENT("append");
     }
     validateHeaderName(name);
     if (value === undefined) {
       throw ERR_HTTP_INVALID_HEADER_VALUE(value, name);
     }
-    if (_checkInvalidHeaderChar(String(value), this._isLenientHeaderValidation())) {
-      throw ERR_INVALID_CHAR('header content', name);
+    if (
+      _checkInvalidHeaderChar(String(value), this._isLenientHeaderValidation())
+    ) {
+      throw ERR_INVALID_CHAR("header content", name);
     }
 
     const field = name.toLowerCase();
@@ -403,7 +468,7 @@ export class OutgoingMessage extends Writable {
   }
 
   getHeader(name) {
-    validateString(name, 'name');
+    validateString(name, "name");
     const headers = this[kOutHeaders];
     if (headers === null) return undefined;
     const entry = headers[name.toLowerCase()];
@@ -432,24 +497,26 @@ export class OutgoingMessage extends Writable {
   }
 
   hasHeader(name) {
-    validateString(name, 'name');
-    return this[kOutHeaders] !== null && !!this[kOutHeaders][name.toLowerCase()];
+    validateString(name, "name");
+    return (
+      this[kOutHeaders] !== null && !!this[kOutHeaders][name.toLowerCase()]
+    );
   }
 
   removeHeader(name) {
-    validateString(name, 'name');
+    validateString(name, "name");
     if (this._header) {
-      throw ERR_HTTP_HEADERS_SENT('remove');
+      throw ERR_HTTP_HEADERS_SENT("remove");
     }
     const key = name.toLowerCase();
     switch (key) {
-      case 'connection':
+      case "connection":
         this._removedConnection = true;
         break;
-      case 'content-length':
+      case "content-length":
         this._removedContLen = true;
         break;
-      case 'transfer-encoding':
+      case "transfer-encoding":
         this._removedTE = true;
         break;
     }
@@ -472,14 +539,14 @@ export class OutgoingMessage extends Writable {
         lines.push(`${name}: ${v}\r\n`);
       }
       const key = String(name).toLowerCase();
-      if (key === 'set-cookie') {
+      if (key === "set-cookie") {
         // Accumulate across calls: each set-cookie value stays a separate
         // array entry so the cookie jar can store every cookie.
         const cur = flat[key];
-        const arr = Array.isArray(cur) ? cur : (cur === undefined ? [] : [cur]);
+        const arr = Array.isArray(cur) ? cur : cur === undefined ? [] : [cur];
         flat[key] = arr.concat(values.map(String));
       } else {
-        flat[key] = values.map(String).join(', ');
+        flat[key] = values.map(String).join(", ");
       }
     };
 
@@ -499,7 +566,7 @@ export class OutgoingMessage extends Writable {
         } else {
           // Flat array: name, value, name, value, ...
           if (headers.length % 2 !== 0) {
-            throw ERR_INVALID_ARG_VALUE('headers', headers);
+            throw ERR_INVALID_ARG_VALUE("headers", headers);
           }
           for (let n = 0; n < headers.length; n += 2) {
             validateHeaderName(headers[n]);
@@ -520,8 +587,8 @@ export class OutgoingMessage extends Writable {
       header += `Date: ${date}\r\n`;
       flat.date = date;
     }
-    header += lines.join('');
-    header += '\r\n';
+    header += lines.join("");
+    header += "\r\n";
 
     this._header = header;
     this._renderedHeaders = flat;
@@ -532,7 +599,7 @@ export class OutgoingMessage extends Writable {
   // lines; single-element arrays collapse to one line.
   _renderHeaderEntry(pushLine, name, value) {
     if (Array.isArray(value)) {
-      const isCookie = String(name).toLowerCase() === 'set-cookie';
+      const isCookie = String(name).toLowerCase() === "set-cookie";
       if (isCookie) {
         // set-cookie arrays must reach pushLine intact: joining them with
         // '; ' would corrupt a multi-cookie response into one unparseable
@@ -540,18 +607,20 @@ export class OutgoingMessage extends Writable {
         pushLine(name, value);
         return;
       }
-      if ((value.length < 2) &&
-          !(this[kUniqueHeaders]?.has(String(name).toLowerCase()))) {
+      if (
+        value.length < 2 &&
+        !this[kUniqueHeaders]?.has(String(name).toLowerCase())
+      ) {
         for (const v of value) pushLine(name, v);
         return;
       }
-      value = value.join(', ');
+      value = value.join(", ");
     }
     pushLine(name, value);
   }
 
   _implicitHeader() {
-    throw makeError('ERR_METHOD_NOT_IMPLEMENTED', '_implicitHeader()');
+    throw makeError("ERR_METHOD_NOT_IMPLEMENTED", "_implicitHeader()");
   }
 
   write(chunk, encoding, callback) {
@@ -560,19 +629,19 @@ export class OutgoingMessage extends Writable {
     }
     if (this._hasBody === false) {
       // 204/304/1xx responses MUST NOT have a body: ignore writes (Node parity).
-      if (typeof encoding === 'function') callback = encoding;
-      if (typeof callback === 'function') queueMicrotask(callback);
+      if (typeof encoding === "function") callback = encoding;
+      if (typeof callback === "function") queueMicrotask(callback);
       return true;
     }
     return super.write(chunk, encoding, callback);
   }
 
   end(chunk, encoding, callback) {
-    if (typeof chunk === 'function') {
+    if (typeof chunk === "function") {
       callback = chunk;
       chunk = null;
       encoding = null;
-    } else if (typeof encoding === 'function') {
+    } else if (typeof encoding === "function") {
       callback = encoding;
       encoding = null;
     }
@@ -598,7 +667,7 @@ export class OutgoingMessage extends Writable {
   }
 
   setTimeout(msecs, callback) {
-    if (callback) this.once('timeout', callback);
+    if (callback) this.once("timeout", callback);
     return this;
   }
 
@@ -621,7 +690,7 @@ export class IncomingMessage extends Readable {
     this.connection = this.socket;
     this.httpVersionMajor = 1;
     this.httpVersionMinor = 1;
-    this.httpVersion = '1.1';
+    this.httpVersion = "1.1";
     this.complete = false;
     this.aborted = false;
     this.headers = {};
@@ -648,7 +717,7 @@ export class IncomingMessage extends Readable {
   }
 
   setTimeout(msecs, callback) {
-    if (callback) this.once('timeout', callback);
+    if (callback) this.once("timeout", callback);
     if (this.socket?.setTimeout) this.socket.setTimeout(msecs);
     return this;
   }
@@ -680,11 +749,12 @@ export class IncomingMessage extends Readable {
       this._finishBody();
       return;
     }
-    const buf = typeof body === 'string'
-      ? Buffer.from(body)
-      : Buffer.isBuffer(body)
-        ? body
-        : Buffer.from(body);
+    const buf =
+      typeof body === "string"
+        ? Buffer.from(body)
+        : Buffer.isBuffer(body)
+          ? body
+          : Buffer.from(body);
     if (buf.length > 0) this.push(buf);
     this._finishBody();
   }
@@ -699,21 +769,28 @@ export class IncomingMessage extends Readable {
     for (const [key, value] of pairs) {
       const lower = key.toLowerCase();
       msg.rawHeaders.push(key, String(value));
-      if (lower === 'set-cookie') {
+      if (lower === "set-cookie") {
         const arr = Array.isArray(value) ? value.map(String) : [String(value)];
         if (msg.headers[lower] === undefined) {
           msg.headers[lower] = arr.length === 1 ? arr[0] : arr;
         } else {
-          const cur = Array.isArray(msg.headers[lower]) ? msg.headers[lower] : [msg.headers[lower]];
+          const cur = Array.isArray(msg.headers[lower])
+            ? msg.headers[lower]
+            : [msg.headers[lower]];
           msg.headers[lower] = cur.concat(arr);
         }
         msg.headersDistinct[lower] = Array.isArray(msg.headers[lower])
           ? msg.headers[lower].slice()
           : [msg.headers[lower]];
       } else {
-        const val = Array.isArray(value) ? value.map(String).join(', ') : String(value);
-        msg.headers[lower] = lower in msg.headers ? `${msg.headers[lower]}, ${val}` : val;
-        msg.headersDistinct[lower] = (msg.headersDistinct[lower] || []).concat(val);
+        const val = Array.isArray(value)
+          ? value.map(String).join(", ")
+          : String(value);
+        msg.headers[lower] =
+          lower in msg.headers ? `${msg.headers[lower]}, ${val}` : val;
+        msg.headersDistinct[lower] = (msg.headersDistinct[lower] || []).concat(
+          val,
+        );
       }
     }
   }
@@ -725,8 +802,11 @@ export class IncomingMessage extends Readable {
 
     IncomingMessage._applyRawHeaders(msg, Object.entries(headers || {}));
 
-    if (body !== null && body !== undefined &&
-        (typeof body === 'string' || ArrayBuffer.isView(body))) {
+    if (
+      body !== null &&
+      body !== undefined &&
+      (typeof body === "string" || ArrayBuffer.isView(body))
+    ) {
       msg._setBody(body);
     } else {
       msg._finishBody();
@@ -742,8 +822,9 @@ export class IncomingMessage extends Readable {
   static async fromFetchResponse(response) {
     const msg = new IncomingMessage();
     msg.statusCode = response.status;
-    msg.statusMessage = response.statusText || STATUS_CODES[response.status] || '';
-    msg.httpVersion = '1.1';
+    msg.statusMessage =
+      response.statusText || STATUS_CODES[response.status] || "";
+    msg.httpVersion = "1.1";
     msg.httpVersionMajor = 1;
     msg.httpVersionMinor = 1;
 
@@ -782,7 +863,7 @@ export class ServerResponse extends OutgoingMessage {
 
   writeHead(statusCode, reason, obj) {
     if (this._header) {
-      throw ERR_HTTP_HEADERS_SENT('write');
+      throw ERR_HTTP_HEADERS_SENT("write");
     }
 
     const originalStatusCode = statusCode;
@@ -791,12 +872,13 @@ export class ServerResponse extends OutgoingMessage {
       throw ERR_HTTP_INVALID_STATUS_CODE(originalStatusCode);
     }
 
-    if (typeof reason === 'string') {
+    if (typeof reason === "string") {
       // writeHead(statusCode, reasonPhrase[, headers])
       this.statusMessage = reason;
     } else {
       // writeHead(statusCode[, headers])
-      this.statusMessage = this.statusMessage || STATUS_CODES[statusCode] || 'unknown';
+      this.statusMessage =
+        this.statusMessage || STATUS_CODES[statusCode] || "unknown";
       obj ??= reason;
     }
     this.statusCode = statusCode;
@@ -806,7 +888,7 @@ export class ServerResponse extends OutgoingMessage {
       // Slow-case: progressive API was used; obj headers merge in.
       if (Array.isArray(obj)) {
         if (obj.length % 2 !== 0) {
-          throw ERR_INVALID_ARG_VALUE('headers', obj);
+          throw ERR_INVALID_ARG_VALUE("headers", obj);
         }
         for (let n = 0; n < obj.length; n += 2) {
           if (obj[n]) this.removeHeader(obj[n]);
@@ -827,13 +909,16 @@ export class ServerResponse extends OutgoingMessage {
     }
 
     if (_checkInvalidHeaderChar(this.statusMessage)) {
-      throw ERR_INVALID_CHAR('statusMessage');
+      throw ERR_INVALID_CHAR("statusMessage");
     }
 
     const statusLine = `HTTP/1.1 ${statusCode} ${this.statusMessage}\r\n`;
 
-    if (statusCode === 204 || statusCode === 304 ||
-        (statusCode >= 100 && statusCode <= 199)) {
+    if (
+      statusCode === 204 ||
+      statusCode === 304 ||
+      (statusCode >= 100 && statusCode <= 199)
+    ) {
       // RFC 2616: these responses MUST NOT include a message body.
       this._hasBody = false;
     }
@@ -852,10 +937,10 @@ export class ServerResponse extends OutgoingMessage {
   writeContinue() {}
   writeProcessing() {}
   writeEarlyHints(hints, callback) {
-    if (typeof callback === 'function') queueMicrotask(callback);
+    if (typeof callback === "function") queueMicrotask(callback);
   }
   writeInformation(info, callback) {
-    if (typeof callback === 'function') queueMicrotask(callback);
+    if (typeof callback === "function") queueMicrotask(callback);
     return false;
   }
 
@@ -897,14 +982,14 @@ export class ServerResponse extends OutgoingMessage {
 
   end(chunk, encoding, callback) {
     if (this.finished) {
-      if (typeof callback === 'function') queueMicrotask(callback);
+      if (typeof callback === "function") queueMicrotask(callback);
       return this;
     }
-    if (typeof chunk === 'function') {
+    if (typeof chunk === "function") {
       callback = chunk;
       chunk = null;
       encoding = null;
-    } else if (typeof encoding === 'function') {
+    } else if (typeof encoding === "function") {
       callback = encoding;
       encoding = null;
     }
@@ -930,18 +1015,18 @@ export class ServerResponse extends OutgoingMessage {
   // --- Express-style conveniences (carried over from the previous shim) ---
 
   send(data) {
-    if (typeof data === 'object' && data !== null && !Buffer.isBuffer(data)) {
-      this.setHeader('Content-Type', 'application/json');
+    if (typeof data === "object" && data !== null && !Buffer.isBuffer(data)) {
+      this.setHeader("Content-Type", "application/json");
       data = JSON.stringify(data);
     }
-    if (!this.hasHeader('Content-Type')) {
-      this.setHeader('Content-Type', 'text/html');
+    if (!this.hasHeader("Content-Type")) {
+      this.setHeader("Content-Type", "text/html");
     }
-    return this.end(typeof data === 'string' ? data : data);
+    return this.end(typeof data === "string" ? data : data);
   }
 
   json(data) {
-    this.setHeader('Content-Type', 'application/json');
+    this.setHeader("Content-Type", "application/json");
     return this.end(JSON.stringify(data));
   }
 
@@ -951,12 +1036,12 @@ export class ServerResponse extends OutgoingMessage {
   }
 
   redirect(urlOrStatus, url) {
-    if (typeof urlOrStatus === 'number') {
+    if (typeof urlOrStatus === "number") {
       this.statusCode = urlOrStatus;
-      this.setHeader('Location', url);
+      this.setHeader("Location", url);
     } else {
       this.statusCode = 302;
-      this.setHeader('Location', urlOrStatus);
+      this.setHeader("Location", urlOrStatus);
     }
     return this.end();
   }
@@ -966,7 +1051,7 @@ export class ServerResponse extends OutgoingMessage {
     return Buffer.concat(this.outputData.map((e) => e.data));
   }
   _getBodyAsString() {
-    return this._getBody().toString('utf8');
+    return this._getBody().toString("utf8");
   }
 }
 
@@ -979,7 +1064,7 @@ function parseRequestArgs(urlOrOptions, optionsOrCallback, callback) {
   let options;
   let cb = callback;
 
-  if (typeof urlOrOptions === 'string' || urlOrOptions instanceof URL) {
+  if (typeof urlOrOptions === "string" || urlOrOptions instanceof URL) {
     const parsed = new URL(urlOrOptions.toString());
     options = {
       protocol: parsed.protocol,
@@ -990,16 +1075,16 @@ function parseRequestArgs(urlOrOptions, optionsOrCallback, callback) {
       auth: parsed.username
         ? `${parsed.username}:${parsed.password}`
         : undefined,
-      method: 'GET',
+      method: "GET",
     };
-    if (typeof optionsOrCallback === 'function') {
+    if (typeof optionsOrCallback === "function") {
       cb = optionsOrCallback;
     } else if (optionsOrCallback) {
       options = { __proto__: null, ...options, ...optionsOrCallback };
     }
   } else {
     options = urlOrOptions || {};
-    if (typeof optionsOrCallback === 'function') {
+    if (typeof optionsOrCallback === "function") {
       cb = optionsOrCallback;
     }
   }
@@ -1010,19 +1095,23 @@ function parseRequestArgs(urlOrOptions, optionsOrCallback, callback) {
 export class ClientRequest extends OutgoingMessage {
   constructor(input, options, cb, defaultAgent) {
     // Propagate the user's highWaterMark to the Writable base (Node parity).
-    const rawOpts = typeof options === 'object' && options !== null ? options
-      : typeof input === 'object' && input !== null ? input : null;
+    const rawOpts =
+      typeof options === "object" && options !== null
+        ? options
+        : typeof input === "object" && input !== null
+          ? input
+          : null;
     const hw = rawOpts?.highWaterMark;
     super(hw == null ? undefined : { highWaterMark: hw });
 
     // Normalize (url, options?, cb?) and (options, cb?) signatures.
-    if (typeof options === 'function') {
+    if (typeof options === "function") {
       cb = options;
       options = undefined;
     }
     let urlOpts = null;
-    if (typeof input === 'string' || input instanceof URL) {
-      const parsed = new URL(input.toString(), 'http://localhost');
+    if (typeof input === "string" || input instanceof URL) {
+      const parsed = new URL(input.toString(), "http://localhost");
       urlOpts = {
         protocol: parsed.protocol,
         hostname: parsed.hostname,
@@ -1030,10 +1119,10 @@ export class ClientRequest extends OutgoingMessage {
         path: `${parsed.pathname}${parsed.search}`,
         auth: parsed.username
           ? decodeURIComponent(parsed.username) +
-            (parsed.password ? `:${decodeURIComponent(parsed.password)}` : '')
+            (parsed.password ? `:${decodeURIComponent(parsed.password)}` : "")
           : undefined,
       };
-    } else if (input && typeof input === 'object') {
+    } else if (input && typeof input === "object") {
       urlOpts = input;
     }
     options = { __proto__: null, ...urlOpts, ...(options || {}) };
@@ -1044,21 +1133,25 @@ export class ClientRequest extends OutgoingMessage {
     if (agent === false) {
       agent = new defAgent.constructor();
     } else if (agent === null || agent === undefined) {
-      if (typeof options.createConnection !== 'function') {
+      if (typeof options.createConnection !== "function") {
         agent = defAgent;
       }
-    } else if (typeof agent.addRequest !== 'function') {
+    } else if (typeof agent.addRequest !== "function") {
       throw ERR_INVALID_ARG_TYPE(
-        'options.agent', 'one of Agent-like Object, undefined, or false', agent);
+        "options.agent",
+        "one of Agent-like Object, undefined, or false",
+        agent,
+      );
     }
     this.agent = agent;
 
-    const protocol = options.protocol || defAgent.protocol || 'http:';
-    const expectedProtocol = this.agent?.protocol || defAgent.protocol || 'http:';
+    const protocol = options.protocol || defAgent.protocol || "http:";
+    const expectedProtocol =
+      this.agent?.protocol || defAgent.protocol || "http:";
     if (options.path !== undefined && options.path !== null) {
       const p = String(options.path);
       if (INVALID_PATH_REGEX.test(p)) {
-        throw ERR_UNESCAPED_CHARACTERS('Request path');
+        throw ERR_UNESCAPED_CHARACTERS("Request path");
       }
     }
     if (protocol !== expectedProtocol) {
@@ -1067,29 +1160,31 @@ export class ClientRequest extends OutgoingMessage {
 
     const defaultPort = options.defaultPort || this.agent?.defaultPort || 80;
     const port = options.port || defaultPort || 80;
-    let host = options.hostname || options.host || 'localhost';
-    if (host !== null && host !== undefined && typeof host !== 'string') {
-      throw ERR_INVALID_ARG_TYPE('options.host', 'of type string', host);
+    let host = options.hostname || options.host || "localhost";
+    if (host !== null && host !== undefined && typeof host !== "string") {
+      throw ERR_INVALID_ARG_TYPE("options.host", "of type string", host);
     }
-    host = host || 'localhost';
+    host = host || "localhost";
 
     let method = options.method;
-    if (method != null) validateString(method, 'options.method');
+    if (method != null) validateString(method, "options.method");
     if (method) {
       if (!_checkIsHttpToken(method)) {
-        throw ERR_INVALID_HTTP_TOKEN('Method', method);
+        throw ERR_INVALID_HTTP_TOKEN("Method", method);
       }
       method = method.toUpperCase();
     } else {
-      method = 'GET';
+      method = "GET";
     }
 
-    if (options.maxHeaderSize !== undefined &&
-        (!Number.isInteger(options.maxHeaderSize) || options.maxHeaderSize < 0)) {
-      throw ERR_OUT_OF_RANGE('maxHeaderSize', '>= 0', options.maxHeaderSize);
+    if (
+      options.maxHeaderSize !== undefined &&
+      (!Number.isInteger(options.maxHeaderSize) || options.maxHeaderSize < 0)
+    ) {
+      throw ERR_OUT_OF_RANGE("maxHeaderSize", ">= 0", options.maxHeaderSize);
     }
 
-    this[kPath] = options.path || '/';
+    this[kPath] = options.path || "/";
     this.method = method;
     this.host = host;
     this.port = port;
@@ -1115,25 +1210,37 @@ export class ClientRequest extends OutgoingMessage {
         this.setHeader(key, options.headers[key]);
       }
     }
-    if (host && !this.getHeader('host') && options.setHost !== false &&
-        options.setDefaultHeaders !== false) {
+    if (
+      host &&
+      !this.getHeader("host") &&
+      options.setHost !== false &&
+      options.setDefaultHeaders !== false
+    ) {
       let hostHeader = host;
       if (port && Number(port) !== Number(defaultPort)) {
         hostHeader += `:${port}`;
       }
-      this.setHeader('Host', hostHeader);
+      this.setHeader("Host", hostHeader);
     }
-    if (options.auth && !this.getHeader('authorization')) {
-      this.setHeader('Authorization',
-        `Basic ${Buffer.from(options.auth).toString('base64')}`);
+    if (options.auth && !this.getHeader("authorization")) {
+      this.setHeader(
+        "Authorization",
+        `Basic ${Buffer.from(options.auth).toString("base64")}`,
+      );
     }
 
     if (cb) {
-      this.once('response', cb);
+      this.once("response", cb);
     }
 
-    if (method === 'GET' || method === 'HEAD' || method === 'DELETE' ||
-        method === 'OPTIONS' || method === 'TRACE' || method === 'CONNECT') {
+    if (
+      method === "GET" ||
+      method === "HEAD" ||
+      method === "DELETE" ||
+      method === "OPTIONS" ||
+      method === "TRACE" ||
+      method === "CONNECT"
+    ) {
       this.useChunkedEncodingByDefault = false;
     }
   }
@@ -1144,7 +1251,7 @@ export class ClientRequest extends OutgoingMessage {
   set path(value) {
     const p = String(value);
     if (INVALID_PATH_REGEX.test(p)) {
-      throw ERR_UNESCAPED_CHARACTERS('Request path');
+      throw ERR_UNESCAPED_CHARACTERS("Request path");
     }
     this[kPath] = p;
   }
@@ -1158,7 +1265,7 @@ export class ClientRequest extends OutgoingMessage {
     if (this.aborted) return;
     this.aborted = true;
     this._aborted = true;
-    queueMicrotask(() => this.emit('abort'));
+    queueMicrotask(() => this.emit("abort"));
     this.destroy();
   }
 
@@ -1166,7 +1273,11 @@ export class ClientRequest extends OutgoingMessage {
   destroy(err) {
     this._aborted = true;
     if (this._abortController) {
-      try { this._abortController.abort(); } catch { /* noop */ }
+      try {
+        this._abortController.abort();
+      } catch {
+        /* noop */
+      }
     }
     if (this._timeoutId) {
       clearTimeout(this._timeoutId);
@@ -1177,7 +1288,7 @@ export class ClientRequest extends OutgoingMessage {
   }
 
   setTimeout(timeout, callback) {
-    if (callback) this.once('timeout', callback);
+    if (callback) this.once("timeout", callback);
     this.timeout = timeout;
     return this;
   }
@@ -1190,8 +1301,12 @@ export class ClientRequest extends OutgoingMessage {
     return this;
   }
 
-  setNoDelay() { return this; }
-  setSocketKeepAlive() { return this; }
+  setNoDelay() {
+    return this;
+  }
+  setSocketKeepAlive() {
+    return this;
+  }
 
   getHeader(name) {
     return super.getHeader(name);
@@ -1205,14 +1320,14 @@ export class ClientRequest extends OutgoingMessage {
 
   end(chunk, encoding, callback) {
     if (this._ended) {
-      if (typeof callback === 'function') queueMicrotask(callback);
+      if (typeof callback === "function") queueMicrotask(callback);
       return this;
     }
-    if (typeof chunk === 'function') {
+    if (typeof chunk === "function") {
       callback = chunk;
       chunk = null;
       encoding = null;
-    } else if (typeof encoding === 'function') {
+    } else if (typeof encoding === "function") {
       callback = encoding;
       encoding = null;
     }
@@ -1220,13 +1335,13 @@ export class ClientRequest extends OutgoingMessage {
     this.finished = true;
     const finish = () => {
       if (callback) callback();
-      this.emit('finish');
+      this.emit("finish");
     };
     const run = () => {
       this._performRequest().then(finish, (err) => {
         // 'error' must not throw when unhandled during perform; Node emits.
-        if (this.listenerCount('error') > 0) this.emit('error', err);
-        else this.emit('abort');
+        if (this.listenerCount("error") > 0) this.emit("error", err);
+        else this.emit("abort");
       });
     };
     if (chunk !== null && chunk !== undefined) {
@@ -1238,30 +1353,31 @@ export class ClientRequest extends OutgoingMessage {
   }
 
   _buildURL() {
-    const protocol = this.protocol === 'https:' ? 'https:' : 'http:';
+    const protocol = this.protocol === "https:" ? "https:" : "http:";
     let hostname = this.host;
-    let portPart = '';
+    let portPart = "";
     // `host` may be "example.com:8080".
-    const colon = hostname.lastIndexOf(':');
-    if (colon !== -1 && hostname.indexOf(':') === colon) {
+    const colon = hostname.lastIndexOf(":");
+    if (colon !== -1 && hostname.indexOf(":") === colon) {
       const maybePort = Number(hostname.slice(colon + 1));
       if (Number.isInteger(maybePort)) {
         portPart = `:${maybePort}`;
         hostname = hostname.slice(0, colon);
       }
     } else if (this.port) {
-      const defPort = this.agent?.defaultPort || (protocol === 'https:' ? 443 : 80);
+      const defPort =
+        this.agent?.defaultPort || (protocol === "https:" ? 443 : 80);
       if (Number(this.port) !== Number(defPort)) portPart = `:${this.port}`;
     }
     // IPv6 literals need brackets.
-    if (hostname.includes(':') && !hostname.startsWith('[')) {
+    if (hostname.includes(":") && !hostname.startsWith("[")) {
       hostname = `[${hostname}]`;
     }
     return `${protocol}//${hostname}${portPart}${this.path}`;
   }
 
   _getFetch() {
-    const f = typeof globalThis.fetch === 'function' ? globalThis.fetch : null;
+    const f = typeof globalThis.fetch === "function" ? globalThis.fetch : null;
     return f;
   }
 
@@ -1270,14 +1386,17 @@ export class ClientRequest extends OutgoingMessage {
 
     const fetchFn = this._getFetch();
     if (!fetchFn) {
-      throw makeError('ERR_NO_FETCH', 'fetch() is not available in this environment');
+      throw makeError(
+        "ERR_NO_FETCH",
+        "fetch() is not available in this environment",
+      );
     }
 
     const url = this._buildURL();
 
     // WebSocket upgrade requests cannot use fetch(): browsers strip
     // Connection/Upgrade headers. Bridge to the native WebSocket instead.
-    if (String(this.getHeader('upgrade') || '').toLowerCase() === 'websocket') {
+    if (String(this.getHeader("upgrade") || "").toLowerCase() === "websocket") {
       this._handleWebSocketUpgrade(url);
       return;
     }
@@ -1286,31 +1405,37 @@ export class ClientRequest extends OutgoingMessage {
     let fetchUrl = url;
     try {
       const ls = globalThis.localStorage;
-      const proxy = typeof ls !== 'undefined' && ls
-        ? ls.getItem('__corsProxyUrl')
-        : null;
+      const proxy =
+        typeof ls !== "undefined" && ls ? ls.getItem("__corsProxyUrl") : null;
       if (proxy) fetchUrl = proxy + encodeURIComponent(url);
-    } catch { /* storage may be unavailable; ignore */ }
+    } catch {
+      /* storage may be unavailable; ignore */
+    }
 
     const fetchOptions = {
       method: this.method,
       headers: {},
       // Unlike Node, fetch() follows redirects automatically; the browser
       // gives us no way to observe the 3xx hop (documented gap).
-      redirect: 'follow',
+      redirect: "follow",
     };
     for (const [k, v] of Object.entries(this.getHeaders())) {
-      fetchOptions.headers[k] = Array.isArray(v) ? v.join(', ') : String(v);
+      fetchOptions.headers[k] = Array.isArray(v) ? v.join(", ") : String(v);
     }
     // fetch forbids user-set Host; the browser derives it from the URL.
     delete fetchOptions.headers.host;
 
     const body = Buffer.concat(this.outputData.map((e) => e.data));
-    if (body.length > 0 && this.method !== 'GET' && this.method !== 'HEAD') {
+    if (body.length > 0 && this.method !== "GET" && this.method !== "HEAD") {
       fetchOptions.body = body;
-    } else if ((this.method === 'GET' || this.method === 'HEAD') && body.length > 0) {
-      throw makeError('ERR_INVALID_ARG_VALUE',
-        `Request with ${this.method} method cannot have a body.`);
+    } else if (
+      (this.method === "GET" || this.method === "HEAD") &&
+      body.length > 0
+    ) {
+      throw makeError(
+        "ERR_INVALID_ARG_VALUE",
+        `Request with ${this.method} method cannot have a body.`,
+      );
     }
 
     // In-process loopback: a virtual server registered for this local
@@ -1320,7 +1445,10 @@ export class ClientRequest extends OutgoingMessage {
     const virtualServer = this._getVirtualServer();
     if (virtualServer) {
       await this._performVirtualRequest(
-        virtualServer, fetchOptions.headers, body.length > 0 ? body : null);
+        virtualServer,
+        fetchOptions.headers,
+        body.length > 0 ? body : null,
+      );
       return;
     }
 
@@ -1332,18 +1460,22 @@ export class ClientRequest extends OutgoingMessage {
       this._timeoutId = setTimeout(() => {
         this._timeoutId = null;
         controller.abort();
-        this.emit('timeout');
+        this.emit("timeout");
       }, this.timeout);
     }
     if (this.agent) {
-      try { this.agent.emit('request', this); } catch { /* noop */ }
+      try {
+        this.agent.emit("request", this);
+      } catch {
+        /* noop */
+      }
     }
 
     let response;
     try {
       // Emit 'socket' with the synthetic socket, like Node does on connect.
       queueMicrotask(() => {
-        if (!this._aborted) this.emit('socket', this.socket);
+        if (!this._aborted) this.emit("socket", this.socket);
       });
       response = await fetchFn(fetchUrl, fetchOptions);
     } catch (err) {
@@ -1352,7 +1484,7 @@ export class ClientRequest extends OutgoingMessage {
         this._timeoutId = null;
       }
       if (this._aborted) return;
-      if (err && err.name === 'AbortError') return; // timeout already emitted
+      if (err && err.name === "AbortError") return; // timeout already emitted
       throw err;
     }
 
@@ -1365,7 +1497,7 @@ export class ClientRequest extends OutgoingMessage {
     const msg = await IncomingMessage.fromFetchResponse(response);
     msg.socket = this.socket;
     msg.connection = this.socket;
-    this.emit('response', msg);
+    this.emit("response", msg);
   }
 
   /**
@@ -1376,16 +1508,20 @@ export class ClientRequest extends OutgoingMessage {
     let hostname = this.host;
     let port = Number(this.port);
     // `host` may be "example.com:8080".
-    const colon = hostname.lastIndexOf(':');
-    if (colon !== -1 && hostname.indexOf(':') === colon) {
+    const colon = hostname.lastIndexOf(":");
+    if (colon !== -1 && hostname.indexOf(":") === colon) {
       const maybePort = Number(hostname.slice(colon + 1));
       if (Number.isInteger(maybePort)) {
         port = maybePort;
         hostname = hostname.slice(0, colon);
       }
     }
-    const local = hostname === 'localhost' || hostname === '127.0.0.1' ||
-      hostname === '::1' || hostname === '[::1]' || hostname === '';
+    const local =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "[::1]" ||
+      hostname === "";
     if (!local || !Number.isInteger(port)) return null;
     return serverRegistry.get(port) || null;
   }
@@ -1402,8 +1538,8 @@ export class ClientRequest extends OutgoingMessage {
     const sock = netConnect(server._port);
     this.socket = sock;
     this.connection = sock;
-    sock.on('connect', () => {
-      if (!this._aborted) this.emit('socket', sock);
+    sock.on("connect", () => {
+      if (!this._aborted) this.emit("socket", sock);
     });
     const onSocketError = (err) => {
       if (this._timeoutId) {
@@ -1412,20 +1548,28 @@ export class ClientRequest extends OutgoingMessage {
       }
       if (this._aborted) return;
       this._aborted = true;
-      this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      this.emit("error", err instanceof Error ? err : new Error(String(err)));
     };
-    sock.on('error', onSocketError);
+    sock.on("error", onSocketError);
 
     if (this.timeout) {
       this._timeoutId = setTimeout(() => {
         this._timeoutId = null;
         this._aborted = true;
-        try { sock.destroy(); } catch { /* best effort */ }
-        this.emit('timeout');
+        try {
+          sock.destroy();
+        } catch {
+          /* best effort */
+        }
+        this.emit("timeout");
       }, this.timeout);
     }
     if (this.agent) {
-      try { this.agent.emit('request', this); } catch { /* noop */ }
+      try {
+        this.agent.emit("request", this);
+      } catch {
+        /* noop */
+      }
     }
 
     let result;
@@ -1453,9 +1597,9 @@ export class ClientRequest extends OutgoingMessage {
 
     const msg = new IncomingMessage();
     msg.statusCode = result.statusCode;
-    msg.statusMessage = result.statusMessage ||
-      STATUS_CODES[result.statusCode] || '';
-    msg.httpVersion = '1.1';
+    msg.statusMessage =
+      result.statusMessage || STATUS_CODES[result.statusCode] || "";
+    msg.httpVersion = "1.1";
     msg.httpVersionMajor = 1;
     msg.httpVersionMinor = 1;
     const pairs = [];
@@ -1466,7 +1610,7 @@ export class ClientRequest extends OutgoingMessage {
     msg.socket = this.socket;
     msg.connection = this.socket;
     msg._setBody(result.body);
-    this.emit('response', msg);
+    this.emit("response", msg);
   }
 
   /**
@@ -1476,41 +1620,48 @@ export class ClientRequest extends OutgoingMessage {
    * socket from the 'upgrade' event.)
    */
   _handleWebSocketUpgrade(url) {
-    const wsUrl = url.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
-    const wsKey = String(this.getHeader('sec-websocket-key') || '');
+    const wsUrl = url.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+    const wsKey = String(this.getHeader("sec-websocket-key") || "");
     const NativeWS = _NativeWebSocket;
 
     if (!NativeWS) {
       queueMicrotask(() => {
-        this.emit('error', new TypeError('WebSocket is not available in this environment'));
+        this.emit(
+          "error",
+          new TypeError("WebSocket is not available in this environment"),
+        );
       });
       return;
     }
 
     // RFC 6455 §1.3: Sec-WebSocket-Accept = base64(sha1(key + GUID)).
-    const acceptValue = _sha1Base64(wsKey + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11');
+    const acceptValue = _sha1Base64(
+      wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+    );
 
     let nativeWs;
     try {
       nativeWs = new NativeWS(wsUrl);
-      nativeWs.binaryType = 'arraybuffer';
+      nativeWs.binaryType = "arraybuffer";
     } catch (e) {
       queueMicrotask(() => {
-        this.emit('error', e instanceof Error ? e : new Error(String(e)));
+        this.emit("error", e instanceof Error ? e : new Error(String(e)));
       });
       return;
     }
 
     const socket = this.socket;
-    if (typeof socket.cork !== 'function') socket.cork = () => {};
-    if (typeof socket.uncork !== 'function') socket.uncork = () => {};
+    if (typeof socket.cork !== "function") socket.cork = () => {};
+    if (typeof socket.uncork !== "function") socket.uncork = () => {};
 
     let writeBuffer = new Uint8Array(0);
     socket.write = (chunk, encodingOrCallback, callback) => {
-      const data = typeof chunk === 'string'
-        ? Buffer.from(chunk)
-        : new Uint8Array(chunk);
-      const cb = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
+      const data =
+        typeof chunk === "string" ? Buffer.from(chunk) : new Uint8Array(chunk);
+      const cb =
+        typeof encodingOrCallback === "function"
+          ? encodingOrCallback
+          : callback;
       const next = new Uint8Array(writeBuffer.length + data.length);
       next.set(writeBuffer, 0);
       next.set(data, writeBuffer.length);
@@ -1524,9 +1675,12 @@ export class ClientRequest extends OutgoingMessage {
         if (nativeWs.readyState !== NativeWS.OPEN) continue;
 
         if (opcode === 0x08) nativeWs.close();
-        else if (opcode === 0x09) nativeWs.send(payload); // ping -> pong-ish
-        else if (opcode === 0x0a) { /* pong: ignore */ }
-        else if (opcode === 0x01) nativeWs.send(new TextDecoder().decode(payload));
+        else if (opcode === 0x09)
+          nativeWs.send(payload); // ping -> pong-ish
+        else if (opcode === 0x0a) {
+          /* pong: ignore */
+        } else if (opcode === 0x01)
+          nativeWs.send(new TextDecoder().decode(payload));
         else if (opcode === 0x02) nativeWs.send(payload);
       }
       if (cb) queueMicrotask(() => cb(null));
@@ -1536,26 +1690,29 @@ export class ClientRequest extends OutgoingMessage {
     nativeWs.onopen = () => {
       const response = new IncomingMessage(socket);
       response.statusCode = 101;
-      response.statusMessage = 'Switching Protocols';
+      response.statusMessage = "Switching Protocols";
       response.headers = {
-        upgrade: 'websocket',
-        connection: 'Upgrade',
-        'sec-websocket-accept': acceptValue,
+        upgrade: "websocket",
+        connection: "Upgrade",
+        "sec-websocket-accept": acceptValue,
       };
       response.rawHeaders.push(
-        'upgrade', 'websocket',
-        'connection', 'Upgrade',
-        'sec-websocket-accept', acceptValue,
+        "upgrade",
+        "websocket",
+        "connection",
+        "Upgrade",
+        "sec-websocket-accept",
+        acceptValue,
       );
       response.complete = true;
       response.push(null);
-      this.emit('upgrade', response, socket, Buffer.alloc(0));
+      this.emit("upgrade", response, socket, Buffer.alloc(0));
     };
 
     nativeWs.onmessage = (event) => {
       let payload;
       let opcode;
-      if (typeof event.data === 'string') {
+      if (typeof event.data === "string") {
         payload = new TextEncoder().encode(event.data);
         opcode = 0x01;
       } else if (event.data instanceof ArrayBuffer) {
@@ -1564,7 +1721,7 @@ export class ClientRequest extends OutgoingMessage {
       } else {
         return;
       }
-      socket.emit('data', Buffer.from(_createWsFrame(opcode, payload, false)));
+      socket.emit("data", Buffer.from(_createWsFrame(opcode, payload, false)));
     };
 
     nativeWs.onclose = (event) => {
@@ -1572,23 +1729,32 @@ export class ClientRequest extends OutgoingMessage {
       const closePayload = new Uint8Array(2);
       closePayload[0] = (code >> 8) & 0xff;
       closePayload[1] = code & 0xff;
-      socket.emit('data', Buffer.from(_createWsFrame(0x08, closePayload, false)));
+      socket.emit(
+        "data",
+        Buffer.from(_createWsFrame(0x08, closePayload, false)),
+      );
       setTimeout(() => {
-        socket.emit('end');
-        socket.emit('close', false);
+        socket.emit("end");
+        socket.emit("close", false);
       }, 10);
     };
 
     nativeWs.onerror = () => {
-      socket.emit('error', new Error('WebSocket connection error'));
+      socket.emit("error", new Error("WebSocket connection error"));
       socket.destroy();
     };
 
     const origDestroy = socket.destroy.bind(socket);
     socket.destroy = (error) => {
-      if (nativeWs.readyState === NativeWS.OPEN ||
-          nativeWs.readyState === NativeWS.CONNECTING) {
-        try { nativeWs.close(); } catch { /* noop */ }
+      if (
+        nativeWs.readyState === NativeWS.OPEN ||
+        nativeWs.readyState === NativeWS.CONNECTING
+      ) {
+        try {
+          nativeWs.close();
+        } catch {
+          /* noop */
+        }
       }
       return origDestroy(error);
     };
@@ -1608,53 +1774,97 @@ function _sha1Base64(ascii) {
   const hi = Math.floor(bitLen / 0x100000000);
   const lo = bitLen >>> 0;
   bytes.push(
-    (hi >>> 24) & 0xff, (hi >>> 16) & 0xff, (hi >>> 8) & 0xff, hi & 0xff,
-    (lo >>> 24) & 0xff, (lo >>> 16) & 0xff, (lo >>> 8) & 0xff, lo & 0xff,
+    (hi >>> 24) & 0xff,
+    (hi >>> 16) & 0xff,
+    (hi >>> 8) & 0xff,
+    hi & 0xff,
+    (lo >>> 24) & 0xff,
+    (lo >>> 16) & 0xff,
+    (lo >>> 8) & 0xff,
+    lo & 0xff,
   );
 
-  let h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE,
-      h3 = 0x10325476, h4 = 0xC3D2E1F0;
+  let h0 = 0x67452301,
+    h1 = 0xefcdab89,
+    h2 = 0x98badcfe,
+    h3 = 0x10325476,
+    h4 = 0xc3d2e1f0;
   const w = new Array(80);
 
   for (let off = 0; off < bytes.length; off += 64) {
     for (let i = 0; i < 16; i++) {
-      w[i] = ((bytes[off + i * 4] << 24) | (bytes[off + i * 4 + 1] << 16) |
-              (bytes[off + i * 4 + 2] << 8) | bytes[off + i * 4 + 3]) >>> 0;
+      w[i] =
+        ((bytes[off + i * 4] << 24) |
+          (bytes[off + i * 4 + 1] << 16) |
+          (bytes[off + i * 4 + 2] << 8) |
+          bytes[off + i * 4 + 3]) >>>
+        0;
     }
     for (let i = 16; i < 80; i++) {
       const x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
       w[i] = ((x << 1) | (x >>> 31)) >>> 0;
     }
-    let a = h0, b = h1, c = h2, d = h3, e = h4;
+    let a = h0,
+      b = h1,
+      c = h2,
+      d = h3,
+      e = h4;
     for (let i = 0; i < 80; i++) {
       let f, k;
-      if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999; }
-      else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
-      else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
-      else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+      if (i < 20) {
+        f = (b & c) | (~b & d);
+        k = 0x5a827999;
+      } else if (i < 40) {
+        f = b ^ c ^ d;
+        k = 0x6ed9eba1;
+      } else if (i < 60) {
+        f = (b & c) | (b & d) | (c & d);
+        k = 0x8f1bbcdc;
+      } else {
+        f = b ^ c ^ d;
+        k = 0xca62c1d6;
+      }
       const tmp = ((((a << 5) | (a >>> 27)) >>> 0) + f + e + k + w[i]) >>> 0;
-      e = d; d = c; c = ((b << 30) | (b >>> 2)) >>> 0; b = a; a = tmp;
+      e = d;
+      d = c;
+      c = ((b << 30) | (b >>> 2)) >>> 0;
+      b = a;
+      a = tmp;
     }
-    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0;
-    h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0;
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
   }
 
   const digest = new Uint8Array(20);
-  for (const [i, h] of [[0, h0], [1, h1], [2, h2], [3, h3], [4, h4]]) {
+  for (const [i, h] of [
+    [0, h0],
+    [1, h1],
+    [2, h2],
+    [3, h3],
+    [4, h4],
+  ]) {
     digest[i * 4] = (h >>> 24) & 0xff;
     digest[i * 4 + 1] = (h >>> 16) & 0xff;
     digest[i * 4 + 2] = (h >>> 8) & 0xff;
     digest[i * 4 + 3] = h & 0xff;
   }
   // base64 (binary-safe, no btoa dependency assumptions)
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  let out = '';
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
   for (let i = 0; i < digest.length; i += 3) {
-    const b0 = digest[i], b1 = digest[i + 1] ?? 0, b2 = digest[i + 2] ?? 0;
+    const b0 = digest[i],
+      b1 = digest[i + 1] ?? 0,
+      b2 = digest[i + 2] ?? 0;
     const n = (b0 << 16) | (b1 << 8) | b2;
-    out += chars[(n >>> 18) & 63] + chars[(n >>> 12) & 63] +
-           (i + 1 < digest.length ? chars[(n >>> 6) & 63] : '=') +
-           (i + 2 < digest.length ? chars[n & 63] : '=');
+    out +=
+      chars[(n >>> 18) & 63] +
+      chars[(n >>> 12) & 63] +
+      (i + 1 < digest.length ? chars[(n >>> 6) & 63] : "=") +
+      (i + 2 < digest.length ? chars[n & 63] : "=");
   }
   return out;
 }
@@ -1676,7 +1886,8 @@ function _parseWsFrame(data) {
     offset = 4;
   } else if (payloadLength === 127) {
     if (data.length < 10) return null;
-    payloadLength = (data[6] * 0x1000000) + ((data[7] << 16) | (data[8] << 8) | data[9]);
+    payloadLength =
+      data[6] * 0x1000000 + ((data[7] << 16) | (data[8] << 8) | data[9]);
     offset = 10;
   }
 
@@ -1728,7 +1939,7 @@ function _createWsFrame(opcode, payload, masked) {
 
   if (masked) {
     const maskKey = new Uint8Array(4);
-    if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    if (typeof globalThis.crypto?.getRandomValues === "function") {
       globalThis.crypto.getRandomValues(maskKey);
     } else {
       for (let i = 0; i < 4; i++) maskKey[i] = Math.floor(Math.random() * 256);
@@ -1796,10 +2007,16 @@ function _unregisterServer(port) {
 function closeServer(port) {
   const server = serverRegistry.get(port);
   if (!server) return false;
-  const err = makeError('EADDRINUSE',
-    `listen EADDRINUSE: address already in use :::${port}`);
+  const err = makeError(
+    "EADDRINUSE",
+    `listen EADDRINUSE: address already in use :::${port}`,
+  );
   err.port = port;
-  queueMicrotask(() => { try { server.emit('error', err); } catch {} });
+  queueMicrotask(() => {
+    try {
+      server.emit("error", err);
+    } catch {}
+  });
   server.close();
   return true;
 }
@@ -1835,9 +2052,9 @@ function _serializeRequestHead(method, path, headers, body) {
   const push = (name, value) => lines.push(`${name}: ${value}`);
   for (const [name, value] of Object.entries(headers || {})) {
     const lower = name.toLowerCase();
-    if (lower === 'host') hasHost = true;
-    else if (lower === 'content-length') hasContentLength = true;
-    else if (lower === 'connection') hasConnection = true;
+    if (lower === "host") hasHost = true;
+    else if (lower === "content-length") hasContentLength = true;
+    else if (lower === "connection") hasConnection = true;
     if (Array.isArray(value)) {
       // Like Node on the wire: one header line per element.
       for (const v of value) push(name, v);
@@ -1845,15 +2062,15 @@ function _serializeRequestHead(method, path, headers, body) {
       push(name, value);
     }
   }
-  if (!hasHost) push('Host', 'localhost');
-  const bodyBuf = body == null ? null
-    : Buffer.isBuffer(body) ? body : Buffer.from(body);
+  if (!hasHost) push("Host", "localhost");
+  const bodyBuf =
+    body == null ? null : Buffer.isBuffer(body) ? body : Buffer.from(body);
   if (!hasContentLength && bodyBuf && bodyBuf.length > 0) {
-    push('Content-Length', String(bodyBuf.length));
+    push("Content-Length", String(bodyBuf.length));
   }
-  if (!hasConnection) push('Connection', 'close');
-  lines.push('', '');
-  const head = Buffer.from(lines.join('\r\n'));
+  if (!hasConnection) push("Connection", "close");
+  lines.push("", "");
+  const head = Buffer.from(lines.join("\r\n"));
   return bodyBuf && bodyBuf.length > 0 ? Buffer.concat([head, bodyBuf]) : head;
 }
 
@@ -1865,25 +2082,34 @@ function _serializeRequestHead(method, path, headers, body) {
  * `onSocket` (optional) receives the connected socket — the client uses it
  * to swap its synthetic socket for the real one and emit 'socket'.
  */
-function _socketHttpRoundTrip(port, { method, path, headers, body, socket, onSocket }) {
+function _socketHttpRoundTrip(
+  port,
+  { method, path, headers, body, socket, onSocket },
+) {
   return new Promise((resolve, reject) => {
     const sock = socket || netConnect(port);
     let settled = false;
     const settle = (fn) => (value) => {
       if (settled) return;
       settled = true;
-      try { sock.destroy(); } catch { /* best effort */ }
+      try {
+        sock.destroy();
+      } catch {
+        /* best effort */
+      }
       fn(value);
     };
     const ok = settle(resolve);
     const fail = settle(reject);
 
-    const parser = new HTTPParser('response');
+    const parser = new HTTPParser("response");
     // HEAD responses never have a body, regardless of framing.
-    parser.isHeadResponse = method === 'HEAD';
+    parser.isHeadResponse = method === "HEAD";
     const chunks = [];
     let info = null;
-    parser.onHeadersComplete = (i) => { info = i; };
+    parser.onHeadersComplete = (i) => {
+      info = i;
+    };
     parser.onBody = (chunk) => chunks.push(Buffer.from(chunk));
     parser.onMessageComplete = () => {
       ok({
@@ -1895,9 +2121,13 @@ function _socketHttpRoundTrip(port, { method, path, headers, body, socket, onSoc
     };
     parser.onError = (err) => fail(err);
 
-    sock.on('connect', () => {
-      if (typeof onSocket === 'function') {
-        try { onSocket(sock); } catch { /* listener errors are not fatal */ }
+    sock.on("connect", () => {
+      if (typeof onSocket === "function") {
+        try {
+          onSocket(sock);
+        } catch {
+          /* listener errors are not fatal */
+        }
       }
       try {
         sock.write(_serializeRequestHead(method, path, headers, body));
@@ -1905,22 +2135,32 @@ function _socketHttpRoundTrip(port, { method, path, headers, body, socket, onSoc
         fail(err);
       }
     });
-    sock.on('data', (chunk) => {
+    sock.on("data", (chunk) => {
       try {
         parser.execute(chunk);
       } catch (err) {
         fail(err);
       }
     });
-    sock.on('error', (err) => fail(err instanceof Error ? err : new Error(String(err))));
-    sock.on('close', () => {
+    sock.on("error", (err) =>
+      fail(err instanceof Error ? err : new Error(String(err))),
+    );
+    sock.on("close", () => {
       if (settled) return;
       // A response framed to EOF completes on close; anything else closing
       // early is a truncated response.
-      try { parser.end(); } catch { /* fall through to fail */ }
+      try {
+        parser.end();
+      } catch {
+        /* fall through to fail */
+      }
       if (!settled) {
-        fail(makeError('ERR_SOCKET_CLOSED',
-          'Socket closed before the HTTP response completed'));
+        fail(
+          makeError(
+            "ERR_SOCKET_CLOSED",
+            "Socket closed before the HTTP response completed",
+          ),
+        );
       }
     });
   });
@@ -1930,19 +2170,26 @@ class ServerBase extends EventEmitter {
   constructor(optionsOrListener, requestListener) {
     super();
     let options;
-    if (typeof optionsOrListener === 'function') {
+    if (typeof optionsOrListener === "function") {
       requestListener = optionsOrListener;
       options = {};
     } else if (optionsOrListener == null) {
       options = {};
-    } else if (typeof optionsOrListener === 'object' && !Array.isArray(optionsOrListener)) {
+    } else if (
+      typeof optionsOrListener === "object" &&
+      !Array.isArray(optionsOrListener)
+    ) {
       options = optionsOrListener;
     } else {
-      throw ERR_INVALID_ARG_TYPE('options', ['Object', 'Function'], optionsOrListener);
+      throw ERR_INVALID_ARG_TYPE(
+        "options",
+        ["Object", "Function"],
+        optionsOrListener,
+      );
     }
     this._requestListener = requestListener;
     if (requestListener) {
-      this.on('request', requestListener);
+      this.on("request", requestListener);
     }
 
     this.listening = false;
@@ -1952,7 +2199,8 @@ class ServerBase extends EventEmitter {
     this.headersTimeout = options.headersTimeout ?? 60000;
     this.requestTimeout = options.requestTimeout ?? 300000;
     this.keepAliveTimeout = options.keepAliveTimeout ?? 5000;
-    this.connectionsCheckingInterval = options.connectionsCheckingInterval ?? 30000;
+    this.connectionsCheckingInterval =
+      options.connectionsCheckingInterval ?? 30000;
     this._port = null;
     this._host = null;
     // Real virtual-network connections (src/net.js sockets), tracked for
@@ -1966,21 +2214,25 @@ class ServerBase extends EventEmitter {
     let host;
     let cb;
 
-    if (typeof portOrOptions === 'number' || typeof portOrOptions === 'string') {
+    if (
+      typeof portOrOptions === "number" ||
+      typeof portOrOptions === "string"
+    ) {
       port = Number(portOrOptions);
-      if (typeof hostOrCallback === 'string') {
+      if (typeof hostOrCallback === "string") {
         host = hostOrCallback;
         cb = callback;
       } else {
         cb = hostOrCallback;
       }
-    } else if (portOrOptions && typeof portOrOptions === 'object') {
-      port = portOrOptions.port !== undefined ? Number(portOrOptions.port) : port;
+    } else if (portOrOptions && typeof portOrOptions === "object") {
+      port =
+        portOrOptions.port !== undefined ? Number(portOrOptions.port) : port;
       host = portOrOptions.host;
-      cb = typeof hostOrCallback === 'function' ? hostOrCallback : callback;
-    } else if (typeof portOrOptions === 'function') {
+      cb = typeof hostOrCallback === "function" ? hostOrCallback : callback;
+    } else if (typeof portOrOptions === "function") {
       cb = portOrOptions;
-    } else if (portOrOptions == null && typeof hostOrCallback === 'function') {
+    } else if (portOrOptions == null && typeof hostOrCallback === "function") {
       cb = hostOrCallback;
     }
 
@@ -1992,53 +2244,55 @@ class ServerBase extends EventEmitter {
     }
 
     if (serverRegistry.has(port)) {
-      const err = makeError('EADDRINUSE',
-        `listen EADDRINUSE: address already in use :::${port}`);
+      const err = makeError(
+        "EADDRINUSE",
+        `listen EADDRINUSE: address already in use :::${port}`,
+      );
       err.port = port;
-      queueMicrotask(() => this.emit('error', err));
+      queueMicrotask(() => this.emit("error", err));
       return this;
     }
 
     this._port = port;
-    this._host = host || '::';
+    this._host = host || "::";
     _registerServer(port, this);
     // Real virtual-network round trip: bind a net.js socket server on the
     // same port so req.socket is a genuine connected socket with real
     // remoteAddress/remotePort/byte counts. net.connect(port) finds this
     // server through the wildcard keys ('::' / '0.0.0.0').
     const netServer = createNetServer();
-    netServer.on('connection', (socket) => this._onSocketConnection(socket));
-    netServer.on('error', (err) => this.emit('error', err));
+    netServer.on("connection", (socket) => this._onSocketConnection(socket));
+    netServer.on("error", (err) => this.emit("error", err));
     this._netServer = netServer;
     netServer.listen(port, this._host);
     this.listening = true;
     // emitMe(fn, method, ...args) serializes only ...args — the payload must
     // go in args (3rd position), not method, or the parent sees an empty message.
-    emitEvent?.('serverListening', null, { port });
+    emitEvent?.("serverListening", null, { port });
     queueMicrotask(() => {
-      this.emit('listening');
+      this.emit("listening");
       if (cb) cb.call(this);
     });
     return this;
   }
 
   close(callback) {
-    if (typeof callback === 'function') {
+    if (typeof callback === "function") {
       if (!this.listening) queueMicrotask(callback);
-      else this.once('close', callback);
+      else this.once("close", callback);
     }
     if (this._port !== null) {
       const port = this._port;
       this._port = null;
       _unregisterServer(port);
-      emitEvent?.('serverClosed', null, { port });
+      emitEvent?.("serverClosed", null, { port });
     }
     if (this._netServer) {
       this._netServer.close();
       this._netServer = null;
     }
     this.listening = false;
-    queueMicrotask(() => this.emit('close'));
+    queueMicrotask(() => this.emit("close"));
     return this;
   }
 
@@ -2059,11 +2313,11 @@ class ServerBase extends EventEmitter {
 
   address() {
     if (!this.listening || this._port === null) return null;
-    return { address: this._host, family: 'IPv6', port: this._port };
+    return { address: this._host, family: "IPv6", port: this._port };
   }
 
   getConnections(callback) {
-    if (typeof callback === 'function') {
+    if (typeof callback === "function") {
       queueMicrotask(() => callback(null, this._connections.size));
     }
     return this;
@@ -2079,25 +2333,25 @@ class ServerBase extends EventEmitter {
   _onSocketConnection(socket) {
     this._connections.add(socket);
     const state = {
-      busy: false,   // a request is being handled; parser input is gated
+      busy: false, // a request is being handled; parser input is gated
       awaitingBody: false, // the in-flight request still expects body bytes
-      pending: [],   // chunks received while busy
+      pending: [], // chunks received while busy
       reqCount: 0,
       current: null, // { req, res } for the in-flight request
     };
     socket._httpState = state;
-    socket.on('close', () => {
+    socket.on("close", () => {
       this._connections.delete(socket);
       if (state.current) {
         state.current.req.aborted = true;
-        state.current.req.emit('aborted');
+        state.current.req.emit("aborted");
         state.current = null;
       }
     });
     // Node parity: servers emit 'connection' for every accepted socket.
-    this.emit('connection', socket);
+    this.emit("connection", socket);
 
-    const parser = new HTTPParser('request');
+    const parser = new HTTPParser("request");
     // Strict one-request-at-a-time: the parser pauses after each message and
     // only resumes once the in-flight response has been fully written.
     parser.pauseBetweenMessages = true;
@@ -2115,23 +2369,29 @@ class ServerBase extends EventEmitter {
         created.req._finishBody();
         state.current = null;
       };
-      if (info.headers.expect === '100-continue' &&
-          info.httpVersionMajor === 1 && info.httpVersionMinor === 1) {
-        socket.write('HTTP/1.1 100 Continue\r\n\r\n');
+      if (
+        info.headers.expect === "100-continue" &&
+        info.httpVersionMajor === 1 &&
+        info.httpVersionMinor === 1
+      ) {
+        socket.write("HTTP/1.1 100 Continue\r\n\r\n");
       }
     };
     parser.onError = (err) => {
       // Malformed request → 400 and close (Node's clientError path).
-      this.emit('clientError', err, socket);
+      this.emit("clientError", err, socket);
       if (!socket.destroyed) {
         try {
           socket.write(
-            'HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
-        } catch { /* best effort */ }
+            "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+          );
+        } catch {
+          /* best effort */
+        }
         socket.destroy();
       }
     };
-    socket.on('data', (chunk) => {
+    socket.on("data", (chunk) => {
       // While a request is in flight, only its own body may flow; anything
       // else (e.g. a pipelined next request) waits for the response.
       if (state.busy && !state.awaitingBody) {
@@ -2140,8 +2400,10 @@ class ServerBase extends EventEmitter {
       }
       parser.execute(chunk);
     });
-    socket.on('error', () => { /* 'close' handles cleanup */ });
-    socket.on('end', () => {
+    socket.on("error", () => {
+      /* 'close' handles cleanup */
+    });
+    socket.on("end", () => {
       // Client half-closed an idle keep-alive connection: close our side.
       if (!state.busy) socket.end();
     });
@@ -2168,15 +2430,15 @@ class ServerBase extends EventEmitter {
     const res = new ServerResponse(req);
     const reqNo = ++state.reqCount;
 
-    res.on('finish', () => {
+    res.on("finish", () => {
       this._finishSocketResponse(socket, info, state, req, res, reqNo);
     });
 
     queueMicrotask(() => {
       try {
-        this.emit('request', req, res);
+        this.emit("request", req, res);
       } catch (err) {
-        this.emit('clientError', err, socket);
+        this.emit("clientError", err, socket);
         socket.destroy(err);
       }
     });
@@ -2190,32 +2452,37 @@ class ServerBase extends EventEmitter {
    */
   _finishSocketResponse(socket, info, state, req, res, reqNo) {
     if (!socket.destroyed) {
-      const head = res._header || 'HTTP/1.1 200 OK\r\n\r\n';
+      const head = res._header || "HTTP/1.1 200 OK\r\n\r\n";
       const body = res._getBody();
       const noBodyStatus = res._hasBody === false;
-      const sendBody = body.length > 0 && req.method !== 'HEAD' && !noBodyStatus;
+      const sendBody =
+        body.length > 0 && req.method !== "HEAD" && !noBodyStatus;
       let headOut = head;
-      const hasCL = res.hasHeader('content-length');
-      const hasTE = res.hasHeader('transfer-encoding');
+      const hasCL = res.hasHeader("content-length");
+      const hasTE = res.hasHeader("transfer-encoding");
       if (!hasCL && !hasTE && !noBodyStatus) {
         // Frame the body like Node does when its length is known at end():
         // HEAD responses carry the length but no bytes.
-        headOut = head.replace(/\r\n$/, `Content-Length: ${body.length}\r\n\r\n`);
+        headOut = head.replace(
+          /\r\n$/,
+          `Content-Length: ${body.length}\r\n\r\n`,
+        );
       }
       socket.write(headOut);
-      const te = hasTE ? String(res.getHeader('transfer-encoding')) : '';
+      const te = hasTE ? String(res.getHeader("transfer-encoding")) : "";
       if (/chunked/i.test(te)) {
         if (sendBody) {
           socket.write(`${body.length.toString(16)}\r\n`);
           socket.write(body);
-          socket.write('\r\n');
+          socket.write("\r\n");
         }
-        socket.write('0\r\n\r\n');
+        socket.write("0\r\n\r\n");
       } else if (sendBody) {
         socket.write(body);
       }
     }
-    const maxOk = this.maxRequestsPerSocket === 0 || reqNo < this.maxRequestsPerSocket;
+    const maxOk =
+      this.maxRequestsPerSocket === 0 || reqNo < this.maxRequestsPerSocket;
     const keepAlive = info.shouldKeepAlive && maxOk && !socket.destroyed;
     if (keepAlive) {
       state.busy = false;
@@ -2234,12 +2501,16 @@ class ServerBase extends EventEmitter {
 
   setTimeout(msecs, callback) {
     this.timeout = msecs || 0;
-    if (callback) this.on('timeout', callback);
+    if (callback) this.on("timeout", callback);
     return this;
   }
 
-  ref() { return this; }
-  unref() { return this; }
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
 
   /**
    * Handle an emulated inbound request (called by the runtime bridge).
@@ -2254,17 +2525,17 @@ class ServerBase extends EventEmitter {
       let timeoutId = null;
       if (this.timeout) {
         timeoutId = setTimeout(() => {
-          reject(makeError('ERR_HTTP_REQUEST_TIMEOUT', 'Request timeout'));
+          reject(makeError("ERR_HTTP_REQUEST_TIMEOUT", "Request timeout"));
         }, this.timeout);
         timeoutId.unref?.();
       }
-      res.once('finish', () => {
+      res.once("finish", () => {
         if (timeoutId) clearTimeout(timeoutId);
       });
 
       queueMicrotask(() => {
         try {
-          this.emit('request', req, res);
+          this.emit("request", req, res);
         } catch (error) {
           if (timeoutId) clearTimeout(timeoutId);
           reject(error);
@@ -2299,7 +2570,7 @@ Server.prototype = ServerBase.prototype;
  */
 export function _connectionListener(socket) {
   const server = this;
-  server.emit('connection', socket);
+  server.emit("connection", socket);
 }
 
 // ---------------------------------------------------------------------------
@@ -2312,20 +2583,26 @@ class AgentBase extends EventEmitter {
     this.options = opts;
 
     this.defaultPort = opts.defaultPort || 80;
-    this.protocol = opts.protocol || 'http:';
+    this.protocol = opts.protocol || "http:";
     this.keepAliveMsecs = opts.keepAliveMsecs || 1000;
     this.keepAlive = opts.keepAlive || false;
     this.maxSockets = opts.maxSockets || AgentBase.defaultMaxSockets;
     this.maxFreeSockets = opts.maxFreeSockets || 256;
-    this.scheduling = opts.scheduling || 'lifo';
-    if (this.scheduling !== 'fifo' && this.scheduling !== 'lifo') {
+    this.scheduling = opts.scheduling || "lifo";
+    if (this.scheduling !== "fifo" && this.scheduling !== "lifo") {
       throw ERR_INVALID_ARG_VALUE(
-        'scheduling', this.scheduling, "must be one of: 'fifo', 'lifo'.");
+        "scheduling",
+        this.scheduling,
+        "must be one of: 'fifo', 'lifo'.",
+      );
     }
     this.maxTotalSockets = opts.maxTotalSockets;
     if (this.maxTotalSockets !== undefined) {
-      if (typeof this.maxTotalSockets !== 'number' || this.maxTotalSockets < 1) {
-        throw ERR_OUT_OF_RANGE('maxTotalSockets', '>= 1', this.maxTotalSockets);
+      if (
+        typeof this.maxTotalSockets !== "number" ||
+        this.maxTotalSockets < 1
+      ) {
+        throw ERR_OUT_OF_RANGE("maxTotalSockets", ">= 1", this.maxTotalSockets);
       }
     } else {
       this.maxTotalSockets = Infinity;
@@ -2340,7 +2617,7 @@ class AgentBase extends EventEmitter {
   /** No real sockets in the browser: hand out a synthetic placeholder. */
   createConnection(_options, callback) {
     const socket = new FakeSocket();
-    if (typeof callback === 'function') {
+    if (typeof callback === "function") {
       queueMicrotask(() => callback(null, socket));
     }
     return socket;
@@ -2354,9 +2631,9 @@ class AgentBase extends EventEmitter {
   }
 
   getName(options = {}) {
-    const host = options.host || options.hostname || 'localhost';
+    const host = options.host || options.hostname || "localhost";
     const port = options.port || this.defaultPort || 80;
-    return `${host}:${port}:${options.localAddress || ''}`;
+    return `${host}:${port}:${options.localAddress || ""}`;
   }
 
   addRequest(_req, _options) {
@@ -2364,7 +2641,9 @@ class AgentBase extends EventEmitter {
   }
 
   removeSocket(_socket, _options) {}
-  keepSocketAlive(_socket) { return true; }
+  keepSocketAlive(_socket) {
+    return true;
+  }
   reuseSocket(_socket, _req) {}
 
   destroy() {
@@ -2387,22 +2666,36 @@ Object.setPrototypeOf(Agent, AgentBase);
 Agent.prototype = AgentBase.prototype;
 
 /** The default agent used when none is supplied. */
-export const globalAgent = new Agent({ keepAlive: true, scheduling: 'lifo', timeout: 5000 });
+export const globalAgent = new Agent({
+  keepAlive: true,
+  scheduling: "lifo",
+  timeout: 5000,
+});
 
 // ---------------------------------------------------------------------------
 // 13. request / get.
 // ---------------------------------------------------------------------------
 export function request(urlOrOptions, optionsOrCallback, callback) {
   const { options, callback: cb } = parseRequestArgs(
-    urlOrOptions, optionsOrCallback, callback);
+    urlOrOptions,
+    optionsOrCallback,
+    callback,
+  );
   const req = new ClientRequest(options, undefined, cb);
   return req;
 }
 
 export function get(urlOrOptions, optionsOrCallback, callback) {
   const { options, callback: cb } = parseRequestArgs(
-    urlOrOptions, optionsOrCallback, callback);
-  const req = new ClientRequest({ __proto__: null, ...options, method: 'GET' }, undefined, cb);
+    urlOrOptions,
+    optionsOrCallback,
+    callback,
+  );
+  const req = new ClientRequest(
+    { __proto__: null, ...options, method: "GET" },
+    undefined,
+    cb,
+  );
   req.end();
   return req;
 }
@@ -2412,9 +2705,17 @@ export function get(urlOrOptions, optionsOrCallback, callback) {
  * Used by the https module (avoids an import cycle: https -> http only).
  */
 function _createClientRequest(
-  urlOrOptions, optionsOrCallback, callback, defaultProtocol, defaultAgent) {
+  urlOrOptions,
+  optionsOrCallback,
+  callback,
+  defaultProtocol,
+  defaultAgent,
+) {
   const { options, callback: cb } = parseRequestArgs(
-    urlOrOptions, optionsOrCallback, callback);
+    urlOrOptions,
+    optionsOrCallback,
+    callback,
+  );
   if (defaultProtocol && options.protocol === undefined) {
     options.protocol = defaultProtocol;
   }
@@ -2433,13 +2734,23 @@ function _createClientRequest(
  * accepted — the URL/method positions are disambiguated by shape (methods are
  * uppercase tokens, URLs start with '/').
  */
-async function handleRequest(port, urlOrMethod, methodOrUrl, bodyOrHeaders, headersOrBody) {
+async function handleRequest(
+  port,
+  urlOrMethod,
+  methodOrUrl,
+  bodyOrHeaders,
+  headersOrBody,
+) {
   let url = urlOrMethod;
   let method = methodOrUrl;
   let body = bodyOrHeaders;
   let headers = headersOrBody;
-  if (typeof urlOrMethod === 'string' && /^[A-Z]+$/.test(urlOrMethod) &&
-      typeof methodOrUrl === 'string' && methodOrUrl.startsWith('/')) {
+  if (
+    typeof urlOrMethod === "string" &&
+    /^[A-Z]+$/.test(urlOrMethod) &&
+    typeof methodOrUrl === "string" &&
+    methodOrUrl.startsWith("/")
+  ) {
     // Legacy order: (port, method, url, headers, body).
     method = urlOrMethod;
     url = methodOrUrl;
@@ -2452,7 +2763,10 @@ async function handleRequest(port, urlOrMethod, methodOrUrl, bodyOrHeaders, head
     server = serverRegistry.values().next().value;
   }
   if (!server) {
-    throw makeError('ERR_NO_SERVER', `No active HTTP server found for port ${port}`);
+    throw makeError(
+      "ERR_NO_SERVER",
+      `No active HTTP server found for port ${port}`,
+    );
   }
 
   // Node lowercases incoming header names; Express relies on that.
@@ -2469,13 +2783,13 @@ async function handleRequest(port, urlOrMethod, methodOrUrl, bodyOrHeaders, head
   let payload = body;
   if (
     payload != null &&
-    typeof payload === 'object' &&
+    typeof payload === "object" &&
     !ArrayBuffer.isView(payload) &&
     !(payload instanceof ArrayBuffer)
   ) {
     if (Object.keys(payload).length > 0) {
       payload = JSON.stringify(payload);
-      h['content-type'] ??= 'application/json';
+      h["content-type"] ??= "application/json";
     } else {
       payload = null;
     }
@@ -2485,8 +2799,8 @@ async function handleRequest(port, urlOrMethod, methodOrUrl, bodyOrHeaders, head
   // Mimic a real HTTP client: set content-length if the caller didn't.
   // body-parser (express.json()) skips parsing when content-length is
   // absent, so requests via __serverRequest__ would see req.body undefined.
-  if (payload != null && h['content-length'] === undefined) {
-    h['content-length'] = String(Buffer.byteLength(payload));
+  if (payload != null && h["content-length"] === undefined) {
+    h["content-length"] = String(Buffer.byteLength(payload));
   }
 
   // Phase 2: emulated inbound requests go over a real virtual socket, so
@@ -2504,7 +2818,8 @@ async function handleRequest(port, urlOrMethod, methodOrUrl, bodyOrHeaders, head
     for (let i = 0; i < res.rawHeaders.length; i += 2) {
       const key = res.rawHeaders[i].toLowerCase();
       const value = res.rawHeaders[i + 1];
-      headers[key] = headers[key] === undefined ? value : `${headers[key]}, ${value}`;
+      headers[key] =
+        headers[key] === undefined ? value : `${headers[key]}, ${value}`;
     }
     return {
       statusCode: res.statusCode,
@@ -2531,9 +2846,13 @@ if (RT) {
 // ---------------------------------------------------------------------------
 export const WebSocket = _NativeWebSocket;
 export const CloseEvent =
-  typeof globalThis.CloseEvent === 'function' ? globalThis.CloseEvent : undefined;
+  typeof globalThis.CloseEvent === "function"
+    ? globalThis.CloseEvent
+    : undefined;
 export const MessageEvent =
-  typeof globalThis.MessageEvent === 'function' ? globalThis.MessageEvent : undefined;
+  typeof globalThis.MessageEvent === "function"
+    ? globalThis.MessageEvent
+    : undefined;
 
 // ---------------------------------------------------------------------------
 // 16. Module exports.

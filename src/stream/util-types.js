@@ -9,17 +9,15 @@ function isUint8Array(value) {
 }
 
 function isAnyArrayBuffer(value) {
-  return value instanceof ArrayBuffer ||
-    (typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer);
+  return (
+    value instanceof ArrayBuffer ||
+    (typeof SharedArrayBuffer !== "undefined" &&
+      value instanceof SharedArrayBuffer)
+  );
 }
 
 function isBlob(value) {
   return value instanceof Blob;
 }
 
-export {
-  isAnyArrayBuffer,
-  isArrayBufferView,
-  isBlob,
-  isUint8Array,
-};
+export { isAnyArrayBuffer, isArrayBufferView, isBlob, isUint8Array };

@@ -19,60 +19,71 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { startNewREPLServer } = require('../common/repl');
-const assert = require('node:assert');
-const fs = require('node:fs');
-const path = require('node:path');
+const common = require("../common");
+const { startNewREPLServer } = require("../common/repl");
+const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
 // Tests that a REPL session data can be saved to and loaded from a file
 
 const { replServer, input } = startNewREPLServer({ terminal: false });
 
-const filePath = path.resolve(tmpdir.path, 'test.save.js');
+const filePath = path.resolve(tmpdir.path, "test.save.js");
 
 const testFileContents = [
-  'let inner = (function() {',
-  '  return {one:1};',
-  '})()',
+  "let inner = (function() {",
+  "  return {one:1};",
+  "})()",
 ];
 
 input.run(testFileContents);
 input.run([`.save ${filePath}`]);
 
-assert.strictEqual(fs.readFileSync(filePath, 'utf8'),
-                   testFileContents.join('\n'));
+assert.strictEqual(
+  fs.readFileSync(filePath, "utf8"),
+  testFileContents.join("\n"),
+);
 
-const innerOCompletions = [['inner.one'], 'inner.o'];
+const innerOCompletions = [["inner.one"], "inner.o"];
 
 // Double check that the data is still present in the repl after the save
-replServer.completer('inner.o', common.mustSucceed((data) => {
-  assert.deepStrictEqual(data, innerOCompletions);
-}));
+replServer.completer(
+  "inner.o",
+  common.mustSucceed((data) => {
+    assert.deepStrictEqual(data, innerOCompletions);
+  }),
+);
 
 // Clear the repl context
-input.run(['.clear']);
+input.run([".clear"]);
 
 // Double check that the data is no longer present in the repl
-replServer.completer('inner.o', common.mustSucceed((data) => {
-  assert.deepStrictEqual(data, [[], 'inner.o']);
-}));
+replServer.completer(
+  "inner.o",
+  common.mustSucceed((data) => {
+    assert.deepStrictEqual(data, [[], "inner.o"]);
+  }),
+);
 
 // Load the file back in.
 input.run([`.load ${filePath}`]);
 
 // Make sure loading doesn't insert extra indentation
 // https://github.com/nodejs/node/issues/47673
-assert.strictEqual(replServer.line, '');
+assert.strictEqual(replServer.line, "");
 
 // Make sure that the loaded data is present
-replServer.complete('inner.o', common.mustSucceed((data) => {
-  assert.deepStrictEqual(data, innerOCompletions);
-}));
+replServer.complete(
+  "inner.o",
+  common.mustSucceed((data) => {
+    assert.deepStrictEqual(data, innerOCompletions);
+  }),
+);
 
 replServer.close();

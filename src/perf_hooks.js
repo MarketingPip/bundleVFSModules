@@ -29,7 +29,9 @@
 // 1. Runtime bridge (rewritten per-sandbox by the runtime's _build_file).
 // ---------------------------------------------------------------------------
 const RT =
-  typeof globalThis._RUNTIME_ !== 'undefined' ? globalThis._RUNTIME_ : undefined;
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 void RT;
 
 // ---------------------------------------------------------------------------
@@ -51,13 +53,13 @@ void RT;
 let nativePerfHooks = null;
 try {
   if (
-    typeof globalThis._RUNTIME_ === 'undefined' &&
+    typeof globalThis._RUNTIME_ === "undefined" &&
     globalThis.__PERF_HOOKS_NO_NATIVE__ !== true &&
-    typeof process !== 'undefined' &&
-    typeof process.getBuiltinModule === 'function'
+    typeof process !== "undefined" &&
+    typeof process.getBuiltinModule === "function"
   ) {
-    const candidate = process.getBuiltinModule('perf_hooks');
-    if (candidate && typeof candidate.createHistogram === 'function') {
+    const candidate = process.getBuiltinModule("perf_hooks");
+    if (candidate && typeof candidate.createHistogram === "function") {
       nativePerfHooks = candidate;
     }
   }
@@ -72,105 +74,112 @@ const nativeHistogramSet = new WeakSet();
 // ---------------------------------------------------------------------------
 // 2. Internal symbols and helpers.
 // ---------------------------------------------------------------------------
-const kSkipThrow = Symbol('kSkipThrow');
-const kHandle = Symbol('kHandle');
-const kMap = Symbol('kMap');
-const kEnabled = Symbol('kEnabled');
-const kRecordable = Symbol('kRecordable');
-const kName = Symbol('kName');
-const kEntryType = Symbol('kEntryType');
-const kStartTime = Symbol('kStartTime');
-const kDuration = Symbol('kDuration');
-const kDetail = Symbol('kDetail');
-const kRequestedUrl = Symbol('kRequestedUrl');
-const kTimingInfo = Symbol('kTimingInfo');
-const kInitiatorType = Symbol('kInitiatorType');
-const kCacheMode = Symbol('kCacheMode');
-const kDeliveryType = Symbol('kDeliveryType');
-const kResponseStatus = Symbol('kResponseStatus');
-const kPending = Symbol('kPending');
-const kEntryTypes = Symbol('kEntryTypes');
-const kType = Symbol('kType');
-const kPerformanceBrand = Symbol('kPerformanceBrand');
-const kListeners = Symbol('kListeners');
-const kInspect = Symbol.for('nodejs.util.inspect.custom');
+const kSkipThrow = Symbol("kSkipThrow");
+const kHandle = Symbol("kHandle");
+const kMap = Symbol("kMap");
+const kEnabled = Symbol("kEnabled");
+const kRecordable = Symbol("kRecordable");
+const kName = Symbol("kName");
+const kEntryType = Symbol("kEntryType");
+const kStartTime = Symbol("kStartTime");
+const kDuration = Symbol("kDuration");
+const kDetail = Symbol("kDetail");
+const kRequestedUrl = Symbol("kRequestedUrl");
+const kTimingInfo = Symbol("kTimingInfo");
+const kInitiatorType = Symbol("kInitiatorType");
+const kCacheMode = Symbol("kCacheMode");
+const kDeliveryType = Symbol("kDeliveryType");
+const kResponseStatus = Symbol("kResponseStatus");
+const kPending = Symbol("kPending");
+const kEntryTypes = Symbol("kEntryTypes");
+const kType = Symbol("kType");
+const kPerformanceBrand = Symbol("kPerformanceBrand");
+const kListeners = Symbol("kListeners");
+const kInspect = Symbol.for("nodejs.util.inspect.custom");
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
 function errIllegalConstructor() {
-  const err = new TypeError('Illegal constructor');
-  err.code = 'ERR_ILLEGAL_CONSTRUCTOR';
+  const err = new TypeError("Illegal constructor");
+  err.code = "ERR_ILLEGAL_CONSTRUCTOR";
   return err;
 }
 
 function errMissingArgs(...args) {
   const msg =
     args.length > 1
-      ? `The ${args.map((a) => `"${a}"`).join(' and ')} arguments must be specified`
+      ? `The ${args.map((a) => `"${a}"`).join(" and ")} arguments must be specified`
       : `The "${args[0]}" argument must be specified`;
   const err = new TypeError(msg);
-  err.code = 'ERR_MISSING_ARGS';
+  err.code = "ERR_MISSING_ARGS";
   return err;
 }
 
 function errInvalidThis(type) {
-  const err = new TypeError(`The "this" argument must be an instance of ${type}`);
-  err.code = 'ERR_INVALID_THIS';
+  const err = new TypeError(
+    `The "this" argument must be an instance of ${type}`,
+  );
+  err.code = "ERR_INVALID_THIS";
   return err;
 }
 
 function errInvalidArgType(name, expected, actual) {
   const actualDesc =
     actual === null
-      ? 'null'
-      : typeof actual === 'object' && Array.isArray(actual)
-        ? 'an instance of Array'
+      ? "null"
+      : typeof actual === "object" && Array.isArray(actual)
+        ? "an instance of Array"
         : `of type ${typeof actual}`;
-  const err = new TypeError(`The "${name}" argument must be ${expected}. Received ${actualDesc}`);
-  err.code = 'ERR_INVALID_ARG_TYPE';
+  const err = new TypeError(
+    `The "${name}" argument must be ${expected}. Received ${actualDesc}`,
+  );
+  err.code = "ERR_INVALID_ARG_TYPE";
   return err;
 }
 
 function errInvalidArgValue(name, value, reason) {
-  const kind = name.includes('.') ? 'property' : 'argument';
+  const kind = name.includes(".") ? "property" : "argument";
   const err = new TypeError(
-    `The ${kind} '${name}' ${reason ?? 'is invalid'}. Received ${miniInspect(value)}`
+    `The ${kind} '${name}' ${reason ?? "is invalid"}. Received ${miniInspect(value)}`,
   );
-  err.code = 'ERR_INVALID_ARG_VALUE';
+  err.code = "ERR_INVALID_ARG_VALUE";
   return err;
 }
 
 function errInvalidTimestamp(value) {
   const err = new TypeError(`${miniInspect(value)} is not a valid timestamp`);
-  err.code = 'ERR_PERFORMANCE_INVALID_TIMESTAMP';
+  err.code = "ERR_PERFORMANCE_INVALID_TIMESTAMP";
   return err;
 }
 
 function errPerformanceMeasureInvalidOptions() {
   const err = new TypeError(
-    'Must not have options.start, options.end, and options.duration specified'
+    "Must not have options.start, options.end, and options.duration specified",
   );
-  err.code = 'ERR_PERFORMANCE_MEASURE_INVALID_OPTIONS';
+  err.code = "ERR_PERFORMANCE_MEASURE_INVALID_OPTIONS";
   return err;
 }
 
 function errPerformanceMarkNotFound(name) {
   // Node throws a DOMException named 'SyntaxError' with code 12 here.
-  return new DOMException(`The "${name}" performance mark has not been set`, 'SyntaxError');
+  return new DOMException(
+    `The "${name}" performance mark has not been set`,
+    "SyntaxError",
+  );
 }
 
 function errOutOfRange(name, range, value) {
-  const actual = typeof value === 'bigint' ? `${value}n` : miniInspect(value);
+  const actual = typeof value === "bigint" ? `${value}n` : miniInspect(value);
   const err = new RangeError(
-    `The value of "${name}" is out of range. It must be ${range}. Received ${actual}`
+    `The value of "${name}" is out of range. It must be ${range}. Received ${actual}`,
   );
-  err.code = 'ERR_OUT_OF_RANGE';
+  err.code = "ERR_OUT_OF_RANGE";
   return err;
 }
 
 function errOutOfRangePlain() {
-  const err = new RangeError('value is out of range');
-  err.code = 'ERR_OUT_OF_RANGE';
+  const err = new RangeError("value is out of range");
+  err.code = "ERR_OUT_OF_RANGE";
   return err;
 }
 
@@ -181,52 +190,64 @@ function validateThisInternalField(obj, field, className) {
 }
 
 function validateFunction(value, name) {
-  if (typeof value !== 'function') throw errInvalidArgType(name, 'of type function', value);
+  if (typeof value !== "function")
+    throw errInvalidArgType(name, "of type function", value);
 }
 
 function validateObject(value, name) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw errInvalidArgType(name, 'of type object', value);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw errInvalidArgType(name, "of type object", value);
   }
 }
 
 function validateString(value, name) {
-  if (typeof value !== 'string') throw errInvalidArgType(name, 'of type string', value);
+  if (typeof value !== "string")
+    throw errInvalidArgType(name, "of type string", value);
 }
 
 function validateNumber(value, name) {
-  if (typeof value !== 'number') throw errInvalidArgType(name, 'of type number', value);
+  if (typeof value !== "number")
+    throw errInvalidArgType(name, "of type number", value);
 }
 
-function validateInteger(value, name, min = Number.MIN_SAFE_INTEGER, max = MAX_SAFE_INTEGER) {
-  if (typeof value !== 'number') throw errInvalidArgType(name, 'of type number', value);
-  if (!Number.isInteger(value)) throw errOutOfRange(name, 'an integer', value);
+function validateInteger(
+  value,
+  name,
+  min = Number.MIN_SAFE_INTEGER,
+  max = MAX_SAFE_INTEGER,
+) {
+  if (typeof value !== "number")
+    throw errInvalidArgType(name, "of type number", value);
+  if (!Number.isInteger(value)) throw errOutOfRange(name, "an integer", value);
   if (value < min || value > max) {
     throw errOutOfRange(name, `>= ${min} && <= ${max}`, value);
   }
 }
 
 function validateBoolean(value, name) {
-  if (typeof value !== 'boolean') throw errInvalidArgType(name, 'of type boolean', value);
+  if (typeof value !== "boolean")
+    throw errInvalidArgType(name, "of type boolean", value);
 }
 
 function validateOneOf(value, name, choices) {
   if (!choices.includes(value)) {
-    const list = choices.map((c) => `'${c}'`).join(', ');
+    const list = choices.map((c) => `'${c}'`).join(", ");
     throw errInvalidArgValue(name, value, `must be one of: ${list}`);
   }
 }
 
 // Minimal value formatter used in error messages (no dependency on util).
 function miniInspect(value) {
-  if (typeof value === 'string') return `'${value}'`;
-  if (typeof value === 'bigint') return `${value}n`;
-  if (Array.isArray(value)) return `[ ${value.map(miniInspect).join(', ')} ]`;
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
-  if (typeof value === 'object') {
-    const entries = Object.entries(value).map(([k, v]) => `${k}: ${miniInspect(v)}`);
-    return `{ ${entries.join(', ')} }`;
+  if (typeof value === "string") return `'${value}'`;
+  if (typeof value === "bigint") return `${value}n`;
+  if (Array.isArray(value)) return `[ ${value.map(miniInspect).join(", ")} ]`;
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "object") {
+    const entries = Object.entries(value).map(
+      ([k, v]) => `${k}: ${miniInspect(v)}`,
+    );
+    return `{ ${entries.join(", ")} }`;
   }
   return String(value);
 }
@@ -235,17 +256,17 @@ function miniInspect(value) {
 // 3. Clock: host performance.now()/timeOrigin when available.
 // ---------------------------------------------------------------------------
 const _nativePerformance =
-  typeof globalThis.performance === 'object' && globalThis.performance !== null
+  typeof globalThis.performance === "object" && globalThis.performance !== null
     ? globalThis.performance
     : undefined;
 
 const timeOrigin =
-  _nativePerformance && typeof _nativePerformance.timeOrigin === 'number'
+  _nativePerformance && typeof _nativePerformance.timeOrigin === "number"
     ? _nativePerformance.timeOrigin
     : Date.now();
 
 function now() {
-  if (_nativePerformance && typeof _nativePerformance.now === 'function') {
+  if (_nativePerformance && typeof _nativePerformance.now === "function") {
     return _nativePerformance.now();
   }
   return Date.now() - timeOrigin;
@@ -253,7 +274,7 @@ function now() {
 
 function structuredCloneValue(value) {
   if (value === null || value === undefined) return null;
-  if (typeof globalThis.structuredClone === 'function') {
+  if (typeof globalThis.structuredClone === "function") {
     return globalThis.structuredClone(value);
   }
   // Fallback for exotic hosts without structuredClone: JSON round-trip.
@@ -284,14 +305,16 @@ class BucketStore {
     this.unitMagnitude = Math.floor(Math.log(lowest) / Math.LN2);
     this.subBucketHalfCountMagnitude = Math.ceil(figures * Math.log2(10));
     this.subBucketCount = Math.pow(2, this.subBucketHalfCountMagnitude + 1);
-    this.subBucketMask = (this.subBucketCount - 1) * Math.pow(2, this.unitMagnitude);
+    this.subBucketMask =
+      (this.subBucketCount - 1) * Math.pow(2, this.unitMagnitude);
     this.bucketCount = this._getBucketCount();
     this.counts = new Array(this.bucketCount * this.subBucketCount).fill(0);
     this.reset();
   }
 
   _getBucketCount() {
-    let smallestUntrackableValue = this.subBucketCount * Math.pow(2, this.unitMagnitude);
+    let smallestUntrackableValue =
+      this.subBucketCount * Math.pow(2, this.unitMagnitude);
     let bucketsNeeded = 1;
     while (smallestUntrackableValue <= this.highest) {
       if (smallestUntrackableValue > MAX_SAFE_INTEGER / 2) {
@@ -325,7 +348,9 @@ class BucketStore {
     const hi = Math.floor(combined / 4294967296);
     const clz = hi !== 0 ? Math.clz32(hi) : 32 + Math.clz32(combined >>> 0);
     const pow2ceiling = 64 - clz;
-    return pow2ceiling - this.unitMagnitude - this.subBucketHalfCountMagnitude - 1;
+    return (
+      pow2ceiling - this.unitMagnitude - this.subBucketHalfCountMagnitude - 1
+    );
   }
 
   _indexFor(value) {
@@ -389,11 +414,17 @@ class BucketStore {
       this.exceeds += other.exceeds;
       this.sum += other.sum;
       this.sumSq += other.sumSq;
-      if (other.minIndex !== -1 && (this.minIndex === -1 || other.minIndex < this.minIndex)) {
+      if (
+        other.minIndex !== -1 &&
+        (this.minIndex === -1 || other.minIndex < this.minIndex)
+      ) {
         this.minIndex = other.minIndex;
         this.min = other.min;
       }
-      if (other.maxIndex !== -1 && (this.maxIndex === -1 || other.maxIndex > this.maxIndex)) {
+      if (
+        other.maxIndex !== -1 &&
+        (this.maxIndex === -1 || other.maxIndex > this.maxIndex)
+      ) {
         this.maxIndex = other.maxIndex;
         this.max = other.max;
       }
@@ -419,9 +450,9 @@ class BucketStore {
   }
 
   percentile(p, asBigInt = false) {
-    validateNumber(p, 'percentile');
+    validateNumber(p, "percentile");
     if (Number.isNaN(p) || p <= 0 || p > 100) {
-      throw errOutOfRange('percentile', '> 0 && <= 100', p);
+      throw errOutOfRange("percentile", "> 0 && <= 100", p);
     }
     return this._percentileValue(p, asBigInt);
   }
@@ -508,7 +539,7 @@ class Histogram {
   }
 
   _store() {
-    if (this[kHandle] === undefined) throw errInvalidThis('Histogram');
+    if (this[kHandle] === undefined) throw errInvalidThis("Histogram");
     return this[kHandle];
   }
 
@@ -562,7 +593,7 @@ class Histogram {
 
   get percentiles() {
     const map = this[kMap];
-    if (map === undefined) throw errInvalidThis('Histogram');
+    if (map === undefined) throw errInvalidThis("Histogram");
     map.clear();
     for (const [k, v] of this._store().percentilesEntries(false)) map.set(k, v);
     return map;
@@ -570,7 +601,7 @@ class Histogram {
 
   get percentilesBigInt() {
     const map = this[kMap];
-    if (map === undefined) throw errInvalidThis('Histogram');
+    if (map === undefined) throw errInvalidThis("Histogram");
     map.clear();
     for (const [k, v] of this._store().percentilesEntries(true)) map.set(k, v);
     return map;
@@ -594,7 +625,10 @@ class Histogram {
 
   [kInspect](depth, options, inspectFn) {
     if (depth < 0) return this;
-    const opts = { ...options, depth: options?.depth == null ? null : options.depth - 1 };
+    const opts = {
+      ...options,
+      depth: options?.depth == null ? null : options.depth - 1,
+    };
     return `Histogram ${formatValue(
       {
         min: this.min,
@@ -606,7 +640,7 @@ class Histogram {
         percentiles: this.percentiles,
       },
       opts,
-      inspectFn
+      inspectFn,
     )}`;
   }
 }
@@ -618,18 +652,19 @@ class RecordableHistogram extends Histogram {
   }
 
   _recordableStore() {
-    if (this[kRecordable] === undefined) throw errInvalidThis('RecordableHistogram');
+    if (this[kRecordable] === undefined)
+      throw errInvalidThis("RecordableHistogram");
     return this._store();
   }
 
   record(val) {
     const store = this._recordableStore();
-    if (typeof val === 'bigint') {
+    if (typeof val === "bigint") {
       if (val < 1n) throw errOutOfRangePlain();
       store.recordBigint(val);
       return;
     }
-    validateInteger(val, 'val', 1);
+    validateInteger(val, "val", 1);
     store.recordValue(val);
   }
 
@@ -644,8 +679,16 @@ class RecordableHistogram extends Histogram {
 
   add(other) {
     const store = this._recordableStore();
-    if (other === null || other === undefined || other[kRecordable] === undefined) {
-      throw errInvalidArgType('other', 'an instance of RecordableHistogram', other);
+    if (
+      other === null ||
+      other === undefined ||
+      other[kRecordable] === undefined
+    ) {
+      throw errInvalidArgType(
+        "other",
+        "an instance of RecordableHistogram",
+        other,
+      );
     }
     store.add(other[kHandle]);
   }
@@ -658,7 +701,7 @@ class ELDHistogram extends Histogram {
   }
 
   _checkEld() {
-    if (this[kEnabled] === undefined) throw errInvalidThis('ELDHistogram');
+    if (this[kEnabled] === undefined) throw errInvalidThis("ELDHistogram");
   }
 
   enable() {
@@ -692,7 +735,11 @@ class ELDHistogram extends Histogram {
       expected += resolution;
       this[kHandle].recordValue(delayNs);
     }, resolution);
-    if (timer !== undefined && timer !== null && typeof timer.unref === 'function') {
+    if (
+      timer !== undefined &&
+      timer !== null &&
+      typeof timer.unref === "function"
+    ) {
       timer.unref();
     }
     this._eldTimer = timer;
@@ -700,7 +747,7 @@ class ELDHistogram extends Histogram {
 }
 
 // `using` support where the host provides Symbol.dispose.
-if (typeof Symbol.dispose !== 'undefined') {
+if (typeof Symbol.dispose !== "undefined") {
   Object.defineProperty(ELDHistogram.prototype, Symbol.dispose, {
     value: function () {
       this.disable();
@@ -712,19 +759,24 @@ if (typeof Symbol.dispose !== 'undefined') {
 
 function createHistogram(options = undefined) {
   if (options === undefined) options = {};
-  validateObject(options, 'options');
+  validateObject(options, "options");
   const { lowest = 1, highest = MAX_SAFE_INTEGER, figures = 3 } = options;
-  if (typeof lowest !== 'bigint') {
-    validateInteger(lowest, 'options.lowest', 1, MAX_SAFE_INTEGER);
+  if (typeof lowest !== "bigint") {
+    validateInteger(lowest, "options.lowest", 1, MAX_SAFE_INTEGER);
   }
-  if (typeof highest !== 'bigint') {
-    validateInteger(highest, 'options.highest', 2 * Number(lowest), MAX_SAFE_INTEGER);
+  if (typeof highest !== "bigint") {
+    validateInteger(
+      highest,
+      "options.highest",
+      2 * Number(lowest),
+      MAX_SAFE_INTEGER,
+    );
   } else if (highest < 2n * BigInt(Number(lowest))) {
     const err = new RangeError('The value of "options.highest" is invalid.');
-    err.code = 'ERR_INVALID_ARG_VALUE';
+    err.code = "ERR_INVALID_ARG_VALUE";
     throw err;
   }
-  validateInteger(figures, 'options.figures', 1, 5);
+  validateInteger(figures, "options.figures", 1, 5);
   if (nativePerfHooks !== null) {
     // Native histograms are V8 host objects: postMessage()/structuredClone()
     // produce live shared-state histograms, which pure JS cannot replicate.
@@ -733,7 +785,11 @@ function createHistogram(options = undefined) {
     return histogram;
   }
   const histogram = new RecordableHistogram(kSkipThrow);
-  histogram[kHandle] = new BucketStore(Number(lowest), Number(highest), figures);
+  histogram[kHandle] = new BucketStore(
+    Number(lowest),
+    Number(highest),
+    figures,
+  );
   histogram[kMap] = new Map();
   histogram[kRecordable] = true;
   histogram.constructor = RecordableHistogram;
@@ -748,7 +804,13 @@ function validateThisEntry(obj, className) {
 }
 
 class PerformanceEntry {
-  constructor(skipThrowSymbol = undefined, name = undefined, type = undefined, start = undefined, duration = undefined) {
+  constructor(
+    skipThrowSymbol = undefined,
+    name = undefined,
+    type = undefined,
+    start = undefined,
+    duration = undefined,
+  ) {
     if (skipThrowSymbol !== kSkipThrow) throw errIllegalConstructor();
     this[kName] = name;
     this[kEntryType] = type;
@@ -757,27 +819,27 @@ class PerformanceEntry {
   }
 
   get name() {
-    validateThisEntry(this, 'PerformanceEntry');
+    validateThisEntry(this, "PerformanceEntry");
     return this[kName];
   }
 
   get entryType() {
-    validateThisEntry(this, 'PerformanceEntry');
+    validateThisEntry(this, "PerformanceEntry");
     return this[kEntryType];
   }
 
   get startTime() {
-    validateThisEntry(this, 'PerformanceEntry');
+    validateThisEntry(this, "PerformanceEntry");
     return this[kStartTime];
   }
 
   get duration() {
-    validateThisEntry(this, 'PerformanceEntry');
+    validateThisEntry(this, "PerformanceEntry");
     return this[kDuration];
   }
 
   toJSON() {
-    validateThisEntry(this, 'PerformanceEntry');
+    validateThisEntry(this, "PerformanceEntry");
     return {
       name: this[kName],
       entryType: this[kEntryType],
@@ -788,7 +850,10 @@ class PerformanceEntry {
 
   [kInspect](depth, options, inspectFn) {
     if (depth < 0) return this;
-    const opts = { ...options, depth: options?.depth == null ? null : options.depth - 1 };
+    const opts = {
+      ...options,
+      depth: options?.depth == null ? null : options.depth - 1,
+    };
     return `${this.constructor.name} ${formatValue(this.toJSON(), opts, inspectFn)}`;
   }
 }
@@ -796,12 +861,12 @@ class PerformanceEntry {
 // timerify() entries: node reports these with a `detail` property.
 class PerformanceNodeEntry extends PerformanceEntry {
   get detail() {
-    validateThisInternalField(this, kDetail, 'NodePerformanceEntry');
+    validateThisInternalField(this, kDetail, "NodePerformanceEntry");
     return this[kDetail];
   }
 
   toJSON() {
-    validateThisEntry(this, 'PerformanceEntry');
+    validateThisEntry(this, "PerformanceEntry");
     return {
       name: this[kName],
       entryType: this[kEntryType],
@@ -813,40 +878,47 @@ class PerformanceNodeEntry extends PerformanceEntry {
 }
 
 function createPerformanceNodeEntry(name, type, start, duration, detail) {
-  const entry = new PerformanceNodeEntry(kSkipThrow, name, type, start, duration);
+  const entry = new PerformanceNodeEntry(
+    kSkipThrow,
+    name,
+    type,
+    start,
+    duration,
+  );
   entry[kDetail] = detail;
   return entry;
 }
 
 // Attributes of `performance.nodeTiming` that cannot be used as mark names.
 const nodeTimingReadOnlyAttributes = new Set([
-  'nodeStart',
-  'v8Start',
-  'environment',
-  'loopStart',
-  'loopExit',
-  'bootstrapComplete',
+  "nodeStart",
+  "v8Start",
+  "environment",
+  "loopStart",
+  "loopExit",
+  "bootstrapComplete",
 ]);
 
 class PerformanceMark extends PerformanceEntry {
   constructor(name, options = undefined) {
-    if (arguments.length === 0) throw errMissingArgs('name');
+    if (arguments.length === 0) throw errMissingArgs("name");
     name = `${name}`;
-    if (nodeTimingReadOnlyAttributes.has(name)) throw errInvalidArgValue('name', name);
-    if (options != null) validateObject(options, 'options');
+    if (nodeTimingReadOnlyAttributes.has(name))
+      throw errInvalidArgValue("name", name);
+    if (options != null) validateObject(options, "options");
     const startTime = options?.startTime ?? now();
-    validateNumber(startTime, 'startTime');
+    validateNumber(startTime, "startTime");
     if (startTime < 0) throw errInvalidTimestamp(startTime);
     // Keep the mark -> startTime mapping even when constructed directly.
     markTimings.set(name, startTime);
     let detail = options?.detail;
     detail = detail != null ? structuredCloneValue(detail) : null;
-    super(kSkipThrow, name, 'mark', startTime, 0);
+    super(kSkipThrow, name, "mark", startTime, 0);
     this[kDetail] = detail;
   }
 
   get detail() {
-    validateThisInternalField(this, kDetail, 'PerformanceMark');
+    validateThisInternalField(this, kDetail, "PerformanceMark");
     return this[kDetail];
   }
 
@@ -862,13 +934,19 @@ class PerformanceMark extends PerformanceEntry {
 }
 
 class PerformanceMeasure extends PerformanceEntry {
-  constructor(skipThrowSymbol = undefined, name = undefined, type = undefined, start = undefined, duration = undefined) {
+  constructor(
+    skipThrowSymbol = undefined,
+    name = undefined,
+    type = undefined,
+    start = undefined,
+    duration = undefined,
+  ) {
     if (skipThrowSymbol !== kSkipThrow) throw errIllegalConstructor();
     super(skipThrowSymbol, name, type, start, duration);
   }
 
   get detail() {
-    validateThisInternalField(this, kDetail, 'PerformanceMeasure');
+    validateThisInternalField(this, kDetail, "PerformanceMeasure");
     return this[kDetail];
   }
 
@@ -884,7 +962,13 @@ class PerformanceMeasure extends PerformanceEntry {
 }
 
 function createPerformanceMeasure(name, start, duration, detail) {
-  const measure = new PerformanceMeasure(kSkipThrow, name, 'measure', start, duration);
+  const measure = new PerformanceMeasure(
+    kSkipThrow,
+    name,
+    "measure",
+    start,
+    duration,
+  );
   measure[kDetail] = detail;
   return measure;
 }
@@ -896,120 +980,129 @@ class PerformanceResourceTiming extends PerformanceEntry {
   }
 
   get name() {
-    validateThisInternalField(this, kRequestedUrl, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kRequestedUrl, "PerformanceResourceTiming");
     return this[kRequestedUrl];
   }
 
   get entryType() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
-    return 'resource';
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
+    return "resource";
   }
 
   get startTime() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].startTime;
   }
 
   get duration() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     const timingInfo = this[kTimingInfo];
     return timingInfo.endTime - timingInfo.startTime;
   }
 
   get initiatorType() {
-    validateThisInternalField(this, kInitiatorType, 'PerformanceResourceTiming');
+    validateThisInternalField(
+      this,
+      kInitiatorType,
+      "PerformanceResourceTiming",
+    );
     return this[kInitiatorType];
   }
 
   get nextHopProtocol() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].finalConnectionTimingInfo?.ALPNNegotiatedProtocol;
   }
 
   get workerStart() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].finalServiceWorkerStartTime;
   }
 
   get redirectStart() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].redirectStartTime;
   }
 
   get redirectEnd() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].redirectEndTime;
   }
 
   get fetchStart() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].postRedirectStartTime;
   }
 
   get domainLookupStart() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].finalConnectionTimingInfo?.domainLookupStartTime;
   }
 
   get domainLookupEnd() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].finalConnectionTimingInfo?.domainLookupEndTime;
   }
 
   get connectStart() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].finalConnectionTimingInfo?.connectionStartTime;
   }
 
   get connectEnd() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].finalConnectionTimingInfo?.connectionEndTime;
   }
 
   get secureConnectionStart() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
-    return this[kTimingInfo].finalConnectionTimingInfo?.secureConnectionStartTime;
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
+    return this[kTimingInfo].finalConnectionTimingInfo
+      ?.secureConnectionStartTime;
   }
 
   get requestStart() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].finalNetworkRequestStartTime;
   }
 
   get responseStart() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].finalNetworkResponseStartTime;
   }
 
   get responseEnd() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].endTime;
   }
 
   get transferSize() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
-    if (this[kCacheMode] === 'local') return 0;
-    if (this[kCacheMode] === 'validated') return 300;
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
+    if (this[kCacheMode] === "local") return 0;
+    if (this[kCacheMode] === "validated") return 300;
     return this[kTimingInfo].encodedBodySize + 300;
   }
 
   get encodedBodySize() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].encodedBodySize;
   }
 
   get decodedBodySize() {
-    validateThisInternalField(this, kTimingInfo, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
     return this[kTimingInfo].decodedBodySize;
   }
 
   get deliveryType() {
-    validateThisInternalField(this, kDeliveryType, 'PerformanceResourceTiming');
+    validateThisInternalField(this, kDeliveryType, "PerformanceResourceTiming");
     return this[kDeliveryType];
   }
 
   get responseStatus() {
-    validateThisInternalField(this, kResponseStatus, 'PerformanceResourceTiming');
+    validateThisInternalField(
+      this,
+      kResponseStatus,
+      "PerformanceResourceTiming",
+    );
     return this[kResponseStatus];
   }
 
@@ -1044,7 +1137,8 @@ class PerformanceResourceTiming extends PerformanceEntry {
   [kInspect](depth, _options, inspectFn) {
     if (depth < 0) return this;
     const fmt = (v) => formatInspectValue(v, inspectFn);
-    return `PerformanceResourceTiming {\n` +
+    return (
+      `PerformanceResourceTiming {\n` +
       `  name: ${fmt(this.name)},\n` +
       `  entryType: ${fmt(this.entryType)},\n` +
       `  startTime: ${fmt(this.startTime)},\n` +
@@ -1068,12 +1162,20 @@ class PerformanceResourceTiming extends PerformanceEntry {
       `  decodedBodySize: ${fmt(this.decodedBodySize)},\n` +
       `  deliveryType: ${fmt(this.deliveryType)},\n` +
       `  responseStatus: ${fmt(this.responseStatus)}\n` +
-      `}`;
+      `}`
+    );
   }
 }
 
-function createPerformanceResourceTiming(name, initiatorType, cacheMode, timingInfo, deliveryType, responseStatus) {
-  const entry = new PerformanceResourceTiming(kSkipThrow, name, 'resource');
+function createPerformanceResourceTiming(
+  name,
+  initiatorType,
+  cacheMode,
+  timingInfo,
+  deliveryType,
+  responseStatus,
+) {
+  const entry = new PerformanceResourceTiming(kSkipThrow, name, "resource");
   entry[kRequestedUrl] = `${name}`;
   entry[kInitiatorType] = `${initiatorType}`;
   entry[kCacheMode] = cacheMode;
@@ -1099,9 +1201,9 @@ let queuedObservers = new Set();
 let queueScheduled = false;
 
 function scheduleDispatch() {
-  if (typeof globalThis.setImmediate === 'function') {
+  if (typeof globalThis.setImmediate === "function") {
     globalThis.setImmediate(dispatchObservers);
-  } else if (typeof globalThis.queueMicrotask === 'function') {
+  } else if (typeof globalThis.queueMicrotask === "function") {
     globalThis.queueMicrotask(dispatchObservers);
   } else {
     globalThis.setTimeout(dispatchObservers, 0);
@@ -1149,7 +1251,7 @@ function dispatchObservers() {
 }
 
 function bufferUserTiming(entry) {
-  if (entry.entryType === 'mark') {
+  if (entry.entryType === "mark") {
     markEntryBuffer.push(entry);
   } else {
     measureEntryBuffer.push(entry);
@@ -1157,8 +1259,13 @@ function bufferUserTiming(entry) {
   // Match Node's leak guard (only when > 1e6 entries buffered).
   const entriesCount = markEntryBuffer.length + measureEntryBuffer.length;
   if (entriesCount > 1e6) {
-    if (typeof globalThis.process !== 'undefined' && typeof globalThis.process.emitWarning === 'function') {
-      globalThis.process.emitWarning('Possible perf_hooks memory leak detected.');
+    if (
+      typeof globalThis.process !== "undefined" &&
+      typeof globalThis.process.emitWarning === "function"
+    ) {
+      globalThis.process.emitWarning(
+        "Possible perf_hooks memory leak detected.",
+      );
     }
     markEntryBuffer = [];
     measureEntryBuffer = [];
@@ -1174,20 +1281,25 @@ function bufferResourceTiming(entry) {
       resourceTimingBuffer.length = 0;
       const fire = () => {
         resourceTimingBufferFullPending = false;
-        const listeners = performance[kListeners]?.get('resourcetimingbufferfull');
+        const listeners = performance[kListeners]?.get(
+          "resourcetimingbufferfull",
+        );
         if (listeners !== undefined) {
           for (const listener of [...listeners]) {
-            if (typeof listener === 'function') listener.call(performance);
-            else if (listener !== null && typeof listener.handleEvent === 'function') {
+            if (typeof listener === "function") listener.call(performance);
+            else if (
+              listener !== null &&
+              typeof listener.handleEvent === "function"
+            ) {
               listener.handleEvent();
             }
           }
         }
-        if (typeof performance._onrtbf === 'function') {
+        if (typeof performance._onrtbf === "function") {
           performance._onrtbf.call(performance);
         }
       };
-      if (typeof globalThis.queueMicrotask === 'function') {
+      if (typeof globalThis.queueMicrotask === "function") {
         globalThis.queueMicrotask(fire);
       } else {
         globalThis.setTimeout(fire, 0);
@@ -1198,21 +1310,25 @@ function bufferResourceTiming(entry) {
 
 function clearEntriesFromBuffer(type, name) {
   switch (type) {
-    case 'mark':
+    case "mark":
       if (name === undefined) {
         markEntryBuffer = [];
       } else {
-        markEntryBuffer = markEntryBuffer.filter((entry) => entry.name !== name);
+        markEntryBuffer = markEntryBuffer.filter(
+          (entry) => entry.name !== name,
+        );
       }
       break;
-    case 'measure':
+    case "measure":
       if (name === undefined) {
         measureEntryBuffer = [];
       } else {
-        measureEntryBuffer = measureEntryBuffer.filter((entry) => entry.name !== name);
+        measureEntryBuffer = measureEntryBuffer.filter(
+          (entry) => entry.name !== name,
+        );
       }
       break;
-    case 'resource':
+    case "resource":
       resourceTimingBuffer = [];
       break;
     default:
@@ -1222,7 +1338,11 @@ function clearEntriesFromBuffer(type, name) {
 
 function filterBufferMapByNameAndType(name, type) {
   const result = [];
-  const entries = [...markEntryBuffer, ...measureEntryBuffer, ...resourceTimingBuffer];
+  const entries = [
+    ...markEntryBuffer,
+    ...measureEntryBuffer,
+    ...resourceTimingBuffer,
+  ];
   for (const entry of entries) {
     if (name !== undefined && entry.name !== name) continue;
     if (type !== undefined && entry.entryType !== type) continue;
@@ -1235,7 +1355,8 @@ function filterBufferMapByNameAndType(name, type) {
 function clearMarkTimings(name) {
   if (name !== undefined) {
     name = `${name}`;
-    if (nodeTimingReadOnlyAttributes.has(name)) throw errInvalidArgValue('name', name);
+    if (nodeTimingReadOnlyAttributes.has(name))
+      throw errInvalidArgValue("name", name);
     markTimings.delete(name);
     return;
   }
@@ -1266,32 +1387,39 @@ function calculateStartDuration(startOrMeasureOptions, endMarkName) {
   let duration;
   if (
     startOrMeasureOptions !== undefined &&
-    typeof startOrMeasureOptions === 'object' &&
+    typeof startOrMeasureOptions === "object" &&
     startOrMeasureOptions !== null
   ) {
     const optStart = startOrMeasureOptions.start;
     const optEnd = startOrMeasureOptions.end;
     const optDuration = startOrMeasureOptions.duration;
     // Specifying all three is rejected before any mark resolution.
-    if (optStart !== undefined && optEnd !== undefined && optDuration !== undefined) {
+    if (
+      optStart !== undefined &&
+      optEnd !== undefined &&
+      optDuration !== undefined
+    ) {
       throw errPerformanceMeasureInvalidOptions();
     }
     if (optStart !== undefined) {
       start =
-        typeof optStart === 'number'
-          ? (validateTimestampOption(optStart, 'start'), optStart)
+        typeof optStart === "number"
+          ? (validateTimestampOption(optStart, "start"), optStart)
           : getMarkOrThrow(`${optStart}`);
     }
     if (optEnd !== undefined) {
       end =
-        typeof optEnd === 'number'
-          ? (validateTimestampOption(optEnd, 'end'), optEnd)
+        typeof optEnd === "number"
+          ? (validateTimestampOption(optEnd, "end"), optEnd)
           : getMarkOrThrow(`${optEnd}`);
     }
     // `duration` is only validated when it participates in the computation;
     // a lone `duration` option is ignored (matches native behavior).
-    if (optDuration !== undefined && (start !== undefined || end !== undefined)) {
-      validateTimestampOption(optDuration, 'duration');
+    if (
+      optDuration !== undefined &&
+      (start !== undefined || end !== undefined)
+    ) {
+      validateTimestampOption(optDuration, "duration");
     }
     duration = optDuration;
     if (start !== undefined && end !== undefined) {
@@ -1308,13 +1436,13 @@ function calculateStartDuration(startOrMeasureOptions, endMarkName) {
     // Non-object form: a string names a start mark; any other type means
     // "start at 0" (numbers are NOT mark lookups here).
     start =
-      typeof startOrMeasureOptions === 'string'
+      typeof startOrMeasureOptions === "string"
         ? getMarkOrThrow(startOrMeasureOptions)
         : 0;
     if (endMarkName !== undefined) {
       end =
-        typeof endMarkName === 'number'
-          ? (validateTimestampOption(endMarkName, 'end'), endMarkName)
+        typeof endMarkName === "number"
+          ? (validateTimestampOption(endMarkName, "end"), endMarkName)
           : getMarkOrThrow(`${endMarkName}`);
       duration = end - start;
     } else {
@@ -1328,21 +1456,29 @@ function calculateStartDuration(startOrMeasureOptions, endMarkName) {
 }
 
 function mark(name, options = undefined) {
-  if (arguments.length === 0) throw errMissingArgs('name');
+  if (arguments.length === 0) throw errMissingArgs("name");
   const entry = new PerformanceMark(`${name}`, options);
   bufferUserTiming(entry);
   enqueue(entry);
   return entry;
 }
 
-function measure(name, startOrMeasureOptions = undefined, endMarkName = undefined) {
-  if (arguments.length === 0) throw errMissingArgs('name');
+function measure(
+  name,
+  startOrMeasureOptions = undefined,
+  endMarkName = undefined,
+) {
+  if (arguments.length === 0) throw errMissingArgs("name");
   name = `${name}`;
-  if (nodeTimingReadOnlyAttributes.has(name)) throw errInvalidArgValue('name', name);
-  const { start, duration } = calculateStartDuration(startOrMeasureOptions, endMarkName);
+  if (nodeTimingReadOnlyAttributes.has(name))
+    throw errInvalidArgValue("name", name);
+  const { start, duration } = calculateStartDuration(
+    startOrMeasureOptions,
+    endMarkName,
+  );
   let detail = null;
   if (
-    typeof startOrMeasureOptions === 'object' &&
+    typeof startOrMeasureOptions === "object" &&
     startOrMeasureOptions !== null &&
     startOrMeasureOptions.detail != null
   ) {
@@ -1361,26 +1497,30 @@ class PerformanceObserverEntryList {
   }
 
   _entries() {
-    if (this[kHandle] === undefined) throw errInvalidThis('PerformanceObserverEntryList');
+    if (this[kHandle] === undefined)
+      throw errInvalidThis("PerformanceObserverEntryList");
     return this[kHandle];
   }
 
   getEntries() {
-    return this._entries().slice().sort((a, b) => a.startTime - b.startTime);
+    return this._entries()
+      .slice()
+      .sort((a, b) => a.startTime - b.startTime);
   }
 
   getEntriesByName(name, type = undefined) {
-    if (arguments.length === 0) throw errMissingArgs('name');
-    validateString(name, 'name');
-    if (type !== undefined) validateString(type, 'type');
+    if (arguments.length === 0) throw errMissingArgs("name");
+    validateString(name, "name");
+    if (type !== undefined) validateString(type, "type");
     return this.getEntries().filter(
-      (entry) => entry.name === name && (type === undefined || entry.entryType === type)
+      (entry) =>
+        entry.name === name && (type === undefined || entry.entryType === type),
     );
   }
 
   getEntriesByType(type) {
-    if (arguments.length === 0) throw errMissingArgs('type');
-    validateString(type, 'type');
+    if (arguments.length === 0) throw errMissingArgs("type");
+    validateString(type, "type");
     return this.getEntries().filter((entry) => entry.entryType === type);
   }
 }
@@ -1405,71 +1545,78 @@ function setToStringTag(ctor, value) {
   });
 }
 
-makeMethodsEnumerable(PerformanceEntry, ['toJSON']);
-setToStringTag(PerformanceEntry, 'PerformanceEntry');
-makeMethodsEnumerable(PerformanceNodeEntry, ['toJSON']);
-makeMethodsEnumerable(PerformanceMark, ['toJSON']);
-setToStringTag(PerformanceMark, 'PerformanceMark');
-makeMethodsEnumerable(PerformanceMeasure, ['toJSON']);
-setToStringTag(PerformanceMeasure, 'PerformanceMeasure');
-makeMethodsEnumerable(PerformanceResourceTiming, ['toJSON']);
-setToStringTag(PerformanceResourceTiming, 'PerformanceResourceTiming');
-makeMethodsEnumerable(PerformanceObserverEntryList, ['getEntries', 'getEntriesByName', 'getEntriesByType']);
-setToStringTag(PerformanceObserverEntryList, 'PerformanceObserverEntryList');
+makeMethodsEnumerable(PerformanceEntry, ["toJSON"]);
+setToStringTag(PerformanceEntry, "PerformanceEntry");
+makeMethodsEnumerable(PerformanceNodeEntry, ["toJSON"]);
+makeMethodsEnumerable(PerformanceMark, ["toJSON"]);
+setToStringTag(PerformanceMark, "PerformanceMark");
+makeMethodsEnumerable(PerformanceMeasure, ["toJSON"]);
+setToStringTag(PerformanceMeasure, "PerformanceMeasure");
+makeMethodsEnumerable(PerformanceResourceTiming, ["toJSON"]);
+setToStringTag(PerformanceResourceTiming, "PerformanceResourceTiming");
+makeMethodsEnumerable(PerformanceObserverEntryList, [
+  "getEntries",
+  "getEntriesByName",
+  "getEntriesByType",
+]);
+setToStringTag(PerformanceObserverEntryList, "PerformanceObserverEntryList");
 
 const supportedEntryTypes = [
-  'dns',
-  'function',
-  'gc',
-  'http',
-  'http2',
-  'mark',
-  'measure',
-  'net',
-  'quic',
-  'resource',
+  "dns",
+  "function",
+  "gc",
+  "http",
+  "http2",
+  "mark",
+  "measure",
+  "net",
+  "quic",
+  "resource",
 ];
 
-const bufferedEntryTypes = ['mark', 'measure', 'resource'];
+const bufferedEntryTypes = ["mark", "measure", "resource"];
 
 class PerformanceObserver {
   constructor(callback) {
-    validateFunction(callback, 'callback');
+    validateFunction(callback, "callback");
     this.callback = callback;
     this[kPending] = new Set();
   }
 
   observe(options = undefined) {
-    if (this[kPending] === undefined) throw errInvalidThis('PerformanceObserver');
+    if (this[kPending] === undefined)
+      throw errInvalidThis("PerformanceObserver");
     if (options === undefined) options = {};
-    validateObject(options, 'options');
+    validateObject(options, "options");
     const { entryTypes, type, buffered = false } = options;
     if (entryTypes !== undefined && type !== undefined) {
       throw errInvalidArgValue(
-        'options.entryTypes',
+        "options.entryTypes",
         entryTypes,
-        'options.entryTypes can not set with options.type together'
+        "options.entryTypes can not set with options.type together",
       );
     }
-    validateBoolean(buffered, 'options.buffered');
+    validateBoolean(buffered, "options.buffered");
     if (entryTypes !== undefined) {
-      if (!Array.isArray(entryTypes)) throw errInvalidArgType('options.entryTypes', 'an Array', entryTypes);
+      if (!Array.isArray(entryTypes))
+        throw errInvalidArgType("options.entryTypes", "an Array", entryTypes);
       this[kEntryTypes] = new Set();
       for (const entryType of entryTypes) {
-        validateString(entryType, 'entryType');
-        validateOneOf(entryType, 'entryType', supportedEntryTypes);
+        validateString(entryType, "entryType");
+        validateOneOf(entryType, "entryType", supportedEntryTypes);
         this[kEntryTypes].add(entryType);
       }
-      if (this[kEntryTypes].size === 0) throw errInvalidArgValue('options.entryTypes', entryTypes);
+      if (this[kEntryTypes].size === 0)
+        throw errInvalidArgValue("options.entryTypes", entryTypes);
       this[kType] = undefined;
     } else if (type !== undefined) {
-      validateString(type, 'type');
-      validateOneOf(type, 'type', supportedEntryTypes);
+      validateString(type, "type");
+      validateOneOf(type, "type", supportedEntryTypes);
       this[kType] = type;
       this[kEntryTypes] = undefined;
       if (buffered) {
         if (!bufferedEntryTypes.includes(type)) {
-          throw errInvalidArgValue('options.buffered', buffered);
+          throw errInvalidArgValue("options.buffered", buffered);
         }
         const entries = filterBufferMapByNameAndType(undefined, type);
         if (entries.length > 0) {
@@ -1482,7 +1629,7 @@ class PerformanceObserver {
         }
       }
     } else {
-      throw errMissingArgs('options.entryTypes', 'options.type');
+      throw errMissingArgs("options.entryTypes", "options.type");
     }
     kObservers.add(this);
   }
@@ -1509,17 +1656,30 @@ class PerformanceObserver {
   }
 }
 
-makeMethodsEnumerable(PerformanceObserver, ['observe', 'disconnect', 'takeRecords']);
-setToStringTag(PerformanceObserver, 'PerformanceObserver');
+makeMethodsEnumerable(PerformanceObserver, [
+  "observe",
+  "disconnect",
+  "takeRecords",
+]);
+setToStringTag(PerformanceObserver, "PerformanceObserver");
 
-function markResourceTiming(timingInfo, requestedUrl, initiatorType, global, cacheMode, body, responseStatus, deliveryType) {
+function markResourceTiming(
+  timingInfo,
+  requestedUrl,
+  initiatorType,
+  global,
+  cacheMode,
+  body,
+  responseStatus,
+  deliveryType,
+) {
   const entry = createPerformanceResourceTiming(
     requestedUrl,
     initiatorType,
     cacheMode,
     timingInfo,
     deliveryType,
-    responseStatus
+    responseStatus,
   );
   enqueue(entry);
   bufferResourceTiming(entry);
@@ -1536,7 +1696,8 @@ const moduleInitNow = now();
 // elsewhere we report the same shape Node uses when idle metrics are
 // unavailable (`{ idle: 0, active: 0, utilization: 0 }`).
 const eventLoopUtilization =
-  nativePerfHooks !== null && typeof nativePerfHooks.eventLoopUtilization === 'function'
+  nativePerfHooks !== null &&
+  typeof nativePerfHooks.eventLoopUtilization === "function"
     ? nativePerfHooks.eventLoopUtilization
     : function eventLoopUtilization(_util1, _util2) {
         return { idle: 0, active: 0, utilization: 0 };
@@ -1549,13 +1710,13 @@ const eventLoopUtilization =
 const nodeTiming = (() => {
   if (nativePerfHooks !== null) {
     const nativeNodeTiming = nativePerfHooks.performance?.nodeTiming;
-    if (nativeNodeTiming && typeof nativeNodeTiming === 'object') {
+    if (nativeNodeTiming && typeof nativeNodeTiming === "object") {
       return nativeNodeTiming;
     }
   }
   const pureJsNodeTiming = {
-    name: 'node',
-    entryType: 'node',
+    name: "node",
+    entryType: "node",
     startTime: 0,
     get duration() {
       return now();
@@ -1587,8 +1748,8 @@ const nodeTiming = (() => {
     },
     toJSON() {
       return {
-        name: 'node',
-        entryType: 'node',
+        name: "node",
+        entryType: "node",
         startTime: 0,
         duration: this.duration,
         nodeStart: this.nodeStart,
@@ -1602,7 +1763,10 @@ const nodeTiming = (() => {
     },
     [kInspect](depth, options, inspectFn) {
       if (depth < 0) return this;
-      const opts = { ...options, depth: options?.depth == null ? null : options.depth - 1 };
+      const opts = {
+        ...options,
+        depth: options?.depth == null ? null : options.depth - 1,
+      };
       return `PerformanceNodeTiming ${formatValue(this.toJSON(), opts, inspectFn)}`;
     },
   };
@@ -1611,16 +1775,25 @@ const nodeTiming = (() => {
 })();
 
 function isHistogram(obj) {
-  return obj != null && (obj[kHandle] !== undefined || nativeHistogramSet.has(obj));
+  return (
+    obj != null && (obj[kHandle] !== undefined || nativeHistogramSet.has(obj))
+  );
 }
 
 function timerify(fn, options = undefined) {
   if (options === undefined) options = {};
-  validateObject(options, 'options');
-  validateFunction(fn, 'fn');
+  validateObject(options, "options");
+  validateFunction(fn, "fn");
   const histogram = options?.histogram;
-  if (histogram !== undefined && (!isHistogram(histogram) || typeof histogram.record !== 'function')) {
-    throw errInvalidArgType('options.histogram', 'a RecordableHistogram', histogram);
+  if (
+    histogram !== undefined &&
+    (!isHistogram(histogram) || typeof histogram.record !== "function")
+  ) {
+    throw errInvalidArgType(
+      "options.histogram",
+      "a RecordableHistogram",
+      histogram,
+    );
   }
 
   function processComplete(startTime, args) {
@@ -1633,7 +1806,13 @@ function timerify(fn, options = undefined) {
     if (histogram !== undefined) {
       histogram.record(Math.ceil(duration * 1e6));
     }
-    const entry = createPerformanceNodeEntry(fn.name, 'function', startTime, duration, detail);
+    const entry = createPerformanceNodeEntry(
+      fn.name,
+      "function",
+      startTime,
+      duration,
+      detail,
+    );
     enqueue(entry);
   }
 
@@ -1649,8 +1828,8 @@ function timerify(fn, options = undefined) {
     const result = Reflect.apply(fn, this, args);
     if (
       result !== null &&
-      (typeof result === 'object' || typeof result === 'function') &&
-      typeof result.finally === 'function'
+      (typeof result === "object" || typeof result === "function") &&
+      typeof result.finally === "function"
     ) {
       return result.finally(processComplete.bind(null, startTime, args));
     }
@@ -1659,7 +1838,11 @@ function timerify(fn, options = undefined) {
   }
   Object.defineProperties(timerified, {
     length: { enumerable: true, configurable: false, value: fn.length },
-    name: { enumerable: true, configurable: false, value: `timerified ${fn.name}` },
+    name: {
+      enumerable: true,
+      configurable: false,
+      value: `timerified ${fn.name}`,
+    },
   });
   return timerified;
 }
@@ -1673,7 +1856,7 @@ class Performance {
   }
 
   addEventListener(type, listener, _options = undefined) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     if (listener == null) return;
     let set = this[kListeners].get(type);
     if (set === undefined) {
@@ -1684,95 +1867,111 @@ class Performance {
   }
 
   removeEventListener(type, listener, _options = undefined) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     this[kListeners].get(type)?.delete(listener);
   }
 
   dispatchEvent(event) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     const listeners = this[kListeners].get(event?.type);
     if (listeners !== undefined) {
       for (const listener of [...listeners]) {
-        if (typeof listener === 'function') listener.call(this, event);
-        else if (listener !== null && typeof listener.handleEvent === 'function') {
+        if (typeof listener === "function") listener.call(this, event);
+        else if (
+          listener !== null &&
+          typeof listener.handleEvent === "function"
+        ) {
           listener.handleEvent(event);
         }
       }
     }
     const handler = this._onrtbf;
-    if (event?.type === 'resourcetimingbufferfull' && typeof handler === 'function') {
+    if (
+      event?.type === "resourcetimingbufferfull" &&
+      typeof handler === "function"
+    ) {
       handler.call(this, event);
     }
     return true;
   }
 
   get onresourcetimingbufferfull() {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     return this._onrtbf ?? null;
   }
 
   set onresourcetimingbufferfull(fn) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     this._onrtbf = fn;
   }
 
   clearMarks(markName = undefined) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
-    clearEntriesFromBuffer('mark', markName === undefined ? undefined : `${markName}`);
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
+    clearEntriesFromBuffer(
+      "mark",
+      markName === undefined ? undefined : `${markName}`,
+    );
     clearMarkTimings(markName);
   }
 
   clearMeasures(measureName = undefined) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     measureName = measureName === undefined ? undefined : `${measureName}`;
-    clearEntriesFromBuffer('measure', measureName);
+    clearEntriesFromBuffer("measure", measureName);
   }
 
   clearResourceTimings() {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     resourceTimingBuffer = [];
     resourceTimingSecondaryBuffer = [];
   }
 
   getEntries() {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     return filterBufferMapByNameAndType(undefined, undefined);
   }
 
   getEntriesByName(name, type = undefined) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
-    if (arguments.length === 0) throw errMissingArgs('name');
-    return filterBufferMapByNameAndType(`${name}`, type === undefined ? undefined : `${type}`);
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
+    if (arguments.length === 0) throw errMissingArgs("name");
+    return filterBufferMapByNameAndType(
+      `${name}`,
+      type === undefined ? undefined : `${type}`,
+    );
   }
 
   getEntriesByType(type) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
-    if (arguments.length === 0) throw errMissingArgs('type');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
+    if (arguments.length === 0) throw errMissingArgs("type");
     return filterBufferMapByNameAndType(undefined, `${type}`);
   }
 
   mark(markName, markOptions = undefined) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     return mark(markName, markOptions);
   }
 
-  measure(measureName, startOrMeasureOptions = undefined, endMarkName = undefined) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+  measure(
+    measureName,
+    startOrMeasureOptions = undefined,
+    endMarkName = undefined,
+  ) {
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     return measure(measureName, startOrMeasureOptions, endMarkName);
   }
 
   now() {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     return now();
   }
 
   get timeOrigin() {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     return timeOrigin;
   }
 
   toJSON() {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
     return {
       nodeTiming: this.nodeTiming,
       timeOrigin: this.timeOrigin,
@@ -1781,30 +1980,30 @@ class Performance {
   }
 
   setResourceTimingBufferSize(maxSize) {
-    validateThisInternalField(this, kPerformanceBrand, 'Performance');
-    validateInteger(maxSize, 'maxSize', 0);
+    validateThisInternalField(this, kPerformanceBrand, "Performance");
+    validateInteger(maxSize, "maxSize", 0);
     resourceTimingBufferSizeLimit = maxSize;
   }
 }
 
 makeMethodsEnumerable(Performance, [
-  'addEventListener',
-  'removeEventListener',
-  'dispatchEvent',
-  'clearMarks',
-  'clearMeasures',
-  'clearResourceTimings',
-  'getEntries',
-  'getEntriesByName',
-  'getEntriesByType',
-  'mark',
-  'measure',
-  'now',
-  'timeOrigin',
-  'toJSON',
-  'setResourceTimingBufferSize',
+  "addEventListener",
+  "removeEventListener",
+  "dispatchEvent",
+  "clearMarks",
+  "clearMeasures",
+  "clearResourceTimings",
+  "getEntries",
+  "getEntriesByName",
+  "getEntriesByType",
+  "mark",
+  "measure",
+  "now",
+  "timeOrigin",
+  "toJSON",
+  "setResourceTimingBufferSize",
 ]);
-setToStringTag(Performance, 'Performance');
+setToStringTag(Performance, "Performance");
 
 function createPerformance() {
   const p = Object.create(Performance.prototype);
@@ -1818,18 +2017,38 @@ const performance = createPerformance();
 
 // Node extensions on the Performance prototype.
 Object.defineProperties(Performance.prototype, {
-  eventLoopUtilization: { enumerable: true, configurable: true, writable: true, value: eventLoopUtilization },
-  nodeTiming: { enumerable: true, configurable: true, writable: true, value: nodeTiming },
-  markResourceTiming: { enumerable: true, configurable: true, writable: true, value: markResourceTiming },
-  timerify: { enumerable: true, configurable: true, writable: true, value: timerify },
+  eventLoopUtilization: {
+    enumerable: true,
+    configurable: true,
+    writable: true,
+    value: eventLoopUtilization,
+  },
+  nodeTiming: {
+    enumerable: true,
+    configurable: true,
+    writable: true,
+    value: nodeTiming,
+  },
+  markResourceTiming: {
+    enumerable: true,
+    configurable: true,
+    writable: true,
+    value: markResourceTiming,
+  },
+  timerify: {
+    enumerable: true,
+    configurable: true,
+    writable: true,
+    value: timerify,
+  },
 });
 
 function monitorEventLoopDelay(options = undefined) {
   if (options === undefined) options = {};
-  validateObject(options, 'options');
+  validateObject(options, "options");
   const { samplePerIteration = false, resolution = 10 } = options;
-  validateBoolean(samplePerIteration, 'options.samplePerIteration');
-  validateInteger(resolution, 'options.resolution', 1);
+  validateBoolean(samplePerIteration, "options.samplePerIteration");
+  validateInteger(resolution, "options.resolution", 1);
   if (nativePerfHooks !== null) {
     // Native ELD histograms participate in V8 structured serialization
     // (postMessage), which the pure-JS fallback cannot replicate.
@@ -1869,7 +2088,7 @@ const constants = Object.freeze({
 // 11. Value formatting for util.inspect custom symbols.
 // ---------------------------------------------------------------------------
 function formatValue(value, opts, inspectFn) {
-  if (typeof inspectFn === 'function') {
+  if (typeof inspectFn === "function") {
     return inspectFn(value, opts);
   }
   return fallbackInspect(value, opts);
@@ -1879,51 +2098,52 @@ function formatValue(value, opts, inspectFn) {
 // PerformanceResourceTiming custom inspect). Prefers the real `util.inspect`
 // when the host provides it via the custom-inspect hook.
 function formatInspectValue(value, inspectFn) {
-  if (typeof inspectFn === 'function') {
+  if (typeof inspectFn === "function") {
     try {
       return inspectFn(value);
     } catch {}
   }
-  if (typeof value === 'string') {
-    return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  if (typeof value === "string") {
+    return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
   }
   if (Array.isArray(value)) {
-    if (value.length === 0) return '[]';
-    return `[ ${value.map((v) => formatInspectValue(v, undefined)).join(', ')} ]`;
+    if (value.length === 0) return "[]";
+    return `[ ${value.map((v) => formatInspectValue(v, undefined)).join(", ")} ]`;
   }
-  if (value === undefined) return 'undefined';
-  if (value === null) return 'null';
+  if (value === undefined) return "undefined";
+  if (value === null) return "null";
   return String(value);
 }
 
 function fallbackInspect(value, opts = {}, seen = new Set()) {
   const depth = opts.depth ?? 2;
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
   const t = typeof value;
-  if (t === 'string') return `'${value}'`;
-  if (t === 'number' || t === 'boolean') return String(value);
-  if (t === 'bigint') return `${value}n`;
-  if (t === 'symbol') return String(value);
-  if (t === 'function') return `[Function: ${value.name || 'anonymous'}]`;
-  if (seen.has(value)) return '[Circular]';
-  if (depth < 0) return '[Object]';
+  if (t === "string") return `'${value}'`;
+  if (t === "number" || t === "boolean") return String(value);
+  if (t === "bigint") return `${value}n`;
+  if (t === "symbol") return String(value);
+  if (t === "function") return `[Function: ${value.name || "anonymous"}]`;
+  if (seen.has(value)) return "[Circular]";
+  if (depth < 0) return "[Object]";
   seen.add(value);
   const childOpts = { ...opts, depth: depth - 1 };
   try {
     if (Array.isArray(value)) {
-      return `[ ${value.map((v) => fallbackInspect(v, childOpts, seen)).join(', ')} ]`;
+      return `[ ${value.map((v) => fallbackInspect(v, childOpts, seen)).join(", ")} ]`;
     }
     if (value instanceof Map) {
       const entries = [...value.entries()].map(
-        ([k, v]) => `${fallbackInspect(k, childOpts, seen)} => ${fallbackInspect(v, childOpts, seen)}`
+        ([k, v]) =>
+          `${fallbackInspect(k, childOpts, seen)} => ${fallbackInspect(v, childOpts, seen)}`,
       );
-      return `Map(${value.size}) { ${entries.join(', ')} }`;
+      return `Map(${value.size}) { ${entries.join(", ")} }`;
     }
     const keys = Object.keys(value);
     const body = keys
       .map((k) => `${k}: ${fallbackInspect(value[k], childOpts, seen)}`)
-      .join(', ');
+      .join(", ");
     return `{ ${body} }`;
   } finally {
     seen.delete(value);
@@ -1978,10 +2198,10 @@ if (nativePerfHooks !== null) {
     const globalPerformance = globalThis.performance;
     if (
       globalPerformance !== null &&
-      typeof globalPerformance === 'object' &&
+      typeof globalPerformance === "object" &&
       globalPerformance.timerify !== timerify
     ) {
-      Object.defineProperty(globalPerformance, 'timerify', {
+      Object.defineProperty(globalPerformance, "timerify", {
         value: timerify,
         writable: true,
         enumerable: true,

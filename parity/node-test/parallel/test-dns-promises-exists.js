@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const dnsPromises = require('dns/promises');
-const dns = require('dns');
+require("../common");
+const assert = require("assert");
+const dnsPromises = require("dns/promises");
+const dns = require("dns");
 
 assert.strictEqual(dnsPromises, dns.promises);
 

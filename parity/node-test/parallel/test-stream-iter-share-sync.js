@@ -1,33 +1,28 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const {
-  shareSync,
-  fromSync,
-  textSync,
-
-} = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { shareSync, fromSync, textSync } = require("stream/iter");
 
 // =============================================================================
 // Sync share
 // =============================================================================
 
 async function testShareSyncBasic() {
-  const shared = shareSync(fromSync('sync shared'));
+  const shared = shareSync(fromSync("sync shared"));
 
   const consumer = shared.pull();
   const data = textSync(consumer);
-  assert.strictEqual(data, 'sync shared');
+  assert.strictEqual(data, "sync shared");
 }
 
 async function testShareSyncMultipleConsumers() {
   const enc = new TextEncoder();
   function* gen() {
-    yield [enc.encode('a')];
-    yield [enc.encode('b')];
-    yield [enc.encode('c')];
+    yield [enc.encode("a")];
+    yield [enc.encode("b")];
+    yield [enc.encode("c")];
   }
 
   const shared = shareSync(gen(), { budget: 16384 });
@@ -38,13 +33,13 @@ async function testShareSyncMultipleConsumers() {
   const data1 = textSync(c1);
   const data2 = textSync(c2);
 
-  assert.strictEqual(data1, 'abc');
-  assert.strictEqual(data2, 'abc');
+  assert.strictEqual(data1, "abc");
+  assert.strictEqual(data2, "abc");
 }
 
 function testShareSyncCancel() {
   // Verify that cancel() on a pre-iteration share yields nothing
-  const shared = shareSync(fromSync('data'));
+  const shared = shareSync(fromSync("data"));
   const consumer = shared.pull();
 
   shared.cancel();
@@ -63,9 +58,9 @@ function testShareSyncCancelMidIteration() {
   let sourceReturnCalled = false;
   function* gen() {
     try {
-      yield [enc.encode('a')];
-      yield [enc.encode('b')];
-      yield [enc.encode('c')];
+      yield [enc.encode("a")];
+      yield [enc.encode("b")];
+      yield [enc.encode("c")];
     } finally {
       sourceReturnCalled = true;
     }
@@ -82,7 +77,7 @@ function testShareSyncCancelMidIteration() {
     shared.cancel();
   }
   assert.strictEqual(items.length, 1);
-  assert.strictEqual(items[0], 'a');
+  assert.strictEqual(items[0], "a");
   assert.strictEqual(sourceReturnCalled, true);
 }
 
@@ -93,9 +88,9 @@ function testShareSyncCancelWithReason() {
   // with a reason will see the error on the next pull after cancel.
   const enc = new TextEncoder();
   function* gen() {
-    yield [enc.encode('a')];
-    yield [enc.encode('b')];
-    yield [enc.encode('c')];
+    yield [enc.encode("a")];
+    yield [enc.encode("b")];
+    yield [enc.encode("c")];
   }
   const shared = shareSync(gen(), { budget: 16384 });
   const c1 = shared.pull();
@@ -106,7 +101,7 @@ function testShareSyncCancelWithReason() {
   const first = iter1.next();
   assert.strictEqual(first.done, false);
 
-  shared.cancel(new Error('sync cancel reason'));
+  shared.cancel(new Error("sync cancel reason"));
 
   // c1 was already iterating, it's now detached → done
   const next = iter1.next();
@@ -126,29 +121,39 @@ function testShareSyncCancelWithReason() {
 
 function testShareSyncSourceError() {
   function* failingSource() {
-    yield [new TextEncoder().encode('ok')];
-    throw new Error('sync share boom');
+    yield [new TextEncoder().encode("ok")];
+    throw new Error("sync share boom");
   }
   const shared = shareSync(failingSource());
   const c1 = shared.pull();
   const c2 = shared.pull();
 
   // Both consumers should see the error
-  assert.throws(() => {
-    // eslint-disable-next-line no-unused-vars
-    for (const _ of c1) { /* consume */ }
-  }, { message: 'sync share boom' });
-  assert.throws(() => {
-    // eslint-disable-next-line no-unused-vars
-    for (const _ of c2) { /* consume */ }
-  }, { message: 'sync share boom' });
+  assert.throws(
+    () => {
+      // eslint-disable-next-line no-unused-vars
+      for (const _ of c1) {
+        /* consume */
+      }
+    },
+    { message: "sync share boom" },
+  );
+  assert.throws(
+    () => {
+      // eslint-disable-next-line no-unused-vars
+      for (const _ of c2) {
+        /* consume */
+      }
+    },
+    { message: "sync share boom" },
+  );
 }
 
 // shareSync() accepts string source directly (normalized via fromSync())
 function testShareSyncStringSource() {
-  const shared = shareSync('hello-sync-share');
+  const shared = shareSync("hello-sync-share");
   const result = textSync(shared.pull());
-  assert.strictEqual(result, 'hello-sync-share');
+  assert.strictEqual(result, "hello-sync-share");
 }
 
 Promise.all([

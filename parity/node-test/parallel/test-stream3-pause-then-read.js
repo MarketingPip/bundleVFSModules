@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const stream = require('stream');
+const stream = require("stream");
 const Readable = stream.Readable;
 const Writable = stream.Writable;
 
@@ -34,23 +34,20 @@ let expectEndingData = expectTotalData;
 
 const r = new Readable({ highWaterMark: 1000 });
 let chunks = totalChunks;
-r._read = function(n) {
-  console.log('_read called', chunks);
-  if (!(chunks % 2))
-    setImmediate(push);
-  else if (!(chunks % 3))
-    process.nextTick(push);
-  else
-    push();
+r._read = function (n) {
+  console.log("_read called", chunks);
+  if (!(chunks % 2)) setImmediate(push);
+  else if (!(chunks % 3)) process.nextTick(push);
+  else push();
 };
 
 let totalPushed = 0;
 function push() {
-  const chunk = chunks-- > 0 ? Buffer.alloc(chunkSize, 'x') : null;
+  const chunk = chunks-- > 0 ? Buffer.alloc(chunkSize, "x") : null;
   if (chunk) {
     totalPushed += chunk.length;
   }
-  console.log('chunks', chunks);
+  console.log("chunks", chunks);
   r.push(chunk);
 }
 
@@ -66,9 +63,8 @@ function readn(n, then) {
   expectEndingData -= n;
   (function read() {
     const c = r.read(n);
-    console.error('c', c);
-    if (!c)
-      r.once('readable', read);
+    console.error("c", c);
+    if (!c) r.once("readable", read);
     else {
       assert.strictEqual(c.length, n);
       assert(!r.readableFlowing);
@@ -80,20 +76,20 @@ function readn(n, then) {
 // Then we listen to some data events.
 function onData() {
   expectEndingData -= 100;
-  console.error('onData');
+  console.error("onData");
   let seen = 0;
-  r.on('data', function od(c) {
+  r.on("data", function od(c) {
     seen += c.length;
     if (seen >= 100) {
       // Seen enough
-      r.removeListener('data', od);
+      r.removeListener("data", od);
       r.pause();
       if (seen > 100) {
         // Oh no, seen too much!
         // Put the extra back.
         const diff = seen - 100;
         r.unshift(c.slice(c.length - diff));
-        console.error('seen too much', seen, diff);
+        console.error("seen too much", seen, diff);
       }
 
       // Nothing should be lost in-between.
@@ -105,14 +101,17 @@ function onData() {
 // Just pipe 200 bytes, then unshift the extra and unpipe.
 function pipeLittle() {
   expectEndingData -= 200;
-  console.error('pipe a little');
+  console.error("pipe a little");
   const w = new Writable();
   let written = 0;
-  w.on('finish', common.mustCall(() => {
-    assert.strictEqual(written, 200);
-    setImmediate(read1234);
-  }));
-  w._write = function(chunk, encoding, cb) {
+  w.on(
+    "finish",
+    common.mustCall(() => {
+      assert.strictEqual(written, 200);
+      setImmediate(read1234);
+    }),
+  );
+  w._write = function (chunk, encoding, cb) {
     written += chunk.length;
     if (written >= 200) {
       r.unpipe(w);
@@ -136,7 +135,7 @@ function read1234() {
 }
 
 function resumePause() {
-  console.error('resumePause');
+  console.error("resumePause");
   // Don't read anything, just resume and re-pause a whole bunch.
   r.resume();
   r.pause();
@@ -151,20 +150,22 @@ function resumePause() {
   setImmediate(pipe);
 }
 
-
 function pipe() {
-  console.error('pipe the rest');
+  console.error("pipe the rest");
   const w = new Writable();
   let written = 0;
-  w._write = function(chunk, encoding, cb) {
+  w._write = function (chunk, encoding, cb) {
     written += chunk.length;
     cb();
   };
-  w.on('finish', common.mustCall(() => {
-    console.error('written', written, totalPushed);
-    assert.strictEqual(written, expectEndingData);
-    assert.strictEqual(totalPushed, expectTotalData);
-    console.log('ok');
-  }));
+  w.on(
+    "finish",
+    common.mustCall(() => {
+      console.error("written", written, totalPushed);
+      assert.strictEqual(written, expectEndingData);
+      assert.strictEqual(totalPushed, expectTotalData);
+      console.log("ok");
+    }),
+  );
   r.pipe(w);
 }

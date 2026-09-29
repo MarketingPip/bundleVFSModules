@@ -19,32 +19,24 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import {
-
-  ObjectSetPrototypeOf,
-} from './primordials.js';
-import Transform from './transform.js';
+import { ObjectSetPrototypeOf } from "./primordials.js";
+import Transform from "./transform.js";
 
 // a passthrough stream.
 // basically just the most minimal sort of Transform stream.
 // Every written chunk gets output as-is.
 
-
-
-
 export default PassThrough;
-
 
 ObjectSetPrototypeOf(PassThrough.prototype, Transform.prototype);
 ObjectSetPrototypeOf(PassThrough, Transform);
 
 function PassThrough(options) {
-  if (!(this instanceof PassThrough))
-    return new PassThrough(options);
+  if (!(this instanceof PassThrough)) return new PassThrough(options);
 
   Transform.call(this, options);
 }
 
-PassThrough.prototype._transform = function(chunk, encoding, cb) {
+PassThrough.prototype._transform = function (chunk, encoding, cb) {
   cb(null, chunk);
 };

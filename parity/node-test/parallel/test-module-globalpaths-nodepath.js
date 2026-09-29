@@ -19,21 +19,21 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const mod = require('module');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const mod = require("module");
 
 let partA, partB;
-const partC = '';
+const partC = "";
 
 if (common.isWindows) {
-  partA = 'C:\\Users\\Rocko Artischocko\\AppData\\Roaming\\npm';
-  partB = 'C:\\Program Files (x86)\\nodejs\\';
+  partA = "C:\\Users\\Rocko Artischocko\\AppData\\Roaming\\npm";
+  partB = "C:\\Program Files (x86)\\nodejs\\";
   process.env.NODE_PATH = `${partA};${partB};${partC}`;
 } else {
-  partA = '/usr/test/lib/node_modules';
-  partB = '/usr/test/lib/node';
+  partA = "/usr/test/lib/node_modules";
+  partB = "/usr/test/lib/node";
   process.env.NODE_PATH = `${partA}:${partB}:${partC}`;
 }
 

@@ -1,33 +1,47 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
-const net = require('net');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
+const net = require("net");
 
-['on', 'addListener', 'prependListener'].forEach((testFn) => {
-  let received = '';
+["on", "addListener", "prependListener"].forEach((testFn) => {
+  let received = "";
 
-  const server = http.createServer(function(req, res) {
-    res.writeHead(200);
-    res.end();
+  const server = http
+    .createServer(function (req, res) {
+      res.writeHead(200);
+      res.end();
 
-    req.socket[testFn]('data', function(data) {
-      received += data;
-    });
-
-    server.close();
-  }).listen(0, common.mustCall(function() {
-    const socket = net.connect(this.address().port, common.mustCall(() => {
-      socket.write('PUT / HTTP/1.1\r\nHost: example.com\r\n\r\n');
-
-      socket.once('data', function() {
-        socket.end('hello world');
+      req.socket[testFn]("data", function (data) {
+        received += data;
       });
 
-      socket.on('end', common.mustCall(() => {
-        assert.strictEqual(received, 'hello world',
-                           `failed for socket.${testFn}`);
-      }));
-    }));
-  }));
+      server.close();
+    })
+    .listen(
+      0,
+      common.mustCall(function () {
+        const socket = net.connect(
+          this.address().port,
+          common.mustCall(() => {
+            socket.write("PUT / HTTP/1.1\r\nHost: example.com\r\n\r\n");
+
+            socket.once("data", function () {
+              socket.end("hello world");
+            });
+
+            socket.on(
+              "end",
+              common.mustCall(() => {
+                assert.strictEqual(
+                  received,
+                  "hello world",
+                  `failed for socket.${testFn}`,
+                );
+              }),
+            );
+          }),
+        );
+      }),
+    );
 });

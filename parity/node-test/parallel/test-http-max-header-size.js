@@ -1,11 +1,14 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const { spawnSync } = require('child_process');
-const http = require('http');
+require("../common");
+const assert = require("assert");
+const { spawnSync } = require("child_process");
+const http = require("http");
 
 assert.strictEqual(http.maxHeaderSize, 16 * 1024);
-const child = spawnSync(process.execPath, ['--max-http-header-size=10', '-p',
-                                           'http.maxHeaderSize']);
+const child = spawnSync(process.execPath, [
+  "--max-http-header-size=10",
+  "-p",
+  "http.maxHeaderSize",
+]);
 assert.strictEqual(+child.stdout.toString().trim(), 10);

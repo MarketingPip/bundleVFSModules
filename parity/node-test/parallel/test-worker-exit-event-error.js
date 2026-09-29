@@ -1,8 +1,12 @@
-'use strict';
-const common = require('../common');
-const { Worker } = require('worker_threads');
+"use strict";
+const common = require("../common");
+const { Worker } = require("worker_threads");
 
-process.on('uncaughtException', common.mustCall());
+process.on("uncaughtException", common.mustCall());
 
-new Worker('', { eval: true })
-  .on('exit', common.mustCall(() => { throw new Error('foo'); }));
+new Worker("", { eval: true }).on(
+  "exit",
+  common.mustCall(() => {
+    throw new Error("foo");
+  }),
+);

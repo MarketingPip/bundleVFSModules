@@ -1,15 +1,15 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const assert = require('node:assert');
-const zlib = require('node:zlib');
-const { test } = require('node:test');
+const assert = require("node:assert");
+const zlib = require("node:zlib");
+const { test } = require("node:test");
 
 // Regression test for https://github.com/nodejs/node/issues/30976
-test('Writes to a stream should finish even after the readable side has been ended.', async (t) => {
+test("Writes to a stream should finish even after the readable side has been ended.", async (t) => {
   const { promise, resolve } = Promise.withResolvers();
-  const data = zlib.deflateRawSync('Welcome');
+  const data = zlib.deflateRawSync("Welcome");
   const inflate = zlib.createInflateRaw();
   const writeCallback = t.mock.fn();
   inflate.resume();

@@ -1,11 +1,11 @@
-'use strict';
+"use strict";
 
 // Flags: --experimental-vm-modules
 
-const common = require('../common');
+const common = require("../common");
 
-const assert = require('assert');
-const { Script, SourceTextModule } = require('vm');
+const assert = require("assert");
+const { Script, SourceTextModule } = require("vm");
 
 async function testNoCallback() {
   const m = new SourceTextModule(`
@@ -19,21 +19,21 @@ async function testNoCallback() {
     await globalThis.importResult;
   } catch (err) {
     threw = true;
-    assert.strictEqual(err.code, 'ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING');
+    assert.strictEqual(err.code, "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING");
   }
   delete globalThis.importResult;
   assert(threw);
 }
 
 async function test() {
-  const foo = new SourceTextModule('export const a = 1;');
+  const foo = new SourceTextModule("export const a = 1;");
   await foo.link(common.mustNotCall());
   await foo.evaluate();
 
   {
     const s = new Script('import("foo")', {
       importModuleDynamically: common.mustCall((specifier, wrap) => {
-        assert.strictEqual(specifier, 'foo');
+        assert.strictEqual(specifier, "foo");
         assert.strictEqual(wrap, s);
         return foo;
       }),
@@ -46,7 +46,7 @@ async function test() {
   {
     const m = new SourceTextModule('globalThis.fooResult = import("foo")', {
       importModuleDynamically: common.mustCall((specifier, wrap) => {
-        assert.strictEqual(specifier, 'foo');
+        assert.strictEqual(specifier, "foo");
         assert.strictEqual(wrap, m);
         return foo;
       }),
@@ -59,13 +59,15 @@ async function test() {
 
   {
     const s = new Script('import("foo", { with: { key: "value" } })', {
-      importModuleDynamically: common.mustCall((specifier, wrap, attributes, phase) => {
-        assert.strictEqual(specifier, 'foo');
-        assert.strictEqual(wrap, s);
-        assert.deepStrictEqual(attributes, { __proto__: null, key: 'value' });
-        assert.strictEqual(phase, 'evaluation');
-        return foo;
-      }),
+      importModuleDynamically: common.mustCall(
+        (specifier, wrap, attributes, phase) => {
+          assert.strictEqual(specifier, "foo");
+          assert.strictEqual(wrap, s);
+          assert.deepStrictEqual(attributes, { __proto__: null, key: "value" });
+          assert.strictEqual(phase, "evaluation");
+          return foo;
+        },
+      ),
     });
 
     const result = s.runInThisContext();
@@ -81,9 +83,11 @@ async function testInvalid() {
   });
   await m.link(common.mustNotCall());
   await m.evaluate();
-  await globalThis.fooResult.catch(common.mustCall((e) => {
-    assert.strictEqual(e.code, 'ERR_VM_MODULE_NOT_MODULE');
-  }));
+  await globalThis.fooResult.catch(
+    common.mustCall((e) => {
+      assert.strictEqual(e.code, "ERR_VM_MODULE_NOT_MODULE");
+    }),
+  );
   delete globalThis.fooResult;
 
   const s = new Script('import("bar")', {
@@ -96,23 +100,21 @@ async function testInvalid() {
     await s.runInThisContext();
   } catch (e) {
     threw = true;
-    assert.strictEqual(e.code, 'ERR_VM_MODULE_NOT_MODULE');
+    assert.strictEqual(e.code, "ERR_VM_MODULE_NOT_MODULE");
   }
   assert(threw);
 }
 
 async function testInvalidimportModuleDynamically() {
   assert.throws(
-    () => new Script(
-      'import("foo")',
-      { importModuleDynamically: false }),
-    { code: 'ERR_INVALID_ARG_TYPE' }
+    () => new Script('import("foo")', { importModuleDynamically: false }),
+    { code: "ERR_INVALID_ARG_TYPE" },
   );
 }
 
-(async function() {
+(async function () {
   await testNoCallback();
   await test();
   await testInvalid();
   await testInvalidimportModuleDynamically();
-}()).then(common.mustCall());
+})().then(common.mustCall());

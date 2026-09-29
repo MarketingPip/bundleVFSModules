@@ -19,14 +19,14 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 
-const file = tmpdir.resolve('write.txt');
+const file = tmpdir.resolve("write.txt");
 
 tmpdir.refresh();
 
@@ -34,8 +34,8 @@ tmpdir.refresh();
   const stream = fs.WriteStream(file);
   const _fs_close = fs.close;
 
-  fs.close = common.mustCall(function(fd) {
-    assert.ok(fd, 'fs.close must not be called without an undefined fd.');
+  fs.close = common.mustCall(function (fd) {
+    assert.ok(fd, "fs.close must not be called without an undefined fd.");
     fs.close = _fs_close;
     fs.closeSync(fd);
   });
@@ -45,9 +45,11 @@ tmpdir.refresh();
 {
   const stream = fs.createWriteStream(file);
 
-  stream.on('drain', function() {
-    assert.fail('\'drain\' event must not be emitted before ' +
-                'stream.write() has been called at least once.');
+  stream.on("drain", function () {
+    assert.fail(
+      "'drain' event must not be emitted before " +
+        "stream.write() has been called at least once.",
+    );
   });
   stream.destroy();
 }
@@ -55,12 +57,15 @@ tmpdir.refresh();
 // Throws if data is not of type Buffer.
 {
   const stream = fs.createWriteStream(file);
-  stream.on('error', common.mustNotCall());
-  assert.throws(() => {
-    stream.write(42);
-  }, {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError'
-  });
+  stream.on("error", common.mustNotCall());
+  assert.throws(
+    () => {
+      stream.write(42);
+    },
+    {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    },
+  );
   stream.destroy();
 }

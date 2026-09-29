@@ -19,53 +19,68 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
-const Countdown = require('../common/countdown');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
+const Countdown = require("../common/countdown");
 
 let name;
 const max = 3;
 const agent = new http.Agent();
 
-const server = http.Server(common.mustCall((req, res) => {
-  if (req.url === '/0') {
-    setTimeout(common.mustCall(() => {
+const server = http.Server(
+  common.mustCall((req, res) => {
+    if (req.url === "/0") {
+      setTimeout(
+        common.mustCall(() => {
+          res.writeHead(200);
+          res.end("Hello, World!");
+        }),
+        100,
+      );
+    } else {
       res.writeHead(200);
-      res.end('Hello, World!');
-    }), 100);
-  } else {
-    res.writeHead(200);
-    res.end('Hello, World!');
-  }
-}, max));
-server.listen(0, common.mustCall(() => {
-  name = agent.getName({ port: server.address().port });
-  for (let i = 0; i < max; ++i)
-    request(i);
-}));
+      res.end("Hello, World!");
+    }
+  }, max),
+);
+server.listen(
+  0,
+  common.mustCall(() => {
+    name = agent.getName({ port: server.address().port });
+    for (let i = 0; i < max; ++i) request(i);
+  }),
+);
 
-const countdown = new Countdown(max, common.mustCall(() => {
-  assert(!(name in agent.sockets));
-  assert(!(name in agent.requests));
-  server.close();
-}));
+const countdown = new Countdown(
+  max,
+  common.mustCall(() => {
+    assert(!(name in agent.sockets));
+    assert(!(name in agent.requests));
+    server.close();
+  }),
+);
 
 function request(i) {
-  const req = http.get({
-    port: server.address().port,
-    path: `/${i}`,
-    agent
-  }, common.mustCall((res) => {
-    const socket = req.socket;
-    socket.on('close', common.mustCall(() => {
-      countdown.dec();
-      if (countdown.remaining > 0) {
-        assert.strictEqual(agent.sockets[name].includes(socket),
-                           false);
-      }
-    }));
-    res.resume();
-  }));
+  const req = http.get(
+    {
+      port: server.address().port,
+      path: `/${i}`,
+      agent,
+    },
+    common.mustCall((res) => {
+      const socket = req.socket;
+      socket.on(
+        "close",
+        common.mustCall(() => {
+          countdown.dec();
+          if (countdown.remaining > 0) {
+            assert.strictEqual(agent.sockets[name].includes(socket), false);
+          }
+        }),
+      );
+      res.resume();
+    }),
+  );
 }

@@ -1,12 +1,12 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const { SlowBuffer } = require('buffer');
+require("../common");
+const assert = require("assert");
+const { SlowBuffer } = require("buffer");
 
 const msg = {
-  code: 'ERR_OUT_OF_RANGE',
-  name: 'RangeError',
+  code: "ERR_OUT_OF_RANGE",
+  name: "RangeError",
 };
 
 // Test that negative Buffer length inputs throw errors.

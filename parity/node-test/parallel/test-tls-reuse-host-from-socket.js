@@ -19,25 +19,35 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const net = require('net');
-const tls = require('tls');
-const fixtures = require('../common/fixtures');
+const net = require("net");
+const tls = require("tls");
+const fixtures = require("../common/fixtures");
 
-const server = tls.createServer({
-  key: fixtures.readKey('agent1-key.pem'),
-  cert: fixtures.readKey('agent1-cert.pem')
-}).listen(0, common.mustCall(() => {
-  const socket = net.connect(server.address().port, common.mustCall(() => {
-    const opts = { socket, rejectUnauthorized: false };
-    const secureSocket = tls.connect(opts, common.mustCall(() => {
-      secureSocket.destroy();
-      server.close();
-    }));
-  }));
-}));
+const server = tls
+  .createServer({
+    key: fixtures.readKey("agent1-key.pem"),
+    cert: fixtures.readKey("agent1-cert.pem"),
+  })
+  .listen(
+    0,
+    common.mustCall(() => {
+      const socket = net.connect(
+        server.address().port,
+        common.mustCall(() => {
+          const opts = { socket, rejectUnauthorized: false };
+          const secureSocket = tls.connect(
+            opts,
+            common.mustCall(() => {
+              secureSocket.destroy();
+              server.close();
+            }),
+          );
+        }),
+      );
+    }),
+  );

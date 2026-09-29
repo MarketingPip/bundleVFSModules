@@ -1,8 +1,8 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 const {
   from,
   fromSync,
@@ -13,7 +13,7 @@ const {
   tapSync,
   text,
   textSync,
-} = require('stream/iter');
+} = require("stream/iter");
 
 // =============================================================================
 // tap / tapSync
@@ -28,7 +28,7 @@ async function testTapSync() {
   });
 
   // tapSync returns a function transform
-  assert.strictEqual(typeof observer, 'function');
+  assert.strictEqual(typeof observer, "function");
 
   // Test that it passes data through unchanged
   const input = [new Uint8Array([1]), new Uint8Array([2])];
@@ -49,7 +49,7 @@ async function testTapAsync() {
     }
   });
 
-  assert.strictEqual(typeof observer, 'function');
+  assert.strictEqual(typeof observer, "function");
 
   const input = [new Uint8Array([1])];
   const result = await observer(input);
@@ -69,34 +69,48 @@ async function testTapInPipeline() {
     }
   });
 
-  writer.write('hello');
+  writer.write("hello");
   writer.end();
 
   // Use pull with tap as a transform
   const result = pull(readable, observer);
   const data = await text(result);
 
-  assert.strictEqual(data, 'hello');
+  assert.strictEqual(data, "hello");
   assert.strictEqual(seen.length, 1);
-  assert.strictEqual(seen[0], 'hello');
+  assert.strictEqual(seen[0], "hello");
 }
 
 // Tap callback error propagates through async pipeline
 async function testTapAsyncErrorPropagation() {
-  const badTap = tap(() => { throw new Error('tap error'); });
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of pull(from('hello'), badTap)) { /* consume */ }
-  }, { message: 'tap error' });
+  const badTap = tap(() => {
+    throw new Error("tap error");
+  });
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of pull(from("hello"), badTap)) {
+        /* consume */
+      }
+    },
+    { message: "tap error" },
+  );
 }
 
 // TapSync callback error propagates through sync pipeline
 function testTapSyncErrorPropagation() {
-  const badTap = tapSync(() => { throw new Error('tapSync error'); });
-  assert.throws(() => {
-    // eslint-disable-next-line no-unused-vars
-    for (const _ of pullSync(fromSync('hello'), badTap)) { /* consume */ }
-  }, { message: 'tapSync error' });
+  const badTap = tapSync(() => {
+    throw new Error("tapSync error");
+  });
+  assert.throws(
+    () => {
+      // eslint-disable-next-line no-unused-vars
+      for (const _ of pullSync(fromSync("hello"), badTap)) {
+        /* consume */
+      }
+    },
+    { message: "tapSync error" },
+  );
 }
 
 // TapSync in a pullSync pipeline passes through data and flush
@@ -113,10 +127,10 @@ function testTapSyncInPipeline() {
     }
   });
 
-  const data = textSync(pullSync(fromSync('hello'), observer));
-  assert.strictEqual(data, 'hello');
+  const data = textSync(pullSync(fromSync("hello"), observer));
+  assert.strictEqual(data, "hello");
   assert.strictEqual(seen.length, 1);
-  assert.strictEqual(seen[0], 'hello');
+  assert.strictEqual(seen[0], "hello");
   assert.strictEqual(sawFlush, true);
 }
 

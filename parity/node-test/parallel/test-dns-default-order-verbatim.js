@@ -1,10 +1,10 @@
 // Flags: --expose-internals --dns-result-order=verbatim
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const { internalBinding } = require('internal/test/binding');
-const cares = internalBinding('cares_wrap');
-const { promisify } = require('util');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const { internalBinding } = require("internal/test/binding");
+const cares = internalBinding("cares_wrap");
+const { promisify } = require("util");
 
 // Test that --dns-result-order=verbatim works as expected.
 
@@ -15,7 +15,7 @@ cares.getaddrinfo = common.mustCallAtLeast((...args) => {
   originalGetaddrinfo(...args);
 }, 1);
 
-const dns = require('dns');
+const dns = require("dns");
 const dnsPromises = dns.promises;
 
 // We want to test the parameter of verbatim only so that we
@@ -35,25 +35,25 @@ function allowFailed(fn) {
     callsLength += 1;
   });
 
-  await allowFailed(promisify(dns.lookup)('example.org'));
+  await allowFailed(promisify(dns.lookup)("example.org"));
   checkParameter(cares.DNS_ORDER_VERBATIM);
 
-  await allowFailed(dnsPromises.lookup('example.org'));
+  await allowFailed(dnsPromises.lookup("example.org"));
   checkParameter(cares.DNS_ORDER_VERBATIM);
 
-  await allowFailed(promisify(dns.lookup)('example.org', {}));
+  await allowFailed(promisify(dns.lookup)("example.org", {}));
   checkParameter(cares.DNS_ORDER_VERBATIM);
 
-  await allowFailed(dnsPromises.lookup('example.org', {}));
+  await allowFailed(dnsPromises.lookup("example.org", {}));
   checkParameter(cares.DNS_ORDER_VERBATIM);
 
   await allowFailed(
-    promisify(dns.lookup)('example.org', { order: 'ipv4first' })
+    promisify(dns.lookup)("example.org", { order: "ipv4first" }),
   );
   checkParameter(cares.DNS_ORDER_IPV4_FIRST);
 
   await allowFailed(
-    promisify(dns.lookup)('example.org', { order: 'ipv6first' })
+    promisify(dns.lookup)("example.org", { order: "ipv6first" }),
   );
   checkParameter(cares.DNS_ORDER_IPV6_FIRST);
 })().then(common.mustCall());

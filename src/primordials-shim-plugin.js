@@ -15,11 +15,11 @@
  */
 
 const RAW_PRIMORDIALS =
-  'https://raw.githubusercontent.com/nodejs/node/main/lib/internal/per_context/primordials.js';
+  "https://raw.githubusercontent.com/nodejs/node/main/lib/internal/per_context/primordials.js";
 
 export function primordialsShimPlugin() {
   return {
-    name: 'primordials-shim',
+    name: "primordials-shim",
     setup(build) {
       // Intercept every spelling Node code uses to require this file
       const ALIASES = [
@@ -29,17 +29,20 @@ export function primordialsShimPlugin() {
       ];
       for (const filter of ALIASES) {
         build.onResolve({ filter }, () => ({
-          path: 'primordials',
-          namespace: 'primordials-shim',
+          path: "primordials",
+          namespace: "primordials-shim",
         }));
       }
 
       let shimPromise = null; // fetch once, reuse
-      build.onLoad({ filter: /.*/, namespace: 'primordials-shim' }, async () => {
-        shimPromise ??= buildShim();
-        const contents = await shimPromise;
-        return { contents, loader: 'js' };
-      });
+      build.onLoad(
+        { filter: /.*/, namespace: "primordials-shim" },
+        async () => {
+          shimPromise ??= buildShim();
+          const contents = await shimPromise;
+          return { contents, loader: "js" };
+        },
+      );
     },
   };
 }
@@ -75,12 +78,16 @@ function extractPrimordialNames(src) {
   }
 
   // Pattern 2: ObjectDefineProperties(primordials, { XYZ: {
-  for (const [, name] of src.matchAll(/\bObjectDefineProperties\s*\(\s*primordials\s*,\s*\{[^}]*?([A-Za-z0-9_$]+)\s*:/gs)) {
+  for (const [, name] of src.matchAll(
+    /\bObjectDefineProperties\s*\(\s*primordials\s*,\s*\{[^}]*?([A-Za-z0-9_$]+)\s*:/gs,
+  )) {
     explicit.add(name);
   }
 
   // Pattern 3: copyProps*(Foo, primordials …) — bulk copies everything off Foo
-  for (const [, obj] of src.matchAll(/copyProps\w*\s*\(\s*([A-Za-z0-9_$]+)\s*,\s*primordials/g)) {
+  for (const [, obj] of src.matchAll(
+    /copyProps\w*\s*\(\s*([A-Za-z0-9_$]+)\s*,\s*primordials/g,
+  )) {
     bulkSources.add(obj);
   }
 
@@ -131,7 +138,7 @@ function emitShim({ explicit, bulkSources }) {
     `module.exports = p;`,
   );
 
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -150,28 +157,28 @@ function emitShim({ explicit, bulkSources }) {
 function resolveBinding(name) {
   // ── Hardcoded specials that don't fit the naming pattern ──────────────────
   const OVERRIDES = {
-    globalThis:                       'globalThis',
-    Infinity:                         'Infinity',
-    NaN:                              'NaN',
-    undefined:                        'undefined',
-    queueMicrotask:                   'globalThis.queueMicrotask?.bind(globalThis)',
-    setQueueMicrotask:                'globalThis.queueMicrotask?.bind(globalThis)',
+    globalThis: "globalThis",
+    Infinity: "Infinity",
+    NaN: "NaN",
+    undefined: "undefined",
+    queueMicrotask: "globalThis.queueMicrotask?.bind(globalThis)",
+    setQueueMicrotask: "globalThis.queueMicrotask?.bind(globalThis)",
     // Symbol well-knowns
-    SymbolAsyncIterator:              'Symbol.asyncIterator',
-    SymbolHasInstance:                'Symbol.hasInstance',
-    SymbolIsConcatSpreadable:         'Symbol.isConcatSpreadable',
-    SymbolIterator:                   'Symbol.iterator',
-    SymbolMatch:                      'Symbol.match',
-    SymbolMatchAll:                   'Symbol.matchAll',
-    SymbolReplace:                    'Symbol.replace',
-    SymbolSearch:                     'Symbol.search',
-    SymbolSpecies:                    'Symbol.species',
-    SymbolSplit:                      'Symbol.split',
-    SymbolToPrimitive:                'Symbol.toPrimitive',
-    SymbolToStringTag:                'Symbol.toStringTag',
-    SymbolUnscopables:                'Symbol.unscopables',
+    SymbolAsyncIterator: "Symbol.asyncIterator",
+    SymbolHasInstance: "Symbol.hasInstance",
+    SymbolIsConcatSpreadable: "Symbol.isConcatSpreadable",
+    SymbolIterator: "Symbol.iterator",
+    SymbolMatch: "Symbol.match",
+    SymbolMatchAll: "Symbol.matchAll",
+    SymbolReplace: "Symbol.replace",
+    SymbolSearch: "Symbol.search",
+    SymbolSpecies: "Symbol.species",
+    SymbolSplit: "Symbol.split",
+    SymbolToPrimitive: "Symbol.toPrimitive",
+    SymbolToStringTag: "Symbol.toStringTag",
+    SymbolUnscopables: "Symbol.unscopables",
     // Error.captureStackTrace is V8-only
-    ErrorCaptureStackTrace:           'Error.captureStackTrace ?? (() => {})',
+    ErrorCaptureStackTrace: "Error.captureStackTrace ?? (() => {})",
     // These are not in browsers yet
     FinalizationRegistryPrototypeRegister:
       '(typeof FinalizationRegistry!=="undefined") ? (fr,...r)=>FinalizationRegistry.prototype.register.call(fr,...r) : undefined',
@@ -181,20 +188,25 @@ function resolveBinding(name) {
 
   // ── Pattern: {Ctor}Prototype{Symbol}{Xxx} ────────────────────────────────
   // e.g. ArrayPrototypeSymbolIterator → (a) => a[Symbol.iterator]()
-  const protoSymMatch = name.match(/^([A-Z][a-zA-Z0-9]*)PrototypeSymbol([A-Z][a-zA-Z0-9]*)$/);
+  const protoSymMatch = name.match(
+    /^([A-Z][a-zA-Z0-9]*)PrototypeSymbol([A-Z][a-zA-Z0-9]*)$/,
+  );
   if (protoSymMatch) {
     const ctor = protoSymMatch[1];
-    const sym  = lcFirst(protoSymMatch[2]);
+    const sym = lcFirst(protoSymMatch[2]);
     if (globalExists(ctor))
       return `(a, ...r) => ${ctor}.prototype[Symbol.${sym}].call(a, ...r)`;
   }
 
   // ── Pattern: {Ctor}Prototype{Method} ────────────────────────────────────
-  const protoMatch = name.match(/^([A-Z][a-zA-Z0-9]*)Prototype([A-Z][a-zA-Z0-9]*)$/);
+  const protoMatch = name.match(
+    /^([A-Z][a-zA-Z0-9]*)Prototype([A-Z][a-zA-Z0-9]*)$/,
+  );
   if (protoMatch) {
-    const ctor    = protoMatch[1];
-    const method  = lcFirst(protoMatch[2]);
-    if (globalExists(ctor) && method in Object(eval(`${ctor}.prototype`)))  // eslint-disable-line no-eval
+    const ctor = protoMatch[1];
+    const method = lcFirst(protoMatch[2]);
+    if (globalExists(ctor) && method in Object(eval(`${ctor}.prototype`)))
+      // eslint-disable-line no-eval
       return `(a, ...r) => ${ctor}.prototype.${method}.call(a, ...r)`;
     // Fall through — might be a static that happens to contain "Prototype" in name
   }
@@ -203,10 +215,11 @@ function resolveBinding(name) {
   // Heuristic: split at first uppercase run that looks like a static method
   const staticMatch = name.match(/^([A-Z][a-zA-Z0-9]*)([A-Z][a-zA-Z0-9]+)$/);
   if (staticMatch) {
-    const ctor   = staticMatch[1];
+    const ctor = staticMatch[1];
     const method = lcFirst(staticMatch[2]);
     // Prefer the constructor itself if the whole name IS the ctor
-    if (KNOWN_CTORS.has(ctor) && method in Object(eval(ctor))) // eslint-disable-line no-eval
+    if (KNOWN_CTORS.has(ctor) && method in Object(eval(ctor)))
+      // eslint-disable-line no-eval
       return `${ctor}.${method}.bind(${ctor})`;
   }
 
@@ -218,17 +231,56 @@ function resolveBinding(name) {
 
 // Known top-level constructors / namespaces present in browsers + Node
 const KNOWN_CTORS = new Set([
-  'Array','ArrayBuffer','BigInt','BigInt64Array','BigUint64Array','Boolean',
-  'DataView','Date','Error','EvalError','FinalizationRegistry',
-  'Float32Array','Float64Array','Function','Int8Array','Int16Array','Int32Array',
-  'JSON','Map','Math','Number','Object','Promise','Proxy','RangeError',
-  'ReferenceError','Reflect','RegExp','Set','SharedArrayBuffer','String',
-  'Symbol','SyntaxError','TypeError','URIError','Uint8Array','Uint8ClampedArray',
-  'Uint16Array','Uint32Array','WeakMap','WeakRef','WeakSet',
+  "Array",
+  "ArrayBuffer",
+  "BigInt",
+  "BigInt64Array",
+  "BigUint64Array",
+  "Boolean",
+  "DataView",
+  "Date",
+  "Error",
+  "EvalError",
+  "FinalizationRegistry",
+  "Float32Array",
+  "Float64Array",
+  "Function",
+  "Int8Array",
+  "Int16Array",
+  "Int32Array",
+  "JSON",
+  "Map",
+  "Math",
+  "Number",
+  "Object",
+  "Promise",
+  "Proxy",
+  "RangeError",
+  "ReferenceError",
+  "Reflect",
+  "RegExp",
+  "Set",
+  "SharedArrayBuffer",
+  "String",
+  "Symbol",
+  "SyntaxError",
+  "TypeError",
+  "URIError",
+  "Uint8Array",
+  "Uint8ClampedArray",
+  "Uint16Array",
+  "Uint32Array",
+  "WeakMap",
+  "WeakRef",
+  "WeakSet",
 ]);
 
-function globalExists(name) { return KNOWN_CTORS.has(name); }
-function lcFirst(s) { return s[0].toLowerCase() + s.slice(1); }
+function globalExists(name) {
+  return KNOWN_CTORS.has(name);
+}
+function lcFirst(s) {
+  return s[0].toLowerCase() + s.slice(1);
+}
 
 // ---------------------------------------------------------------------------
 // Shared fetch helper (same signature as the one in nodeGitHubPlugin)
@@ -239,7 +291,7 @@ async function fetchWithRetry(url, retries = 3) {
     const res = await fetch(url);
     if (res.ok) return res.text();
     if (res.status === 404) throw new Error(`404: ${url}`);
-    if (i < retries - 1) await new Promise(r => setTimeout(r, 300 * 2 ** i));
+    if (i < retries - 1) await new Promise((r) => setTimeout(r, 300 * 2 ** i));
   }
   throw new Error(`Failed to fetch ${url} after ${retries} attempts`);
 }

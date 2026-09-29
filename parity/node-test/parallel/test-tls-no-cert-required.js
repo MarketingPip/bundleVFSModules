@@ -19,43 +19,38 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const assert = require('assert');
-const tls = require('tls');
+const assert = require("assert");
+const tls = require("tls");
 
 // Omitting the cert or pfx option to tls.createServer() should not throw.
 if (process.features.openssl_is_boringssl) {
   // AECDH-NULL-SHA is a no-authentication/no-encryption cipher and hence
   // does not need a certificate. BoringSSL does not provide that anonymous
   // cipher suite, so only this cipher-specific no-cert case is skipped.
-  common.printSkipMessage('BoringSSL: skipping anonymous AECDH-NULL-SHA case');
+  common.printSkipMessage("BoringSSL: skipping anonymous AECDH-NULL-SHA case");
 } else {
-  tls.createServer({ ciphers: 'AECDH-NULL-SHA' })
+  tls
+    .createServer({ ciphers: "AECDH-NULL-SHA" })
     .listen(0, common.mustCall(close));
 }
 
-tls.createServer(assert.fail)
-  .listen(0, common.mustCall(close));
+tls.createServer(assert.fail).listen(0, common.mustCall(close));
 
-tls.createServer({})
-  .listen(0, common.mustCall(close));
+tls.createServer({}).listen(0, common.mustCall(close));
 
-assert.throws(
-  () => tls.createServer('this is not valid'),
-  {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: 'The "options" argument must be of type object. ' +
-             "Received type string ('this is not valid')"
-  }
-);
+assert.throws(() => tls.createServer("this is not valid"), {
+  code: "ERR_INVALID_ARG_TYPE",
+  name: "TypeError",
+  message:
+    'The "options" argument must be of type object. ' +
+    "Received type string ('this is not valid')",
+});
 
-tls.createServer()
-  .listen(0, common.mustCall(close));
+tls.createServer().listen(0, common.mustCall(close));
 
 function close() {
   this.close();

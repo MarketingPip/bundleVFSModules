@@ -1,6 +1,6 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
+require("../common");
+const assert = require("assert");
 
-assert.strictEqual(require('util/types'), require('util').types);
+assert.strictEqual(require("util/types"), require("util").types);

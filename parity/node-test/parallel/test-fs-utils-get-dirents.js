@@ -1,20 +1,20 @@
 // Flags: --expose-internals
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { getDirents, getDirent } = require('internal/fs/utils');
-const assert = require('assert');
-const { internalBinding } = require('internal/test/binding');
-const { UV_DIRENT_UNKNOWN } = internalBinding('constants').fs;
-const fs = require('fs');
+const common = require("../common");
+const { getDirents, getDirent } = require("internal/fs/utils");
+const assert = require("assert");
+const { internalBinding } = require("internal/test/binding");
+const { UV_DIRENT_UNKNOWN } = internalBinding("constants").fs;
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
-const filename = 'foo';
+const tmpdir = require("../common/tmpdir");
+const filename = "foo";
 
 {
   // setup
   tmpdir.refresh();
-  fs.writeFileSync(tmpdir.resolve(filename), '');
+  fs.writeFileSync(tmpdir.resolve(filename), "");
 }
 // getDirents
 {
@@ -25,8 +25,8 @@ const filename = 'foo';
     common.mustCall((err, names) => {
       assert.strictEqual(err, null);
       assert.strictEqual(names.length, 1);
-    },
-    ));
+    }),
+  );
 }
 {
   // string + Buffer
@@ -36,8 +36,8 @@ const filename = 'foo';
     common.mustCall((err, names) => {
       assert.strictEqual(err, null);
       assert.strictEqual(names.length, 1);
-    },
-    ));
+    }),
+  );
 }
 {
   // Buffer + Buffer
@@ -47,8 +47,8 @@ const filename = 'foo';
     common.mustCall((err, names) => {
       assert.strictEqual(err, null);
       assert.strictEqual(names.length, 1);
-    },
-    ));
+    }),
+  );
 }
 {
   // wrong combination
@@ -60,10 +60,11 @@ const filename = 'foo';
         err.message,
         [
           'The "path" argument must be of type string or an ' +
-          'instance of Buffer. Received type number (42)',
-        ].join(''));
-    },
-    ));
+            "instance of Buffer. Received type number (42)",
+        ].join(""),
+      );
+    }),
+  );
 }
 // getDirent
 {
@@ -76,20 +77,16 @@ const filename = 'foo';
       assert.strictEqual(err, null);
       assert.strictEqual(dirent.name, filename);
       assert.strictEqual(dirent.parentPath, tmpdir.path);
-    },
-    ));
+    }),
+  );
 }
 {
   // Reassigning `.path` property should not trigger a warning
-  const dirent = getDirent(
-    tmpdir.path,
-    filename,
-    UV_DIRENT_UNKNOWN,
-  );
+  const dirent = getDirent(tmpdir.path, filename, UV_DIRENT_UNKNOWN);
   assert.strictEqual(dirent.name, filename);
-  dirent.path = 'some other value';
+  dirent.path = "some other value";
   assert.strictEqual(dirent.parentPath, tmpdir.path);
-  assert.strictEqual(dirent.path, 'some other value');
+  assert.strictEqual(dirent.path, "some other value");
 }
 {
   // string + Buffer
@@ -102,8 +99,8 @@ const filename = 'foo';
       assert.strictEqual(err, null);
       assert.strictEqual(dirent.name, filenameBuffer);
       assert.strictEqual(dirent.parentPath, tmpdir.path);
-    },
-    ));
+    }),
+  );
 }
 {
   // Buffer + Buffer
@@ -117,8 +114,8 @@ const filename = 'foo';
       assert.strictEqual(err, null);
       assert.strictEqual(dirent.name, filenameBuffer);
       assert.deepStrictEqual(dirent.parentPath, dirnameBuffer);
-    },
-    ));
+    }),
+  );
 }
 {
   // wrong combination
@@ -131,8 +128,9 @@ const filename = 'foo';
         err.message,
         [
           'The "path" argument must be of type string or an ' +
-          'instance of Buffer. Received type number (42)',
-        ].join(''));
-    },
-    ));
+            "instance of Buffer. Received type number (42)",
+        ].join(""),
+      );
+    }),
+  );
 }

@@ -1,29 +1,29 @@
 // Flags: --expose-internals
-'use strict';
+"use strict";
 
 // This tests that fs.access and fs.accessSync works as expected
 // and the errors thrown from these APIs include the desired properties
 
-const common = require('../common');
+const common = require("../common");
 if (!common.isWindows && process.getuid() === 0)
-  common.skip('as this test should not be run as `root`');
+  common.skip("as this test should not be run as `root`");
 
 if (common.isIBMi)
-  common.skip('IBMi has a different access permission mechanism');
+  common.skip("IBMi has a different access permission mechanism");
 
-const assert = require('assert');
-const fs = require('fs');
+const assert = require("assert");
+const fs = require("fs");
 
-const { internalBinding } = require('internal/test/binding');
-const { UV_ENOENT } = internalBinding('uv');
+const { internalBinding } = require("internal/test/binding");
+const { UV_ENOENT } = internalBinding("uv");
 
-const tmpdir = require('../common/tmpdir');
-const doesNotExist = tmpdir.resolve('__this_should_not_exist');
-const readOnlyFile = tmpdir.resolve('read_only_file');
-const readWriteFile = tmpdir.resolve('read_write_file');
+const tmpdir = require("../common/tmpdir");
+const doesNotExist = tmpdir.resolve("__this_should_not_exist");
+const readOnlyFile = tmpdir.resolve("read_only_file");
+const readWriteFile = tmpdir.resolve("read_write_file");
 
 function createFileWithPerms(file, mode) {
-  fs.writeFileSync(file, '');
+  fs.writeFileSync(file, "");
   fs.chmodSync(file, mode);
 }
 
@@ -56,51 +56,68 @@ let hasWriteAccessForReadonlyFile = false;
 if (!common.isWindows && process.getuid() === 0) {
   hasWriteAccessForReadonlyFile = true;
   try {
-    process.setuid('nobody');
+    process.setuid("nobody");
     hasWriteAccessForReadonlyFile = false;
   } catch {
     // Continue regardless of error.
   }
 }
 
-assert.strictEqual(typeof fs.constants.F_OK, 'number');
-assert.strictEqual(typeof fs.constants.R_OK, 'number');
-assert.strictEqual(typeof fs.constants.W_OK, 'number');
-assert.strictEqual(typeof fs.constants.X_OK, 'number');
+assert.strictEqual(typeof fs.constants.F_OK, "number");
+assert.strictEqual(typeof fs.constants.R_OK, "number");
+assert.strictEqual(typeof fs.constants.W_OK, "number");
+assert.strictEqual(typeof fs.constants.X_OK, "number");
 
-const throwNextTick = (e) => { process.nextTick(() => { throw e; }); };
+const throwNextTick = (e) => {
+  process.nextTick(() => {
+    throw e;
+  });
+};
 
-fs.access(__filename, common.mustCall(function(...args) {
-  assert.deepStrictEqual(args, [null]);
-}));
-fs.promises.access(__filename)
+fs.access(
+  __filename,
+  common.mustCall(function (...args) {
+    assert.deepStrictEqual(args, [null]);
+  }),
+);
+fs.promises.access(__filename).then(common.mustCall()).catch(throwNextTick);
+fs.access(
+  __filename,
+  fs.constants.R_OK,
+  common.mustCall(function (...args) {
+    assert.deepStrictEqual(args, [null]);
+  }),
+);
+fs.promises
+  .access(__filename, fs.constants.R_OK)
   .then(common.mustCall())
   .catch(throwNextTick);
-fs.access(__filename, fs.constants.R_OK, common.mustCall(function(...args) {
-  assert.deepStrictEqual(args, [null]);
-}));
-fs.promises.access(__filename, fs.constants.R_OK)
-  .then(common.mustCall())
-  .catch(throwNextTick);
-fs.access(readOnlyFile, fs.constants.R_OK, common.mustCall(function(...args) {
-  assert.deepStrictEqual(args, [null]);
-}));
-fs.promises.access(readOnlyFile, fs.constants.R_OK)
+fs.access(
+  readOnlyFile,
+  fs.constants.R_OK,
+  common.mustCall(function (...args) {
+    assert.deepStrictEqual(args, [null]);
+  }),
+);
+fs.promises
+  .access(readOnlyFile, fs.constants.R_OK)
   .then(common.mustCall())
   .catch(throwNextTick);
 
 {
   const expectedError = common.mustCall((err) => {
     assert.notStrictEqual(err, null);
-    assert.strictEqual(err.code, 'ENOENT');
+    assert.strictEqual(err.code, "ENOENT");
     assert.strictEqual(err.path, doesNotExist);
   }, 2);
   fs.access(doesNotExist, expectedError);
-  assert.rejects(fs.promises.access(doesNotExist), (err) => {
-    expectedError(err);
-    assert.match(err.stack, /at async Object\.access/);
-    return true;
-  }).then(common.mustCall());
+  assert
+    .rejects(fs.promises.access(doesNotExist), (err) => {
+      expectedError(err);
+      assert.match(err.stack, /at async Object\.access/);
+      return true;
+    })
+    .then(common.mustCall());
 }
 
 {
@@ -114,23 +131,24 @@ fs.promises.access(readOnlyFile, fs.constants.R_OK)
     }
   }
   fs.access(readOnlyFile, fs.constants.W_OK, common.mustCall(expectedError));
-  fs.promises.access(readOnlyFile, fs.constants.W_OK)
+  fs.promises
+    .access(readOnlyFile, fs.constants.W_OK)
     .then(common.mustNotCall(), common.mustCall(expectedError))
     .catch(throwNextTick);
 }
 
 {
   const expectedError = common.mustCall((err) => {
-    assert.strictEqual(err.code, 'ERR_INVALID_ARG_TYPE');
+    assert.strictEqual(err.code, "ERR_INVALID_ARG_TYPE");
     assert.ok(err instanceof TypeError);
     return true;
   }, 2);
-  assert.throws(
-    () => { fs.access(100, fs.constants.F_OK, common.mustNotCall()); },
-    expectedError
-  );
+  assert.throws(() => {
+    fs.access(100, fs.constants.F_OK, common.mustNotCall());
+  }, expectedError);
 
-  assert.rejects(fs.promises.access(100, fs.constants.F_OK), expectedError)
+  assert
+    .rejects(fs.promises.access(100, fs.constants.F_OK), expectedError)
     .then(common.mustCall());
 }
 
@@ -139,18 +157,24 @@ assert.throws(
     fs.access(__filename, fs.constants.F_OK);
   },
   {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError'
-  });
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+  },
+);
 
 assert.throws(
   () => {
-    fs.access(__filename, fs.constants.F_OK, common.mustNotMutateObjectDeep({}));
+    fs.access(
+      __filename,
+      fs.constants.F_OK,
+      common.mustNotMutateObjectDeep({}),
+    );
   },
   {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError'
-  });
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+  },
+);
 
 // Regular access should not throw.
 fs.accessSync(__filename);
@@ -161,75 +185,66 @@ fs.accessSync(readWriteFile, mode);
 [
   false,
   1n,
-  { [Symbol.toPrimitive]() { return fs.constants.R_OK; } },
+  {
+    [Symbol.toPrimitive]() {
+      return fs.constants.R_OK;
+    },
+  },
   [1],
-  'r',
+  "r",
 ].forEach((mode, i) => {
   console.log(mode, i);
-  assert.throws(
-    () => fs.access(readWriteFile, mode, common.mustNotCall()),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-    }
-  );
-  assert.throws(
-    () => fs.accessSync(readWriteFile, mode),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-    }
-  );
+  assert.throws(() => fs.access(readWriteFile, mode, common.mustNotCall()), {
+    code: "ERR_INVALID_ARG_TYPE",
+  });
+  assert.throws(() => fs.accessSync(readWriteFile, mode), {
+    code: "ERR_INVALID_ARG_TYPE",
+  });
 });
 
 // Out of range modes should throw
-[
-  -1,
-  8,
-  Infinity,
-  NaN,
-].forEach((mode, i) => {
+[-1, 8, Infinity, NaN].forEach((mode, i) => {
   console.log(mode, i);
-  assert.throws(
-    () => fs.access(readWriteFile, mode, common.mustNotCall()),
-    {
-      code: 'ERR_OUT_OF_RANGE',
-    }
-  );
-  assert.throws(
-    () => fs.accessSync(readWriteFile, mode),
-    {
-      code: 'ERR_OUT_OF_RANGE',
-    }
-  );
+  assert.throws(() => fs.access(readWriteFile, mode, common.mustNotCall()), {
+    code: "ERR_OUT_OF_RANGE",
+  });
+  assert.throws(() => fs.accessSync(readWriteFile, mode), {
+    code: "ERR_OUT_OF_RANGE",
+  });
 });
 
 assert.throws(
-  () => { fs.accessSync(doesNotExist); },
+  () => {
+    fs.accessSync(doesNotExist);
+  },
   (err) => {
-    assert.strictEqual(err.code, 'ENOENT');
+    assert.strictEqual(err.code, "ENOENT");
     assert.strictEqual(err.path, doesNotExist);
     assert.strictEqual(
       err.message,
-      `ENOENT: no such file or directory, access '${doesNotExist}'`
+      `ENOENT: no such file or directory, access '${doesNotExist}'`,
     );
     assert.strictEqual(err.constructor, Error);
-    assert.strictEqual(err.syscall, 'access');
+    assert.strictEqual(err.syscall, "access");
     assert.strictEqual(err.errno, UV_ENOENT);
     return true;
-  }
+  },
 );
 
 assert.throws(
-  () => { fs.accessSync(Buffer.from(doesNotExist)); },
+  () => {
+    fs.accessSync(Buffer.from(doesNotExist));
+  },
   (err) => {
-    assert.strictEqual(err.code, 'ENOENT');
+    assert.strictEqual(err.code, "ENOENT");
     assert.strictEqual(err.path, doesNotExist);
     assert.strictEqual(
       err.message,
-      `ENOENT: no such file or directory, access '${doesNotExist}'`
+      `ENOENT: no such file or directory, access '${doesNotExist}'`,
     );
     assert.strictEqual(err.constructor, Error);
-    assert.strictEqual(err.syscall, 'access');
+    assert.strictEqual(err.syscall, "access");
     assert.strictEqual(err.errno, UV_ENOENT);
     return true;
-  }
+  },
 );

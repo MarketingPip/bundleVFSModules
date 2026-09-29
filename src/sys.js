@@ -14,19 +14,25 @@
 // under the parity harness, where `require('util')` resolves to the real
 // builtin.) The `node:` import is externalized by the VFS build, exactly like
 // the `node:path` / `node:querystring` imports already used in src/url.js.
-'use strict';
+"use strict";
 
-import util from 'node:util';
+import util from "node:util";
 
 // Node emits DEP0025 eagerly when the module is first loaded, once per process
 // (the loaded module is cached). `process.emitWarning` doesn't exist in
 // browsers, so guard it to stay browser-safe.
-if (typeof process !== 'undefined' && typeof process.emitWarning === 'function') {
-  process.emitWarning('sys is deprecated. Use util instead.',
-                      'DeprecationWarning', 'DEP0025');
+if (
+  typeof process !== "undefined" &&
+  typeof process.emitWarning === "function"
+) {
+  process.emitWarning(
+    "sys is deprecated. Use util instead.",
+    "DeprecationWarning",
+    "DEP0025",
+  );
 }
 
 // Re-export the whole util namespace, so the default import AND named imports
 // (`import { format } from 'sys'`) behave exactly like 'util'.
-export * from 'node:util';
+export * from "node:util";
 export default util;

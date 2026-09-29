@@ -1,10 +1,12 @@
-'use strict';
+"use strict";
 
-require('../common');
-const { AsyncResource } = require('async_hooks');
+require("../common");
+const { AsyncResource } = require("async_hooks");
 
 try {
-  new AsyncResource('foo').runInAsyncScope(() => { throw new Error('bar'); });
+  new AsyncResource("foo").runInAsyncScope(() => {
+    throw new Error("bar");
+  });
 } catch {
   // Continue regardless of error.
 }

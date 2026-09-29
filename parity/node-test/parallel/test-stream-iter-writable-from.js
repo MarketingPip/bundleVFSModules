@@ -1,31 +1,27 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
 // Tests for toWritable() - creating a classic stream.Writable
 // backed by a stream/iter Writer.
 
-const common = require('../common');
-const assert = require('assert');
-const {
-  push,
-  text,
-  toWritable,
-} = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { push, text, toWritable } = require("stream/iter");
 
 // =============================================================================
 // Basic: write through fromStreamIter writable, read from readable
 // =============================================================================
 
 async function testBasicWrite() {
-  const { writer, readable } = push({ backpressure: 'unbounded' });
+  const { writer, readable } = push({ backpressure: "unbounded" });
   const writable = toWritable(writer);
 
-  writable.write('hello');
-  writable.write(' world');
+  writable.write("hello");
+  writable.write(" world");
   writable.end();
 
   const result = await text(readable);
-  assert.strictEqual(result, 'hello world');
+  assert.strictEqual(result, "hello world");
 }
 
 // =============================================================================
@@ -40,20 +36,22 @@ async function testWriteDelegatesToWriter() {
       chunks.push(Buffer.from(chunk));
       return Promise.resolve();
     },
-    end() { return Promise.resolve(0); },
+    end() {
+      return Promise.resolve(0);
+    },
     fail() {},
   };
 
   const writable = toWritable(writer);
 
   await new Promise((resolve, reject) => {
-    writable.write('hello', (err) => {
+    writable.write("hello", (err) => {
       if (err) reject(err);
       else resolve();
     });
   });
 
-  assert.strictEqual(Buffer.concat(chunks).toString(), 'hello');
+  assert.strictEqual(Buffer.concat(chunks).toString(), "hello");
 }
 
 // =============================================================================
@@ -73,7 +71,9 @@ async function testWritevDelegation() {
     writevSync(chunks) {
       return false;
     },
-    end() { return Promise.resolve(0); },
+    end() {
+      return Promise.resolve(0);
+    },
     fail() {},
   };
 
@@ -81,15 +81,15 @@ async function testWritevDelegation() {
 
   // Cork to batch writes, then uncork to trigger _writev
   writable.cork();
-  writable.write('a');
-  writable.write('b');
-  writable.write('c');
+  writable.write("a");
+  writable.write("b");
+  writable.write("c");
   writable.uncork();
 
   await new Promise((resolve) => writable.end(resolve));
 
   // Writev should have been called with the batched chunks
-  assert.ok(batches.length > 0, 'writev should have been called');
+  assert.ok(batches.length > 0, "writev should have been called");
 }
 
 // =============================================================================
@@ -98,7 +98,9 @@ async function testWritevDelegation() {
 
 function testNoWritevWithoutWriterWritev() {
   const writer = {
-    write(chunk) { return Promise.resolve(); },
+    write(chunk) {
+      return Promise.resolve();
+    },
   };
 
   const writable = toWritable(writer);
@@ -117,24 +119,26 @@ async function testWriteSyncFirst() {
   const writer = {
     writeSync(chunk) {
       syncCalled = true;
-      return true;  // Sync path accepted
+      return true; // Sync path accepted
     },
     write(chunk) {
       asyncCalled = true;
       return Promise.resolve();
     },
-    end() { return Promise.resolve(0); },
+    end() {
+      return Promise.resolve(0);
+    },
     fail() {},
   };
 
   const writable = toWritable(writer);
 
   await new Promise((resolve) => {
-    writable.write('test', resolve);
+    writable.write("test", resolve);
   });
 
-  assert.ok(syncCalled, 'writeSync should have been called');
-  assert.ok(!asyncCalled, 'write should not have been called');
+  assert.ok(syncCalled, "writeSync should have been called");
+  assert.ok(!asyncCalled, "write should not have been called");
 }
 
 // =============================================================================
@@ -148,24 +152,26 @@ async function testWriteSyncFallback() {
   const writer = {
     writeSync(chunk) {
       syncCalled = true;
-      return false;  // Sync path rejected
+      return false; // Sync path rejected
     },
     write(chunk) {
       asyncCalled = true;
       return Promise.resolve();
     },
-    end() { return Promise.resolve(0); },
+    end() {
+      return Promise.resolve(0);
+    },
     fail() {},
   };
 
   const writable = toWritable(writer);
 
   await new Promise((resolve) => {
-    writable.write('test', resolve);
+    writable.write("test", resolve);
   });
 
-  assert.ok(syncCalled, 'writeSync should have been called');
-  assert.ok(asyncCalled, 'write should have been called as fallback');
+  assert.ok(syncCalled, "writeSync should have been called");
+  assert.ok(asyncCalled, "write should have been called as fallback");
 }
 
 // =============================================================================
@@ -177,10 +183,12 @@ async function testEndSyncFirst() {
   let endAsyncCalled = false;
 
   const writer = {
-    write(chunk) { return Promise.resolve(); },
+    write(chunk) {
+      return Promise.resolve();
+    },
     endSync() {
       endSyncCalled = true;
-      return 5;  // Success, returns byte count
+      return 5; // Success, returns byte count
     },
     end() {
       endAsyncCalled = true;
@@ -193,8 +201,8 @@ async function testEndSyncFirst() {
 
   await new Promise((resolve) => writable.end(resolve));
 
-  assert.ok(endSyncCalled, 'endSync should have been called');
-  assert.ok(!endAsyncCalled, 'end should not have been called');
+  assert.ok(endSyncCalled, "endSync should have been called");
+  assert.ok(!endAsyncCalled, "end should not have been called");
 }
 
 // =============================================================================
@@ -206,10 +214,12 @@ async function testEndSyncFallback() {
   let endAsyncCalled = false;
 
   const writer = {
-    write(chunk) { return Promise.resolve(); },
+    write(chunk) {
+      return Promise.resolve();
+    },
     endSync() {
       endSyncCalled = true;
-      return -1;  // Can't complete synchronously
+      return -1; // Can't complete synchronously
     },
     end() {
       endAsyncCalled = true;
@@ -222,8 +232,8 @@ async function testEndSyncFallback() {
 
   await new Promise((resolve) => writable.end(resolve));
 
-  assert.ok(endSyncCalled, 'endSync should have been called');
-  assert.ok(endAsyncCalled, 'end should have been called as fallback');
+  assert.ok(endSyncCalled, "endSync should have been called");
+  assert.ok(endAsyncCalled, "end should have been called as fallback");
 }
 
 // =============================================================================
@@ -233,7 +243,9 @@ async function testEndSyncFallback() {
 async function testFinalDelegatesToEnd() {
   let endCalled = false;
   const writer = {
-    write(chunk) { return Promise.resolve(); },
+    write(chunk) {
+      return Promise.resolve();
+    },
     end() {
       endCalled = true;
       return Promise.resolve(0);
@@ -245,7 +257,7 @@ async function testFinalDelegatesToEnd() {
 
   await new Promise((resolve) => writable.end(resolve));
 
-  assert.ok(endCalled, 'writer.end() should have been called');
+  assert.ok(endCalled, "writer.end() should have been called");
 }
 
 // =============================================================================
@@ -255,15 +267,21 @@ async function testFinalDelegatesToEnd() {
 async function testDestroyDelegatesToFail() {
   let failReason = null;
   const writer = {
-    write(chunk) { return Promise.resolve(); },
-    end() { return Promise.resolve(0); },
-    fail(reason) { failReason = reason; },
+    write(chunk) {
+      return Promise.resolve();
+    },
+    end() {
+      return Promise.resolve(0);
+    },
+    fail(reason) {
+      failReason = reason;
+    },
   };
 
   const writable = toWritable(writer);
-  writable.on('error', () => {});  // Prevent unhandled
+  writable.on("error", () => {}); // Prevent unhandled
 
-  const testErr = new Error('destroy test');
+  const testErr = new Error("destroy test");
   writable.destroy(testErr);
 
   // Give a tick for destroy to propagate
@@ -279,20 +297,25 @@ async function testDestroyDelegatesToFail() {
 async function testWriteErrorPropagation() {
   const writer = {
     write(chunk) {
-      return Promise.reject(new Error('write failed'));
+      return Promise.reject(new Error("write failed"));
     },
-    end() { return Promise.resolve(0); },
+    end() {
+      return Promise.resolve(0);
+    },
     fail() {},
   };
 
   const writable = toWritable(writer);
 
-  await assert.rejects(new Promise((resolve, reject) => {
-    writable.write('data', (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  }), { message: 'write failed' });
+  await assert.rejects(
+    new Promise((resolve, reject) => {
+      writable.write("data", (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    }),
+    { message: "write failed" },
+  );
 }
 
 // =============================================================================
@@ -300,22 +323,17 @@ async function testWriteErrorPropagation() {
 // =============================================================================
 
 function testInvalidWriterThrows() {
-  assert.throws(
-    () => toWritable(null),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
-  assert.throws(
-    () => toWritable({}),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
-  assert.throws(
-    () => toWritable('not a writer'),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
+  assert.throws(() => toWritable(null), { code: "ERR_INVALID_ARG_TYPE" });
+  assert.throws(() => toWritable({}), { code: "ERR_INVALID_ARG_TYPE" });
+  assert.throws(() => toWritable("not a writer"), {
+    code: "ERR_INVALID_ARG_TYPE",
+  });
   // Object with write is valid (only write is required).
   // This should not throw.
   toWritable({
-    write() { return Promise.resolve(); },
+    write() {
+      return Promise.resolve();
+    },
   });
 }
 
@@ -324,10 +342,10 @@ function testInvalidWriterThrows() {
 // =============================================================================
 
 async function testRoundTrip() {
-  const { writer, readable } = push({ backpressure: 'unbounded' });
+  const { writer, readable } = push({ backpressure: "unbounded" });
   const writable = toWritable(writer);
 
-  const data = 'round trip test data';
+  const data = "round trip test data";
   writable.write(data);
   writable.end();
 
@@ -340,21 +358,24 @@ async function testRoundTrip() {
 // =============================================================================
 
 async function testPushWriterBlockBackpressureNoDuplicate() {
-  const { writer, readable } = push({ budget: 16384, backpressure: 'unbounded' });
+  const { writer, readable } = push({
+    budget: 16384,
+    backpressure: "unbounded",
+  });
   const writable = toWritable(writer);
 
   await new Promise((resolve, reject) => {
-    writable.write('a', (err) => {
+    writable.write("a", (err) => {
       if (err) reject(err);
       else resolve();
     });
   });
 
-  writable.write('b');
+  writable.write("b");
   writable.end();
 
   const result = await text(readable);
-  assert.strictEqual(result, 'ab');
+  assert.strictEqual(result, "ab");
 }
 
 // =============================================================================
@@ -362,24 +383,27 @@ async function testPushWriterBlockBackpressureNoDuplicate() {
 // =============================================================================
 
 async function testPushWriterBlockBackpressureWritevNoDuplicate() {
-  const { writer, readable } = push({ budget: 16384, backpressure: 'unbounded' });
+  const { writer, readable } = push({
+    budget: 16384,
+    backpressure: "unbounded",
+  });
   const writable = toWritable(writer);
 
   await new Promise((resolve, reject) => {
-    writable.write('a', (err) => {
+    writable.write("a", (err) => {
       if (err) reject(err);
       else resolve();
     });
   });
 
   writable.cork();
-  writable.write('b');
-  writable.write('c');
+  writable.write("b");
+  writable.write("c");
   writable.uncork();
   writable.end();
 
   const result = await text(readable);
-  assert.strictEqual(result, 'abc');
+  assert.strictEqual(result, "abc");
 }
 
 // =============================================================================
@@ -387,7 +411,7 @@ async function testPushWriterBlockBackpressureWritevNoDuplicate() {
 // =============================================================================
 
 async function testSequentialWrites() {
-  const { writer, readable } = push({ backpressure: 'unbounded' });
+  const { writer, readable } = push({ backpressure: "unbounded" });
   const writable = toWritable(writer);
 
   for (let i = 0; i < 10; i++) {
@@ -395,7 +419,7 @@ async function testSequentialWrites() {
   }
   writable.end();
 
-  let expected = '';
+  let expected = "";
   for (let i = 0; i < 10; i++) {
     expected += `chunk${i}`;
   }
@@ -417,14 +441,16 @@ async function testSyncCallbackDeferred() {
     write(chunk) {
       return Promise.resolve();
     },
-    end() { return Promise.resolve(0); },
+    end() {
+      return Promise.resolve(0);
+    },
     fail() {},
   };
 
   const writable = toWritable(writer);
 
   const p = new Promise((resolve) => {
-    writable.write('test', () => {
+    writable.write("test", () => {
       callbackTick = true;
       resolve();
     });
@@ -453,11 +479,11 @@ async function testMinimalWriter() {
   const writable = toWritable(writer);
 
   await new Promise((resolve) => {
-    writable.write('minimal');
+    writable.write("minimal");
     writable.end(resolve);
   });
 
-  assert.strictEqual(Buffer.concat(chunks).toString(), 'minimal');
+  assert.strictEqual(Buffer.concat(chunks).toString(), "minimal");
 }
 
 // =============================================================================
@@ -467,8 +493,12 @@ async function testMinimalWriter() {
 async function testDestroyWithoutError() {
   let failCalled = false;
   const writer = {
-    write(chunk) { return Promise.resolve(); },
-    fail() { failCalled = true; },
+    write(chunk) {
+      return Promise.resolve();
+    },
+    fail() {
+      failCalled = true;
+    },
   };
 
   const writable = toWritable(writer);
@@ -476,7 +506,7 @@ async function testDestroyWithoutError() {
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
-  assert.ok(!failCalled, 'fail should not be called on clean destroy');
+  assert.ok(!failCalled, "fail should not be called on clean destroy");
 }
 
 // =============================================================================
@@ -486,14 +516,18 @@ async function testDestroyWithoutError() {
 async function testDestroyWithError() {
   let failReason = null;
   const writer = {
-    write(chunk) { return Promise.resolve(); },
-    fail(reason) { failReason = reason; },
+    write(chunk) {
+      return Promise.resolve();
+    },
+    fail(reason) {
+      failReason = reason;
+    },
   };
 
   const writable = toWritable(writer);
-  writable.on('error', () => {});
+  writable.on("error", () => {});
 
-  const err = new Error('test');
+  const err = new Error("test");
   writable.destroy(err);
 
   await new Promise((resolve) => setTimeout(resolve, 10));
@@ -507,15 +541,17 @@ async function testDestroyWithError() {
 
 async function testDestroyWithoutFail() {
   const writer = {
-    write(chunk) { return Promise.resolve(); },
+    write(chunk) {
+      return Promise.resolve();
+    },
     // No fail method
   };
 
   const writable = toWritable(writer);
-  writable.on('error', () => {});
+  writable.on("error", () => {});
 
   // Should not throw even though writer has no fail()
-  writable.destroy(new Error('test'));
+  writable.destroy(new Error("test"));
 
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(writable.destroyed);
@@ -527,7 +563,9 @@ async function testDestroyWithoutFail() {
 
 function testHighWaterMarkIsMaxSafeInt() {
   const writer = {
-    write(chunk) { return Promise.resolve(); },
+    write(chunk) {
+      return Promise.resolve();
+    },
   };
 
   // HWM is set to MAX_SAFE_INTEGER to disable Writable's internal
@@ -543,23 +581,28 @@ function testHighWaterMarkIsMaxSafeInt() {
 async function testWriteSyncThrowsPropagation() {
   const writer = {
     writeSync() {
-      throw new Error('sync broken');
+      throw new Error("sync broken");
     },
     write() {
       return Promise.resolve();
     },
-    end() { return Promise.resolve(0); },
+    end() {
+      return Promise.resolve(0);
+    },
     fail() {},
   };
 
   const writable = toWritable(writer);
 
-  await assert.rejects(new Promise((resolve, reject) => {
-    writable.write('test', (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  }), { message: 'sync broken' });
+  await assert.rejects(
+    new Promise((resolve, reject) => {
+      writable.write("test", (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    }),
+    { message: "sync broken" },
+  );
 }
 
 // =============================================================================
@@ -570,18 +613,21 @@ async function testWriteSyncThrowsPropagation() {
 async function testWriteThrowsSyncPropagation() {
   const writer = {
     write() {
-      throw new Error('sync throw from write');
+      throw new Error("sync throw from write");
     },
   };
 
   const writable = toWritable(writer);
 
-  await assert.rejects(new Promise((resolve, reject) => {
-    writable.write('data', (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  }), { message: 'sync throw from write' });
+  await assert.rejects(
+    new Promise((resolve, reject) => {
+      writable.write("data", (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    }),
+    { message: "sync throw from write" },
+  );
 }
 
 // =============================================================================
@@ -590,22 +636,28 @@ async function testWriteThrowsSyncPropagation() {
 
 async function testEndThrowsSyncPropagation() {
   const writer = {
-    write(chunk) { return Promise.resolve(); },
-    endSync() { return -1; },
+    write(chunk) {
+      return Promise.resolve();
+    },
+    endSync() {
+      return -1;
+    },
     end() {
-      throw new Error('sync throw from end');
+      throw new Error("sync throw from end");
     },
   };
 
   const writable = toWritable(writer);
-  writable.on('error', () => {});
+  writable.on("error", () => {});
 
   await new Promise((resolve) => {
-    writable.end(common.mustCall((err) => {
-      assert.ok(err);
-      assert.strictEqual(err.message, 'sync throw from end');
-      resolve();
-    }));
+    writable.end(
+      common.mustCall((err) => {
+        assert.ok(err);
+        assert.strictEqual(err.message, "sync throw from end");
+        resolve();
+      }),
+    );
   });
 }
 

@@ -19,7 +19,7 @@
  *     the GC semantics the official tests assert)
  */
 
-import process from 'process';
+import process from "process";
 
 // ---------------------------------------------------------------------------
 // Primordial captures (defensive copies of builtins, evaluated once).
@@ -41,7 +41,11 @@ function arrayPush(arr, ...items) {
   return ReflectApply(ArrayPrototypePush, arr, items);
 }
 function arraySlice(arr, start, end) {
-  return ReflectApply(ArrayPrototypeSlice, arr, start === undefined ? [] : end === undefined ? [start] : [start, end]);
+  return ReflectApply(
+    ArrayPrototypeSlice,
+    arr,
+    start === undefined ? [] : end === undefined ? [start] : [start, end],
+  );
 }
 function arraySplice(arr, ...items) {
   return ReflectApply(ArrayPrototypeSplice, arr, items);
@@ -53,27 +57,31 @@ function arraySplice(arr, ...items) {
 // ---------------------------------------------------------------------------
 
 const kTypes = [
-  'string',
-  'function',
-  'number',
-  'object',
+  "string",
+  "function",
+  "number",
+  "object",
   // Accept 'Function' and 'Object' as alternative to the lower cased version.
-  'Function',
-  'Object',
-  'boolean',
-  'bigint',
-  'symbol',
+  "Function",
+  "Object",
+  "boolean",
+  "bigint",
+  "symbol",
 ];
 const classRegExp = /^[A-Z][a-zA-Z0-9]*$/;
 
-function formatList(array, type = 'and') {
+function formatList(array, type = "and") {
   switch (array.length) {
-    case 0: return '';
-    case 1: return `${array[0]}`;
-    case 2: return `${array[0]} ${type} ${array[1]}`;
-    case 3: return `${array[0]}, ${array[1]}, ${type} ${array[2]}`;
+    case 0:
+      return "";
+    case 1:
+      return `${array[0]}`;
+    case 2:
+      return `${array[0]} ${type} ${array[1]}`;
+    case 3:
+      return `${array[0]}, ${array[1]}, ${type} ${array[2]}`;
     default:
-      return `${arraySlice(array, 0, -1).join(', ')}, ${type} ${array[array.length - 1]}`;
+      return `${arraySlice(array, 0, -1).join(", ")}, ${type} ${array[array.length - 1]}`;
   }
 }
 
@@ -90,39 +98,40 @@ function miniInspect(value) {
 
 function determineSpecificType(value) {
   if (value === null) {
-    return 'null';
+    return "null";
   } else if (value === undefined) {
-    return 'undefined';
+    return "undefined";
   }
 
   const type = typeof value;
 
   switch (type) {
-    case 'bigint':
+    case "bigint":
       return `type bigint (${value}n)`;
-    case 'number':
+    case "number":
       if (value === 0) {
-        return 1 / value === -Infinity ? 'type number (-0)' : 'type number (0)';
-      } else if (value !== value) { // eslint-disable-line no-self-compare
-        return 'type number (NaN)';
+        return 1 / value === -Infinity ? "type number (-0)" : "type number (0)";
+      } else if (value !== value) {
+        // eslint-disable-line no-self-compare
+        return "type number (NaN)";
       } else if (value === Infinity) {
-        return 'type number (Infinity)';
+        return "type number (Infinity)";
       } else if (value === -Infinity) {
-        return 'type number (-Infinity)';
+        return "type number (-Infinity)";
       }
       return `type number (${value})`;
-    case 'boolean':
-      return value ? 'type boolean (true)' : 'type boolean (false)';
-    case 'symbol':
+    case "boolean":
+      return value ? "type boolean (true)" : "type boolean (false)";
+    case "symbol":
       return `type symbol (${String(value)})`;
-    case 'function':
+    case "function":
       return `function ${value.name}`;
-    case 'object':
-      if (value.constructor && 'name' in value.constructor) {
+    case "object":
+      if (value.constructor && "name" in value.constructor) {
         return `an instance of ${value.constructor.name}`;
       }
       return `${miniInspect(value)}`;
-    case 'string':
+    case "string":
       if (value.length > 28) value = `${value.slice(0, 25)}...`;
       if (!value.includes("'")) {
         return `type string ('${value}')`;
@@ -143,15 +152,15 @@ function buildInvalidArgTypeMessage(name, expected, actual) {
     expected = [expected];
   }
 
-  let msg = 'The ';
-  if (name.endsWith(' argument')) {
+  let msg = "The ";
+  if (name.endsWith(" argument")) {
     // For cases like 'first argument'
     msg += `${name} `;
   } else {
-    const type = name.includes('.') ? 'property' : 'argument';
+    const type = name.includes(".") ? "property" : "argument";
     msg += `"${name}" ${type} `;
   }
-  msg += 'must be ';
+  msg += "must be ";
 
   const types = [];
   const instances = [];
@@ -170,31 +179,28 @@ function buildInvalidArgTypeMessage(name, expected, actual) {
   // Special handle `object` in case other instances are allowed to outline
   // the differences between each other.
   if (instances.length > 0) {
-    const pos = types.indexOf('object');
+    const pos = types.indexOf("object");
     if (pos !== -1) {
       arraySplice(types, pos, 1);
-      arrayPush(instances, 'Object');
+      arrayPush(instances, "Object");
     }
   }
 
   if (types.length > 0) {
-    msg += `${types.length > 1 ? 'one of type' : 'of type'} ${formatList(types, 'or')}`;
-    if (instances.length > 0 || other.length > 0)
-      msg += ' or ';
+    msg += `${types.length > 1 ? "one of type" : "of type"} ${formatList(types, "or")}`;
+    if (instances.length > 0 || other.length > 0) msg += " or ";
   }
 
   if (instances.length > 0) {
-    msg += `an instance of ${formatList(instances, 'or')}`;
-    if (other.length > 0)
-      msg += ' or ';
+    msg += `an instance of ${formatList(instances, "or")}`;
+    if (other.length > 0) msg += " or ";
   }
 
   if (other.length > 0) {
     if (other.length > 1) {
-      msg += `one of ${formatList(other, 'or')}`;
+      msg += `one of ${formatList(other, "or")}`;
     } else {
-      if (other[0].toLowerCase() !== other[0])
-        msg += 'an ';
+      if (other[0].toLowerCase() !== other[0]) msg += "an ";
       msg += `${other[0]}`;
     }
   }
@@ -207,7 +213,7 @@ function buildInvalidArgTypeMessage(name, expected, actual) {
 class ERR_INVALID_ARG_TYPE extends TypeError {
   constructor(name, expected, actual) {
     super(buildInvalidArgTypeMessage(name, expected, actual));
-    this.code = 'ERR_INVALID_ARG_TYPE';
+    this.code = "ERR_INVALID_ARG_TYPE";
   }
 
   // Mirrors NodeError.prototype.toString in lib/internal/errors.js, so
@@ -222,8 +228,8 @@ class ERR_INVALID_ARG_TYPE extends TypeError {
 // ---------------------------------------------------------------------------
 
 function validateFunction(value, name) {
-  if (typeof value !== 'function') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'Function', value);
+  if (typeof value !== "function") {
+    throw new ERR_INVALID_ARG_TYPE(name, "Function", value);
   }
 }
 
@@ -354,7 +360,7 @@ function wrapStoreRun(store, data, next, transform = defaultTransform) {
 // TODO(qard): should there be a C++ channel interface?
 class ActiveChannel {
   subscribe(subscription) {
-    validateFunction(subscription, 'subscription');
+    validateFunction(subscription, "subscription");
     this._subscribers = arraySlice(this._subscribers);
     arrayPush(this._subscribers, subscription);
     channels.incRef(this.name);
@@ -362,7 +368,9 @@ class ActiveChannel {
   }
 
   unsubscribe(subscription) {
-    const index = ReflectApply(ArrayPrototypeIndexOf, this._subscribers, [subscription]);
+    const index = ReflectApply(ArrayPrototypeIndexOf, this._subscribers, [
+      subscription,
+    ]);
     if (index === -1) return false;
 
     const before = arraySlice(this._subscribers, 0, index);
@@ -446,8 +454,9 @@ class Channel {
 
   static [SymbolHasInstance](instance) {
     const prototype = ObjectGetPrototypeOf(instance);
-    return prototype === Channel.prototype ||
-           prototype === ActiveChannel.prototype;
+    return (
+      prototype === Channel.prototype || prototype === ActiveChannel.prototype
+    );
   }
 
   subscribe(subscription) {
@@ -485,8 +494,8 @@ export function channel(name) {
   const chan = channels.get(name);
   if (chan) return chan;
 
-  if (typeof name !== 'string' && typeof name !== 'symbol') {
-    throw new ERR_INVALID_ARG_TYPE('channel', ['string', 'symbol'], name);
+  if (typeof name !== "string" && typeof name !== "symbol") {
+    throw new ERR_INVALID_ARG_TYPE("channel", ["string", "symbol"], name);
   }
 
   return new Channel(name);
@@ -507,34 +516,30 @@ export function hasSubscribers(name) {
   return chan.hasSubscribers;
 }
 
-const traceEvents = [
-  'start',
-  'end',
-  'asyncStart',
-  'asyncEnd',
-  'error',
-];
+const traceEvents = ["start", "end", "asyncStart", "asyncEnd", "error"];
 
 function assertChannel(value, name) {
   if (!(value instanceof Channel)) {
-    throw new ERR_INVALID_ARG_TYPE(name, ['Channel'], value);
+    throw new ERR_INVALID_ARG_TYPE(name, ["Channel"], value);
   }
 }
 
 function tracingChannelFrom(nameOrChannels, name) {
-  if (typeof nameOrChannels === 'string') {
+  if (typeof nameOrChannels === "string") {
     return channel(`tracing:${nameOrChannels}:${name}`);
   }
 
-  if (typeof nameOrChannels === 'object' && nameOrChannels !== null) {
+  if (typeof nameOrChannels === "object" && nameOrChannels !== null) {
     const chan = nameOrChannels[name];
     assertChannel(chan, `nameOrChannels.${name}`);
     return chan;
   }
 
-  throw new ERR_INVALID_ARG_TYPE('nameOrChannels',
-                                 ['string', 'object', 'TracingChannel'],
-                                 nameOrChannels);
+  throw new ERR_INVALID_ARG_TYPE(
+    "nameOrChannels",
+    ["string", "object", "TracingChannel"],
+    nameOrChannels,
+  );
 }
 
 // Not exported: Node v24.20.0 exposes only the lowercase `tracingChannel`
@@ -551,11 +556,13 @@ class TracingChannel {
   }
 
   get hasSubscribers() {
-    return this.start?.hasSubscribers ||
+    return (
+      this.start?.hasSubscribers ||
       this.end?.hasSubscribers ||
       this.asyncStart?.hasSubscribers ||
       this.asyncEnd?.hasSubscribers ||
-      this.error?.hasSubscribers;
+      this.error?.hasSubscribers
+    );
   }
 
   subscribe(handlers) {
@@ -672,7 +679,7 @@ class TracingChannel {
     }
 
     const callback = ReflectApply(ArrayPrototypeAt, args, [position]);
-    validateFunction(callback, 'callback');
+    validateFunction(callback, "callback");
     arraySplice(args, position, 1, wrappedCallback);
 
     return start.runStores(context, () => {

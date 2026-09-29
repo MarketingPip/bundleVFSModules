@@ -1,30 +1,25 @@
 // Flags: --expose-internals
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const readline = require('readline');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const readline = require("readline");
 
 const noop = () => {};
-const { internalBinding } = require('internal/test/binding');
-const TTY = internalBinding('tty_wrap').TTY = function() {};
+const { internalBinding } = require("internal/test/binding");
+const TTY = (internalBinding("tty_wrap").TTY = function () {});
 
 TTY.prototype = {
   setBlocking: noop,
-  getWindowSize: noop
+  getWindowSize: noop,
 };
 
-const { WriteStream } = require('tty');
+const { WriteStream } = require("tty");
 
-[
-  'cursorTo',
-  'moveCursor',
-  'clearLine',
-  'clearScreenDown',
-].forEach((method) => {
-  readline[method] = common.mustCall(function() {
+["cursorTo", "moveCursor", "clearLine", "clearScreenDown"].forEach((method) => {
+  readline[method] = common.mustCall(function () {
     const lastArg = arguments[arguments.length - 1];
 
-    if (typeof lastArg === 'function') {
+    if (typeof lastArg === "function") {
       process.nextTick(lastArg);
     }
 

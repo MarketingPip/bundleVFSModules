@@ -1,16 +1,15 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
 // Test the `allowHalfOpen` option of the `tls.TLSSocket` constructor.
 
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const assert = require('assert');
-const net = require('net');
-const stream = require('stream');
-const tls = require('tls');
+const assert = require("assert");
+const net = require("net");
+const stream = require("stream");
+const tls = require("tls");
 
 {
   // The option is ignored when the `socket` argument is a `net.Socket`.
@@ -23,7 +22,7 @@ const tls = require('tls');
   // `stream.Duplex`.
   const duplex = new stream.Duplex({
     allowHalfOpen: false,
-    read() {}
+    read() {},
   });
   const socket = new tls.TLSSocket(duplex, { allowHalfOpen: true });
   assert.strictEqual(socket.allowHalfOpen, false);

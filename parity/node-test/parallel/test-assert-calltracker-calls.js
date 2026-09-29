@@ -1,6 +1,6 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
 // This test ensures that assert.CallTracker.calls() works as intended.
 
@@ -9,49 +9,47 @@ const tracker = new assert.CallTracker();
 function bar() {}
 
 const err = {
-  code: 'ERR_INVALID_ARG_TYPE',
+  code: "ERR_INVALID_ARG_TYPE",
 };
 
 // Ensures calls() throws on invalid input types.
 assert.throws(() => {
-  const callsbar = tracker.calls(bar, '1');
+  const callsbar = tracker.calls(bar, "1");
   callsbar();
-}, err
-);
+}, err);
 
-assert.throws(() => {
-  const callsbar = tracker.calls(bar, 0.1);
-  callsbar();
-}, { code: 'ERR_OUT_OF_RANGE' }
+assert.throws(
+  () => {
+    const callsbar = tracker.calls(bar, 0.1);
+    callsbar();
+  },
+  { code: "ERR_OUT_OF_RANGE" },
 );
 
 assert.throws(() => {
   const callsbar = tracker.calls(bar, true);
   callsbar();
-}, err
-);
+}, err);
 
 assert.throws(() => {
   const callsbar = tracker.calls(bar, () => {});
   callsbar();
-}, err
-);
+}, err);
 
 assert.throws(() => {
   const callsbar = tracker.calls(bar, null);
   callsbar();
-}, err
-);
+}, err);
 
 // Expects an error as tracker.calls() cannot be called within a process exit
 // handler.
-process.on('exit', () => {
+process.on("exit", () => {
   assert.throws(() => tracker.calls(bar, 1), {
-    code: 'ERR_UNAVAILABLE_DURING_EXIT',
+    code: "ERR_UNAVAILABLE_DURING_EXIT",
   });
 });
 
-const msg = 'Expected to throw';
+const msg = "Expected to throw";
 
 function func() {
   throw new Error(msg);
@@ -60,10 +58,7 @@ function func() {
 const callsfunc = tracker.calls(func, 1);
 
 // Expects callsfunc() to call func() which throws an error.
-assert.throws(
-  () => callsfunc(),
-  { message: msg }
-);
+assert.throws(() => callsfunc(), { message: msg });
 
 {
   const tracker = new assert.CallTracker();
@@ -98,28 +93,28 @@ assert.throws(
   delete func.length;
   const tracker = new assert.CallTracker();
   const callsfunc = tracker.calls(func);
-  assert.strictEqual(Object.hasOwn(callsfunc, 'length'), false);
+  assert.strictEqual(Object.hasOwn(callsfunc, "length"), false);
 }
 
 {
   const ArrayIteratorPrototype = Reflect.getPrototypeOf(
-    Array.prototype.values()
+    Array.prototype.values(),
   );
   const { next } = ArrayIteratorPrototype;
   ArrayIteratorPrototype.next = common.mustNotCall(
-    '%ArrayIteratorPrototype%.next'
+    "%ArrayIteratorPrototype%.next",
   );
-  Object.prototype.get = common.mustNotCall('%Object.prototype%.get');
+  Object.prototype.get = common.mustNotCall("%Object.prototype%.get");
 
   const customPropertyValue = Symbol();
   function func(a, b, c = 2) {
     return a + b + c;
   }
   func.customProperty = customPropertyValue;
-  Object.defineProperty(func, 'length', { get: common.mustNotCall() });
+  Object.defineProperty(func, "length", { get: common.mustNotCall() });
   const tracker = new assert.CallTracker();
   const callsfunc = tracker.calls(func);
-  assert.strictEqual(Object.hasOwn(callsfunc, 'length'), true);
+  assert.strictEqual(Object.hasOwn(callsfunc, "length"), true);
   assert.strictEqual(callsfunc.customProperty, customPropertyValue);
   assert.strictEqual(callsfunc(1, 2, 3), 6);
 

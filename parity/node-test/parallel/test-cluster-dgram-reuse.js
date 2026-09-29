@@ -1,29 +1,31 @@
-'use strict';
-const common = require('../common');
-const os = require('os');
+"use strict";
+const common = require("../common");
+const os = require("os");
 if (common.isWindows)
-  common.skip('dgram clustering is currently not supported on windows.');
-if (common.isAIX && os.release() === '7.3')
-  common.skip('dgram clutering with reuse does not work if built on AIX 7.3.');
+  common.skip("dgram clustering is currently not supported on windows.");
+if (common.isAIX && os.release() === "7.3")
+  common.skip("dgram clutering with reuse does not work if built on AIX 7.3.");
 
-const assert = require('assert');
-const cluster = require('cluster');
-const dgram = require('dgram');
+const assert = require("assert");
+const cluster = require("cluster");
+const dgram = require("dgram");
 
 if (cluster.isPrimary) {
-  cluster.fork().on('exit', common.mustCall((code) => {
-    assert.strictEqual(code, 0);
-  }));
+  cluster.fork().on(
+    "exit",
+    common.mustCall((code) => {
+      assert.strictEqual(code, 0);
+    }),
+  );
   return;
 }
 
 let waiting = 2;
 function close() {
-  if (--waiting === 0)
-    cluster.worker.disconnect();
+  if (--waiting === 0) cluster.worker.disconnect();
 }
 
-const options = { type: 'udp4', reuseAddr: true };
+const options = { type: "udp4", reuseAddr: true };
 const socket1 = dgram.createSocket(options);
 const socket2 = dgram.createSocket(options);
 

@@ -1,26 +1,20 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
 // Tests for classic Writable stream interop with the stream/iter API
 // via fromWritable().
 
-const common = require('../common');
-const assert = require('assert');
-const { Writable } = require('stream');
-const {
-  from,
-  fromWritable,
-  pipeTo,
-  text,
-  ondrain,
-} = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { Writable } = require("stream");
+const { from, fromWritable, pipeTo, text, ondrain } = require("stream/iter");
 
 // =============================================================================
 // fromWritable() is exported from stream/iter
 // =============================================================================
 
 function testFunctionExists() {
-  assert.strictEqual(typeof fromWritable, 'function');
+  assert.strictEqual(typeof fromWritable, "function");
 }
 
 // =============================================================================
@@ -30,12 +24,14 @@ function testFunctionExists() {
 async function testDefaultIsStrict() {
   const writable = new Writable({
     highWaterMark: 1024,
-    write(chunk, encoding, cb) { cb(); },
+    write(chunk, encoding, cb) {
+      cb();
+    },
   });
 
   const writer = fromWritable(writable);
   // Should work fine when buffer has room
-  await writer.write('hello');
+  await writer.write("hello");
   await writer.end();
 }
 
@@ -52,10 +48,10 @@ async function testBasicWrite() {
     },
   });
 
-  const writer = fromWritable(writable, { backpressure: 'unbounded' });
-  await pipeTo(from('hello world'), writer);
+  const writer = fromWritable(writable, { backpressure: "unbounded" });
+  await pipeTo(from("hello world"), writer);
 
-  assert.strictEqual(Buffer.concat(chunks).toString(), 'hello world');
+  assert.strictEqual(Buffer.concat(chunks).toString(), "hello world");
 }
 
 // =============================================================================
@@ -73,11 +69,11 @@ async function testWriteNoDrain() {
   });
 
   const writer = fromWritable(writable);
-  await writer.write('hello');
-  await writer.write(' world');
+  await writer.write("hello");
+  await writer.write(" world");
   await writer.end();
 
-  assert.strictEqual(Buffer.concat(chunks).toString(), 'hello world');
+  assert.strictEqual(Buffer.concat(chunks).toString(), "hello world");
 }
 
 // =============================================================================
@@ -87,7 +83,7 @@ async function testWriteNoDrain() {
 async function testBlockWaitsForDrain() {
   const chunks = [];
   const writable = new Writable({
-    highWaterMark: 1,  // Very small buffer
+    highWaterMark: 1, // Very small buffer
     write(chunk, encoding, cb) {
       chunks.push(Buffer.from(chunk));
       // Delay callback to simulate slow consumer
@@ -95,14 +91,14 @@ async function testBlockWaitsForDrain() {
     },
   });
 
-  const writer = fromWritable(writable, { backpressure: 'unbounded' });
+  const writer = fromWritable(writable, { backpressure: "unbounded" });
 
-  await writer.write('a');
-  await writer.write('b');
-  await writer.write('c');
+  await writer.write("a");
+  await writer.write("b");
+  await writer.write("c");
   await writer.end();
 
-  assert.strictEqual(Buffer.concat(chunks).toString(), 'abc');
+  assert.strictEqual(Buffer.concat(chunks).toString(), "abc");
 }
 
 // =============================================================================
@@ -117,15 +113,15 @@ async function testBlockErrorRejectsPendingWrite() {
     },
   });
 
-  const writer = fromWritable(writable, { backpressure: 'unbounded' });
+  const writer = fromWritable(writable, { backpressure: "unbounded" });
 
   // First write fills the buffer, waits for drain
-  const writePromise = writer.write('data that will block');
+  const writePromise = writer.write("data that will block");
 
   // Destroy with error while write is pending
-  writable.destroy(new Error('stream broke'));
+  writable.destroy(new Error("stream broke"));
 
-  await assert.rejects(writePromise, { message: 'stream broke' });
+  await assert.rejects(writePromise, { message: "stream broke" });
 }
 
 // =============================================================================
@@ -143,13 +139,10 @@ async function testStrictRejectsWhenFull() {
   const writer = fromWritable(writable);
 
   // First write fills the buffer (5 bytes = hwm)
-  await writer.write('12345');
+  await writer.write("12345");
 
   // Second write should reject -- buffer is full
-  await assert.rejects(
-    writer.write('more'),
-    { code: 'ERR_INVALID_STATE' },
-  );
+  await assert.rejects(writer.write("more"), { code: "ERR_INVALID_STATE" });
 }
 
 // =============================================================================
@@ -167,15 +160,15 @@ async function testStrictWritevRejectsWhenFull() {
   const writer = fromWritable(writable);
 
   // Fill buffer
-  await writer.write('12345');
+  await writer.write("12345");
 
   // Writev should reject entire batch
   await assert.rejects(
     writer.writev([
-      new TextEncoder().encode('a'),
-      new TextEncoder().encode('b'),
+      new TextEncoder().encode("a"),
+      new TextEncoder().encode("b"),
     ]),
-    { code: 'ERR_INVALID_STATE' },
+    { code: "ERR_INVALID_STATE" },
   );
 }
 
@@ -193,17 +186,17 @@ async function testDropNewestDiscards() {
     },
   });
 
-  const writer = fromWritable(writable, { backpressure: 'drop-newest' });
+  const writer = fromWritable(writable, { backpressure: "drop-newest" });
 
   // First write fills the buffer
-  await writer.write('12345');
+  await writer.write("12345");
 
   // Second write should be silently discarded (no reject, no block)
-  await writer.write('dropped');
+  await writer.write("dropped");
 
   // Only the first chunk was actually written to the writable
   assert.strictEqual(chunks.length, 1);
-  assert.strictEqual(chunks[0].toString(), '12345');
+  assert.strictEqual(chunks[0].toString(), "12345");
 }
 
 // =============================================================================
@@ -220,15 +213,15 @@ async function testDropNewestWritevDiscards() {
     },
   });
 
-  const writer = fromWritable(writable, { backpressure: 'drop-newest' });
+  const writer = fromWritable(writable, { backpressure: "drop-newest" });
 
   // Fill buffer
-  await writer.write('12345');
+  await writer.write("12345");
 
   // Writev should discard entire batch
   await writer.writev([
-    new TextEncoder().encode('a'),
-    new TextEncoder().encode('b'),
+    new TextEncoder().encode("a"),
+    new TextEncoder().encode("b"),
   ]);
 
   assert.strictEqual(chunks.length, 1);
@@ -246,10 +239,10 @@ async function testDropNewestCountsBytes() {
     },
   });
 
-  const writer = fromWritable(writable, { backpressure: 'drop-newest' });
+  const writer = fromWritable(writable, { backpressure: "drop-newest" });
 
-  await writer.write('12345');  // 5 bytes, accepted
-  await writer.write('67890');  // 5 bytes, dropped
+  await writer.write("12345"); // 5 bytes, accepted
+  await writer.write("67890"); // 5 bytes, dropped
 
   // canWrite should be false (buffer is full)
   assert.strictEqual(writer.canWrite, false);
@@ -260,11 +253,14 @@ async function testDropNewestCountsBytes() {
 // =============================================================================
 
 function testDropOldestThrows() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
-  assert.throws(
-    () => fromWritable(writable, { backpressure: 'drop-oldest' }),
-    { code: 'ERR_INVALID_ARG_VALUE' },
-  );
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
+  assert.throws(() => fromWritable(writable, { backpressure: "drop-oldest" }), {
+    code: "ERR_INVALID_ARG_VALUE",
+  });
 }
 
 // =============================================================================
@@ -272,11 +268,14 @@ function testDropOldestThrows() {
 // =============================================================================
 
 function testInvalidBackpressureThrows() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
-  assert.throws(
-    () => fromWritable(writable, { backpressure: 'invalid' }),
-    { code: 'ERR_INVALID_ARG_VALUE' },
-  );
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
+  assert.throws(() => fromWritable(writable, { backpressure: "invalid" }), {
+    code: "ERR_INVALID_ARG_VALUE",
+  });
 }
 
 // =============================================================================
@@ -299,15 +298,15 @@ async function testWritev() {
     },
   });
 
-  const writer = fromWritable(writable, { backpressure: 'unbounded' });
+  const writer = fromWritable(writable, { backpressure: "unbounded" });
   await writer.writev([
-    new TextEncoder().encode('hello'),
-    new TextEncoder().encode(' '),
-    new TextEncoder().encode('world'),
+    new TextEncoder().encode("hello"),
+    new TextEncoder().encode(" "),
+    new TextEncoder().encode("world"),
   ]);
   await writer.end();
 
-  assert.strictEqual(Buffer.concat(chunks).toString(), 'hello world');
+  assert.strictEqual(Buffer.concat(chunks).toString(), "hello world");
 }
 
 // =============================================================================
@@ -315,7 +314,11 @@ async function testWritev() {
 // =============================================================================
 
 function testSyncMethodsReturnFalse() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
   assert.strictEqual(writer.writeSync(new Uint8Array(1)), false);
@@ -327,7 +330,11 @@ function testSyncMethodsReturnFalse() {
 // =============================================================================
 
 function testEndSyncReturnsNegativeOne() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
   assert.strictEqual(writer.endSync(), -1);
@@ -339,12 +346,14 @@ function testEndSyncReturnsNegativeOne() {
 
 async function testEndReturnsByteCount() {
   const writable = new Writable({
-    write(chunk, encoding, cb) { cb(); },
+    write(chunk, encoding, cb) {
+      cb();
+    },
   });
 
   const writer = fromWritable(writable);
-  await writer.write('hello');  // 5 bytes
-  await writer.write(' world'); // 6 bytes
+  await writer.write("hello"); // 5 bytes
+  await writer.write(" world"); // 6 bytes
   const total = await writer.end();
 
   assert.strictEqual(total, 11);
@@ -355,11 +364,15 @@ async function testEndReturnsByteCount() {
 // =============================================================================
 
 async function testFail() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
-  writable.on('error', () => {});  // Prevent unhandled error
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
+  writable.on("error", () => {}); // Prevent unhandled error
   const writer = fromWritable(writable);
 
-  writer.fail(new Error('test fail'));
+  writer.fail(new Error("test fail"));
 
   assert.ok(writable.destroyed);
 }
@@ -385,7 +398,11 @@ function testCanWrite() {
 // =============================================================================
 
 function testCanWriteNull() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
   writable.destroy();
@@ -399,7 +416,9 @@ function testCanWriteNull() {
 async function testDrainableNoPressure() {
   const writable = new Writable({
     highWaterMark: 1024,
-    write(chunk, enc, cb) { cb(); },
+    write(chunk, enc, cb) {
+      cb();
+    },
   });
 
   const writer = fromWritable(writable);
@@ -412,7 +431,11 @@ async function testDrainableNoPressure() {
 // =============================================================================
 
 function testDrainableNull() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
   writable.destroy();
@@ -424,15 +447,18 @@ function testDrainableNull() {
 // =============================================================================
 
 async function testWriteAfterEnd() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
   await writer.end();
 
-  await assert.rejects(
-    writer.write('should fail'),
-    { code: 'ERR_STREAM_WRITE_AFTER_END' },
-  );
+  await assert.rejects(writer.write("should fail"), {
+    code: "ERR_STREAM_WRITE_AFTER_END",
+  });
 }
 
 // =============================================================================
@@ -455,7 +481,7 @@ async function testSequentialWrites() {
   }
   await writer.end();
 
-  let expected = '';
+  let expected = "";
   for (let i = 0; i < 10; i++) {
     expected += `chunk${i}`;
   }
@@ -467,11 +493,8 @@ async function testSequentialWrites() {
 // =============================================================================
 
 async function testPipeToWithTransform() {
-  const {
-    compressGzip,
-    decompressGzip,
-  } = require('zlib/iter');
-  const { pull } = require('stream/iter');
+  const { compressGzip, decompressGzip } = require("zlib/iter");
+  const { pull } = require("stream/iter");
 
   const compressed = [];
   const writable = new Writable({
@@ -481,13 +504,13 @@ async function testPipeToWithTransform() {
     },
   });
 
-  const writer = fromWritable(writable, { backpressure: 'unbounded' });
-  await pipeTo(from('hello via transform'), compressGzip(), writer);
+  const writer = fromWritable(writable, { backpressure: "unbounded" });
+  await pipeTo(from("hello via transform"), compressGzip(), writer);
 
   const decompressed = await text(
     pull(from(Buffer.concat(compressed)), decompressGzip()),
   );
-  assert.strictEqual(decompressed, 'hello via transform');
+  assert.strictEqual(decompressed, "hello via transform");
 }
 
 // =============================================================================
@@ -495,7 +518,11 @@ async function testPipeToWithTransform() {
 // =============================================================================
 
 async function testDispose() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
   writer[Symbol.dispose]();
@@ -503,7 +530,11 @@ async function testDispose() {
 }
 
 async function testAsyncDispose() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
   await writer[Symbol.asyncDispose]();
@@ -515,21 +546,16 @@ async function testAsyncDispose() {
 // =============================================================================
 
 async function testWriteInvalidChunkType() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
-  await assert.rejects(
-    writer.write(42),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
-  await assert.rejects(
-    writer.write(null),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
-  await assert.rejects(
-    writer.write({}),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
+  await assert.rejects(writer.write(42), { code: "ERR_INVALID_ARG_TYPE" });
+  await assert.rejects(writer.write(null), { code: "ERR_INVALID_ARG_TYPE" });
+  await assert.rejects(writer.write({}), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 // =============================================================================
@@ -537,17 +563,17 @@ async function testWriteInvalidChunkType() {
 // =============================================================================
 
 function testWritevInvalidChunksType() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
-  assert.throws(
-    () => writer.writev('not an array'),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
-  assert.throws(
-    () => writer.writev(42),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
+  assert.throws(() => writer.writev("not an array"), {
+    code: "ERR_INVALID_ARG_TYPE",
+  });
+  assert.throws(() => writer.writev(42), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 // =============================================================================
@@ -555,13 +581,16 @@ function testWritevInvalidChunksType() {
 // =============================================================================
 
 function testWritevInvalidChunkUncorks() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer = fromWritable(writable);
 
-  assert.throws(
-    () => writer.writev([new Uint8Array([1]), 42]),
-    { code: 'ERR_INVALID_ARG_TYPE' },
-  );
+  assert.throws(() => writer.writev([new Uint8Array([1]), 42]), {
+    code: "ERR_INVALID_ARG_TYPE",
+  });
   assert.strictEqual(writable.writableCorked, 0);
 }
 
@@ -570,7 +599,11 @@ function testWritevInvalidChunkUncorks() {
 // =============================================================================
 
 function testCachedWriter() {
-  const writable = new Writable({ write(chunk, enc, cb) { cb(); } });
+  const writable = new Writable({
+    write(chunk, enc, cb) {
+      cb();
+    },
+  });
   const writer1 = fromWritable(writable);
   const writer2 = fromWritable(writable);
 
@@ -588,17 +621,17 @@ async function testFailRejectsPendingWaiters() {
       // Never call cb -- stuck
     },
   });
-  writable.on('error', () => {});  // Prevent unhandled error
+  writable.on("error", () => {}); // Prevent unhandled error
 
-  const writer = fromWritable(writable, { backpressure: 'unbounded' });
+  const writer = fromWritable(writable, { backpressure: "unbounded" });
 
   // This write will block on drain
-  const writePromise = writer.write('blocked data');
+  const writePromise = writer.write("blocked data");
 
   // fail() should reject the pending waiter, not orphan it
-  writer.fail(new Error('fail reason'));
+  writer.fail(new Error("fail reason"));
 
-  await assert.rejects(writePromise, { message: 'fail reason' });
+  await assert.rejects(writePromise, { message: "fail reason" });
 }
 
 // =============================================================================
@@ -613,14 +646,14 @@ async function testDisposeRejectsPendingWaiters() {
     },
   });
 
-  const writer = fromWritable(writable, { backpressure: 'unbounded' });
+  const writer = fromWritable(writable, { backpressure: "unbounded" });
 
   // This write will block on drain
-  const writePromise = writer.write('blocked data');
+  const writePromise = writer.write("blocked data");
 
   writer[Symbol.dispose]();
 
-  await assert.rejects(writePromise, { name: 'AbortError' });
+  await assert.rejects(writePromise, { name: "AbortError" });
 }
 
 // =============================================================================
@@ -636,12 +669,11 @@ testSyncMethodsReturnFalse();
 function testObjectModeThrows() {
   const writable = new Writable({
     objectMode: true,
-    write(chunk, enc, cb) { cb(); },
+    write(chunk, enc, cb) {
+      cb();
+    },
   });
-  assert.throws(
-    () => fromWritable(writable),
-    { code: 'ERR_INVALID_STATE' },
-  );
+  assert.throws(() => fromWritable(writable), { code: "ERR_INVALID_STATE" });
 }
 
 testFunctionExists();

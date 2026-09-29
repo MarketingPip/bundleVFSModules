@@ -19,78 +19,109 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const http = require('http');
+const http = require("http");
 
 let serverEndCb = false;
-let serverIncoming = '';
-const serverIncomingExpect = 'bazquuxblerg';
+let serverIncoming = "";
+const serverIncomingExpect = "bazquuxblerg";
 
 let clientEndCb = false;
-let clientIncoming = '';
-const clientIncomingExpect = 'asdffoobar';
+let clientIncoming = "";
+const clientIncomingExpect = "asdffoobar";
 
-process.on('exit', () => {
+process.on("exit", () => {
   assert(serverEndCb);
   assert.strictEqual(serverIncoming, serverIncomingExpect);
   assert(clientEndCb);
   assert.strictEqual(clientIncoming, clientIncomingExpect);
-  console.log('ok');
+  console.log("ok");
 });
 
 // Verify that we get a callback when we do res.write(..., cb)
 const server = http.createServer((req, res) => {
   res.statusCode = 400;
-  res.end('Bad Request.\nMust send Expect:100-continue\n');
+  res.end("Bad Request.\nMust send Expect:100-continue\n");
 });
 
-server.on('checkContinue', common.mustCall((req, res) => {
-  server.close();
-  assert.strictEqual(req.method, 'PUT');
-  res.writeContinue(() => {
-    // Continue has been written
-    req.on('end', () => {
-      res.write('asdf', common.mustSucceed(() => {
-        res.write('foo', 'ascii', common.mustSucceed(() => {
-          res.end(Buffer.from('bar'), 'buffer', common.mustSucceed(() => {
-            serverEndCb = true;
-          }));
-        }));
-      }));
+server.on(
+  "checkContinue",
+  common.mustCall((req, res) => {
+    server.close();
+    assert.strictEqual(req.method, "PUT");
+    res.writeContinue(() => {
+      // Continue has been written
+      req.on("end", () => {
+        res.write(
+          "asdf",
+          common.mustSucceed(() => {
+            res.write(
+              "foo",
+              "ascii",
+              common.mustSucceed(() => {
+                res.end(
+                  Buffer.from("bar"),
+                  "buffer",
+                  common.mustSucceed(() => {
+                    serverEndCb = true;
+                  }),
+                );
+              }),
+            );
+          }),
+        );
+      });
     });
-  });
 
-  req.setEncoding('ascii');
-  req.on('data', (c) => {
-    serverIncoming += c;
-  });
-}));
-
-server.listen(0, common.mustCall(function() {
-  const req = http.request({
-    port: this.address().port,
-    method: 'PUT',
-    headers: { 'expect': '100-continue' }
-  });
-  req.on('continue', () => {
-    // ok, good to go.
-    req.write('YmF6', 'base64', common.mustSucceed(() => {
-      req.write(Buffer.from('quux'), common.mustSucceed(() => {
-        req.end('626c657267', 'hex', common.mustSucceed(() => {
-          clientEndCb = true;
-        }));
-      }));
-    }));
-  });
-  req.on('response', common.mustCall((res) => {
-    // This should not come until after the end is flushed out
-    assert(clientEndCb);
-    res.setEncoding('ascii');
-    res.on('data', (c) => {
-      clientIncoming += c;
+    req.setEncoding("ascii");
+    req.on("data", (c) => {
+      serverIncoming += c;
     });
-  }));
-}));
+  }),
+);
+
+server.listen(
+  0,
+  common.mustCall(function () {
+    const req = http.request({
+      port: this.address().port,
+      method: "PUT",
+      headers: { expect: "100-continue" },
+    });
+    req.on("continue", () => {
+      // ok, good to go.
+      req.write(
+        "YmF6",
+        "base64",
+        common.mustSucceed(() => {
+          req.write(
+            Buffer.from("quux"),
+            common.mustSucceed(() => {
+              req.end(
+                "626c657267",
+                "hex",
+                common.mustSucceed(() => {
+                  clientEndCb = true;
+                }),
+              );
+            }),
+          );
+        }),
+      );
+    });
+    req.on(
+      "response",
+      common.mustCall((res) => {
+        // This should not come until after the end is flushed out
+        assert(clientEndCb);
+        res.setEncoding("ascii");
+        res.on("data", (c) => {
+          clientIncoming += c;
+        });
+      }),
+    );
+  }),
+);

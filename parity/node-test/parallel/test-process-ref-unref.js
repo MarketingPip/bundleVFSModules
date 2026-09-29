@@ -1,13 +1,10 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const {
-  describe,
-  it,
-} = require('node:test');
+const { describe, it } = require("node:test");
 
-const assert = require('node:assert');
+const assert = require("node:assert");
 
 class Foo {
   refCalled = 0;
@@ -23,16 +20,16 @@ class Foo {
 class Foo2 {
   refCalled = 0;
   unrefCalled = 0;
-  [Symbol.for('nodejs.ref')]() {
+  [Symbol.for("nodejs.ref")]() {
     this.refCalled++;
   }
-  [Symbol.for('nodejs.unref')]() {
+  [Symbol.for("nodejs.unref")]() {
     this.unrefCalled++;
   }
 }
 
-describe('process.ref/unref work as expected', () => {
-  it('refs...', () => {
+describe("process.ref/unref work as expected", () => {
+  it("refs...", () => {
     // Objects that implement the new Symbol-based API
     // just work.
     const foo1 = new Foo();

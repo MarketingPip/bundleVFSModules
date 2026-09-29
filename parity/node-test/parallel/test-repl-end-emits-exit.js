@@ -19,22 +19,22 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const { startNewREPLServer } = require('../common/repl');
-const assert = require('assert');
+"use strict";
+require("../common");
+const { startNewREPLServer } = require("../common/repl");
+const assert = require("assert");
 let terminalExit = 0;
 let regularExit = 0;
 
 function testTerminalMode() {
   const { replServer, input } = startNewREPLServer({ terminal: true });
 
-  process.nextTick(function() {
+  process.nextTick(function () {
     // Manually fire a ^D keypress
-    input.emit('data', '\u0004');
+    input.emit("data", "\u0004");
   });
 
-  replServer.on('exit', function() {
+  replServer.on("exit", function () {
     // Should be fired from the simulated ^D keypress
     terminalExit++;
     testRegularMode();
@@ -44,21 +44,20 @@ function testTerminalMode() {
 function testRegularMode() {
   const { replServer, input } = startNewREPLServer({ terminal: true });
 
-  process.nextTick(function() {
-    input.emit('end');
+  process.nextTick(function () {
+    input.emit("end");
   });
 
-  replServer.on('exit', function() {
+  replServer.on("exit", function () {
     // Should be fired from the simulated 'end' event
     regularExit++;
   });
 }
 
-process.on('exit', function() {
+process.on("exit", function () {
   assert.strictEqual(terminalExit, 1);
   assert.strictEqual(regularExit, 1);
 });
-
 
 // start
 testTerminalMode();

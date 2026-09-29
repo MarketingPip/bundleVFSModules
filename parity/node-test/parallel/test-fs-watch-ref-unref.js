@@ -1,11 +1,10 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
-if (common.isIBMi)
-  common.skip('IBMi does not support `fs.watch()`');
+if (common.isIBMi) common.skip("IBMi does not support `fs.watch()`");
 
-const fs = require('fs');
+const fs = require("fs");
 
 const watcher = fs.watch(__filename, common.mustNotCall());
 
@@ -16,5 +15,5 @@ setTimeout(
     watcher.ref();
     watcher.unref();
   }),
-  common.platformTimeout(100)
+  common.platformTimeout(100),
 );

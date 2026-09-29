@@ -19,10 +19,9 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
 // This test tries to confirm that a TLS Socket will work as expected even if it
 // is created after the original socket has received some data.
@@ -30,43 +29,60 @@ if (!common.hasCrypto)
 // Ref: https://github.com/nodejs/node-v0.x-archive/issues/6940
 // Ref: https://github.com/nodejs/node-v0.x-archive/pull/6950
 
-const fixtures = require('../common/fixtures');
-const assert = require('assert');
-const tls = require('tls');
-const net = require('net');
+const fixtures = require("../common/fixtures");
+const assert = require("assert");
+const tls = require("tls");
+const net = require("net");
 
-const sent = 'hello world';
-let received = '';
+const sent = "hello world";
+let received = "";
 
 const options = {
-  key: fixtures.readKey('agent1-key.pem'),
-  cert: fixtures.readKey('agent1-cert.pem')
+  key: fixtures.readKey("agent1-key.pem"),
+  cert: fixtures.readKey("agent1-cert.pem"),
 };
 
-const server = net.createServer(common.mustCall((c) => {
-  setTimeout(common.mustCall(() => {
-    const s = new tls.TLSSocket(c, {
-      isServer: true,
-      secureContext: tls.createSecureContext(options)
-    });
+const server = net
+  .createServer(
+    common.mustCall((c) => {
+      setTimeout(
+        common.mustCall(() => {
+          const s = new tls.TLSSocket(c, {
+            isServer: true,
+            secureContext: tls.createSecureContext(options),
+          });
 
-    s.on('data', (chunk) => {
-      received += chunk;
-    });
+          s.on("data", (chunk) => {
+            received += chunk;
+          });
 
-    s.on('end', common.mustCall(() => {
-      server.close();
-      s.destroy();
-    }));
-  }), 200);
-})).listen(0, common.mustCall(() => {
-  const c = tls.connect(server.address().port, {
-    rejectUnauthorized: false
-  }, () => {
-    c.end(sent);
-  });
-}));
+          s.on(
+            "end",
+            common.mustCall(() => {
+              server.close();
+              s.destroy();
+            }),
+          );
+        }),
+        200,
+      );
+    }),
+  )
+  .listen(
+    0,
+    common.mustCall(() => {
+      const c = tls.connect(
+        server.address().port,
+        {
+          rejectUnauthorized: false,
+        },
+        () => {
+          c.end(sent);
+        },
+      );
+    }),
+  );
 
-process.on('exit', () => {
+process.on("exit", () => {
   assert.strictEqual(received, sent);
 });

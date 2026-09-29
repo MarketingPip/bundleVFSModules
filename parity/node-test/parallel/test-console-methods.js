@@ -1,43 +1,43 @@
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
 // This test ensures that console methods cannot be invoked as constructors and
 // that their name is always correct.
 
-const assert = require('assert');
+const assert = require("assert");
 
 const { Console } = console;
 const newInstance = new Console(process.stdout);
 const err = TypeError;
 
 const methods = [
-  'log',
-  'warn',
-  'dir',
-  'time',
-  'timeEnd',
-  'timeLog',
-  'trace',
-  'assert',
-  'clear',
-  'count',
-  'countReset',
-  'group',
-  'groupEnd',
-  'table',
-  'debug',
-  'info',
-  'dirxml',
-  'error',
-  'groupCollapsed',
+  "log",
+  "warn",
+  "dir",
+  "time",
+  "timeEnd",
+  "timeLog",
+  "trace",
+  "assert",
+  "clear",
+  "count",
+  "countReset",
+  "group",
+  "groupEnd",
+  "table",
+  "debug",
+  "info",
+  "dirxml",
+  "error",
+  "groupCollapsed",
 ];
 
 const alternateNames = {
-  debug: 'log',
-  info: 'log',
-  dirxml: 'log',
-  error: 'warn',
-  groupCollapsed: 'group'
+  debug: "log",
+  info: "log",
+  dirxml: "log",
+  error: "warn",
+  groupCollapsed: "group",
 };
 
 function assertEqualName(method) {

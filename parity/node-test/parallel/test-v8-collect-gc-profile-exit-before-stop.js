@@ -1,6 +1,6 @@
-'use strict';
-require('../common');
-const { GCProfiler } = require('v8');
+"use strict";
+require("../common");
+const { GCProfiler } = require("v8");
 
 // Test if it makes the process crash.
 {

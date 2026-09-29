@@ -1,10 +1,8 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const {
-  Readable,
-} = require('stream');
-const assert = require('assert');
+const common = require("../common");
+const { Readable } = require("stream");
+const assert = require("assert");
 
 {
   // Works on a synchronous stream
@@ -13,7 +11,9 @@ const assert = require('assert');
       [],
       [1],
       [1, 2, 3],
-      Array(100).fill().map((_, i) => i),
+      Array(100)
+        .fill()
+        .map((_, i) => i),
     ];
     for (const test of tests) {
       const stream = Readable.from(test);
@@ -28,9 +28,9 @@ const assert = require('assert');
   (async () => {
     const firstBuffer = Buffer.from([1, 2, 3]);
     const secondBuffer = Buffer.from([4, 5, 6]);
-    const stream = Readable.from(
-      [firstBuffer, secondBuffer],
-      { objectMode: false });
+    const stream = Readable.from([firstBuffer, secondBuffer], {
+      objectMode: false,
+    });
     const result = await stream.toArray();
     assert.strictEqual(Array.isArray(result), true);
     assert.deepStrictEqual(result, [firstBuffer, secondBuffer]);
@@ -44,7 +44,9 @@ const assert = require('assert');
       [],
       [1],
       [1, 2, 3],
-      Array(100).fill().map((_, i) => i),
+      Array(100)
+        .fill()
+        .map((_, i) => i),
     ];
     for (const test of tests) {
       const stream = Readable.from(test).map((x) => Promise.resolve(x));
@@ -58,20 +60,27 @@ const assert = require('assert');
   // Support for AbortSignal
   const ac = new AbortController();
   let stream;
-  assert.rejects(async () => {
-    stream = Readable.from([1, 2, 3, 4]).map(async (x) => {
-      if (x === 3) {
-        await new Promise(() => {}); // Explicitly do not pass signal here
-      }
-      return Promise.resolve(x);
-    });
-    await stream.toArray({ signal: ac.signal });
-  }, {
-    name: 'AbortError',
-  }).then(common.mustCall(() => {
-    // Stops toArray *and* destroys the stream
-    assert.strictEqual(stream.destroyed, true);
-  }));
+  assert
+    .rejects(
+      async () => {
+        stream = Readable.from([1, 2, 3, 4]).map(async (x) => {
+          if (x === 3) {
+            await new Promise(() => {}); // Explicitly do not pass signal here
+          }
+          return Promise.resolve(x);
+        });
+        await stream.toArray({ signal: ac.signal });
+      },
+      {
+        name: "AbortError",
+      },
+    )
+    .then(
+      common.mustCall(() => {
+        // Stops toArray *and* destroys the stream
+        assert.strictEqual(stream.destroyed, true);
+      }),
+    );
   ac.abort();
 }
 {
@@ -81,13 +90,17 @@ const assert = require('assert');
 }
 {
   // Error cases
-  assert.rejects(async () => {
-    await Readable.from([1]).toArray(1);
-  }, /ERR_INVALID_ARG_TYPE/).then(common.mustCall());
+  assert
+    .rejects(async () => {
+      await Readable.from([1]).toArray(1);
+    }, /ERR_INVALID_ARG_TYPE/)
+    .then(common.mustCall());
 
-  assert.rejects(async () => {
-    await Readable.from([1]).toArray({
-      signal: true
-    });
-  }, /ERR_INVALID_ARG_TYPE/).then(common.mustCall());
+  assert
+    .rejects(async () => {
+      await Readable.from([1]).toArray({
+        signal: true,
+      });
+    }, /ERR_INVALID_ARG_TYPE/)
+    .then(common.mustCall());
 }

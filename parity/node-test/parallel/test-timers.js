@@ -19,23 +19,23 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
 const inputs = [
   undefined,
   null,
   true,
   false,
-  '',
+  "",
   [],
   {},
   NaN,
   +Infinity,
   -Infinity,
-  (1.0 / 0.0),      // sanity check
-  parseFloat('x'),  // NaN
+  1.0 / 0.0, // sanity check
+  parseFloat("x"), // NaN
   -10,
   -1,
   -0.5,
@@ -47,8 +47,8 @@ const inputs = [
   0.5,
   1,
   1.0,
-  2147483648,     // Browser behavior: timeouts > 2^31-1 run on next tick
-  12345678901234,  // ditto
+  2147483648, // Browser behavior: timeouts > 2^31-1 run on next tick
+  12345678901234, // ditto
 ];
 
 const timeouts = [];
@@ -68,19 +68,31 @@ inputs.forEach((value, index) => {
 // All values in inputs array coerce to 1 ms. Therefore, they should all run
 // before a timer set here for 2 ms.
 
-setTimeout(common.mustCall(() => {
-  // Assert that all other timers have run
-  inputs.forEach((value, index) => {
-    assert(timeouts[index]);
-    assert(intervals[index]);
-  });
-}), 2);
+setTimeout(
+  common.mustCall(() => {
+    // Assert that all other timers have run
+    inputs.forEach((value, index) => {
+      assert(timeouts[index]);
+      assert(intervals[index]);
+    });
+  }),
+  2,
+);
 
 // Test 10 ms timeout separately.
 setTimeout(common.mustCall(), 10);
-setInterval(common.mustCall(function() { clearInterval(this); }), 10);
+setInterval(
+  common.mustCall(function () {
+    clearInterval(this);
+  }),
+  10,
+);
 
 // Test no timeout separately
 setTimeout(common.mustCall());
 // eslint-disable-next-line no-restricted-syntax
-setInterval(common.mustCall(function() { clearInterval(this); }));
+setInterval(
+  common.mustCall(function () {
+    clearInterval(this);
+  }),
+);

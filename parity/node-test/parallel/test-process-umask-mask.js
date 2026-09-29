@@ -1,14 +1,14 @@
-'use strict';
+"use strict";
 
 // This tests that the lower bits of mode > 0o777 still works in
 // process.umask()
 
-const common = require('../common');
-const assert = require('assert');
-const { isMainThread } = require('worker_threads');
+const common = require("../common");
+const assert = require("assert");
+const { isMainThread } = require("worker_threads");
 
 if (!isMainThread)
-  common.skip('Setting process.umask is not supported in Workers');
+  common.skip("Setting process.umask is not supported in Workers");
 
 let mask;
 

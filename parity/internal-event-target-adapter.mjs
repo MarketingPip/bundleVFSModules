@@ -15,7 +15,7 @@
 
 const probe = new AbortController().signal;
 const kEvents = Object.getOwnPropertySymbols(probe).find(
-  (s) => s.description === 'kEvents',
+  (s) => s.description === "kEvents",
 );
 
 export const Event = globalThis.Event;
@@ -23,4 +23,4 @@ export const EventTarget = globalThis.EventTarget;
 export const CustomEvent = globalThis.CustomEvent;
 export class NodeEventTarget extends EventTarget {}
 export { kEvents };
-export const kWeakHandler = Symbol('kWeakHandler');
+export const kWeakHandler = Symbol("kWeakHandler");

@@ -19,18 +19,17 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const assert = require('assert');
-const fixtures = require('../common/fixtures');
-const https = require('https');
+const assert = require("assert");
+const fixtures = require("../common/fixtures");
+const https = require("https");
 
-const key = fixtures.readKey('agent1-key.pem');
-const cert = fixtures.readKey('agent1-cert.pem');
+const key = fixtures.readKey("agent1-key.pem");
+const cert = fixtures.readKey("agent1-cert.pem");
 
 // Number of bytes discovered empirically to trigger the bug
 const data = Buffer.alloc(1024 * 32 + 1);
@@ -40,33 +39,37 @@ httpsTest();
 function httpsTest() {
   const sopt = { key, cert };
 
-  const server = https.createServer(sopt, function(req, res) {
-    res.setHeader('content-length', data.length);
+  const server = https.createServer(sopt, function (req, res) {
+    res.setHeader("content-length", data.length);
     res.end(data);
     server.close();
   });
 
-  server.listen(0, function() {
+  server.listen(0, function () {
     const opts = { port: this.address().port, rejectUnauthorized: false };
-    https.get(opts).on('response', function(res) {
+    https.get(opts).on("response", function (res) {
       test(res);
     });
   });
 }
 
-
-const test = common.mustCall(function(res) {
-  res.on('end', common.mustCall(function() {
-    assert.strictEqual(res.readableLength, 0);
-    assert.strictEqual(bytes, data.length);
-  }));
+const test = common.mustCall(function (res) {
+  res.on(
+    "end",
+    common.mustCall(function () {
+      assert.strictEqual(res.readableLength, 0);
+      assert.strictEqual(bytes, data.length);
+    }),
+  );
 
   // Pause and then resume on each chunk, to ensure that there will be
   // a lone byte hanging out at the very end.
   let bytes = 0;
-  res.on('data', function(chunk) {
+  res.on("data", function (chunk) {
     bytes += chunk.length;
     this.pause();
-    setTimeout(() => { this.resume(); }, 1);
+    setTimeout(() => {
+      this.resume();
+    }, 1);
   });
 });

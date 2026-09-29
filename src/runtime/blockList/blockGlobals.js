@@ -1,12 +1,11 @@
 export function blockGlobals(names) {
+  const globalObj = typeof globalThis !== "undefined" ? globalThis : window;
 
-  const globalObj = typeof globalThis !== 'undefined' ? globalThis : window;
-  
   if (!Array.isArray(names)) {
     throw new TypeError("names must be an array");
   }
 
-  names.forEach(name => {
+  names.forEach((name) => {
     // ignore non-string values
     if (typeof name !== "string" || name.trim() === "") return;
 
@@ -15,7 +14,7 @@ export function blockGlobals(names) {
       return;
     }
 
-    globalObj[name] = function() {
+    globalObj[name] = function () {
       throw new Error(`${name} is not defined`);
     };
   });

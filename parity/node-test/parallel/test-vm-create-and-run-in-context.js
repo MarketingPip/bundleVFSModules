@@ -19,32 +19,32 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 // Flags: --expose-gc
-require('../common');
-const assert = require('assert');
+require("../common");
+const assert = require("assert");
 
-const vm = require('vm');
+const vm = require("vm");
 
 // Run in a new empty context
 let context = vm.createContext();
 let result = vm.runInContext('"passed";', context);
-assert.strictEqual(result, 'passed');
+assert.strictEqual(result, "passed");
 
 // Create a new pre-populated context
-context = vm.createContext({ 'foo': 'bar', 'thing': 'lala' });
-assert.strictEqual(context.foo, 'bar');
-assert.strictEqual(context.thing, 'lala');
+context = vm.createContext({ foo: "bar", thing: "lala" });
+assert.strictEqual(context.foo, "bar");
+assert.strictEqual(context.thing, "lala");
 
 // Test updating context
-result = vm.runInContext('var foo = 3;', context);
+result = vm.runInContext("var foo = 3;", context);
 assert.strictEqual(context.foo, 3);
-assert.strictEqual(context.thing, 'lala');
+assert.strictEqual(context.thing, "lala");
 
 // https://github.com/nodejs/node/issues/5768
 // Run in contextified sandbox without referencing the context
 const sandbox = { x: 1 };
 vm.createContext(sandbox);
 globalThis.gc();
-vm.runInContext('x = 2', sandbox);
+vm.runInContext("x = 2", sandbox);
 // Should not crash.

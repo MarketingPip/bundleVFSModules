@@ -1,10 +1,10 @@
 // Flags: --expose-internals
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const net = require('net');
-const cluster = require('cluster');
-const rr = require('internal/cluster/round_robin_handle');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const net = require("net");
+const cluster = require("cluster");
+const rr = require("internal/cluster/round_robin_handle");
 
 if (cluster.isPrimary) {
   const originalDistribute = rr.prototype.distribute;
@@ -17,14 +17,21 @@ if (cluster.isPrimary) {
   cluster.fork();
 } else {
   const server = net.createServer(common.mustNotCall());
-  server.listen(0, common.mustCall(() => {
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const socket = net.connect(server.address().port);
 
-    const socket = net.connect(server.address().port);
-
-    socket.on('close', common.mustCall(() => {
-      server.close(common.mustCall(() => {
-        process.disconnect();
-      }));
-    }));
-  }));
+      socket.on(
+        "close",
+        common.mustCall(() => {
+          server.close(
+            common.mustCall(() => {
+              process.disconnect();
+            }),
+          );
+        }),
+      );
+    }),
+  );
 }

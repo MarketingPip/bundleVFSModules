@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const { URLPattern } = require('url');
-const assert = require('assert');
+const { URLPattern } = require("url");
+const assert = require("assert");
 
 const pattern = new URLPattern();
 const proto = Object.getPrototypeOf(pattern);
@@ -11,20 +11,24 @@ const proto = Object.getPrototypeOf(pattern);
 // Verifies that attempts to call the property getters on a URLPattern
 // with the incorrect `this` will not crash the process.
 [
-  'protocol',
-  'username',
-  'password',
-  'hostname',
-  'port',
-  'pathname',
-  'search',
-  'hash',
-  'hasRegExpGroups',
+  "protocol",
+  "username",
+  "password",
+  "hostname",
+  "port",
+  "pathname",
+  "search",
+  "hash",
+  "hasRegExpGroups",
 ].forEach((i) => {
   const prop = Object.getOwnPropertyDescriptor(proto, i).get;
-  assert.throws(() => prop({}), {
-    message: 'Illegal invocation',
-  }, i);
+  assert.throws(
+    () => prop({}),
+    {
+      message: "Illegal invocation",
+    },
+    i,
+  );
 });
 
 // Verifies that attempts to call the exec and test functions
@@ -33,8 +37,8 @@ const proto = Object.getPrototypeOf(pattern);
 const { test, exec } = pattern;
 
 assert.throws(() => test({}), {
-  message: 'Illegal invocation',
+  message: "Illegal invocation",
 });
 assert.throws(() => exec({}), {
-  message: 'Illegal invocation',
+  message: "Illegal invocation",
 });

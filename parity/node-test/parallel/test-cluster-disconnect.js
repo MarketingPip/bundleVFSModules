@@ -19,37 +19,50 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const cluster = require('cluster');
-const net = require('net');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const cluster = require("cluster");
+const net = require("net");
 
 if (cluster.isWorker) {
-  net.createServer((socket) => {
-    socket.end('echo');
-  }).listen(0, '127.0.0.1');
+  net
+    .createServer((socket) => {
+      socket.end("echo");
+    })
+    .listen(0, "127.0.0.1");
 
-  net.createServer((socket) => {
-    socket.end('echo');
-  }).listen(0, '127.0.0.1');
+  net
+    .createServer((socket) => {
+      socket.end("echo");
+    })
+    .listen(0, "127.0.0.1");
 } else if (cluster.isPrimary) {
   const servers = 2;
   const serverPorts = new Set();
 
   // Test a single TCP server
   const testConnection = common.mustCallAtLeast((port, cb) => {
-    const socket = net.connect(port, '127.0.0.1', common.mustCall(() => {
-      // buffer result
-      let result = '';
-      socket.on('data', (chunk) => { result += chunk; });
+    const socket = net.connect(
+      port,
+      "127.0.0.1",
+      common.mustCall(() => {
+        // buffer result
+        let result = "";
+        socket.on("data", (chunk) => {
+          result += chunk;
+        });
 
-      // check result
-      socket.on('end', common.mustCall(() => {
-        cb(result === 'echo');
-        serverPorts.delete(port);
-      }));
-    }));
+        // check result
+        socket.on(
+          "end",
+          common.mustCall(() => {
+            cb(result === "echo");
+            serverPorts.delete(port);
+          }),
+        );
+      }),
+    );
   });
 
   // Test both servers created in the cluster
@@ -58,13 +71,16 @@ if (cluster.isWorker) {
     const portsArray = Array.from(serverPorts);
 
     for (let i = 0; i < servers; i++) {
-      testConnection(portsArray[i], common.mustCall((success) => {
-        assert.ok(success);
-        done += 1;
-        if (done === servers) {
-          cb();
-        }
-      }));
+      testConnection(
+        portsArray[i],
+        common.mustCall((success) => {
+          assert.ok(success);
+          done += 1;
+          if (done === servers) {
+            cb();
+          }
+        }),
+      );
     }
   });
 
@@ -74,31 +90,40 @@ if (cluster.isWorker) {
     let online = 0;
 
     for (let i = 0, l = workers; i < l; i++) {
-      cluster.fork().on('listening', common.mustCall((address) => {
-        serverPorts.add(address.port);
+      cluster.fork().on(
+        "listening",
+        common.mustCall((address) => {
+          serverPorts.add(address.port);
 
-        online += 1;
-        if (online === workers * servers) {
-          cb();
-        }
-      }, servers));
+          online += 1;
+          if (online === workers * servers) {
+            cb();
+          }
+        }, servers),
+      );
     }
   });
 
   const test = common.mustCall((again) => {
     // 1. start cluster
-    startCluster(common.mustCall(() => {
-      // 2. test cluster
-      testCluster(common.mustCall(() => {
-        // 3. disconnect cluster
-        cluster.disconnect(common.mustCall(() => {
-          // Run test again to confirm cleanup
-          if (again) {
-            test();
-          }
-        }));
-      }));
-    }));
+    startCluster(
+      common.mustCall(() => {
+        // 2. test cluster
+        testCluster(
+          common.mustCall(() => {
+            // 3. disconnect cluster
+            cluster.disconnect(
+              common.mustCall(() => {
+                // Run test again to confirm cleanup
+                if (again) {
+                  test();
+                }
+              }),
+            );
+          }),
+        );
+      }),
+    );
   }, 2);
 
   test(true);

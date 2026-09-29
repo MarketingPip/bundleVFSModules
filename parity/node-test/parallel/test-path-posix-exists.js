@@ -1,6 +1,6 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
+require("../common");
+const assert = require("assert");
 
-assert.strictEqual(require('path/posix'), require('path').posix);
+assert.strictEqual(require("path/posix"), require("path").posix);

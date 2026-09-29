@@ -21,6 +21,40 @@
     abort() {
     throw new Error('Process aborted');
     },
+    // --- begin sandbox getBuiltinModule (gap #3) ---
+    // Synchronous builtin access for createRequire()/Module._load, backed
+    // by the _builtinCache populated at sandbox init. Fragment-pipeline
+    // guards: this template has no _builtinManifest/_builtinCache of its
+    // own (the shipped runtime.js header defines them), so without them
+    // this degrades to Node's unknown-builtin behavior (undefined).
+    getBuiltinModule(id) {
+      if (typeof id !== 'string') {
+        const err = new TypeError(
+          'The "id" argument must be of type string. Received type ' + typeof id + ' (' + String(id) + ')'
+        );
+        err.code = 'ERR_INVALID_ARG_TYPE';
+        throw err;
+      }
+      if (typeof _builtinManifest === 'undefined' || typeof _builtinCache === 'undefined') {
+        return undefined;
+      }
+      const bare = id.startsWith('node:') ? id.slice(5) : id;
+      if (!Object.prototype.hasOwnProperty.call(_builtinManifest, bare)) {
+        return undefined;
+      }
+      if (!_builtinCache.has(bare)) {
+        const err = new Error(
+          '[ERR_REQUIRE_ASYNC_MODULE] Cannot require builtin \'' + id + '\' synchronously: it was not preloaded into the sync builtin cache'
+        );
+        err.code = 'ERR_REQUIRE_ASYNC_MODULE';
+        throw err;
+      }
+      const mod = _builtinCache.get(bare);
+      return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
+        ? mod.default
+        : mod;
+    },
+    // --- end sandbox getBuiltinModule (gap #3) ---
       // --- Timing ---
   uptime() {
     return (Date.now() - startTime) / 1000;

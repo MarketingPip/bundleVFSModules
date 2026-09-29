@@ -19,59 +19,71 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
-const Countdown = require('../common/countdown');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
+const Countdown = require("../common/countdown");
 
 const countdown = new Countdown(2, () => server.close());
-const server = http.createServer(function(req, res) {
-  if (req.url === '/one') {
-    res.writeHead(200, [['set-cookie', 'A'],
-                        ['content-type', 'text/plain']]);
-    res.end('one\n');
+const server = http.createServer(function (req, res) {
+  if (req.url === "/one") {
+    res.writeHead(200, [
+      ["set-cookie", "A"],
+      ["content-type", "text/plain"],
+    ]);
+    res.end("one\n");
   } else {
-    res.writeHead(200, [['set-cookie', 'A'],
-                        ['set-cookie', 'B'],
-                        ['content-type', 'text/plain']]);
-    res.end('two\n');
+    res.writeHead(200, [
+      ["set-cookie", "A"],
+      ["set-cookie", "B"],
+      ["content-type", "text/plain"],
+    ]);
+    res.end("two\n");
   }
 });
 server.listen(0);
 
-server.on('listening', common.mustCall(function() {
-  //
-  // one set-cookie header
-  //
-  http.get({ port: this.address().port, path: '/one' }, common.mustCall((res) => {
-    // set-cookie headers are always return in an array.
-    // even if there is only one.
-    assert.deepStrictEqual(res.headers['set-cookie'], ['A']);
-    assert.strictEqual(res.headers['content-type'], 'text/plain');
+server.on(
+  "listening",
+  common.mustCall(function () {
+    //
+    // one set-cookie header
+    //
+    http.get(
+      { port: this.address().port, path: "/one" },
+      common.mustCall((res) => {
+        // set-cookie headers are always return in an array.
+        // even if there is only one.
+        assert.deepStrictEqual(res.headers["set-cookie"], ["A"]);
+        assert.strictEqual(res.headers["content-type"], "text/plain");
 
-    res.on('data', function(chunk) {
-      console.log(chunk.toString());
-    });
+        res.on("data", function (chunk) {
+          console.log(chunk.toString());
+        });
 
-    res.on('end', function() {
-      countdown.dec();
-    });
-  }));
+        res.on("end", function () {
+          countdown.dec();
+        });
+      }),
+    );
 
-  // Two set-cookie headers
+    // Two set-cookie headers
 
-  http.get({ port: this.address().port, path: '/two' }, common.mustCall((res) => {
-    assert.deepStrictEqual(res.headers['set-cookie'], ['A', 'B']);
-    assert.strictEqual(res.headers['content-type'], 'text/plain');
+    http.get(
+      { port: this.address().port, path: "/two" },
+      common.mustCall((res) => {
+        assert.deepStrictEqual(res.headers["set-cookie"], ["A", "B"]);
+        assert.strictEqual(res.headers["content-type"], "text/plain");
 
-    res.on('data', function(chunk) {
-      console.log(chunk.toString());
-    });
+        res.on("data", function (chunk) {
+          console.log(chunk.toString());
+        });
 
-    res.on('end', function() {
-      countdown.dec();
-    });
-  }));
-
-}));
+        res.on("end", function () {
+          countdown.dec();
+        });
+      }),
+    );
+  }),
+);

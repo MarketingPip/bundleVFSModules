@@ -1,18 +1,18 @@
 // Flags: --expose-internals
-'use strict';
+"use strict";
 
 // Regression tests for the native `advanced` IPC codec (see PR #63933).
 // Host-object classification and tag validation must match the previous
 // JavaScript (v8.DefaultSerializer-based) behavior exactly.
-const common = require('../common');
-const assert = require('assert');
-const { fork } = require('child_process');
-const v8 = require('v8');
-const { MessageChannel } = require('worker_threads');
-const { internalBinding } = require('internal/test/binding');
+const common = require("../common");
+const assert = require("assert");
+const { fork } = require("child_process");
+const v8 = require("v8");
+const { MessageChannel } = require("worker_threads");
+const { internalBinding } = require("internal/test/binding");
 
-if (process.argv[2] === 'inspect') {
-  process.on('message', (value) => {
+if (process.argv[2] === "inspect") {
+  process.on("message", (value) => {
     process.send({
       isBuffer: Buffer.isBuffer(value),
       keys: Object.keys(value),
@@ -24,11 +24,11 @@ if (process.argv[2] === 'inspect') {
 
 function inspect(value) {
   return new Promise((resolve, reject) => {
-    const child = fork(__filename, ['inspect'], {
-      serialization: 'advanced',
-      stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+    const child = fork(__filename, ["inspect"], {
+      serialization: "advanced",
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
     });
-    child.once('message', (message) => {
+    child.once("message", (message) => {
       child.disconnect();
       resolve(message);
     });
@@ -48,10 +48,14 @@ async function main() {
   {
     const { port1, port2 } = new MessageChannel();
     port1.visible = 1;
-    Object.defineProperty(Object.prototype, 'visible', {
+    Object.defineProperty(Object.prototype, "visible", {
       configurable: true,
-      get() { return undefined; },
-      set() { throw new Error('setter called'); },
+      get() {
+        return undefined;
+      },
+      set() {
+        throw new Error("setter called");
+      },
     });
     let message;
     try {
@@ -62,14 +66,14 @@ async function main() {
       port2.close();
     }
     assert.strictEqual(message.visible, 1);
-    assert.strictEqual(message.keys[0], 'visible');
+    assert.strictEqual(message.keys[0], "visible");
   }
 
   // 2) A Buffer whose `.constructor` is reassigned is classified by its
   //    constructor, exactly like v8.DefaultSerializer: it is no longer a
   //    Buffer on the receiving side.
   {
-    const buf = Buffer.from('abc');
+    const buf = Buffer.from("abc");
     buf.constructor = Uint8Array;
     const message = await inspect(buf);
     assert.strictEqual(message.isBuffer, false);
@@ -93,7 +97,7 @@ async function main() {
     Buffer.prototype.constructor = Uint8Array;
     let message;
     try {
-      message = await inspect(Buffer.from('abc'));
+      message = await inspect(Buffer.from("abc"));
     } finally {
       Buffer.prototype.constructor = original;
     }
@@ -103,7 +107,7 @@ async function main() {
   // 5) A host-object tag other than the two the codec emits (0 and 1) must be
   //    rejected rather than silently accepted.
   {
-    const { deserialize } = internalBinding('ipc_serdes');
+    const { deserialize } = internalBinding("ipc_serdes");
 
     class BadTagSerializer extends v8.DefaultSerializer {
       _writeHostObject(value) {
@@ -113,10 +117,10 @@ async function main() {
     }
     const ser = new BadTagSerializer();
     ser.writeHeader();
-    ser.writeValue(Buffer.from('x'));
+    ser.writeValue(Buffer.from("x"));
     const payload = ser.releaseBuffer();
 
-    assert.throws(() => deserialize(payload), { code: 'ERR_INVALID_STATE' });
+    assert.throws(() => deserialize(payload), { code: "ERR_INVALID_STATE" });
   }
 }
 

@@ -1,12 +1,12 @@
 // Flags: --expose-gc
-import { isWindows, skipIfSQLiteMissing } from '../common/index.mjs';
-import tmpdir from '../common/tmpdir.js';
-import { join } from 'node:path';
-import { describe, test } from 'node:test';
-import { writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { isWindows, skipIfSQLiteMissing } from "../common/index.mjs";
+import tmpdir from "../common/tmpdir.js";
+import { join } from "node:path";
+import { describe, test } from "node:test";
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 skipIfSQLiteMissing();
-const { backup, DatabaseSync } = await import('node:sqlite');
+const { backup, DatabaseSync } = await import("node:sqlite");
 
 const isRoot = !isWindows && process.getuid() === 0;
 
@@ -18,7 +18,7 @@ function nextDb() {
   return join(tmpdir.path, `database-${cnt++}.db`);
 }
 
-function makeSourceDb(dbPath = ':memory:') {
+function makeSourceDb(dbPath = ":memory:") {
   const database = new DatabaseSync(dbPath);
 
   database.exec(`
@@ -28,7 +28,9 @@ function makeSourceDb(dbPath = ':memory:') {
     ) STRICT
   `);
 
-  const insert = database.prepare('INSERT INTO data (key, value) VALUES (?, ?)');
+  const insert = database.prepare(
+    "INSERT INTO data (key, value) VALUES (?, ?)",
+  );
 
   for (let i = 1; i <= 2; i++) {
     insert.run(i, `value-${i}`);
@@ -37,105 +39,139 @@ function makeSourceDb(dbPath = ':memory:') {
   return database;
 }
 
-describe('backup()', () => {
-  test('throws if the source database is not provided', (t) => {
-    t.assert.throws(() => {
-      backup();
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "sourceDb" argument must be an object.'
-    });
+describe("backup()", () => {
+  test("throws if the source database is not provided", (t) => {
+    t.assert.throws(
+      () => {
+        backup();
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message: 'The "sourceDb" argument must be an object.',
+      },
+    );
   });
 
-  test('throws if path is not a string, URL, or Buffer', (t) => {
+  test("throws if path is not a string, URL, or Buffer", (t) => {
     const database = makeSourceDb();
 
-    t.assert.throws(() => {
-      backup(database);
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "path" argument must be a string, Uint8Array, or URL without null bytes.'
-    });
+    t.assert.throws(
+      () => {
+        backup(database);
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message:
+          'The "path" argument must be a string, Uint8Array, or URL without null bytes.',
+      },
+    );
 
-    t.assert.throws(() => {
-      backup(database, {});
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "path" argument must be a string, Uint8Array, or URL without null bytes.'
-    });
+    t.assert.throws(
+      () => {
+        backup(database, {});
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message:
+          'The "path" argument must be a string, Uint8Array, or URL without null bytes.',
+      },
+    );
   });
 
-  test('throws if the database path contains null bytes', (t) => {
+  test("throws if the database path contains null bytes", (t) => {
     const database = makeSourceDb();
 
-    t.assert.throws(() => {
-      backup(database, Buffer.from('l\0cation'));
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "path" argument must be a string, Uint8Array, or URL without null bytes.'
-    });
+    t.assert.throws(
+      () => {
+        backup(database, Buffer.from("l\0cation"));
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message:
+          'The "path" argument must be a string, Uint8Array, or URL without null bytes.',
+      },
+    );
 
-    t.assert.throws(() => {
-      backup(database, 'l\0cation');
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "path" argument must be a string, Uint8Array, or URL without null bytes.'
-    });
+    t.assert.throws(
+      () => {
+        backup(database, "l\0cation");
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message:
+          'The "path" argument must be a string, Uint8Array, or URL without null bytes.',
+      },
+    );
   });
 
-  test('throws if options is not an object', (t) => {
+  test("throws if options is not an object", (t) => {
     const database = makeSourceDb();
 
-    t.assert.throws(() => {
-      backup(database, 'hello.db', 'invalid');
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "options" argument must be an object.'
-    });
+    t.assert.throws(
+      () => {
+        backup(database, "hello.db", "invalid");
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message: 'The "options" argument must be an object.',
+      },
+    );
   });
 
-  test('throws if any of provided options is invalid', (t) => {
+  test("throws if any of provided options is invalid", (t) => {
     const database = makeSourceDb();
 
-    t.assert.throws(() => {
-      backup(database, 'hello.db', {
-        source: 42
-      });
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "options.source" argument must be a string.'
-    });
+    t.assert.throws(
+      () => {
+        backup(database, "hello.db", {
+          source: 42,
+        });
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message: 'The "options.source" argument must be a string.',
+      },
+    );
 
-    t.assert.throws(() => {
-      backup(database, 'hello.db', {
-        target: 42
-      });
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "options.target" argument must be a string.'
-    });
+    t.assert.throws(
+      () => {
+        backup(database, "hello.db", {
+          target: 42,
+        });
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message: 'The "options.target" argument must be a string.',
+      },
+    );
 
-    t.assert.throws(() => {
-      backup(database, 'hello.db', {
-        rate: 'invalid'
-      });
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "options.rate" argument must be an integer.'
-    });
+    t.assert.throws(
+      () => {
+        backup(database, "hello.db", {
+          rate: "invalid",
+        });
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message: 'The "options.rate" argument must be an integer.',
+      },
+    );
 
-    t.assert.throws(() => {
-      backup(database, 'hello.db', {
-        progress: 'invalid'
-      });
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "options.progress" argument must be a function.'
-    });
+    t.assert.throws(
+      () => {
+        backup(database, "hello.db", {
+          progress: "invalid",
+        });
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+        message: 'The "options.progress" argument must be a function.',
+      },
+    );
   });
 });
 
-test('database backup', async (t) => {
+test("database backup", async (t) => {
   const progressFn = t.mock.fn();
   const database = makeSourceDb();
   const destDb = nextDb();
@@ -146,16 +182,18 @@ test('database backup', async (t) => {
   });
 
   const backupDb = new DatabaseSync(destDb);
-  const rows = backupDb.prepare('SELECT * FROM data').all();
+  const rows = backupDb.prepare("SELECT * FROM data").all();
 
   // The source database has two pages - using the default page size -,
   // so the progress function should be called once (the last call is not made since
   // the promise resolves)
   t.assert.strictEqual(progressFn.mock.calls.length, 1);
-  t.assert.deepStrictEqual(progressFn.mock.calls[0].arguments, [{ totalPages: 2, remainingPages: 1 }]);
+  t.assert.deepStrictEqual(progressFn.mock.calls[0].arguments, [
+    { totalPages: 2, remainingPages: 1 },
+  ]);
   t.assert.deepStrictEqual(rows, [
-    { __proto__: null, key: 1, value: 'value-1' },
-    { __proto__: null, key: 2, value: 'value-2' },
+    { __proto__: null, key: 1, value: "value-1" },
+    { __proto__: null, key: 2, value: "value-2" },
   ]);
 
   t.after(() => {
@@ -164,47 +202,55 @@ test('database backup', async (t) => {
   });
 });
 
-test('backup database using location as URL', async (t) => {
+test("backup database using location as URL", async (t) => {
   const database = makeSourceDb();
   const destDb = pathToFileURL(nextDb());
 
-  t.after(() => { database.close(); });
+  t.after(() => {
+    database.close();
+  });
 
   await backup(database, destDb);
 
   const backupDb = new DatabaseSync(destDb);
 
-  t.after(() => { backupDb.close(); });
+  t.after(() => {
+    backupDb.close();
+  });
 
-  const rows = backupDb.prepare('SELECT * FROM data').all();
+  const rows = backupDb.prepare("SELECT * FROM data").all();
 
   t.assert.deepStrictEqual(rows, [
-    { __proto__: null, key: 1, value: 'value-1' },
-    { __proto__: null, key: 2, value: 'value-2' },
+    { __proto__: null, key: 1, value: "value-1" },
+    { __proto__: null, key: 2, value: "value-2" },
   ]);
 });
 
-test('backup database using location as Buffer', async (t) => {
+test("backup database using location as Buffer", async (t) => {
   const database = makeSourceDb();
   const destDb = Buffer.from(nextDb());
 
-  t.after(() => { database.close(); });
+  t.after(() => {
+    database.close();
+  });
 
   await backup(database, destDb);
 
   const backupDb = new DatabaseSync(destDb);
 
-  t.after(() => { backupDb.close(); });
+  t.after(() => {
+    backupDb.close();
+  });
 
-  const rows = backupDb.prepare('SELECT * FROM data').all();
+  const rows = backupDb.prepare("SELECT * FROM data").all();
 
   t.assert.deepStrictEqual(rows, [
-    { __proto__: null, key: 1, value: 'value-1' },
-    { __proto__: null, key: 2, value: 'value-2' },
+    { __proto__: null, key: 1, value: "value-1" },
+    { __proto__: null, key: 2, value: "value-2" },
   ]);
 });
 
-test('database backup in a single call', async (t) => {
+test("database backup in a single call", async (t) => {
   const progressFn = t.mock.fn();
   const database = makeSourceDb();
   const destDb = nextDb();
@@ -215,12 +261,12 @@ test('database backup in a single call', async (t) => {
   });
 
   const backupDb = new DatabaseSync(destDb);
-  const rows = backupDb.prepare('SELECT * FROM data').all();
+  const rows = backupDb.prepare("SELECT * FROM data").all();
 
   t.assert.strictEqual(progressFn.mock.calls.length, 0);
   t.assert.deepStrictEqual(rows, [
-    { __proto__: null, key: 1, value: 'value-1' },
-    { __proto__: null, key: 2, value: 'value-2' },
+    { __proto__: null, key: 1, value: "value-1" },
+    { __proto__: null, key: 2, value: "value-2" },
   ]);
 
   t.after(() => {
@@ -229,94 +275,118 @@ test('database backup in a single call', async (t) => {
   });
 });
 
-test('throws exception when trying to start backup from a closed database', (t) => {
-  t.assert.throws(() => {
-    const database = new DatabaseSync(':memory:');
+test("throws exception when trying to start backup from a closed database", (t) => {
+  t.assert.throws(
+    () => {
+      const database = new DatabaseSync(":memory:");
 
+      database.close();
+
+      backup(database, "backup.db");
+    },
+    {
+      code: "ERR_INVALID_STATE",
+      message: "database is not open",
+    },
+  );
+});
+
+test("throws if URL is not file: scheme", (t) => {
+  const database = new DatabaseSync(":memory:");
+
+  t.after(() => {
     database.close();
-
-    backup(database, 'backup.db');
-  }, {
-    code: 'ERR_INVALID_STATE',
-    message: 'database is not open'
   });
+
+  t.assert.throws(
+    () => {
+      backup(database, new URL("http://example.com/backup.db"));
+    },
+    {
+      code: "ERR_INVALID_URL_SCHEME",
+      message: "The URL must be of scheme file:",
+    },
+  );
 });
 
-test('throws if URL is not file: scheme', (t) => {
-  const database = new DatabaseSync(':memory:');
+test(
+  "database backup fails when dest file is not writable",
+  { skip: isRoot },
+  async (t) => {
+    const readonlyDestDb = nextDb();
+    writeFileSync(readonlyDestDb, "", { mode: 0o444 });
 
-  t.after(() => { database.close(); });
+    const database = makeSourceDb();
 
-  t.assert.throws(() => {
-    backup(database, new URL('http://example.com/backup.db'));
-  }, {
-    code: 'ERR_INVALID_URL_SCHEME',
-    message: 'The URL must be of scheme file:',
-  });
-});
+    await t.assert.rejects(
+      async () => {
+        await backup(database, readonlyDestDb);
+      },
+      {
+        code: "ERR_SQLITE_ERROR",
+        message: "attempt to write a readonly database",
+      },
+    );
+  },
+);
 
-test('database backup fails when dest file is not writable', { skip: isRoot }, async (t) => {
-  const readonlyDestDb = nextDb();
-  writeFileSync(readonlyDestDb, '', { mode: 0o444 });
-
-  const database = makeSourceDb();
-
-  await t.assert.rejects(async () => {
-    await backup(database, readonlyDestDb);
-  }, {
-    code: 'ERR_SQLITE_ERROR',
-    message: 'attempt to write a readonly database'
-  });
-});
-
-test('backup fails when progress function throws', async (t) => {
+test("backup fails when progress function throws", async (t) => {
   const database = makeSourceDb();
   const destDb = nextDb();
 
   const progressFn = t.mock.fn(() => {
-    throw new Error('progress error');
+    throw new Error("progress error");
   });
 
-  await t.assert.rejects(async () => {
-    await backup(database, destDb, {
-      rate: 1,
-      progress: progressFn,
-    });
-  }, {
-    message: 'progress error'
-  });
+  await t.assert.rejects(
+    async () => {
+      await backup(database, destDb, {
+        rate: 1,
+        progress: progressFn,
+      });
+    },
+    {
+      message: "progress error",
+    },
+  );
 });
 
-test('backup fails when source db is invalid', async (t) => {
+test("backup fails when source db is invalid", async (t) => {
   const database = makeSourceDb();
   const destDb = nextDb();
 
-  await t.assert.rejects(async () => {
-    await backup(database, destDb, {
-      rate: 1,
-      source: 'invalid',
-    });
-  }, {
-    message: 'unknown database invalid'
-  });
+  await t.assert.rejects(
+    async () => {
+      await backup(database, destDb, {
+        rate: 1,
+        source: "invalid",
+      });
+    },
+    {
+      message: "unknown database invalid",
+    },
+  );
 });
 
-test('backup fails when path cannot be opened', async (t) => {
+test("backup fails when path cannot be opened", async (t) => {
   const database = makeSourceDb();
 
-  await t.assert.rejects(async () => {
-    await backup(database, `${tmpdir.path}/invalid/backup.db`);
-  }, {
-    message: 'unable to open database file'
-  });
+  await t.assert.rejects(
+    async () => {
+      await backup(database, `${tmpdir.path}/invalid/backup.db`);
+    },
+    {
+      message: "unable to open database file",
+    },
+  );
 });
 
-test('backup has correct name and length', (t) => {
-  t.assert.strictEqual(backup.name, 'backup');
+test("backup has correct name and length", (t) => {
+  t.assert.strictEqual(backup.name, "backup");
   t.assert.strictEqual(backup.length, 2);
 });
 
-test('source database is kept alive while a backup is in flight', async (t) => {
+test("source database is kept alive while a backup is in flight", async (t) => {
   // Regression test: previously, BackupJob stored a raw DatabaseSync* and the
   // source could be garbage-collected while the backup was still running,
   // leading to a use-after-free when BackupJob::Finalize() dereferenced the
@@ -325,9 +395,11 @@ test('source database is kept alive while a backup is in flight', async (t) => {
 
   let database = makeSourceDb();
   // Insert enough rows to ensure the backup takes multiple steps.
-  const insert = database.prepare('INSERT INTO data (key, value) VALUES (?, ?)');
+  const insert = database.prepare(
+    "INSERT INTO data (key, value) VALUES (?, ?)",
+  );
   for (let i = 3; i <= 500; i++) {
-    insert.run(i, 'A'.repeat(1024) + i);
+    insert.run(i, "A".repeat(1024) + i);
   }
 
   const p = backup(database, destDb, {
@@ -351,7 +423,9 @@ test('source database is kept alive while a backup is in flight', async (t) => {
   t.assert.ok(totalPages > 0);
 
   const backupDb = new DatabaseSync(destDb);
-  t.after(() => { backupDb.close(); });
-  const rows = backupDb.prepare('SELECT COUNT(*) AS n FROM data').get();
+  t.after(() => {
+    backupDb.close();
+  });
+  const rows = backupDb.prepare("SELECT COUNT(*) AS n FROM data").get();
   t.assert.strictEqual(rows.n, 500);
 });

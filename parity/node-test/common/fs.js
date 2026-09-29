@@ -1,10 +1,10 @@
-'use strict';
+"use strict";
 
-const { mustNotMutateObjectDeep } = require('.');
-const { readdirSync } = require('node:fs');
-const { join } = require('node:path');
-const assert = require('node:assert');
-const tmpdir = require('./tmpdir.js');
+const { mustNotMutateObjectDeep } = require(".");
+const { readdirSync } = require("node:fs");
+const { join } = require("node:path");
+const assert = require("node:assert");
+const tmpdir = require("./tmpdir.js");
 
 let dirc = 0;
 function nextdir(dirname) {
@@ -33,7 +33,10 @@ function assertDirEquivalent(dir1, dir2) {
 }
 
 function collectEntries(dir, dirEntries) {
-  const newEntries = readdirSync(dir, mustNotMutateObjectDeep({ withFileTypes: true }));
+  const newEntries = readdirSync(
+    dir,
+    mustNotMutateObjectDeep({ withFileTypes: true }),
+  );
   for (const entry of newEntries) {
     if (entry.isDirectory()) {
       collectEntries(join(dir, entry.name), dirEntries);

@@ -19,20 +19,20 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
-const net = require('net');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
+const net = require("net");
 
 const options = {
-  host: '127.0.0.1',
-  port: undefined
+  host: "127.0.0.1",
+  port: undefined,
 };
 
-process.env.NODE_DEBUG = 'http';
+process.env.NODE_DEBUG = "http";
 // Start a tcp server that closes incoming connections immediately
-const server = net.createServer(function(client) {
+const server = net.createServer(function (client) {
   client.destroy();
   server.close();
 });
@@ -42,8 +42,11 @@ server.listen(0, options.host, common.mustCall(onListen));
 function onListen() {
   options.port = this.address().port;
   const req = http.request(options, common.mustNotCall());
-  req.on('error', common.mustCall(function(err) {
-    assert.strictEqual(err.code, 'ECONNRESET');
-  }));
+  req.on(
+    "error",
+    common.mustCall(function (err) {
+      assert.strictEqual(err.code, "ECONNRESET");
+    }),
+  );
   req.end();
 }

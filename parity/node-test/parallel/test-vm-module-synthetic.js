@@ -1,15 +1,15 @@
-'use strict';
+"use strict";
 
 // Flags: --experimental-vm-modules
 
-const common = require('../common');
-const { SyntheticModule, SourceTextModule } = require('vm');
-const assert = require('assert');
+const common = require("../common");
+const { SyntheticModule, SourceTextModule } = require("vm");
+const assert = require("assert");
 
 (async () => {
   {
-    const s = new SyntheticModule(['x'], () => {
-      s.setExport('x', 1);
+    const s = new SyntheticModule(["x"], () => {
+      s.setExport("x", 1);
     });
 
     const m = new SourceTextModule(`
@@ -22,7 +22,7 @@ const assert = require('assert');
     await m.evaluate();
 
     assert.strictEqual(m.namespace.getX(), 1);
-    s.setExport('x', 42);
+    s.setExport("x", 42);
     assert.strictEqual(m.namespace.getX(), 42);
   }
 
@@ -40,34 +40,42 @@ const assert = require('assert');
   for (const invalidName of [1, Symbol.iterator, {}, [], null, true, 0]) {
     const s = new SyntheticModule([], () => {});
     await s.link(() => {});
-    assert.throws(() => {
-      s.setExport(invalidName, undefined);
-    }, {
-      name: 'TypeError',
-    });
+    assert.throws(
+      () => {
+        s.setExport(invalidName, undefined);
+      },
+      {
+        name: "TypeError",
+      },
+    );
   }
 
   {
     const s = new SyntheticModule([], () => {});
     await s.link(() => {});
-    assert.throws(() => {
-      s.setExport('does not exist');
-    }, {
-      name: 'ReferenceError',
-    });
+    assert.throws(
+      () => {
+        s.setExport("does not exist");
+      },
+      {
+        name: "ReferenceError",
+      },
+    );
   }
 
   {
-    const s = new SyntheticModule(['name'], () => {});
+    const s = new SyntheticModule(["name"], () => {});
     // Exports of SyntheticModule can be immediately set after creation.
     // No link is required.
-    s.setExport('name', 'value');
+    s.setExport("name", "value");
   }
 
   for (const value of [null, {}, SyntheticModule.prototype]) {
-    assert.throws(() => {
-      SyntheticModule.prototype.setExport.call(value, 'foo');
-    }, { code: 'ERR_INVALID_THIS' });
+    assert.throws(
+      () => {
+        SyntheticModule.prototype.setExport.call(value, "foo");
+      },
+      { code: "ERR_INVALID_THIS" },
+    );
   }
-
 })().then(common.mustCall());

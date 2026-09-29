@@ -19,26 +19,29 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const { isMainThread } = require('worker_threads');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const { isMainThread } = require("worker_threads");
 
 if (!isMainThread) {
-  assert.strictEqual(typeof process.umask(), 'number');
-  assert.throws(() => {
-    process.umask('0664');
-  }, { code: 'ERR_WORKER_UNSUPPORTED_OPERATION' });
+  assert.strictEqual(typeof process.umask(), "number");
+  assert.throws(
+    () => {
+      process.umask("0664");
+    },
+    { code: "ERR_WORKER_UNSUPPORTED_OPERATION" },
+  );
 
-  common.skip('Setting process.umask is not supported in Workers');
+  common.skip("Setting process.umask is not supported in Workers");
 }
 
 // Note in Windows one can only set the "user" bits.
 let mask;
 if (common.isWindows) {
-  mask = '0600';
+  mask = "0600";
 } else {
-  mask = '0664';
+  mask = "0664";
 }
 
 const old = process.umask(mask);
@@ -51,16 +54,22 @@ assert.strictEqual(process.umask(), old);
 // 2. If the test fails, process.umask() will return 0
 assert.strictEqual(process.umask(), old);
 
-assert.throws(() => {
-  process.umask({});
-}, {
-  code: 'ERR_INVALID_ARG_TYPE',
-});
+assert.throws(
+  () => {
+    process.umask({});
+  },
+  {
+    code: "ERR_INVALID_ARG_TYPE",
+  },
+);
 
-['123x', 'abc', '999'].forEach((value) => {
-  assert.throws(() => {
-    process.umask(value);
-  }, {
-    code: 'ERR_INVALID_ARG_VALUE',
-  });
+["123x", "abc", "999"].forEach((value) => {
+  assert.throws(
+    () => {
+      process.umask(value);
+    },
+    {
+      code: "ERR_INVALID_ARG_VALUE",
+    },
+  );
 });

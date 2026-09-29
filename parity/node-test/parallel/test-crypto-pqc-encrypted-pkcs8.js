@@ -1,28 +1,27 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const { hasOpenSSL } = require('../common/crypto');
+const { hasOpenSSL } = require("../common/crypto");
 
 if (!hasOpenSSL(3, 5) && !process.features.openssl_is_boringssl)
-  common.skip('requires OpenSSL >= 3.5 or BoringSSL');
+  common.skip("requires OpenSSL >= 3.5 or BoringSSL");
 
-const assert = require('assert');
-const {
-  createPrivateKey,
-  generateKeyPairSync,
-  getCiphers,
-} = require('crypto');
+const assert = require("assert");
+const { createPrivateKey, generateKeyPairSync, getCiphers } = require("crypto");
 
 const algorithms = new Set([
-  'ml-dsa-44', 'ml-dsa-65', 'ml-dsa-87',
-  'ml-kem-512', 'ml-kem-768', 'ml-kem-1024',
+  "ml-dsa-44",
+  "ml-dsa-65",
+  "ml-dsa-87",
+  "ml-kem-512",
+  "ml-kem-768",
+  "ml-kem-1024",
 ]);
 // BoringSSL does not support ML-KEM-512.
 if (process.features.openssl_is_boringssl) {
-  algorithms.delete('ml-kem-512');
+  algorithms.delete("ml-kem-512");
 }
 
 // Exercise each CBC cipher that PBES2 may use. This covers multiple
@@ -31,32 +30,39 @@ if (process.features.openssl_is_boringssl) {
 // the EncryptedPrivateKeyInfo parser.
 const availableCiphers = new Set(getCiphers());
 const ciphers = [
-  'aes-128-cbc', 'aes-192-cbc', 'aes-256-cbc',
-  'des-ede3-cbc', 'rc2-cbc',
+  "aes-128-cbc",
+  "aes-192-cbc",
+  "aes-256-cbc",
+  "des-ede3-cbc",
+  "rc2-cbc",
 ].filter((c) => availableCiphers.has(c));
 
-const passphrase = 'top secret';
+const passphrase = "top secret";
 const wrongPassphraseError =
   /bad decrypt|DECRYPTION_FAILED|BAD_DECRYPT|bad password|DECODE[ _]ERROR/i;
 // A wrong passphrase usually fails during cipher finalization, but CBC output
 // can have valid padding by chance. OpenSSL then parses the bad plaintext as
 // PKCS#8 and may report ASN.1 or decoder errors from the same failed import.
 function assertWrongPassphrase(fn) {
-  assert.throws(fn, (err) => wrongPassphraseError.test(err.message) ||
-                            err.code?.startsWith('ERR_OSSL_ASN1_') ||
-                            err.code === 'ERR_OSSL_UNSUPPORTED');
+  assert.throws(
+    fn,
+    (err) =>
+      wrongPassphraseError.test(err.message) ||
+      err.code?.startsWith("ERR_OSSL_ASN1_") ||
+      err.code === "ERR_OSSL_UNSUPPORTED",
+  );
 }
 
 for (const asymmetricKeyType of algorithms) {
   const { privateKey } = generateKeyPairSync(asymmetricKeyType);
   assert.strictEqual(privateKey.asymmetricKeyType, asymmetricKeyType);
 
-  const plainDer = privateKey.export({ type: 'pkcs8', format: 'der' });
+  const plainDer = privateKey.export({ type: "pkcs8", format: "der" });
 
   for (const cipher of ciphers) {
-    for (const format of ['pem', 'der']) {
+    for (const format of ["pem", "der"]) {
       const encrypted = privateKey.export({
-        type: 'pkcs8',
+        type: "pkcs8",
         format,
         cipher,
         passphrase,
@@ -65,22 +71,24 @@ for (const asymmetricKeyType of algorithms) {
       const imported = createPrivateKey({
         key: encrypted,
         format,
-        type: 'pkcs8',
+        type: "pkcs8",
         passphrase,
       });
-      assert.strictEqual(imported.type, 'private');
+      assert.strictEqual(imported.type, "private");
       assert.strictEqual(imported.asymmetricKeyType, asymmetricKeyType);
       assert.deepStrictEqual(
-        imported.export({ type: 'pkcs8', format: 'der' }),
+        imported.export({ type: "pkcs8", format: "der" }),
         plainDer,
       );
 
-      assertWrongPassphrase(() => createPrivateKey({
-        key: encrypted,
-        format,
-        type: 'pkcs8',
-        passphrase: 'wrong',
-      }));
+      assertWrongPassphrase(() =>
+        createPrivateKey({
+          key: encrypted,
+          format,
+          type: "pkcs8",
+          passphrase: "wrong",
+        }),
+      );
     }
   }
 }
@@ -90,45 +98,53 @@ for (const asymmetricKeyType of algorithms) {
 // PrivateKeyInfo fixtures. The inner seed-only form is portable across
 // OpenSSL (>=3.5) and BoringSSL, and the matching JWK fixture provides the
 // canonical key material used to derive the expected PKCS#8 bytes.
-const fixtures = require('../common/fixtures');
+const fixtures = require("../common/fixtures");
 const fixtureCases = [
-  { alg: 'ml-dsa-44', jwkFile: 'ml-dsa-44.json',
-    encBase: 'ml_dsa_44_private_encrypted' },
-  { alg: 'ml-kem-768', jwkFile: 'ml-kem-768.json',
-    encBase: 'ml_kem_768_private_encrypted' },
+  {
+    alg: "ml-dsa-44",
+    jwkFile: "ml-dsa-44.json",
+    encBase: "ml_dsa_44_private_encrypted",
+  },
+  {
+    alg: "ml-kem-768",
+    jwkFile: "ml-kem-768.json",
+    encBase: "ml_kem_768_private_encrypted",
+  },
 ];
 
 for (const { alg, jwkFile, encBase } of fixtureCases) {
   const jwkKey = createPrivateKey({
-    key: JSON.parse(fixtures.readKey(jwkFile, 'utf8')),
-    format: 'jwk',
+    key: JSON.parse(fixtures.readKey(jwkFile, "utf8")),
+    format: "jwk",
   });
   assert.strictEqual(jwkKey.asymmetricKeyType, alg);
-  const expectedDer = jwkKey.export({ type: 'pkcs8', format: 'der' });
+  const expectedDer = jwkKey.export({ type: "pkcs8", format: "der" });
 
-  for (const format of ['pem', 'der']) {
+  for (const format of ["pem", "der"]) {
     const encryptedFixture = fixtures.readKey(
       `${encBase}.${format}`,
-      format === 'pem' ? 'utf8' : null,
+      format === "pem" ? "utf8" : null,
     );
 
     const imported = createPrivateKey({
       key: encryptedFixture,
       format,
-      type: 'pkcs8',
-      passphrase: 'password',
+      type: "pkcs8",
+      passphrase: "password",
     });
     assert.strictEqual(imported.asymmetricKeyType, alg);
     assert.deepStrictEqual(
-      imported.export({ type: 'pkcs8', format: 'der' }),
+      imported.export({ type: "pkcs8", format: "der" }),
       expectedDer,
     );
 
-    assertWrongPassphrase(() => createPrivateKey({
-      key: encryptedFixture,
-      format,
-      type: 'pkcs8',
-      passphrase: 'wrong',
-    }));
+    assertWrongPassphrase(() =>
+      createPrivateKey({
+        key: encryptedFixture,
+        format,
+        type: "pkcs8",
+        passphrase: "wrong",
+      }),
+    );
   }
 }

@@ -1,19 +1,19 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
-const { isMainThread } = require('worker_threads');
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+const { isMainThread } = require("worker_threads");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
 // Basic usage
 {
-  const result = fs.mkdtempDisposableSync(tmpdir.resolve('foo.'));
+  const result = fs.mkdtempDisposableSync(tmpdir.resolve("foo."));
 
-  assert.strictEqual(path.basename(result.path).length, 'foo.XXXXXX'.length);
+  assert.strictEqual(path.basename(result.path).length, "foo.XXXXXX".length);
   assert.strictEqual(path.dirname(result.path), tmpdir.path);
   assert(fs.existsSync(result.path));
 
@@ -27,7 +27,7 @@ tmpdir.refresh();
 
 // Usage with [Symbol.dispose]()
 {
-  const result = fs.mkdtempDisposableSync(tmpdir.resolve('foo.'));
+  const result = fs.mkdtempDisposableSync(tmpdir.resolve("foo."));
 
   assert(fs.existsSync(result.path));
 
@@ -45,8 +45,8 @@ if (isMainThread) {
   const originalCwd = process.cwd();
 
   process.chdir(tmpdir.path);
-  const first = fs.mkdtempDisposableSync('first.');
-  const second = fs.mkdtempDisposableSync('second.');
+  const first = fs.mkdtempDisposableSync("first.");
+  const second = fs.mkdtempDisposableSync("second.");
 
   const fullFirstPath = path.join(tmpdir.path, first.path);
   const fullSecondPath = path.join(tmpdir.path, second.path);
@@ -69,10 +69,10 @@ if (isMainThread) {
 // Errors from cleanup are thrown
 // It is difficult to arrange for rmdir to fail on windows
 if (!common.isWindows && process.getuid() !== 0) {
-  const base = fs.mkdtempDisposableSync(tmpdir.resolve('foo.'));
+  const base = fs.mkdtempDisposableSync(tmpdir.resolve("foo."));
 
   // On Unix we can prevent removal by making the parent directory read-only
-  const child = fs.mkdtempDisposableSync(path.join(base.path, 'bar.'));
+  const child = fs.mkdtempDisposableSync(path.join(base.path, "bar."));
 
   const originalMode = fs.statSync(base.path).mode;
   fs.chmodSync(base.path, 0o444);
