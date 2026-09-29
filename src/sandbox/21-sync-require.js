@@ -177,6 +177,24 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
   const isCjs = !!moduleObject.__bvm_cjs__;
   delete moduleObject.__bvm_cjs__;
 
+  // Star re-exports (see convertCjsToEsm __exportStar → export * from).
+  // __bvm_star_* hold lifted module namespaces to re-export (all keys
+  // except `default`, per ESM semantics). Collected for proxy fallback and
+  // hidden from the visible namespace like __bvm_cjs__.
+  const starSources = [];
+  for (const key of Object.keys(moduleObject)) {
+    if (key.startsWith("__bvm_star_")) {
+      const starMod = moduleObject[key];
+      if (
+        starMod &&
+        (typeof starMod === "object" || typeof starMod === "function")
+      ) {
+        starSources.push(starMod);
+      }
+      delete moduleObject[key];
+    }
+  }
+
   if (moduleType === "require") {
     return moduleObject.default ?? moduleObject;
   }
@@ -205,6 +223,18 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
       if (prop === "__esModule") return true;
 
       if (!(prop in target)) {
+        // Star re-export fallback (ESM `export *` semantics): check each
+        // star source, skipping `default`. Star modules are proxied and
+        // throw SyntaxError for missing exports; try the next source.
+        for (const starMod of starSources) {
+          if (prop === "default") break;
+          try {
+            return starMod[prop];
+          } catch (e) {
+            if (e instanceof SyntaxError) continue;
+            throw e;
+          }
+        }
         // CJS interop (Node parity): a named import from a CJS module
         // resolves against module.exports, including keys it inherited
         // via spread (which static analysis cannot see).
