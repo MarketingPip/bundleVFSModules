@@ -4677,7 +4677,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
   try {
     const extension = modulePath.split('.').pop().toLowerCase();
     const isRelative = modulePath.startsWith('./') || modulePath.startsWith('../');
-  const isAbsolute = modulePath.startsWith('./')
+  const isAbsolute = modulePath.startsWith('/')
 
   let sourceResolvedError = false;
   
@@ -8796,6 +8796,7 @@ function _parseKey(s) {
             : (parentEntryPoint ?? "");
 
           const isRelative = path.startsWith("./") || path.startsWith("../");
+          const isAbsolute = path.startsWith("/");
 
           // 3a. Package-internal # imports (gap #2): resolve via the nearest
           // package.json 'imports' field before the node_modules walk.
@@ -8815,7 +8816,9 @@ function _parseKey(s) {
           }
 
           // 3. Handle Bare Specifiers (node_modules lookup)
-          if (!isRelative) {
+          // Absolute VFS paths (isAbsolute) bypass this branch — they are
+          // resolved directly against the VFS, not via package lookup.
+          if (!isRelative && !isAbsolute) {
             // Vendor browser/WASM builds for native-only packages (real
             // Vite 7: rollup → @rollup/browser, esbuild → esbuild-wasm
             // shim). Specifier-based, so ESM 'import 'rollup'' resolves
@@ -8844,6 +8847,24 @@ function _parseKey(s) {
               };
             }
             return null; // Fall through if package is completely missing
+          }
+
+          // 3b. Handle Absolute VFS Paths (e.g. '/node_modules/terser/...').
+          // Resolve directly against the VFS root, ignoring the importer.
+          // (Vite's loadTerserPath does `await import(pathToFileURL(...))`
+          // which the sandbox normalizes to an absolute VFS path.)
+          if (isAbsolute) {
+            const absResult = resolveVFS(path, "", vfs);
+            if (!absResult) {
+              throw new Error(
+                `[ERR_MODULE_NOT_FOUND]: Cannot find module '${path}' (absolute VFS path)`,
+              );
+            }
+            // Gap #1: return the resolved VFS path alongside the source.
+            return {
+              source: absResult.source,
+              resolvedPath: absResult.resolvedPath,
+            };
           }
 
           // 4. Handle Relative Paths
