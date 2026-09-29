@@ -31,6 +31,13 @@
 const ROLLUP_BROWSER_MAIN =
   "/node_modules/@rollup/browser/dist/rollup.browser.js";
 const ROLLUP_BROWSER_DIR = "/node_modules/@rollup/browser";
+// @rollup/browser does not ship the `rollup/parseAst` subpath (its export
+// list is exactly { VERSION, defineConfig, rollup }), but vite 7 imports
+// { parseAst, parseAstAsync } from "rollup/parseAst" at its top level.
+// This VFS module provides rollup 4's documented parseAst contract backed
+// by the real acorn parser (see src/vendor/rollup-parseast.mjs) — it
+// really parses; it is not a stub.
+const ROLLUP_PARSEAST_MODULE = "/node_modules/.bvm/rollup-parseast.mjs";
 const ESBUILD_SHIM = "/node_modules/.bvm/esbuild-shim.cjs";
 
 function hasRuntimeVFS() {
@@ -47,6 +54,17 @@ function hasRuntimeVFS() {
 // node_modules dir (e.g. code that did require.resolve('rollup') elsewhere
 // and then requires the absolute path).
 function interceptAbsolutePath(request) {
+  // rollup/parseAst has its own module (see ROLLUP_PARSEAST_MODULE) — it
+  // must win over the generic /node_modules/rollup/ → @rollup/browser
+  // rewrite below, which would point at a file that does not exist.
+  if (
+    request === "/node_modules/rollup/parseAst" ||
+    request === "/node_modules/rollup/parseAst.js" ||
+    request.endsWith("/node_modules/rollup/parseAst") ||
+    request.endsWith("/node_modules/rollup/parseAst.js")
+  ) {
+    return ROLLUP_PARSEAST_MODULE;
+  }
   const rollupSeg = "/node_modules/rollup/";
   const idx = request.indexOf(rollupSeg);
   if (idx !== -1) {
@@ -121,6 +139,10 @@ export function lookupNativeInterception(request) {
 
   // rollup -> @rollup/browser (official browser build, rollup 4.x).
   if (request === "rollup") return ROLLUP_BROWSER_MAIN;
+  // rollup/parseAst -> acorn-backed VFS module. Exact match FIRST: the
+  // generic subpath passthrough below would map it into
+  // /node_modules/@rollup/browser/parseAst, which does not exist.
+  if (request === "rollup/parseAst") return ROLLUP_PARSEAST_MODULE;
   if (request.startsWith("rollup/")) {
     return ROLLUP_BROWSER_DIR + request.slice("rollup".length);
   }
@@ -141,5 +163,6 @@ export function lookupNativeInterception(request) {
 export const BROWSER_BUILD_TARGETS = Object.freeze({
   ROLLUP_BROWSER_MAIN,
   ROLLUP_BROWSER_DIR,
+  ROLLUP_PARSEAST_MODULE,
   ESBUILD_SHIM,
 });

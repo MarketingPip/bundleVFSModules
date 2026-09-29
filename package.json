@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@jest/globals": "^30.5.2",
+    "acorn": "^8.18.0",
     "@rollup/browser": "^4.63.5",
     "esbuild": "^0.22.0",
     "esbuild-plugins-node-modules-polyfill": "^1.8.1",
