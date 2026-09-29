@@ -17,60 +17,60 @@ function throwNotImplemented(apiName) {
 
 export class DynamicLibrary {
   constructor() {
-    throwNotImplemented('DynamicLibrary');
+    throwNotImplemented("DynamicLibrary");
   }
 }
 
 export function dlopen() {
-  throwNotImplemented('dlopen');
+  throwNotImplemented("dlopen");
 }
 
 export function dlclose() {
-  throwNotImplemented('dlclose');
+  throwNotImplemented("dlclose");
 }
 
 export function dlsym() {
-  throwNotImplemented('dlsym');
+  throwNotImplemented("dlsym");
 }
 
 export function exportString() {
-  throwNotImplemented('exportString');
+  throwNotImplemented("exportString");
 }
 
 export function exportBuffer() {
-  throwNotImplemented('exportBuffer');
+  throwNotImplemented("exportBuffer");
 }
 
 export function exportArrayBuffer() {
-  throwNotImplemented('exportArrayBuffer');
+  throwNotImplemented("exportArrayBuffer");
 }
 
 export function exportArrayBufferView() {
-  throwNotImplemented('exportArrayBufferView');
+  throwNotImplemented("exportArrayBufferView");
 }
 
 export const types = Object.freeze({
   __proto__: null,
-  VOID: 'void',
-  POINTER: 'pointer',
-  BUFFER: 'buffer',
-  ARRAY_BUFFER: 'arraybuffer',
-  FUNCTION: 'function',
-  BOOL: 'bool',
-  CHAR: 'char',
-  STRING: 'string',
-  FLOAT: 'float',
-  DOUBLE: 'double',
-  INT_8: 'int8',
-  UINT_8: 'uint8',
-  INT_16: 'int16',
-  UINT_16: 'uint16',
-  INT_32: 'int32',
-  UINT_32: 'uint32',
-  INT_64: 'int64',
-  UINT_64: 'uint64',
-  FLOAT_32: 'float32',
-  FLOAT_64: 'float64',
+  VOID: "void",
+  POINTER: "pointer",
+  BUFFER: "buffer",
+  ARRAY_BUFFER: "arraybuffer",
+  FUNCTION: "function",
+  BOOL: "bool",
+  CHAR: "char",
+  STRING: "string",
+  FLOAT: "float",
+  DOUBLE: "double",
+  INT_8: "int8",
+  UINT_8: "uint8",
+  INT_16: "int16",
+  UINT_16: "uint16",
+  INT_32: "int32",
+  UINT_32: "uint32",
+  INT_64: "int64",
+  UINT_64: "uint64",
+  FLOAT_32: "float32",
+  FLOAT_64: "float64",
 });
 
 export default {

@@ -1,16 +1,16 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const Countdown = require('../common/countdown');
+const common = require("../common");
+const Countdown = require("../common/countdown");
 const {
   parentPort,
   postMessageToThread,
   threadId,
   workerData,
   Worker,
-} = require('node:worker_threads');
-const assert = require('node:assert');
-const { once } = require('node:events');
+} = require("node:worker_threads");
+const assert = require("node:assert");
+const { once } = require("node:events");
 
 // Spawn threads on three levels: 1 main thread, two children, four grand childrens. 7 threads total, max id = 6
 const MAX_LEVEL = 2;
@@ -20,19 +20,21 @@ const MAX_THREAD = 6;
 const mainThread = workerData?.mainThread ?? threadId;
 const level = workerData?.level ?? 0;
 
-const channel = new BroadcastChannel('nodejs:test-worker-connection');
+const channel = new BroadcastChannel("nodejs:test-worker-connection");
 let completed;
 
 if (level === 0) {
   completed = new Countdown(MAX_THREAD + 1, () => {
-    channel.postMessage('exit');
+    channel.postMessage("exit");
     channel.close();
   });
 }
 
 async function createChildren() {
-  const worker = new Worker(__filename, { workerData: { mainThread, level: level + 1 } });
-  await once(worker, 'message');
+  const worker = new Worker(__filename, {
+    workerData: { mainThread, level: level + 1 },
+  });
+  await once(worker, "message");
 }
 
 async function ping() {
@@ -44,38 +46,62 @@ async function ping() {
   const { port1, port2 } = new MessageChannel();
   await postMessageToThread(target, { level, port: port2 }, [port2]);
 
-  port1.on('message', common.mustCall(function(message) {
-    assert.deepStrictEqual(message, { message: 'pong', source: target, destination: threadId });
-    port1.close();
+  port1.on(
+    "message",
+    common.mustCall(function (message) {
+      assert.deepStrictEqual(message, {
+        message: "pong",
+        source: target,
+        destination: threadId,
+      });
+      port1.close();
 
-    if (level === 0) {
-      completed.dec();
-    } else {
-      channel.postMessage('end');
-    }
-  }));
+      if (level === 0) {
+        completed.dec();
+      } else {
+        channel.postMessage("end");
+      }
+    }),
+  );
 
-  port1.postMessage({ message: 'ping', source: threadId, destination: target });
+  port1.postMessage({ message: "ping", source: threadId, destination: target });
 }
 
 // Do not use mustCall here as the thread might not receive any connection request
-process.on('workerMessage', common.mustCallAtLeast(({ port, level }, source) => {
-  // Let's verify the source hierarchy
-  // Given we do depth first, the level is 1 for thread 1 and 4, 2 for other threads
-  if (source !== mainThread) {
-    const currentThread = source - mainThread;
-    assert.strictEqual(level, (currentThread === 1 || currentThread === 4) ? 1 : 2);
-  } else {
-    assert.strictEqual(level, 0);
-  }
+process.on(
+  "workerMessage",
+  common.mustCallAtLeast(({ port, level }, source) => {
+    // Let's verify the source hierarchy
+    // Given we do depth first, the level is 1 for thread 1 and 4, 2 for other threads
+    if (source !== mainThread) {
+      const currentThread = source - mainThread;
+      assert.strictEqual(
+        level,
+        currentThread === 1 || currentThread === 4 ? 1 : 2,
+      );
+    } else {
+      assert.strictEqual(level, 0);
+    }
 
-  // Verify communication
-  port.on('message', common.mustCall(function(message) {
-    assert.deepStrictEqual(message, { message: 'ping', source, destination: threadId });
-    port.postMessage({ message: 'pong', source: threadId, destination: source });
-    port.close();
-  }));
-}, 0));
+    // Verify communication
+    port.on(
+      "message",
+      common.mustCall(function (message) {
+        assert.deepStrictEqual(message, {
+          message: "ping",
+          source,
+          destination: threadId,
+        });
+        port.postMessage({
+          message: "pong",
+          source: threadId,
+          destination: source,
+        });
+        port.close();
+      }),
+    );
+  }, 0),
+);
 
 async function test() {
   if (level < MAX_LEVEL) {
@@ -83,17 +109,17 @@ async function test() {
     await createChildren();
   }
 
-  channel.onmessage = function(message) {
+  channel.onmessage = function (message) {
     switch (message.data) {
-      case 'start':
+      case "start":
         ping();
         break;
-      case 'end':
+      case "end":
         if (level === 0) {
           completed.dec();
         }
         break;
-      case 'exit':
+      case "exit":
         channel.close();
         break;
     }
@@ -101,10 +127,13 @@ async function test() {
 
   if (level > 0) {
     const currentThread = threadId - mainThread;
-    assert.strictEqual(level, (currentThread === 1 || currentThread === 4) ? 1 : 2);
-    parentPort.postMessage({ type: 'ready', threadId });
+    assert.strictEqual(
+      level,
+      currentThread === 1 || currentThread === 4 ? 1 : 2,
+    );
+    parentPort.postMessage({ type: "ready", threadId });
   } else {
-    channel.postMessage('start');
+    channel.postMessage("start");
     ping();
   }
 }

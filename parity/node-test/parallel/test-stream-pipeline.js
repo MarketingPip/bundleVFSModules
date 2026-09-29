@@ -1,6 +1,6 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 const {
   Stream,
   Writable,
@@ -10,37 +10,33 @@ const {
   PassThrough,
   Duplex,
   addAbortSignal,
-} = require('stream');
-const pipelinep = require('stream/promises').pipeline;
-const assert = require('assert');
-const http = require('http');
-const { promisify } = require('util');
-const net = require('net');
-const tsp = require('timers/promises');
-const tmpdir = require('../common/tmpdir');
-const fs = require('fs');
+} = require("stream");
+const pipelinep = require("stream/promises").pipeline;
+const assert = require("assert");
+const http = require("http");
+const { promisify } = require("util");
+const net = require("net");
+const tsp = require("timers/promises");
+const tmpdir = require("../common/tmpdir");
+const fs = require("fs");
 
 {
   let finished = false;
   const processed = [];
-  const expected = [
-    Buffer.from('a'),
-    Buffer.from('b'),
-    Buffer.from('c'),
-  ];
+  const expected = [Buffer.from("a"), Buffer.from("b"), Buffer.from("c")];
 
   const read = new Readable({
-    read() {}
+    read() {},
   });
 
   const write = new Writable({
     write(data, enc, cb) {
       processed.push(data);
       cb();
-    }
+    },
   });
 
-  write.on('finish', () => {
+  write.on("finish", () => {
     finished = true;
   });
 
@@ -49,15 +45,19 @@ const fs = require('fs');
   }
   read.push(null);
 
-  pipeline(read, write, common.mustSucceed(() => {
-    assert.ok(finished);
-    assert.deepStrictEqual(processed, expected);
-  }));
+  pipeline(
+    read,
+    write,
+    common.mustSucceed(() => {
+      assert.ok(finished);
+      assert.deepStrictEqual(processed, expected);
+    }),
+  );
 }
 
 {
   const read = new Readable({
-    read() {}
+    read() {},
   });
 
   assert.throws(() => {
@@ -73,150 +73,176 @@ const fs = require('fs');
 
 tmpdir.refresh();
 {
-  assert.rejects(async () => {
-    const read = fs.createReadStream(__filename);
-    const write = fs.createWriteStream(tmpdir.resolve('a'));
-    const close = promisify(write.close);
-    await close.call(write);
-    await pipelinep(read, write);
-  }, /ERR_STREAM_UNABLE_TO_PIPE/).then(common.mustCall());
+  assert
+    .rejects(async () => {
+      const read = fs.createReadStream(__filename);
+      const write = fs.createWriteStream(tmpdir.resolve("a"));
+      const close = promisify(write.close);
+      await close.call(write);
+      await pipelinep(read, write);
+    }, /ERR_STREAM_UNABLE_TO_PIPE/)
+    .then(common.mustCall());
 }
 
 {
   const read = new Readable({
-    read() {}
+    read() {},
   });
 
   const write = new Writable({
     write(data, enc, cb) {
       cb();
-    }
+    },
   });
 
-  read.push('data');
+  read.push("data");
   setImmediate(() => read.destroy());
 
-  pipeline(read, write, common.mustCall((err) => {
-    assert.ok(err, 'should have an error');
-  }));
+  pipeline(
+    read,
+    write,
+    common.mustCall((err) => {
+      assert.ok(err, "should have an error");
+    }),
+  );
 }
 
 {
   const read = new Readable({
-    read() {}
+    read() {},
   });
 
   const write = new Writable({
     write(data, enc, cb) {
       cb();
-    }
+    },
   });
 
-  read.push('data');
-  setImmediate(() => read.destroy(new Error('kaboom')));
+  read.push("data");
+  setImmediate(() => read.destroy(new Error("kaboom")));
 
-  const dst = pipeline(read, write, common.mustCall((err) => {
-    assert.deepStrictEqual(err, new Error('kaboom'));
-  }));
+  const dst = pipeline(
+    read,
+    write,
+    common.mustCall((err) => {
+      assert.deepStrictEqual(err, new Error("kaboom"));
+    }),
+  );
 
   assert.strictEqual(dst, write);
 }
 
 {
   const read = new Readable({
-    read() {}
+    read() {},
   });
 
   const transform = new Transform({
     transform(data, enc, cb) {
-      cb(new Error('kaboom'));
-    }
+      cb(new Error("kaboom"));
+    },
   });
 
   const write = new Writable({
     write(data, enc, cb) {
       cb();
-    }
+    },
   });
 
-  read.on('close', common.mustCall());
-  transform.on('close', common.mustCall());
-  write.on('close', common.mustCall());
+  read.on("close", common.mustCall());
+  transform.on("close", common.mustCall());
+  write.on("close", common.mustCall());
 
   [read, transform, write].forEach((stream) => {
-    stream.on('error', common.mustCall((err) => {
-      assert.deepStrictEqual(err, new Error('kaboom'));
-    }));
+    stream.on(
+      "error",
+      common.mustCall((err) => {
+        assert.deepStrictEqual(err, new Error("kaboom"));
+      }),
+    );
   });
 
-  const dst = pipeline(read, transform, write, common.mustCall((err) => {
-    assert.deepStrictEqual(err, new Error('kaboom'));
-  }));
+  const dst = pipeline(
+    read,
+    transform,
+    write,
+    common.mustCall((err) => {
+      assert.deepStrictEqual(err, new Error("kaboom"));
+    }),
+  );
 
   assert.strictEqual(dst, write);
 
-  read.push('hello');
+  read.push("hello");
 }
 
 {
   const server = http.createServer((req, res) => {
     const rs = new Readable({
       read() {
-        rs.push('hello');
+        rs.push("hello");
         rs.push(null);
-      }
+      },
     });
 
     pipeline(rs, res, () => {});
   });
 
-  server.listen(0, common.mustCall(() => {
-    const req = http.request({
-      port: server.address().port
-    });
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const req = http.request({
+        port: server.address().port,
+      });
 
-    req.end();
-    req.on('response', common.mustCall((res) => {
-      const buf = [];
-      res.on('data', (data) => buf.push(data));
-      res.on('end', common.mustCall(() => {
-        assert.deepStrictEqual(
-          Buffer.concat(buf),
-          Buffer.from('hello')
-        );
-        server.close();
-      }));
-    }));
-  }));
+      req.end();
+      req.on(
+        "response",
+        common.mustCall((res) => {
+          const buf = [];
+          res.on("data", (data) => buf.push(data));
+          res.on(
+            "end",
+            common.mustCall(() => {
+              assert.deepStrictEqual(Buffer.concat(buf), Buffer.from("hello"));
+              server.close();
+            }),
+          );
+        }),
+      );
+    }),
+  );
 }
 
 {
-  const server = http.createServer(common.mustCallAtLeast((req, res) => {
-    let sent = false;
-    const rs = new Readable({
-      read() {
-        if (sent) {
-          return;
-        }
-        sent = true;
-        rs.push('hello');
-      },
-      destroy: common.mustCall((err, cb) => {
-        // Prevents fd leaks by destroying http pipelines
-        cb();
-      })
-    });
+  const server = http.createServer(
+    common.mustCallAtLeast((req, res) => {
+      let sent = false;
+      const rs = new Readable({
+        read() {
+          if (sent) {
+            return;
+          }
+          sent = true;
+          rs.push("hello");
+        },
+        destroy: common.mustCall((err, cb) => {
+          // Prevents fd leaks by destroying http pipelines
+          cb();
+        }),
+      });
 
-    pipeline(rs, res, () => {});
-  }));
+      pipeline(rs, res, () => {});
+    }),
+  );
 
   server.listen(0, () => {
     const req = http.request({
-      port: server.address().port
+      port: server.address().port,
     });
 
     req.end();
-    req.on('response', (res) => {
+    req.on("response", (res) => {
       setImmediate(() => {
         res.destroy();
         server.close();
@@ -226,84 +252,109 @@ tmpdir.refresh();
 }
 
 {
-  const server = http.createServer(common.mustCallAtLeast((req, res) => {
-    let sent = 0;
-    const rs = new Readable({
-      read() {
-        if (sent++ > 10) {
-          return;
-        }
-        rs.push('hello');
-      },
-      destroy: common.mustCall((err, cb) => {
-        cb();
-      })
-    });
+  const server = http.createServer(
+    common.mustCallAtLeast((req, res) => {
+      let sent = 0;
+      const rs = new Readable({
+        read() {
+          if (sent++ > 10) {
+            return;
+          }
+          rs.push("hello");
+        },
+        destroy: common.mustCall((err, cb) => {
+          cb();
+        }),
+      });
 
-    pipeline(rs, res, () => {});
-  }));
+      pipeline(rs, res, () => {});
+    }),
+  );
 
   let cnt = 10;
 
   const badSink = new Writable({
     write(data, enc, cb) {
       cnt--;
-      if (cnt === 0) cb(new Error('kaboom'));
+      if (cnt === 0) cb(new Error("kaboom"));
       else cb();
-    }
+    },
   });
 
-  server.listen(0, common.mustCall(() => {
-    const req = http.request({
-      port: server.address().port
-    });
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const req = http.request({
+        port: server.address().port,
+      });
 
-    req.end();
-    req.on('response', common.mustCall((res) => {
-      pipeline(res, badSink, common.mustCall((err) => {
-        assert.deepStrictEqual(err, new Error('kaboom'));
-        server.close();
-      }));
-    }));
-  }));
+      req.end();
+      req.on(
+        "response",
+        common.mustCall((res) => {
+          pipeline(
+            res,
+            badSink,
+            common.mustCall((err) => {
+              assert.deepStrictEqual(err, new Error("kaboom"));
+              server.close();
+            }),
+          );
+        }),
+      );
+    }),
+  );
 }
 
 {
-  const server = http.createServer(common.mustCallAtLeast((req, res) => {
-    pipeline(req, res, common.mustCall((err) => {
-      // The client destroys the request body source before EOF below, so the
-      // echoed response cannot finish successfully either.
-      assert.strictEqual(err?.code, 'ERR_STREAM_PREMATURE_CLOSE');
-    }));
-  }));
+  const server = http.createServer(
+    common.mustCallAtLeast((req, res) => {
+      pipeline(
+        req,
+        res,
+        common.mustCall((err) => {
+          // The client destroys the request body source before EOF below, so the
+          // echoed response cannot finish successfully either.
+          assert.strictEqual(err?.code, "ERR_STREAM_PREMATURE_CLOSE");
+        }),
+      );
+    }),
+  );
 
-  server.listen(0, common.mustCall(() => {
-    const req = http.request({
-      port: server.address().port
-    });
-
-    let sent = 0;
-    const rs = new Readable({
-      read() {
-        if (sent++ > 10) {
-          return;
-        }
-        rs.push('hello');
-      }
-    });
-
-    pipeline(rs, req, common.mustCall(() => {
-      server.close();
-    }));
-
-    req.on('response', (res) => {
-      let cnt = 10;
-      res.on('data', () => {
-        cnt--;
-        if (cnt === 0) rs.destroy();
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const req = http.request({
+        port: server.address().port,
       });
-    });
-  }));
+
+      let sent = 0;
+      const rs = new Readable({
+        read() {
+          if (sent++ > 10) {
+            return;
+          }
+          rs.push("hello");
+        },
+      });
+
+      pipeline(
+        rs,
+        req,
+        common.mustCall(() => {
+          server.close();
+        }),
+      );
+
+      req.on("response", (res) => {
+        let cnt = 10;
+        res.on("data", () => {
+          cnt--;
+          if (cnt === 0) rs.destroy();
+        });
+      });
+    }),
+  );
 }
 
 {
@@ -311,17 +362,17 @@ tmpdir.refresh();
     const tr = new Transform({
       transform(data, enc, cb) {
         cb(null, data);
-      }
+      },
     });
 
-    tr.on('close', common.mustCall());
+    tr.on("close", common.mustCall());
     return tr;
   });
 
   const rs = new Readable({
     read() {
-      rs.push('hello');
-    }
+      rs.push("hello");
+    },
   });
 
   let cnt = 10;
@@ -329,13 +380,13 @@ tmpdir.refresh();
   const ws = new Writable({
     write(data, enc, cb) {
       cnt--;
-      if (cnt === 0) return cb(new Error('kaboom'));
+      if (cnt === 0) return cb(new Error("kaboom"));
       cb();
-    }
+    },
   });
 
-  rs.on('close', common.mustCall());
-  ws.on('close', common.mustCall());
+  rs.on("close", common.mustCall());
+  ws.on("close", common.mustCall());
 
   pipeline(
     rs,
@@ -347,8 +398,8 @@ tmpdir.refresh();
     makeTransform(),
     ws,
     common.mustCall((err) => {
-      assert.deepStrictEqual(err, new Error('kaboom'));
-    })
+      assert.deepStrictEqual(err, new Error("kaboom"));
+    }),
   );
 }
 
@@ -357,17 +408,14 @@ tmpdir.refresh();
 
   oldStream.pause = oldStream.resume = () => {};
   oldStream.write = (data) => {
-    oldStream.emit('data', data);
+    oldStream.emit("data", data);
     return true;
   };
   oldStream.end = () => {
-    oldStream.emit('end');
+    oldStream.emit("end");
   };
 
-  const expected = [
-    Buffer.from('hello'),
-    Buffer.from('world'),
-  ];
+  const expected = [Buffer.from("hello"), Buffer.from("world")];
 
   const rs = new Readable({
     read() {
@@ -375,7 +423,7 @@ tmpdir.refresh();
         rs.push(expected[i]);
       }
       rs.push(null);
-    }
+    },
   });
 
   const ws = new Writable({
@@ -387,7 +435,7 @@ tmpdir.refresh();
 
   let finished = false;
 
-  ws.on('finish', () => {
+  ws.on("finish", () => {
     finished = true;
   });
 
@@ -396,8 +444,8 @@ tmpdir.refresh();
     oldStream,
     ws,
     common.mustSucceed(() => {
-      assert(finished, 'last stream finished');
-    })
+      assert(finished, "last stream finished");
+    }),
   );
 }
 
@@ -406,42 +454,42 @@ tmpdir.refresh();
 
   oldStream.pause = oldStream.resume = () => {};
   oldStream.write = (data) => {
-    oldStream.emit('data', data);
+    oldStream.emit("data", data);
     return true;
   };
   oldStream.end = () => {
-    oldStream.emit('end');
+    oldStream.emit("end");
   };
 
   const destroyableOldStream = new Stream();
 
   destroyableOldStream.pause = destroyableOldStream.resume = () => {};
   destroyableOldStream.destroy = common.mustCall(() => {
-    destroyableOldStream.emit('close');
+    destroyableOldStream.emit("close");
   });
   destroyableOldStream.write = (data) => {
-    destroyableOldStream.emit('data', data);
+    destroyableOldStream.emit("data", data);
     return true;
   };
   destroyableOldStream.end = () => {
-    destroyableOldStream.emit('end');
+    destroyableOldStream.emit("end");
   };
 
   const rs = new Readable({
     read() {
-      rs.destroy(new Error('stop'));
-    }
+      rs.destroy(new Error("stop"));
+    },
   });
 
   const ws = new Writable({
     write(data, enc, cb) {
       cb();
-    }
+    },
   });
 
   let finished = false;
 
-  ws.on('finish', () => {
+  ws.on("finish", () => {
     finished = true;
   });
 
@@ -451,9 +499,9 @@ tmpdir.refresh();
     destroyableOldStream,
     ws,
     common.mustCall((err) => {
-      assert.deepStrictEqual(err, new Error('stop'));
-      assert(!finished, 'should not finish');
-    })
+      assert.deepStrictEqual(err, new Error("stop"));
+      assert(!finished, "should not finish");
+    }),
   );
 }
 
@@ -462,21 +510,21 @@ tmpdir.refresh();
 
   async function run() {
     const read = new Readable({
-      read() {}
+      read() {},
     });
 
     const write = new Writable({
       write(data, enc, cb) {
         cb();
-      }
+      },
     });
 
-    read.push('data');
+    read.push("data");
     read.push(null);
 
     let finished = false;
 
-    write.on('finish', () => {
+    write.on("finish", () => {
       finished = true;
     });
 
@@ -497,18 +545,18 @@ tmpdir.refresh();
     async function* producer() {
       ac.abort();
       await Promise.resolve();
-      yield '8';
+      yield "8";
     }
 
     const w = new Writable({
       write(chunk, encoding, callback) {
         callback();
-      }
+      },
     });
     await pipelinePromise(producer, w, { signal });
   }
 
-  assert.rejects(run, { name: 'AbortError' }).then(common.mustCall());
+  assert.rejects(run, { name: "AbortError" }).then(common.mustCall());
 }
 
 {
@@ -518,22 +566,22 @@ tmpdir.refresh();
     const ac = new AbortController();
     const { signal } = ac;
     async function* producer() {
-      yield '5';
+      yield "5";
       await Promise.resolve();
       ac.abort();
       await Promise.resolve();
-      yield '8';
+      yield "8";
     }
 
     const w = new Writable({
       write(chunk, encoding, callback) {
         callback();
-      }
+      },
     });
     await pipelinePromise(producer, w, { signal });
   }
 
-  assert.rejects(run, { name: 'AbortError' }).then(common.mustCall());
+  assert.rejects(run, { name: "AbortError" }).then(common.mustCall());
 }
 
 {
@@ -542,293 +590,378 @@ tmpdir.refresh();
   async function run() {
     const signal = AbortSignal.abort();
     async function* producer() {
-      yield '5';
+      yield "5";
       await Promise.resolve();
-      yield '8';
+      yield "8";
     }
 
     const w = new Writable({
       write(chunk, encoding, callback) {
         callback();
-      }
+      },
     });
     await pipelinePromise(producer, w, { signal });
   }
 
-  assert.rejects(run, { name: 'AbortError' }).then(common.mustCall());
+  assert.rejects(run, { name: "AbortError" }).then(common.mustCall());
 }
 
 {
   const read = new Readable({
-    read() {}
+    read() {},
   });
 
   const transform = new Transform({
     transform(data, enc, cb) {
-      cb(new Error('kaboom'));
-    }
+      cb(new Error("kaboom"));
+    },
   });
 
   const write = new Writable({
     write(data, enc, cb) {
       cb();
-    }
+    },
   });
 
-  assert.throws(
-    () => pipeline(read, transform, write),
-    { code: 'ERR_INVALID_ARG_TYPE' }
+  assert.throws(() => pipeline(read, transform, write), {
+    code: "ERR_INVALID_ARG_TYPE",
+  });
+}
+
+{
+  const server = http.Server(function (req, res) {
+    res.write("asd");
+  });
+  server.listen(
+    0,
+    common.mustCall(function () {
+      http
+        .get(
+          { port: this.address().port },
+          common.mustCall((res) => {
+            const stream = new PassThrough();
+
+            stream.on("error", common.mustCall());
+
+            pipeline(
+              res,
+              stream,
+              common.mustCall((err) => {
+                assert.strictEqual(err.message, "oh no");
+                server.close();
+              }),
+            );
+
+            stream.destroy(new Error("oh no"));
+          }),
+        )
+        .on("error", common.mustNotCall());
+    }),
   );
 }
 
 {
-  const server = http.Server(function(req, res) {
-    res.write('asd');
-  });
-  server.listen(0, common.mustCall(function() {
-    http.get({ port: this.address().port }, common.mustCall((res) => {
-      const stream = new PassThrough();
-
-      stream.on('error', common.mustCall());
-
-      pipeline(
-        res,
-        stream,
-        common.mustCall((err) => {
-          assert.strictEqual(err.message, 'oh no');
-          server.close();
-        })
-      );
-
-      stream.destroy(new Error('oh no'));
-    })).on('error', common.mustNotCall());
-  }));
-}
-
-{
-  let res = '';
+  let res = "";
   const w = new Writable({
     write(chunk, encoding, callback) {
       res += chunk;
       callback();
-    }
+    },
   });
-  pipeline(function*() {
-    yield 'hello';
-    yield 'world';
-  }(), w, common.mustSucceed(() => {
-    assert.strictEqual(res, 'helloworld');
-  }));
+  pipeline(
+    (function* () {
+      yield "hello";
+      yield "world";
+    })(),
+    w,
+    common.mustSucceed(() => {
+      assert.strictEqual(res, "helloworld");
+    }),
+  );
 }
 
 {
-  let res = '';
+  let res = "";
   const w = new Writable({
     write(chunk, encoding, callback) {
       res += chunk;
       callback();
-    }
+    },
   });
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-  }(), w, common.mustSucceed(() => {
-    assert.strictEqual(res, 'helloworld');
-  }));
+  pipeline(
+    (async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+    })(),
+    w,
+    common.mustSucceed(() => {
+      assert.strictEqual(res, "helloworld");
+    }),
+  );
 }
 
 {
-  let res = '';
+  let res = "";
   const w = new Writable({
     write(chunk, encoding, callback) {
       res += chunk;
       callback();
-    }
+    },
   });
-  pipeline(function*() {
-    yield 'hello';
-    yield 'world';
-  }, w, common.mustSucceed(() => {
-    assert.strictEqual(res, 'helloworld');
-  }));
+  pipeline(
+    function* () {
+      yield "hello";
+      yield "world";
+    },
+    w,
+    common.mustSucceed(() => {
+      assert.strictEqual(res, "helloworld");
+    }),
+  );
 }
 
 {
-  let res = '';
+  let res = "";
   const w = new Writable({
     write(chunk, encoding, callback) {
       res += chunk;
       callback();
-    }
+    },
   });
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-  }, w, common.mustSucceed(() => {
-    assert.strictEqual(res, 'helloworld');
-  }));
+  pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+    },
+    w,
+    common.mustSucceed(() => {
+      assert.strictEqual(res, "helloworld");
+    }),
+  );
 }
 
 {
-  let res = '';
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-  }, async function*(source) {
-    for await (const chunk of source) {
-      yield chunk.toUpperCase();
-    }
-  }, async function(source) {
-    for await (const chunk of source) {
-      res += chunk;
-    }
-  }, common.mustSucceed(() => {
-    assert.strictEqual(res, 'HELLOWORLD');
-  }));
+  let res = "";
+  pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+    },
+    async function* (source) {
+      for await (const chunk of source) {
+        yield chunk.toUpperCase();
+      }
+    },
+    async function (source) {
+      for await (const chunk of source) {
+        res += chunk;
+      }
+    },
+    common.mustSucceed(() => {
+      assert.strictEqual(res, "HELLOWORLD");
+    }),
+  );
 }
 
 {
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-  }, async function*(source) {
-    for await (const chunk of source) {
-      yield chunk.toUpperCase();
-    }
-  }, async function(source) {
-    let ret = '';
-    for await (const chunk of source) {
-      ret += chunk;
-    }
-    return ret;
-  }, common.mustSucceed((val) => {
-    assert.strictEqual(val, 'HELLOWORLD');
-  }));
+  pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+    },
+    async function* (source) {
+      for await (const chunk of source) {
+        yield chunk.toUpperCase();
+      }
+    },
+    async function (source) {
+      let ret = "";
+      for await (const chunk of source) {
+        ret += chunk;
+      }
+      return ret;
+    },
+    common.mustSucceed((val) => {
+      assert.strictEqual(val, "HELLOWORLD");
+    }),
+  );
 }
 
 {
   // AsyncIterable destination is returned and finalizes.
 
-  const ret = pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-  }, async function*(source) { // eslint-disable-line require-yield
-    for await (const chunk of source) { } // eslint-disable-line no-unused-vars, no-empty
-  }, common.mustCall((err) => {
-    assert.strictEqual(err, undefined);
-  }));
+  const ret = pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+    },
+    async function* (source) {
+      // eslint-disable-line require-yield
+      // eslint-disable-next-line no-unused-vars, no-empty
+      for await (const chunk of source) {
+      }
+    },
+    common.mustCall((err) => {
+      assert.strictEqual(err, undefined);
+    }),
+  );
   ret.resume();
-  assert.strictEqual(typeof ret.pipe, 'function');
+  assert.strictEqual(typeof ret.pipe, "function");
 }
 
 {
   // AsyncFunction destination is not returned and error is
   // propagated.
 
-  const ret = pipeline(async function*() { // eslint-disable-line require-yield
-    await Promise.resolve();
-    throw new Error('kaboom');
-  }, async function*(source) { // eslint-disable-line require-yield
-    for await (const chunk of source) { } // eslint-disable-line no-unused-vars, no-empty
-  }, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'kaboom');
-  }));
+  const ret = pipeline(
+    async function* () {
+      // eslint-disable-line require-yield
+      await Promise.resolve();
+      throw new Error("kaboom");
+    },
+    async function* (source) {
+      // eslint-disable-line require-yield
+      // eslint-disable-next-line no-unused-vars, no-empty
+      for await (const chunk of source) {
+      }
+    },
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "kaboom");
+    }),
+  );
   ret.resume();
-  assert.strictEqual(typeof ret.pipe, 'function');
+  assert.strictEqual(typeof ret.pipe, "function");
 }
 
 {
   const s = new PassThrough();
-  pipeline(async function*() { // eslint-disable-line require-yield
-    throw new Error('kaboom');
-  }, s, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'kaboom');
-    assert.strictEqual(s.destroyed, true);
-  }));
+  pipeline(
+    async function* () {
+      // eslint-disable-line require-yield
+      throw new Error("kaboom");
+    },
+    s,
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "kaboom");
+      assert.strictEqual(s.destroyed, true);
+    }),
+  );
 }
 
 {
   const s = new PassThrough();
-  pipeline(async function*() { // eslint-disable-line require-yield
-    throw new Error('kaboom');
-  }(), s, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'kaboom');
-    assert.strictEqual(s.destroyed, true);
-  }));
+  pipeline(
+    (async function* () {
+      // eslint-disable-line require-yield
+      throw new Error("kaboom");
+    })(),
+    s,
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "kaboom");
+      assert.strictEqual(s.destroyed, true);
+    }),
+  );
 }
 
 {
   const s = new PassThrough();
-  pipeline(function*() { // eslint-disable-line require-yield
-    throw new Error('kaboom');
-  }, s, common.mustCall((err, val) => {
-    assert.strictEqual(err.message, 'kaboom');
-    assert.strictEqual(s.destroyed, true);
-  }));
+  pipeline(
+    function* () {
+      // eslint-disable-line require-yield
+      throw new Error("kaboom");
+    },
+    s,
+    common.mustCall((err, val) => {
+      assert.strictEqual(err.message, "kaboom");
+      assert.strictEqual(s.destroyed, true);
+    }),
+  );
 }
 
 {
   const s = new PassThrough();
-  pipeline(function*() { // eslint-disable-line require-yield
-    throw new Error('kaboom');
-  }(), s, common.mustCall((err, val) => {
-    assert.strictEqual(err.message, 'kaboom');
-    assert.strictEqual(s.destroyed, true);
-  }));
+  pipeline(
+    (function* () {
+      // eslint-disable-line require-yield
+      throw new Error("kaboom");
+    })(),
+    s,
+    common.mustCall((err, val) => {
+      assert.strictEqual(err.message, "kaboom");
+      assert.strictEqual(s.destroyed, true);
+    }),
+  );
 }
 
 {
   const s = new PassThrough();
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-  }, s, async function(source) {
-    for await (const chunk of source) { // eslint-disable-line no-unused-vars
-      throw new Error('kaboom');
-    }
-  }, common.mustCall((err, val) => {
-    assert.strictEqual(err.message, 'kaboom');
-    assert.strictEqual(s.destroyed, true);
-  }));
+  pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+    },
+    s,
+    async function (source) {
+      // eslint-disable-next-line no-unused-vars
+      for await (const chunk of source) {
+        throw new Error("kaboom");
+      }
+    },
+    common.mustCall((err, val) => {
+      assert.strictEqual(err.message, "kaboom");
+      assert.strictEqual(s.destroyed, true);
+    }),
+  );
 }
 
 {
   const s = new PassThrough();
-  const ret = pipeline(function() {
-    return ['hello', 'world'];
-  }, s, async function*(source) { // eslint-disable-line require-yield
-    for await (const chunk of source) { // eslint-disable-line no-unused-vars
-      throw new Error('kaboom');
-    }
-  }, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'kaboom');
-    assert.strictEqual(s.destroyed, true);
-  }));
+  const ret = pipeline(
+    function () {
+      return ["hello", "world"];
+    },
+    s,
+    async function* (source) {
+      // eslint-disable-line require-yield
+      // eslint-disable-next-line no-unused-vars
+      for await (const chunk of source) {
+        throw new Error("kaboom");
+      }
+    },
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "kaboom");
+      assert.strictEqual(s.destroyed, true);
+    }),
+  );
   ret.resume();
-  assert.strictEqual(typeof ret.pipe, 'function');
+  assert.strictEqual(typeof ret.pipe, "function");
 }
 
 {
   // Legacy streams without async iterator.
 
   const s = new PassThrough();
-  s.push('asd');
+  s.push("asd");
   s.push(null);
   s[Symbol.asyncIterator] = null;
-  let ret = '';
-  pipeline(s, async function(source) {
-    for await (const chunk of source) {
-      ret += chunk;
-    }
-  }, common.mustCall((err) => {
-    assert.strictEqual(err, undefined);
-    assert.strictEqual(ret, 'asd');
-  }));
+  let ret = "";
+  pipeline(
+    s,
+    async function (source) {
+      for await (const chunk of source) {
+        ret += chunk;
+      }
+    },
+    common.mustCall((err) => {
+      assert.strictEqual(err, undefined);
+      assert.strictEqual(ret, "asd");
+    }),
+  );
 }
 
 {
@@ -836,22 +969,26 @@ tmpdir.refresh();
 
   const s = new Stream();
   process.nextTick(() => {
-    s.emit('data', 'asd');
-    s.emit('end');
+    s.emit("data", "asd");
+    s.emit("end");
   });
   // 'destroyer' can be called multiple times,
   // once from stream wrapper and
   // once from iterator wrapper.
   s.close = common.mustCallAtLeast(1);
-  let ret = '';
-  pipeline(s, async function(source) {
-    for await (const chunk of source) {
-      ret += chunk;
-    }
-  }, common.mustCall((err) => {
-    assert.strictEqual(err, undefined);
-    assert.strictEqual(ret, 'asd');
-  }));
+  let ret = "";
+  pipeline(
+    s,
+    async function (source) {
+      for await (const chunk of source) {
+        ret += chunk;
+      }
+    },
+    common.mustCall((err) => {
+      assert.strictEqual(err, undefined);
+      assert.strictEqual(ret, "asd");
+    }),
+  );
 }
 
 {
@@ -859,142 +996,193 @@ tmpdir.refresh();
 
   const s = new Stream();
   process.nextTick(() => {
-    s.emit('error', new Error('kaboom'));
+    s.emit("error", new Error("kaboom"));
   });
   s.destroy = common.mustCall();
-  pipeline(s, async function(source) {
-  }, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'kaboom');
-  }));
+  pipeline(
+    s,
+    async function (source) {},
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "kaboom");
+    }),
+  );
 }
 
 {
   const s = new PassThrough();
-  assert.throws(() => {
-    pipeline(function(source) {
-    }, s, () => {});
-  }, (err) => {
-    assert.strictEqual(err.code, 'ERR_INVALID_RETURN_VALUE');
-    assert.strictEqual(s.destroyed, false);
-    return true;
-  });
+  assert.throws(
+    () => {
+      pipeline(
+        function (source) {},
+        s,
+        () => {},
+      );
+    },
+    (err) => {
+      assert.strictEqual(err.code, "ERR_INVALID_RETURN_VALUE");
+      assert.strictEqual(s.destroyed, false);
+      return true;
+    },
+  );
 }
 
 {
   const s = new PassThrough();
-  assert.throws(() => {
-    pipeline(s, function(source) {
-    }, s, () => {});
-  }, (err) => {
-    assert.strictEqual(err.code, 'ERR_INVALID_RETURN_VALUE');
-    assert.strictEqual(s.destroyed, false);
-    return true;
-  });
+  assert.throws(
+    () => {
+      pipeline(
+        s,
+        function (source) {},
+        s,
+        () => {},
+      );
+    },
+    (err) => {
+      assert.strictEqual(err.code, "ERR_INVALID_RETURN_VALUE");
+      assert.strictEqual(s.destroyed, false);
+      return true;
+    },
+  );
 }
 
 {
   const s = new PassThrough();
-  assert.throws(() => {
-    pipeline(s, function(source) {
-    }, () => {});
-  }, (err) => {
-    assert.strictEqual(err.code, 'ERR_INVALID_RETURN_VALUE');
-    assert.strictEqual(s.destroyed, false);
-    return true;
-  });
+  assert.throws(
+    () => {
+      pipeline(
+        s,
+        function (source) {},
+        () => {},
+      );
+    },
+    (err) => {
+      assert.strictEqual(err.code, "ERR_INVALID_RETURN_VALUE");
+      assert.strictEqual(s.destroyed, false);
+      return true;
+    },
+  );
 }
 
 {
   const s = new PassThrough();
-  assert.throws(() => {
-    pipeline(s, function*(source) {
-    }, () => {});
-  }, (err) => {
-    assert.strictEqual(err.code, 'ERR_INVALID_RETURN_VALUE');
-    assert.strictEqual(s.destroyed, false);
-    return true;
-  });
+  assert.throws(
+    () => {
+      pipeline(
+        s,
+        function* (source) {},
+        () => {},
+      );
+    },
+    (err) => {
+      assert.strictEqual(err.code, "ERR_INVALID_RETURN_VALUE");
+      assert.strictEqual(s.destroyed, false);
+      return true;
+    },
+  );
 }
 
 {
-  let res = '';
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-  }, new Transform({
-    transform(chunk, encoding, cb) {
-      cb(new Error('kaboom'));
-    }
-  }), async function(source) {
-    for await (const chunk of source) {
-      res += chunk;
-    }
-  }, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'kaboom');
-    assert.strictEqual(res, '');
-  }));
+  let res = "";
+  pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+    },
+    new Transform({
+      transform(chunk, encoding, cb) {
+        cb(new Error("kaboom"));
+      },
+    }),
+    async function (source) {
+      for await (const chunk of source) {
+        res += chunk;
+      }
+    },
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "kaboom");
+      assert.strictEqual(res, "");
+    }),
+  );
 }
 
 {
-  let res = '';
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-  }, new Transform({
-    transform(chunk, encoding, cb) {
-      process.nextTick(cb, new Error('kaboom'));
-    }
-  }), async function(source) {
-    for await (const chunk of source) {
-      res += chunk;
-    }
-  }, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'kaboom');
-    assert.strictEqual(res, '');
-  }));
+  let res = "";
+  pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+    },
+    new Transform({
+      transform(chunk, encoding, cb) {
+        process.nextTick(cb, new Error("kaboom"));
+      },
+    }),
+    async function (source) {
+      for await (const chunk of source) {
+        res += chunk;
+      }
+    },
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "kaboom");
+      assert.strictEqual(res, "");
+    }),
+  );
 }
 
 {
-  let res = '';
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-  }, new Transform({
-    decodeStrings: false,
-    transform(chunk, encoding, cb) {
-      cb(null, chunk.toUpperCase());
-    }
-  }), async function(source) {
-    for await (const chunk of source) {
-      res += chunk;
-    }
-  }, common.mustSucceed(() => {
-    assert.strictEqual(res, 'HELLOWORLD');
-  }));
+  let res = "";
+  pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+    },
+    new Transform({
+      decodeStrings: false,
+      transform(chunk, encoding, cb) {
+        cb(null, chunk.toUpperCase());
+      },
+    }),
+    async function (source) {
+      for await (const chunk of source) {
+        res += chunk;
+      }
+    },
+    common.mustSucceed(() => {
+      assert.strictEqual(res, "HELLOWORLD");
+    }),
+  );
 }
 
 {
   // Ensure no unhandled rejection from async function.
 
-  pipeline(async function*() {
-    yield 'hello';
-  }, async function(source) {
-    throw new Error('kaboom');
-  }, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'kaboom');
-  }));
+  pipeline(
+    async function* () {
+      yield "hello";
+    },
+    async function (source) {
+      throw new Error("kaboom");
+    },
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "kaboom");
+    }),
+  );
 }
 
 {
   const src = new PassThrough({ autoDestroy: false });
   const dst = new PassThrough({ autoDestroy: false });
-  pipeline(src, dst, common.mustCall(() => {
-    assert.strictEqual(src.destroyed, false);
-    assert.strictEqual(dst.destroyed, false);
-  }));
+  pipeline(
+    src,
+    dst,
+    common.mustCall(() => {
+      assert.strictEqual(src.destroyed, false);
+      assert.strictEqual(dst.destroyed, false);
+    }),
+  );
   src.end();
 }
 
@@ -1006,23 +1194,26 @@ tmpdir.refresh();
   const w = new Writable({
     write(chunk, encoding, cb) {
       cb();
-    }
+    },
   });
-  pipeline(r, w, common.mustCall((err) => {
-    assert.strictEqual(err, undefined);
-  }));
-  r.push('asd');
+  pipeline(
+    r,
+    w,
+    common.mustCall((err) => {
+      assert.strictEqual(err, undefined);
+    }),
+  );
+  r.push("asd");
   r.push(null);
-  r.emit('close');
+  r.emit("close");
 }
 
 {
-  const server = http.createServer((req, res) => {
-  });
+  const server = http.createServer((req, res) => {});
 
   server.listen(0, () => {
     const req = http.request({
-      port: server.address().port
+      port: server.address().port,
     });
 
     const body = new PassThrough();
@@ -1034,7 +1225,7 @@ tmpdir.refresh();
         assert(!req.aborted);
         req.abort();
         server.close();
-      })
+      }),
     );
     body.end();
   });
@@ -1043,9 +1234,13 @@ tmpdir.refresh();
 {
   const src = new PassThrough();
   const dst = new PassThrough();
-  pipeline(src, dst, common.mustSucceed(() => {
-    assert.strictEqual(dst.destroyed, false);
-  }));
+  pipeline(
+    src,
+    dst,
+    common.mustSucceed(() => {
+      assert.strictEqual(dst.destroyed, false);
+    }),
+  );
   src.end();
 }
 
@@ -1053,56 +1248,76 @@ tmpdir.refresh();
   const src = new PassThrough();
   const dst = new PassThrough();
   dst.readable = false;
-  pipeline(src, dst, common.mustSucceed(() => {
-    assert.strictEqual(dst.destroyed, true);
-  }));
+  pipeline(
+    src,
+    dst,
+    common.mustSucceed(() => {
+      assert.strictEqual(dst.destroyed, true);
+    }),
+  );
   src.end();
 }
 
 {
-  let res = '';
+  let res = "";
   const rs = new Readable({
     read() {
       setImmediate(() => {
-        rs.push('hello');
+        rs.push("hello");
       });
-    }
+    },
   });
   const ws = new Writable({
-    write: common.mustNotCall()
+    write: common.mustNotCall(),
   });
-  pipeline(rs, async function*(stream) { // eslint-disable-line require-yield
-    for await (const chunk of stream) { // eslint-disable-line no-unused-vars
-      throw new Error('kaboom');
-    }
-  }, async function *(source) { // eslint-disable-line require-yield
-    for await (const chunk of source) {
-      res += chunk;
-    }
-  }, ws, common.mustCall((err) => {
-    assert.strictEqual(err.message, 'kaboom');
-    assert.strictEqual(res, '');
-  }));
+  pipeline(
+    rs,
+    async function* (stream) {
+      // eslint-disable-line require-yield
+      // eslint-disable-next-line no-unused-vars
+      for await (const chunk of stream) {
+        throw new Error("kaboom");
+      }
+    },
+    async function* (source) {
+      // eslint-disable-line require-yield
+      for await (const chunk of source) {
+        res += chunk;
+      }
+    },
+    ws,
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "kaboom");
+      assert.strictEqual(res, "");
+    }),
+  );
 }
 
 {
   const server = http.createServer((req, res) => {
-    req.socket.on('error', common.mustNotCall());
-    pipeline(req, new PassThrough(), common.mustSucceed(() => {
-      res.end();
-      server.close();
-    }));
+    req.socket.on("error", common.mustNotCall());
+    pipeline(
+      req,
+      new PassThrough(),
+      common.mustSucceed(() => {
+        res.end();
+        server.close();
+      }),
+    );
   });
 
-  server.listen(0, common.mustCall(() => {
-    const req = http.request({
-      method: 'PUT',
-      port: server.address().port
-    });
-    req.end('asd123');
-    req.on('response', common.mustCall());
-    req.on('error', common.mustNotCall());
-  }));
+  server.listen(
+    0,
+    common.mustCall(() => {
+      const req = http.request({
+        method: "PUT",
+        port: server.address().port,
+      });
+      req.end("asd123");
+      req.on("response", common.mustCall());
+      req.on("error", common.mustNotCall());
+    }),
+  );
 }
 
 {
@@ -1114,10 +1329,14 @@ tmpdir.refresh();
   const src = new PassThrough();
   assert.strictEqual(src.writable, true);
   const dst = new PassThrough();
-  pipeline(src, dst, common.mustCall((err) => {
-    assert.strictEqual(src.writable, true);
-    assert.strictEqual(src.destroyed, false);
-  }));
+  pipeline(
+    src,
+    dst,
+    common.mustCall((err) => {
+      assert.strictEqual(src.writable, true);
+      assert.strictEqual(src.destroyed, false);
+    }),
+  );
   src.push(null);
 }
 
@@ -1125,27 +1344,31 @@ tmpdir.refresh();
   const src = new PassThrough();
   const dst = pipeline(
     src,
-    async function * (source) {
+    async function* (source) {
       for await (const chunk of source) {
         yield chunk;
       }
     },
     common.mustCall((err) => {
-      assert.strictEqual(err.code, 'ERR_STREAM_PREMATURE_CLOSE');
-    })
+      assert.strictEqual(err.code, "ERR_STREAM_PREMATURE_CLOSE");
+    }),
   );
-  src.push('asd');
+  src.push("asd");
   dst.destroy();
 }
 
 {
-  pipeline(async function * () {
-    yield 'asd';
-  }, async function * (source) {
-    for await (const chunk of source) {
-      yield { chunk };
-    }
-  }, common.mustSucceed());
+  pipeline(
+    async function* () {
+      yield "asd";
+    },
+    async function* (source) {
+      for await (const chunk of source) {
+        yield { chunk };
+      }
+    },
+    common.mustSucceed(),
+  );
 }
 
 {
@@ -1154,20 +1377,24 @@ tmpdir.refresh();
     read() {},
     destroy(err, cb) {
       process.nextTick(cb);
-    }
+    },
   });
   const dst = new Writable({
     write(chunk, encoding, callback) {
       callback();
-    }
+    },
   });
-  src.on('close', () => {
+  src.on("close", () => {
     closed = true;
   });
   src.push(null);
-  pipeline(src, dst, common.mustCall((err) => {
-    assert.strictEqual(closed, true);
-  }));
+  pipeline(
+    src,
+    dst,
+    common.mustCall((err) => {
+      assert.strictEqual(closed, true);
+    }),
+  );
 }
 
 {
@@ -1176,30 +1403,47 @@ tmpdir.refresh();
     read() {},
     destroy(err, cb) {
       process.nextTick(cb);
-    }
+    },
   });
   const dst = new Duplex({});
-  src.on('close', common.mustCall(() => {
-    closed = true;
-  }));
+  src.on(
+    "close",
+    common.mustCall(() => {
+      closed = true;
+    }),
+  );
   src.push(null);
-  pipeline(src, dst, common.mustCall((err) => {
-    assert.strictEqual(closed, true);
-  }));
+  pipeline(
+    src,
+    dst,
+    common.mustCall((err) => {
+      assert.strictEqual(closed, true);
+    }),
+  );
 }
 
 {
-  const server = net.createServer(common.mustCall((socket) => {
-    // echo server
-    pipeline(socket, socket, common.mustSucceed());
-    // 13 force destroys the socket before it has a chance to emit finish
-    socket.on('finish', common.mustCall(() => {
-      server.close();
-    }));
-  })).listen(0, common.mustCall(() => {
-    const socket = net.connect(server.address().port);
-    socket.end();
-  }));
+  const server = net
+    .createServer(
+      common.mustCall((socket) => {
+        // echo server
+        pipeline(socket, socket, common.mustSucceed());
+        // 13 force destroys the socket before it has a chance to emit finish
+        socket.on(
+          "finish",
+          common.mustCall(() => {
+            server.close();
+          }),
+        );
+      }),
+    )
+    .listen(
+      0,
+      common.mustCall(() => {
+        const socket = net.connect(server.address().port);
+        socket.end();
+      }),
+    );
 }
 
 {
@@ -1213,37 +1457,50 @@ tmpdir.refresh();
       d.push(null);
     }),
     final: common.mustCall((cb) => {
-      setTimeout(common.mustCall(() => {
-        assert.strictEqual(d.destroyed, false);
-        cb();
-      }), 1000);
+      setTimeout(
+        common.mustCall(() => {
+          assert.strictEqual(d.destroyed, false);
+          cb();
+        }),
+        1000,
+      );
     }),
-    destroy: common.mustNotCall()
+    destroy: common.mustNotCall(),
   });
 
   const sink = new Writable({
     write: common.mustCall((data, enc, cb) => {
       cb();
-    })
+    }),
   });
 
   pipeline(d, sink, common.mustSucceed());
 
-  d.write('test');
+  d.write("test");
   d.end();
 }
 
 {
-  const server = net.createServer(common.mustCall((socket) => {
-    // echo server
-    pipeline(socket, socket, common.mustSucceed());
-    socket.on('finish', common.mustCall(() => {
-      server.close();
-    }));
-  })).listen(0, common.mustCall(() => {
-    const socket = net.connect(server.address().port);
-    socket.end();
-  }));
+  const server = net
+    .createServer(
+      common.mustCall((socket) => {
+        // echo server
+        pipeline(socket, socket, common.mustSucceed());
+        socket.on(
+          "finish",
+          common.mustCall(() => {
+            server.close();
+          }),
+        );
+      }),
+    )
+    .listen(
+      0,
+      common.mustCall(() => {
+        const socket = net.connect(server.address().port);
+        socket.end();
+      }),
+    );
 }
 
 {
@@ -1257,46 +1514,52 @@ tmpdir.refresh();
       d.push(null);
     }),
     final: common.mustCall((cb) => {
-      setTimeout(common.mustCall(() => {
-        assert.strictEqual(d.destroyed, false);
-        cb();
-      }), 1000);
+      setTimeout(
+        common.mustCall(() => {
+          assert.strictEqual(d.destroyed, false);
+          cb();
+        }),
+        1000,
+      );
     }),
     // `destroy()` won't be invoked by pipeline since
     // the writable side has not completed when
     // the pipeline has completed.
-    destroy: common.mustNotCall()
+    destroy: common.mustNotCall(),
   });
 
   const sink = new Writable({
     write: common.mustCall((data, enc, cb) => {
       cb();
-    })
+    }),
   });
 
   pipeline(d, sink, common.mustSucceed());
 
-  d.write('test');
+  d.write("test");
   d.end();
 }
 
 {
   const r = new Readable({
-    read() {}
+    read() {},
   });
-  r.push('hello');
-  r.push('world');
+  r.push("hello");
+  r.push("world");
   r.push(null);
-  let res = '';
+  let res = "";
   const w = new Writable({
     write(chunk, encoding, callback) {
       res += chunk;
       callback();
-    }
+    },
   });
-  pipeline([r, w], common.mustSucceed(() => {
-    assert.strictEqual(res, 'helloworld');
-  }));
+  pipeline(
+    [r, w],
+    common.mustSucceed(() => {
+      assert.strictEqual(res, "helloworld");
+    }),
+  );
 }
 
 {
@@ -1328,7 +1591,7 @@ tmpdir.refresh();
     return {
       get then() {
         if (counter++) {
-          throw new Error('Cannot access `then` more than once');
+          throw new Error("Cannot access `then` more than once");
         }
         return Function.prototype;
       },
@@ -1344,30 +1607,31 @@ tmpdir.refresh();
   );
 }
 
-
 {
   const ac = new AbortController();
-  const reason = new Error('Reason');
-  const r = Readable.from(async function* () {
-    for (let i = 0; i < 10; i++) {
-      await Promise.resolve();
-      yield String(i);
-      if (i === 5) {
-        ac.abort(reason);
+  const reason = new Error("Reason");
+  const r = Readable.from(
+    (async function* () {
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve();
+        yield String(i);
+        if (i === 5) {
+          ac.abort(reason);
+        }
       }
-    }
-  }());
-  let res = '';
+    })(),
+  );
+  let res = "";
   const w = new Writable({
     write(chunk, encoding, callback) {
       res += chunk;
       callback();
-    }
+    },
   });
   const cb = common.mustCall((err) => {
-    assert.strictEqual(err.name, 'AbortError');
+    assert.strictEqual(err.name, "AbortError");
     assert.strictEqual(err.cause, reason);
-    assert.strictEqual(res, '012345');
+    assert.strictEqual(res, "012345");
     assert.strictEqual(w.destroyed, true);
     assert.strictEqual(r.destroyed, true);
     assert.strictEqual(pipelined.destroyed, true);
@@ -1376,71 +1640,86 @@ tmpdir.refresh();
 }
 
 {
-  pipeline([1, 2, 3], PassThrough({ objectMode: true }),
-           common.mustSucceed(() => {}));
+  pipeline(
+    [1, 2, 3],
+    PassThrough({ objectMode: true }),
+    common.mustSucceed(() => {}),
+  );
 
-  let res = '';
+  let res = "";
   const w = new Writable({
     write(chunk, encoding, callback) {
       res += chunk;
       callback();
     },
   });
-  pipeline(['1', '2', '3'], w, common.mustSucceed(() => {
-    assert.strictEqual(res, '123');
-  }));
+  pipeline(
+    ["1", "2", "3"],
+    w,
+    common.mustSucceed(() => {
+      assert.strictEqual(res, "123");
+    }),
+  );
 }
 
 {
-  const content = 'abc';
-  pipeline(Buffer.from(content), PassThrough({ objectMode: true }),
-           common.mustSucceed(() => {}));
+  const content = "abc";
+  pipeline(
+    Buffer.from(content),
+    PassThrough({ objectMode: true }),
+    common.mustSucceed(() => {}),
+  );
 
-  let res = '';
-  pipeline(Buffer.from(content), async function*(previous) {
-    for await (const val of previous) {
-      res += String.fromCharCode(val);
-      yield val;
-    }
-  }, common.mustSucceed(() => {
-    assert.strictEqual(res, content);
-  }));
+  let res = "";
+  pipeline(
+    Buffer.from(content),
+    async function* (previous) {
+      for await (const val of previous) {
+        res += String.fromCharCode(val);
+        yield val;
+      }
+    },
+    common.mustSucceed(() => {
+      assert.strictEqual(res, content);
+    }),
+  );
 }
 
 {
   const ac = new AbortController();
   const signal = ac.signal;
   pipelinep(
-    async function * ({ signal }) { // eslint-disable-line require-yield
+    async function* ({ signal }) {
+      // eslint-disable-line require-yield
       await tsp.setTimeout(1e6, signal);
     },
-    async function(source) {
-
-    },
-    { signal }
-  ).catch(common.mustCall((err) => {
-    assert.strictEqual(err.name, 'AbortError');
-  }));
+    async function (source) {},
+    { signal },
+  ).catch(
+    common.mustCall((err) => {
+      assert.strictEqual(err.name, "AbortError");
+    }),
+  );
   ac.abort();
 }
 
 {
   async function run() {
     let finished = false;
-    let text = '';
+    let text = "";
     const write = new Writable({
       write(data, enc, cb) {
         text += data;
         cb();
-      }
+      },
     });
-    write.on('finish', () => {
+    write.on("finish", () => {
       finished = true;
     });
 
-    await pipelinep([Readable.from('Hello World!'), write]);
+    await pipelinep([Readable.from("Hello World!"), write]);
     assert(finished);
-    assert.strictEqual(text, 'Hello World!');
+    assert.strictEqual(text, "Hello World!");
   }
 
   run();
@@ -1448,21 +1727,24 @@ tmpdir.refresh();
 
 {
   let finished = false;
-  let text = '';
+  let text = "";
   const write = new Writable({
     write(data, enc, cb) {
       text += data;
       cb();
-    }
+    },
   });
-  write.on('finish', () => {
+  write.on("finish", () => {
     finished = true;
   });
 
-  pipeline([Readable.from('Hello World!'), write], common.mustSucceed(() => {
-    assert(finished);
-    assert.strictEqual(text, 'Hello World!');
-  }));
+  pipeline(
+    [Readable.from("Hello World!"), write],
+    common.mustSucceed(() => {
+      assert(finished);
+      assert.strictEqual(text, "Hello World!");
+    }),
+  );
 }
 
 {
@@ -1470,7 +1752,7 @@ tmpdir.refresh();
 
   async function run() {
     const read = new Readable({
-      read() {}
+      read() {},
     });
 
     const duplex = new PassThrough();
@@ -1490,7 +1772,7 @@ tmpdir.refresh();
 
   async function run() {
     const read = new Readable({
-      read() {}
+      read() {},
     });
 
     const duplex = new PassThrough();
@@ -1512,41 +1794,51 @@ tmpdir.refresh();
 
 {
   const s = new PassThrough({ objectMode: true });
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-    yield 'world';
-  }, s, async function(source) {
-    let ret = '';
-    let n = 0;
-    for await (const chunk of source) {
-      if (n++ > 1) {
-        break;
+  pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+      yield "world";
+    },
+    s,
+    async function (source) {
+      let ret = "";
+      let n = 0;
+      for await (const chunk of source) {
+        if (n++ > 1) {
+          break;
+        }
+        ret += chunk;
       }
-      ret += chunk;
-    }
-    return ret;
-  }, common.mustCall((err, val) => {
-    assert.strictEqual(err, undefined);
-    assert.strictEqual(val, 'helloworld');
-    assert.strictEqual(s.destroyed, true);
-  }));
+      return ret;
+    },
+    common.mustCall((err, val) => {
+      assert.strictEqual(err, undefined);
+      assert.strictEqual(val, "helloworld");
+      assert.strictEqual(s.destroyed, true);
+    }),
+  );
 }
 
 {
   const s = new PassThrough({ objectMode: true });
-  pipeline(async function*() {
-    await Promise.resolve();
-    yield 'hello';
-    yield 'world';
-    yield 'world';
-  }, s, async function(source) {
-    return null;
-  }, common.mustCall((err, val) => {
-    assert.strictEqual(err, undefined);
-    assert.strictEqual(val, null);
-  }));
+  pipeline(
+    async function* () {
+      await Promise.resolve();
+      yield "hello";
+      yield "world";
+      yield "world";
+    },
+    s,
+    async function (source) {
+      return null;
+    },
+    common.mustCall((err, val) => {
+      assert.strictEqual(err, undefined);
+      assert.strictEqual(val, null);
+    }),
+  );
 }
 
 {
@@ -1558,31 +1850,34 @@ tmpdir.refresh();
   }
 
   const writable = new LegacyWritable();
-  writable.on('error', common.mustCall((err) => {
-    assert.deepStrictEqual(err, new Error('stop'));
-  }));
+  writable.on(
+    "error",
+    common.mustCall((err) => {
+      assert.deepStrictEqual(err, new Error("stop"));
+    }),
+  );
 
   pipeline(
     Readable.from({
       [Symbol.asyncIterator]() {
         return {
           next() {
-            return Promise.reject(new Error('stop'));
-          }
+            return Promise.reject(new Error("stop"));
+          },
         };
-      }
+      },
     }),
     writable,
     common.mustCall((err) => {
-      assert.deepStrictEqual(err, new Error('stop'));
-    })
+      assert.deepStrictEqual(err, new Error("stop"));
+    }),
   );
 }
 
 {
   class CustomReadable extends Readable {
     _read() {
-      this.push('asd');
+      this.push("asd");
       this.push(null);
     }
   }
@@ -1591,7 +1886,7 @@ tmpdir.refresh();
     constructor() {
       super();
       this.endCount = 0;
-      this.str = '';
+      this.str = "";
     }
 
     _write(chunk, enc, cb) {
@@ -1608,19 +1903,26 @@ tmpdir.refresh();
   const readable = new CustomReadable();
   const writable = new CustomWritable();
 
-  pipeline(readable, writable, common.mustSucceed(() => {
-    assert.strictEqual(writable.str, 'asd');
-    assert.strictEqual(writable.endCount, 1);
-  }));
+  pipeline(
+    readable,
+    writable,
+    common.mustSucceed(() => {
+      assert.strictEqual(writable.str, "asd");
+      assert.strictEqual(writable.endCount, 1);
+    }),
+  );
 }
 
 {
   const readable = new Readable({
-    read() {}
+    read() {},
   });
-  readable.on('end', common.mustCall(() => {
-    pipeline(readable, new PassThrough(), common.mustSucceed());
-  }));
+  readable.on(
+    "end",
+    common.mustCall(() => {
+      pipeline(readable, new PassThrough(), common.mustSucceed());
+    }),
+  );
   readable.push(null);
   readable.read();
 }
@@ -1630,42 +1932,51 @@ tmpdir.refresh();
     read() {},
     write(chunk, enc, cb) {
       cb();
-    }
+    },
   });
-  dup.on('end', common.mustCall(() => {
-    pipeline(dup, new PassThrough(), common.mustSucceed());
-  }));
+  dup.on(
+    "end",
+    common.mustCall(() => {
+      pipeline(dup, new PassThrough(), common.mustSucceed());
+    }),
+  );
   dup.push(null);
   dup.read();
 }
 
 {
-  let res = '';
+  let res = "";
   const writable = new Writable({
     write(chunk, enc, cb) {
       res += chunk;
       cb();
-    }
+    },
   });
-  pipelinep(async function*() {
-    yield 'hello';
-    await Promise.resolve();
-    yield 'world';
-  }, writable, { end: false }).then(common.mustCall(() => {
-    assert.strictEqual(res, 'helloworld');
-    assert.strictEqual(writable.closed, false);
-  }));
+  pipelinep(
+    async function* () {
+      yield "hello";
+      await Promise.resolve();
+      yield "world";
+    },
+    writable,
+    { end: false },
+  ).then(
+    common.mustCall(() => {
+      assert.strictEqual(res, "helloworld");
+      assert.strictEqual(writable.closed, false);
+    }),
+  );
 }
 
 {
   const r = new Readable();
   for (let i = 0; i < 4000; i++) {
-    r.push('asdfdagljanfgkaljdfn');
+    r.push("asdfdagljanfgkaljdfn");
   }
   r.push(null);
 
   let ended = false;
-  r.on('end', () => {
+  r.on("end", () => {
     ended = true;
   });
 
@@ -1676,12 +1987,16 @@ tmpdir.refresh();
     final: common.mustCall((cb) => {
       assert.strictEqual(ended, true);
       cb(null);
-    })
+    }),
   });
 
-  pipeline(r, w, common.mustCall((err) => {
-    assert.strictEqual(err, undefined);
-  }));
+  pipeline(
+    r,
+    w,
+    common.mustCall((err) => {
+      assert.strictEqual(err, undefined);
+    }),
+  );
 }
 
 {
@@ -1694,12 +2009,16 @@ tmpdir.refresh();
     },
   });
 
-  pipeline(src, dst, common.mustCall((err) => {
-    assert.strictEqual(src.closed, true);
-    assert.strictEqual(dst.closed, true);
-    assert.strictEqual(err.message, 'problem');
-  }));
-  src.destroy(new Error('problem'));
+  pipeline(
+    src,
+    dst,
+    common.mustCall((err) => {
+      assert.strictEqual(src.closed, true);
+      assert.strictEqual(dst.closed, true);
+      assert.strictEqual(err.message, "problem");
+    }),
+  );
+  src.destroy(new Error("problem"));
 }
 
 {
@@ -1715,16 +2034,21 @@ tmpdir.refresh();
     passThroughs.push(new PassThrough());
   }
 
-  pipeline(src, ...passThroughs, dst, common.mustCall((err) => {
-    assert.strictEqual(src.closed, true);
-    assert.strictEqual(dst.closed, true);
-    assert.strictEqual(err.message, 'problem');
+  pipeline(
+    src,
+    ...passThroughs,
+    dst,
+    common.mustCall((err) => {
+      assert.strictEqual(src.closed, true);
+      assert.strictEqual(dst.closed, true);
+      assert.strictEqual(err.message, "problem");
 
-    for (let i = 0; i < passThroughs.length; i++) {
-      assert.strictEqual(passThroughs[i].closed, true);
-    }
-  }));
-  src.destroy(new Error('problem'));
+      for (let i = 0; i < passThroughs.length; i++) {
+        assert.strictEqual(passThroughs[i].closed, true);
+      }
+    }),
+  );
+  src.destroy(new Error("problem"));
 }
 
 {
@@ -1738,8 +2062,8 @@ tmpdir.refresh();
 
   const r = new Readable({
     read() {
-      this.push('data1\n');
-      throw new Error('booom');
+      this.push("data1\n");
+      throw new Error("booom");
     },
   });
 
@@ -1749,16 +2073,25 @@ tmpdir.refresh();
     },
   });
 
-  pipeline(r, duplexStream, w, common.mustCall((err) => {
-    assert.deepStrictEqual(err, new Error('booom'));
-  }));
+  pipeline(
+    r,
+    duplexStream,
+    w,
+    common.mustCall((err) => {
+      assert.deepStrictEqual(err, new Error("booom"));
+    }),
+  );
 }
 
 {
   // Errors thrown in Readable.map inside pipeline should not be
   // swallowed by AbortError when the source is an infinite stream.
   pipeline(
-    new Readable({ read() { this.push('data'); } }),
+    new Readable({
+      read() {
+        this.push("data");
+      },
+    }),
     new Transform({
       readableObjectMode: true,
       transform(chunk, encoding, callback) {
@@ -1766,11 +2099,12 @@ tmpdir.refresh();
         callback();
       },
     }),
-    (readable) => readable.map(async () => {
-      throw new Error('Boom!');
-    }),
+    (readable) =>
+      readable.map(async () => {
+        throw new Error("Boom!");
+      }),
     common.mustCall((err) => {
-      assert.strictEqual(err.message, 'Boom!');
+      assert.strictEqual(err.message, "Boom!");
     }),
   );
 }

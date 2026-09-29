@@ -8,9 +8,16 @@ import https, {
   get,
   Agent,
   globalAgent,
-} from '../src/https.js';
-import http from '../src/http.js';
-import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
+} from "../src/https.js";
+import http from "../src/http.js";
+import {
+  describe,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+  jest,
+} from "@jest/globals";
 
 const throwsCode = (fn) => {
   try {
@@ -21,10 +28,16 @@ const throwsCode = (fn) => {
   return null;
 };
 
-describe('https surface', () => {
-  test('exports exactly Server/createServer/request/get/Agent/globalAgent', () => {
-    expect(Object.keys(https).sort()).toEqual(
-      ['Agent', 'Server', 'createServer', 'get', 'globalAgent', 'request']);
+describe("https surface", () => {
+  test("exports exactly Server/createServer/request/get/Agent/globalAgent", () => {
+    expect(Object.keys(https).sort()).toEqual([
+      "Agent",
+      "Server",
+      "createServer",
+      "get",
+      "globalAgent",
+      "request",
+    ]);
     expect(Server).toBe(https.Server);
     expect(createServer).toBe(https.createServer);
     expect(request).toBe(https.request);
@@ -34,130 +47,136 @@ describe('https surface', () => {
   });
 });
 
-describe('https.Agent', () => {
-  test('defaults match Node (443, https:, maxCachedSessions 100)', () => {
+describe("https.Agent", () => {
+  test("defaults match Node (443, https:, maxCachedSessions 100)", () => {
     const agent = new Agent();
     expect(agent).toBeInstanceOf(http.Agent);
     expect(agent.defaultPort).toBe(443);
-    expect(agent.protocol).toBe('https:');
+    expect(agent.protocol).toBe("https:");
     expect(agent.maxCachedSessions).toBe(100);
     expect(agent.keepAlive).toBe(false);
   });
 
-  test('globalAgent is an https Agent', () => {
+  test("globalAgent is an https Agent", () => {
     expect(globalAgent).toBeInstanceOf(Agent);
     expect(globalAgent.defaultPort).toBe(443);
-    expect(globalAgent.protocol).toBe('https:');
+    expect(globalAgent.protocol).toBe("https:");
     expect(globalAgent.maxCachedSessions).toBe(100);
     expect(globalAgent.keepAlive).toBe(true);
   });
 
-  test('explicit options win over https defaults', () => {
+  test("explicit options win over https defaults", () => {
     const agent = new Agent({ defaultPort: 8443, maxCachedSessions: 5 });
     expect(agent.defaultPort).toBe(8443);
     expect(agent.maxCachedSessions).toBe(5);
-    expect(agent.protocol).toBe('https:');
+    expect(agent.protocol).toBe("https:");
   });
 });
 
-describe('https.Server', () => {
-  test('extends http.Server and shares the virtual registry', async () => {
+describe("https.Server", () => {
+  test("extends http.Server and shares the virtual registry", async () => {
     expect(new Server()).toBeInstanceOf(http.Server);
-    const server = createServer({ key: 'fake', cert: 'fake' }, (req, res) => {
-      res.end('secure-ish');
+    const server = createServer({ key: "fake", cert: "fake" }, (req, res) => {
+      res.end("secure-ish");
     });
     expect(server).toBeInstanceOf(Server);
     await new Promise((resolve) => server.listen(18101, resolve));
-    const result = await server.handleRequest('GET', '/tls', {}, null);
+    const result = await server.handleRequest("GET", "/tls", {}, null);
     expect(result.statusCode).toBe(200);
-    expect(Buffer.from(result.body).toString()).toBe('secure-ish');
+    expect(Buffer.from(result.body).toString()).toBe("secure-ish");
     server.close();
   });
 
-  test('setSecureContext is accepted and ignored', () => {
+  test("setSecureContext is accepted and ignored", () => {
     const server = createServer();
-    expect(() => server.setSecureContext({ cert: 'x' })).not.toThrow();
+    expect(() => server.setSecureContext({ cert: "x" })).not.toThrow();
   });
 });
 
-describe('https client (fetch bridge)', () => {
+describe("https client (fetch bridge)", () => {
   let realFetch;
   beforeEach(() => {
     realFetch = globalThis.fetch;
     globalThis.fetch = jest.fn(async () => ({
       status: 200,
-      statusText: 'OK',
+      statusText: "OK",
       headers: new Map(),
-      arrayBuffer: async () => new TextEncoder().encode('tls body').buffer,
+      arrayBuffer: async () => new TextEncoder().encode("tls body").buffer,
     }));
   });
   afterEach(() => {
     globalThis.fetch = realFetch;
   });
 
-  test('request forces the https: protocol', async () => {
+  test("request forces the https: protocol", async () => {
     const body = await new Promise((resolve, reject) => {
-      const req = request('https://example.com/secure', (res) => {
-        let data = '';
-        res.on('data', (c) => { data += c; });
-        res.on('end', () => resolve(data));
-        res.on('error', reject);
+      const req = request("https://example.com/secure", (res) => {
+        let data = "";
+        res.on("data", (c) => {
+          data += c;
+        });
+        res.on("end", () => resolve(data));
+        res.on("error", reject);
       });
-      req.on('error', reject);
+      req.on("error", reject);
       req.end();
     });
-    expect(body).toBe('tls body');
+    expect(body).toBe("tls body");
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://example.com/secure',
-      expect.objectContaining({ method: 'GET' }),
+      "https://example.com/secure",
+      expect.objectContaining({ method: "GET" }),
     );
   });
 
-  test('options without protocol default to https:', async () => {
+  test("options without protocol default to https:", async () => {
     await new Promise((resolve, reject) => {
-      const req = request({ hostname: 'example.com', path: '/' }, (res) => {
+      const req = request({ hostname: "example.com", path: "/" }, (res) => {
         res.resume();
-        res.on('end', resolve);
-        res.on('error', reject);
+        res.on("end", resolve);
+        res.on("error", reject);
       });
-      req.on('error', reject);
-      expect(req.protocol).toBe('https:');
+      req.on("error", reject);
+      expect(req.protocol).toBe("https:");
       expect(req.agent).toBe(globalAgent);
       req.end();
     });
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://example.com/',
+      "https://example.com/",
       expect.anything(),
     );
   });
 
-  test('get() ends the request', async () => {
-    const req = get('https://example.com/', () => {});
-    req.on('error', () => {});
+  test("get() ends the request", async () => {
+    const req = get("https://example.com/", () => {});
+    req.on("error", () => {});
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(globalThis.fetch).toHaveBeenCalled();
   });
 
-  test('http: URL through https.request throws ERR_INVALID_PROTOCOL', () => {
-    expect(throwsCode(() => request('http://example.com/', () => {})))
-      .toBe('ERR_INVALID_PROTOCOL');
+  test("http: URL through https.request throws ERR_INVALID_PROTOCOL", () => {
+    expect(throwsCode(() => request("http://example.com/", () => {}))).toBe(
+      "ERR_INVALID_PROTOCOL",
+    );
   });
 
-  test('TLS options are accepted and ignored', async () => {
+  test("TLS options are accepted and ignored", async () => {
     await new Promise((resolve, reject) => {
-      const req = request({
-        hostname: 'example.com',
-        path: '/',
-        key: 'fake-key',
-        cert: 'fake-cert',
-        ca: 'fake-ca',
-        rejectUnauthorized: false,
-      }, (res) => {
-        res.resume();
-        res.on('end', resolve);
-        res.on('error', reject);
-      });
-      req.on('error', reject);
+      const req = request(
+        {
+          hostname: "example.com",
+          path: "/",
+          key: "fake-key",
+          cert: "fake-cert",
+          ca: "fake-ca",
+          rejectUnauthorized: false,
+        },
+        (res) => {
+          res.resume();
+          res.on("end", resolve);
+          res.on("error", reject);
+        },
+      );
+      req.on("error", reject);
       req.end();
     });
     expect(globalThis.fetch).toHaveBeenCalled();

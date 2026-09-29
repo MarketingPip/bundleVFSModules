@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-const { mustCall } = require('../common');
-const assert = require('assert');
-const { Agent, get } = require('http');
+const { mustCall } = require("../common");
+const assert = require("assert");
+const { Agent, get } = require("http");
 
 // Test that the listener that forwards the `'timeout'` event from the socket to
 // the `ClientRequest` instance is added to the socket when the `timeout` option
@@ -10,14 +10,17 @@ const { Agent, get } = require('http');
 
 const request = get({
   agent: new Agent({ timeout: 50 }),
-  lookup: () => {}
+  lookup: () => {},
 });
 
-request.on('socket', mustCall((socket) => {
-  assert.strictEqual(socket.timeout, 50);
+request.on(
+  "socket",
+  mustCall((socket) => {
+    assert.strictEqual(socket.timeout, 50);
 
-  const listeners = socket.listeners('timeout');
+    const listeners = socket.listeners("timeout");
 
-  assert.strictEqual(listeners.length, 2);
-  assert.strictEqual(listeners[1], request.timeoutCb);
-}));
+    assert.strictEqual(listeners.length, 2);
+    assert.strictEqual(listeners[1], request.timeoutCb);
+  }),
+);

@@ -1,34 +1,40 @@
-'use strict';
-const common = require('./index.js');
-const tmpdir = require('./tmpdir.js');
-const fixtures = require('./fixtures.js');
-const { writeFileSync, readdirSync, readFileSync, renameSync, unlinkSync } = require('node:fs');
-const { spawn } = require('node:child_process');
-const { once } = require('node:events');
-const assert = require('node:assert');
-const { setTimeout } = require('node:timers/promises');
+"use strict";
+const common = require("./index.js");
+const tmpdir = require("./tmpdir.js");
+const fixtures = require("./fixtures.js");
+const {
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+} = require("node:fs");
+const { spawn } = require("node:child_process");
+const { once } = require("node:events");
+const assert = require("node:assert");
+const { setTimeout } = require("node:timers/promises");
 
 function skipIfNoWatch() {
   if (common.isIBMi) {
-    common.skip('IBMi does not support `fs.watch()`');
+    common.skip("IBMi does not support `fs.watch()`");
   }
 
   if (common.isAIX) {
-    common.skip('folder watch capability is limited in AIX.');
+    common.skip("folder watch capability is limited in AIX.");
   }
 }
 
 function skipIfNoWatchModeSignals() {
   if (common.isWindows) {
-    common.skip('no signals on Windows');
+    common.skip("no signals on Windows");
   }
 
   if (common.isIBMi) {
-    common.skip('IBMi does not support `fs.watch()`');
+    common.skip("IBMi does not support `fs.watch()`");
   }
 
   if (common.isAIX) {
-    common.skip('folder watch capability is limited in AIX.');
+    common.skip("folder watch capability is limited in AIX.");
   }
 }
 
@@ -37,12 +43,12 @@ const fixtureContent = {};
 
 function refreshForTestRunnerWatch() {
   tmpdir.refresh();
-  const files = readdirSync(fixtures.path('test-runner-watch'));
+  const files = readdirSync(fixtures.path("test-runner-watch"));
   for (const file of files) {
-    const src = fixtures.path('test-runner-watch', file);
+    const src = fixtures.path("test-runner-watch", file);
     const dest = tmpdir.resolve(file);
     fixturePaths[file] = dest;
-    fixtureContent[file] = readFileSync(src, 'utf8');
+    fixtureContent[file] = readFileSync(src, "utf8");
     writeFileSync(dest, fixtureContent[file]);
   }
 }
@@ -72,7 +78,7 @@ function assertTestOutput(run, shouldCheckRecursion = false) {
 async function testRunnerWatch({
   fileToUpdate,
   file,
-  action = 'update',
+  action = "update",
   fileToCreate,
   isolation,
   useRunApi = false,
@@ -85,25 +91,32 @@ async function testRunnerWatch({
   let args;
   if (useRunApi) {
     // Use the fixture that calls run() API
-    const runner = fixtures.path('test-runner-watch.mjs');
+    const runner = fixtures.path("test-runner-watch.mjs");
     args = [runner];
-    if (file) args.push('--file', file);
-    if (runnerCwd) args.push('--cwd', runnerCwd);
-    if (isolation) args.push('--isolation', isolation);
+    if (file) args.push("--file", file);
+    if (runnerCwd) args.push("--cwd", runnerCwd);
+    if (isolation) args.push("--isolation", isolation);
   } else {
     // Use CLI --watch --test flags
-    args = ['--watch', '--test', '--test-reporter=spec',
-            isolation ? `--test-isolation=${isolation}` : '',
-            file ? fixturePaths[file] : undefined].filter(Boolean);
+    args = [
+      "--watch",
+      "--test",
+      "--test-reporter=spec",
+      isolation ? `--test-isolation=${isolation}` : "",
+      file ? fixturePaths[file] : undefined,
+    ].filter(Boolean);
   }
 
-  const child = spawn(process.execPath, args,
-                      { encoding: 'utf8', stdio: 'pipe', cwd });
-  let stdout = '';
-  let currentRun = '';
+  const child = spawn(process.execPath, args, {
+    encoding: "utf8",
+    stdio: "pipe",
+    cwd,
+  });
+  let stdout = "";
+  let currentRun = "";
   const runs = [];
 
-  child.stdout.on('data', (data) => {
+  child.stdout.on("data", (data) => {
     stdout += data.toString();
     currentRun += data.toString();
     const testRuns = stdout.match(/^\S+ duration_ms\s\d+/gm);
@@ -114,19 +127,16 @@ async function testRunnerWatch({
   const testUpdate = async () => {
     await ran1.promise;
     runs.push(currentRun);
-    currentRun = '';
+    currentRun = "";
     const content = fixtureContent[fileToUpdate];
     const path = fixturePaths[fileToUpdate];
 
-    await performFileOperation(
-      () => writeFileSync(path, content),
-      useRunApi,
-    );
+    await performFileOperation(() => writeFileSync(path, content), useRunApi);
     await ran2.promise;
 
     runs.push(currentRun);
     child.kill();
-    await once(child, 'exit');
+    await once(child, "exit");
 
     assert.strictEqual(runs.length, 2);
 
@@ -138,7 +148,7 @@ async function testRunnerWatch({
   const testRename = async () => {
     await ran1.promise;
     runs.push(currentRun);
-    currentRun = '';
+    currentRun = "";
     const fileToRenamePath = tmpdir.resolve(fileToUpdate);
     const newFileNamePath = tmpdir.resolve(`test-renamed-${fileToUpdate}`);
 
@@ -150,14 +160,14 @@ async function testRunnerWatch({
 
     runs.push(currentRun);
     child.kill();
-    await once(child, 'exit');
+    await once(child, "exit");
 
     assert.strictEqual(runs.length, 2);
 
     const [firstRun, secondRun] = runs;
     assertTestOutput(firstRun, useRunApi);
 
-    if (action === 'rename2') {
+    if (action === "rename2") {
       assert.match(secondRun, /MODULE_NOT_FOUND/);
       return;
     }
@@ -168,11 +178,11 @@ async function testRunnerWatch({
   const testDelete = async () => {
     await ran1.promise;
     runs.push(currentRun);
-    currentRun = '';
+    currentRun = "";
     const fileToDeletePath = tmpdir.resolve(fileToUpdate);
 
     if (useRunApi) {
-      const { existsSync } = require('node:fs');
+      const { existsSync } = require("node:fs");
       const interval = setInterval(() => {
         if (existsSync(fileToDeletePath)) {
           unlinkSync(fileToDeletePath);
@@ -190,7 +200,7 @@ async function testRunnerWatch({
 
     runs.push(currentRun);
     child.kill();
-    await once(child, 'exit');
+    await once(child, "exit");
 
     assert.strictEqual(runs.length, 2);
 
@@ -202,33 +212,32 @@ async function testRunnerWatch({
   const testCreate = async () => {
     await ran1.promise;
     runs.push(currentRun);
-    currentRun = '';
+    currentRun = "";
     const newFilePath = tmpdir.resolve(fileToCreate);
 
     await performFileOperation(
-      () => writeFileSync(newFilePath, 'module.exports = {};'),
+      () => writeFileSync(newFilePath, "module.exports = {};"),
       useRunApi,
     );
     await ran2.promise;
 
     runs.push(currentRun);
     child.kill();
-    await once(child, 'exit');
+    await once(child, "exit");
 
     for (const run of runs) {
       assertTestOutput(run, false);
     }
   };
 
-  action === 'update' && await testUpdate();
-  action === 'rename' && await testRename();
-  action === 'rename2' && await testRename();
-  action === 'delete' && await testDelete();
-  action === 'create' && await testCreate();
+  action === "update" && (await testUpdate());
+  action === "rename" && (await testRename());
+  action === "rename2" && (await testRename());
+  action === "delete" && (await testDelete());
+  action === "create" && (await testCreate());
 
   return runs;
 }
-
 
 module.exports = {
   skipIfNoWatch,

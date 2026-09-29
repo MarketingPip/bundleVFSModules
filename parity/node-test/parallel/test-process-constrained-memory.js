@@ -1,6 +1,6 @@
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
 const constrainedMemory = process.constrainedMemory();
-assert.strictEqual(typeof constrainedMemory, 'number');
+assert.strictEqual(typeof constrainedMemory, "number");

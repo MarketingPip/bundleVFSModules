@@ -1,26 +1,28 @@
-import * as common from '../common/index.mjs';
+import * as common from "../common/index.mjs";
 
 common.skipIfInspectorDisabled();
 
-import assert from 'node:assert';
-import { NodeInstance } from '../common/inspector-helper.js';
-
+import assert from "node:assert";
+import { NodeInstance } from "../common/inspector-helper.js";
 
 async function runTests() {
-  const child = new NodeInstance(['--inspect-wait=0'], 'console.log(0);');
+  const child = new NodeInstance(["--inspect-wait=0"], "console.log(0);");
   const session = await child.connectInspectorSession();
-  await session.send({ method: 'NodeRuntime.enable' });
-  await session.waitForNotification('NodeRuntime.waitingForDebugger');
+  await session.send({ method: "NodeRuntime.enable" });
+  await session.waitForNotification("NodeRuntime.waitingForDebugger");
 
   // The execution should be paused until the debugger is attached
-  while (await child.nextStderrString() !== 'Debugger attached.');
+  while ((await child.nextStderrString()) !== "Debugger attached.");
 
-  await session.send({ 'method': 'Runtime.runIfWaitingForDebugger' });
+  await session.send({ method: "Runtime.runIfWaitingForDebugger" });
 
   // Wait for the execution to finish
-  while (await child.nextStderrString() !== 'Waiting for the debugger to disconnect...');
+  while (
+    (await child.nextStderrString()) !==
+    "Waiting for the debugger to disconnect..."
+  );
 
-  await session.send({ method: 'NodeRuntime.disable' });
+  await session.send({ method: "NodeRuntime.disable" });
   session.disconnect();
   assert.strictEqual((await child.expectShutdown()).exitCode, 0);
 }

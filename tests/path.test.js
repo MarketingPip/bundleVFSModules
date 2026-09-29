@@ -1,7 +1,7 @@
 // No imports needed for describe/test/expect in Jest
 
 // adjust path if needed
-import * as win32 from '../src/path/win32.js';
+import * as win32 from "../src/path/win32.js";
 
 // Node-faithful: with no absolute segment, win32.resolve() anchors at the
 // process cwd (converted to win32 separators) — the old 'C:\' implied-root
@@ -10,20 +10,19 @@ import * as win32 from '../src/path/win32.js';
 const BS = String.fromCharCode(92);
 // win32.resolve('', 'foo') → '\' + cwd with win32 separators + '\foo'
 // (the cwd's leading '/' is consumed as the root separator).
-const cwdAsWin = process.cwd().split('/').join(BS);
+const cwdAsWin = process.cwd().split("/").join(BS);
 
-describe('win32 path implementation', () => {
-
+describe("win32 path implementation", () => {
   // -------------------------------------------------------------------------
   // resolve
   // -------------------------------------------------------------------------
-  describe('resolve()', () => {
+  describe("resolve()", () => {
     test.each([
-      [['C:\\foo', 'bar'], 'C:\\foo\\bar'],
-      [['C:\\foo', '..\\bar'], 'C:\\bar'],
-      [['C:\\foo', 'C:\\bar'], 'C:\\bar'],
-      [['', 'foo'], cwdAsWin + BS + 'foo'],
-    ])('resolve(%o)', (args, expected) => {
+      [["C:\\foo", "bar"], "C:\\foo\\bar"],
+      [["C:\\foo", "..\\bar"], "C:\\bar"],
+      [["C:\\foo", "C:\\bar"], "C:\\bar"],
+      [["", "foo"], cwdAsWin + BS + "foo"],
+    ])("resolve(%o)", (args, expected) => {
       expect(win32.resolve(...args)).toBe(expected);
     });
   });
@@ -31,13 +30,13 @@ describe('win32 path implementation', () => {
   // -------------------------------------------------------------------------
   // normalize
   // -------------------------------------------------------------------------
-  describe('normalize()', () => {
+  describe("normalize()", () => {
     test.each([
-      ['C:\\foo\\..\\bar', 'C:\\bar'],
-      ['C:/foo//bar\\baz', 'C:\\foo\\bar\\baz'],
-      ['foo\\..\\bar', 'bar'],
-      ['.', '.'],
-    ])('normalize(%s)', (input, expected) => {
+      ["C:\\foo\\..\\bar", "C:\\bar"],
+      ["C:/foo//bar\\baz", "C:\\foo\\bar\\baz"],
+      ["foo\\..\\bar", "bar"],
+      [".", "."],
+    ])("normalize(%s)", (input, expected) => {
       expect(win32.normalize(input)).toBe(expected);
     });
   });
@@ -45,13 +44,13 @@ describe('win32 path implementation', () => {
   // -------------------------------------------------------------------------
   // isAbsolute
   // -------------------------------------------------------------------------
-  describe('isAbsolute()', () => {
+  describe("isAbsolute()", () => {
     test.each([
-      ['C:\\foo', true],
-      ['\\foo', true],
-      ['foo\\bar', false],
-      ['C:foo', false],
-    ])('isAbsolute(%s)', (input, expected) => {
+      ["C:\\foo", true],
+      ["\\foo", true],
+      ["foo\\bar", false],
+      ["C:foo", false],
+    ])("isAbsolute(%s)", (input, expected) => {
       expect(win32.isAbsolute(input)).toBe(expected);
     });
   });
@@ -59,13 +58,13 @@ describe('win32 path implementation', () => {
   // -------------------------------------------------------------------------
   // join
   // -------------------------------------------------------------------------
-  describe('join()', () => {
+  describe("join()", () => {
     test.each([
-      [['C:\\foo', 'bar'], 'C:\\foo\\bar'],
-      [['C:\\foo', '..', 'bar'], 'C:\\bar'],
-      [['foo', 'bar', 'baz'], 'foo\\bar\\baz'],
-      [[], '.'],
-    ])('join(%o)', (args, expected) => {
+      [["C:\\foo", "bar"], "C:\\foo\\bar"],
+      [["C:\\foo", "..", "bar"], "C:\\bar"],
+      [["foo", "bar", "baz"], "foo\\bar\\baz"],
+      [[], "."],
+    ])("join(%o)", (args, expected) => {
       expect(win32.join(...args)).toBe(expected);
     });
   });
@@ -73,13 +72,13 @@ describe('win32 path implementation', () => {
   // -------------------------------------------------------------------------
   // relative
   // -------------------------------------------------------------------------
-  describe('relative()', () => {
+  describe("relative()", () => {
     test.each([
-      ['C:\\foo\\bar', 'C:\\foo\\baz', '..\\baz'],
-      ['C:\\foo', 'C:\\foo\\bar', 'bar'],
-      ['C:\\foo\\bar', 'C:\\foo\\bar', ''],
-      ['C:\\Users\\Alice', 'C:\\users\\alice\\docs', 'docs'],
-    ])('relative(%s, %s)', (from, to, expected) => {
+      ["C:\\foo\\bar", "C:\\foo\\baz", "..\\baz"],
+      ["C:\\foo", "C:\\foo\\bar", "bar"],
+      ["C:\\foo\\bar", "C:\\foo\\bar", ""],
+      ["C:\\Users\\Alice", "C:\\users\\alice\\docs", "docs"],
+    ])("relative(%s, %s)", (from, to, expected) => {
       expect(win32.relative(from, to)).toBe(expected);
     });
   });
@@ -87,13 +86,13 @@ describe('win32 path implementation', () => {
   // -------------------------------------------------------------------------
   // dirname
   // -------------------------------------------------------------------------
-  describe('dirname()', () => {
+  describe("dirname()", () => {
     test.each([
-      ['C:\\foo\\bar\\baz.txt', 'C:\\foo\\bar'],
-      ['C:\\foo\\bar\\', 'C:\\foo'],
-      ['C:\\', 'C:\\'],
-      ['foo', '.'],
-    ])('dirname(%s)', (input, expected) => {
+      ["C:\\foo\\bar\\baz.txt", "C:\\foo\\bar"],
+      ["C:\\foo\\bar\\", "C:\\foo"],
+      ["C:\\", "C:\\"],
+      ["foo", "."],
+    ])("dirname(%s)", (input, expected) => {
       expect(win32.dirname(input)).toBe(expected);
     });
   });
@@ -101,12 +100,12 @@ describe('win32 path implementation', () => {
   // -------------------------------------------------------------------------
   // basename
   // -------------------------------------------------------------------------
-  describe('basename()', () => {
+  describe("basename()", () => {
     test.each([
-      ['C:\\foo\\bar.txt', undefined, 'bar.txt'],
-      ['C:\\foo\\bar.txt', '.txt', 'bar'],
-      ['C:\\foo\\bar', '.txt', 'bar'],
-    ])('basename(%s)', (input, ext, expected) => {
+      ["C:\\foo\\bar.txt", undefined, "bar.txt"],
+      ["C:\\foo\\bar.txt", ".txt", "bar"],
+      ["C:\\foo\\bar", ".txt", "bar"],
+    ])("basename(%s)", (input, ext, expected) => {
       expect(win32.basename(input, ext)).toBe(expected);
     });
   });
@@ -114,13 +113,13 @@ describe('win32 path implementation', () => {
   // -------------------------------------------------------------------------
   // extname
   // -------------------------------------------------------------------------
-  describe('extname()', () => {
+  describe("extname()", () => {
     test.each([
-      ['file.txt', '.txt'],
-      ['archive.tar.gz', '.gz'],
-      ['noext', ''],
-      ['.gitignore', ''],
-    ])('extname(%s)', (input, expected) => {
+      ["file.txt", ".txt"],
+      ["archive.tar.gz", ".gz"],
+      ["noext", ""],
+      [".gitignore", ""],
+    ])("extname(%s)", (input, expected) => {
       expect(win32.extname(input)).toBe(expected);
     });
   });
@@ -128,46 +127,45 @@ describe('win32 path implementation', () => {
   // -------------------------------------------------------------------------
   // parse / format
   // -------------------------------------------------------------------------
-  describe('parse() and format()', () => {
-    test('parse basic path', () => {
-      const parsed = win32.parse('C:\\foo\\bar.txt');
+  describe("parse() and format()", () => {
+    test("parse basic path", () => {
+      const parsed = win32.parse("C:\\foo\\bar.txt");
       expect(parsed).toEqual({
-        root: 'C:\\',
-        dir: 'C:\\foo',
-        base: 'bar.txt',
-        ext: '.txt',
-        name: 'bar',
+        root: "C:\\",
+        dir: "C:\\foo",
+        base: "bar.txt",
+        ext: ".txt",
+        name: "bar",
       });
     });
 
-    test('format reconstructs path', () => {
+    test("format reconstructs path", () => {
       const obj = {
-        root: 'C:\\',
-        dir: 'C:\\foo',
-        base: 'bar.txt',
-        ext: '.txt',
-        name: 'bar',
+        root: "C:\\",
+        dir: "C:\\foo",
+        base: "bar.txt",
+        ext: ".txt",
+        name: "bar",
       };
-      expect(win32.format(obj)).toBe('C:\\foo\\bar.txt');
+      expect(win32.format(obj)).toBe("C:\\foo\\bar.txt");
     });
   });
 
   // -------------------------------------------------------------------------
   // edge cases
   // -------------------------------------------------------------------------
-  describe('edge cases', () => {
-    test('throws on non-string', () => {
+  describe("edge cases", () => {
+    test("throws on non-string", () => {
       expect(() => win32.normalize(null)).toThrow();
     });
 
-    test('empty string normalize', () => {
-      expect(win32.normalize('')).toBe('.');
+    test("empty string normalize", () => {
+      expect(win32.normalize("")).toBe(".");
     });
 
-    test('UNC path parse', () => {
-      const parsed = win32.parse('\\\\server\\share\\file.txt');
-      expect(parsed.root).toContain('\\\\server\\share');
+    test("UNC path parse", () => {
+      const parsed = win32.parse("\\\\server\\share\\file.txt");
+      expect(parsed.root).toContain("\\\\server\\share");
     });
   });
-
 });

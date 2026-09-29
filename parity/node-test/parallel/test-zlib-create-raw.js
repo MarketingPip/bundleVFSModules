@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const zlib = require('zlib');
+require("../common");
+const assert = require("assert");
+const zlib = require("zlib");
 
 {
   const inflateRaw = zlib.createInflateRaw();

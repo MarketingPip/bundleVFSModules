@@ -19,22 +19,21 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-if (!common.canCreateSymLink())
-  common.skip('insufficient privileges');
+"use strict";
+const common = require("../common");
+if (!common.canCreateSymLink()) common.skip("insufficient privileges");
 
-const fixtures = require('../common/fixtures');
+const fixtures = require("../common/fixtures");
 
-const assert = require('assert');
-const fs = require('fs');
+const assert = require("assert");
+const fs = require("fs");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 tmpdir.refresh();
 
 // Test creating and reading symbolic link
-const linkData = fixtures.path('/cycles/root.js');
-const linkPath = tmpdir.resolve('symlink1.js');
+const linkData = fixtures.path("/cycles/root.js");
+const linkPath = tmpdir.resolve("symlink1.js");
 
 let linkTime;
 let fileTime;
@@ -42,18 +41,27 @@ let fileTime;
 // Refs: https://github.com/nodejs/node/issues/34514
 fs.symlinkSync(Buffer.from(linkData), linkPath);
 
-fs.lstat(linkPath, common.mustSucceed((stats) => {
-  linkTime = stats.mtime.getTime();
-}));
+fs.lstat(
+  linkPath,
+  common.mustSucceed((stats) => {
+    linkTime = stats.mtime.getTime();
+  }),
+);
 
-fs.stat(linkPath, common.mustSucceed((stats) => {
-  fileTime = stats.mtime.getTime();
-}));
+fs.stat(
+  linkPath,
+  common.mustSucceed((stats) => {
+    fileTime = stats.mtime.getTime();
+  }),
+);
 
-fs.readlink(linkPath, common.mustSucceed((destination) => {
-  assert.strictEqual(destination, linkData);
-}));
+fs.readlink(
+  linkPath,
+  common.mustSucceed((destination) => {
+    assert.strictEqual(destination, linkData);
+  }),
+);
 
-process.on('exit', () => {
+process.on("exit", () => {
   assert.notStrictEqual(linkTime, fileTime);
 });

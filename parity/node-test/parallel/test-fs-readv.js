@@ -1,13 +1,14 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
-const tmpdir = require('../common/tmpdir');
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
+const tmpdir = require("../common/tmpdir");
 
 tmpdir.refresh();
 
-const expected = 'ümlaut. Лорем 運務ホソモ指及 आपको करने विकास 紙読決多密所 أضف';
+const expected =
+  "ümlaut. Лорем 運務ホソモ指及 आपको करने विकास 紙読決多密所 أضف";
 
 let cnt = 0;
 const getFileName = () => tmpdir.resolve(`readv_${++cnt}.txt`);
@@ -36,7 +37,7 @@ const getCallback = (fd, bufferArr) => {
 // fs.readv with array of buffers with all parameters
 {
   const filename = getFileName();
-  const fd = fs.openSync(filename, 'w+');
+  const fd = fs.openSync(filename, "w+");
   fs.writeSync(fd, exptectedBuff);
 
   const bufferArr = allocateEmptyBuffers(exptectedBuff.length);
@@ -49,7 +50,7 @@ const getCallback = (fd, bufferArr) => {
 {
   const filename = getFileName();
   fs.writeFileSync(filename, exptectedBuff);
-  const fd = fs.openSync(filename, 'r');
+  const fd = fs.openSync(filename, "r");
 
   const bufferArr = allocateEmptyBuffers(exptectedBuff.length);
   const callback = getCallback(fd, bufferArr);
@@ -60,20 +61,18 @@ const getCallback = (fd, bufferArr) => {
 /**
  * Testing with incorrect arguments
  */
-const wrongInputs = [false, 'test', {}, [{}], ['sdf'], null, undefined];
+const wrongInputs = [false, "test", {}, [{}], ["sdf"], null, undefined];
 
 {
   const filename = getFileName(2);
   fs.writeFileSync(filename, exptectedBuff);
-  const fd = fs.openSync(filename, 'r');
+  const fd = fs.openSync(filename, "r");
 
   for (const wrongInput of wrongInputs) {
-    assert.throws(
-      () => fs.readv(fd, wrongInput, null, common.mustNotCall()), {
-        code: 'ERR_INVALID_ARG_TYPE',
-        name: 'TypeError'
-      }
-    );
+    assert.throws(() => fs.readv(fd, wrongInput, null, common.mustNotCall()), {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    });
   }
 
   fs.closeSync(fd);
@@ -82,12 +81,9 @@ const wrongInputs = [false, 'test', {}, [{}], ['sdf'], null, undefined];
 {
   // fs.readv with wrong fd argument
   for (const wrongInput of wrongInputs) {
-    assert.throws(
-      () => fs.readv(wrongInput, common.mustNotCall()),
-      {
-        code: 'ERR_INVALID_ARG_TYPE',
-        name: 'TypeError'
-      }
-    );
+    assert.throws(() => fs.readv(wrongInput, common.mustNotCall()), {
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    });
   }
 }

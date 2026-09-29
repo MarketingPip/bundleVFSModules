@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { startNewREPLServer } = require('../common/repl');
-const assert = require('node:assert');
+const common = require("../common");
+const { startNewREPLServer } = require("../common/repl");
+const assert = require("node:assert");
 
 // This test checks that an eval function returning an error in its callback
 // after the repl server has been closed doesn't cause an ERR_USE_AFTER_CLOSE
@@ -12,26 +12,32 @@ const assert = require('node:assert');
   const close$ = Promise.withResolvers();
   const eval$ = Promise.withResolvers();
 
-  const { replServer, output } = startNewREPLServer({
-    eval(_cmd, _context, _file, cb) {
-      // eslint-disable-next-line node-core/must-call-assert
-      close$.promise.then(() => {
-        cb(new Error('Error returned from the eval callback'));
-        eval$.resolve();
-      });
+  const { replServer, output } = startNewREPLServer(
+    {
+      eval(_cmd, _context, _file, cb) {
+        // eslint-disable-next-line node-core/must-call-assert
+        close$.promise.then(() => {
+          cb(new Error("Error returned from the eval callback"));
+          eval$.resolve();
+        });
+      },
     },
-  }, {
-    disableDomainErrorAssert: true,
-  });
+    {
+      disableDomainErrorAssert: true,
+    },
+  );
 
-  replServer.write('\n');
+  replServer.write("\n");
 
   replServer.close();
   close$.resolve();
 
-  process.on('uncaughtException', common.mustNotCall());
+  process.on("uncaughtException", common.mustNotCall());
 
   await eval$.promise;
 
-  assert.match(output.accumulator, /Uncaught Error: Error returned from the eval callback/);
+  assert.match(
+    output.accumulator,
+    /Uncaught Error: Error returned from the eval callback/,
+  );
 })().then(common.mustCall());

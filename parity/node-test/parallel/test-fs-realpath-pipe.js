@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
 if (common.isWindows || common.isAIX || common.isIBMi)
   common.skip(`No /dev/stdin on ${process.platform}.`);
 
-const assert = require('assert');
+const assert = require("assert");
 
-const { spawnSync } = require('child_process');
+const { spawnSync } = require("child_process");
 
 for (const code of [
   `require('fs').realpath('/dev/stdin', (err, resolvedPath) => {
@@ -28,8 +28,8 @@ for (const code of [
     process.exit(1);
   }`,
 ]) {
-  const child = spawnSync(process.execPath, ['-e', code], {
-    stdio: 'pipe'
+  const child = spawnSync(process.execPath, ["-e", code], {
+    stdio: "pipe",
   });
   if (child.status !== 2) {
     console.log(code);

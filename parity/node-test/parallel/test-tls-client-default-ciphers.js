@@ -19,20 +19,19 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const assert = require('assert');
-const tls = require('tls');
+const assert = require("assert");
+const tls = require("tls");
 
 function Done() {}
 
 function test1() {
-  let ciphers = '';
+  let ciphers = "";
 
-  tls.createSecureContext = function(options) {
+  tls.createSecureContext = function (options) {
     ciphers = options.ciphers;
     throw new Done();
   };

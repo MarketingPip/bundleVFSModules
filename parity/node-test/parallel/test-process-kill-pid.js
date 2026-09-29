@@ -19,9 +19,9 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
 // Test variants of pid
 //
@@ -38,27 +38,28 @@ const assert = require('assert');
 //
 // process.pid, String(process.pid): ourself
 
-['SIGTERM', null, undefined, NaN, Infinity, -Infinity].forEach((val) => {
+["SIGTERM", null, undefined, NaN, Infinity, -Infinity].forEach((val) => {
   assert.throws(() => process.kill(val), {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: 'The "pid" argument must be of type number.' +
-             common.invalidArgTypeHelper(val)
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      'The "pid" argument must be of type number.' +
+      common.invalidArgTypeHelper(val),
   });
 });
 
 // Test that kill throws an error for unknown signal names
-assert.throws(() => process.kill(0, 'test'), {
-  code: 'ERR_UNKNOWN_SIGNAL',
-  name: 'TypeError',
-  message: 'Unknown signal: test'
+assert.throws(() => process.kill(0, "test"), {
+  code: "ERR_UNKNOWN_SIGNAL",
+  name: "TypeError",
+  message: "Unknown signal: test",
 });
 
 // Test that kill throws an error for invalid signal numbers
 assert.throws(() => process.kill(0, 987), {
-  code: 'EINVAL',
-  name: 'Error',
-  message: 'kill EINVAL'
+  code: "EINVAL",
+  name: "Error",
+  message: "kill EINVAL",
 });
 
 // Test kill argument processing in valid cases.
@@ -70,7 +71,7 @@ function kill(tryPid, trySig, expectPid, expectSig) {
   let getPid;
   let getSig;
   const origKill = process._kill;
-  process._kill = function(pid, sig) {
+  process._kill = function (pid, sig) {
     getPid = pid;
     getSig = sig;
 
@@ -87,10 +88,10 @@ function kill(tryPid, trySig, expectPid, expectSig) {
 // Note that SIGHUP and SIGTERM map to 1 and 15 respectively, even on Windows
 // (for Windows, libuv maps 1 and 15 to the correct behavior).
 
-kill(0, 'SIGHUP', 0, 1);
+kill(0, "SIGHUP", 0, 1);
 kill(0, undefined, 0, 15);
-kill('0', 'SIGHUP', 0, 1);
-kill('0', undefined, 0, 15);
+kill("0", "SIGHUP", 0, 1);
+kill("0", undefined, 0, 15);
 
 // Confirm that numeric signal arguments are supported
 
@@ -98,12 +99,12 @@ kill(0, 1, 0, 1);
 kill(0, 15, 0, 15);
 
 // Negative numbers are meaningful on unix
-kill(-1, 'SIGHUP', -1, 1);
+kill(-1, "SIGHUP", -1, 1);
 kill(-1, undefined, -1, 15);
-kill('-1', 'SIGHUP', -1, 1);
-kill('-1', undefined, -1, 15);
+kill("-1", "SIGHUP", -1, 1);
+kill("-1", undefined, -1, 15);
 
-kill(process.pid, 'SIGHUP', process.pid, 1);
+kill(process.pid, "SIGHUP", process.pid, 1);
 kill(process.pid, undefined, process.pid, 15);
-kill(String(process.pid), 'SIGHUP', process.pid, 1);
+kill(String(process.pid), "SIGHUP", process.pid, 1);
 kill(String(process.pid), undefined, process.pid, 15);

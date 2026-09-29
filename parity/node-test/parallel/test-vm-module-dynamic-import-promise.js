@@ -1,10 +1,10 @@
 // Flags: --experimental-vm-modules
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
-const assert = require('assert');
-const { createContext, Script, SourceTextModule } = require('vm');
+const assert = require("assert");
+const { createContext, Script, SourceTextModule } = require("vm");
 
 // Verifies that a `import` call returns a promise created in the context
 // where the `import` was called, not the context of `importModuleDynamically`
@@ -13,25 +13,28 @@ const { createContext, Script, SourceTextModule } = require('vm');
 async function testScript() {
   const ctx = createContext();
 
-  const mod1 = new SourceTextModule('export const a = 1;', {
+  const mod1 = new SourceTextModule("export const a = 1;", {
     context: ctx,
   });
   // No import statements, so must not link statically.
   await mod1.link(common.mustNotCall());
 
-  const script2 = new Script(`
+  const script2 = new Script(
+    `
     const promise = import("mod1");
     if (Object.getPrototypeOf(promise) !== Promise.prototype) {
       throw new Error('Expected promise to be created in the current context');
     }
     globalThis.__result = promise;
-  `, {
-    importModuleDynamically: common.mustCall((specifier, referrer) => {
-      assert.strictEqual(specifier, 'mod1');
-      assert.strictEqual(referrer, script2);
-      return mod1;
-    }),
-  });
+  `,
+    {
+      importModuleDynamically: common.mustCall((specifier, referrer) => {
+        assert.strictEqual(specifier, "mod1");
+        assert.strictEqual(referrer, script2);
+        return mod1;
+      }),
+    },
+  );
   script2.runInContext(ctx);
 
   // Wait for the promise to resolve.
@@ -41,24 +44,27 @@ async function testScript() {
 async function testScriptImportFailed() {
   const ctx = createContext();
 
-  const mod1 = new SourceTextModule('export const a = 1;', {
+  const mod1 = new SourceTextModule("export const a = 1;", {
     context: ctx,
   });
   // No import statements, so must not link statically.
   await mod1.link(common.mustNotCall());
 
-  const err = new Error('import failed');
-  const script2 = new Script(`
+  const err = new Error("import failed");
+  const script2 = new Script(
+    `
     const promise = import("mod1");
     if (Object.getPrototypeOf(promise) !== Promise.prototype) {
       throw new Error('Expected promise to be created in the current context');
     }
     globalThis.__result = promise;
-  `, {
-    importModuleDynamically: common.mustCall((specifier, referrer) => {
-      throw err;
-    }),
-  });
+  `,
+    {
+      importModuleDynamically: common.mustCall((specifier, referrer) => {
+        throw err;
+      }),
+    },
+  );
   script2.runInContext(ctx);
 
   // Wait for the promise to reject.
@@ -68,26 +74,29 @@ async function testScriptImportFailed() {
 async function testModule() {
   const ctx = createContext();
 
-  const mod1 = new SourceTextModule('export const a = 1;', {
+  const mod1 = new SourceTextModule("export const a = 1;", {
     context: ctx,
   });
   // No import statements, so must not link statically.
   await mod1.link(common.mustNotCall());
 
-  const mod2 = new SourceTextModule(`
+  const mod2 = new SourceTextModule(
+    `
     const promise = import("mod1");
     if (Object.getPrototypeOf(promise) !== Promise.prototype) {
       throw new Error('Expected promise to be created in the current context');
     }
     await promise;
-  `, {
-    context: ctx,
-    importModuleDynamically: common.mustCall((specifier, referrer) => {
-      assert.strictEqual(specifier, 'mod1');
-      assert.strictEqual(referrer, mod2);
-      return mod1;
-    }),
-  });
+  `,
+    {
+      context: ctx,
+      importModuleDynamically: common.mustCall((specifier, referrer) => {
+        assert.strictEqual(specifier, "mod1");
+        assert.strictEqual(referrer, mod2);
+        return mod1;
+      }),
+    },
+  );
   // No import statements, so must not link statically.
   await mod2.link(common.mustNotCall());
   await mod2.evaluate();
@@ -96,15 +105,16 @@ async function testModule() {
 async function testModuleImportFailed() {
   const ctx = createContext();
 
-  const mod1 = new SourceTextModule('export const a = 1;', {
+  const mod1 = new SourceTextModule("export const a = 1;", {
     context: ctx,
   });
   // No import statements, so must not link statically.
   await mod1.link(common.mustNotCall());
 
-  const err = new Error('import failed');
+  const err = new Error("import failed");
   ctx.__err = err;
-  const mod2 = new SourceTextModule(`
+  const mod2 = new SourceTextModule(
+    `
     const promise = import("mod1");
     if (Object.getPrototypeOf(promise) !== Promise.prototype) {
       throw new Error('Expected promise to be created in the current context');
@@ -116,12 +126,14 @@ async function testModuleImportFailed() {
         throw new Error('Expected promise to be rejected with "import failed"');
       }
     });
-  `, {
-    context: ctx,
-    importModuleDynamically: common.mustCall((specifier, referrer) => {
-      throw err;
-    }),
-  });
+  `,
+    {
+      context: ctx,
+      importModuleDynamically: common.mustCall((specifier, referrer) => {
+        throw err;
+      }),
+    },
+  );
   // No import statements, so must not link statically.
   await mod2.link(common.mustNotCall());
   await mod2.evaluate();

@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
-const Readable = require('stream').Readable;
+const Readable = require("stream").Readable;
 
 class MyStream extends Readable {
   constructor(options) {
@@ -37,31 +37,30 @@ class MyStream extends Readable {
         return this.push(null);
       case 1:
         return setTimeout(() => {
-          this.push('last chunk');
+          this.push("last chunk");
         }, 100);
       case 2:
-        return this.push('second to last chunk');
+        return this.push("second to last chunk");
       case 3:
         return process.nextTick(() => {
-          this.push('first chunk');
+          this.push("first chunk");
         });
       default:
-        throw new Error('?');
+        throw new Error("?");
     }
   }
 }
 
 const ms = new MyStream();
 const results = [];
-ms.on('readable', function() {
+ms.on("readable", function () {
   let chunk;
-  while (null !== (chunk = ms.read()))
-    results.push(String(chunk));
+  while (null !== (chunk = ms.read())) results.push(String(chunk));
 });
 
-const expect = [ 'first chunksecond to last chunk', 'last chunk' ];
-process.on('exit', function() {
+const expect = ["first chunksecond to last chunk", "last chunk"];
+process.on("exit", function () {
   assert.strictEqual(ms._chunks, -1);
   assert.deepStrictEqual(results, expect);
-  console.log('ok');
+  console.log("ok");
 });

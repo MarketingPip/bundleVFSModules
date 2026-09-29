@@ -1,27 +1,26 @@
-'use strict';
+"use strict";
 
 // Flags: --expose-internals
 
-const common = require('../common');
-const stream = require('stream');
-const repl = require('internal/repl');
-const assert = require('assert');
+const common = require("../common");
+const stream = require("stream");
+const repl = require("internal/repl");
+const assert = require("assert");
 
 // Array of [useGlobal, expectedResult] pairs
 const globalTestCases = [
-  [false, 'undefined'],
-  [true, '\'tacos\''],
-  [undefined, 'undefined'],
+  [false, "undefined"],
+  [true, "'tacos'"],
+  [undefined, "undefined"],
 ];
 
 const globalTest = (useGlobal, cb, output) => (err, repl) => {
-  if (err)
-    return cb(err);
+  if (err) return cb(err);
 
-  let str = '';
-  output.on('data', (data) => (str += data));
-  globalThis.lunch = 'tacos';
-  repl.write('globalThis.lunch;\n');
+  let str = "";
+  output.on("data", (data) => (str += data));
+  globalThis.lunch = "tacos";
+  repl.write("globalThis.lunch;\n");
   repl.close();
   delete globalThis.lunch;
   cb(null, str.trim());
@@ -29,9 +28,13 @@ const globalTest = (useGlobal, cb, output) => (err, repl) => {
 
 // Test how the global object behaves in each state for useGlobal
 for (const [option, expected] of globalTestCases) {
-  runRepl(option, globalTest, common.mustSucceed((output) => {
-    assert.strictEqual(output, expected);
-  }));
+  runRepl(
+    option,
+    globalTest,
+    common.mustSucceed((output) => {
+      assert.strictEqual(output, expected);
+    }),
+  );
 }
 
 // Test how shadowing the process object via `let`
@@ -43,23 +46,26 @@ for (const [option, expected] of globalTestCases) {
 //
 const processTestCases = [false, undefined];
 const processTest = (useGlobal, cb, output) => (err, repl) => {
-  if (err)
-    return cb(err);
+  if (err) return cb(err);
 
-  let str = '';
-  output.on('data', (data) => (str += data));
+  let str = "";
+  output.on("data", (data) => (str += data));
 
   // If useGlobal is false, then `let process` should work
-  repl.write('let process;\n');
-  repl.write('21 * 2;\n');
+  repl.write("let process;\n");
+  repl.write("21 * 2;\n");
   repl.close();
   cb(null, str.trim());
 };
 
 for (const option of processTestCases) {
-  runRepl(option, processTest, common.mustSucceed((output) => {
-    assert.strictEqual(output, 'undefined\n42');
-  }));
+  runRepl(
+    option,
+    processTest,
+    common.mustSucceed((output) => {
+      assert.strictEqual(output, "undefined\n42");
+    }),
+  );
 }
 
 function runRepl(useGlobal, testFunc, cb) {
@@ -71,11 +77,12 @@ function runRepl(useGlobal, testFunc, cb) {
     useGlobal: useGlobal,
     useColors: false,
     terminal: false,
-    prompt: ''
+    prompt: "",
   };
 
   repl.createInternalRepl(
     process.env,
     opts,
-    testFunc(useGlobal, cb, opts.output));
+    testFunc(useGlobal, cb, opts.output),
+  );
 }

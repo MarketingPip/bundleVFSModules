@@ -19,12 +19,12 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 // This test asserts that Stream.prototype.pipe does not leave listeners
 // hanging on the source or dest.
-require('../common');
-const stream = require('stream');
-const assert = require('assert');
+require("../common");
+const stream = require("stream");
+const assert = require("assert");
 
 function Writable() {
   this.writable = true;
@@ -33,11 +33,11 @@ function Writable() {
 }
 Object.setPrototypeOf(Writable.prototype, stream.Stream.prototype);
 Object.setPrototypeOf(Writable, stream.Stream);
-Writable.prototype.end = function() {
+Writable.prototype.end = function () {
   this.endCalls++;
 };
 
-Writable.prototype.destroy = function() {
+Writable.prototype.destroy = function () {
   this.endCalls++;
 };
 
@@ -65,9 +65,9 @@ let r;
 for (i = 0; i < limit; i++) {
   r = new Readable();
   r.pipe(w);
-  r.emit('end');
+  r.emit("end");
 }
-assert.strictEqual(r.listeners('end').length, 0);
+assert.strictEqual(r.listeners("end").length, 0);
 assert.strictEqual(w.endCalls, limit);
 
 w.endCalls = 0;
@@ -75,9 +75,9 @@ w.endCalls = 0;
 for (i = 0; i < limit; i++) {
   r = new Readable();
   r.pipe(w);
-  r.emit('close');
+  r.emit("close");
 }
-assert.strictEqual(r.listeners('close').length, 0);
+assert.strictEqual(r.listeners("close").length, 0);
 assert.strictEqual(w.endCalls, limit);
 
 w.endCalls = 0;
@@ -87,39 +87,39 @@ r = new Readable();
 for (i = 0; i < limit; i++) {
   w = new Writable();
   r.pipe(w);
-  w.emit('close');
+  w.emit("close");
 }
-assert.strictEqual(w.listeners('close').length, 0);
+assert.strictEqual(w.listeners("close").length, 0);
 
 r = new Readable();
 w = new Writable();
 const d = new Duplex();
 r.pipe(d); // pipeline A
 d.pipe(w); // pipeline B
-assert.strictEqual(r.listeners('end').length, 2);   // A.onend, A.cleanup
-assert.strictEqual(r.listeners('close').length, 2); // A.onclose, A.cleanup
-assert.strictEqual(d.listeners('end').length, 2);   // B.onend, B.cleanup
+assert.strictEqual(r.listeners("end").length, 2); // A.onend, A.cleanup
+assert.strictEqual(r.listeners("close").length, 2); // A.onclose, A.cleanup
+assert.strictEqual(d.listeners("end").length, 2); // B.onend, B.cleanup
 // A.cleanup, B.onclose, B.cleanup
-assert.strictEqual(d.listeners('close').length, 3);
-assert.strictEqual(w.listeners('end').length, 0);
-assert.strictEqual(w.listeners('close').length, 1); // B.cleanup
+assert.strictEqual(d.listeners("close").length, 3);
+assert.strictEqual(w.listeners("end").length, 0);
+assert.strictEqual(w.listeners("close").length, 1); // B.cleanup
 
-r.emit('end');
+r.emit("end");
 assert.strictEqual(d.endCalls, 1);
 assert.strictEqual(w.endCalls, 0);
-assert.strictEqual(r.listeners('end').length, 0);
-assert.strictEqual(r.listeners('close').length, 0);
-assert.strictEqual(d.listeners('end').length, 2);   // B.onend, B.cleanup
-assert.strictEqual(d.listeners('close').length, 2); // B.onclose, B.cleanup
-assert.strictEqual(w.listeners('end').length, 0);
-assert.strictEqual(w.listeners('close').length, 1); // B.cleanup
+assert.strictEqual(r.listeners("end").length, 0);
+assert.strictEqual(r.listeners("close").length, 0);
+assert.strictEqual(d.listeners("end").length, 2); // B.onend, B.cleanup
+assert.strictEqual(d.listeners("close").length, 2); // B.onclose, B.cleanup
+assert.strictEqual(w.listeners("end").length, 0);
+assert.strictEqual(w.listeners("close").length, 1); // B.cleanup
 
-d.emit('end');
+d.emit("end");
 assert.strictEqual(d.endCalls, 1);
 assert.strictEqual(w.endCalls, 1);
-assert.strictEqual(r.listeners('end').length, 0);
-assert.strictEqual(r.listeners('close').length, 0);
-assert.strictEqual(d.listeners('end').length, 0);
-assert.strictEqual(d.listeners('close').length, 0);
-assert.strictEqual(w.listeners('end').length, 0);
-assert.strictEqual(w.listeners('close').length, 0);
+assert.strictEqual(r.listeners("end").length, 0);
+assert.strictEqual(r.listeners("close").length, 0);
+assert.strictEqual(d.listeners("end").length, 0);
+assert.strictEqual(d.listeners("close").length, 0);
+assert.strictEqual(w.listeners("end").length, 0);
+assert.strictEqual(w.listeners("close").length, 0);

@@ -1,17 +1,16 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const fixtures = require('../common/fixtures');
-const https = require('https');
-const assert = require('assert');
-const { once, listenerCount } = require('events');
+const fixtures = require("../common/fixtures");
+const https = require("https");
+const assert = require("assert");
+const { once, listenerCount } = require("events");
 
 const options = {
-  key: fixtures.readKey('agent1-key.pem'),
-  cert: fixtures.readKey('agent1-cert.pem')
+  key: fixtures.readKey("agent1-key.pem"),
+  cert: fixtures.readKey("agent1-cert.pem"),
 };
 
 // Check async post-aborted
@@ -23,18 +22,18 @@ const options = {
   try {
     const ac = new AbortController();
     const req = https.request({
-      host: 'localhost',
+      host: "localhost",
       port,
-      path: '/',
-      method: 'GET',
+      path: "/",
+      method: "GET",
       rejectUnauthorized: false,
       signal: ac.signal,
     });
-    assert.strictEqual(listenerCount(ac.signal, 'abort'), 1);
+    assert.strictEqual(listenerCount(ac.signal, "abort"), 1);
     process.nextTick(() => ac.abort());
-    const [ err ] = await once(req, 'error');
-    assert.strictEqual(err.name, 'AbortError');
-    assert.strictEqual(err.code, 'ABORT_ERR');
+    const [err] = await once(req, "error");
+    assert.strictEqual(err.name, "AbortError");
+    assert.strictEqual(err.code, "ABORT_ERR");
   } finally {
     server.close();
   }
@@ -50,18 +49,18 @@ const options = {
     const ac = new AbortController();
     const { signal } = ac;
     const req = https.request({
-      host: 'localhost',
+      host: "localhost",
       port,
-      path: '/',
-      method: 'GET',
+      path: "/",
+      method: "GET",
       rejectUnauthorized: false,
       signal,
     });
-    assert.strictEqual(listenerCount(ac.signal, 'abort'), 1);
+    assert.strictEqual(listenerCount(ac.signal, "abort"), 1);
     ac.abort();
-    const [ err ] = await once(req, 'error');
-    assert.strictEqual(err.name, 'AbortError');
-    assert.strictEqual(err.code, 'ABORT_ERR');
+    const [err] = await once(req, "error");
+    assert.strictEqual(err.name, "AbortError");
+    assert.strictEqual(err.code, "ABORT_ERR");
   } finally {
     server.close();
   }
@@ -78,17 +77,17 @@ const options = {
     const { signal } = ac;
     ac.abort();
     const req = https.request({
-      host: 'localhost',
+      host: "localhost",
       port,
-      path: '/',
-      method: 'GET',
+      path: "/",
+      method: "GET",
       rejectUnauthorized: false,
       signal,
     });
-    assert.strictEqual(listenerCount(ac.signal, 'abort'), 0);
-    const [ err ] = await once(req, 'error');
-    assert.strictEqual(err.name, 'AbortError');
-    assert.strictEqual(err.code, 'ABORT_ERR');
+    assert.strictEqual(listenerCount(ac.signal, "abort"), 0);
+    const [err] = await once(req, "error");
+    assert.strictEqual(err.name, "AbortError");
+    assert.strictEqual(err.code, "ABORT_ERR");
   } finally {
     server.close();
   }

@@ -1,22 +1,31 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
 // Tests for pipeTo writev/writevSync paths and writeBatchAsyncFallback.
 
-const common = require('../common');
-const assert = require('assert');
-const { setImmediate: setImmediatePromise } = require('timers/promises');
-const { pipeTo, pipeToSync, push, text } = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { setImmediate: setImmediatePromise } = require("timers/promises");
+const { pipeTo, pipeToSync, push, text } = require("stream/iter");
 
 // Multi-chunk batch with writevSync (sync success path)
 async function testWritevSyncSuccess() {
   const batches = [];
   const writer = {
     write(chunk) {},
-    writevSync(chunks) { batches.push(chunks); return true; },
-    writev(chunks) { batches.push(chunks); },
-    writeSync(chunk) { return true; },
-    endSync() { return 0; },
+    writevSync(chunks) {
+      batches.push(chunks);
+      return true;
+    },
+    writev(chunks) {
+      batches.push(chunks);
+    },
+    writeSync(chunk) {
+      return true;
+    },
+    endSync() {
+      return 0;
+    },
   };
   // Source that yields multi-chunk batches
   async function* source() {
@@ -34,8 +43,12 @@ async function testWritevSyncSuccess() {
 async function testWritevAsyncFallback() {
   const batches = [];
   const writer = {
-    async writev(chunks) { batches.push(chunks); },
-    async write(chunk) { batches.push([chunk]); },
+    async writev(chunks) {
+      batches.push(chunks);
+    },
+    async write(chunk) {
+      batches.push([chunk]);
+    },
     async end() {},
   };
   async function* source() {
@@ -63,7 +76,7 @@ async function testWritevSyncUndefinedSuccess() {
   }
   const total = await pipeTo(source(), writer);
   assert.strictEqual(total, 2);
-  assert.strictEqual(Buffer.concat(chunks).toString(), 'AB');
+  assert.strictEqual(Buffer.concat(chunks).toString(), "AB");
 }
 
 // writevSync returns false — falls through to async writev
@@ -71,10 +84,18 @@ async function testWritevSyncFails() {
   const asyncCalls = [];
   const writer = {
     write() {},
-    writevSync() { return false; },
-    async writev(chunks) { asyncCalls.push(chunks); },
-    writeSync() { return true; },
-    endSync() { return 0; },
+    writevSync() {
+      return false;
+    },
+    async writev(chunks) {
+      asyncCalls.push(chunks);
+    },
+    writeSync() {
+      return true;
+    },
+    endSync() {
+      return 0;
+    },
   };
   async function* source() {
     yield [new Uint8Array([1]), new Uint8Array([2])];
@@ -93,7 +114,9 @@ async function testWriteSyncFailsMidBatch() {
       if (chunk[0] === 2) return false;
       return true;
     },
-    async write(chunk) { asyncWrites.push(chunk); },
+    async write(chunk) {
+      asyncWrites.push(chunk);
+    },
     async end() {},
   };
   // Single batch with 3 chunks
@@ -113,8 +136,12 @@ async function testWriteSyncFailsMidBatch() {
 async function testWriteSyncAlwaysFails() {
   const asyncWrites = [];
   const writer = {
-    writeSync() { return false; },
-    async write(chunk) { asyncWrites.push(chunk); },
+    writeSync() {
+      return false;
+    },
+    async write(chunk) {
+      asyncWrites.push(chunk);
+    },
     async end() {},
   };
   async function* source() {
@@ -130,7 +157,7 @@ async function testWriteSyncAlwaysFails() {
 async function assertPushWriterBlockPipeTo(source, expected, expectedTotal) {
   const { writer, readable } = push({
     budget: 16384,
-    backpressure: 'unbounded',
+    backpressure: "unbounded",
   });
 
   const pipe = pipeTo(source, writer);
@@ -143,15 +170,23 @@ async function assertPushWriterBlockPipeTo(source, expected, expectedTotal) {
 }
 
 async function testPushWriterBlockSyncFalseAccepted() {
-  await assertPushWriterBlockPipeTo((async function*() {
-    yield [new Uint8Array([97])];
-    yield [new Uint8Array([98])];
-  })(), 'ab', 2);
+  await assertPushWriterBlockPipeTo(
+    (async function* () {
+      yield [new Uint8Array([97])];
+      yield [new Uint8Array([98])];
+    })(),
+    "ab",
+    2,
+  );
 
-  await assertPushWriterBlockPipeTo((async function*() {
-    yield [new Uint8Array([97, 98])];
-    yield [new Uint8Array([99]), new Uint8Array([100])];
-  })(), 'abcd', 4);
+  await assertPushWriterBlockPipeTo(
+    (async function* () {
+      yield [new Uint8Array([97, 98])];
+      yield [new Uint8Array([99]), new Uint8Array([100])];
+    })(),
+    "abcd",
+    4,
+  );
 }
 
 async function testPipeToSyncPushWriterStrictFalseRejected() {
@@ -163,36 +198,45 @@ async function testPipeToSyncPushWriterStrictFalseRejected() {
 
   // pipeToSync should throw when writeSync returns false (budget exhausted)
   assert.throws(
-    () => pipeToSync([kChunk], writer,
-                     { preventClose: true, preventFail: true }),
-    { code: 'ERR_OUT_OF_RANGE' },
+    () =>
+      pipeToSync([kChunk], writer, { preventClose: true, preventFail: true }),
+    { code: "ERR_OUT_OF_RANGE" },
   );
 }
 
 async function testPipeToSyncWritevFalseNotCounted() {
   const writer = {
-    writevSync() { return false; },
+    writevSync() {
+      return false;
+    },
     writeSync: common.mustNotCall(),
-    endSync() { return 0; },
+    endSync() {
+      return 0;
+    },
   };
   function* source() {
     yield [new Uint8Array([1]), new Uint8Array([2])];
   }
 
   // pipeToSync throws when writevSync returns false (budget exhausted)
-  assert.throws(
-    () => pipeToSync(source(), writer),
-    { code: 'ERR_OUT_OF_RANGE' },
-  );
+  assert.throws(() => pipeToSync(source(), writer), {
+    code: "ERR_OUT_OF_RANGE",
+  });
 }
 
 // pipeToSync with writevSync
 async function testPipeToSyncWritev() {
   const batches = [];
   const writer = {
-    writevSync(chunks) { batches.push(chunks); },
-    writeSync(chunk) { return true; },
-    endSync() { return 0; },
+    writevSync(chunks) {
+      batches.push(chunks);
+    },
+    writeSync(chunk) {
+      return true;
+    },
+    endSync() {
+      return 0;
+    },
   };
   function* source() {
     yield [new Uint8Array([1]), new Uint8Array([2]), new Uint8Array([3])];
@@ -208,9 +252,16 @@ async function testPipeToSyncPlainChunksWritev() {
   const batches = [];
   const writes = [];
   const writer = {
-    writevSync(chunks) { batches.push(chunks); },
-    writeSync(chunk) { writes.push(chunk); return true; },
-    endSync() { return 0; },
+    writevSync(chunks) {
+      batches.push(chunks);
+    },
+    writeSync(chunk) {
+      writes.push(chunk);
+      return true;
+    },
+    endSync() {
+      return 0;
+    },
   };
   function* source() {
     yield new Uint8Array([1]);
@@ -228,9 +279,16 @@ async function testPipeToSyncPlainChunksWritev() {
 async function testPipeToSyncWriteFallback() {
   const syncWrites = [];
   const writer = {
-    writeSync(chunk) { syncWrites.push(chunk); return true; },
-    write(chunk) { /* should not be called */ },
-    endSync() { return 0; },
+    writeSync(chunk) {
+      syncWrites.push(chunk);
+      return true;
+    },
+    write(chunk) {
+      /* should not be called */
+    },
+    endSync() {
+      return 0;
+    },
   };
   function* source() {
     yield [new Uint8Array([1]), new Uint8Array([2])];

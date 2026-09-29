@@ -1,10 +1,10 @@
 // Flags: --experimental-vm-modules
 
-'use strict';
+"use strict";
 
-const common = require('../common');
-const vm = require('vm');
-const assert = require('assert');
+const common = require("../common");
+const vm = require("vm");
+const assert = require("assert");
 
 // This test verifies that a module can be returned multiple
 // times in the linker function in `module.link(linker)`.
@@ -14,7 +14,7 @@ const assert = require('assert');
 // Regression of https://github.com/nodejs/node/issues/59480
 
 const sources = {
-  './index.js': `
+  "./index.js": `
         import foo from "./foo.js";
         import shared from "./shared.js";
         export default {
@@ -22,13 +22,13 @@ const sources = {
             shared
         };
     `,
-  './foo.js': `
+  "./foo.js": `
         import shared from "./shared.js";
         export default {
             name: "foo"
         };
     `,
-  './shared.js': `
+  "./shared.js": `
         export default {
             name: "shared",
         };
@@ -66,16 +66,16 @@ async function esmImport(identifier) {
 }
 
 async function test() {
-  const { 0: mod, 1: requests } = await esmImport('./index.js');
-  assert.strictEqual(mod.default.foo.name, 'foo');
-  assert.strictEqual(mod.default.shared.name, 'shared');
+  const { 0: mod, 1: requests } = await esmImport("./index.js");
+  assert.strictEqual(mod.default.foo.name, "foo");
+  assert.strictEqual(mod.default.shared.name, "shared");
 
   // Assert that there is no duplicated requests.
   assert.deepStrictEqual(requests, [
     // [specifier, referrer]
-    ['./foo.js', './index.js'],
-    ['./shared.js', './index.js'],
-    ['./shared.js', './foo.js'],
+    ["./foo.js", "./index.js"],
+    ["./shared.js", "./index.js"],
+    ["./shared.js", "./foo.js"],
   ]);
 }
 

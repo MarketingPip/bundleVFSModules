@@ -27,7 +27,7 @@ class Interface {
   // Public properties matching Node.js readline API surface
   input;
   output;
-  
+
   #terminal;
   #promptStr;
   #closed = false;
@@ -44,17 +44,28 @@ class Interface {
   #lineDone = false;
 
   constructor(options = {}) {
-    const input  = options.input  || (typeof globalThis.process !== 'undefined' ? globalThis.process.stdin  : null) || noopStream;
-    const output = options.output || (typeof globalThis.process !== 'undefined' ? globalThis.process.stdout : null) || noopStream;
-    const terminal = options.terminal != null ? !!options.terminal : !!(output?.isTTY);
+    const input =
+      options.input ||
+      (typeof globalThis.process !== "undefined"
+        ? globalThis.process.stdin
+        : null) ||
+      noopStream;
+    const output =
+      options.output ||
+      (typeof globalThis.process !== "undefined"
+        ? globalThis.process.stdout
+        : null) ||
+      noopStream;
+    const terminal =
+      options.terminal != null ? !!options.terminal : !!output?.isTTY;
 
-    this.input   = input;
-    this.output  = output;
+    this.input = input;
+    this.output = output;
     this.#terminal = terminal;
-    this.#promptStr = options.prompt ?? (terminal ? '> ' : '');
+    this.#promptStr = options.prompt ?? (terminal ? "> " : "");
 
     // wire line/close to the async-iterator queues
-    this.#_on('line', line => {
+    this.#_on("line", (line) => {
       if (this.#lineResolve) {
         const r = this.#lineResolve;
         this.#lineResolve = null;
@@ -63,7 +74,7 @@ class Interface {
         this.#lineQueue.push(line);
       }
     });
-    this.#_on('close', () => {
+    this.#_on("close", () => {
       this.#lineDone = true;
       if (this.#lineResolve) {
         this.#lineResolve({ value: undefined, done: true });
@@ -71,11 +82,13 @@ class Interface {
       }
     });
 
-    this.#boundHandleChunk    = chunk => this.#handleChunk(chunk);
-    this.#boundOnInputClose   = ()    => { if (!this.#closed) this.close(); };
+    this.#boundHandleChunk = (chunk) => this.#handleChunk(chunk);
+    this.#boundOnInputClose = () => {
+      if (!this.#closed) this.close();
+    };
 
-    this.input?.on?.('data',  this.#boundHandleChunk);
-    this.input?.on?.('close', this.#boundOnInputClose);
+    this.input?.on?.("data", this.#boundHandleChunk);
+    this.input?.on?.("close", this.#boundOnInputClose);
   }
 
   // ── private event helpers ──────────────────────────────────────────────
@@ -86,33 +99,46 @@ class Interface {
   }
 
   #_off(ev, fn) {
-    if (this.#ev[ev]) this.#ev[ev] = this.#ev[ev].filter(e => e.fn !== fn);
+    if (this.#ev[ev]) this.#ev[ev] = this.#ev[ev].filter((e) => e.fn !== fn);
   }
 
   #_emit(ev, ...args) {
     const list = this.#ev[ev];
     if (!list) return false;
     const snap = [...list];
-    this.#ev[ev] = list.filter(e => !e.once);
+    this.#ev[ev] = list.filter((e) => !e.once);
     for (const e of snap) e.fn(...args);
     return true;
   }
 
-  #_listenerCount(ev) { return (this.#ev[ev] || []).length; }
+  #_listenerCount(ev) {
+    return (this.#ev[ev] || []).length;
+  }
 
   // ── input handling ────────────────────────────────────────────────────
 
   #handleChunk(chunk) {
-    const str = typeof chunk === 'string' ? chunk : chunk.toString();
+    const str = typeof chunk === "string" ? chunk : chunk.toString();
     if (this.input?.isRaw || this.#terminal) {
-      const line = str.replace(/[\r\n]+$/, '');
-      if (line === '\u0003') { this.#_emit('SIGINT'); return; }
-      this.#_emit('line', line);
+      const line = str.replace(/[\r\n]+$/, "");
+      if (line === "\u0003") {
+        this.#_emit("SIGINT");
+        return;
+      }
+      this.#_emit("line", line);
     } else {
       for (let i = 0; i < str.length; i++) {
         const ch = str[i];
-        if (ch === '\r') { this.#crSeen = true;  this.#flushLine(); continue; }
-        if (ch === '\n') { if (!this.#crSeen) this.#flushLine(); this.#crSeen = false; continue; }
+        if (ch === "\r") {
+          this.#crSeen = true;
+          this.#flushLine();
+          continue;
+        }
+        if (ch === "\n") {
+          if (!this.#crSeen) this.#flushLine();
+          this.#crSeen = false;
+          continue;
+        }
         this.#crSeen = false;
         this.#lineBuffer += ch;
       }
@@ -122,35 +148,65 @@ class Interface {
   #flushLine() {
     const line = this.#lineBuffer;
     this.#lineBuffer = "";
-    if (line === '\u0003') { this.#_emit('SIGINT'); return; }
-    this.#_emit('line', line);
+    if (line === "\u0003") {
+      this.#_emit("SIGINT");
+      return;
+    }
+    this.#_emit("line", line);
   }
 
   // ── public EventEmitter-like API ──────────────────────────────────────
 
-  get terminal() { return this.#terminal; }
+  get terminal() {
+    return this.#terminal;
+  }
 
   /** Current line buffer contents (mirrors Node's `rl.line`). @since Node.js v0.1.98 */
-  get line()   { return this.#lineBuffer; }
+  get line() {
+    return this.#lineBuffer;
+  }
   /** Current cursor position within `rl.line`. @since Node.js v0.1.98 */
-  get cursor() { return this.#lineBuffer.length; }
+  get cursor() {
+    return this.#lineBuffer.length;
+  }
 
-  on(ev, fn)             { this.#_on(ev, fn, false); return this; }
-  once(ev, fn)           { this.#_on(ev, fn, true);  return this; }
-  off(ev, fn)            { this.#_off(ev, fn);        return this; }
-  removeListener(ev, fn) { this.#_off(ev, fn);        return this; }
-  removeAllListeners(ev) {
-    if (ev) delete this.#ev[ev];
-    else Object.keys(this.#ev).forEach(k => delete this.#ev[k]);
+  on(ev, fn) {
+    this.#_on(ev, fn, false);
     return this;
   }
-  listenerCount(ev) { return this.#_listenerCount(ev); }
-  emit(ev, ...a)    { return this.#_emit(ev, ...a); }
+  once(ev, fn) {
+    this.#_on(ev, fn, true);
+    return this;
+  }
+  off(ev, fn) {
+    this.#_off(ev, fn);
+    return this;
+  }
+  removeListener(ev, fn) {
+    this.#_off(ev, fn);
+    return this;
+  }
+  removeAllListeners(ev) {
+    if (ev) delete this.#ev[ev];
+    else Object.keys(this.#ev).forEach((k) => delete this.#ev[k]);
+    return this;
+  }
+  listenerCount(ev) {
+    return this.#_listenerCount(ev);
+  }
+  emit(ev, ...a) {
+    return this.#_emit(ev, ...a);
+  }
 
   // ── prompt / pause / resume / close ──────────────────────────────────
 
-  setPrompt(str)         { this.#promptStr = str; return this; }
-  getPrompt()            { return this.#promptStr; }
+  setPrompt(str) {
+    this.#promptStr = str;
+    return this;
+  }
+  getPrompt() {
+    return this.#promptStr;
+  }
   prompt(/*preserveCursor*/) {
     if (this.output?.write) this.output.write(this.#promptStr);
     return this;
@@ -158,29 +214,29 @@ class Interface {
 
   pause() {
     this.input?.pause?.();
-    this.#_emit('pause');
+    this.#_emit("pause");
     return this;
   }
   resume() {
     this.input?.resume?.();
-    this.#_emit('resume');
+    this.#_emit("resume");
     return this;
   }
 
   close() {
     if (this.#closed) return this;
     this.#closed = true;
-    this.input?.removeListener?.('data', this.#boundHandleChunk);
-    this.input?.removeListener?.('close', this.#boundOnInputClose);
+    this.input?.removeListener?.("data", this.#boundHandleChunk);
+    this.input?.removeListener?.("close", this.#boundOnInputClose);
     if (this.#lineBuffer.length) this.#flushLine();
-    this.#_emit('close');
+    this.#_emit("close");
     return this;
   }
 
   write(data /*, key */) {
     if (this.#closed) return this;
-    if (typeof data === 'string' && data.length)
-      this.#_emit('line', data.replace(/[\r\n]+$/, ''));
+    if (typeof data === "string" && data.length)
+      this.#_emit("line", data.replace(/[\r\n]+$/, ""));
     return this;
   }
 
@@ -229,13 +285,14 @@ class Interface {
 
   question(query, optionsOrCb, cb) {
     if (this.#closed) {
-      return typeof cb === 'function' || typeof optionsOrCb === 'function'
+      return typeof cb === "function" || typeof optionsOrCb === "function"
         ? void 0
-        : Promise.reject(new Error('readline was closed'));
+        : Promise.reject(new Error("readline was closed"));
     }
 
-    let opts = {}, callback;
-    if (typeof optionsOrCb === 'function') {
+    let opts = {},
+      callback;
+    if (typeof optionsOrCb === "function") {
       callback = optionsOrCb;
     } else {
       opts = optionsOrCb || {};
@@ -245,36 +302,48 @@ class Interface {
     if (this.output?.write) this.output.write(query);
     const signal = opts.signal;
 
-    if (typeof callback === 'function') {
+    if (typeof callback === "function") {
       let called = false;
-      const onLine = answer => {
-        if (called) return; called = true;
-        this.#_off('line', onLine);
+      const onLine = (answer) => {
+        if (called) return;
+        called = true;
+        this.#_off("line", onLine);
         callback(answer);
       };
-      this.#_on('line', onLine);
-      signal?.addEventListener('abort', () => {
-        if (called) return; called = true;
-        this.#_off('line', onLine);
-      }, { once: true });
+      this.#_on("line", onLine);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          if (called) return;
+          called = true;
+          this.#_off("line", onLine);
+        },
+        { once: true },
+      );
       return this;
     }
 
     return new Promise((resolve, reject) => {
       let settled = false;
-      const onLine = answer => {
-        if (settled) return; settled = true;
-        this.#_off('line', onLine);
+      const onLine = (answer) => {
+        if (settled) return;
+        settled = true;
+        this.#_off("line", onLine);
         resolve(answer);
       };
-      this.#_on('line', onLine);
-      signal?.addEventListener('abort', () => {
-        if (settled) return; settled = true;
-        this.#_off('line', onLine);
-        const err = new Error('The question was aborted');
-        err.code = 'ABORT_ERR';
-        reject(err);
-      }, { once: true });
+      this.#_on("line", onLine);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          if (settled) return;
+          settled = true;
+          this.#_off("line", onLine);
+          const err = new Error("The question was aborted");
+          err.code = "ABORT_ERR";
+          reject(err);
+        },
+        { once: true },
+      );
     });
   }
 
@@ -283,14 +352,19 @@ class Interface {
     return {
       next() {
         if (self.#lineQueue.length)
-          return Promise.resolve({ value: self.#lineQueue.shift(), done: false });
+          return Promise.resolve({
+            value: self.#lineQueue.shift(),
+            done: false,
+          });
         if (self.#lineDone)
           return Promise.resolve({ value: undefined, done: true });
-        return new Promise(res => { self.#lineResolve = res; });
+        return new Promise((res) => {
+          self.#lineResolve = res;
+        });
       },
       return() {
         return Promise.resolve({ value: undefined, done: true });
-      }
+      },
     };
   }
 }
@@ -310,7 +384,7 @@ function emitKeypressEvents(stream) {
 function cursorTo(stream, x, y, cb) {
   const target = stream || noopStream;
   if (y == null) target.write(`\u001b[${x + 1}G`);
-  else           target.write(`\u001b[${y + 1};${x + 1}H`);
+  else target.write(`\u001b[${y + 1};${x + 1}H`);
   cb?.();
   return true;
 }
@@ -335,7 +409,7 @@ function clearLine(stream, dir, cb) {
 
 function clearScreenDown(stream, cb) {
   const target = stream || noopStream;
-  target.write('\u001b[0J');
+  target.write("\u001b[0J");
   cb?.();
   return true;
 }

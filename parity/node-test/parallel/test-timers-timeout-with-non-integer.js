@@ -1,5 +1,5 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 /**
  * This test is for https://github.com/nodejs/node/issues/24203

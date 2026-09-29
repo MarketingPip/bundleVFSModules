@@ -19,27 +19,30 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const fs = require('fs');
-const assert = require('assert');
-const tmpdir = require('../common/tmpdir');
-const file = tmpdir.resolve('read_stream_fd_test.txt');
-const input = 'hello world';
+"use strict";
+const common = require("../common");
+const fs = require("fs");
+const assert = require("assert");
+const tmpdir = require("../common/tmpdir");
+const file = tmpdir.resolve("read_stream_fd_test.txt");
+const input = "hello world";
 
-let output = '';
+let output = "";
 tmpdir.refresh();
 fs.writeFileSync(file, input);
 
-const fd = fs.openSync(file, 'r');
-const stream = fs.createReadStream(null, { fd: fd, encoding: 'utf8' });
+const fd = fs.openSync(file, "r");
+const stream = fs.createReadStream(null, { fd: fd, encoding: "utf8" });
 
 assert.strictEqual(stream.path, undefined);
 
-stream.on('data', common.mustCallAtLeast((data) => {
-  output += data;
-}));
+stream.on(
+  "data",
+  common.mustCallAtLeast((data) => {
+    output += data;
+  }),
+);
 
-process.on('exit', () => {
+process.on("exit", () => {
   assert.strictEqual(output, input);
 });

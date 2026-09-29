@@ -19,34 +19,37 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-if (!common.isWindows)
-  common.skip('this test is Windows-specific.');
+"use strict";
+const common = require("../common");
+if (!common.isWindows) common.skip("this test is Windows-specific.");
 
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 
-const tmpdir = require('../common/tmpdir');
+const tmpdir = require("../common/tmpdir");
 
 // Make a path that will be at least 260 chars long.
 const fileNameLen = Math.max(260 - tmpdir.path.length - 1, 1);
-const fileName = tmpdir.resolve('x'.repeat(fileNameLen));
+const fileName = tmpdir.resolve("x".repeat(fileNameLen));
 const fullPath = path.resolve(fileName);
 
 tmpdir.refresh();
 
 console.log({
   filenameLength: fileName.length,
-  fullPathLength: fullPath.length
+  fullPathLength: fullPath.length,
 });
 
-fs.writeFile(fullPath, 'ok', common.mustSucceed(() => {
-  fs.stat(fullPath, common.mustSucceed());
+fs.writeFile(
+  fullPath,
+  "ok",
+  common.mustSucceed(() => {
+    fs.stat(fullPath, common.mustSucceed());
 
-  // Tests https://github.com/nodejs/node/issues/39721
-  fs.realpath.native(fullPath, common.mustSucceed());
+    // Tests https://github.com/nodejs/node/issues/39721
+    fs.realpath.native(fullPath, common.mustSucceed());
 
-  // Tests https://github.com/nodejs/node/issues/51031
-  fs.promises.realpath(fullPath).then(common.mustCall());
-}));
+    // Tests https://github.com/nodejs/node/issues/51031
+    fs.promises.realpath(fullPath).then(common.mustCall());
+  }),
+);

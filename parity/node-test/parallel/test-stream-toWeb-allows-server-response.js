@@ -1,9 +1,9 @@
-'use strict';
-const common = require('../common');
-const { Writable } = require('stream');
+"use strict";
+const common = require("../common");
+const { Writable } = require("stream");
 
-const assert = require('assert');
-const http = require('http');
+const assert = require("assert");
+const http = require("http");
 
 // Check if Writable.toWeb works on the response object after creating a server.
 const server = http.createServer(
@@ -11,7 +11,7 @@ const server = http.createServer(
     const webStreamResponse = Writable.toWeb(res);
     assert.strictEqual(webStreamResponse instanceof WritableStream, true);
     res.end();
-  })
+  }),
 );
 
 server.listen(
@@ -23,7 +23,7 @@ server.listen(
       },
       common.mustCall(() => {
         server.close();
-      })
+      }),
     );
-  })
+  }),
 );

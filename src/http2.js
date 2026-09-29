@@ -42,16 +42,17 @@
 //     async ECONNREFUSED 'error' on the session.
 //   * respondWithFile/respondWithFD are noops (no file descriptors).
 
-import { EventEmitter } from './events.js';
-import { Buffer } from 'buffer';
+import { EventEmitter } from "./events.js";
+import { Buffer } from "buffer";
 
 // ---------------------------------------------------------------------------
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
 // ---------------------------------------------------------------------------
-const RT = (typeof globalThis._RUNTIME_ !== 'undefined')
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 void RT;
 
 // ---------------------------------------------------------------------------
@@ -70,16 +71,17 @@ const typeError = (code, message) => http2Error(code, message, TypeError);
 // Approximation of Node's test-helper invalidArgTypeHelper (used in real
 // Node error messages, asserted by official tests).
 function invalidArgTypeHelper(input) {
-  if (input === null || input === undefined) return ` Received ${String(input)}`;
-  if (typeof input === 'function') {
-    return ` Received function ${input.name || 'anonymous'}`;
+  if (input === null || input === undefined)
+    return ` Received ${String(input)}`;
+  if (typeof input === "function") {
+    return ` Received function ${input.name || "anonymous"}`;
   }
-  if (typeof input === 'object') {
+  if (typeof input === "object") {
     const name = input.constructor && input.constructor.name;
     if (name) return ` Received an instance of ${name}`;
     return ` Received ${String(input)}`;
   }
-  let inspected = typeof input === 'string' ? `'${input}'` : String(input);
+  let inspected = typeof input === "string" ? `'${input}'` : String(input);
   if (inspected.length > 28) inspected = `${inspected.slice(0, 25)}...`;
   return ` Received type ${typeof input} (${inspected})`;
 }
@@ -95,131 +97,132 @@ export const constants = {
   DEFAULT_SETTINGS_MAX_CONCURRENT_STREAMS: 4294967295,
   DEFAULT_SETTINGS_MAX_FRAME_SIZE: 16384,
   DEFAULT_SETTINGS_MAX_HEADER_LIST_SIZE: 65535,
-  HTTP2_HEADER_ACCEPT: 'accept',
-  HTTP2_HEADER_ACCEPT_CHARSET: 'accept-charset',
-  HTTP2_HEADER_ACCEPT_ENCODING: 'accept-encoding',
-  HTTP2_HEADER_ACCEPT_LANGUAGE: 'accept-language',
-  HTTP2_HEADER_ACCEPT_RANGES: 'accept-ranges',
-  HTTP2_HEADER_ACCESS_CONTROL_ALLOW_CREDENTIALS: 'access-control-allow-credentials',
-  HTTP2_HEADER_ACCESS_CONTROL_ALLOW_HEADERS: 'access-control-allow-headers',
-  HTTP2_HEADER_ACCESS_CONTROL_ALLOW_METHODS: 'access-control-allow-methods',
-  HTTP2_HEADER_ACCESS_CONTROL_ALLOW_ORIGIN: 'access-control-allow-origin',
-  HTTP2_HEADER_ACCESS_CONTROL_EXPOSE_HEADERS: 'access-control-expose-headers',
-  HTTP2_HEADER_ACCESS_CONTROL_MAX_AGE: 'access-control-max-age',
-  HTTP2_HEADER_ACCESS_CONTROL_REQUEST_HEADERS: 'access-control-request-headers',
-  HTTP2_HEADER_ACCESS_CONTROL_REQUEST_METHOD: 'access-control-request-method',
-  HTTP2_HEADER_AGE: 'age',
-  HTTP2_HEADER_ALLOW: 'allow',
-  HTTP2_HEADER_ALT_SVC: 'alt-svc',
-  HTTP2_HEADER_AUTHORITY: ':authority',
-  HTTP2_HEADER_AUTHORIZATION: 'authorization',
-  HTTP2_HEADER_CACHE_CONTROL: 'cache-control',
-  HTTP2_HEADER_CONNECTION: 'connection',
-  HTTP2_HEADER_CONTENT_DISPOSITION: 'content-disposition',
-  HTTP2_HEADER_CONTENT_ENCODING: 'content-encoding',
-  HTTP2_HEADER_CONTENT_LANGUAGE: 'content-language',
-  HTTP2_HEADER_CONTENT_LENGTH: 'content-length',
-  HTTP2_HEADER_CONTENT_LOCATION: 'content-location',
-  HTTP2_HEADER_CONTENT_MD5: 'content-md5',
-  HTTP2_HEADER_CONTENT_RANGE: 'content-range',
-  HTTP2_HEADER_CONTENT_SECURITY_POLICY: 'content-security-policy',
-  HTTP2_HEADER_CONTENT_TYPE: 'content-type',
-  HTTP2_HEADER_COOKIE: 'cookie',
-  HTTP2_HEADER_DATE: 'date',
-  HTTP2_HEADER_DNT: 'dnt',
-  HTTP2_HEADER_EARLY_DATA: 'early-data',
-  HTTP2_HEADER_ETAG: 'etag',
-  HTTP2_HEADER_EXPECT: 'expect',
-  HTTP2_HEADER_EXPECT_CT: 'expect-ct',
-  HTTP2_HEADER_EXPIRES: 'expires',
-  HTTP2_HEADER_FORWARDED: 'forwarded',
-  HTTP2_HEADER_FROM: 'from',
-  HTTP2_HEADER_HOST: 'host',
-  HTTP2_HEADER_HTTP2_SETTINGS: 'http2-settings',
-  HTTP2_HEADER_IF_MATCH: 'if-match',
-  HTTP2_HEADER_IF_MODIFIED_SINCE: 'if-modified-since',
-  HTTP2_HEADER_IF_NONE_MATCH: 'if-none-match',
-  HTTP2_HEADER_IF_RANGE: 'if-range',
-  HTTP2_HEADER_IF_UNMODIFIED_SINCE: 'if-unmodified-since',
-  HTTP2_HEADER_KEEP_ALIVE: 'keep-alive',
-  HTTP2_HEADER_LAST_MODIFIED: 'last-modified',
-  HTTP2_HEADER_LINK: 'link',
-  HTTP2_HEADER_LOCATION: 'location',
-  HTTP2_HEADER_MAX_FORWARDS: 'max-forwards',
-  HTTP2_HEADER_METHOD: ':method',
-  HTTP2_HEADER_ORIGIN: 'origin',
-  HTTP2_HEADER_PATH: ':path',
-  HTTP2_HEADER_PREFER: 'prefer',
-  HTTP2_HEADER_PRIORITY: 'priority',
-  HTTP2_HEADER_PROTOCOL: ':protocol',
-  HTTP2_HEADER_PROXY_AUTHENTICATE: 'proxy-authenticate',
-  HTTP2_HEADER_PROXY_AUTHORIZATION: 'proxy-authorization',
-  HTTP2_HEADER_PROXY_CONNECTION: 'proxy-connection',
-  HTTP2_HEADER_PURPOSE: 'purpose',
-  HTTP2_HEADER_RANGE: 'range',
-  HTTP2_HEADER_REFERER: 'referer',
-  HTTP2_HEADER_REFRESH: 'refresh',
-  HTTP2_HEADER_RETRY_AFTER: 'retry-after',
-  HTTP2_HEADER_SCHEME: ':scheme',
-  HTTP2_HEADER_SERVER: 'server',
-  HTTP2_HEADER_SET_COOKIE: 'set-cookie',
-  HTTP2_HEADER_STATUS: ':status',
-  HTTP2_HEADER_STRICT_TRANSPORT_SECURITY: 'strict-transport-security',
-  HTTP2_HEADER_TE: 'te',
-  HTTP2_HEADER_TIMING_ALLOW_ORIGIN: 'timing-allow-origin',
-  HTTP2_HEADER_TK: 'tk',
-  HTTP2_HEADER_TRAILER: 'trailer',
-  HTTP2_HEADER_TRANSFER_ENCODING: 'transfer-encoding',
-  HTTP2_HEADER_UPGRADE: 'upgrade',
-  HTTP2_HEADER_UPGRADE_INSECURE_REQUESTS: 'upgrade-insecure-requests',
-  HTTP2_HEADER_USER_AGENT: 'user-agent',
-  HTTP2_HEADER_VARY: 'vary',
-  HTTP2_HEADER_VIA: 'via',
-  HTTP2_HEADER_WARNING: 'warning',
-  HTTP2_HEADER_WWW_AUTHENTICATE: 'www-authenticate',
-  HTTP2_HEADER_X_CONTENT_TYPE_OPTIONS: 'x-content-type-options',
-  HTTP2_HEADER_X_FORWARDED_FOR: 'x-forwarded-for',
-  HTTP2_HEADER_X_FRAME_OPTIONS: 'x-frame-options',
-  HTTP2_HEADER_X_XSS_PROTECTION: 'x-xss-protection',
-  HTTP2_METHOD_ACL: 'ACL',
-  HTTP2_METHOD_BASELINE_CONTROL: 'BASELINE-CONTROL',
-  HTTP2_METHOD_BIND: 'BIND',
-  HTTP2_METHOD_CHECKIN: 'CHECKIN',
-  HTTP2_METHOD_CHECKOUT: 'CHECKOUT',
-  HTTP2_METHOD_CONNECT: 'CONNECT',
-  HTTP2_METHOD_COPY: 'COPY',
-  HTTP2_METHOD_DELETE: 'DELETE',
-  HTTP2_METHOD_GET: 'GET',
-  HTTP2_METHOD_HEAD: 'HEAD',
-  HTTP2_METHOD_LABEL: 'LABEL',
-  HTTP2_METHOD_LINK: 'LINK',
-  HTTP2_METHOD_LOCK: 'LOCK',
-  HTTP2_METHOD_MERGE: 'MERGE',
-  HTTP2_METHOD_MKACTIVITY: 'MKACTIVITY',
-  HTTP2_METHOD_MKCALENDAR: 'MKCALENDAR',
-  HTTP2_METHOD_MKCOL: 'MKCOL',
-  HTTP2_METHOD_MKREDIRECTREF: 'MKREDIRECTREF',
-  HTTP2_METHOD_MKWORKSPACE: 'MKWORKSPACE',
-  HTTP2_METHOD_MOVE: 'MOVE',
-  HTTP2_METHOD_OPTIONS: 'OPTIONS',
-  HTTP2_METHOD_ORDERPATCH: 'ORDERPATCH',
-  HTTP2_METHOD_PATCH: 'PATCH',
-  HTTP2_METHOD_POST: 'POST',
-  HTTP2_METHOD_PRI: 'PRI',
-  HTTP2_METHOD_PROPFIND: 'PROPFIND',
-  HTTP2_METHOD_PROPPATCH: 'PROPPATCH',
-  HTTP2_METHOD_PUT: 'PUT',
-  HTTP2_METHOD_REBIND: 'REBIND',
-  HTTP2_METHOD_REPORT: 'REPORT',
-  HTTP2_METHOD_SEARCH: 'SEARCH',
-  HTTP2_METHOD_TRACE: 'TRACE',
-  HTTP2_METHOD_UNBIND: 'UNBIND',
-  HTTP2_METHOD_UNCHECKOUT: 'UNCHECKOUT',
-  HTTP2_METHOD_UNLINK: 'UNLINK',
-  HTTP2_METHOD_UNLOCK: 'UNLOCK',
-  HTTP2_METHOD_UPDATE: 'UPDATE',
-  HTTP2_METHOD_UPDATEREDIRECTREF: 'UPDATEREDIRECTREF',
-  HTTP2_METHOD_VERSION_CONTROL: 'VERSION-CONTROL',
+  HTTP2_HEADER_ACCEPT: "accept",
+  HTTP2_HEADER_ACCEPT_CHARSET: "accept-charset",
+  HTTP2_HEADER_ACCEPT_ENCODING: "accept-encoding",
+  HTTP2_HEADER_ACCEPT_LANGUAGE: "accept-language",
+  HTTP2_HEADER_ACCEPT_RANGES: "accept-ranges",
+  HTTP2_HEADER_ACCESS_CONTROL_ALLOW_CREDENTIALS:
+    "access-control-allow-credentials",
+  HTTP2_HEADER_ACCESS_CONTROL_ALLOW_HEADERS: "access-control-allow-headers",
+  HTTP2_HEADER_ACCESS_CONTROL_ALLOW_METHODS: "access-control-allow-methods",
+  HTTP2_HEADER_ACCESS_CONTROL_ALLOW_ORIGIN: "access-control-allow-origin",
+  HTTP2_HEADER_ACCESS_CONTROL_EXPOSE_HEADERS: "access-control-expose-headers",
+  HTTP2_HEADER_ACCESS_CONTROL_MAX_AGE: "access-control-max-age",
+  HTTP2_HEADER_ACCESS_CONTROL_REQUEST_HEADERS: "access-control-request-headers",
+  HTTP2_HEADER_ACCESS_CONTROL_REQUEST_METHOD: "access-control-request-method",
+  HTTP2_HEADER_AGE: "age",
+  HTTP2_HEADER_ALLOW: "allow",
+  HTTP2_HEADER_ALT_SVC: "alt-svc",
+  HTTP2_HEADER_AUTHORITY: ":authority",
+  HTTP2_HEADER_AUTHORIZATION: "authorization",
+  HTTP2_HEADER_CACHE_CONTROL: "cache-control",
+  HTTP2_HEADER_CONNECTION: "connection",
+  HTTP2_HEADER_CONTENT_DISPOSITION: "content-disposition",
+  HTTP2_HEADER_CONTENT_ENCODING: "content-encoding",
+  HTTP2_HEADER_CONTENT_LANGUAGE: "content-language",
+  HTTP2_HEADER_CONTENT_LENGTH: "content-length",
+  HTTP2_HEADER_CONTENT_LOCATION: "content-location",
+  HTTP2_HEADER_CONTENT_MD5: "content-md5",
+  HTTP2_HEADER_CONTENT_RANGE: "content-range",
+  HTTP2_HEADER_CONTENT_SECURITY_POLICY: "content-security-policy",
+  HTTP2_HEADER_CONTENT_TYPE: "content-type",
+  HTTP2_HEADER_COOKIE: "cookie",
+  HTTP2_HEADER_DATE: "date",
+  HTTP2_HEADER_DNT: "dnt",
+  HTTP2_HEADER_EARLY_DATA: "early-data",
+  HTTP2_HEADER_ETAG: "etag",
+  HTTP2_HEADER_EXPECT: "expect",
+  HTTP2_HEADER_EXPECT_CT: "expect-ct",
+  HTTP2_HEADER_EXPIRES: "expires",
+  HTTP2_HEADER_FORWARDED: "forwarded",
+  HTTP2_HEADER_FROM: "from",
+  HTTP2_HEADER_HOST: "host",
+  HTTP2_HEADER_HTTP2_SETTINGS: "http2-settings",
+  HTTP2_HEADER_IF_MATCH: "if-match",
+  HTTP2_HEADER_IF_MODIFIED_SINCE: "if-modified-since",
+  HTTP2_HEADER_IF_NONE_MATCH: "if-none-match",
+  HTTP2_HEADER_IF_RANGE: "if-range",
+  HTTP2_HEADER_IF_UNMODIFIED_SINCE: "if-unmodified-since",
+  HTTP2_HEADER_KEEP_ALIVE: "keep-alive",
+  HTTP2_HEADER_LAST_MODIFIED: "last-modified",
+  HTTP2_HEADER_LINK: "link",
+  HTTP2_HEADER_LOCATION: "location",
+  HTTP2_HEADER_MAX_FORWARDS: "max-forwards",
+  HTTP2_HEADER_METHOD: ":method",
+  HTTP2_HEADER_ORIGIN: "origin",
+  HTTP2_HEADER_PATH: ":path",
+  HTTP2_HEADER_PREFER: "prefer",
+  HTTP2_HEADER_PRIORITY: "priority",
+  HTTP2_HEADER_PROTOCOL: ":protocol",
+  HTTP2_HEADER_PROXY_AUTHENTICATE: "proxy-authenticate",
+  HTTP2_HEADER_PROXY_AUTHORIZATION: "proxy-authorization",
+  HTTP2_HEADER_PROXY_CONNECTION: "proxy-connection",
+  HTTP2_HEADER_PURPOSE: "purpose",
+  HTTP2_HEADER_RANGE: "range",
+  HTTP2_HEADER_REFERER: "referer",
+  HTTP2_HEADER_REFRESH: "refresh",
+  HTTP2_HEADER_RETRY_AFTER: "retry-after",
+  HTTP2_HEADER_SCHEME: ":scheme",
+  HTTP2_HEADER_SERVER: "server",
+  HTTP2_HEADER_SET_COOKIE: "set-cookie",
+  HTTP2_HEADER_STATUS: ":status",
+  HTTP2_HEADER_STRICT_TRANSPORT_SECURITY: "strict-transport-security",
+  HTTP2_HEADER_TE: "te",
+  HTTP2_HEADER_TIMING_ALLOW_ORIGIN: "timing-allow-origin",
+  HTTP2_HEADER_TK: "tk",
+  HTTP2_HEADER_TRAILER: "trailer",
+  HTTP2_HEADER_TRANSFER_ENCODING: "transfer-encoding",
+  HTTP2_HEADER_UPGRADE: "upgrade",
+  HTTP2_HEADER_UPGRADE_INSECURE_REQUESTS: "upgrade-insecure-requests",
+  HTTP2_HEADER_USER_AGENT: "user-agent",
+  HTTP2_HEADER_VARY: "vary",
+  HTTP2_HEADER_VIA: "via",
+  HTTP2_HEADER_WARNING: "warning",
+  HTTP2_HEADER_WWW_AUTHENTICATE: "www-authenticate",
+  HTTP2_HEADER_X_CONTENT_TYPE_OPTIONS: "x-content-type-options",
+  HTTP2_HEADER_X_FORWARDED_FOR: "x-forwarded-for",
+  HTTP2_HEADER_X_FRAME_OPTIONS: "x-frame-options",
+  HTTP2_HEADER_X_XSS_PROTECTION: "x-xss-protection",
+  HTTP2_METHOD_ACL: "ACL",
+  HTTP2_METHOD_BASELINE_CONTROL: "BASELINE-CONTROL",
+  HTTP2_METHOD_BIND: "BIND",
+  HTTP2_METHOD_CHECKIN: "CHECKIN",
+  HTTP2_METHOD_CHECKOUT: "CHECKOUT",
+  HTTP2_METHOD_CONNECT: "CONNECT",
+  HTTP2_METHOD_COPY: "COPY",
+  HTTP2_METHOD_DELETE: "DELETE",
+  HTTP2_METHOD_GET: "GET",
+  HTTP2_METHOD_HEAD: "HEAD",
+  HTTP2_METHOD_LABEL: "LABEL",
+  HTTP2_METHOD_LINK: "LINK",
+  HTTP2_METHOD_LOCK: "LOCK",
+  HTTP2_METHOD_MERGE: "MERGE",
+  HTTP2_METHOD_MKACTIVITY: "MKACTIVITY",
+  HTTP2_METHOD_MKCALENDAR: "MKCALENDAR",
+  HTTP2_METHOD_MKCOL: "MKCOL",
+  HTTP2_METHOD_MKREDIRECTREF: "MKREDIRECTREF",
+  HTTP2_METHOD_MKWORKSPACE: "MKWORKSPACE",
+  HTTP2_METHOD_MOVE: "MOVE",
+  HTTP2_METHOD_OPTIONS: "OPTIONS",
+  HTTP2_METHOD_ORDERPATCH: "ORDERPATCH",
+  HTTP2_METHOD_PATCH: "PATCH",
+  HTTP2_METHOD_POST: "POST",
+  HTTP2_METHOD_PRI: "PRI",
+  HTTP2_METHOD_PROPFIND: "PROPFIND",
+  HTTP2_METHOD_PROPPATCH: "PROPPATCH",
+  HTTP2_METHOD_PUT: "PUT",
+  HTTP2_METHOD_REBIND: "REBIND",
+  HTTP2_METHOD_REPORT: "REPORT",
+  HTTP2_METHOD_SEARCH: "SEARCH",
+  HTTP2_METHOD_TRACE: "TRACE",
+  HTTP2_METHOD_UNBIND: "UNBIND",
+  HTTP2_METHOD_UNCHECKOUT: "UNCHECKOUT",
+  HTTP2_METHOD_UNLINK: "UNLINK",
+  HTTP2_METHOD_UNLOCK: "UNLOCK",
+  HTTP2_METHOD_UPDATE: "UPDATE",
+  HTTP2_METHOD_UPDATEREDIRECTREF: "UPDATEREDIRECTREF",
+  HTTP2_METHOD_VERSION_CONTROL: "VERSION-CONTROL",
   HTTP_STATUS_ACCEPTED: 202,
   HTTP_STATUS_ALREADY_REPORTED: 208,
   HTTP_STATUS_BAD_GATEWAY: 502,
@@ -352,13 +355,13 @@ const SETTINGS_NAME_TO_ID = {
   enableConnectProtocol: 8,
 };
 const SETTINGS_ID_TO_NAME = {
-  1: 'headerTableSize',
-  2: 'enablePush',
-  3: 'maxConcurrentStreams',
-  4: 'initialWindowSize',
-  5: 'maxFrameSize',
+  1: "headerTableSize",
+  2: "enablePush",
+  3: "maxConcurrentStreams",
+  4: "initialWindowSize",
+  5: "maxFrameSize",
   // 6 -> both maxHeaderListSize and maxHeaderSize (Node sets both on unpack)
-  8: 'enableConnectProtocol',
+  8: "enableConnectProtocol",
 };
 // [min, max] per setting, from Node's http2 binding validation.
 const SETTINGS_RANGES = {
@@ -371,18 +374,27 @@ const SETTINGS_RANGES = {
   maxHeaderSize: [0, 0xffffffff],
   enableConnectProtocol: [0, 1],
 };
-const BOOLEAN_SETTINGS = new Set(['enablePush', 'enableConnectProtocol']);
+const BOOLEAN_SETTINGS = new Set(["enablePush", "enableConnectProtocol"]);
 // Custom settings ids 1..8 are remapped by Node's binding through this
 // table (verified empirically against Node v24.20.0); id "3" maps to
 // nothing, which makes the whole getPackedSettings call return undefined.
-const CUSTOM_ID_REMAP = { 1: 2, 2: 4, 3: undefined, 4: 3, 5: 6, 6: 8, 7: 7, 8: 8 };
+const CUSTOM_ID_REMAP = {
+  1: 2,
+  2: 4,
+  3: undefined,
+  4: 3,
+  5: 6,
+  6: 8,
+  7: 7,
+  8: 8,
+};
 const MAX_CUSTOM_SETTINGS = 10;
 
 function invalidSettingValue(name, value, Kind = RangeError) {
   return http2Error(
-    'ERR_HTTP2_INVALID_SETTING_VALUE',
+    "ERR_HTTP2_INVALID_SETTING_VALUE",
     `Invalid value for setting "${name}": ${value}`,
-    Kind
+    Kind,
   );
 }
 
@@ -390,12 +402,12 @@ function normalizeSettingValue(name, value) {
   const range = SETTINGS_RANGES[name];
   if (BOOLEAN_SETTINGS.has(name)) {
     // Node requires real booleans here; numbers/strings/NaN throw TypeError.
-    if (typeof value !== 'boolean') {
+    if (typeof value !== "boolean") {
       throw invalidSettingValue(name, value, TypeError);
     }
     return value ? 1 : 0;
   }
-  if (typeof value !== 'number') {
+  if (typeof value !== "number") {
     throw invalidSettingValue(name, value, RangeError);
   }
   if (Number.isNaN(value)) return NaN; // sentinel: whole pack call returns undefined
@@ -417,7 +429,7 @@ function readKnownSettingsEntries(settings) {
   let id6; // maxHeaderSize wins over maxHeaderListSize for wire id 6
   let id6Name;
   for (const name of Object.keys(settings)) {
-    if (name === 'customSettings') continue;
+    if (name === "customSettings") continue;
     const id = SETTINGS_NAME_TO_ID[name];
     if (id === undefined) continue; // unknown keys ignored, like Node
     const value = settings[name];
@@ -425,7 +437,7 @@ function readKnownSettingsEntries(settings) {
     const normalized = normalizeSettingValue(name, value);
     if (Number.isNaN(normalized)) return undefined;
     if (id === 6) {
-      if (name === 'maxHeaderSize' || id6 === undefined) {
+      if (name === "maxHeaderSize" || id6 === undefined) {
         id6 = normalized;
         id6Name = name;
       }
@@ -443,41 +455,45 @@ function readKnownSettingsEntries(settings) {
 // ERR_HTTP2_TOO_MANY_CUSTOM_SETTINGS; ids are uint16 (remapped for 1..8);
 // non-number values are skipped; NaN throws RangeError.
 function readCustomSettingsEntries(customSettings) {
-  if (customSettings === null || typeof customSettings !== 'object' || Array.isArray(customSettings)) {
+  if (
+    customSettings === null ||
+    typeof customSettings !== "object" ||
+    Array.isArray(customSettings)
+  ) {
     throw typeError(
-      'ERR_INVALID_ARG_TYPE',
+      "ERR_INVALID_ARG_TYPE",
       'The "customSettings" argument must be an instance of Number.' +
-        invalidArgTypeHelper(customSettings)
+        invalidArgTypeHelper(customSettings),
     );
   }
   const keys = Object.keys(customSettings);
   if (keys.length > MAX_CUSTOM_SETTINGS) {
     throw http2Error(
-      'ERR_HTTP2_TOO_MANY_CUSTOM_SETTINGS',
-      'Number of custom settings exceeds MAX_ADDITIONAL_SETTINGS'
+      "ERR_HTTP2_TOO_MANY_CUSTOM_SETTINGS",
+      "Number of custom settings exceeds MAX_ADDITIONAL_SETTINGS",
     );
   }
   const entries = [];
   for (const key of keys) {
     const value = customSettings[key];
-    if (value === undefined || typeof value !== 'number') continue; // skipped, like Node
+    if (value === undefined || typeof value !== "number") continue; // skipped, like Node
     if (Number.isNaN(value)) {
-      throw invalidSettingValue('customSettings:value', value, RangeError);
+      throw invalidSettingValue("customSettings:value", value, RangeError);
     }
     let id = Math.trunc(Number(key));
     if (!Number.isFinite(id)) {
-      throw invalidSettingValue('customSettings:id', key, RangeError);
+      throw invalidSettingValue("customSettings:id", key, RangeError);
     }
     if (id >= 1 && id <= 8) {
       const remapped = CUSTOM_ID_REMAP[id];
       if (remapped === undefined) return undefined; // id "3": whole call returns undefined
       id = remapped;
     } else if (id < 1 || id > 65535) {
-      throw invalidSettingValue('customSettings:id', key, RangeError);
+      throw invalidSettingValue("customSettings:id", key, RangeError);
     }
     const num = Math.trunc(value);
     if (num < 0 || num > 0xffffffff) {
-      throw invalidSettingValue('customSettings:value', value, RangeError);
+      throw invalidSettingValue("customSettings:value", value, RangeError);
     }
     entries.push([id, num >>> 0]);
   }
@@ -486,11 +502,15 @@ function readCustomSettingsEntries(customSettings) {
 
 function readSettingsEntries(settings) {
   if (settings === undefined) return [];
-  if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) {
+  if (
+    settings === null ||
+    typeof settings !== "object" ||
+    Array.isArray(settings)
+  ) {
     throw typeError(
-      'ERR_INVALID_ARG_TYPE',
+      "ERR_INVALID_ARG_TYPE",
       'The "settings" argument must be of type object.' +
-        invalidArgTypeHelper(settings)
+        invalidArgTypeHelper(settings),
     );
   }
   const entries = readKnownSettingsEntries(settings);
@@ -531,29 +551,32 @@ export function getPackedSettings(settings) {
 function validateUnpackedValue(id, value) {
   // Only these two are range-checked with { validate: true } in Node.
   if (id === 4 && (value < 0 || value > 2147483647)) {
-    throw invalidSettingValue('initialWindowSize', value, RangeError);
+    throw invalidSettingValue("initialWindowSize", value, RangeError);
   }
   if (id === 5 && (value < 16384 || value > 16777215)) {
-    throw invalidSettingValue('maxFrameSize', value, RangeError);
+    throw invalidSettingValue("maxFrameSize", value, RangeError);
   }
 }
 
 export function getUnpackedSettings(buf, options) {
-  const isView = typeof buf === 'object' && buf !== null &&
-    typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(buf) &&
-    !(typeof DataView !== 'undefined' && buf instanceof DataView);
+  const isView =
+    typeof buf === "object" &&
+    buf !== null &&
+    typeof ArrayBuffer !== "undefined" &&
+    ArrayBuffer.isView(buf) &&
+    !(typeof DataView !== "undefined" && buf instanceof DataView);
   if (!isView) {
     throw typeError(
-      'ERR_INVALID_ARG_TYPE',
+      "ERR_INVALID_ARG_TYPE",
       'The "buf" argument must be an instance of Buffer or TypedArray.' +
-        invalidArgTypeHelper(buf)
+        invalidArgTypeHelper(buf),
     );
   }
   const len = buf.length; // element count: Node reads TypedArray elements, not raw bytes
   if (len % 6 !== 0) {
     throw rangeError(
-      'ERR_HTTP2_INVALID_PACKED_SETTINGS_LENGTH',
-      'Packed settings length must be a multiple of six'
+      "ERR_HTTP2_INVALID_PACKED_SETTINGS_LENGTH",
+      "Packed settings length must be a multiple of six",
     );
   }
   // Element-wise byte view (matches Node: a Uint16Array's elements become
@@ -561,16 +584,20 @@ export function getUnpackedSettings(buf, options) {
   const bytes = new Uint8Array(len);
   for (let i = 0; i < len; i++) bytes[i] = buf[i] & 0xff;
   const validate = !!(
-    options !== null && typeof options === 'object' && options.validate
+    options !== null &&
+    typeof options === "object" &&
+    options.validate
   );
   const settings = {};
   const customSettings = {};
   for (let i = 0; i < bytes.length; i += 6) {
     const id = (bytes[i] << 8) | bytes[i + 1];
-    const value = (
-      (bytes[i + 2] * 0x1000000) + (bytes[i + 3] << 16) +
-      (bytes[i + 4] << 8) + bytes[i + 5]
-    ) >>> 0;
+    const value =
+      (bytes[i + 2] * 0x1000000 +
+        (bytes[i + 3] << 16) +
+        (bytes[i + 4] << 8) +
+        bytes[i + 5]) >>>
+      0;
     if (validate) validateUnpackedValue(id, value);
     if (id === 6) {
       // Node sets both names on unpack.
@@ -591,14 +618,14 @@ export function getUnpackedSettings(buf, options) {
   return settings;
 }
 
-export const sensitiveHeaders = Symbol('sensitiveHeaders');
+export const sensitiveHeaders = Symbol("sensitiveHeaders");
 
 // ---------------------------------------------------------------------------
 // 5. Http2Session — real method shapes; I/O methods are honest noops or
 //    virtual-loop wiring with the real callback/event signatures.
 // ---------------------------------------------------------------------------
 
-const kEncrypted = Symbol('http2.encrypted');
+const kEncrypted = Symbol("http2.encrypted");
 
 class Http2Session extends EventEmitter {
   constructor(options = {}) {
@@ -614,17 +641,39 @@ class Http2Session extends EventEmitter {
     this._timeout = 0;
   }
 
-  get closed() { return this._closed; }
-  get destroyed() { return this._destroyed; }
-  get connecting() { return this._connecting; }
-  get encrypted() { return this[kEncrypted]; }
-  get alpnProtocol() { return undefined; } // no real TLS handshake
-  get originSet() { return undefined; } // origins not tracked in emulation
-  get socket() { return null; } // no real socket
-  get type() { return constants.NGHTTP2_SESSION_CLIENT; }
-  get pendingSettingsAck() { return this._pendingSettingsAck; }
-  get localSettings() { return { ...this._localSettings }; }
-  get remoteSettings() { return { ...this._remoteSettings }; }
+  get closed() {
+    return this._closed;
+  }
+  get destroyed() {
+    return this._destroyed;
+  }
+  get connecting() {
+    return this._connecting;
+  }
+  get encrypted() {
+    return this[kEncrypted];
+  }
+  get alpnProtocol() {
+    return undefined;
+  } // no real TLS handshake
+  get originSet() {
+    return undefined;
+  } // origins not tracked in emulation
+  get socket() {
+    return null;
+  } // no real socket
+  get type() {
+    return constants.NGHTTP2_SESSION_CLIENT;
+  }
+  get pendingSettingsAck() {
+    return this._pendingSettingsAck;
+  }
+  get localSettings() {
+    return { ...this._localSettings };
+  }
+  get remoteSettings() {
+    return { ...this._remoteSettings };
+  }
   get state() {
     // Emulated: plausible static values, nextStreamID is tracked for real.
     return {
@@ -642,18 +691,24 @@ class Http2Session extends EventEmitter {
 
   _assertUsable() {
     if (this._destroyed || this._closed) {
-      throw http2Error('ERR_HTTP2_INVALID_SESSION', 'The session has been destroyed');
+      throw http2Error(
+        "ERR_HTTP2_INVALID_SESSION",
+        "The session has been destroyed",
+      );
     }
   }
 
   close(callback) {
-    if (typeof callback !== 'function' && callback !== undefined) {
-      throw http2Error('ERR_INVALID_ARG_TYPE', 'The "callback" argument must be of type function');
+    if (typeof callback !== "function" && callback !== undefined) {
+      throw http2Error(
+        "ERR_INVALID_ARG_TYPE",
+        'The "callback" argument must be of type function',
+      );
     }
     if (!this._closed) {
       this._closed = true;
       this._connecting = false;
-      this.emit('close');
+      this.emit("close");
     }
     if (callback) setTimeout(callback, 0);
   }
@@ -663,25 +718,25 @@ class Http2Session extends EventEmitter {
       this._destroyed = true;
       this._closed = true;
       this._connecting = false;
-      if (error) this.emit('error', error);
-      this.emit('close', code);
+      if (error) this.emit("error", error);
+      this.emit("close", code);
     }
   }
 
   goaway(code = constants.NGHTTP2_NO_ERROR, lastStreamID = 0, opaqueData) {
     // Noop: nothing is sent on the wire in the browser emulation.
-    void code; void lastStreamID; void opaqueData;
+    void code;
+    void lastStreamID;
+    void opaqueData;
   }
 
   ping(payload, callback) {
-    if (typeof payload === 'function') {
+    if (typeof payload === "function") {
       callback = payload;
       payload = undefined;
     }
     this._assertUsable();
-    const data = payload === undefined
-      ? Buffer.alloc(8)
-      : Buffer.from(payload);
+    const data = payload === undefined ? Buffer.alloc(8) : Buffer.from(payload);
     if (callback) {
       // Emulated: 0ms round-trip; no real PING frame is exchanged.
       setTimeout(() => callback(null, 0, data), 0);
@@ -689,14 +744,18 @@ class Http2Session extends EventEmitter {
     return true;
   }
 
-  ref() { return this; }
-  unref() { return this; }
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
 
   setTimeout(msecs, callback) {
     // Noop: inactivity is not tracked, so no 'timeout' is ever emitted.
     // Kept for shape compatibility; the gap is documented.
     this._timeout = msecs;
-    if (callback) this.once('timeout', callback);
+    if (callback) this.once("timeout", callback);
   }
 
   settings(settings, callback) {
@@ -718,18 +777,20 @@ class Http2Session extends EventEmitter {
     }
     this._pendingSettingsAck = false;
     const snapshot = { ...this._localSettings };
-    queueMicrotask(() => this.emit('localSettings', snapshot));
+    queueMicrotask(() => this.emit("localSettings", snapshot));
     if (callback) setTimeout(() => callback(null, snapshot, 0), 0);
   }
 
   rstStream(stream, code = constants.NGHTTP2_NO_ERROR) {
     // Noop: tears down the local stream object only.
-    if (stream && typeof stream.rstStream === 'function') stream.rstStream(code);
+    if (stream && typeof stream.rstStream === "function")
+      stream.rstStream(code);
   }
 
   priority(stream, prioritySpec) {
     // Noop: no PRIORITY frame is sent.
-    void stream; void prioritySpec;
+    void stream;
+    void prioritySpec;
   }
 
   setLocalWindowSize(windowSize) {
@@ -739,7 +800,7 @@ class Http2Session extends EventEmitter {
 
   setNextStreamID(id) {
     if (!Number.isInteger(id) || id <= 0) {
-      throw http2Error('ERR_HTTP2_INVALID_STREAM', `Invalid stream id: ${id}`);
+      throw http2Error("ERR_HTTP2_INVALID_STREAM", `Invalid stream id: ${id}`);
     }
     this._nextStreamID = id;
   }
@@ -750,12 +811,21 @@ class ClientHttp2Session extends Http2Session {
     super(options);
   }
 
-  get type() { return constants.NGHTTP2_SESSION_CLIENT; }
+  get type() {
+    return constants.NGHTTP2_SESSION_CLIENT;
+  }
 
   request(headers = {}, options = {}) {
     this._assertUsable();
-    if (headers === null || typeof headers !== 'object' || Array.isArray(headers)) {
-      throw http2Error('ERR_INVALID_ARG_TYPE', 'The "headers" argument must be of type object');
+    if (
+      headers === null ||
+      typeof headers !== "object" ||
+      Array.isArray(headers)
+    ) {
+      throw http2Error(
+        "ERR_INVALID_ARG_TYPE",
+        'The "headers" argument must be of type object',
+      );
     }
     const stream = new Http2Stream(this, { ...headers });
     stream._id = this._nextStreamID;
@@ -773,7 +843,9 @@ class ServerHttp2Session extends Http2Session {
     super(options);
   }
 
-  get type() { return constants.NGHTTP2_SESSION_SERVER; }
+  get type() {
+    return constants.NGHTTP2_SESSION_SERVER;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -804,21 +876,45 @@ class Http2Stream extends EventEmitter {
     this._timeout = 0;
   }
 
-  get id() { return this._id; }
-  get closed() { return this._closed; }
-  get destroyed() { return this._destroyed; }
-  get pending() { return this._id === 0; }
-  get rstCode() { return this._rstCode; }
-  get aborted() { return this._aborted; }
-  get headersSent() { return this._sentHeaders !== null; }
-  get pushAllowed() { return false; } // push is impossible in the emulation
-  get sentHeaders() { return this._sentHeaders ? { ...this._sentHeaders } : null; }
-  get sentInfoHeaders() { return this._sentInfoHeaders.map((h) => ({ ...h })); }
-  get sentTrailers() { return this._sentTrailers ? { ...this._sentTrailers } : null; }
-  get headRequest() {
-    return (this._requestHeaders[':method'] || '').toUpperCase() === 'HEAD';
+  get id() {
+    return this._id;
   }
-  get endAfterHeaders() { return false; }
+  get closed() {
+    return this._closed;
+  }
+  get destroyed() {
+    return this._destroyed;
+  }
+  get pending() {
+    return this._id === 0;
+  }
+  get rstCode() {
+    return this._rstCode;
+  }
+  get aborted() {
+    return this._aborted;
+  }
+  get headersSent() {
+    return this._sentHeaders !== null;
+  }
+  get pushAllowed() {
+    return false;
+  } // push is impossible in the emulation
+  get sentHeaders() {
+    return this._sentHeaders ? { ...this._sentHeaders } : null;
+  }
+  get sentInfoHeaders() {
+    return this._sentInfoHeaders.map((h) => ({ ...h }));
+  }
+  get sentTrailers() {
+    return this._sentTrailers ? { ...this._sentTrailers } : null;
+  }
+  get headRequest() {
+    return (this._requestHeaders[":method"] || "").toUpperCase() === "HEAD";
+  }
+  get endAfterHeaders() {
+    return false;
+  }
   get bufferSize() {
     return this._responseChunks.reduce((n, c) => n + c.length, 0);
   }
@@ -840,7 +936,7 @@ class Http2Stream extends EventEmitter {
 
   additionalHeaders(headers) {
     // Noop: informational headers are recorded locally only.
-    if (headers && typeof headers === 'object') {
+    if (headers && typeof headers === "object") {
       this._sentInfoHeaders.push({ ...headers });
     }
   }
@@ -850,13 +946,13 @@ class Http2Stream extends EventEmitter {
   }
 
   close(code = constants.NGHTTP2_NO_ERROR, callback) {
-    if (typeof code === 'function') {
+    if (typeof code === "function") {
       callback = code;
       code = constants.NGHTTP2_NO_ERROR;
     }
     if (!this._closed) {
       this._closed = true;
-      this.emit('close', code);
+      this.emit("close", code);
     }
     if (callback) setTimeout(callback, 0);
   }
@@ -865,8 +961,8 @@ class Http2Stream extends EventEmitter {
     if (!this._destroyed) {
       this._destroyed = true;
       this._closed = true;
-      if (error) this.emit('error', error);
-      this.emit('close', this._rstCode);
+      if (error) this.emit("error", error);
+      this.emit("close", this._rstCode);
     }
   }
 
@@ -884,7 +980,7 @@ class Http2Stream extends EventEmitter {
   setTimeout(msecs, callback) {
     // Noop: inactivity is not tracked; documented gap.
     this._timeout = msecs;
-    if (callback) this.once('timeout', callback);
+    if (callback) this.once("timeout", callback);
   }
 
   respond(headers = {}, options = {}) {
@@ -896,12 +992,16 @@ class Http2Stream extends EventEmitter {
 
   respondWithFD(fd, headers = {}, options = {}) {
     // Noop: no file descriptors in the browser.
-    void fd; void headers; void options;
+    void fd;
+    void headers;
+    void options;
   }
 
   respondWithFile(path, headers = {}, options = {}) {
     // Noop: no filesystem file delivery in the browser.
-    void path; void headers; void options;
+    void path;
+    void headers;
+    void options;
   }
 
   sendTrailers(headers) {
@@ -910,16 +1010,23 @@ class Http2Stream extends EventEmitter {
   }
 
   pushStream(headers, options, callback) {
-    if (typeof options === 'function') {
+    if (typeof options === "function") {
       callback = options;
       options = {};
     }
     // Push is impossible in the browser emulation; report it asynchronously
     // rather than throwing, per the noop-over-throw rule.
     if (callback) {
-      setTimeout(() => callback(
-        http2Error('ERR_HTTP2_PUSH_DISABLED', 'Push streams are not supported in the browser emulation')
-      ), 0);
+      setTimeout(
+        () =>
+          callback(
+            http2Error(
+              "ERR_HTTP2_PUSH_DISABLED",
+              "Push streams are not supported in the browser emulation",
+            ),
+          ),
+        0,
+      );
     }
   }
 
@@ -932,16 +1039,17 @@ class Http2Stream extends EventEmitter {
   }
 
   write(chunk, encoding, callback) {
-    if (typeof encoding === 'function') {
+    if (typeof encoding === "function") {
       callback = encoding;
       encoding = undefined;
     }
     if (this._responseStarted) {
       this._writeResponse(chunk, encoding);
     } else {
-      const buf = typeof chunk === 'string'
-        ? Buffer.from(chunk, encoding)
-        : Buffer.from(chunk);
+      const buf =
+        typeof chunk === "string"
+          ? Buffer.from(chunk, encoding)
+          : Buffer.from(chunk);
       this._requestChunks.push(buf);
     }
     if (callback) setTimeout(callback, 0);
@@ -949,17 +1057,20 @@ class Http2Stream extends EventEmitter {
   }
 
   end(data, encoding, callback) {
-    if (typeof data === 'function') {
-      callback = data; data = undefined; encoding = undefined;
-    } else if (typeof encoding === 'function') {
-      callback = encoding; encoding = undefined;
+    if (typeof data === "function") {
+      callback = data;
+      data = undefined;
+      encoding = undefined;
+    } else if (typeof encoding === "function") {
+      callback = encoding;
+      encoding = undefined;
     }
     if (data !== undefined && data !== null) this.write(data, encoding);
     if (this._responseStarted) {
       this._deliverResponse();
     } else {
       this._requestEnded = true;
-      this.emit('finish');
+      this.emit("finish");
     }
     if (callback) setTimeout(callback, 0);
     return this;
@@ -967,29 +1078,31 @@ class Http2Stream extends EventEmitter {
 
   // -- server side (used by Http2ServerResponse): response body -----------
   _writeResponse(chunk, encoding) {
-    const buf = typeof chunk === 'string'
-      ? Buffer.from(chunk, encoding)
-      : Buffer.from(chunk);
+    const buf =
+      typeof chunk === "string"
+        ? Buffer.from(chunk, encoding)
+        : Buffer.from(chunk);
     this._responseChunks.push(buf);
   }
 
   _endResponse(data, encoding) {
-    if (data !== undefined && data !== null) this._writeResponse(data, encoding);
+    if (data !== undefined && data !== null)
+      this._writeResponse(data, encoding);
     this._deliverResponse();
   }
 
   _deliverResponse() {
     if (this._responseDelivered) return;
     this._responseDelivered = true;
-    const headers = this._sentHeaders || { ':status': 200 };
+    const headers = this._sentHeaders || { ":status": 200 };
     const body = Buffer.concat(this._responseChunks);
     // Client-side observable events, in real order.
-    this.emit('response', { ...headers }, 0);
-    if (body.length > 0 && !this.headRequest) this.emit('data', body);
-    if (this._sentTrailers) this.emit('trailers', { ...this._sentTrailers }, 0);
-    this.emit('end');
+    this.emit("response", { ...headers }, 0);
+    if (body.length > 0 && !this.headRequest) this.emit("data", body);
+    if (this._sentTrailers) this.emit("trailers", { ...this._sentTrailers }, 0);
+    this.emit("end");
     this._closed = true;
-    this.emit('close', constants.NGHTTP2_NO_ERROR);
+    this.emit("close", constants.NGHTTP2_NO_ERROR);
   }
 
   get requestBody() {
@@ -1008,23 +1121,29 @@ export class Http2ServerRequest extends EventEmitter {
     super();
     this.stream = stream;
     this.headers = { ...headers };
-    this.httpVersion = '2.0';
+    this.httpVersion = "2.0";
     this.httpVersionMajor = 2;
     this.httpVersionMinor = 0;
-    this.method = headers[':method'] || 'GET';
-    this.url = headers[':path'] || '/';
-    this.scheme = headers[':scheme'] || 'http';
-    this.authority = headers[':authority'];
+    this.method = headers[":method"] || "GET";
+    this.url = headers[":path"] || "/";
+    this.scheme = headers[":scheme"] || "http";
+    this.authority = headers[":authority"];
     this.rawHeaders = [];
     for (const [k, v] of Object.entries(this.headers)) {
-      if (!k.startsWith(':')) this.rawHeaders.push(k, v);
+      if (!k.startsWith(":")) this.rawHeaders.push(k, v);
     }
     this._body = stream ? stream.requestBody : Buffer.alloc(0);
   }
 
-  get body() { return this._body; }
-  get aborted() { return this.stream ? this.stream.aborted : false; }
-  get complete() { return this.stream ? this.stream._requestEnded : true; }
+  get body() {
+    return this._body;
+  }
+  get aborted() {
+    return this.stream ? this.stream.aborted : false;
+  }
+  get complete() {
+    return this.stream ? this.stream._requestEnded : true;
+  }
 }
 
 export class Http2ServerResponse extends EventEmitter {
@@ -1043,14 +1162,24 @@ export class Http2ServerResponse extends EventEmitter {
     return this;
   }
 
-  getHeader(name) { return this._headers[name.toLowerCase()]; }
-  getHeaders() { return { ...this._headers }; }
-  getHeaderNames() { return Object.keys(this._headers); }
-  hasHeader(name) { return name.toLowerCase() in this._headers; }
-  removeHeader(name) { delete this._headers[name.toLowerCase()]; }
+  getHeader(name) {
+    return this._headers[name.toLowerCase()];
+  }
+  getHeaders() {
+    return { ...this._headers };
+  }
+  getHeaderNames() {
+    return Object.keys(this._headers);
+  }
+  hasHeader(name) {
+    return name.toLowerCase() in this._headers;
+  }
+  removeHeader(name) {
+    delete this._headers[name.toLowerCase()];
+  }
 
   writeHead(statusCode, statusMessage, headers) {
-    if (typeof statusMessage === 'object' && statusMessage !== null) {
+    if (typeof statusMessage === "object" && statusMessage !== null) {
       headers = statusMessage;
       statusMessage = undefined;
     }
@@ -1059,31 +1188,36 @@ export class Http2ServerResponse extends EventEmitter {
     if (headers) {
       for (const [k, v] of Object.entries(headers)) this.setHeader(k, v);
     }
-    const out = { ':status': statusCode, ...this._headers };
+    const out = { ":status": statusCode, ...this._headers };
     this.stream.respond(out);
     this._headersSent = true;
     return this;
   }
 
-  get headersSent() { return this._headersSent; }
+  get headersSent() {
+    return this._headersSent;
+  }
 
   write(chunk, encoding, callback) {
     if (!this._headersSent) this.writeHead(this.statusCode);
     this.stream._writeResponse(chunk, encoding);
-    if (typeof encoding === 'function') callback = encoding;
+    if (typeof encoding === "function") callback = encoding;
     if (callback) setTimeout(callback, 0);
     return true;
   }
 
   end(data, encoding, callback) {
-    if (typeof data === 'function') {
-      callback = data; data = undefined; encoding = undefined;
-    } else if (typeof encoding === 'function') {
-      callback = encoding; encoding = undefined;
+    if (typeof data === "function") {
+      callback = data;
+      data = undefined;
+      encoding = undefined;
+    } else if (typeof encoding === "function") {
+      callback = encoding;
+      encoding = undefined;
     }
     if (!this._headersSent) this.writeHead(this.statusCode);
     this.stream._endResponse(data, encoding);
-    this.emit('finish');
+    this.emit("finish");
     if (callback) setTimeout(callback, 0);
     return this;
   }
@@ -1099,7 +1233,9 @@ let nextEphemeralPort = 40000;
 function lookupServer(port) {
   if (serverRegistry.has(port)) return serverRegistry.get(port);
   // Fallback: first registered server (matches the historical stub).
-  return serverRegistry.size > 0 ? serverRegistry.values().next().value : undefined;
+  return serverRegistry.size > 0
+    ? serverRegistry.values().next().value
+    : undefined;
 }
 
 function dispatchVirtualRequest(session, stream) {
@@ -1107,15 +1243,15 @@ function dispatchVirtualRequest(session, stream) {
   const server = lookupServer(session._virtualPort);
   if (!server) {
     const err = http2Error(
-      'ECONNREFUSED',
-      `connect ECONNREFUSED 127.0.0.1:${session._virtualPort}`
+      "ECONNREFUSED",
+      `connect ECONNREFUSED 127.0.0.1:${session._virtualPort}`,
     );
-    err.code = 'ECONNREFUSED';
+    err.code = "ECONNREFUSED";
     err.errno = -111;
-    err.syscall = 'connect';
+    err.syscall = "connect";
     queueMicrotask(() => {
-      session.emit('error', err);
-      stream.emit('error', err);
+      session.emit("error", err);
+      stream.emit("error", err);
     });
     return;
   }
@@ -1125,7 +1261,7 @@ function dispatchVirtualRequest(session, stream) {
 class Http2Server extends EventEmitter {
   constructor(options = {}, requestListener) {
     super();
-    if (typeof options === 'function') {
+    if (typeof options === "function") {
       requestListener = options;
       options = {};
     }
@@ -1134,10 +1270,12 @@ class Http2Server extends EventEmitter {
     this._listening = false;
     this._port = null;
     this._sessions = new Set();
-    if (requestListener) this.on('request', requestListener);
+    if (requestListener) this.on("request", requestListener);
   }
 
-  get listening() { return this._listening; }
+  get listening() {
+    return this._listening;
+  }
 
   listen(...args) {
     // Supports listen(port[, host][, backlog][, callback]),
@@ -1145,10 +1283,10 @@ class Http2Server extends EventEmitter {
     let port;
     let callback;
     for (const arg of args) {
-      if (typeof arg === 'function') callback = arg;
-      else if (typeof arg === 'number') port = arg;
-      else if (arg && typeof arg === 'object') {
-        if (typeof arg.port === 'number') port = arg.port;
+      if (typeof arg === "function") callback = arg;
+      else if (typeof arg === "number") port = arg;
+      else if (arg && typeof arg === "object") {
+        if (typeof arg.port === "number") port = arg.port;
       }
     }
     if (port === undefined || port === 0) port = nextEphemeralPort++;
@@ -1156,7 +1294,7 @@ class Http2Server extends EventEmitter {
     this._listening = true;
     serverRegistry.set(port, this);
     queueMicrotask(() => {
-      this.emit('listening');
+      this.emit("listening");
       if (callback) callback();
     });
     return this;
@@ -1164,17 +1302,17 @@ class Http2Server extends EventEmitter {
 
   address() {
     if (!this._listening) return null;
-    return { address: '::', family: 'IPv6', port: this._port };
+    return { address: "::", family: "IPv6", port: this._port };
   }
 
   getConnections(callback) {
-    if (typeof callback === 'function') setTimeout(() => callback(null, 0), 0);
+    if (typeof callback === "function") setTimeout(() => callback(null, 0), 0);
   }
 
   setTimeout(msecs, callback) {
     // Noop: no real sockets, so no socket timeouts; documented gap.
     this.timeout = msecs;
-    if (callback) this.on('timeout', callback);
+    if (callback) this.on("timeout", callback);
     return this;
   }
 
@@ -1184,20 +1322,25 @@ class Http2Server extends EventEmitter {
 
   close(callback) {
     if (this._port !== null) {
-      if (serverRegistry.get(this._port) === this) serverRegistry.delete(this._port);
+      if (serverRegistry.get(this._port) === this)
+        serverRegistry.delete(this._port);
     }
     this._listening = false;
     for (const session of this._sessions) session.close();
     this._sessions.clear();
     queueMicrotask(() => {
-      this.emit('close');
+      this.emit("close");
       if (callback) callback();
     });
     return this;
   }
 
-  ref() { return this; }
-  unref() { return this; }
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
 
   // -- virtual loop -------------------------------------------------------
   _getServerSession() {
@@ -1207,7 +1350,7 @@ class Http2Server extends EventEmitter {
       });
       this._serverSession._connecting = false;
       this._sessions.add(this._serverSession);
-      queueMicrotask(() => this.emit('session', this._serverSession));
+      queueMicrotask(() => this.emit("session", this._serverSession));
     }
     return this._serverSession;
   }
@@ -1218,17 +1361,23 @@ class Http2Server extends EventEmitter {
     const flags = 0;
     const rawHeaders = [];
     for (const [k, v] of Object.entries(headers)) {
-      if (!k.startsWith(':')) rawHeaders.push(k, v);
+      if (!k.startsWith(":")) rawHeaders.push(k, v);
     }
     queueMicrotask(() => {
-      this.emit('stream', stream, headers, flags, rawHeaders);
-      if (this.listenerCount('request') > 0 || this.listenerCount('checkContinue') > 0) {
+      this.emit("stream", stream, headers, flags, rawHeaders);
+      if (
+        this.listenerCount("request") > 0 ||
+        this.listenerCount("checkContinue") > 0
+      ) {
         const req = new Http2ServerRequest(stream, headers);
         const res = new Http2ServerResponse(stream);
-        if (this.listenerCount('checkContinue') > 0 && headers.expect === '100-continue') {
-          this.emit('checkContinue', req, res);
+        if (
+          this.listenerCount("checkContinue") > 0 &&
+          headers.expect === "100-continue"
+        ) {
+          this.emit("checkContinue", req, res);
         } else {
-          this.emit('request', req, res);
+          this.emit("request", req, res);
         }
       }
     });
@@ -1238,16 +1387,16 @@ class Http2Server extends EventEmitter {
   _handleInboundRequest(method, url, headers = {}, body) {
     return new Promise((resolve, reject) => {
       const h2Headers = {
-        ':method': method,
-        ':path': url,
-        ':scheme': 'http',
-        ':authority': headers.host || headers[':authority'] || 'localhost',
+        ":method": method,
+        ":path": url,
+        ":scheme": "http",
+        ":authority": headers.host || headers[":authority"] || "localhost",
         ...headers,
       };
       const stream = new Http2Stream(null, h2Headers);
       if (body !== undefined && body !== null) {
         stream._requestChunks.push(
-          typeof body === 'string' ? Buffer.from(body) : Buffer.from(body)
+          typeof body === "string" ? Buffer.from(body) : Buffer.from(body),
         );
         stream._requestEnded = true;
       }
@@ -1255,26 +1404,28 @@ class Http2Server extends EventEmitter {
         const responseBody = Buffer.concat(stream._responseChunks);
         const outHeaders = {};
         for (const [k, v] of Object.entries(responseHeaders)) {
-          if (!k.startsWith(':')) outHeaders[k.toLowerCase()] = v;
+          if (!k.startsWith(":")) outHeaders[k.toLowerCase()] = v;
         }
         resolve({
-          statusCode: Number(responseHeaders[':status'] || 200),
+          statusCode: Number(responseHeaders[":status"] || 200),
           headers: outHeaders,
           body: responseBody,
         });
       };
-      stream.once('response', onResponse);
-      stream.once('error', reject);
+      stream.once("response", onResponse);
+      stream.once("error", reject);
       const timeoutId = this.timeout
         ? setTimeout(() => {
-          const err = new Error('Request timeout');
-          err.code = 'ETIMEDOUT';
-          reject(err);
-        }, this.timeout)
+            const err = new Error("Request timeout");
+            err.code = "ETIMEDOUT";
+            reject(err);
+          }, this.timeout)
         : null;
-      const clear = () => { if (timeoutId) clearTimeout(timeoutId); };
-      stream.once('response', clear);
-      stream.once('error', clear);
+      const clear = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+      };
+      stream.once("response", clear);
+      stream.once("error", clear);
       try {
         this._dispatchVirtualStream({ _virtualPort: this._port }, stream);
       } catch (err) {
@@ -1300,7 +1451,7 @@ export function createSecureServer(options, onRequestHandler) {
 }
 
 export function connect(authority, options, listener) {
-  if (typeof options === 'function') {
+  if (typeof options === "function") {
     listener = options;
     options = {};
   }
@@ -1309,25 +1460,27 @@ export function connect(authority, options, listener) {
   try {
     url = new URL(authority);
   } catch {
-    throw http2Error('ERR_INVALID_URL', `Invalid URL: ${authority}`);
+    throw http2Error("ERR_INVALID_URL", `Invalid URL: ${authority}`);
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw http2Error(
-      'ERR_HTTP2_UNSUPPORTED_PROTOCOL',
-      `The protocol "${url.protocol}" is not supported`
+      "ERR_HTTP2_UNSUPPORTED_PROTOCOL",
+      `The protocol "${url.protocol}" is not supported`,
     );
   }
   const session = new ClientHttp2Session({
-    encrypted: url.protocol === 'https:',
+    encrypted: url.protocol === "https:",
   });
   session._virtualPort = url.port
     ? Number(url.port)
-    : (url.protocol === 'https:' ? 443 : 80);
+    : url.protocol === "https:"
+      ? 443
+      : 80;
   if (options.settings) session.settings(options.settings);
-  if (listener) session.once('connect', listener);
+  if (listener) session.once("connect", listener);
   queueMicrotask(() => {
     session._connecting = false;
-    session.emit('connect', session, null);
+    session.emit("connect", session, null);
   });
   return session;
 }
@@ -1335,7 +1488,8 @@ export function connect(authority, options, listener) {
 export function performServerHandshake(socket, options) {
   // Noop: no real TLS handshake in the browser. Returns a server session
   // object with the right shape.
-  void socket; void options;
+  void socket;
+  void options;
   const session = new ServerHttp2Session({ encrypted: true });
   session._connecting = false;
   return session;
@@ -1349,7 +1503,10 @@ export function performServerHandshake(socket, options) {
 async function handleRequest(port, method, url, headers = {}, body) {
   const server = lookupServer(port);
   if (!server) {
-    throw http2Error('ECONNREFUSED', `No active HTTP/2 server found for port ${port}`);
+    throw http2Error(
+      "ECONNREFUSED",
+      `No active HTTP/2 server found for port ${port}`,
+    );
   }
   return server._handleInboundRequest(method, url, headers, body);
 }

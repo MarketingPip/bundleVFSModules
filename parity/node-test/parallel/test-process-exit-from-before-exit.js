@@ -19,12 +19,15 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-process.on('beforeExit', common.mustCall(function() {
-  setTimeout(common.mustNotCall(), 5);
-  process.exit(0);  // Should execute immediately even if we schedule new work.
-  assert.fail();
-}));
+process.on(
+  "beforeExit",
+  common.mustCall(function () {
+    setTimeout(common.mustNotCall(), 5);
+    process.exit(0); // Should execute immediately even if we schedule new work.
+    assert.fail();
+  }),
+);

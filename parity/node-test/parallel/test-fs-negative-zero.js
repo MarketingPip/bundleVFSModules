@@ -1,15 +1,15 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
 const missing = path.join(
   os.tmpdir(),
   `node-fs-negative-zero-${process.pid}`,
-  'entry',
+  "entry",
 );
 
 function ignoreExpectedError(fn) {
@@ -23,11 +23,11 @@ function ignoreExpectedError(fn) {
 const fd = fs.openSync(process.execPath, -0);
 fs.closeSync(fd);
 
-ignoreExpectedError(() => fs.openSync(process.execPath, 'r', -0));
+ignoreExpectedError(() => fs.openSync(process.execPath, "r", -0));
 ignoreExpectedError(() => fs.readFileSync(process.execPath, { flag: -0 }));
 ignoreExpectedError(() => fs.mkdirSync(missing, { mode: -0 }));
 ignoreExpectedError(() => fs.chmodSync(missing, -0));
-ignoreExpectedError(() => fs.writeFileSync(missing, '', { mode: -0 }));
+ignoreExpectedError(() => fs.writeFileSync(missing, "", { mode: -0 }));
 
 fs.watchFile(missing, { interval: -0 }, () => {});
 fs.unwatchFile(missing);

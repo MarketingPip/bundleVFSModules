@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-const { mustCall } = require('../common');
+const { mustCall } = require("../common");
 
 const TIMEOUT = 10;
 const SPIN_DUR = 50;
 
-const assert = require('assert');
-const { performance, eventLoopUtilization } = require('perf_hooks');
-const { Worker, parentPort } = require('worker_threads');
+const assert = require("assert");
+const { performance, eventLoopUtilization } = require("perf_hooks");
+const { Worker, parentPort } = require("worker_threads");
 
 // Verifies that `performance.eventLoopUtilization` is an alias of
 // `perf_hooks.eventLoopUtilization`.
@@ -19,53 +19,77 @@ const elu = eventLoopUtilization();
 if (nodeTiming.loopStart === -1) {
   assert.strictEqual(nodeTiming.idleTime, 0);
   assert.deepStrictEqual(elu, { idle: 0, active: 0, utilization: 0 });
-  assert.deepStrictEqual(eventLoopUtilization(elu),
-                         { idle: 0, active: 0, utilization: 0 });
-  assert.deepStrictEqual(eventLoopUtilization(elu, eventLoopUtilization()),
-                         { idle: 0, active: 0, utilization: 0 });
+  assert.deepStrictEqual(eventLoopUtilization(elu), {
+    idle: 0,
+    active: 0,
+    utilization: 0,
+  });
+  assert.deepStrictEqual(eventLoopUtilization(elu, eventLoopUtilization()), {
+    idle: 0,
+    active: 0,
+    utilization: 0,
+  });
 }
 
-const nodeTimingProps = ['name', 'entryType', 'startTime', 'duration',
-                         'nodeStart', 'v8Start', 'environment', 'loopStart',
-                         'loopExit', 'bootstrapComplete', 'idleTime'];
+const nodeTimingProps = [
+  "name",
+  "entryType",
+  "startTime",
+  "duration",
+  "nodeStart",
+  "v8Start",
+  "environment",
+  "loopStart",
+  "loopExit",
+  "bootstrapComplete",
+  "idleTime",
+];
 for (const p of nodeTimingProps)
-  assert.ok(typeof JSON.parse(JSON.stringify(nodeTiming))[p] ===
-    typeof nodeTiming[p]);
+  assert.ok(
+    typeof JSON.parse(JSON.stringify(nodeTiming))[p] === typeof nodeTiming[p],
+  );
 
-setTimeout(mustCall(function r() {
-  const elu1 = eventLoopUtilization();
+setTimeout(
+  mustCall(function r() {
+    const elu1 = eventLoopUtilization();
 
-  // Force idle time to accumulate before allowing test to continue.
-  if (elu1.idle <= 0)
-    return setTimeout(mustCall(r), 5);
+    // Force idle time to accumulate before allowing test to continue.
+    if (elu1.idle <= 0) return setTimeout(mustCall(r), 5);
 
-  const t = Date.now();
-  while (Date.now() - t < SPIN_DUR);
+    const t = Date.now();
+    while (Date.now() - t < SPIN_DUR);
 
-  const elu2 = eventLoopUtilization(elu1);
-  const elu3 = eventLoopUtilization();
-  const elu4 = eventLoopUtilization(elu3, elu1);
+    const elu2 = eventLoopUtilization(elu1);
+    const elu3 = eventLoopUtilization();
+    const elu4 = eventLoopUtilization(elu3, elu1);
 
-  assert.strictEqual(elu2.idle, 0);
-  assert.strictEqual(elu4.idle, 0);
-  assert.strictEqual(elu2.utilization, 1);
-  assert.strictEqual(elu4.utilization, 1);
-  assert.strictEqual(elu3.active - elu1.active, elu4.active);
-  assert.ok(elu2.active > SPIN_DUR - 10, `${elu2.active} <= ${SPIN_DUR - 10}`);
-  assert.ok(elu2.active < elu4.active, `${elu2.active} >= ${elu4.active}`);
-  assert.ok(elu3.active > elu2.active, `${elu3.active} <= ${elu2.active}`);
-  assert.ok(elu3.active > elu4.active, `${elu3.active} <= ${elu4.active}`);
+    assert.strictEqual(elu2.idle, 0);
+    assert.strictEqual(elu4.idle, 0);
+    assert.strictEqual(elu2.utilization, 1);
+    assert.strictEqual(elu4.utilization, 1);
+    assert.strictEqual(elu3.active - elu1.active, elu4.active);
+    assert.ok(
+      elu2.active > SPIN_DUR - 10,
+      `${elu2.active} <= ${SPIN_DUR - 10}`,
+    );
+    assert.ok(elu2.active < elu4.active, `${elu2.active} >= ${elu4.active}`);
+    assert.ok(elu3.active > elu2.active, `${elu3.active} <= ${elu2.active}`);
+    assert.ok(elu3.active > elu4.active, `${elu3.active} <= ${elu4.active}`);
 
-  setTimeout(mustCall(runIdleTimeTest), TIMEOUT);
-}), 5);
+    setTimeout(mustCall(runIdleTimeTest), TIMEOUT);
+  }),
+  5,
+);
 
 function runIdleTimeTest() {
   const idleTime = nodeTiming.idleTime;
   const elu1 = eventLoopUtilization();
   const sum = elu1.idle + elu1.active;
 
-  assert.ok(sum >= elu1.idle && sum >= elu1.active,
-            `idle: ${elu1.idle}  active: ${elu1.active}  sum: ${sum}`);
+  assert.ok(
+    sum >= elu1.idle && sum >= elu1.active,
+    `idle: ${elu1.idle}  active: ${elu1.active}  sum: ${sum}`,
+  );
   assert.strictEqual(elu1.idle, idleTime);
   assert.strictEqual(elu1.utilization, elu1.active / sum);
 
@@ -83,14 +107,20 @@ function runCalcTest(elu1) {
   assert.ok(elu2.active >= 0, `${elu2.active} < 0`);
   assert.ok(elu3.idle >= 0, `${elu3.idle} < 0`);
   assert.ok(elu3.active >= 0, `${elu3.active} < 0`);
-  assert.ok(elu2.idle + elu2.active > elu1.idle + elu1.active,
-            `${elu2.idle + elu2.active} <= ${elu1.idle + elu1.active}`);
-  assert.ok(elu2.idle + elu2.active >= now - nodeTiming.loopStart,
-            `${elu2.idle + elu2.active} < ${now - nodeTiming.loopStart}`);
+  assert.ok(
+    elu2.idle + elu2.active > elu1.idle + elu1.active,
+    `${elu2.idle + elu2.active} <= ${elu1.idle + elu1.active}`,
+  );
+  assert.ok(
+    elu2.idle + elu2.active >= now - nodeTiming.loopStart,
+    `${elu2.idle + elu2.active} < ${now - nodeTiming.loopStart}`,
+  );
   assert.strictEqual(elu3.active, elu2.active - elu1.active);
   assert.strictEqual(elu3.idle, elu2.idle - elu1.idle);
-  assert.strictEqual(elu3.utilization,
-                     active_delta / (idle_delta + active_delta));
+  assert.strictEqual(
+    elu3.utilization,
+    active_delta / (idle_delta + active_delta),
+  );
 
   setImmediate(mustCall(runWorkerTest));
 }
@@ -98,19 +128,24 @@ function runCalcTest(elu1) {
 function runWorkerTest() {
   // Use argv to detect whether we're running as a Worker called by this test
   // vs. this test also being called as a Worker.
-  if (process.argv[2] === 'iamalive') {
+  if (process.argv[2] === "iamalive") {
     parentPort.postMessage(JSON.stringify(eventLoopUtilization()));
     return;
   }
 
   const elu1 = eventLoopUtilization();
-  const worker = new Worker(__filename, { argv: [ 'iamalive' ] });
+  const worker = new Worker(__filename, { argv: ["iamalive"] });
 
-  worker.on('message', mustCall((msg) => {
-    const elu2 = eventLoopUtilization(elu1);
-    const data = JSON.parse(msg);
+  worker.on(
+    "message",
+    mustCall((msg) => {
+      const elu2 = eventLoopUtilization(elu1);
+      const data = JSON.parse(msg);
 
-    assert.ok(elu2.active + elu2.idle > data.active + data.idle,
-              `${elu2.active + elu2.idle} <= ${data.active + data.idle}`);
-  }));
+      assert.ok(
+        elu2.active + elu2.idle > data.active + data.idle,
+        `${elu2.active + elu2.idle} <= ${data.active + data.idle}`,
+      );
+    }),
+  );
 }

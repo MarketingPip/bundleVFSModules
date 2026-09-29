@@ -1,30 +1,30 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { push, text } = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { push, text } = require("stream/iter");
 
 async function testBasicWriteRead() {
   const { writer, readable } = push();
 
-  writer.write('hello');
+  writer.write("hello");
   writer.end();
 
   const data = await text(readable);
-  assert.strictEqual(data, 'hello');
+  assert.strictEqual(data, "hello");
 }
 
 async function testMultipleWrites() {
   const { writer, readable } = push({ budget: 16384 });
 
-  writer.write('a');
-  writer.write('b');
-  writer.write('c');
+  writer.write("a");
+  writer.write("b");
+  writer.write("c");
   writer.end();
 
   const data = await text(readable);
-  assert.strictEqual(data, 'abc');
+  assert.strictEqual(data, "abc");
 }
 
 async function testCanWrite() {
@@ -33,7 +33,7 @@ async function testCanWrite() {
 
   assert.strictEqual(writer.canWrite, true);
   writer.writeSync(kHalf);
-  assert.strictEqual(writer.canWrite, true);  // 8192 < 16384
+  assert.strictEqual(writer.canWrite, true); // 8192 < 16384
   writer.writeSync(kHalf);
   assert.strictEqual(writer.canWrite, false); // 16384 >= 16384
 
@@ -60,25 +60,25 @@ async function testWriterEnd() {
 async function testWriterFail() {
   const { writer, readable } = push();
 
-  writer.fail(new Error('test fail'));
+  writer.fail(new Error("test fail"));
 
   await assert.rejects(
     async () => {
       // eslint-disable-next-line no-unused-vars
       for await (const _ of readable) {
-        assert.fail('Should not reach here');
+        assert.fail("Should not reach here");
       }
     },
-    { message: 'test fail' },
+    { message: "test fail" },
   );
 }
 
 async function testConsumerBreak() {
   const { writer, readable } = push({ budget: 16384 });
 
-  writer.writeSync('a');
-  writer.writeSync('b');
-  writer.writeSync('c');
+  writer.writeSync("a");
+  writer.writeSync("b");
+  writer.writeSync("c");
 
   // Break after first batch
   // eslint-disable-next-line no-unused-vars
@@ -100,36 +100,39 @@ async function testAbortSignal() {
     async () => {
       // eslint-disable-next-line no-unused-vars
       for await (const _ of readable) {
-        assert.fail('Should not reach here');
+        assert.fail("Should not reach here");
       }
     },
-    { name: 'AbortError' },
+    { name: "AbortError" },
   );
 }
 
 async function testAbortSignalReason() {
-  const reason = 'test reason';
+  const reason = "test reason";
   const ac = new AbortController();
   const { writer } = push({ signal: ac.signal });
 
   ac.abort(reason);
 
-  await assert.rejects(writer.write('data'), (err) => err === reason);
+  await assert.rejects(writer.write("data"), (err) => err === reason);
 }
 
 async function testPreAbortedSignal() {
   const { readable } = push({ signal: AbortSignal.abort() });
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of readable) {
-      assert.fail('Should not reach here');
-    }
-  }, { name: 'AbortError' });
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of readable) {
+        assert.fail("Should not reach here");
+      }
+    },
+    { name: "AbortError" },
+  );
 }
 
 async function testConsumerBreakWriteSyncReturnsFalse() {
   const { writer, readable } = push({ budget: 16384 });
-  writer.writeSync('a');
+  writer.writeSync("a");
 
   // Break after first batch
   // eslint-disable-next-line no-unused-vars
@@ -138,7 +141,7 @@ async function testConsumerBreakWriteSyncReturnsFalse() {
   }
 
   // After consumer break, writeSync should return false
-  assert.strictEqual(writer.writeSync('b'), false);
+  assert.strictEqual(writer.writeSync("b"), false);
   assert.strictEqual(writer.canWrite, null);
 }
 
@@ -153,23 +156,23 @@ async function testPushWithTransforms() {
 
   const { writer, readable } = push(upper);
 
-  writer.write('hello');
+  writer.write("hello");
   writer.end();
 
   const data = await text(readable);
-  assert.strictEqual(data, 'HELLO');
+  assert.strictEqual(data, "HELLO");
 }
 
 async function testInvalidBackpressure() {
-  assert.throws(() => push({ backpressure: 'banana' }), {
-    code: 'ERR_INVALID_ARG_VALUE',
+  assert.throws(() => push({ backpressure: "banana" }), {
+    code: "ERR_INVALID_ARG_VALUE",
   });
-  assert.throws(() => push({ backpressure: '' }), {
-    code: 'ERR_INVALID_ARG_VALUE',
+  assert.throws(() => push({ backpressure: "" }), {
+    code: "ERR_INVALID_ARG_VALUE",
   });
 
   // Valid values should not throw
-  for (const bp of ['strict', 'unbounded', 'drop-oldest', 'drop-newest']) {
+  for (const bp of ["strict", "unbounded", "drop-oldest", "drop-newest"]) {
     push({ backpressure: bp });
   }
 }

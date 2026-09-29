@@ -1,6 +1,6 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
 // clearImmediate should be a noop if anything other than an Immediate
 // is passed to it.

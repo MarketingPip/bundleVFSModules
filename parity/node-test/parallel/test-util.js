@@ -19,23 +19,23 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 // Flags: --expose-internals
-const common = require('../common');
-const assert = require('assert');
-const util = require('util');
-const errors = require('internal/errors');
-const context = require('vm').runInNewContext;
+const common = require("../common");
+const assert = require("assert");
+const util = require("util");
+const errors = require("internal/errors");
+const context = require("vm").runInNewContext;
 
 // isArray
 assert.strictEqual(util.isArray([]), true);
 assert.strictEqual(util.isArray(Array()), true);
 assert.strictEqual(util.isArray(new Array()), true);
 assert.strictEqual(util.isArray(new Array(5)), true);
-assert.strictEqual(util.isArray(new Array('with', 'some', 'entries')), true);
-assert.strictEqual(util.isArray(context('Array')()), true);
+assert.strictEqual(util.isArray(new Array("with", "some", "entries")), true);
+assert.strictEqual(util.isArray(context("Array")()), true);
 assert.strictEqual(util.isArray({}), false);
-assert.strictEqual(util.isArray({ push: function() {} }), false);
+assert.strictEqual(util.isArray({ push: function () {} }), false);
 assert.strictEqual(util.isArray(/regexp/), false);
 assert.strictEqual(util.isArray(new Error()), false);
 assert.strictEqual(util.isArray({ __proto__: Array.prototype }), false);
@@ -49,51 +49,61 @@ assert.deepStrictEqual(util._extend({ a: 1 }, false), { a: 1 });
 assert.deepStrictEqual(util._extend({ a: 1 }, { b: 2 }), { a: 1, b: 2 });
 assert.deepStrictEqual(util._extend({ a: 1, b: 2 }, { b: 3 }), { a: 1, b: 3 });
 
-assert.strictEqual(util.toUSVString('string\ud801'), 'string\ufffd');
+assert.strictEqual(util.toUSVString("string\ud801"), "string\ufffd");
 
 {
   assert.strictEqual(util.types.isNativeError(new Error()), true);
   assert.strictEqual(util.types.isNativeError(new TypeError()), true);
   assert.strictEqual(util.types.isNativeError(new SyntaxError()), true);
-  assert.strictEqual(util.types.isNativeError(new (context('Error'))()), true);
+  assert.strictEqual(util.types.isNativeError(new (context("Error"))()), true);
   assert.strictEqual(
-    util.types.isNativeError(new (context('TypeError'))()),
-    true
+    util.types.isNativeError(new (context("TypeError"))()),
+    true,
   );
   assert.strictEqual(
-    util.types.isNativeError(new (context('SyntaxError'))()),
-    true
+    util.types.isNativeError(new (context("SyntaxError"))()),
+    true,
   );
   assert.strictEqual(util.types.isNativeError({}), false);
   assert.strictEqual(
-    util.types.isNativeError({ name: 'Error', message: '' }),
-    false
+    util.types.isNativeError({ name: "Error", message: "" }),
+    false,
   );
   assert.strictEqual(util.types.isNativeError([]), false);
   assert.strictEqual(
     util.types.isNativeError({ __proto__: Error.prototype }),
-    false
+    false,
   );
   assert.strictEqual(
     util.types.isNativeError(new errors.codes.ERR_IPC_CHANNEL_CLOSED()),
-    true
+    true,
   );
 }
 
-assert.throws(() => {
-  util.stripVTControlCharacters({});
-}, {
-  code: 'ERR_INVALID_ARG_TYPE',
-  message: 'The "str" argument must be of type string.' +
-           common.invalidArgTypeHelper({})
-});
+assert.throws(
+  () => {
+    util.stripVTControlCharacters({});
+  },
+  {
+    code: "ERR_INVALID_ARG_TYPE",
+    message:
+      'The "str" argument must be of type string.' +
+      common.invalidArgTypeHelper({}),
+  },
+);
 
 // stripVTControlCharacters: fast path returns input when no ANSI codes
-assert.strictEqual(util.stripVTControlCharacters('hello'), 'hello');
-assert.strictEqual(util.stripVTControlCharacters(''), '');
+assert.strictEqual(util.stripVTControlCharacters("hello"), "hello");
+assert.strictEqual(util.stripVTControlCharacters(""), "");
 
 // stripVTControlCharacters: strips 7-bit ESC sequences
-assert.strictEqual(util.stripVTControlCharacters('\u001B[31mfoo\u001B[39m'), 'foo');
+assert.strictEqual(
+  util.stripVTControlCharacters("\u001B[31mfoo\u001B[39m"),
+  "foo",
+);
 
 // stripVTControlCharacters: strips 8-bit CSI sequences
-assert.strictEqual(util.stripVTControlCharacters('\u009B31mfoo\u009B39m'), 'foo');
+assert.strictEqual(
+  util.stripVTControlCharacters("\u009B31mfoo\u009B39m"),
+  "foo",
+);

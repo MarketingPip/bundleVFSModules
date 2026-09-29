@@ -1,8 +1,8 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 const {
   from,
   fromSync,
@@ -11,7 +11,7 @@ const {
   text,
   toAsyncStreamable,
   toStreamable,
-} = require('stream/iter');
+} = require("stream/iter");
 
 // =============================================================================
 // merge
@@ -21,9 +21,9 @@ async function testMergeTwoSources() {
   const { writer: w1, readable: r1 } = push();
   const { writer: w2, readable: r2 } = push();
 
-  w1.write('from-a');
+  w1.write("from-a");
   w1.end();
-  w2.write('from-b');
+  w2.write("from-b");
   w2.end();
 
   const merged = merge(r1, r2);
@@ -36,13 +36,13 @@ async function testMergeTwoSources() {
 
   // Both sources should be present (order is temporal, not guaranteed)
   assert.strictEqual(chunks.length, 2);
-  assert.ok(chunks.includes('from-a'));
-  assert.ok(chunks.includes('from-b'));
+  assert.ok(chunks.includes("from-a"));
+  assert.ok(chunks.includes("from-b"));
 }
 
 async function testMergeSingleSource() {
-  const data = await text(merge(from('only-one')));
-  assert.strictEqual(data, 'only-one');
+  const data = await text(merge(from("only-one")));
+  assert.strictEqual(data, "only-one");
 }
 
 async function testMergeEmpty() {
@@ -55,27 +55,27 @@ async function testMergeEmpty() {
 }
 
 async function testMergeWithAbortSignal() {
-  const merged = merge(from('data'), { signal: AbortSignal.abort() });
+  const merged = merge(from("data"), { signal: AbortSignal.abort() });
 
   await assert.rejects(
     async () => {
       // eslint-disable-next-line no-unused-vars
       for await (const _ of merged) {
-        assert.fail('Should not reach here');
+        assert.fail("Should not reach here");
       }
     },
-    { name: 'AbortError' },
+    { name: "AbortError" },
   );
 }
 
 // Regression test: merge() with sync iterable sources
 async function testMergeSyncSources() {
-  const s1 = fromSync('abc');
-  const s2 = fromSync('def');
+  const s1 = fromSync("abc");
+  const s2 = fromSync("def");
   const result = await text(merge(s1, s2));
   // Both sources should be fully consumed; order may vary
   assert.strictEqual(result.length, 6);
-  for (const ch of 'abcdef') {
+  for (const ch of "abcdef") {
     assert.ok(result.includes(ch), `missing '${ch}' in '${result}'`);
   }
 }
@@ -87,15 +87,15 @@ async function testMergeSyncSources() {
 async function testMergeSourceError() {
   async function* goodSource() {
     const enc = new TextEncoder();
-    yield [enc.encode('a')];
+    yield [enc.encode("a")];
     // Slow so the bad source errors first
     await new Promise((r) => setTimeout(r, 50));
-    yield [enc.encode('b')];
+    yield [enc.encode("b")];
   }
 
   async function* badSource() {
-    yield [new TextEncoder().encode('x')];
-    throw new Error('merge source boom');
+    yield [new TextEncoder().encode("x")];
+    throw new Error("merge source boom");
   }
   await assert.rejects(
     async () => {
@@ -104,7 +104,7 @@ async function testMergeSourceError() {
         /* consume */
       }
     },
-    { message: 'merge source boom' },
+    { message: "merge source boom" },
   );
 }
 
@@ -113,7 +113,7 @@ async function testMergeConsumerBreak() {
   let source2Return = false;
   async function* source1() {
     try {
-      while (true) yield [new TextEncoder().encode('a')];
+      while (true) yield [new TextEncoder().encode("a")];
     } finally {
       source1Return = true;
     }
@@ -121,7 +121,7 @@ async function testMergeConsumerBreak() {
 
   async function* source2() {
     try {
-      while (true) yield [new TextEncoder().encode('b')];
+      while (true) yield [new TextEncoder().encode("b")];
     } finally {
       source2Return = true;
     }
@@ -140,15 +140,15 @@ async function testMergeSignalMidIteration() {
   const ac = new AbortController();
   async function* slowSource() {
     const enc = new TextEncoder();
-    yield [enc.encode('a')];
+    yield [enc.encode("a")];
     await new Promise((r) => setTimeout(r, 100));
-    yield [enc.encode('b')];
+    yield [enc.encode("b")];
   }
   const merged = merge(slowSource(), { signal: ac.signal });
   const iter = merged[Symbol.asyncIterator]();
   await iter.next(); // First batch
   ac.abort();
-  await assert.rejects(() => iter.next(), { name: 'AbortError' });
+  await assert.rejects(() => iter.next(), { name: "AbortError" });
 }
 
 async function testMergeSignalDuringPendingMultiSourceRead() {
@@ -167,7 +167,7 @@ async function testMergeSignalDuringPendingMultiSourceRead() {
   const next = iter.next();
   ac.abort();
 
-  await assert.rejects(next, { name: 'AbortError' });
+  await assert.rejects(next, { name: "AbortError" });
 }
 
 async function testMergeSignalDuringPendingSingleSourceRead() {
@@ -197,7 +197,7 @@ async function testMergeSignalDuringPendingSingleSourceRead() {
   await new Promise(setImmediate);
   ac.abort();
 
-  await assert.rejects(next, { name: 'AbortError' });
+  await assert.rejects(next, { name: "AbortError" });
   assert.strictEqual(returned, true);
 }
 
@@ -230,36 +230,36 @@ async function testMergeDoesNotDrainSourcesWhileIdle() {
 // merge() accepts string sources (normalized via from())
 async function testMergeStringSources() {
   const batches = [];
-  for await (const batch of merge('hello', 'world')) {
+  for await (const batch of merge("hello", "world")) {
     batches.push(batch);
   }
   // Each string becomes a single-batch source
   assert.strictEqual(batches.length >= 2, true);
   const combined = new TextDecoder().decode(Buffer.concat(batches.flat()));
   // Both strings should appear (order may vary)
-  assert.ok(combined.includes('hello'));
-  assert.ok(combined.includes('world'));
+  assert.ok(combined.includes("hello"));
+  assert.ok(combined.includes("world"));
 }
 
 // merge() accepts object-like sources that are normalized via from()
 async function testMergeObjectLikeSources() {
-  const arrayBuffer = new TextEncoder().encode('abc').buffer;
-  const dataView = new DataView(new TextEncoder().encode('def').buffer);
+  const arrayBuffer = new TextEncoder().encode("abc").buffer;
+  const dataView = new DataView(new TextEncoder().encode("def").buffer);
   const streamable = {
     [toStreamable]() {
-      return 'ghi';
+      return "ghi";
     },
   };
   const asyncStreamable = {
     [toAsyncStreamable]() {
-      return Promise.resolve('jkl');
+      return Promise.resolve("jkl");
     },
   };
 
-  assert.strictEqual(await text(merge(arrayBuffer)), 'abc');
-  assert.strictEqual(await text(merge(dataView)), 'def');
-  assert.strictEqual(await text(merge(streamable)), 'ghi');
-  assert.strictEqual(await text(merge(asyncStreamable)), 'jkl');
+  assert.strictEqual(await text(merge(arrayBuffer)), "abc");
+  assert.strictEqual(await text(merge(dataView)), "def");
+  assert.strictEqual(await text(merge(streamable)), "ghi");
+  assert.strictEqual(await text(merge(asyncStreamable)), "jkl");
 }
 
 // =============================================================================
@@ -274,14 +274,14 @@ function throwInFinally(message) {
 // normal completion. The cleanup error should propagate directly.
 async function testMergeCleanupErrorOnly() {
   async function* source() {
-    yield [new TextEncoder().encode('data')];
+    yield [new TextEncoder().encode("data")];
   }
 
   async function* failingReturnSource() {
     try {
-      yield [new TextEncoder().encode('more')];
+      yield [new TextEncoder().encode("more")];
     } finally {
-      throwInFinally('cleanup boom');
+      throwInFinally("cleanup boom");
     }
   }
 
@@ -292,7 +292,7 @@ async function testMergeCleanupErrorOnly() {
         // Consume all - no primary error
       }
     },
-    { message: 'cleanup boom' },
+    { message: "cleanup boom" },
   );
 }
 
@@ -300,15 +300,15 @@ async function testMergeCleanupErrorOnly() {
 // iterator.return() also throws. Should get a SuppressedError.
 async function testMergePrimaryAndCleanupError() {
   async function* badSource() {
-    yield [new TextEncoder().encode('x')];
-    throw new Error('primary boom');
+    yield [new TextEncoder().encode("x")];
+    throw new Error("primary boom");
   }
 
   async function* failingReturnSource() {
     try {
-      while (true) yield [new TextEncoder().encode('y')];
+      while (true) yield [new TextEncoder().encode("y")];
     } finally {
-      throwInFinally('cleanup boom');
+      throwInFinally("cleanup boom");
     }
   }
 
@@ -324,8 +324,8 @@ async function testMergePrimaryAndCleanupError() {
         err instanceof SuppressedError,
         `Expected SuppressedError, got ${err.constructor.name}`,
       );
-      assert.strictEqual(err.error.message, 'primary boom');
-      assert.strictEqual(err.suppressed.message, 'cleanup boom');
+      assert.strictEqual(err.error.message, "primary boom");
+      assert.strictEqual(err.suppressed.message, "cleanup boom");
       return true;
     },
   );
@@ -336,9 +336,9 @@ async function testMergePrimaryAndCleanupError() {
 async function testMergeBreakWithCleanupError() {
   async function* failingReturnSource() {
     try {
-      while (true) yield [new TextEncoder().encode('data')];
+      while (true) yield [new TextEncoder().encode("data")];
     } finally {
-      throwInFinally('cleanup on break');
+      throwInFinally("cleanup on break");
     }
   }
 
@@ -349,7 +349,7 @@ async function testMergeBreakWithCleanupError() {
         break;
       }
     },
-    { message: 'cleanup on break' },
+    { message: "cleanup on break" },
   );
 }
 

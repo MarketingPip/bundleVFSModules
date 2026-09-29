@@ -1,19 +1,19 @@
-'use strict';
+"use strict";
 // Flags: --expose-internals
 
 // Make sure http.request() can catch immediate errors in
 // net.createConnection().
 
-const common = require('../common');
-const assert = require('assert');
-const net = require('net');
-const http = require('http');
-const { internalBinding } = require('internal/test/binding');
-const { UV_ENETUNREACH } = internalBinding('uv');
+const common = require("../common");
+const assert = require("assert");
+const net = require("net");
+const http = require("http");
+const { internalBinding } = require("internal/test/binding");
+const { UV_ENETUNREACH } = internalBinding("uv");
 const {
   newAsyncId,
-  symbols: { async_id_symbol }
-} = require('internal/async_hooks');
+  symbols: { async_id_symbol },
+} = require("internal/async_hooks");
 
 const agent = new http.Agent();
 agent.createConnection = common.mustCall((cfg) => {
@@ -25,7 +25,7 @@ agent.createConnection = common.mustCall((cfg) => {
       return UV_ENETUNREACH;
     }),
     readStart() {},
-    close() {}
+    close() {},
   };
 
   // Simulate just enough socket handle initialization
@@ -35,10 +35,15 @@ agent.createConnection = common.mustCall((cfg) => {
   return sock;
 });
 
-http.get({
-  host: '127.0.0.1',
-  port: 1,
-  agent
-}).on('error', common.mustCall((err) => {
-  assert.strictEqual(err.code, 'ENETUNREACH');
-}));
+http
+  .get({
+    host: "127.0.0.1",
+    port: 1,
+    agent,
+  })
+  .on(
+    "error",
+    common.mustCall((err) => {
+      assert.strictEqual(err.code, "ENETUNREACH");
+    }),
+  );

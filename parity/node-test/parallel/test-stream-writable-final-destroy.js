@@ -1,7 +1,7 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
-const { Writable } = require('stream');
+const { Writable } = require("stream");
 
 {
   const w = new Writable({
@@ -10,12 +10,12 @@ const { Writable } = require('stream');
     },
     final(callback) {
       queueMicrotask(callback);
-    }
+    },
   });
   w.end();
   w.destroy();
 
-  w.on('prefinish', common.mustNotCall());
-  w.on('finish', common.mustNotCall());
-  w.on('close', common.mustCall());
+  w.on("prefinish", common.mustNotCall());
+  w.on("finish", common.mustNotCall());
+  w.on("close", common.mustCall());
 }

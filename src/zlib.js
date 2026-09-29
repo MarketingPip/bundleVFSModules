@@ -22,7 +22,7 @@
 // - Stream semantics are provided by a minimal built-in Transform
 //   implementation (no node:stream import, so this stays browser-loadable).
 
-import { Deflate as PakoDeflate, Inflate as PakoInflate } from 'pako';
+import { Deflate as PakoDeflate, Inflate as PakoInflate } from "pako";
 
 // ---------------------------------------------------------------------------
 // Constants (verbatim from Node v24)
@@ -235,15 +235,15 @@ const {
 // Bidirectional map of zlib status codes, like Node's `codes`.
 export const codes = {};
 for (const [name, num] of [
-  ['Z_OK', 0],
-  ['Z_STREAM_END', 1],
-  ['Z_NEED_DICT', 2],
-  ['Z_ERRNO', -1],
-  ['Z_STREAM_ERROR', -2],
-  ['Z_DATA_ERROR', -3],
-  ['Z_MEM_ERROR', -4],
-  ['Z_BUF_ERROR', -5],
-  ['Z_VERSION_ERROR', -6],
+  ["Z_OK", 0],
+  ["Z_STREAM_END", 1],
+  ["Z_NEED_DICT", 2],
+  ["Z_ERRNO", -1],
+  ["Z_STREAM_ERROR", -2],
+  ["Z_DATA_ERROR", -3],
+  ["Z_MEM_ERROR", -4],
+  ["Z_BUF_ERROR", -5],
+  ["Z_VERSION_ERROR", -6],
 ]) {
   codes[name] = num;
   codes[num] = name;
@@ -263,21 +263,27 @@ for (let n = 0; n < 256; n++) {
 }
 
 function toBytes(data) {
-  if (typeof data === 'string') return Buffer.from(data);
+  if (typeof data === "string") return Buffer.from(data);
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  if (isArrayBufferView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  if (isArrayBufferView(data))
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   return null;
 }
 
 export function crc32(data, seed = 0) {
   const bytes = toBytes(data);
   if (!bytes)
-    throw new ERR_INVALID_ARG_TYPE('data', ['string', 'Buffer', 'TypedArray', 'DataView', 'ArrayBuffer'], data);
-  if (typeof seed !== 'number')
-    throw new ERR_INVALID_ARG_TYPE('value', 'number', seed);
+    throw new ERR_INVALID_ARG_TYPE(
+      "data",
+      ["string", "Buffer", "TypedArray", "DataView", "ArrayBuffer"],
+      data,
+    );
+  if (typeof seed !== "number")
+    throw new ERR_INVALID_ARG_TYPE("value", "number", seed);
   seed = seed >>> 0;
   let crc = (seed ^ 0xffffffff) >>> 0;
-  for (let i = 0; i < bytes.length; i++) crc = (CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)) >>> 0;
+  for (let i = 0; i < bytes.length; i++)
+    crc = (CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)) >>> 0;
   return (crc ^ 0xffffffff) >>> 0;
 }
 
@@ -304,49 +310,50 @@ function zlibError(codeName, errno, message) {
 
 class ERR_INVALID_ARG_TYPE extends TypeError {
   constructor(name, expected, actual) {
-    const isProperty = name.includes('.');
-    const kind = isProperty ? 'property' : 'argument';
+    const isProperty = name.includes(".");
+    const kind = isProperty ? "property" : "argument";
     let received;
-    if (actual === undefined) received = 'Received undefined';
-    else if (actual === null) received = 'Received null';
-    else if (typeof actual === 'object') received = `Received ${Object.prototype.toString.call(actual)}`;
+    if (actual === undefined) received = "Received undefined";
+    else if (actual === null) received = "Received null";
+    else if (typeof actual === "object")
+      received = `Received ${Object.prototype.toString.call(actual)}`;
     else received = `Received type ${typeof actual} ('${actual}')`;
     super(`The "${name}" ${kind} must be of type ${expected}. ${received}`);
-    this.code = 'ERR_INVALID_ARG_TYPE';
+    this.code = "ERR_INVALID_ARG_TYPE";
   }
 }
 class ERR_OUT_OF_RANGE extends RangeError {
   constructor(name, range, value, finiteCheck = false) {
     let msg = `The value of "${name}" is out of range.`;
-    if (finiteCheck) msg += ' It must be a finite number.';
+    if (finiteCheck) msg += " It must be a finite number.";
     else if (range) msg += ` ${range}`;
     msg += ` Received ${value}`;
     super(msg);
-    this.code = 'ERR_OUT_OF_RANGE';
+    this.code = "ERR_OUT_OF_RANGE";
   }
 }
 class ERR_INVALID_ARG_VALUE extends TypeError {
-  constructor(name, value, reason = 'is invalid') {
+  constructor(name, value, reason = "is invalid") {
     super(`The argument "${name}" ${reason}. Received ${value}`);
-    this.code = 'ERR_INVALID_ARG_VALUE';
+    this.code = "ERR_INVALID_ARG_VALUE";
   }
 }
 class ERR_BUFFER_TOO_LARGE extends Error {
   constructor(max) {
     super(`Cannot create a Buffer larger than ${max} bytes`);
-    this.code = 'ERR_BUFFER_TOO_LARGE';
+    this.code = "ERR_BUFFER_TOO_LARGE";
   }
 }
 class ERR_ZLIB_INITIALIZATION_FAILED extends Error {
   constructor() {
-    super('Initialization failed');
-    this.code = 'ERR_ZLIB_INITIALIZATION_FAILED';
+    super("Initialization failed");
+    this.code = "ERR_ZLIB_INITIALIZATION_FAILED";
   }
 }
 class ERR_TRAILING_JUNK_AFTER_STREAM_END extends Error {
   constructor() {
-    super('Trailing junk after stream end');
-    this.code = 'ERR_TRAILING_JUNK_AFTER_STREAM_END';
+    super("Trailing junk after stream end");
+    this.code = "ERR_TRAILING_JUNK_AFTER_STREAM_END";
   }
 }
 
@@ -356,28 +363,36 @@ class ERR_TRAILING_JUNK_AFTER_STREAM_END extends Error {
 
 function checkRangesOrGetDefault(value, name, min, max, def) {
   // Real Node treats NaN like "not provided" for these numeric options.
-  if (value === undefined || (typeof value === 'number' && Number.isNaN(value))) return def;
-  if (typeof value !== 'number') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
+  if (value === undefined || (typeof value === "number" && Number.isNaN(value)))
+    return def;
+  if (typeof value !== "number") {
+    throw new ERR_INVALID_ARG_TYPE(name, "number", value);
   }
   if (!Number.isFinite(value)) {
     throw new ERR_OUT_OF_RANGE(name, null, value, true);
   }
   if (value < min || value > max) {
-    throw new ERR_OUT_OF_RANGE(name, `It must be >= ${min} and <= ${max}.`, value);
+    throw new ERR_OUT_OF_RANGE(
+      name,
+      `It must be >= ${min} and <= ${max}.`,
+      value,
+    );
   }
   return Math.trunc(value);
 }
 
 function validateFiniteNumber(value, name) {
-  return typeof value === 'number' && Number.isFinite(value);
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function isArrayBufferView(v) {
   return ArrayBuffer.isView(v);
 }
 function isAnyArrayBuffer(v) {
-  return v instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer);
+  return (
+    v instanceof ArrayBuffer ||
+    (typeof SharedArrayBuffer !== "undefined" && v instanceof SharedArrayBuffer)
+  );
 }
 
 // Mode identifiers (mirror the C++ binding modes).
@@ -395,12 +410,17 @@ const MODE_ZSTD_DECOMPRESS = 11;
 
 // [min, max] flush bounds per family.
 const FLUSH_BOUND_NORMAL = [Z_NO_FLUSH, Z_BLOCK];
-const FLUSH_BOUND_BROTLI = [constants.BROTLI_OPERATION_PROCESS, constants.BROTLI_OPERATION_EMIT_METADATA];
+const FLUSH_BOUND_BROTLI = [
+  constants.BROTLI_OPERATION_PROCESS,
+  constants.BROTLI_OPERATION_EMIT_METADATA,
+];
 const FLUSH_BOUND_ZSTD = [constants.ZSTD_e_continue, constants.ZSTD_e_end];
 
 function flushBoundFor(mode) {
-  if (mode === MODE_BROTLI_ENCODE || mode === MODE_BROTLI_DECODE) return FLUSH_BOUND_BROTLI;
-  if (mode === MODE_ZSTD_COMPRESS || mode === MODE_ZSTD_DECOMPRESS) return FLUSH_BOUND_ZSTD;
+  if (mode === MODE_BROTLI_ENCODE || mode === MODE_BROTLI_DECODE)
+    return FLUSH_BOUND_BROTLI;
+  if (mode === MODE_ZSTD_COMPRESS || mode === MODE_ZSTD_DECOMPRESS)
+    return FLUSH_BOUND_ZSTD;
   return FLUSH_BOUND_NORMAL;
 }
 
@@ -412,16 +432,42 @@ function normalizeZlibOptions(opts, mode) {
   let dictionary;
 
   if (opts) {
-    if ((opts.windowBits == null || opts.windowBits === 0) &&
-        (mode === MODE_INFLATE || mode === MODE_GUNZIP || mode === MODE_UNZIP)) {
+    if (
+      (opts.windowBits == null || opts.windowBits === 0) &&
+      (mode === MODE_INFLATE || mode === MODE_GUNZIP || mode === MODE_UNZIP)
+    ) {
       windowBits = 0;
     } else {
       const min = Z_MIN_WINDOWBITS + (mode === MODE_GZIP ? 1 : 0);
-      windowBits = checkRangesOrGetDefault(opts.windowBits, 'options.windowBits', min, Z_MAX_WINDOWBITS, Z_DEFAULT_WINDOWBITS);
+      windowBits = checkRangesOrGetDefault(
+        opts.windowBits,
+        "options.windowBits",
+        min,
+        Z_MAX_WINDOWBITS,
+        Z_DEFAULT_WINDOWBITS,
+      );
     }
-    level = checkRangesOrGetDefault(opts.level, 'options.level', Z_MIN_LEVEL, Z_MAX_LEVEL, Z_DEFAULT_COMPRESSION);
-    memLevel = checkRangesOrGetDefault(opts.memLevel, 'options.memLevel', Z_MIN_MEMLEVEL, Z_MAX_MEMLEVEL, Z_DEFAULT_MEMLEVEL);
-    strategy = checkRangesOrGetDefault(opts.strategy, 'options.strategy', Z_DEFAULT_STRATEGY, Z_FIXED, Z_DEFAULT_STRATEGY);
+    level = checkRangesOrGetDefault(
+      opts.level,
+      "options.level",
+      Z_MIN_LEVEL,
+      Z_MAX_LEVEL,
+      Z_DEFAULT_COMPRESSION,
+    );
+    memLevel = checkRangesOrGetDefault(
+      opts.memLevel,
+      "options.memLevel",
+      Z_MIN_MEMLEVEL,
+      Z_MAX_MEMLEVEL,
+      Z_DEFAULT_MEMLEVEL,
+    );
+    strategy = checkRangesOrGetDefault(
+      opts.strategy,
+      "options.strategy",
+      Z_DEFAULT_STRATEGY,
+      Z_FIXED,
+      Z_DEFAULT_STRATEGY,
+    );
     dictionary = opts.dictionary;
     if (dictionary !== undefined && !isArrayBufferView(dictionary)) {
       if (isAnyArrayBuffer(dictionary)) {
@@ -429,15 +475,15 @@ function normalizeZlibOptions(opts, mode) {
       } else {
         const err = new TypeError(
           `The "options.dictionary" property must be an instance of Buffer, TypedArray, DataView, or ArrayBuffer. ` +
-          `Received type ${typeof dictionary} ('${dictionary}')`
+            `Received type ${typeof dictionary} ('${dictionary}')`,
         );
-        err.code = 'ERR_INVALID_ARG_TYPE';
+        err.code = "ERR_INVALID_ARG_TYPE";
         throw err;
       }
     }
   }
   // `{ windowBits: 8 }` on raw deflate is upgraded to 9 internally.
-  if ((mode === MODE_DEFLATERAW) && windowBits === 8) windowBits = 9;
+  if (mode === MODE_DEFLATERAW && windowBits === 8) windowBits = 9;
   return { windowBits, level, memLevel, strategy, dictionary };
 }
 
@@ -453,30 +499,81 @@ function normalizeBaseOptions(opts, mode, defaults) {
 
   if (opts) {
     if (opts.chunkSize !== undefined) {
-      if (typeof opts.chunkSize !== 'number') {
-        throw new ERR_INVALID_ARG_TYPE('options.chunkSize', 'number', opts.chunkSize);
+      if (typeof opts.chunkSize !== "number") {
+        throw new ERR_INVALID_ARG_TYPE(
+          "options.chunkSize",
+          "number",
+          opts.chunkSize,
+        );
       }
       if (!Number.isFinite(opts.chunkSize)) {
-        throw new ERR_OUT_OF_RANGE('options.chunkSize', null, opts.chunkSize, true);
+        throw new ERR_OUT_OF_RANGE(
+          "options.chunkSize",
+          null,
+          opts.chunkSize,
+          true,
+        );
       }
       if (opts.chunkSize < Z_MIN_CHUNK) {
-        throw new ERR_OUT_OF_RANGE('options.chunkSize', `It must be >= ${Z_MIN_CHUNK}.`, opts.chunkSize);
+        throw new ERR_OUT_OF_RANGE(
+          "options.chunkSize",
+          `It must be >= ${Z_MIN_CHUNK}.`,
+          opts.chunkSize,
+        );
       }
       chunkSize = Math.trunc(opts.chunkSize);
     }
-    flush = checkRangesOrGetDefault(opts.flush, 'options.flush', flushBound[0], flushBound[1], flush);
-    finishFlush = checkRangesOrGetDefault(opts.finishFlush, 'options.finishFlush', flushBound[0], flushBound[1], finishFlush);
-    maxOutputLength = checkRangesOrGetDefault(opts.maxOutputLength, 'options.maxOutputLength', 1, Number.MAX_SAFE_INTEGER, maxOutputLength);
-    if (opts.rejectGarbageAfterEnd !== undefined && typeof opts.rejectGarbageAfterEnd !== 'boolean') {
-      throw new ERR_INVALID_ARG_TYPE('options.rejectGarbageAfterEnd', 'boolean', opts.rejectGarbageAfterEnd);
+    flush = checkRangesOrGetDefault(
+      opts.flush,
+      "options.flush",
+      flushBound[0],
+      flushBound[1],
+      flush,
+    );
+    finishFlush = checkRangesOrGetDefault(
+      opts.finishFlush,
+      "options.finishFlush",
+      flushBound[0],
+      flushBound[1],
+      finishFlush,
+    );
+    maxOutputLength = checkRangesOrGetDefault(
+      opts.maxOutputLength,
+      "options.maxOutputLength",
+      1,
+      Number.MAX_SAFE_INTEGER,
+      maxOutputLength,
+    );
+    if (
+      opts.rejectGarbageAfterEnd !== undefined &&
+      typeof opts.rejectGarbageAfterEnd !== "boolean"
+    ) {
+      throw new ERR_INVALID_ARG_TYPE(
+        "options.rejectGarbageAfterEnd",
+        "boolean",
+        opts.rejectGarbageAfterEnd,
+      );
     }
     rejectGarbageAfterEnd = opts.rejectGarbageAfterEnd === true;
     info = opts.info === true;
   }
-  return { chunkSize, flush, finishFlush, fullFlush, maxOutputLength, rejectGarbageAfterEnd, info, flushBound };
+  return {
+    chunkSize,
+    flush,
+    finishFlush,
+    fullFlush,
+    maxOutputLength,
+    rejectGarbageAfterEnd,
+    info,
+    flushBound,
+  };
 }
 
-const zlibDefaultOpts = { flush: Z_NO_FLUSH, finishFlush: Z_FINISH, fullFlush: Z_FULL_FLUSH };
+const zlibDefaultOpts = {
+  flush: Z_NO_FLUSH,
+  finishFlush: Z_FINISH,
+  fullFlush: Z_FULL_FLUSH,
+};
 
 // ---------------------------------------------------------------------------
 // DEFLATE / inflate engines backed by the maintained `pako` package
@@ -506,17 +603,17 @@ const zlibDefaultOpts = { flush: Z_NO_FLUSH, finishFlush: Z_FINISH, fullFlush: Z
 // encoder, so Brotli remains an honest pass-through stub (documented gap).
 
 function dataError(message) {
-  return zlibError('Z_DATA_ERROR', Z_DATA_ERROR, message);
+  return zlibError("Z_DATA_ERROR", Z_DATA_ERROR, message);
 }
 function bufError(message) {
-  return zlibError('Z_BUF_ERROR', Z_BUF_ERROR, message);
+  return zlibError("Z_BUF_ERROR", Z_BUF_ERROR, message);
 }
 
 const PAKO_CHUNK_SIZE = 16384;
 const PAKO_EMPTY = Buffer.alloc(0);
 
 function pakoStatusName(status) {
-  return codes[status] || 'Z_STREAM_ERROR';
+  return codes[status] || "Z_STREAM_ERROR";
 }
 
 // ---------------------------------------------------------------------------
@@ -534,14 +631,15 @@ class PakoInflateEngine {
 
   _newInflator() {
     const opts = { chunkSize: PAKO_CHUNK_SIZE };
-    if (this.dictionary && this.wrapper !== 'gzip') opts.dictionary = this.dictionary;
-    if (this.wrapper === 'raw') {
+    if (this.dictionary && this.wrapper !== "gzip")
+      opts.dictionary = this.dictionary;
+    if (this.wrapper === "raw") {
       opts.raw = true;
       opts.windowBits = this.windowBits || 15;
-    } else if (this.wrapper === 'zlib') {
+    } else if (this.wrapper === "zlib") {
       // zlib wrapper only: a gzip stream here is a data error, like Node.
       opts.windowBits = this.windowBits || 15;
-    } else if (this.wrapper === 'gzip') {
+    } else if (this.wrapper === "gzip") {
       // gzip wrapper only: a zlib stream here is a data error, like Node.
       opts.windowBits = (this.windowBits || 15) + 16;
     } else {
@@ -550,7 +648,9 @@ class PakoInflateEngine {
     }
     const inf = new PakoInflate(opts);
     inf._collected = [];
-    inf.onData = (chunk) => { inf._collected.push(Buffer.from(chunk)); };
+    inf.onData = (chunk) => {
+      inf._collected.push(Buffer.from(chunk));
+    };
     return inf;
   }
 
@@ -579,9 +679,9 @@ class PakoInflateEngine {
 
   _statusError(status, msg) {
     const name = pakoStatusName(status);
-    let message = String(msg || '');
+    let message = String(msg || "");
     // Node reports truncated input as 'unexpected end of file'.
-    if (status === Z_BUF_ERROR) message = 'unexpected end of file';
+    if (status === Z_BUF_ERROR) message = "unexpected end of file";
     if (!message) message = name;
     return zlibError(name, status, message);
   }
@@ -590,7 +690,8 @@ class PakoInflateEngine {
     // Record whether the member about to be decoded is gzip (1f 8b magic).
     // A single leading 0x1f byte suffices: 0x1f is not a valid zlib CMF.
     if (bytes.length === 0 || this._memberWasGzip !== null) return;
-    this._memberWasGzip = bytes[0] === 0x1f && (bytes.length < 2 || bytes[1] === 0x8b);
+    this._memberWasGzip =
+      bytes[0] === 0x1f && (bytes.length < 2 || bytes[1] === 0x8b);
   }
 
   write(chunk, flushFlag) {
@@ -599,7 +700,7 @@ class PakoInflateEngine {
     // mode; Z_NO_FLUSH buffers internally. Real zlib (and Node) deliver
     // decoded bytes as soon as they are available, so translate "no flush"
     // into Z_SYNC_FLUSH here. Z_FINISH still completes the stream.
-    const mode = flushFlag === Z_FINISH ? true : (flushFlag || Z_SYNC_FLUSH);
+    const mode = flushFlag === Z_FINISH ? true : flushFlag || Z_SYNC_FLUSH;
     const isFinal = mode === true;
     let bytes = chunk;
     if (!bytes || bytes.length === 0) bytes = PAKO_EMPTY;
@@ -611,14 +712,25 @@ class PakoInflateEngine {
         if (isFinal) {
           this._memberEnded = false;
           this.finished = true;
-          return { output: PAKO_EMPTY, finished: true, consumed: 0, trailing: false };
+          return {
+            output: PAKO_EMPTY,
+            finished: true,
+            consumed: 0,
+            trailing: false,
+          };
         }
-        return { output: PAKO_EMPTY, finished: false, consumed: 0, trailing: false };
+        return {
+          output: PAKO_EMPTY,
+          finished: false,
+          consumed: 0,
+          trailing: false,
+        };
       }
       const wasGzip = this._memberWasGzip;
       this._memberEnded = false;
       this._memberWasGzip = null;
-      const startNew = this.wrapper === 'gzip' || (this.wrapper === 'unzip' && wasGzip);
+      const startNew =
+        this.wrapper === "gzip" || (this.wrapper === "unzip" && wasGzip);
       if (startNew) {
         this._inf = this._newInflator();
         this.finished = false;
@@ -628,15 +740,25 @@ class PakoInflateEngine {
         // are trailing garbage, never a new stream.
         this.finished = true;
         this.trailingGarbage = true;
-        return { output: PAKO_EMPTY, finished: true, consumed: bytes.length, trailing: true };
+        return {
+          output: PAKO_EMPTY,
+          finished: true,
+          consumed: bytes.length,
+          trailing: true,
+        };
       }
     }
 
     if (this.finished) {
       if (bytes.length === 0) {
-        return { output: PAKO_EMPTY, finished: true, consumed: 0, trailing: false };
+        return {
+          output: PAKO_EMPTY,
+          finished: true,
+          consumed: 0,
+          trailing: false,
+        };
       }
-      if (this.wrapper === 'gzip' || this.wrapper === 'unzip') {
+      if (this.wrapper === "gzip" || this.wrapper === "unzip") {
         // A previous stream completed on an earlier write; start the next
         // one. (Members completed within a single push are already chained
         // internally by pako.)
@@ -647,7 +769,12 @@ class PakoInflateEngine {
         // zlib/raw: bytes after stream end are trailing garbage, never a
         // new stream.
         this.trailingGarbage = true;
-        return { output: PAKO_EMPTY, finished: true, consumed: bytes.length, trailing: true };
+        return {
+          output: PAKO_EMPTY,
+          finished: true,
+          consumed: bytes.length,
+          trailing: true,
+        };
       }
     }
 
@@ -660,18 +787,25 @@ class PakoInflateEngine {
       // pako reports "not finished" even when a member completed exactly at
       // this push boundary; detect it via the cleared stream state.
       if (inf.strm.state === null) {
-        if (this.wrapper === 'zlib' || this.wrapper === 'raw') {
+        if (this.wrapper === "zlib" || this.wrapper === "raw") {
           this.finished = true;
         } else {
           this._memberEnded = true;
         }
       }
-      return { output, finished: this.finished, consumed: bytes.length, trailing: false };
+      return {
+        output,
+        finished: this.finished,
+        consumed: bytes.length,
+        trailing: false,
+      };
     }
 
     const status = inf.err;
     if (status === Z_NEED_DICT) {
-      this.error = dataError(this.dictionary ? 'Bad dictionary' : 'Missing dictionary');
+      this.error = dataError(
+        this.dictionary ? "Bad dictionary" : "Missing dictionary",
+      );
       throw this.error;
     }
     if (status !== Z_OK) {
@@ -684,7 +818,7 @@ class PakoInflateEngine {
     this.finished = true;
     const remaining = inf.strm ? inf.strm.avail_in : 0;
     let trailing = false;
-    if (remaining > 0 && this.wrapper !== 'gzip') {
+    if (remaining > 0 && this.wrapper !== "gzip") {
       // For gzip, pako stops before zero padding bytes, which Node ignores.
       // For zlib/raw/unzip, leftover bytes are trailing garbage.
       this.trailingGarbage = true;
@@ -717,14 +851,14 @@ class PakoDeflateEngine {
   }
 
   _wrapperHeader() {
-    if (this.wrapper === 'raw') return PAKO_EMPTY;
+    if (this.wrapper === "raw") return PAKO_EMPTY;
     const opts = {
       level: this.level,
       strategy: this.strategy,
       chunkSize: 64,
       windowBits: this.windowBits || 15,
     };
-    if (this.wrapper === 'gzip') {
+    if (this.wrapper === "gzip") {
       opts.gzip = true;
     } else if (this.dictionary) {
       // zlib wrapper with dictionary: header carries the FDICT flag and the
@@ -738,7 +872,7 @@ class PakoDeflateEngine {
     t.push(PAKO_EMPTY, true);
     if (t.err) return PAKO_EMPTY;
     const full = Buffer.concat(chunks);
-    if (this.wrapper === 'gzip') return full.subarray(0, 10);
+    if (this.wrapper === "gzip") return full.subarray(0, 10);
     return full.subarray(0, this.dictionary ? 6 : 2);
   }
 
@@ -754,12 +888,14 @@ class PakoDeflateEngine {
       raw: true,
       windowBits: this.windowBits || 15,
     };
-    if (this.wrapper !== 'gzip' && dictionary && dictionary.length) {
+    if (this.wrapper !== "gzip" && dictionary && dictionary.length) {
       opts.dictionary = dictionary;
     }
     const p = new PakoDeflate(opts);
     p._collected = [];
-    p.onData = (chunk) => { p._collected.push(Buffer.from(chunk)); };
+    p.onData = (chunk) => {
+      p._collected.push(Buffer.from(chunk));
+    };
     return p;
   }
 
@@ -820,13 +956,13 @@ class PakoDeflateEngine {
   }
 
   _trailer() {
-    if (this.wrapper === 'gzip') {
+    if (this.wrapper === "gzip") {
       const t = Buffer.alloc(8);
       t.writeUInt32LE(this._crc >>> 0, 0);
       t.writeUInt32LE(this._totalIn >>> 0, 4);
       return t;
     }
-    if (this.wrapper === 'zlib') {
+    if (this.wrapper === "zlib") {
       const t = Buffer.alloc(4);
       t.writeUInt32BE(this._adler >>> 0, 0);
       return t;
@@ -836,7 +972,8 @@ class PakoDeflateEngine {
 
   write(chunk, flushFlag) {
     if (this.error) throw this.error;
-    if (this.finished) throw zlibError('Z_STREAM_ERROR', Z_STREAM_ERROR, 'write after finish');
+    if (this.finished)
+      throw zlibError("Z_STREAM_ERROR", Z_STREAM_ERROR, "write after finish");
     let bytes = chunk;
     if (!bytes || bytes.length === 0) bytes = PAKO_EMPTY;
     this._noteInput(bytes);
@@ -850,7 +987,11 @@ class PakoDeflateEngine {
     }
     if (!ok || p.err) {
       const status = p.err || Z_STREAM_ERROR;
-      this.error = zlibError(pakoStatusName(status), status, String(p.msg || 'deflate error'));
+      this.error = zlibError(
+        pakoStatusName(status),
+        status,
+        String(p.msg || "deflate error"),
+      );
       throw this.error;
     }
     let output = this._drainPhase();
@@ -859,7 +1000,10 @@ class PakoDeflateEngine {
       // before any compressed output exists.
       this._headerEmitted = true;
       if (this._header.length > 0) {
-        output = output.length > 0 ? Buffer.concat([this._header, output]) : this._header;
+        output =
+          output.length > 0
+            ? Buffer.concat([this._header, output])
+            : this._header;
       }
     }
     if (flushFlag === Z_FINISH) {
@@ -869,10 +1013,14 @@ class PakoDeflateEngine {
         output = output.length > 0 ? Buffer.concat([output, trailer]) : trailer;
       }
     }
-    return { output, finished: this.finished, consumed: bytes.length, trailing: false };
+    return {
+      output,
+      finished: this.finished,
+      consumed: bytes.length,
+      trailing: false,
+    };
   }
 }
-
 
 // ---------------------------------------------------------------------------
 // Minimal stream implementation (browser-safe; no node:stream import)
@@ -884,14 +1032,20 @@ class MiniEmitter {
   }
   on(ev, fn) {
     let list = this._ev.get(ev);
-    if (!list) { list = []; this._ev.set(ev, list); }
+    if (!list) {
+      list = [];
+      this._ev.set(ev, list);
+    }
     list.push({ fn, once: false });
     if (this._onNewListener) this._onNewListener(ev);
     return this;
   }
   once(ev, fn) {
     let list = this._ev.get(ev);
-    if (!list) { list = []; this._ev.set(ev, list); }
+    if (!list) {
+      list = [];
+      this._ev.set(ev, list);
+    }
     list.push({ fn, once: true });
     if (this._onNewListener) this._onNewListener(ev);
     return this;
@@ -929,13 +1083,27 @@ class MiniEmitter {
 }
 
 function maxFlush(a, b) {
-  const order = [Z_NO_FLUSH, Z_BLOCK, Z_PARTIAL_FLUSH, Z_SYNC_FLUSH, Z_FULL_FLUSH, Z_FINISH];
+  const order = [
+    Z_NO_FLUSH,
+    Z_BLOCK,
+    Z_PARTIAL_FLUSH,
+    Z_SYNC_FLUSH,
+    Z_FULL_FLUSH,
+    Z_FINISH,
+  ];
   return order.indexOf(a) > order.indexOf(b) ? a : b;
 }
 
-const kFlushFlag = Symbol('kFlushFlag');
+const kFlushFlag = Symbol("kFlushFlag");
 const kFlushBuffers = [];
-for (const f of [Z_NO_FLUSH, Z_BLOCK, Z_PARTIAL_FLUSH, Z_SYNC_FLUSH, Z_FULL_FLUSH, Z_FINISH]) {
+for (const f of [
+  Z_NO_FLUSH,
+  Z_BLOCK,
+  Z_PARTIAL_FLUSH,
+  Z_SYNC_FLUSH,
+  Z_FULL_FLUSH,
+  Z_FINISH,
+]) {
   const b = Buffer.alloc(0);
   b[kFlushFlag] = f;
   kFlushBuffers[f] = b;
@@ -958,37 +1126,54 @@ class MiniTransform extends MiniEmitter {
     this._destroyed = false;
     this.bytesWritten = 0;
     this._onNewListener = (ev) => {
-      if (ev === 'data' && !this._flowing) {
+      if (ev === "data" && !this._flowing) {
         this._flowing = true;
         queueMicrotask(() => this._flow());
       }
     };
   }
-  get writableEnded() { return this._wended; }
-  get writableFinished() { return this._wfinished; }
-  get destroyed() { return this._destroyed; }
-  get readableLength() { return this._rlen; }
+  get writableEnded() {
+    return this._wended;
+  }
+  get writableFinished() {
+    return this._wfinished;
+  }
+  get destroyed() {
+    return this._destroyed;
+  }
+  get readableLength() {
+    return this._rlen;
+  }
 
   _normalizeChunk(chunk, encoding) {
     if (chunk == null) return Buffer.alloc(0);
-    if (typeof chunk === 'string') return Buffer.from(chunk, encoding || 'utf8');
+    if (typeof chunk === "string")
+      return Buffer.from(chunk, encoding || "utf8");
     if (Buffer.isBuffer(chunk)) return chunk;
-    if (chunk instanceof Uint8Array) return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    if (chunk instanceof Uint8Array)
+      return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
     if (isAnyArrayBuffer(chunk)) return Buffer.from(chunk);
-    throw new ERR_INVALID_ARG_TYPE('chunk', ['string', 'Buffer', 'TypedArray', 'DataView', 'ArrayBuffer'], chunk);
+    throw new ERR_INVALID_ARG_TYPE(
+      "chunk",
+      ["string", "Buffer", "TypedArray", "DataView", "ArrayBuffer"],
+      chunk,
+    );
   }
 
   write(chunk, encoding, cb) {
-    if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+    if (typeof encoding === "function") {
+      cb = encoding;
+      encoding = undefined;
+    }
     if (this._destroyed) {
-      if (cb) queueMicrotask(() => cb(new Error('write after destroy')));
+      if (cb) queueMicrotask(() => cb(new Error("write after destroy")));
       return false;
     }
     if (this._wended) {
-      const err = new Error('write after end');
-      err.code = 'ERR_STREAM_WRITE_AFTER_END';
+      const err = new Error("write after end");
+      err.code = "ERR_STREAM_WRITE_AFTER_END";
       if (cb) queueMicrotask(() => cb(err));
-      else queueMicrotask(() => this.emit('error', err));
+      else queueMicrotask(() => this.emit("error", err));
       return false;
     }
     let buf;
@@ -996,19 +1181,26 @@ class MiniTransform extends MiniEmitter {
       buf = this._normalizeChunk(chunk, encoding);
     } catch (err) {
       if (cb) queueMicrotask(() => cb(err));
-      else queueMicrotask(() => this.emit('error', err));
+      else queueMicrotask(() => this.emit("error", err));
       return false;
     }
     // Preserve flush-flagged buffers.
-    if (chunk && chunk[kFlushFlag] !== undefined) buf[kFlushFlag] = chunk[kFlushFlag];
+    if (chunk && chunk[kFlushFlag] !== undefined)
+      buf[kFlushFlag] = chunk[kFlushFlag];
     this._wqueue.push({ chunk: buf, cb: cb || null, encoding });
     queueMicrotask(() => this._pumpWrites());
     return this._rlen < 16384;
   }
 
   end(chunk, encoding, cb) {
-    if (typeof chunk === 'function') { cb = chunk; chunk = undefined; encoding = undefined; }
-    else if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+    if (typeof chunk === "function") {
+      cb = chunk;
+      chunk = undefined;
+      encoding = undefined;
+    } else if (typeof encoding === "function") {
+      cb = encoding;
+      encoding = undefined;
+    }
     if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
     this._wended = true;
     if (cb) this._endCb = cb;
@@ -1024,17 +1216,28 @@ class MiniTransform extends MiniEmitter {
         this._wfinished = true;
         this._wprocessing = true;
         queueMicrotask(() => {
-          if (this._destroyed) { this._wprocessing = false; return; }
+          if (this._destroyed) {
+            this._wprocessing = false;
+            return;
+          }
           this._flush((err) => {
             this._wprocessing = false;
             if (err) {
               this.destroy(err);
-              if (this._endCb) { const cb = this._endCb; this._endCb = null; cb(err); }
+              if (this._endCb) {
+                const cb = this._endCb;
+                this._endCb = null;
+                cb(err);
+              }
               return;
             }
             this.push(null);
-            this.emit('finish');
-            if (this._endCb) { const cb = this._endCb; this._endCb = null; cb(); }
+            this.emit("finish");
+            if (this._endCb) {
+              const cb = this._endCb;
+              this._endCb = null;
+              cb();
+            }
           });
         });
       }
@@ -1045,7 +1248,10 @@ class MiniTransform extends MiniEmitter {
     // Z_FINISH happens in the _flush() branch below after the queue drains.
     const isLast = false;
     queueMicrotask(() => {
-      if (this._destroyed) { this._wprocessing = false; return; }
+      if (this._destroyed) {
+        this._wprocessing = false;
+        return;
+      }
       this._transform(item.chunk, item.encoding, isLast, (err) => {
         this._wprocessing = false;
         if (err && !this._destroyed) {
@@ -1059,8 +1265,12 @@ class MiniTransform extends MiniEmitter {
     });
   }
 
-  _transform(chunk, encoding, isLast, cb) { cb(); }
-  _flush(cb) { cb(); }
+  _transform(chunk, encoding, isLast, cb) {
+    cb();
+  }
+  _flush(cb) {
+    cb();
+  }
 
   push(chunk) {
     if (this._destroyed) return false;
@@ -1080,7 +1290,10 @@ class MiniTransform extends MiniEmitter {
       this._rlen += buf.length;
     }
     if (this._flowing) this._flow();
-    else queueMicrotask(() => { if (!this._destroyed) this.emit('readable'); });
+    else
+      queueMicrotask(() => {
+        if (!this._destroyed) this.emit("readable");
+      });
     return true;
   }
 
@@ -1088,15 +1301,22 @@ class MiniTransform extends MiniEmitter {
     while (this._flowing && this._rbuf.length > 0 && !this._destroyed) {
       const chunk = this._rbuf.shift();
       this._rlen -= chunk.length;
-      this.emit('data', chunk);
+      this.emit("data", chunk);
     }
     this._maybeEmitEnd();
   }
 
   _maybeEmitEnd() {
-    if (this._eof && this._rbuf.length === 0 && !this._endEmitted && !this._destroyed) {
+    if (
+      this._eof &&
+      this._rbuf.length === 0 &&
+      !this._endEmitted &&
+      !this._destroyed
+    ) {
       this._endEmitted = true;
-      queueMicrotask(() => { if (!this._destroyed) this.emit('end'); });
+      queueMicrotask(() => {
+        if (!this._destroyed) this.emit("end");
+      });
     }
   }
 
@@ -1106,7 +1326,7 @@ class MiniTransform extends MiniEmitter {
       return null;
     }
     if (this._encoding) {
-      const s = this._rbuf.join('');
+      const s = this._rbuf.join("");
       this._rbuf = [];
       this._rlen = 0;
       this._maybeEmitEnd();
@@ -1125,14 +1345,25 @@ class MiniTransform extends MiniEmitter {
   }
 
   pipe(dest) {
-    this.on('data', (chunk) => { dest.write(chunk); });
-    this.on('end', () => { dest.end(); });
-    this.on('error', (err) => { if (dest.emit) dest.emit('error', err); });
+    this.on("data", (chunk) => {
+      dest.write(chunk);
+    });
+    this.on("end", () => {
+      dest.end();
+    });
+    this.on("error", (err) => {
+      if (dest.emit) dest.emit("error", err);
+    });
     return dest;
   }
-  unpipe() { return this; }
+  unpipe() {
+    return this;
+  }
 
-  pause() { this._flowing = false; return this; }
+  pause() {
+    this._flowing = false;
+    return this;
+  }
   resume() {
     if (!this._flowing) {
       this._flowing = true;
@@ -1140,7 +1371,9 @@ class MiniTransform extends MiniEmitter {
     }
     return this;
   }
-  isPaused() { return !this._flowing; }
+  isPaused() {
+    return !this._flowing;
+  }
 
   setEncoding(enc) {
     // Validate lightly like Node (it throws for unknown encodings on use).
@@ -1153,13 +1386,13 @@ class MiniTransform extends MiniEmitter {
     this._destroyed = true;
     this._wqueue = [];
     this._rbuf = [];
-    if (err) queueMicrotask(() => this.emit('error', err));
-    queueMicrotask(() => this.emit('close'));
+    if (err) queueMicrotask(() => this.emit("error", err));
+    queueMicrotask(() => this.emit("close"));
     return this;
   }
 
   close(cb) {
-    if (cb) this.once('close', cb);
+    if (cb) this.once("close", cb);
     this.destroy();
     return this;
   }
@@ -1170,13 +1403,27 @@ class MiniTransform extends MiniEmitter {
 // ---------------------------------------------------------------------------
 
 class PassThroughEngine {
-  constructor() { this.finished = false; }
-  reset() { this.finished = false; return this; }
+  constructor() {
+    this.finished = false;
+  }
+  reset() {
+    this.finished = false;
+    return this;
+  }
   setParams() {}
   write(chunk, flushFlag) {
-    const bytes = chunk ? (chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)) : new Uint8Array(0);
+    const bytes = chunk
+      ? chunk instanceof Uint8Array
+        ? chunk
+        : new Uint8Array(chunk)
+      : new Uint8Array(0);
     if (flushFlag === Z_FINISH) this.finished = true;
-    return { output: Buffer.from(bytes), finished: this.finished, consumed: bytes.length, trailing: false };
+    return {
+      output: Buffer.from(bytes),
+      finished: this.finished,
+      consumed: bytes.length,
+      trailing: false,
+    };
   }
 }
 
@@ -1199,7 +1446,7 @@ class ZlibBase extends MiniTransform {
     this._level = undefined;
     this._strategy = undefined;
 
-    const zopts = (isBrotli || isZstd) ? {} : normalizeZlibOptions(opts, mode);
+    const zopts = isBrotli || isZstd ? {} : normalizeZlibOptions(opts, mode);
     if (zopts.level !== undefined) this._level = zopts.level;
     if (zopts.strategy !== undefined) this._strategy = zopts.strategy;
 
@@ -1208,7 +1455,9 @@ class ZlibBase extends MiniTransform {
     this._handle = {
       reset() {
         if (self._wqueue.length > 0 || self._wprocessing) {
-          throw new Error('Cannot reset zlib stream while a write is in progress');
+          throw new Error(
+            "Cannot reset zlib stream while a write is in progress",
+          );
         }
         self._engine.reset();
       },
@@ -1222,25 +1471,40 @@ class ZlibBase extends MiniTransform {
   _createEngine(mode, zopts) {
     switch (mode) {
       case MODE_DEFLATE:
-        return new PakoDeflateEngine({ wrapper: 'zlib', ...zopts });
+        return new PakoDeflateEngine({ wrapper: "zlib", ...zopts });
       case MODE_DEFLATERAW:
-        return new PakoDeflateEngine({ wrapper: 'raw', ...zopts });
+        return new PakoDeflateEngine({ wrapper: "raw", ...zopts });
       case MODE_GZIP:
-        return new PakoDeflateEngine({ wrapper: 'gzip', ...zopts });
+        return new PakoDeflateEngine({ wrapper: "gzip", ...zopts });
       case MODE_INFLATE:
-        return new PakoInflateEngine({ wrapper: 'zlib', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
+        return new PakoInflateEngine({
+          wrapper: "zlib",
+          windowBits: zopts.windowBits,
+          dictionary: zopts.dictionary,
+        });
       case MODE_INFLATERAW:
-        return new PakoInflateEngine({ wrapper: 'raw', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
+        return new PakoInflateEngine({
+          wrapper: "raw",
+          windowBits: zopts.windowBits,
+          dictionary: zopts.dictionary,
+        });
       case MODE_GUNZIP:
-        return new PakoInflateEngine({ wrapper: 'gzip', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
+        return new PakoInflateEngine({
+          wrapper: "gzip",
+          windowBits: zopts.windowBits,
+          dictionary: zopts.dictionary,
+        });
       case MODE_UNZIP:
-        return new PakoInflateEngine({ wrapper: 'unzip', windowBits: zopts.windowBits, dictionary: zopts.dictionary });
+        return new PakoInflateEngine({
+          wrapper: "unzip",
+          windowBits: zopts.windowBits,
+          dictionary: zopts.dictionary,
+        });
       default:
         // Brotli / Zstd: honest pass-through fallback (no codec available).
         return new PassThroughEngine();
     }
   }
-
 
   _transform(chunk, encoding, isLast, cb) {
     let flushFlag = this._defaultFlushFlag;
@@ -1259,7 +1523,7 @@ class ZlibBase extends MiniTransform {
   }
 
   _processChunk(chunk, flushFlag, cb) {
-    if (typeof cb === 'function') {
+    if (typeof cb === "function") {
       queueMicrotask(() => {
         let out;
         try {
@@ -1284,9 +1548,13 @@ class ZlibBase extends MiniTransform {
   }
 
   _processChunkSync(chunk, flushFlag) {
-    if (this._closed || !this._handle) throw new Error('zlib binding closed');
+    if (this._closed || !this._handle) throw new Error("zlib binding closed");
     if (this._outOffset > this._chunkSize) {
-      throw new ERR_OUT_OF_RANGE('_outOffset', `It must be <= ${this._chunkSize}.`, this._outOffset);
+      throw new ERR_OUT_OF_RANGE(
+        "_outOffset",
+        `It must be <= ${this._chunkSize}.`,
+        this._outOffset,
+      );
     }
     const bytes = chunk ? this._normalizeChunk(chunk) : Buffer.alloc(0);
     const result = this._engine.write(bytes, flushFlag);
@@ -1298,24 +1566,36 @@ class ZlibBase extends MiniTransform {
   }
 
   flush(kind, cb) {
-    if (typeof kind === 'function' || (kind === undefined && cb === undefined)) {
+    if (
+      typeof kind === "function" ||
+      (kind === undefined && cb === undefined)
+    ) {
       cb = kind;
       kind = this._defaultFullFlushFlag;
     }
-    kind = checkRangesOrGetDefault(kind, 'kind', this._flushBound[0], this._flushBound[1], this._defaultFullFlushFlag);
+    kind = checkRangesOrGetDefault(
+      kind,
+      "kind",
+      this._flushBound[0],
+      this._flushBound[1],
+      this._defaultFullFlushFlag,
+    );
     if (this.writableFinished) {
       if (cb) queueMicrotask(() => cb());
     } else if (this.writableEnded) {
-      if (cb) this.once('end', cb);
+      if (cb) this.once("end", cb);
     } else {
       this.write(kFlushBuffers[kind], cb);
     }
   }
 
   params(level, strategy, callback) {
-    checkRangesOrGetDefault(level, 'level', Z_MIN_LEVEL, Z_MAX_LEVEL);
-    checkRangesOrGetDefault(strategy, 'strategy', Z_DEFAULT_STRATEGY, Z_FIXED);
-    if (this._engine.setParams && (this._level !== level || this._strategy !== strategy)) {
+    checkRangesOrGetDefault(level, "level", Z_MIN_LEVEL, Z_MAX_LEVEL);
+    checkRangesOrGetDefault(strategy, "strategy", Z_DEFAULT_STRATEGY, Z_FIXED);
+    if (
+      this._engine.setParams &&
+      (this._level !== level || this._strategy !== strategy)
+    ) {
       this.flush(Z_SYNC_FLUSH, () => {
         if (this._destroyed || !this._handle) {
           if (callback) callback();
@@ -1332,7 +1612,7 @@ class ZlibBase extends MiniTransform {
   }
 
   reset() {
-    if (!this._handle) throw new Error('zlib binding closed');
+    if (!this._handle) throw new Error("zlib binding closed");
     this._handle.reset();
     return this;
   }
@@ -1349,13 +1629,13 @@ class ZlibBase extends MiniTransform {
 // Constructors (callable with or without `new`).
 function validateBrotliOptions(options) {
   if (options === undefined || options === null) return;
-  if (typeof options !== 'object') {
-    throw new ERR_INVALID_ARG_TYPE('options', 'object', options);
+  if (typeof options !== "object") {
+    throw new ERR_INVALID_ARG_TYPE("options", "object", options);
   }
   const params = options.params;
   if (params === undefined) return;
-  if (typeof params !== 'object' || params === null) {
-    throw new ERR_INVALID_ARG_TYPE('options.params', 'object', params);
+  if (typeof params !== "object" || params === null) {
+    throw new ERR_INVALID_ARG_TYPE("options.params", "object", params);
   }
   const validParams = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8]);
   for (const key of Object.keys(params)) {
@@ -1363,12 +1643,12 @@ function validateBrotliOptions(options) {
     const numKey = Number(key);
     if (!validParams.has(numKey) || String(numKey) !== key) {
       const err = new RangeError(`${key} is not a valid Brotli parameter`);
-      err.code = 'ERR_BROTLI_INVALID_PARAM';
+      err.code = "ERR_BROTLI_INVALID_PARAM";
       throw err;
     }
     const value = params[key];
     if (!Number.isInteger(value)) {
-      throw new ERR_INVALID_ARG_TYPE(`options.params.${key}`, 'integer', value);
+      throw new ERR_INVALID_ARG_TYPE(`options.params.${key}`, "integer", value);
     }
     // BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING is a boolean flag; real
     // Node rejects any other integer with ERR_ZLIB_INITIALIZATION_FAILED.
@@ -1401,25 +1681,50 @@ const DeflateRaw = makeZlibClass(MODE_DEFLATERAW);
 const InflateRaw = makeZlibClass(MODE_INFLATERAW);
 const Unzip = makeZlibClass(MODE_UNZIP);
 const BrotliCompress = makeZlibClass(MODE_BROTLI_ENCODE, validateBrotliOptions);
-const BrotliDecompress = makeZlibClass(MODE_BROTLI_DECODE, validateBrotliOptions);
+const BrotliDecompress = makeZlibClass(
+  MODE_BROTLI_DECODE,
+  validateBrotliOptions,
+);
 const ZstdCompress = makeZlibClass(MODE_ZSTD_COMPRESS);
 const ZstdDecompress = makeZlibClass(MODE_ZSTD_DECOMPRESS);
 
-function createDeflate(opts) { return new Deflate(opts); }
-function createInflate(opts) { return new Inflate(opts); }
-function createDeflateRaw(opts) { return new DeflateRaw(opts); }
-function createInflateRaw(opts) { return new InflateRaw(opts); }
-function createGzip(opts) { return new Gzip(opts); }
-function createGunzip(opts) { return new Gunzip(opts); }
-function createUnzip(opts) { return new Unzip(opts); }
-function createBrotliCompress(opts) { return new BrotliCompress(opts); }
-function createBrotliDecompress(opts) { return new BrotliDecompress(opts); }
-function createZstdCompress(opts) { return new ZstdCompress(opts); }
-function createZstdDecompress(opts) { return new ZstdDecompress(opts); }
+function createDeflate(opts) {
+  return new Deflate(opts);
+}
+function createInflate(opts) {
+  return new Inflate(opts);
+}
+function createDeflateRaw(opts) {
+  return new DeflateRaw(opts);
+}
+function createInflateRaw(opts) {
+  return new InflateRaw(opts);
+}
+function createGzip(opts) {
+  return new Gzip(opts);
+}
+function createGunzip(opts) {
+  return new Gunzip(opts);
+}
+function createUnzip(opts) {
+  return new Unzip(opts);
+}
+function createBrotliCompress(opts) {
+  return new BrotliCompress(opts);
+}
+function createBrotliDecompress(opts) {
+  return new BrotliDecompress(opts);
+}
+function createZstdCompress(opts) {
+  return new ZstdCompress(opts);
+}
+function createZstdDecompress(opts) {
+  return new ZstdDecompress(opts);
+}
 
 // Convenience helpers.
 function normalizeBufferArgs(buffer, options, callback) {
-  if (typeof options === 'function') {
+  if (typeof options === "function") {
     callback = options;
     options = undefined;
   }
@@ -1428,9 +1733,13 @@ function normalizeBufferArgs(buffer, options, callback) {
 }
 
 function zlibBuffer(Engine, buffer, options, callback) {
-  const { bytes, options: opts, callback: cb } = normalizeBufferArgs(buffer, options, callback);
-  if (typeof cb !== 'function') {
-    throw new ERR_INVALID_ARG_TYPE('callback', 'function', cb);
+  const {
+    bytes,
+    options: opts,
+    callback: cb,
+  } = normalizeBufferArgs(buffer, options, callback);
+  if (typeof cb !== "function") {
+    throw new ERR_INVALID_ARG_TYPE("callback", "function", cb);
   }
   const stream = new Engine(opts);
   const chunks = [];
@@ -1438,14 +1747,19 @@ function zlibBuffer(Engine, buffer, options, callback) {
   const done = (err) => {
     if (called) return;
     called = true;
-    if (err) { cb(err); return; }
+    if (err) {
+      cb(err);
+      return;
+    }
     const result = Buffer.concat(chunks);
     if (opts && opts.info) cb(null, { buffer: result, engine: stream });
     else cb(null, result);
   };
-  stream.on('error', done);
-  stream.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
-  stream.on('end', () => done(null));
+  stream.on("error", done);
+  stream.on("data", (c) =>
+    chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)),
+  );
+  stream.on("end", () => done(null));
   stream.end(bytes);
 }
 
@@ -1457,22 +1771,53 @@ function zlibBufferSync(Engine, buffer, options) {
   return out;
 }
 
-function deflate(buffer, options, callback) { return zlibBuffer(Deflate, buffer, options, callback); }
-function deflateSync(buffer, options) { return zlibBufferSync(Deflate, buffer, options); }
-function deflateRaw(buffer, options, callback) { return zlibBuffer(DeflateRaw, buffer, options, callback); }
-function deflateRawSync(buffer, options) { return zlibBufferSync(DeflateRaw, buffer, options); }
-function gzip(buffer, options, callback) { return zlibBuffer(Gzip, buffer, options, callback); }
-function gzipSync(buffer, options) { return zlibBufferSync(Gzip, buffer, options); }
-function gunzip(buffer, options, callback) { return zlibBuffer(Gunzip, buffer, options, callback); }
-function gunzipSync(buffer, options) { return zlibBufferSync(Gunzip, buffer, options); }
-function inflate(buffer, options, callback) { return zlibBuffer(Inflate, buffer, options, callback); }
-function inflateSync(buffer, options) { return zlibBufferSync(Inflate, buffer, options); }
-function inflateRaw(buffer, options, callback) { return zlibBuffer(InflateRaw, buffer, options, callback); }
-function inflateRawSync(buffer, options) { return zlibBufferSync(InflateRaw, buffer, options); }
-function unzip(buffer, options, callback) { return zlibBuffer(Unzip, buffer, options, callback); }
-function unzipSync(buffer, options) { return zlibBufferSync(Unzip, buffer, options); }
+function deflate(buffer, options, callback) {
+  return zlibBuffer(Deflate, buffer, options, callback);
+}
+function deflateSync(buffer, options) {
+  return zlibBufferSync(Deflate, buffer, options);
+}
+function deflateRaw(buffer, options, callback) {
+  return zlibBuffer(DeflateRaw, buffer, options, callback);
+}
+function deflateRawSync(buffer, options) {
+  return zlibBufferSync(DeflateRaw, buffer, options);
+}
+function gzip(buffer, options, callback) {
+  return zlibBuffer(Gzip, buffer, options, callback);
+}
+function gzipSync(buffer, options) {
+  return zlibBufferSync(Gzip, buffer, options);
+}
+function gunzip(buffer, options, callback) {
+  return zlibBuffer(Gunzip, buffer, options, callback);
+}
+function gunzipSync(buffer, options) {
+  return zlibBufferSync(Gunzip, buffer, options);
+}
+function inflate(buffer, options, callback) {
+  return zlibBuffer(Inflate, buffer, options, callback);
+}
+function inflateSync(buffer, options) {
+  return zlibBufferSync(Inflate, buffer, options);
+}
+function inflateRaw(buffer, options, callback) {
+  return zlibBuffer(InflateRaw, buffer, options, callback);
+}
+function inflateRawSync(buffer, options) {
+  return zlibBufferSync(InflateRaw, buffer, options);
+}
+function unzip(buffer, options, callback) {
+  return zlibBuffer(Unzip, buffer, options, callback);
+}
+function unzipSync(buffer, options) {
+  return zlibBufferSync(Unzip, buffer, options);
+}
 function brotliCompress(buffer, options, callback) {
-  if (typeof options === 'function') { callback = options; options = undefined; }
+  if (typeof options === "function") {
+    callback = options;
+    options = undefined;
+  }
   validateBrotliOptions(options);
   return zlibBuffer(BrotliCompress, buffer, options, callback);
 }
@@ -1481,7 +1826,10 @@ function brotliCompressSync(buffer, options) {
   return zlibBufferSync(BrotliCompress, buffer, options);
 }
 function brotliDecompress(buffer, options, callback) {
-  if (typeof options === 'function') { callback = options; options = undefined; }
+  if (typeof options === "function") {
+    callback = options;
+    options = undefined;
+  }
   validateBrotliOptions(options);
   return zlibBuffer(BrotliDecompress, buffer, options, callback);
 }
@@ -1489,10 +1837,18 @@ function brotliDecompressSync(buffer, options) {
   validateBrotliOptions(options);
   return zlibBufferSync(BrotliDecompress, buffer, options);
 }
-function zstdCompress(buffer, options, callback) { return zlibBuffer(ZstdCompress, buffer, options, callback); }
-function zstdCompressSync(buffer, options) { return zlibBufferSync(ZstdCompress, buffer, options); }
-function zstdDecompress(buffer, options, callback) { return zlibBuffer(ZstdDecompress, buffer, options, callback); }
-function zstdDecompressSync(buffer, options) { return zlibBufferSync(ZstdDecompress, buffer, options); }
+function zstdCompress(buffer, options, callback) {
+  return zlibBuffer(ZstdCompress, buffer, options, callback);
+}
+function zstdCompressSync(buffer, options) {
+  return zlibBufferSync(ZstdCompress, buffer, options);
+}
+function zstdDecompress(buffer, options, callback) {
+  return zlibBuffer(ZstdDecompress, buffer, options, callback);
+}
+function zstdDecompressSync(buffer, options) {
+  return zlibBufferSync(ZstdDecompress, buffer, options);
+}
 
 // ---------------------------------------------------------------------------
 // Exports

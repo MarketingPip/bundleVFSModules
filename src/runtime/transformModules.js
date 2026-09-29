@@ -1,17 +1,20 @@
 import MagicString from "magic-string";
 
-import {ancestor} from "acorn-walk";
-import {parse} from "acorn";  
-
+import { ancestor } from "acorn-walk";
+import { parse } from "acorn";
 
 export function convertEsmToCjs(code) {
   const ast = parse(code, { ecmaVersion: 2022, sourceType: "module" });
   const s = new MagicString(code);
 
   // Pre-scan: detect if there are BOTH a default export and named exports
-  const hasDefault = ast.body.some(n => n.type === "ExportDefaultDeclaration");
+  const hasDefault = ast.body.some(
+    (n) => n.type === "ExportDefaultDeclaration",
+  );
   const hasNamed = ast.body.some(
-    n => n.type === "ExportNamedDeclaration" && (n.declaration || n.specifiers.length)
+    (n) =>
+      n.type === "ExportNamedDeclaration" &&
+      (n.declaration || n.specifiers.length),
   );
   const mixed = hasDefault && hasNamed;
 
@@ -38,10 +41,14 @@ export function convertEsmToCjs(code) {
         });
 
         const isDestructured = specifiers.some(
-          (s) => s.type === "ImportSpecifier"
+          (s) => s.type === "ImportSpecifier",
         );
         const importStr = isDestructured ? `{ ${parts.join(", ")} }` : parts[0];
-        s.overwrite(node.start, node.end, `const ${importStr} = require(${source});`);
+        s.overwrite(
+          node.start,
+          node.end,
+          `const ${importStr} = require(${source});`,
+        );
       }
     },
 
@@ -51,14 +58,20 @@ export function convertEsmToCjs(code) {
         // In mixed mode, emit exports.default = ... instead of module.exports =
         if (node.declaration.id) {
           s.remove(node.start, node.declaration.start);
-          s.appendLeft(node.end, `\nexports.default = ${node.declaration.id.name};`);
+          s.appendLeft(
+            node.end,
+            `\nexports.default = ${node.declaration.id.name};`,
+          );
         } else {
           s.overwrite(node.start, node.declaration.start, "exports.default = ");
         }
       } else {
         if (node.declaration.id) {
           s.remove(node.start, node.declaration.start);
-          s.appendLeft(node.end, `\nmodule.exports = ${node.declaration.id.name};`);
+          s.appendLeft(
+            node.end,
+            `\nmodule.exports = ${node.declaration.id.name};`,
+          );
         } else {
           s.overwrite(node.start, node.declaration.start, "module.exports = ");
         }
@@ -72,10 +85,16 @@ export function convertEsmToCjs(code) {
 
         if (node.declaration.type === "VariableDeclaration") {
           node.declaration.declarations.forEach((decl) => {
-            s.appendRight(node.end, `\nexports.${decl.id.name} = ${decl.id.name};`);
+            s.appendRight(
+              node.end,
+              `\nexports.${decl.id.name} = ${decl.id.name};`,
+            );
           });
         } else if (node.declaration.id) {
-          s.appendRight(node.end, `\nexports.${node.declaration.id.name} = ${node.declaration.id.name};`);
+          s.appendRight(
+            node.end,
+            `\nexports.${node.declaration.id.name} = ${node.declaration.id.name};`,
+          );
         }
       } else if (node.specifiers.length && node.source) {
         const temp = `_tmp_${Math.random().toString(36).slice(2, 8)}`;
@@ -96,9 +115,9 @@ export function convertEsmToCjs(code) {
       s.overwrite(
         node.start,
         node.end,
-        `Object.assign(exports, require(${node.source.raw}));`
+        `Object.assign(exports, require(${node.source.raw}));`,
       );
-    }
+    },
   });
 
   return s.toString().trim();
@@ -119,8 +138,8 @@ export function convertCjsToEsm(code) {
         [
           "FunctionDeclaration",
           "FunctionExpression",
-          "ArrowFunctionExpression"
-        ].includes(a.type)
+          "ArrowFunctionExpression",
+        ].includes(a.type),
       );
       if (!isTopLevel) return;
 
@@ -132,7 +151,7 @@ export function convertCjsToEsm(code) {
           // previous module.exports is dead
           deadZones.push({
             start: lastModuleExport.start,
-            end: lastModuleExport.end
+            end: lastModuleExport.end,
           });
         }
         lastModuleExport = node;
@@ -141,7 +160,7 @@ export function convertCjsToEsm(code) {
       else if (left.object?.name === "exports") {
         exportsProps.push({ node, name: left.property.name });
       }
-    }
+    },
   });
 
   // Pass 2: remove dead module.exports
@@ -154,7 +173,7 @@ export function convertCjsToEsm(code) {
     exportsProps.forEach((exp) => {
       s.remove(
         exp.node.start,
-        exp.node.end + (code[exp.node.end] === ";" ? 1 : 0)
+        exp.node.end + (code[exp.node.end] === ";" ? 1 : 0),
       );
     });
   }
@@ -164,7 +183,7 @@ export function convertCjsToEsm(code) {
     s.overwrite(
       lastModuleExport.start,
       lastModuleExport.right.start,
-      "export default "
+      "export default ",
     );
   }
   // Otherwise, transform exports.* to named exports
@@ -173,7 +192,7 @@ export function convertCjsToEsm(code) {
       s.overwrite(
         exp.node.start,
         exp.node.right.start,
-        `export const ${exp.name} = `
+        `export const ${exp.name} = `,
       );
     });
   }

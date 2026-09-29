@@ -7,7 +7,7 @@ const kEmptyObject = Object.freeze({ __proto__: null });
 function once(callback, { preserveReturnValue = false } = kEmptyObject) {
   let called = false;
   let returnValue;
-  return function(...args) {
+  return function (...args) {
     if (called) return returnValue;
     called = true;
     const result = Reflect.apply(callback, this, args);
@@ -17,27 +17,26 @@ function once(callback, { preserveReturnValue = false } = kEmptyObject) {
 }
 
 function assignFunctionName(name, fn, descriptor = kEmptyObject) {
-  if (typeof name !== 'string') {
-    const symbolDescription = Object.getOwnPropertyDescriptor(name, 'description')?.value ??
-      (typeof name === 'symbol' ? name.description : undefined);
+  if (typeof name !== "string") {
+    const symbolDescription =
+      Object.getOwnPropertyDescriptor(name, "description")?.value ??
+      (typeof name === "symbol" ? name.description : undefined);
     if (symbolDescription === undefined) {
-      throw new Error('Attempted to name function after descriptionless Symbol');
+      throw new Error(
+        "Attempted to name function after descriptionless Symbol",
+      );
     }
     name = `[${symbolDescription}]`;
   }
-  return Object.defineProperty(fn, 'name', {
+  return Object.defineProperty(fn, "name", {
     __proto__: null,
     writable: false,
     enumerable: false,
     configurable: true,
-    ...Object.getOwnPropertyDescriptor(fn, 'name'),
+    ...Object.getOwnPropertyDescriptor(fn, "name"),
     ...descriptor,
     value: name,
   });
 }
 
-export {
-  kEmptyObject,
-  once,
-  assignFunctionName,
-};
+export { kEmptyObject, once, assignFunctionName };

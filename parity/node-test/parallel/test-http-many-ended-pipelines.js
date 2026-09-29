@@ -19,46 +19,54 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
-const net = require('net');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
+const net = require("net");
 
 const numRequests = 20;
 let first = false;
 
-const server = http.createServer(function(req, res) {
+const server = http.createServer(function (req, res) {
   if (!first) {
     first = true;
-    req.socket.on('close', function() {
+    req.socket.on("close", function () {
       server.close();
     });
   }
 
-  res.end('ok');
+  res.end("ok");
   // Oh no!  The connection died!
   req.socket.destroy();
 });
 
-server.listen(0, common.mustCall(function() {
-  const client = net.connect({ port: this.address().port,
-                               allowHalfOpen: true });
+server.listen(
+  0,
+  common.mustCall(function () {
+    const client = net.connect({
+      port: this.address().port,
+      allowHalfOpen: true,
+    });
 
-  client.on('error', common.mustCallAtLeast((err) => {
-    // The socket might be destroyed by the other peer while data is still
-    // being written. The `'EPIPE'` and `'ECONNABORTED'` codes might also be
-    // valid but they have not been seen yet.
-    assert.strictEqual(err.code, 'ECONNRESET');
-  }, 0));
+    client.on(
+      "error",
+      common.mustCallAtLeast((err) => {
+        // The socket might be destroyed by the other peer while data is still
+        // being written. The `'EPIPE'` and `'ECONNABORTED'` codes might also be
+        // valid but they have not been seen yet.
+        assert.strictEqual(err.code, "ECONNRESET");
+      }, 0),
+    );
 
-  for (let i = 0; i < numRequests; i++) {
-    client.write('GET / HTTP/1.1\r\n' +
-                 'Host: some.host.name\r\n' +
-                 '\r\n\r\n');
-  }
-  client.end();
-  client.pipe(process.stdout);
-}));
+    for (let i = 0; i < numRequests; i++) {
+      client.write(
+        "GET / HTTP/1.1\r\n" + "Host: some.host.name\r\n" + "\r\n\r\n",
+      );
+    }
+    client.end();
+    client.pipe(process.stdout);
+  }),
+);
 
-process.on('warning', common.mustNotCall());
+process.on("warning", common.mustNotCall());

@@ -1,7 +1,7 @@
-'use strict';
+"use strict";
 
-require('../common');
-const { inspect } = require('node:util');
+require("../common");
+const { inspect } = require("node:util");
 
 const r = Proxy.revocable({}, {});
 r.revoke();

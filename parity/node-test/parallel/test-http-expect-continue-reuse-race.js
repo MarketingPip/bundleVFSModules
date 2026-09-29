@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 
 // Regression test for a keep-alive socket reuse race condition.
 //
@@ -20,9 +20,9 @@
 // socket by stripping a subsequent request's listeners and emitting a
 // spurious 'free' event, causing requests to hang / time out.
 
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
 const REQUEST_COUNT = 100;
 const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
@@ -38,12 +38,12 @@ function patchSocket(socket) {
   patchedSockets.add(socket);
   const delay = 5;
   const origWrite = socket.write;
-  socket.write = function(chunk, encoding, cb) {
-    if (typeof encoding === 'function') {
+  socket.write = function (chunk, encoding, cb) {
+    if (typeof encoding === "function") {
       cb = encoding;
       encoding = null;
     }
-    if (typeof cb === 'function') {
+    if (typeof cb === "function") {
       const orig = cb;
       cb = (...args) => setTimeout(() => orig(...args), delay);
     }
@@ -51,65 +51,71 @@ function patchSocket(socket) {
   };
 }
 
-const server = http.createServer(common.mustCall((req, res) => {
-  req.on('error', common.mustNotCall());
-  res.writeHead(200);
-  res.end();
-}, REQUEST_COUNT));
+const server = http.createServer(
+  common.mustCall((req, res) => {
+    req.on("error", common.mustNotCall());
+    res.writeHead(200);
+    res.end();
+  }, REQUEST_COUNT),
+);
 
-server.listen(0, common.mustCall(() => {
-  const { port } = server.address();
+server.listen(
+  0,
+  common.mustCall(() => {
+    const { port } = server.address();
 
-  async function run() {
-    try {
-      for (let i = 0; i < REQUEST_COUNT; i++) {
-        await sendRequest(port);
+    async function run() {
+      try {
+        for (let i = 0; i < REQUEST_COUNT; i++) {
+          await sendRequest(port);
+        }
+      } finally {
+        agent.destroy();
+        server.close();
       }
-    } finally {
-      agent.destroy();
-      server.close();
     }
-  }
 
-  run().then(common.mustCall());
-}));
+    run().then(common.mustCall());
+  }),
+);
 
 function sendRequest(port) {
   let timeout;
   const promise = new Promise((resolve, reject) => {
     function done(err) {
       clearTimeout(timeout);
-      if (err)
-        reject(err);
-      else
-        resolve();
+      if (err) reject(err);
+      else resolve();
     }
 
-    const req = http.request({
-      port,
-      host: '127.0.0.1',
-      method: 'POST',
-      agent,
-      headers: {
-        'Content-Length': '0',
-        'Expect': '100-continue',
+    const req = http.request(
+      {
+        port,
+        host: "127.0.0.1",
+        method: "POST",
+        agent,
+        headers: {
+          "Content-Length": "0",
+          Expect: "100-continue",
+        },
       },
-    }, common.mustCall((res) => {
-      assert.strictEqual(res.statusCode, 200);
-      res.resume();
-      res.once('end', done);
-      res.once('error', done);
-    }));
+      common.mustCall((res) => {
+        assert.strictEqual(res.statusCode, 200);
+        res.resume();
+        res.once("end", done);
+        res.once("error", done);
+      }),
+    );
 
-    req.on('socket', patchSocket);
+    req.on("socket", patchSocket);
 
     timeout = setTimeout(() => {
-      const err = new Error('request timed out');
+      const err = new Error("request timed out");
       req.destroy(err);
       done(err);
     }, common.platformTimeout(5000));
 
-    req.once('error', done);
+    req.once("error", done);
 
     setTimeout(() => req.end(Buffer.alloc(0)), 0);
   });

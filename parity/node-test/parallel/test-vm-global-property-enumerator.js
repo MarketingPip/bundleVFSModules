@@ -1,18 +1,18 @@
-'use strict';
-require('../common');
-const globalNames = require('../common/globals');
-const vm = require('vm');
-const assert = require('assert');
+"use strict";
+require("../common");
+const globalNames = require("../common/globals");
+const vm = require("vm");
+const assert = require("assert");
 
 // Regression of https://github.com/nodejs/node/issues/53346
 
 const cases = [
   {
     get 1() {
-      return 'value';
+      return "value";
     },
     get key() {
-      return 'value';
+      return "value";
     },
   },
   {
@@ -24,18 +24,18 @@ const cases = [
   },
   {},
   {
-    key: 'value',
-    1: 'value',
+    key: "value",
+    1: "value",
   },
-  (new class GetterObject {
+  new (class GetterObject {
     get key() {
-      return 'value';
+      return "value";
     }
     get 1() {
-      return 'value';
+      return "value";
     }
-  }()),
-  (new class SetterObject {
+  })(),
+  new (class SetterObject {
     // Intentionally single setter.
     // eslint-disable-next-line accessor-pairs
     set key(value) {
@@ -45,38 +45,38 @@ const cases = [
     set 1(value) {
       // noop
     }
-  }()),
+  })(),
   [],
-  [['key', 'value']],
+  [["key", "value"]],
   {
     __proto__: {
-      key: 'value',
-      1: 'value',
+      key: "value",
+      1: "value",
     },
   },
   (() => {
     const obj = {
       __proto__: {
-        [Symbol.toStringTag]: 'proto',
+        [Symbol.toStringTag]: "proto",
       },
     };
-    Object.defineProperty(obj, '1', {
-      value: 'value',
+    Object.defineProperty(obj, "1", {
+      value: "value",
       enumerable: false,
       configurable: true,
     });
-    Object.defineProperty(obj, 'key', {
-      value: 'value',
+    Object.defineProperty(obj, "key", {
+      value: "value",
       enumerable: false,
       configurable: true,
     });
-    Object.defineProperty(obj, Symbol('symbol'), {
-      value: 'value',
+    Object.defineProperty(obj, Symbol("symbol"), {
+      value: "value",
       enumerable: false,
       configurable: true,
     });
-    Object.defineProperty(obj, Symbol('symbol-enumerable'), {
-      value: 'value',
+    Object.defineProperty(obj, Symbol("symbol-enumerable"), {
+      value: "value",
       enumerable: true,
       configurable: true,
     });
@@ -86,15 +86,22 @@ const cases = [
 
 for (const [idx, obj] of cases.entries()) {
   const ctx = vm.createContext(obj);
-  const globalObj = vm.runInContext('this', ctx);
-  assert.deepStrictEqual(Object.keys(globalObj), Object.keys(obj), `Case ${idx} failed: Object.keys`);
+  const globalObj = vm.runInContext("this", ctx);
+  assert.deepStrictEqual(
+    Object.keys(globalObj),
+    Object.keys(obj),
+    `Case ${idx} failed: Object.keys`,
+  );
 
-  const ownPropertyNamesInner = difference(Object.getOwnPropertyNames(globalObj), globalNames.intrinsics);
+  const ownPropertyNamesInner = difference(
+    Object.getOwnPropertyNames(globalObj),
+    globalNames.intrinsics,
+  );
   const ownPropertyNamesOuter = Object.getOwnPropertyNames(obj);
   assert.deepStrictEqual(
     ownPropertyNamesInner,
     ownPropertyNamesOuter,
-    `Case ${idx} failed: Object.getOwnPropertyNames`
+    `Case ${idx} failed: Object.getOwnPropertyNames`,
   );
 
   // FIXME(legendecas): globalThis[@@toStringTag] is unconditionally
@@ -103,13 +110,15 @@ for (const [idx, obj] of cases.entries()) {
   // @@toStringTag on the globalThis as an own property, like
   // Window.prototype[@@toStringTag] should be a property on the prototype.
   assert.deepStrictEqual(
-    Object.getOwnPropertySymbols(globalObj).filter((it) => it !== Symbol.toStringTag),
+    Object.getOwnPropertySymbols(globalObj).filter(
+      (it) => it !== Symbol.toStringTag,
+    ),
     Object.getOwnPropertySymbols(obj),
-    `Case ${idx} failed: Object.getOwnPropertySymbols`
+    `Case ${idx} failed: Object.getOwnPropertySymbols`,
   );
 }
 
 function difference(arrA, arrB) {
   const setB = new Set(arrB);
   return arrA.filter((x) => !setB.has(x));
-};
+}

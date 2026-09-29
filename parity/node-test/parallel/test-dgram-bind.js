@@ -19,24 +19,30 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const dgram = require('dgram');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const dgram = require("dgram");
 
-const socket = dgram.createSocket('udp4');
+const socket = dgram.createSocket("udp4");
 
-socket.on('listening', common.mustCall(() => {
-  assert.throws(() => {
-    socket.bind();
-  }, {
-    code: 'ERR_SOCKET_ALREADY_BOUND',
-    name: 'Error',
-    message: /^Socket is already bound$/
-  });
+socket.on(
+  "listening",
+  common.mustCall(() => {
+    assert.throws(
+      () => {
+        socket.bind();
+      },
+      {
+        code: "ERR_SOCKET_ALREADY_BOUND",
+        name: "Error",
+        message: /^Socket is already bound$/,
+      },
+    );
 
-  socket.close();
-}));
+    socket.close();
+  }),
+);
 
 const result = socket.bind(); // Should not throw.
 

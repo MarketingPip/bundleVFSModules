@@ -19,18 +19,17 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const fixtures = require('../common/fixtures');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const fixtures = require("../common/fixtures");
+const assert = require("assert");
 
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const tls = require('tls');
+const tls = require("tls");
 
-let key = fixtures.readKey('rsa_private.pem');
-let cert = fixtures.readKey('rsa_cert.crt');
+let key = fixtures.readKey("rsa_private.pem");
+let cert = fixtures.readKey("rsa_cert.crt");
 
 // This test validates that we accept certificates and keys which
 // do not end with a newline. If a newline exists at the end
@@ -46,14 +45,20 @@ if (i !== 0) cert = cert.slice(0, cert.length - i);
 function test(cert, key, cb) {
   assert.notStrictEqual(cert.at(-1), 0x0a);
   assert.notStrictEqual(key.at(-1), 0x0a);
-  const server = tls.createServer({
-    cert,
-    key
-  }).listen(0, function() {
-    server.close(cb);
-  });
+  const server = tls
+    .createServer({
+      cert,
+      key,
+    })
+    .listen(0, function () {
+      server.close(cb);
+    });
 }
 
-test(cert, key, common.mustCall(function() {
-  test(Buffer.from(cert), Buffer.from(key), common.mustCall());
-}));
+test(
+  cert,
+  key,
+  common.mustCall(function () {
+    test(Buffer.from(cert), Buffer.from(key), common.mustCall());
+  }),
+);

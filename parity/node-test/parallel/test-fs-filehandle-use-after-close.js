@@ -1,7 +1,7 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs').promises;
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs").promises;
 
 (async () => {
   const filehandle = await fs.open(__filename);
@@ -17,8 +17,8 @@ const fs = require('fs').promises;
   const otherFilehandle = await fs.open(process.execPath);
 
   await assert.rejects(() => filehandle.stat(), {
-    code: 'EBADF',
-    syscall: 'fstat'
+    code: "EBADF",
+    syscall: "fstat",
   });
 
   await otherFilehandle.close();

@@ -1,13 +1,13 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { pull, from, text, tap } = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { pull, from, text, tap } = require("stream/iter");
 
 async function testPullIdentity() {
-  const data = await text(pull(from('hello-async')));
-  assert.strictEqual(data, 'hello-async');
+  const data = await text(pull(from("hello-async")));
+  assert.strictEqual(data, "hello-async");
 }
 
 async function testPullStatelessTransform() {
@@ -18,16 +18,16 @@ async function testPullStatelessTransform() {
       return new TextEncoder().encode(str.toUpperCase());
     });
   };
-  const data = await text(pull(from('abc'), upper));
-  assert.strictEqual(data, 'ABC');
+  const data = await text(pull(from("abc"), upper));
+  assert.strictEqual(data, "ABC");
 }
 
 async function testPullStatefulTransform() {
   const stateful = {
-    transform: async function*(source) {
+    transform: async function* (source) {
       for await (const chunks of source) {
         if (chunks === null) {
-          yield new TextEncoder().encode('-ASYNC-END');
+          yield new TextEncoder().encode("-ASYNC-END");
           continue;
         }
         for (const chunk of chunks) {
@@ -36,8 +36,8 @@ async function testPullStatefulTransform() {
       }
     },
   };
-  const data = await text(pull(from('data'), stateful));
-  assert.strictEqual(data, 'data-ASYNC-END');
+  const data = await text(pull(from("data"), stateful));
+  assert.strictEqual(data, "data-ASYNC-END");
 }
 
 async function testPullWithAbortSignal() {
@@ -50,10 +50,10 @@ async function testPullWithAbortSignal() {
     async () => {
       // eslint-disable-next-line no-unused-vars
       for await (const _ of result) {
-        assert.fail('Should not reach here');
+        assert.fail("Should not reach here");
       }
     },
-    { name: 'AbortError' },
+    { name: "AbortError" },
   );
 }
 
@@ -62,15 +62,15 @@ async function testPullChainedTransforms() {
   const transforms = [
     (chunks) => {
       if (chunks === null) return null;
-      return [...chunks, enc.encode('!')];
+      return [...chunks, enc.encode("!")];
     },
     (chunks) => {
       if (chunks === null) return null;
-      return [...chunks, enc.encode('?')];
+      return [...chunks, enc.encode("?")];
     },
   ];
-  const data = await text(pull(from('hello'), ...transforms));
-  assert.strictEqual(data, 'hello!?');
+  const data = await text(pull(from("hello"), ...transforms));
+  assert.strictEqual(data, "hello!?");
 }
 
 // Source error → controller.abort() → transform listener throws →
@@ -81,20 +81,20 @@ async function testTransformSignalListenerErrorOnSourceError() {
   // so we must catch them as uncaught exceptions.
   const uncaughtErrors = [];
   const handler = (err) => uncaughtErrors.push(err);
-  process.on('uncaughtException', handler);
+  process.on("uncaughtException", handler);
 
   const throwingTransform = {
     transform(source, options) {
-      options.signal.addEventListener('abort', () => {
-        throw new Error('listener boom');
+      options.signal.addEventListener("abort", () => {
+        throw new Error("listener boom");
       });
       return source;
     },
   };
 
   async function* failingSource() {
-    yield [new TextEncoder().encode('a')];
-    throw new Error('source error');
+    yield [new TextEncoder().encode("a")];
+    throw new Error("source error");
   }
 
   await assert.rejects(
@@ -104,36 +104,48 @@ async function testTransformSignalListenerErrorOnSourceError() {
         // Consume
       }
     },
-    { message: 'source error' },
+    { message: "source error" },
   );
 
   // Give the nextTick rethrow a chance to fire
   await new Promise(setImmediate);
-  process.removeListener('uncaughtException', handler);
+  process.removeListener("uncaughtException", handler);
 
   assert.strictEqual(uncaughtErrors.length, 1);
-  assert.strictEqual(uncaughtErrors[0].message, 'listener boom');
+  assert.strictEqual(uncaughtErrors[0].message, "listener boom");
 }
 
 // Pull source error propagates to consumer
 async function testPullSourceError() {
   async function* failingSource() {
-    yield [new TextEncoder().encode('a')];
-    throw new Error('source boom');
+    yield [new TextEncoder().encode("a")];
+    throw new Error("source boom");
   }
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of pull(failingSource())) { /* consume */ }
-  }, { message: 'source boom' });
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of pull(failingSource())) {
+        /* consume */
+      }
+    },
+    { message: "source boom" },
+  );
 }
 
 // Tap callback error propagates through pipeline
 async function testTapCallbackError() {
-  const badTap = tap(() => { throw new Error('tap boom'); });
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of pull(from('hello'), badTap)) { /* consume */ }
-  }, { message: 'tap boom' });
+  const badTap = tap(() => {
+    throw new Error("tap boom");
+  });
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of pull(from("hello"), badTap)) {
+        /* consume */
+      }
+    },
+    { message: "tap boom" },
+  );
 }
 
 // Pull signal aborted mid-iteration (not pre-aborted)
@@ -141,16 +153,16 @@ async function testPullSignalAbortMidIteration() {
   const ac = new AbortController();
   const enc = new TextEncoder();
   async function* slowSource() {
-    yield [enc.encode('a')];
-    yield [enc.encode('b')];
-    yield [enc.encode('c')];
+    yield [enc.encode("a")];
+    yield [enc.encode("b")];
+    yield [enc.encode("c")];
   }
   const result = pull(slowSource(), { signal: ac.signal });
   const iter = result[Symbol.asyncIterator]();
   const first = await iter.next(); // Read first batch
   assert.strictEqual(first.done, false);
   ac.abort();
-  await assert.rejects(() => iter.next(), { name: 'AbortError' });
+  await assert.rejects(() => iter.next(), { name: "AbortError" });
 }
 
 async function testPullSignalAbortWhileSourceNextPending() {
@@ -167,7 +179,7 @@ async function testPullSignalAbortWhileSourceNextPending() {
   const iter = pull(source, { signal: ac.signal })[Symbol.asyncIterator]();
   const next = iter.next();
   ac.abort();
-  await assert.rejects(next, { name: 'AbortError' });
+  await assert.rejects(next, { name: "AbortError" });
 }
 
 async function testPullSignalAbortWithTransformWhileSourceNextPending() {
@@ -181,14 +193,12 @@ async function testPullSignalAbortWithTransformWhileSourceNextPending() {
     },
   };
   const ac = new AbortController();
-  const iter = pull(
-    source,
-    (chunks) => chunks,
-    { signal: ac.signal },
-  )[Symbol.asyncIterator]();
+  const iter = pull(source, (chunks) => chunks, { signal: ac.signal })[
+    Symbol.asyncIterator
+  ]();
   const next = iter.next();
   ac.abort();
-  await assert.rejects(next, { name: 'AbortError' });
+  await assert.rejects(next, { name: "AbortError" });
 }
 
 // Pull consumer break (return()) cleans up transform signal
@@ -196,7 +206,7 @@ async function testPullConsumerBreakCleanup() {
   let signalAborted = false;
   const trackingTransform = {
     transform(source, options) {
-      options.signal.addEventListener('abort', () => {
+      options.signal.addEventListener("abort", () => {
         signalAborted = true;
       });
       return source;
@@ -224,84 +234,100 @@ async function testPullTransformReturnsPromise() {
     if (chunks === null) return null;
     return chunks;
   };
-  const result = await text(pull(from('hello'), asyncTransform));
-  assert.strictEqual(result, 'hello');
+  const result = await text(pull(from("hello"), asyncTransform));
+  assert.strictEqual(result, "hello");
 }
 
 // Stateless transform error propagates
 async function testPullStatelessTransformError() {
   const badTransform = (chunks) => {
     if (chunks === null) return null;
-    throw new Error('async stateless boom');
+    throw new Error("async stateless boom");
   };
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of pull(from('hello'), badTransform)) { /* consume */ }
-  }, { message: 'async stateless boom' });
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of pull(from("hello"), badTransform)) {
+        /* consume */
+      }
+    },
+    { message: "async stateless boom" },
+  );
 }
 
 // Stateful transform error propagates
 async function testPullStatefulTransformError() {
   const badStateful = {
-    transform: async function*(source) { // eslint-disable-line require-yield
+    transform: async function* (source) {
+      // eslint-disable-line require-yield
       for await (const chunks of source) {
         if (chunks === null) continue;
-        throw new Error('async stateful boom');
+        throw new Error("async stateful boom");
       }
     },
   };
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of pull(from('hello'), badStateful)) { /* consume */ }
-  }, { message: 'async stateful boom' });
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of pull(from("hello"), badStateful)) {
+        /* consume */
+      }
+    },
+    { message: "async stateful boom" },
+  );
 }
 
 // Stateless transform flush emitting data
 async function testPullStatelessTransformFlush() {
   const withTrailer = (chunks) => {
     if (chunks === null) {
-      return [new TextEncoder().encode('-TRAILER')];
+      return [new TextEncoder().encode("-TRAILER")];
     }
     return chunks;
   };
-  const data = await text(pull(from('data'), withTrailer));
-  assert.strictEqual(data, 'data-TRAILER');
+  const data = await text(pull(from("data"), withTrailer));
+  assert.strictEqual(data, "data-TRAILER");
 }
 
 // Consecutive stateless transforms each receive a final flush signal after
 // upstream flush output has been processed.
 async function testPullConsecutiveStatelessTransformFlush() {
   const enc = new TextEncoder();
-  const addAOnFlush = (chunks) => (chunks === null ?
-    [enc.encode('-A')] : chunks);
-  const addBOnFlush = (chunks) => (chunks === null ?
-    [enc.encode('-B')] : chunks);
+  const addAOnFlush = (chunks) =>
+    chunks === null ? [enc.encode("-A")] : chunks;
+  const addBOnFlush = (chunks) =>
+    chunks === null ? [enc.encode("-B")] : chunks;
 
-  const data = await text(pull(from('x'), addAOnFlush, addBOnFlush));
-  assert.strictEqual(data, 'x-A-B');
+  const data = await text(pull(from("x"), addAOnFlush, addBOnFlush));
+  assert.strictEqual(data, "x-A-B");
 }
 
 // Stateless transform flush error propagates
 async function testPullStatelessTransformFlushError() {
   const badFlush = (chunks) => {
     if (chunks === null) {
-      throw new Error('async flush boom');
+      throw new Error("async flush boom");
     }
     return chunks;
   };
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of pull(from('hello'), badFlush)) { /* consume */ }
-  }, { message: 'async flush boom' });
+  await assert.rejects(
+    async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of pull(from("hello"), badFlush)) {
+        /* consume */
+      }
+    },
+    { message: "async flush boom" },
+  );
 }
 
 // Pull with a sync iterable source (not async)
 async function testPullWithSyncSource() {
   function* gen() {
-    yield new TextEncoder().encode('sync-source');
+    yield new TextEncoder().encode("sync-source");
   }
   const data = await text(pull(gen()));
-  assert.strictEqual(data, 'sync-source');
+  assert.strictEqual(data, "sync-source");
 }
 
 // Pull transform yielding strings
@@ -310,14 +336,14 @@ async function testPullTransformYieldsStrings() {
     if (chunks === null) return null;
     return chunks.map((c) => new TextDecoder().decode(c));
   };
-  const result = await text(pull(from('hello'), stringTransform));
-  assert.strictEqual(result, 'hello');
+  const result = await text(pull(from("hello"), stringTransform));
+  assert.strictEqual(result, "hello");
 }
 
 // pull() accepts a string source directly (normalized via from())
 async function testPullStringSource() {
-  const data = await text(pull('hello-direct'));
-  assert.strictEqual(data, 'hello-direct');
+  const data = await text(pull("hello-direct"));
+  assert.strictEqual(data, "hello-direct");
 }
 
 // Transform returning a single Uint8Array should be wrapped as a batch,
@@ -327,10 +353,10 @@ async function testTransformReturnsSingleUint8Array() {
     if (chunks === null) return null;
     // Return a single Uint8Array, not an array
     const enc = new TextEncoder();
-    return enc.encode('transformed');
+    return enc.encode("transformed");
   };
-  const data = await text(pull(from('input'), transform));
-  assert.strictEqual(data, 'transformed');
+  const data = await text(pull(from("input"), transform));
+  assert.strictEqual(data, "transformed");
 }
 
 // Transform returning a single string should be UTF-8 encoded,
@@ -338,10 +364,10 @@ async function testTransformReturnsSingleUint8Array() {
 async function testTransformReturnsSingleString() {
   const transform = (chunks) => {
     if (chunks === null) return null;
-    return 'hello-string';
+    return "hello-string";
   };
-  const data = await text(pull(from('input'), transform));
-  assert.strictEqual(data, 'hello-string');
+  const data = await text(pull(from("input"), transform));
+  assert.strictEqual(data, "hello-string");
 }
 
 // Transform returning an ArrayBuffer should be converted to Uint8Array
@@ -349,20 +375,20 @@ async function testTransformReturnsArrayBuffer() {
   const transform = (chunks) => {
     if (chunks === null) return null;
     const enc = new TextEncoder();
-    return enc.encode('arraybuf').buffer;
+    return enc.encode("arraybuf").buffer;
   };
-  const data = await text(pull(from('input'), transform));
-  assert.strictEqual(data, 'arraybuf');
+  const data = await text(pull(from("input"), transform));
+  assert.strictEqual(data, "arraybuf");
 }
 
 // pipeTo() accepts a string source directly (normalized via from())
 async function testPipeToStringSource() {
-  const { pipeTo, push: pushFn, text: textFn } = require('stream/iter');
+  const { pipeTo, push: pushFn, text: textFn } = require("stream/iter");
   const { writer, readable } = pushFn({ budget: 16384 });
   const consume = (async () => textFn(readable))();
-  await pipeTo('hello-pipe', writer);
+  await pipeTo("hello-pipe", writer);
   const data = await consume;
-  assert.strictEqual(data, 'hello-pipe');
+  assert.strictEqual(data, "hello-pipe");
 }
 
 // INVARIANT: Each transform invocation receives its own options object.
@@ -380,7 +406,7 @@ async function testTransformOptionsNotShared() {
     seen.push({ id: 2, mutated: options.mutated });
     return chunks;
   };
-  await text(pull(from('test'), transform1, transform2));
+  await text(pull(from("test"), transform1, transform2));
   // transform1 sees its own mutation
   assert.strictEqual(seen[0].mutated, true);
   // transform2 gets a fresh options object - no mutation visible

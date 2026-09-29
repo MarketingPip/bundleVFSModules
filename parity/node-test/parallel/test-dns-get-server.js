@@ -1,8 +1,8 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const { Resolver } = require('dns');
+const { Resolver } = require("dns");
 
 const resolver = new Resolver();
 assert(resolver.getServers().length > 0);

@@ -1,15 +1,15 @@
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
-const assert = require('assert');
+const assert = require("assert");
 
-const buffer = require('buffer');
+const buffer = require("buffer");
 const SlowBuffer = buffer.SlowBuffer;
 
 const kMaxLength = buffer.kMaxLength;
 const bufferMaxSizeMsg = {
-  code: 'ERR_OUT_OF_RANGE',
-  name: 'RangeError',
+  code: "ERR_OUT_OF_RANGE",
+  name: "RangeError",
 };
 
 assert.throws(() => Buffer(kMaxLength + 1), bufferMaxSizeMsg);

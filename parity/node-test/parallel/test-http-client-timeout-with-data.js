@@ -19,45 +19,65 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
 let nchunks = 0;
 
 const options = {
-  method: 'GET',
+  method: "GET",
   port: undefined,
-  host: '127.0.0.1',
-  path: '/'
+  host: "127.0.0.1",
+  path: "/",
 };
 
-const server = http.createServer(common.mustCallAtLeast(function(req, res) {
-  res.writeHead(200, { 'Content-Length': '2' });
-  res.write('*');
-  server.once('timeout', common.mustCall(function() { res.end('*'); }));
-}));
+const server = http.createServer(
+  common.mustCallAtLeast(function (req, res) {
+    res.writeHead(200, { "Content-Length": "2" });
+    res.write("*");
+    server.once(
+      "timeout",
+      common.mustCall(function () {
+        res.end("*");
+      }),
+    );
+  }),
+);
 
-server.listen(0, options.host, common.mustCall(function() {
-  options.port = this.address().port;
-  const req = http.request(options, onresponse);
-  req.end();
+server.listen(
+  0,
+  options.host,
+  common.mustCall(function () {
+    options.port = this.address().port;
+    const req = http.request(options, onresponse);
+    req.end();
 
-  function onresponse(res) {
-    req.setTimeout(50, common.mustCall(function() {
-      assert.strictEqual(nchunks, 1); // Should have received the first chunk
-      server.emit('timeout');
-    }));
+    function onresponse(res) {
+      req.setTimeout(
+        50,
+        common.mustCall(function () {
+          assert.strictEqual(nchunks, 1); // Should have received the first chunk
+          server.emit("timeout");
+        }),
+      );
 
-    res.on('data', common.mustCall(function(data) {
-      assert.strictEqual(String(data), '*');
-      nchunks++;
-    }, 2));
+      res.on(
+        "data",
+        common.mustCall(function (data) {
+          assert.strictEqual(String(data), "*");
+          nchunks++;
+        }, 2),
+      );
 
-    res.on('end', common.mustCall(function() {
-      assert.strictEqual(nchunks, 2);
-      server.close();
-    }));
-  }
-}));
+      res.on(
+        "end",
+        common.mustCall(function () {
+          assert.strictEqual(nchunks, 2);
+          server.close();
+        }),
+      );
+    }
+  }),
+);

@@ -1,17 +1,17 @@
-'use strict';
-const common = require('../common');
-const fixtures = require('../common/fixtures');
+"use strict";
+const common = require("../common");
+const fixtures = require("../common/fixtures");
 
 common.skipIfInspectorDisabled();
 
-const assert = require('assert');
-const execFile = require('child_process').execFile;
+const assert = require("assert");
+const execFile = require("child_process").execFile;
 
-const mainScript = fixtures.path('loop.js');
+const mainScript = fixtures.path("loop.js");
 const expected =
-  '`node --debug` and `node --debug-brk` are invalid. ' +
-  'Please use `node --inspect` and `node --inspect-brk` instead.';
-for (const invalidArg of ['--debug-brk', '--debug']) {
+  "`node --debug` and `node --debug-brk` are invalid. " +
+  "Please use `node --inspect` and `node --inspect-brk` instead.";
+for (const invalidArg of ["--debug-brk", "--debug"]) {
   execFile(
     process.execPath,
     [invalidArg, mainScript],
@@ -20,8 +20,8 @@ for (const invalidArg of ['--debug-brk', '--debug']) {
       assert.strictEqual(
         stderr.includes(expected),
         true,
-        `${stderr} should include '${expected}'`
+        `${stderr} should include '${expected}'`,
       );
-    })
+    }),
   );
 }

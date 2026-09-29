@@ -1,26 +1,26 @@
-'use strict';
+"use strict";
 
-const assert = require('assert');
-const common = require('./');
+const assert = require("assert");
+const common = require("./");
 
 // The formats could change when V8 is updated, then the tests should be
 // updated accordingly.
 function assertResultShape(result) {
-  assert.strictEqual(typeof result.jsMemoryEstimate, 'number');
-  assert.strictEqual(typeof result.jsMemoryRange[0], 'number');
-  assert.strictEqual(typeof result.jsMemoryRange[1], 'number');
+  assert.strictEqual(typeof result.jsMemoryEstimate, "number");
+  assert.strictEqual(typeof result.jsMemoryRange[0], "number");
+  assert.strictEqual(typeof result.jsMemoryRange[1], "number");
 }
 
 function assertSummaryShape(result) {
-  assert.strictEqual(typeof result, 'object');
-  assert.strictEqual(typeof result.total, 'object');
+  assert.strictEqual(typeof result, "object");
+  assert.strictEqual(typeof result.total, "object");
   assertResultShape(result.total);
 }
 
 function assertDetailedShape(result, contexts = 0) {
-  assert.strictEqual(typeof result, 'object');
-  assert.strictEqual(typeof result.total, 'object');
-  assert.strictEqual(typeof result.current, 'object');
+  assert.strictEqual(typeof result, "object");
+  assert.strictEqual(typeof result.total, "object");
+  assert.strictEqual(typeof result.current, "object");
   assertResultShape(result.total);
   assertResultShape(result.current);
   if (contexts === 0) {
@@ -34,9 +34,9 @@ function assertDetailedShape(result, contexts = 0) {
 }
 
 function assertSingleDetailedShape(result) {
-  assert.strictEqual(typeof result, 'object');
-  assert.strictEqual(typeof result.total, 'object');
-  assert.strictEqual(typeof result.current, 'object');
+  assert.strictEqual(typeof result, "object");
+  assert.strictEqual(typeof result.total, "object");
+  assert.strictEqual(typeof result.current, "object");
   assert.deepStrictEqual(result.other, []);
   assertResultShape(result.total);
   assertResultShape(result.current);
@@ -44,8 +44,8 @@ function assertSingleDetailedShape(result) {
 
 function expectExperimentalWarning() {
   common.expectWarning(
-    'ExperimentalWarning',
-    'vm.measureMemory is an experimental feature and might change at any time',
+    "ExperimentalWarning",
+    "vm.measureMemory is an experimental feature and might change at any time",
   );
 }
 

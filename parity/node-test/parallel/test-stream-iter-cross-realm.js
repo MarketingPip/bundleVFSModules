@@ -1,10 +1,10 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const vm = require('vm');
-const { from, fromSync, pull, text, bytesSync } = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const vm = require("vm");
+const { from, fromSync, pull, text, bytesSync } = require("stream/iter");
 
 // Cross-realm objects are created in a different VM context.
 // They have different prototypes, so `instanceof` checks fail.
@@ -12,8 +12,11 @@ const { from, fromSync, pull, text, bytesSync } = require('stream/iter');
 
 // Helper: compare Uint8Array content regardless of realm.
 function assertBytes(actual, expected) {
-  assert.strictEqual(actual.length, expected.length,
-                     `length mismatch: ${actual.length} !== ${expected.length}`);
+  assert.strictEqual(
+    actual.length,
+    expected.length,
+    `length mismatch: ${actual.length} !== ${expected.length}`,
+  );
   for (let i = 0; i < expected.length; i++) {
     assert.strictEqual(actual[i], expected[i], `byte mismatch at index ${i}`);
   }
@@ -24,15 +27,15 @@ function assertBytes(actual, expected) {
 // =============================================================================
 
 async function testFromSyncCrossRealmUint8Array() {
-  const crossRealm = vm.runInNewContext('new Uint8Array([1, 2, 3])');
+  const crossRealm = vm.runInNewContext("new Uint8Array([1, 2, 3])");
   const data = bytesSync(fromSync(crossRealm));
   assertBytes(data, new Uint8Array([1, 2, 3]));
 }
 
 async function testFromCrossRealmUint8Array() {
-  const crossRealm = vm.runInNewContext('new Uint8Array([4, 5, 6])');
+  const crossRealm = vm.runInNewContext("new Uint8Array([4, 5, 6])");
   const result = await text(from(crossRealm));
-  assert.strictEqual(result, '\x04\x05\x06');
+  assert.strictEqual(result, "\x04\x05\x06");
 }
 
 // =============================================================================
@@ -40,19 +43,15 @@ async function testFromCrossRealmUint8Array() {
 // =============================================================================
 
 async function testFromSyncCrossRealmArrayBuffer() {
-  const crossRealm = vm.runInNewContext(
-    'new Uint8Array([7, 8, 9]).buffer',
-  );
+  const crossRealm = vm.runInNewContext("new Uint8Array([7, 8, 9]).buffer");
   const data = bytesSync(fromSync(crossRealm));
   assertBytes(data, new Uint8Array([7, 8, 9]));
 }
 
 async function testFromCrossRealmArrayBuffer() {
-  const crossRealm = vm.runInNewContext(
-    'new Uint8Array([10, 11, 12]).buffer',
-  );
+  const crossRealm = vm.runInNewContext("new Uint8Array([10, 11, 12]).buffer");
   const result = await text(from(crossRealm));
-  assert.strictEqual(result, '\x0a\x0b\x0c');
+  assert.strictEqual(result, "\x0a\x0b\x0c");
 }
 
 // =============================================================================
@@ -61,7 +60,7 @@ async function testFromCrossRealmArrayBuffer() {
 
 async function testFromSyncCrossRealmUint8ArrayArray() {
   const crossRealm = vm.runInNewContext(
-    '[new Uint8Array([1, 2]), new Uint8Array([3, 4])]',
+    "[new Uint8Array([1, 2]), new Uint8Array([3, 4])]",
   );
   const data = bytesSync(fromSync(crossRealm));
   assertBytes(data, new Uint8Array([1, 2, 3, 4]));
@@ -69,10 +68,10 @@ async function testFromSyncCrossRealmUint8ArrayArray() {
 
 async function testFromCrossRealmUint8ArrayArray() {
   const crossRealm = vm.runInNewContext(
-    '[new Uint8Array([5, 6]), new Uint8Array([7, 8])]',
+    "[new Uint8Array([5, 6]), new Uint8Array([7, 8])]",
   );
   const result = await text(from(crossRealm));
-  assert.strictEqual(result, '\x05\x06\x07\x08');
+  assert.strictEqual(result, "\x05\x06\x07\x08");
 }
 
 // =============================================================================
@@ -84,12 +83,10 @@ async function testPullCrossRealmTransformOutput() {
   const crossRealmTransform = (chunks) => {
     if (chunks === null) return null;
     // Re-encode each chunk as cross-realm Uint8Array
-    return vm.runInNewContext(
-      `[new Uint8Array([${[...chunks[0]]}])]`,
-    );
+    return vm.runInNewContext(`[new Uint8Array([${[...chunks[0]]}])]`);
   };
-  const output = await text(pull(from('hello'), crossRealmTransform));
-  assert.strictEqual(output, 'hello');
+  const output = await text(pull(from("hello"), crossRealmTransform));
+  assert.strictEqual(output, "hello");
 }
 
 // =============================================================================
@@ -104,7 +101,7 @@ async function testFromCrossRealmPromise() {
     yield crossRealmPromise;
   }
   const result = await text(from(gen()));
-  assert.strictEqual(result, 'promised-data');
+  assert.strictEqual(result, "promised-data");
 }
 
 // =============================================================================
@@ -112,7 +109,7 @@ async function testFromCrossRealmPromise() {
 // =============================================================================
 
 async function testFromSyncCrossRealmInt32Array() {
-  const crossRealm = vm.runInNewContext('new Int32Array([1])');
+  const crossRealm = vm.runInNewContext("new Int32Array([1])");
   const data = bytesSync(fromSync(crossRealm));
   // Int32Array([1]) = 4 bytes, endianness varies by platform
   assert.strictEqual(data.length, 4);

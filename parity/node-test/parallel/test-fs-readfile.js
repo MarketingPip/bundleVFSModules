@@ -1,28 +1,23 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // This test ensures that fs.readFile correctly returns the
 // contents of varying-sized files.
 
-const tmpdir = require('../../test/common/tmpdir');
-const assert = require('assert');
-const fs = require('fs');
+const tmpdir = require("../../test/common/tmpdir");
+const assert = require("assert");
+const fs = require("fs");
 
 const prefix = `.removeme-fs-readfile-${process.pid}`;
 
 tmpdir.refresh();
 
 const fileInfo = [
-  { name: tmpdir.resolve(`${prefix}-1K.txt`),
-    len: 1024 },
-  { name: tmpdir.resolve(`${prefix}-64K.txt`),
-    len: 64 * 1024 },
-  { name: tmpdir.resolve(`${prefix}-64KLessOne.txt`),
-    len: (64 * 1024) - 1 },
-  { name: tmpdir.resolve(`${prefix}-1M.txt`),
-    len: 1 * 1024 * 1024 },
-  { name: tmpdir.resolve(`${prefix}-1MPlusOne.txt`),
-    len: (1 * 1024 * 1024) + 1 },
+  { name: tmpdir.resolve(`${prefix}-1K.txt`), len: 1024 },
+  { name: tmpdir.resolve(`${prefix}-64K.txt`), len: 64 * 1024 },
+  { name: tmpdir.resolve(`${prefix}-64KLessOne.txt`), len: 64 * 1024 - 1 },
+  { name: tmpdir.resolve(`${prefix}-1M.txt`), len: 1 * 1024 * 1024 },
+  { name: tmpdir.resolve(`${prefix}-1MPlusOne.txt`), len: 1 * 1024 * 1024 + 1 },
 ];
 
 // Populate each fileInfo (and file) with unique fill.
@@ -45,11 +40,14 @@ for (const e of fileInfo) {
 
 // Test readFile on each size.
 for (const e of fileInfo) {
-  fs.readFile(e.name, common.mustCall((err, buf) => {
-    console.log(`Validating readFile on file ${e.name} of length ${e.len}`);
-    assert.ifError(err);
-    assert.deepStrictEqual(buf, e.contents);
-  }));
+  fs.readFile(
+    e.name,
+    common.mustCall((err, buf) => {
+      console.log(`Validating readFile on file ${e.name} of length ${e.len}`);
+      assert.ifError(err);
+      assert.deepStrictEqual(buf, e.contents);
+    }),
+  );
 }
 
 // readFile() and readFileSync() should fail if the file is too big.
@@ -61,40 +59,57 @@ for (const e of fileInfo) {
     common.printSkipMessage(`Not enough space in ${tmpdir.path}`);
   } else {
     const file = tmpdir.resolve(`${prefix}-too-large.txt`);
-    fs.writeFileSync(file, Buffer.from('0'));
+    fs.writeFileSync(file, Buffer.from("0"));
     fs.truncateSync(file, kIoMaxLength + 1);
 
-    fs.readFile(file, common.expectsError({
-      code: 'ERR_FS_FILE_TOO_LARGE',
-      name: 'RangeError',
-    }));
-    assert.throws(() => {
-      fs.readFileSync(file);
-    }, { code: 'ERR_FS_FILE_TOO_LARGE', name: 'RangeError' });
+    fs.readFile(
+      file,
+      common.expectsError({
+        code: "ERR_FS_FILE_TOO_LARGE",
+        name: "RangeError",
+      }),
+    );
+    assert.throws(
+      () => {
+        fs.readFileSync(file);
+      },
+      { code: "ERR_FS_FILE_TOO_LARGE", name: "RangeError" },
+    );
   }
 }
 
 {
   // Test cancellation, before
   const signal = AbortSignal.abort();
-  fs.readFile(fileInfo[0].name, { signal }, common.mustCall((err, buf) => {
-    assert.strictEqual(err.name, 'AbortError');
-  }));
+  fs.readFile(
+    fileInfo[0].name,
+    { signal },
+    common.mustCall((err, buf) => {
+      assert.strictEqual(err.name, "AbortError");
+    }),
+  );
 }
 {
   // Test cancellation, during read
   const controller = new AbortController();
   const signal = controller.signal;
-  fs.readFile(fileInfo[0].name, { signal }, common.mustCall((err, buf) => {
-    assert.strictEqual(err.name, 'AbortError');
-  }));
+  fs.readFile(
+    fileInfo[0].name,
+    { signal },
+    common.mustCall((err, buf) => {
+      assert.strictEqual(err.name, "AbortError");
+    }),
+  );
   process.nextTick(() => controller.abort());
 }
 {
   // Verify that if something different than Abortcontroller.signal
   // is passed, ERR_INVALID_ARG_TYPE is thrown
-  assert.throws(() => {
-    const callback = common.mustNotCall();
-    fs.readFile(fileInfo[0].name, { signal: 'hello' }, callback);
-  }, { code: 'ERR_INVALID_ARG_TYPE', name: 'TypeError' });
+  assert.throws(
+    () => {
+      const callback = common.mustNotCall();
+      fs.readFile(fileInfo[0].name, { signal: "hello" }, callback);
+    },
+    { code: "ERR_INVALID_ARG_TYPE", name: "TypeError" },
+  );
 }

@@ -1,19 +1,13 @@
-import {
-
-  Symbol,
-} from './primordials.js';
-import Duplex from './duplex.js';
-import { nextTick } from './task-queues.js';
-
-
-
+import { Symbol } from "./primordials.js";
+import Duplex from "./duplex.js";
+import { nextTick } from "./task-queues.js";
 
 function assert(value, message) {
   if (!value) throw new Error(message || "Assertion failed");
 }
 
-const kCallback = Symbol('Callback');
-const kInitOtherSide = Symbol('InitOtherSide');
+const kCallback = Symbol("Callback");
+const kInitOtherSide = Symbol("InitOtherSide");
 
 class DuplexSide extends Duplex {
   #otherSide = null;
@@ -53,10 +47,9 @@ class DuplexSide extends Duplex {
   }
 
   _final(callback) {
-    this.#otherSide.on('end', callback);
+    this.#otherSide.on("end", callback);
     this.#otherSide.push(null);
   }
-
 
   _destroy(err, callback) {
     const otherSide = this.#otherSide;

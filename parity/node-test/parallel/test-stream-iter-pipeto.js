@@ -1,35 +1,45 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { pipeTo, pipeToSync, from, fromSync } = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { pipeTo, pipeToSync, from, fromSync } = require("stream/iter");
 
 async function testPipeToSync() {
   const written = [];
   const writer = {
-    writeSync(chunk) { written.push(chunk); return true; },
-    endSync() { return written.length; },
+    writeSync(chunk) {
+      written.push(chunk);
+      return true;
+    },
+    endSync() {
+      return written.length;
+    },
     fail() {},
   };
 
-  const totalBytes = pipeToSync(fromSync('pipe-data'), writer);
+  const totalBytes = pipeToSync(fromSync("pipe-data"), writer);
   assert.strictEqual(totalBytes, 9); // 'pipe-data' = 9 UTF-8 bytes
   assert.ok(written.length > 0);
   const result = new TextDecoder().decode(
-    new Uint8Array(written.reduce((acc, c) => [...acc, ...c], [])));
-  assert.strictEqual(result, 'pipe-data');
+    new Uint8Array(written.reduce((acc, c) => [...acc, ...c], [])),
+  );
+  assert.strictEqual(result, "pipe-data");
 }
 
 async function testPipeTo() {
   const written = [];
   const writer = {
-    async write(chunk) { written.push(chunk); },
-    async end() { return written.length; },
+    async write(chunk) {
+      written.push(chunk);
+    },
+    async end() {
+      return written.length;
+    },
     async fail() {},
   };
 
-  const totalBytes = await pipeTo(from('async-pipe-data'), writer);
+  const totalBytes = await pipeTo(from("async-pipe-data"), writer);
   assert.strictEqual(totalBytes, 15); // 'async-pipe-data' = 15 UTF-8 bytes
   assert.ok(written.length > 0);
 }
@@ -38,11 +48,13 @@ async function testPipeToPreventClose() {
   let endCalled = false;
   const writer = {
     async write() {},
-    async end() { endCalled = true; },
+    async end() {
+      endCalled = true;
+    },
     async fail() {},
   };
 
-  await pipeTo(from('data'), writer, { preventClose: true });
+  await pipeTo(from("data"), writer, { preventClose: true });
   assert.strictEqual(endCalled, false);
 }
 
@@ -52,35 +64,40 @@ async function testPipeToSourceError() {
   let failReason;
   const writer = {
     write() {},
-    fail(reason) { failCalled = true; failReason = reason; },
+    fail(reason) {
+      failCalled = true;
+      failReason = reason;
+    },
   };
   async function* failingSource() {
-    yield [new TextEncoder().encode('a')];
-    throw new Error('pipe source boom');
+    yield [new TextEncoder().encode("a")];
+    throw new Error("pipe source boom");
   }
-  await assert.rejects(
-    () => pipeTo(failingSource(), writer),
-    { message: 'pipe source boom' },
-  );
+  await assert.rejects(() => pipeTo(failingSource(), writer), {
+    message: "pipe source boom",
+  });
   assert.strictEqual(failCalled, true);
-  assert.strictEqual(failReason.message, 'pipe source boom');
+  assert.strictEqual(failReason.message, "pipe source boom");
 }
 
 // PipeToSync source error calls writer.fail()
 async function testPipeToSyncSourceError() {
   let failCalled = false;
   const writer = {
-    writeSync() { return true; },
-    fail(reason) { failCalled = true; },
+    writeSync() {
+      return true;
+    },
+    fail(reason) {
+      failCalled = true;
+    },
   };
   function* failingSource() {
-    yield [new TextEncoder().encode('a')];
-    throw new Error('sync pipe boom');
+    yield [new TextEncoder().encode("a")];
+    throw new Error("sync pipe boom");
   }
-  assert.throws(
-    () => pipeToSync(failingSource(), writer),
-    { message: 'sync pipe boom' },
-  );
+  assert.throws(() => pipeToSync(failingSource(), writer), {
+    message: "sync pipe boom",
+  });
   assert.strictEqual(failCalled, true);
 }
 
@@ -89,17 +106,19 @@ async function testPipeToWithSignal() {
   const ac = new AbortController();
   const chunks = [];
   const writer = {
-    write(chunk) { chunks.push(chunk); },
+    write(chunk) {
+      chunks.push(chunk);
+    },
   };
   async function* slowSource() {
-    yield [new TextEncoder().encode('a')];
+    yield [new TextEncoder().encode("a")];
     await new Promise((r) => setTimeout(r, 50));
-    yield [new TextEncoder().encode('b')];
+    yield [new TextEncoder().encode("b")];
   }
   ac.abort();
   await assert.rejects(
     () => pipeTo(slowSource(), writer, { signal: ac.signal }),
-    { name: 'AbortError' },
+    { name: "AbortError" },
   );
 }
 
@@ -107,7 +126,9 @@ async function testPipeToWithSignal() {
 async function testPipeToWithTransforms() {
   const chunks = [];
   const writer = {
-    write(chunk) { chunks.push(new TextDecoder().decode(chunk)); },
+    write(chunk) {
+      chunks.push(new TextDecoder().decode(chunk));
+    },
   };
   const upper = (batch) => {
     if (batch === null) return null;
@@ -118,15 +139,18 @@ async function testPipeToWithTransforms() {
       return out;
     });
   };
-  await pipeTo(from('hello'), upper, writer);
-  assert.strictEqual(chunks.join(''), 'HELLO');
+  await pipeTo(from("hello"), upper, writer);
+  assert.strictEqual(chunks.join(""), "HELLO");
 }
 
 // PipeToSync with transforms
 async function testPipeToSyncWithTransforms() {
   const chunks = [];
   const writer = {
-    writeSync(chunk) { chunks.push(new TextDecoder().decode(chunk)); return true; },
+    writeSync(chunk) {
+      chunks.push(new TextDecoder().decode(chunk));
+      return true;
+    },
   };
   const upper = (batch) => {
     if (batch === null) return null;
@@ -137,19 +161,21 @@ async function testPipeToSyncWithTransforms() {
       return out;
     });
   };
-  pipeToSync(fromSync('hello'), upper, writer);
-  assert.strictEqual(chunks.join(''), 'HELLO');
+  pipeToSync(fromSync("hello"), upper, writer);
+  assert.strictEqual(chunks.join(""), "HELLO");
 }
 
 async function testPipeToWriterTransformMethodIgnored() {
   const chunks = [];
   const writer = {
     transform: common.mustNotCall(),
-    write(chunk) { chunks.push(new TextDecoder().decode(chunk)); },
+    write(chunk) {
+      chunks.push(new TextDecoder().decode(chunk));
+    },
   };
 
-  await pipeTo(from('hello'), writer);
-  assert.strictEqual(chunks.join(''), 'hello');
+  await pipeTo(from("hello"), writer);
+  assert.strictEqual(chunks.join(""), "hello");
 }
 
 async function testPipeToSyncWriterTransformMethodIgnored() {
@@ -162,18 +188,22 @@ async function testPipeToSyncWriterTransformMethodIgnored() {
     },
   };
 
-  pipeToSync(fromSync('hello'), writer);
-  assert.strictEqual(chunks.join(''), 'hello');
+  pipeToSync(fromSync("hello"), writer);
+  assert.strictEqual(chunks.join(""), "hello");
 }
 
 // PipeTo with writev writer
 async function testPipeToWithWritevWriter() {
   const allChunks = [];
   const writer = {
-    write(chunk) { allChunks.push(chunk); },
-    writev(chunks) { allChunks.push(...chunks); },
+    write(chunk) {
+      allChunks.push(chunk);
+    },
+    writev(chunks) {
+      allChunks.push(...chunks);
+    },
   };
-  await pipeTo(from('hello world'), writer);
+  await pipeTo(from("hello world"), writer);
   assert.strictEqual(allChunks.length > 0, true);
 }
 
@@ -181,10 +211,15 @@ async function testPipeToWithWritevWriter() {
 async function testPipeToSyncFallback() {
   const chunks = [];
   const writer = {
-    writeSync(chunk) { chunks.push(chunk); return true; },
-    write(chunk) { chunks.push(chunk); },
+    writeSync(chunk) {
+      chunks.push(chunk);
+      return true;
+    },
+    write(chunk) {
+      chunks.push(chunk);
+    },
   };
-  await pipeTo(from('hello'), writer);
+  await pipeTo(from("hello"), writer);
   assert.strictEqual(chunks.length > 0, true);
 }
 
@@ -193,15 +228,17 @@ async function testPipeToPreventFail() {
   let failCalled = false;
   const writer = {
     write() {},
-    fail() { failCalled = true; },
+    fail() {
+      failCalled = true;
+    },
   };
   // eslint-disable-next-line require-yield
   async function* failingSource() {
-    throw new Error('boom');
+    throw new Error("boom");
   }
   await assert.rejects(
     () => pipeTo(failingSource(), writer, { preventFail: true }),
-    { message: 'boom' },
+    { message: "boom" },
   );
   assert.strictEqual(failCalled, false);
 }
@@ -210,10 +247,15 @@ async function testPipeToPreventFail() {
 async function testPipeToSyncPreventClose() {
   let endCalled = false;
   const writer = {
-    writeSync() { return true; },
-    endSync() { endCalled = true; return 0; },
+    writeSync() {
+      return true;
+    },
+    endSync() {
+      endCalled = true;
+      return 0;
+    },
   };
-  pipeToSync(fromSync('hello'), writer, { preventClose: true });
+  pipeToSync(fromSync("hello"), writer, { preventClose: true });
   assert.strictEqual(endCalled, false);
 }
 
@@ -227,7 +269,7 @@ async function testPipeToMinimalWriter() {
     },
   };
 
-  await pipeTo(from('minimal'), minimalWriter);
+  await pipeTo(from("minimal"), minimalWriter);
   assert.strictEqual(chunks.length > 0, true);
 }
 
@@ -240,7 +282,7 @@ async function testPipeToSyncMinimalWriter() {
     },
   };
 
-  pipeToSync(fromSync('minimal-sync'), minimalWriter);
+  pipeToSync(fromSync("minimal-sync"), minimalWriter);
   assert.strictEqual(chunks.length > 0, true);
 }
 
@@ -306,15 +348,16 @@ async function testPipeToSyncIterableFastPathAsyncValue() {
     },
   };
   function* source() {
-    yield Promise.resolve('a');
+    yield Promise.resolve("a");
     yield new Uint8Array([0x62]);
   }
 
   const totalBytes = await pipeTo(source(), writer);
   assert.strictEqual(totalBytes, 2);
   const result = new TextDecoder().decode(
-    new Uint8Array(chunks.reduce((acc, c) => [...acc, ...c], [])));
-  assert.strictEqual(result, 'ab');
+    new Uint8Array(chunks.reduce((acc, c) => [...acc, ...c], [])),
+  );
+  assert.strictEqual(result, "ab");
 }
 
 Promise.all([

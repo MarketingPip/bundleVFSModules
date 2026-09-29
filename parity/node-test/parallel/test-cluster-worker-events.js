@@ -19,23 +19,25 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const cluster = require('cluster');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const cluster = require("cluster");
 
 const OK = 2;
 
 if (cluster.isPrimary) {
-
   const worker = cluster.fork();
 
-  worker.on('exit', common.mustCall((code) => {
-    assert.strictEqual(code, OK);
-    process.exit(0);
-  }));
+  worker.on(
+    "exit",
+    common.mustCall((code) => {
+      assert.strictEqual(code, OK);
+      process.exit(0);
+    }),
+  );
 
-  const result = worker.send('SOME MESSAGE');
+  const result = worker.send("SOME MESSAGE");
   assert.strictEqual(result, true);
 
   return;
@@ -58,22 +60,31 @@ const check = common.mustCallAtLeast((m) => {
 
   assert.deepStrictEqual(messages[0], messages[1]);
 
-  cluster.worker.once('error', common.mustCall((e) => {
-    assert.strictEqual(e, 'HI');
-    process.exit(OK);
-  }));
+  cluster.worker.once(
+    "error",
+    common.mustCall((e) => {
+      assert.strictEqual(e, "HI");
+      process.exit(OK);
+    }),
+  );
 
-  process.emit('error', 'HI');
+  process.emit("error", "HI");
 });
 
-process.on('message', common.mustCall((m) => {
-  assert(!sawProcess);
-  sawProcess = true;
-  check(m);
-}));
+process.on(
+  "message",
+  common.mustCall((m) => {
+    assert(!sawProcess);
+    sawProcess = true;
+    check(m);
+  }),
+);
 
-cluster.worker.on('message', common.mustCall((m) => {
-  assert(!sawWorker);
-  sawWorker = true;
-  check(m);
-}));
+cluster.worker.on(
+  "message",
+  common.mustCall((m) => {
+    assert(!sawWorker);
+    sawWorker = true;
+    check(m);
+  }),
+);

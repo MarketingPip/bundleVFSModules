@@ -19,136 +19,153 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 if (!common.hasCrypto) {
-  common.skip('missing crypto');
+  common.skip("missing crypto");
 }
-const {
-  hasOpenSSL,
-  opensslCli,
-} = require('../common/crypto');
+const { hasOpenSSL, opensslCli } = require("../common/crypto");
 
 if (!opensslCli) {
-  common.skip('node compiled without OpenSSL CLI.');
+  common.skip("node compiled without OpenSSL CLI.");
 }
 
-const fixtures = require('../common/fixtures');
-const assert = require('assert');
-const tls = require('tls');
-const { spawn } = require('child_process');
+const fixtures = require("../common/fixtures");
+const assert = require("assert");
+const tls = require("tls");
+const { spawn } = require("child_process");
 const isBoringSSL = process.features.openssl_is_boringssl;
 
-doTest({ tickets: false }, function() {
-  doTest({ tickets: true }, function() {
-    doTest({ tickets: false, invalidSession: true }, function() {
-      console.error('all done');
+doTest({ tickets: false }, function () {
+  doTest({ tickets: true }, function () {
+    doTest({ tickets: false, invalidSession: true }, function () {
+      console.error("all done");
     });
   });
 });
 
 function doTest(testOptions, callback) {
-  const key = fixtures.readKey('rsa_private.pem');
-  const cert = fixtures.readKey('rsa_cert.crt');
+  const key = fixtures.readKey("rsa_private.pem");
+  const cert = fixtures.readKey("rsa_cert.crt");
   const options = {
     key,
     cert,
     ca: [cert],
     requestCert: true,
     rejectUnauthorized: false,
-    secureProtocol: 'TLS_method',
+    secureProtocol: "TLS_method",
     // BoringSSL supports the RSA cipher selector, but not OpenSSL's
     // cipher-string policy command syntax.
-    ciphers: isBoringSSL ? 'RSA' : 'RSA@SECLEVEL=0'
+    ciphers: isBoringSSL ? "RSA" : "RSA@SECLEVEL=0",
   };
   let requestCount = 0;
   let resumeCount = 0;
   let newSessionCount = 0;
   let session;
 
-  const server = tls.createServer(options, function(cleartext) {
-    cleartext.on('error', function(er) {
+  const server = tls.createServer(options, function (cleartext) {
+    cleartext.on("error", function (er) {
       // We're ok with getting ECONNRESET in this test, but it's
       // timing-dependent, and thus unreliable. Any other errors
       // are just failures, though.
-      if (er.code !== 'ECONNRESET')
-        throw er;
+      if (er.code !== "ECONNRESET") throw er;
     });
     ++requestCount;
-    cleartext.end('');
+    cleartext.end("");
   });
-  server.on('newSession', common.mustCallAtLeast((id, data, cb) => {
-    ++newSessionCount;
-    // Emulate asynchronous store
-    setImmediate(common.mustCall(() => {
-      assert.ok(!session);
-      session = { id, data };
-      cb();
-    }));
-  }, 0));
-  server.on('resumeSession', common.mustCallAtLeast((id, callback) => {
-    ++resumeCount;
-    assert.ok(session);
-    assert.strictEqual(session.id.toString('hex'), id.toString('hex'));
+  server.on(
+    "newSession",
+    common.mustCallAtLeast((id, data, cb) => {
+      ++newSessionCount;
+      // Emulate asynchronous store
+      setImmediate(
+        common.mustCall(() => {
+          assert.ok(!session);
+          session = { id, data };
+          cb();
+        }),
+      );
+    }, 0),
+  );
+  server.on(
+    "resumeSession",
+    common.mustCallAtLeast((id, callback) => {
+      ++resumeCount;
+      assert.ok(session);
+      assert.strictEqual(session.id.toString("hex"), id.toString("hex"));
 
-    let data = session.data;
+      let data = session.data;
 
-    // Return an invalid session to test Node does not crash.
-    if (testOptions.invalidSession) {
-      data = Buffer.from('INVALID SESSION');
-      session = null;
-    }
+      // Return an invalid session to test Node does not crash.
+      if (testOptions.invalidSession) {
+        data = Buffer.from("INVALID SESSION");
+        session = null;
+      }
 
-    // Just to check that async really works there
-    setImmediate(() => {
-      callback(null, data);
-    });
-  }, 0));
-
-  server.listen(0, common.mustCall(function() {
-    const args = [
-      's_client',
-      isBoringSSL ? '-tls1_2' : '-tls1',
-      '-cipher', (hasOpenSSL(3, 1) ? 'DEFAULT:@SECLEVEL=0' : 'DEFAULT'),
-      '-connect', `localhost:${this.address().port}`,
-      '-servername', 'ohgod',
-      '-key', fixtures.path('keys/rsa_private.pem'),
-      '-cert', fixtures.path('keys/rsa_cert.crt'),
-      '-reconnect',
-    ].concat(testOptions.tickets ? [] : '-no_ticket');
-
-    function spawnClient() {
-      const client = spawn(opensslCli, args, {
-        stdio: [ 0, 1, 'pipe' ]
+      // Just to check that async really works there
+      setImmediate(() => {
+        callback(null, data);
       });
-      let err = '';
-      client.stderr.setEncoding('utf8');
-      client.stderr.on('data', function(chunk) {
-        err += chunk;
-      });
+    }, 0),
+  );
 
-      client.on('exit', common.mustCall(function(code, signal) {
-        if (code !== 0) {
-          // If SmartOS and connection refused, then retry. See
-          // https://github.com/nodejs/node/issues/2663.
-          if (common.isSunOS && err.includes('Connection refused')) {
-            requestCount = 0;
-            spawnClient();
-            return;
-          }
-          assert.fail(`code: ${code}, signal: ${signal}, output: ${err}`);
-        }
-        assert.strictEqual(code, 0);
-        server.close(common.mustCall(function() {
-          setImmediate(callback);
-        }));
-      }));
-    }
+  server.listen(
+    0,
+    common.mustCall(function () {
+      const args = [
+        "s_client",
+        isBoringSSL ? "-tls1_2" : "-tls1",
+        "-cipher",
+        hasOpenSSL(3, 1) ? "DEFAULT:@SECLEVEL=0" : "DEFAULT",
+        "-connect",
+        `localhost:${this.address().port}`,
+        "-servername",
+        "ohgod",
+        "-key",
+        fixtures.path("keys/rsa_private.pem"),
+        "-cert",
+        fixtures.path("keys/rsa_cert.crt"),
+        "-reconnect",
+      ].concat(testOptions.tickets ? [] : "-no_ticket");
 
-    spawnClient();
-  }));
+      function spawnClient() {
+        const client = spawn(opensslCli, args, {
+          stdio: [0, 1, "pipe"],
+        });
+        let err = "";
+        client.stderr.setEncoding("utf8");
+        client.stderr.on("data", function (chunk) {
+          err += chunk;
+        });
 
-  process.on('exit', function() {
+        client.on(
+          "exit",
+          common.mustCall(function (code, signal) {
+            if (code !== 0) {
+              // If SmartOS and connection refused, then retry. See
+              // https://github.com/nodejs/node/issues/2663.
+              if (common.isSunOS && err.includes("Connection refused")) {
+                requestCount = 0;
+                spawnClient();
+                return;
+              }
+              assert.fail(`code: ${code}, signal: ${signal}, output: ${err}`);
+            }
+            assert.strictEqual(code, 0);
+            server.close(
+              common.mustCall(function () {
+                setImmediate(callback);
+              }),
+            );
+          }),
+        );
+      }
+
+      spawnClient();
+    }),
+  );
+
+  process.on("exit", function () {
     // Each test run connects 6 times: an initial request and 5 reconnect
     // requests.
     assert.strictEqual(requestCount, 6);

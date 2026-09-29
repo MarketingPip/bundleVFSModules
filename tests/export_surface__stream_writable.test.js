@@ -1,11 +1,11 @@
 // Export-surface parity: src/_stream_writeable.js  <->  node:_stream_writable
 // captured from real Node v24.20.0 (node:_stream_writable)
 // Regenerate: node ~/workspace/bvm-export-helpers/gen_export_surface_tests.mjs
-import * as shim from '../src/_stream_writeable.js';
+import * as shim from "../src/_stream_writeable.js";
 
-const EXPECTED = ["WritableState","default","fromWeb","toWeb"];
+const EXPECTED = ["WritableState", "default", "fromWeb", "toWeb"];
 
-test('node:_stream_writable export surface matches the defined contract', () => {
+test("node:_stream_writable export surface matches the defined contract", () => {
   const actual = Object.keys(shim).sort();
   const missing = EXPECTED.filter((k) => !actual.includes(k));
   const extra = actual.filter((k) => !EXPECTED.includes(k));

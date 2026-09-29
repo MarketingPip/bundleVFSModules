@@ -1,16 +1,16 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const dc = require('diagnostics_channel');
+const common = require("../common");
+const dc = require("diagnostics_channel");
 
-const channel = dc.tracingChannel('test');
+const channel = dc.tracingChannel("test");
 
 const handlers = {
   start: common.mustNotCall(),
   end: common.mustNotCall(),
   asyncStart: common.mustNotCall(),
   asyncEnd: common.mustNotCall(),
-  error: common.mustNotCall()
+  error: common.mustNotCall(),
 };
 
 // While subscribe occurs _before_ the callback executes,

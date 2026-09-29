@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { describe, it } = require('node:test');
-const assert = require('assert');
-const { startNewREPLServer } = require('../common/repl');
+const common = require("../common");
+const { describe, it } = require("node:test");
+const assert = require("assert");
+const { startNewREPLServer } = require("../common/repl");
 
 function getNoResultsFunction() {
   return common.mustSucceed((data) => {
@@ -11,20 +11,20 @@ function getNoResultsFunction() {
   });
 }
 
-describe('REPL tab completion without side effects', () => {
+describe("REPL tab completion without side effects", () => {
   const setup = [
-    'globalThis.counter = 0;',
-    'function incCounter() { return counter++; }',
+    "globalThis.counter = 0;",
+    "function incCounter() { return counter++; }",
     'const arr = [{ bar: "baz" }];',
   ];
   // None of these expressions should affect the value of `counter`
   for (const code of [
-    'incCounter().',
-    'a=(counter+=1).foo.',
-    'a=(counter++).foo.',
-    'for((counter)of[1])foo.',
-    'for((counter)in{1:1})foo.',
-    'arr[incCounter()].b',
+    "incCounter().",
+    "a=(counter+=1).foo.",
+    "a=(counter++).foo.",
+    "for((counter)of[1])foo.",
+    "for((counter)in{1:1})foo.",
+    "arr[incCounter()].b",
   ]) {
     it(`does not evaluate with side effects (${code})`, async () => {
       const { replServer, input } = startNewREPLServer();

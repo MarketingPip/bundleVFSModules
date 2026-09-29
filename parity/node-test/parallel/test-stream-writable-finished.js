@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { Writable } = require('stream');
-const assert = require('assert');
+const common = require("../common");
+const { Writable } = require("stream");
+const assert = require("assert");
 
 // basic
 {
   // Find it on Writable.prototype
-  assert(Object.hasOwn(Writable.prototype, 'writableFinished'));
+  assert(Object.hasOwn(Writable.prototype, "writableFinished"));
 }
 
 // event
@@ -20,13 +20,19 @@ const assert = require('assert');
     cb();
   });
 
-  writable.on('finish', common.mustCall(() => {
-    assert.strictEqual(writable.writableFinished, true);
-  }));
+  writable.on(
+    "finish",
+    common.mustCall(() => {
+      assert.strictEqual(writable.writableFinished, true);
+    }),
+  );
 
-  writable.end('testing finished state', common.mustCall(() => {
-    assert.strictEqual(writable.writableFinished, true);
-  }));
+  writable.end(
+    "testing finished state",
+    common.mustCall(() => {
+      assert.strictEqual(writable.writableFinished, true);
+    }),
+  );
 }
 
 {
@@ -35,11 +41,11 @@ const assert = require('assert');
   const w = new Writable({
     write(chunk, encoding, cb) {
       cb();
-    }
+    },
   });
 
   w.end();
-  w.on('finish', common.mustCall());
+  w.on("finish", common.mustCall());
 }
 
 {
@@ -48,13 +54,16 @@ const assert = require('assert');
   const w = new Writable({
     write(chunk, encoding, cb) {
       cb();
-    }
+    },
   });
 
   let sync = true;
-  w.on('prefinish', common.mustCall(() => {
-    assert.strictEqual(sync, true);
-  }));
+  w.on(
+    "prefinish",
+    common.mustCall(() => {
+      assert.strictEqual(sync, true);
+    }),
+  );
   w.end();
   sync = false;
 }
@@ -68,17 +77,19 @@ const assert = require('assert');
     },
     final(cb) {
       cb();
-    }
+    },
   });
 
   let sync = true;
-  w.on('prefinish', common.mustCall(() => {
-    assert.strictEqual(sync, true);
-  }));
+  w.on(
+    "prefinish",
+    common.mustCall(() => {
+      assert.strictEqual(sync, true);
+    }),
+  );
   w.end();
   sync = false;
 }
-
 
 {
   // Call _final synchronously.
@@ -91,7 +102,7 @@ const assert = require('assert');
     final: common.mustCall((cb) => {
       assert.strictEqual(sync, true);
       cb();
-    })
+    }),
   });
 
   w.end();

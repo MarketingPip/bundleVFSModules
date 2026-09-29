@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('node:assert');
-const { getCallSites } = require('node:util');
+const common = require("../common");
+const assert = require("node:assert");
+const { getCallSites } = require("node:util");
 
 // Asserts that util.getCallSites() does not invoke
 // Error.prepareStackTrace.

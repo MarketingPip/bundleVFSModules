@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const vm = require('vm');
+require("../common");
+const assert = require("assert");
+const vm = require("vm");
 
 function checkSourceMapUrl(source, expectedSourceMapURL) {
   const script = new vm.Script(source);
@@ -10,18 +10,27 @@ function checkSourceMapUrl(source, expectedSourceMapURL) {
 }
 
 // No magic comment
-checkSourceMapUrl(`
+checkSourceMapUrl(
+  `
 function myFunc() {}
-`, undefined);
+`,
+  undefined,
+);
 
 // Malformed magic comment
-checkSourceMapUrl(`
+checkSourceMapUrl(
+  `
 function myFunc() {}
 // sourceMappingURL=sourcemap.json
-`, undefined);
+`,
+  undefined,
+);
 
 // Expected magic comment
-checkSourceMapUrl(`
+checkSourceMapUrl(
+  `
 function myFunc() {}
 //# sourceMappingURL=sourcemap.json
-`, 'sourcemap.json');
+`,
+  "sourcemap.json",
+);

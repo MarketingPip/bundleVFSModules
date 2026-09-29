@@ -6,26 +6,27 @@
 // TLS options (key/cert/ca/rejectUnauthorized/...) are accepted and ignored:
 // browsers do not let pages configure TLS.
 
-import http, { Agent as HttpAgent } from './http.js';
+import http, { Agent as HttpAgent } from "./http.js";
 
 // ---------------------------------------------------------------------------
 // Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 // undefined under real Node / direct import).
 // ---------------------------------------------------------------------------
-const RT = (typeof globalThis._RUNTIME_ !== "undefined")
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 void RT;
 
 class HttpsServerBase extends http.Server {
   constructor(options, requestListener) {
     // options may carry key/cert/ca/etc.; the virtual server ignores them.
     super(options, requestListener);
-    this._tlsOptions = options && typeof options === 'object' ? options : {};
+    this._tlsOptions = options && typeof options === "object" ? options : {};
   }
 
   setSecureContext(options) {
-    if (options && typeof options === 'object') {
+    if (options && typeof options === "object") {
       this._tlsOptions = { ...this._tlsOptions, ...options };
     }
   }
@@ -42,7 +43,7 @@ Object.setPrototypeOf(Server, HttpsServerBase);
 Server.prototype = HttpsServerBase.prototype;
 
 export function createServer(options, requestListener) {
-  if (typeof options === 'function') {
+  if (typeof options === "function") {
     requestListener = options;
     options = {};
   }
@@ -55,7 +56,7 @@ class HttpsAgentBase extends HttpAgent {
       __proto__: null,
       ...(options || {}),
       defaultPort: options?.defaultPort ?? 443,
-      protocol: options?.protocol ?? 'https:',
+      protocol: options?.protocol ?? "https:",
     });
     this.maxCachedSessions = options?.maxCachedSessions ?? 100;
   }
@@ -68,11 +69,20 @@ export function Agent(...args) {
 Object.setPrototypeOf(Agent, HttpsAgentBase);
 Agent.prototype = HttpsAgentBase.prototype;
 
-export const globalAgent = new Agent({ keepAlive: true, scheduling: 'lifo', timeout: 5000 });
+export const globalAgent = new Agent({
+  keepAlive: true,
+  scheduling: "lifo",
+  timeout: 5000,
+});
 
 export function request(urlOrOptions, optionsOrCallback, callback) {
   return http._createClientRequest(
-    urlOrOptions, optionsOrCallback, callback, 'https:', globalAgent);
+    urlOrOptions,
+    optionsOrCallback,
+    callback,
+    "https:",
+    globalAgent,
+  );
 }
 
 export function get(urlOrOptions, optionsOrCallback, callback) {

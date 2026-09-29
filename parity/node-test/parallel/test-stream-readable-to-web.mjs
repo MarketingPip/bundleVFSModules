@@ -1,8 +1,8 @@
-import { mustCall } from '../common/index.mjs';
-import { Readable } from 'node:stream';
-import { memoryUsage } from 'node:process';
-import assert from 'node:assert';
-import { setImmediate } from 'node:timers/promises';
+import { mustCall } from "../common/index.mjs";
+import { Readable } from "node:stream";
+import { memoryUsage } from "node:process";
+import assert from "node:assert";
+import { setImmediate } from "node:timers/promises";
 
 // Based on: https://github.com/nodejs/node/issues/46347#issuecomment-1413886707
 // edit: make it cross-platform as /dev/urandom is not available on Windows
@@ -25,10 +25,10 @@ const randomNodeStream = new Readable({
 
     this.push(Buffer.alloc(size));
     buffersCreated++;
-  }
+  },
 });
 
-randomNodeStream.on('error', (err) => {
+randomNodeStream.on("error", (err) => {
   assert.fail(err);
 });
 
@@ -44,18 +44,21 @@ checkMemoryUsage();
 let timeout;
 try {
   // Wait two seconds before consuming the stream to see if memory usage increases
-  timeout = setTimeout(mustCall(async () => {
-    // Did the stream leak memory?
-    checkMemoryUsage();
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of randomWebStream) {
-      // Yield event loop to allow garbage collection
-      await setImmediate();
-      // consume the stream
-      // check memory usage remains okay
+  timeout = setTimeout(
+    mustCall(async () => {
+      // Did the stream leak memory?
       checkMemoryUsage();
-    }
-  }), 2000);
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of randomWebStream) {
+        // Yield event loop to allow garbage collection
+        await setImmediate();
+        // consume the stream
+        // check memory usage remains okay
+        checkMemoryUsage();
+      }
+    }),
+    2000,
+  );
 } catch (err) {
   if (timeout) {
     clearTimeout(timeout);

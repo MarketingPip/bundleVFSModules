@@ -1,7 +1,7 @@
-'use strict';
-const common = require('../common');
-const http = require('http');
-const net = require('net');
+"use strict";
+const common = require("../common");
+const http = require("http");
+const net = require("net");
 
 // This test verifies that errors occurring synchronously during connection
 // when using http.request with a custom lookup function and blockList
@@ -24,24 +24,30 @@ const lookup = (_hostname, _options, callback) => {
   callback(null, common.localhostIPv4, 4);
 };
 
-const req = http.request({
-  host: 'example.com',
-  port: 80,
-  lookup,
-  family: 4, // Force IPv4 to use simple lookup path
-  createConnection: (opts) => {
-    // Pass blockList to trigger synchronous ERR_IP_BLOCKED error
-    return net.createConnection({ ...opts, blockList });
+const req = http.request(
+  {
+    host: "example.com",
+    port: 80,
+    lookup,
+    family: 4, // Force IPv4 to use simple lookup path
+    createConnection: (opts) => {
+      // Pass blockList to trigger synchronous ERR_IP_BLOCKED error
+      return net.createConnection({ ...opts, blockList });
+    },
   },
-}, common.mustNotCall());
+  common.mustNotCall(),
+);
 
 // This error handler must be called.
 // Without the fix, the error would be emitted before http.request()
 // returns, causing an unhandled 'error' event.
-req.on('error', common.mustCall((err) => {
-  if (err.code !== 'ERR_IP_BLOCKED') {
-    throw new Error(`Expected ERR_IP_BLOCKED but got ${err.code}`);
-  }
-}));
+req.on(
+  "error",
+  common.mustCall((err) => {
+    if (err.code !== "ERR_IP_BLOCKED") {
+      throw new Error(`Expected ERR_IP_BLOCKED but got ${err.code}`);
+    }
+  }),
+);
 
 req.end();

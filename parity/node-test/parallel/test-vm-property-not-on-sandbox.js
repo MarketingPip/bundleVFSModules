@@ -1,7 +1,7 @@
-'use strict';
-require('../common');
-const assert = require('assert');
-const vm = require('vm');
+"use strict";
+require("../common");
+const assert = require("assert");
+const vm = require("vm");
 
 // This, admittedly contrived, example tests an edge cases of the vm module.
 //

@@ -1,20 +1,23 @@
 // adjust path if needed
-import {jest, describe, test, expect } from '@jest/globals';
+import { jest, describe, test, expect } from "@jest/globals";
 
 import timers, {
-  setTimeout, clearTimeout,
-  setInterval, clearInterval,
-  setImmediate, clearImmediate,
-} from '../src/timers.js';
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  setImmediate,
+  clearImmediate,
+} from "../src/timers.js";
 // NOTE: enroll/unenroll/active/_unrefActive are NOT named ESM exports in
 // real node:timers — they live only on the default export, so the tests
 // reach them there (matching the true module surface).
 
-describe('timers-web', () => {
+describe("timers-web", () => {
   // Legacy idle-timer helpers (default-export only in real node:timers).
   const { enroll, unenroll, active, _unrefActive } = timers;
 
-    beforeAll(() => {
+  beforeAll(() => {
     jest.useFakeTimers();
   });
 
@@ -24,11 +27,11 @@ describe('timers-web', () => {
   // -------------------------------------------------------------------------
   // setTimeout / clearTimeout
   // -------------------------------------------------------------------------
-  describe('setTimeout / clearTimeout', () => {
-    test('setTimeout returns Timeout with close', (done) => {
+  describe("setTimeout / clearTimeout", () => {
+    test("setTimeout returns Timeout with close", (done) => {
       const fn = jest.fn();
-      const t = setTimeout(fn, 10, 'a', 'b');
-      expect(typeof t.close).toBe('function');
+      const t = setTimeout(fn, 10, "a", "b");
+      expect(typeof t.close).toBe("function");
       t.close();
 
       setTimeout(() => {
@@ -37,7 +40,7 @@ describe('timers-web', () => {
       }, 20);
     });
 
-    test('timeout fires after delay with args', (done) => {
+    test("timeout fires after delay with args", (done) => {
       const fn = jest.fn((a, b) => {
         expect(a).toBe(1);
         expect(b).toBe(2);
@@ -46,33 +49,33 @@ describe('timers-web', () => {
       setTimeout(fn, 10, 1, 2);
     });
 
-    test('Timeout ref/unref are no-ops', () => {
+    test("Timeout ref/unref are no-ops", () => {
       const t = setTimeout(() => {}, 10);
       expect(t.ref()).toBe(t);
       expect(t.unref()).toBe(t);
     });
 
-     test('Timeout Symbol.toPrimitive returns id', () => {
+    test("Timeout Symbol.toPrimitive returns id", () => {
       const fn = jest.fn();
       const t = setTimeout(fn, 10);
-    
+
       // Ensure _id exists
       expect(t._id).toBeDefined();
-    
+
       // Ensure the Timeout object behaves correctly
-      expect(typeof t.close).toBe('function');
-    
+      expect(typeof t.close).toBe("function");
+
       // Closing the timeout prevents the callback from firing
       t.close();
       jest.advanceTimersByTime(20);
       expect(fn).not.toHaveBeenCalled();
     });
-  }); 
+  });
   // -------------------------------------------------------------------------
   // setInterval / clearInterval
   // -------------------------------------------------------------------------
-  describe('setInterval / clearInterval', () => {
-    test('interval fires repeatedly until cleared', (done) => {
+  describe("setInterval / clearInterval", () => {
+    test("interval fires repeatedly until cleared", (done) => {
       let count = 0;
       const iv = setInterval(() => {
         count++;
@@ -89,15 +92,15 @@ describe('timers-web', () => {
   // -------------------------------------------------------------------------
   // setImmediate / clearImmediate
   // -------------------------------------------------------------------------
-  describe('setImmediate / clearImmediate', () => {
-    test('setImmediate fires in next tick', (done) => {
+  describe("setImmediate / clearImmediate", () => {
+    test("setImmediate fires in next tick", (done) => {
       setImmediate((arg) => {
-        expect(arg).toBe('arg');
+        expect(arg).toBe("arg");
         done();
-      }, 'arg');
+      }, "arg");
     });
 
-    test('Immediate close cancels', (done) => {
+    test("Immediate close cancels", (done) => {
       const fn = jest.fn();
       const im = setImmediate(fn);
       im.close();
@@ -108,7 +111,7 @@ describe('timers-web', () => {
       }, 20);
     });
 
-    test('Immediate ref/unref are no-ops', () => {
+    test("Immediate ref/unref are no-ops", () => {
       const im = setImmediate(() => {});
       expect(im.ref()).toBe(im);
       expect(im.unref()).toBe(im);
@@ -118,8 +121,8 @@ describe('timers-web', () => {
   // -------------------------------------------------------------------------
   // clearTimeout / clearInterval with raw id
   // -------------------------------------------------------------------------
-  describe('clearTimeout / clearInterval', () => {
-    test('clears numeric timer id', (done) => {
+  describe("clearTimeout / clearInterval", () => {
+    test("clears numeric timer id", (done) => {
       const fn = jest.fn();
       const id = setTimeout(fn, 10);
       clearTimeout(id._id);
@@ -130,7 +133,7 @@ describe('timers-web', () => {
       }, 20);
     });
 
-    test('clears Timeout/Interval object', (done) => {
+    test("clears Timeout/Interval object", (done) => {
       const fn = jest.fn();
       const t = setTimeout(fn, 10);
       clearTimeout(t);
@@ -145,8 +148,8 @@ describe('timers-web', () => {
   // -------------------------------------------------------------------------
   // clearImmediate with raw id
   // -------------------------------------------------------------------------
-  describe('clearImmediate', () => {
-    test('clears numeric immediate id', (done) => {
+  describe("clearImmediate", () => {
+    test("clears numeric immediate id", (done) => {
       const fn = jest.fn();
       const id = setImmediate(fn);
       clearImmediate(id._id);
@@ -161,18 +164,18 @@ describe('timers-web', () => {
   // -------------------------------------------------------------------------
   // enroll / unenroll / active
   // -------------------------------------------------------------------------
-  describe('legacy idle-timeout helpers', () => {
+  describe("legacy idle-timeout helpers", () => {
     let obj;
     beforeEach(() => {
       obj = { _idleTimeoutId: null, _idleTimeout: 0, _onTimeout: jest.fn() };
     });
 
-    test('enroll sets _idleTimeout', () => {
+    test("enroll sets _idleTimeout", () => {
       enroll(obj, 1234);
       expect(obj._idleTimeout).toBe(1234);
     });
 
-    test('unenroll cancels timer and sets _idleTimeout to -1', (done) => {
+    test("unenroll cancels timer and sets _idleTimeout to -1", (done) => {
       obj._idleTimeoutId = setTimeout(() => {}, 10);
       unenroll(obj);
       expect(obj._idleTimeout).toBe(-1);
@@ -180,7 +183,7 @@ describe('timers-web', () => {
       setTimeout(() => done(), 20);
     });
 
-    test('active schedules _onTimeout after _idleTimeout', (done) => {
+    test("active schedules _onTimeout after _idleTimeout", (done) => {
       enroll(obj, 20);
       active(obj);
 
@@ -190,7 +193,7 @@ describe('timers-web', () => {
       }, 25);
     });
 
-    test('_unrefActive alias works', (done) => {
+    test("_unrefActive alias works", (done) => {
       enroll(obj, 10);
       _unrefActive(obj);
 
@@ -204,17 +207,17 @@ describe('timers-web', () => {
   // -------------------------------------------------------------------------
   // default export contains all
   // -------------------------------------------------------------------------
-  describe('default export', () => {
-    test('has all timer functions', () => {
-      expect(typeof timers.setTimeout).toBe('function');
-      expect(typeof timers.clearTimeout).toBe('function');
-      expect(typeof timers.setInterval).toBe('function');
-      expect(typeof timers.clearInterval).toBe('function');
-      expect(typeof timers.setImmediate).toBe('function');
-      expect(typeof timers.clearImmediate).toBe('function');
-      expect(typeof timers.enroll).toBe('function');
-      expect(typeof timers.unenroll).toBe('function');
-      expect(typeof timers.active).toBe('function');
+  describe("default export", () => {
+    test("has all timer functions", () => {
+      expect(typeof timers.setTimeout).toBe("function");
+      expect(typeof timers.clearTimeout).toBe("function");
+      expect(typeof timers.setInterval).toBe("function");
+      expect(typeof timers.clearInterval).toBe("function");
+      expect(typeof timers.setImmediate).toBe("function");
+      expect(typeof timers.clearImmediate).toBe("function");
+      expect(typeof timers.enroll).toBe("function");
+      expect(typeof timers.unenroll).toBe("function");
+      expect(typeof timers.active).toBe("function");
       expect(timers._unrefActive).toBe(timers.active);
     });
   });

@@ -1,19 +1,19 @@
 // Flags: --expose-internals --no-warnings
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { isMainThread } = require('worker_threads');
+const common = require("../common");
+const { isMainThread } = require("worker_threads");
 
 if (!isMainThread) {
-  common.skip('process.chdir is not available in Workers');
+  common.skip("process.chdir is not available in Workers");
 }
 
-const { internalBinding } = require('internal/test/binding');
+const { internalBinding } = require("internal/test/binding");
 
-const assert = require('assert');
-const { Worker } = require('worker_threads');
+const assert = require("assert");
+const { Worker } = require("worker_threads");
 
-const processBinding = internalBinding('process_methods');
+const processBinding = internalBinding("process_methods");
 const originalChdir = processBinding.chdir;
 
 const cwdOriginal = process.cwd();
@@ -31,7 +31,8 @@ processBinding.chdir = common.mustCall(function chdir(path) {
   return originalChdir(path);
 });
 
-const worker = new Worker(`
+const worker = new Worker(
+  `
   const {
     parentPort,
     workerData: { i32 },
@@ -51,19 +52,24 @@ const worker = new Worker(`
 
   const cwdAfterChdir = process.cwd();
   parentPort.postMessage({ cwdDuringChdir, cwdAfterChdir });
-`, {
-  eval: true,
-  workerData: { i32 },
-});
+`,
+  {
+    eval: true,
+    workerData: { i32 },
+  },
+);
 
-worker.on('exit', common.mustCall());
-worker.on('error', common.mustNotCall());
-worker.on('message', common.mustCall(({ cwdDuringChdir, cwdAfterChdir }) => {
-  assert.strictEqual(cwdDuringChdir, cwdOriginal);
-  assert.strictEqual(cwdAfterChdir, process.cwd());
-}));
+worker.on("exit", common.mustCall());
+worker.on("error", common.mustNotCall());
+worker.on(
+  "message",
+  common.mustCall(({ cwdDuringChdir, cwdAfterChdir }) => {
+    assert.strictEqual(cwdDuringChdir, cwdOriginal);
+    assert.strictEqual(cwdAfterChdir, process.cwd());
+  }),
+);
 
-process.chdir('..');
+process.chdir("..");
 
 // Signal to the worker that the chdir call is completed
 Atomics.store(i32, 2, 1);

@@ -1,12 +1,12 @@
-'use strict';
+"use strict";
 
-const wait = require('timers/promises').setTimeout;
-const assert = require('assert');
-const common = require('../common');
+const wait = require("timers/promises").setTimeout;
+const assert = require("assert");
+const common = require("../common");
 // TODO(joyeecheung): rewrite checkIfCollectable to use this too.
-const { setImmediate: setImmediatePromisified } = require('timers/promises');
+const { setImmediate: setImmediatePromisified } = require("timers/promises");
 const gcTrackerMap = new WeakMap();
-const gcTrackerTag = 'NODE_TEST_COMMON_GC_TRACKER';
+const gcTrackerTag = "NODE_TEST_COMMON_GC_TRACKER";
 
 /**
  * Installs a garbage collection listener for the specified object.
@@ -17,23 +17,25 @@ const gcTrackerTag = 'NODE_TEST_COMMON_GC_TRACKER';
  * @param {Function} gcListener.ongc - The function to call when the target object is garbage collected.
  */
 function onGC(obj, gcListener) {
-  const async_hooks = require('async_hooks');
+  const async_hooks = require("async_hooks");
 
-  const onGcAsyncHook = async_hooks.createHook({
-    init: common.mustCallAtLeast(function(id, type) {
-      if (this.trackedId === undefined) {
-        assert.strictEqual(type, gcTrackerTag);
-        this.trackedId = id;
-      }
-    }),
-    destroy(id) {
-      assert.notStrictEqual(this.trackedId, -1);
-      if (id === this.trackedId) {
-        this.gcListener.ongc();
-        onGcAsyncHook.disable();
-      }
-    },
-  }).enable();
+  const onGcAsyncHook = async_hooks
+    .createHook({
+      init: common.mustCallAtLeast(function (id, type) {
+        if (this.trackedId === undefined) {
+          assert.strictEqual(type, gcTrackerTag);
+          this.trackedId = id;
+        }
+      }),
+      destroy(id) {
+        assert.notStrictEqual(this.trackedId, -1);
+        if (id === this.trackedId) {
+          this.gcListener.ongc();
+          onGcAsyncHook.disable();
+        }
+      },
+    })
+    .enable();
   onGcAsyncHook.gcListener = gcListener;
 
   gcTrackerMap.set(obj, new async_hooks.AsyncResource(gcTrackerTag));
@@ -55,7 +57,7 @@ async function gcUntil(name, condition, maxCount = 10, gcOptions) {
     if (gcOptions) {
       await global.gc(gcOptions);
     } else {
-      await global.gc();  // Passing in undefined is not the same as empty.
+      await global.gc(); // Passing in undefined is not the same as empty.
     }
     if (condition()) {
       return;
@@ -90,7 +92,11 @@ async function gcUntil(name, condition, maxCount = 10, gcOptions) {
 // other logic in V8 such as bytecode aging, and it can slow down the test
 // significantly, so it should be used scarcely and only as a last resort.
 async function checkIfCollectable(
-  fn, maxCount = 4096, generateSnapshotAt = Infinity, logEvery = 128) {
+  fn,
+  maxCount = 4096,
+  generateSnapshotAt = Infinity,
+  logEvery = 128,
+) {
   let anyFinalized = false;
   let count = 0;
 
@@ -112,7 +118,7 @@ async function checkIfCollectable(
       // not enough problems in the CI & be slower depending on file system.
       // Just do this for now as long as it works and only invent some
       // internal voodoo when we absolutely have no other choice.
-      require('v8').getHeapSnapshot().pause().read();
+      require("v8").getHeapSnapshot().pause().read();
       console.log(`Generated heap snapshot at ${count}`);
     }
     if (count % logEvery === 0) {
@@ -147,29 +153,33 @@ async function runAndBreathe(fn, repeat, waitTime = 20) {
  * @param {number} waitTime Optional breathing time for GC.
  */
 async function checkIfCollectableByCounting(fn, ctor, count, waitTime = 20) {
-  const { queryObjects } = require('v8');
+  const { queryObjects } = require("v8");
   const { name } = ctor;
-  const initialCount = queryObjects(ctor, { format: 'count' });
+  const initialCount = queryObjects(ctor, { format: "count" });
   console.log(`Initial count of ${name}: ${initialCount}`);
   let totalCreated = 0;
   for (let i = 0; i < count; ++i) {
     const created = await fn(i);
     totalCreated += created;
     console.log(`#${i}: created ${created} ${name}, total ${totalCreated}`);
-    await wait(waitTime);  // give GC some breathing room.
-    const currentCount = queryObjects(ctor, { format: 'count' });
+    await wait(waitTime); // give GC some breathing room.
+    const currentCount = queryObjects(ctor, { format: "count" });
     const collected = totalCreated - (currentCount - initialCount);
-    console.log(`#${i}: counted ${currentCount} ${name}, collected ${collected}`);
+    console.log(
+      `#${i}: counted ${currentCount} ${name}, collected ${collected}`,
+    );
     if (collected > 0) {
       console.log(`Detected ${collected} collected ${name}, finish early`);
       return;
     }
   }
 
-  await wait(waitTime);  // give GC some breathing room.
-  const currentCount = queryObjects(ctor, { format: 'count' });
+  await wait(waitTime); // give GC some breathing room.
+  const currentCount = queryObjects(ctor, { format: "count" });
   const collected = totalCreated - (currentCount - initialCount);
-  console.log(`Last count: counted ${currentCount} ${name}, collected ${collected}`);
+  console.log(
+    `Last count: counted ${currentCount} ${name}, collected ${collected}`,
+  );
   // Some objects with the prototype can be collected.
   if (collected > 0) {
     console.log(`Detected ${collected} collected ${name}`);

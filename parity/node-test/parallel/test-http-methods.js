@@ -19,50 +19,50 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+require("../common");
+const assert = require("assert");
+const http = require("http");
 
 // This test ensures all http methods from HTTP parser are exposed
 // to http library
 
 const methods = [
-  'ACL',
-  'BIND',
-  'CHECKOUT',
-  'CONNECT',
-  'COPY',
-  'DELETE',
-  'GET',
-  'HEAD',
-  'LINK',
-  'LOCK',
-  'M-SEARCH',
-  'MERGE',
-  'MKACTIVITY',
-  'MKCALENDAR',
-  'MKCOL',
-  'MOVE',
-  'NOTIFY',
-  'OPTIONS',
-  'PATCH',
-  'POST',
-  'PROPFIND',
-  'PROPPATCH',
-  'PURGE',
-  'PUT',
-  'QUERY',
-  'REBIND',
-  'REPORT',
-  'SEARCH',
-  'SOURCE',
-  'SUBSCRIBE',
-  'TRACE',
-  'UNBIND',
-  'UNLINK',
-  'UNLOCK',
-  'UNSUBSCRIBE',
+  "ACL",
+  "BIND",
+  "CHECKOUT",
+  "CONNECT",
+  "COPY",
+  "DELETE",
+  "GET",
+  "HEAD",
+  "LINK",
+  "LOCK",
+  "M-SEARCH",
+  "MERGE",
+  "MKACTIVITY",
+  "MKCALENDAR",
+  "MKCOL",
+  "MOVE",
+  "NOTIFY",
+  "OPTIONS",
+  "PATCH",
+  "POST",
+  "PROPFIND",
+  "PROPPATCH",
+  "PURGE",
+  "PUT",
+  "QUERY",
+  "REBIND",
+  "REPORT",
+  "SEARCH",
+  "SOURCE",
+  "SUBSCRIBE",
+  "TRACE",
+  "UNBIND",
+  "UNLINK",
+  "UNLOCK",
+  "UNSUBSCRIBE",
 ];
 
 assert.deepStrictEqual(http.METHODS, methods.sort());

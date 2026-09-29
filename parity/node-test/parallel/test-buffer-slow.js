@@ -1,16 +1,16 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const buffer = require('buffer');
+const common = require("../common");
+const assert = require("assert");
+const buffer = require("buffer");
 const SlowBuffer = buffer.SlowBuffer;
 
 const ones = [1, 1, 1, 1];
 
 common.expectWarning(
-  'DeprecationWarning',
-  'SlowBuffer() is deprecated. Please use Buffer.allocUnsafeSlow()',
-  'DEP0030'
+  "DeprecationWarning",
+  "SlowBuffer() is deprecated. Please use Buffer.allocUnsafeSlow()",
+  "DEP0030",
 );
 
 // Should create a Buffer
@@ -39,19 +39,19 @@ assert.strictEqual(SlowBuffer(0).length, 0);
 
 // Should throw with invalid length type
 const bufferInvalidTypeMsg = {
-  code: 'ERR_INVALID_ARG_TYPE',
-  name: 'TypeError',
+  code: "ERR_INVALID_ARG_TYPE",
+  name: "TypeError",
   message: /^The "size" argument must be of type number/,
 };
 assert.throws(() => SlowBuffer(), bufferInvalidTypeMsg);
 assert.throws(() => SlowBuffer({}), bufferInvalidTypeMsg);
-assert.throws(() => SlowBuffer('6'), bufferInvalidTypeMsg);
+assert.throws(() => SlowBuffer("6"), bufferInvalidTypeMsg);
 assert.throws(() => SlowBuffer(true), bufferInvalidTypeMsg);
 
 // Should throw with invalid length value
 const bufferMaxSizeMsg = {
-  code: 'ERR_OUT_OF_RANGE',
-  name: 'RangeError',
+  code: "ERR_OUT_OF_RANGE",
+  name: "RangeError",
 };
 assert.throws(() => SlowBuffer(NaN), bufferMaxSizeMsg);
 assert.throws(() => SlowBuffer(Infinity), bufferMaxSizeMsg);

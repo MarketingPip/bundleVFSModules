@@ -1,5 +1,5 @@
-'use strict';
-const v8 = require('v8');
+"use strict";
+const v8 = require("v8");
 
 setTimeout(() => {
   v8.takeCoverage();

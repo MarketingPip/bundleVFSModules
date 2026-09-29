@@ -4,8 +4,7 @@ import Table from "easy-table";
 
 const isString = (x) => typeof x === "string";
 
-const isArrayOf = (fn, arr) =>
-  Array.isArray(arr) && arr.every(fn);
+const isArrayOf = (fn, arr) => Array.isArray(arr) && arr.every(fn);
 
 const isArrayOfStrings = (arr) => isArrayOf(isString, arr);
 const isArrayOfArrays = (arr) => isArrayOf(Array.isArray, arr);
@@ -30,7 +29,7 @@ function arrayToString(arr) {
 function objectToArray(obj) {
   return Object.keys(obj).map((key) => ({
     key,
-    value: obj[key]
+    value: obj[key],
   }));
 }
 
@@ -104,8 +103,7 @@ function getTable(...args) {
 
 export function patchConsoleTable() {
   const originalConsoleTable = globalThis.console.table;
-  const originalDescriptor =
-    Object.getOwnPropertyDescriptor(console, "table");
+  const originalDescriptor = Object.getOwnPropertyDescriptor(console, "table");
 
   function table(...args) {
     const str = getTable(...args);

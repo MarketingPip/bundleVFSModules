@@ -3,11 +3,11 @@
  * @param {PromiseRejectionEvent} event
  */
 export function parseError(event) {
-  const stack = reason.stack || '';
+  const stack = reason.stack || "";
 
   // Extract first stack frame location
   let locationStr = null;
-  const stackLines = stack.split('\n');
+  const stackLines = stack.split("\n");
 
   if (stackLines.length > 1) {
     const match = stackLines[1].match(/\(?(.+:\d+:\d+)\)?$/);
@@ -21,7 +21,7 @@ export function parseError(event) {
     file,
     line,
     column,
-    location: locationStr?.trim() || null
+    location: locationStr?.trim() || null,
   };
 }
 
@@ -31,11 +31,11 @@ export function parseError(event) {
 function parseStackLocation(location) {
   if (!location) return { file: null, line: null, column: null };
 
-  const parts = location.split(':');
+  const parts = location.split(":");
 
   return {
-    file: parts[0]?.trim().replace(/^at\s+/,'') || null,
+    file: parts[0]?.trim().replace(/^at\s+/, "") || null,
     line: parts[1] || null,
-    column: parts[2] || null
+    column: parts[2] || null,
   };
 }

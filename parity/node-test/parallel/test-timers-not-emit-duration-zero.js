@@ -1,17 +1,17 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
+const common = require("../common");
+const assert = require("assert");
 
 function timerNotCanceled() {
-  assert.fail('Timer should be canceled');
+  assert.fail("Timer should be canceled");
 }
 
 process.on(
-  'warning',
+  "warning",
   common.mustNotCall(() => {
-    assert.fail('Timer should be canceled');
-  })
+    assert.fail("Timer should be canceled");
+  }),
 );
 
 {

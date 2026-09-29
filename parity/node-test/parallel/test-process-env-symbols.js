@@ -1,8 +1,8 @@
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
-const assert = require('assert');
-const symbol = Symbol('sym');
+const assert = require("assert");
+const symbol = Symbol("sym");
 
 // Verify that getting via a symbol key returns undefined.
 assert.strictEqual(process.env[symbol], undefined);

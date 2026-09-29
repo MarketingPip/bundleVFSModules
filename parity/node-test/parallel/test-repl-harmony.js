@@ -19,12 +19,12 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const spawn = require('child_process').spawn;
-const args = ['-i'];
+const spawn = require("child_process").spawn;
+const args = ["-i"];
 const child = spawn(process.execPath, args);
 
 const input = '(function(){"use strict"; const y=1;y=2})()\n';
@@ -32,19 +32,22 @@ const input = '(function(){"use strict"; const y=1;y=2})()\n';
 // contents beyond confirming that the `Error` is a `TypeError`.
 const expectOut = /> Uncaught TypeError: /;
 
-child.stderr.setEncoding('utf8');
-child.stderr.on('data', (d) => {
-  throw new Error('child.stderr be silent');
+child.stderr.setEncoding("utf8");
+child.stderr.on("data", (d) => {
+  throw new Error("child.stderr be silent");
 });
 
-child.stdout.setEncoding('utf8');
-let out = '';
-child.stdout.on('data', (d) => {
+child.stdout.setEncoding("utf8");
+let out = "";
+child.stdout.on("data", (d) => {
   out += d;
 });
-child.stdout.on('end', common.mustCall(() => {
-  assert.match(out, expectOut);
-  console.log('ok');
-}));
+child.stdout.on(
+  "end",
+  common.mustCall(() => {
+    assert.match(out, expectOut);
+    console.log("ok");
+  }),
+);
 
 child.stdin.end(input);

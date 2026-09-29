@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-require('../common');
-const assert = require('assert');
-const { Duplex } = require('stream');
+require("../common");
+const assert = require("assert");
+const { Duplex } = require("stream");
 
 {
   const d = new Duplex({
     objectMode: true,
-    highWaterMark: 100
+    highWaterMark: 100,
   });
 
   assert.strictEqual(d.writableObjectMode, true);
@@ -21,7 +21,7 @@ const { Duplex } = require('stream');
     readableObjectMode: false,
     readableHighWaterMark: 10,
     writableObjectMode: true,
-    writableHighWaterMark: 100
+    writableHighWaterMark: 100,
   });
 
   assert.strictEqual(d.writableObjectMode, true);

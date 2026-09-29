@@ -1,11 +1,8 @@
-import {
-
-  ArrayPrototypeSlice,
-} from './primordials.js';
-import { AbortError, codes as errorsCodes } from './errors.js';
-import { pipeline } from './pipeline.js';
-import Duplex from './duplex.js';
-import { destroyer } from './destroy.js';
+import { ArrayPrototypeSlice } from "./primordials.js";
+import { AbortError, codes as errorsCodes } from "./errors.js";
+import { pipeline } from "./pipeline.js";
+import Duplex from "./duplex.js";
+import { destroyer } from "./destroy.js";
 import {
   isNodeStream,
   isReadable,
@@ -14,25 +11,14 @@ import {
   isTransformStream,
   isWritableStream,
   isReadableStream,
-} from './utils.js';
-import { eos } from './end-of-stream.js';
+} from "./utils.js";
+import { eos } from "./end-of-stream.js";
 
-
-
-
-
-
-
-
-const {
-    ERR_INVALID_ARG_VALUE,
-    ERR_MISSING_ARGS,
-} = errorsCodes;
-
+const { ERR_INVALID_ARG_VALUE, ERR_MISSING_ARGS } = errorsCodes;
 
 export default function compose(...streams) {
   if (streams.length === 0) {
-    throw new ERR_MISSING_ARGS('streams');
+    throw new ERR_MISSING_ARGS("streams");
   }
 
   if (streams.length === 1) {
@@ -41,11 +27,11 @@ export default function compose(...streams) {
 
   const orgStreams = ArrayPrototypeSlice(streams);
 
-  if (typeof streams[0] === 'function') {
+  if (typeof streams[0] === "function") {
     streams[0] = Duplex.from(streams[0]);
   }
 
-  if (typeof streams[streams.length - 1] === 'function') {
+  if (typeof streams[streams.length - 1] === "function") {
     const idx = streams.length - 1;
     streams[idx] = Duplex.from(streams[idx]);
   }
@@ -66,7 +52,7 @@ export default function compose(...streams) {
       throw new ERR_INVALID_ARG_VALUE(
         `streams[${n}]`,
         orgStreams[n],
-        'must be readable',
+        "must be readable",
       );
     }
     if (
@@ -80,7 +66,7 @@ export default function compose(...streams) {
       throw new ERR_INVALID_ARG_VALUE(
         `streams[${n}]`,
         orgStreams[n],
-        'must be writable',
+        "must be writable",
       );
     }
   }
@@ -130,7 +116,7 @@ export default function compose(...streams) {
 
   if (writable) {
     if (isNodeStream(head)) {
-      d._write = function(chunk, encoding, callback) {
+      d._write = function (chunk, encoding, callback) {
         if (head.write(chunk, encoding)) {
           callback();
         } else {
@@ -138,12 +124,12 @@ export default function compose(...streams) {
         }
       };
 
-      d._final = function(callback) {
+      d._final = function (callback) {
         head.end();
         onfinish = callback;
       };
 
-      head.on('drain', function() {
+      head.on("drain", function () {
         if (ondrain) {
           const cb = ondrain;
           ondrain = null;
@@ -154,7 +140,7 @@ export default function compose(...streams) {
       const writable = isTransformStream(head) ? head.writable : head;
       const writer = writable.getWriter();
 
-      d._write = async function(chunk, encoding, callback) {
+      d._write = async function (chunk, encoding, callback) {
         try {
           await writer.ready;
           writer.write(chunk).catch(() => {});
@@ -164,7 +150,7 @@ export default function compose(...streams) {
         }
       };
 
-      d._final = async function(callback) {
+      d._final = async function (callback) {
         try {
           await writer.ready;
           writer.close().catch(() => {});
@@ -188,23 +174,23 @@ export default function compose(...streams) {
 
   if (readable) {
     if (isNodeStream(tail)) {
-      d._read = function() {
+      d._read = function () {
         tail.resume();
       };
 
-      tail.on('data', function(chunk) {
+      tail.on("data", function (chunk) {
         if (!d.push(chunk)) {
           tail.pause();
         }
       });
 
-      tail.on('end', function() {
+      tail.on("end", function () {
         d.push(null);
       });
     } else if (isWebStream(tail)) {
       const readable = isTransformStream(tail) ? tail.readable : tail;
       const reader = readable.getReader();
-      d._read = async function() {
+      d._read = async function () {
         while (true) {
           try {
             const { value, done } = await reader.read();
@@ -225,7 +211,7 @@ export default function compose(...streams) {
     }
   }
 
-  d._destroy = function(err, callback) {
+  d._destroy = function (err, callback) {
     if (!err && onclose !== null) {
       err = new AbortError();
     }
@@ -245,4 +231,4 @@ export default function compose(...streams) {
   };
 
   return d;
-};
+}

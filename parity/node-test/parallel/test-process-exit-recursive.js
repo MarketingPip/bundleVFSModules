@@ -19,14 +19,14 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
+"use strict";
+require("../common");
+const assert = require("assert");
 
 // Recursively calling .exit() should not overflow the call stack
 let nexits = 0;
 
-process.on('exit', function(code) {
+process.on("exit", function (code) {
   assert.strictEqual(nexits++, 0);
   assert.strictEqual(code, 1);
 

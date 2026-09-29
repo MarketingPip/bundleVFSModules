@@ -19,37 +19,38 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const assert = require('assert');
-const crypto = require('crypto');
+const assert = require("assert");
+const crypto = require("crypto");
 
-if (!crypto.getCiphers().includes('aes256'))
-  common.skip('aes256 cipher is not available');
+if (!crypto.getCiphers().includes("aes256"))
+  common.skip("aes256 cipher is not available");
 
-const iv = Buffer.from('00000000000000000000000000000000', 'hex');
-const key = Buffer.from('0123456789abcdef0123456789abcdef' +
-                        '0123456789abcdef0123456789abcdef', 'hex');
+const iv = Buffer.from("00000000000000000000000000000000", "hex");
+const key = Buffer.from(
+  "0123456789abcdef0123456789abcdef" + "0123456789abcdef0123456789abcdef",
+  "hex",
+);
 
 function encrypt(val, pad) {
-  const c = crypto.createCipheriv('aes256', key, iv);
+  const c = crypto.createCipheriv("aes256", key, iv);
   c.setAutoPadding(pad);
-  return c.update(val, 'utf8', 'latin1') + c.final('latin1');
+  return c.update(val, "utf8", "latin1") + c.final("latin1");
 }
 
 function decrypt(val, pad) {
-  const c = crypto.createDecipheriv('aes256', key, iv);
+  const c = crypto.createDecipheriv("aes256", key, iv);
   c.setAutoPadding(pad);
-  return c.update(val, 'latin1', 'utf8') + c.final('utf8');
+  return c.update(val, "latin1", "utf8") + c.final("utf8");
 }
 
 // echo 0123456789abcdef0123456789abcdef \
 // | openssl enc -e -aes256 -nopad -K <key> -iv <iv> \
 // | openssl enc -d -aes256 -nopad -K <key> -iv <iv>
-let plaintext = '0123456789abcdef0123456789abcdef'; // Multiple of block size
+let plaintext = "0123456789abcdef0123456789abcdef"; // Multiple of block size
 let encrypted = encrypt(plaintext, false);
 let decrypted = decrypt(encrypted, false);
 assert.strictEqual(decrypted, plaintext);
@@ -57,7 +58,7 @@ assert.strictEqual(decrypted, plaintext);
 // echo 0123456789abcdef0123456789abcde \
 // | openssl enc -e -aes256 -K <key> -iv <iv> \
 // | openssl enc -d -aes256 -K <key> -iv <iv>
-plaintext = '0123456789abcdef0123456789abcde'; // not a multiple
+plaintext = "0123456789abcdef0123456789abcde"; // not a multiple
 encrypted = encrypt(plaintext, true);
 decrypted = decrypt(encrypted, true);
 assert.strictEqual(decrypted, plaintext);

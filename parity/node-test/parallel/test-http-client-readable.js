@@ -19,35 +19,34 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
-const Duplex = require('stream').Duplex;
+const Duplex = require("stream").Duplex;
 
 class FakeAgent extends http.Agent {
   createConnection() {
     const s = new Duplex();
     let once = false;
 
-    s._read = function() {
-      if (once)
-        return this.push(null);
+    s._read = function () {
+      if (once) return this.push(null);
       once = true;
 
-      this.push('HTTP/1.1 200 Ok\r\nTransfer-Encoding: chunked\r\n\r\n');
-      this.push('b\r\nhello world\r\n');
+      this.push("HTTP/1.1 200 Ok\r\nTransfer-Encoding: chunked\r\n\r\n");
+      this.push("b\r\nhello world\r\n");
       this.readable = false;
-      this.push('0\r\n\r\n');
+      this.push("0\r\n\r\n");
     };
 
     // Blackhole
-    s._write = function(data, enc, cb) {
+    s._write = function (data, enc, cb) {
       cb();
     };
 
-    s.destroy = s.destroySoon = function() {
+    s.destroy = s.destroySoon = function () {
       this.writable = false;
     };
 
@@ -55,17 +54,23 @@ class FakeAgent extends http.Agent {
   }
 }
 
-let received = '';
+let received = "";
 
-const req = http.request({
-  agent: new FakeAgent()
-}, common.mustCall(function requestCallback(res) {
-  res.on('data', function dataCallback(chunk) {
-    received += chunk;
-  });
+const req = http.request(
+  {
+    agent: new FakeAgent(),
+  },
+  common.mustCall(function requestCallback(res) {
+    res.on("data", function dataCallback(chunk) {
+      received += chunk;
+    });
 
-  res.on('end', common.mustCall(function endCallback() {
-    assert.strictEqual(received, 'hello world');
-  }));
-}));
+    res.on(
+      "end",
+      common.mustCall(function endCallback() {
+        assert.strictEqual(received, "hello world");
+      }),
+    );
+  }),
+);
 req.end();

@@ -7,7 +7,6 @@ export default {
   // important for modern ESM setups
   transform: {},
 
- 
   // optional but useful
   verbose: true,
 };

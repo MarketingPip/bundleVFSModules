@@ -1,15 +1,15 @@
-'use strict';
+"use strict";
 
 // Flags: --experimental-vm-modules
 
-require('../common');
+require("../common");
 
-const assert = require('assert');
+const assert = require("assert");
 
-const { SourceTextModule } = require('vm');
-const test = require('node:test');
+const { SourceTextModule } = require("vm");
+const test = require("node:test");
 
-test('simple module', () => {
+test("simple module", () => {
   const foo = new SourceTextModule(`
     export const foo = 4
     export default 5;
@@ -17,7 +17,7 @@ test('simple module', () => {
   assert.strictEqual(foo.hasTopLevelAwait(), false);
 });
 
-test('simple module with top-level await', () => {
+test("simple module with top-level await", () => {
   const foo = new SourceTextModule(`
     export const foo = 4
     export default 5;
@@ -27,7 +27,7 @@ test('simple module with top-level await', () => {
   assert.strictEqual(foo.hasTopLevelAwait(), true);
 });
 
-test('simple module with non top-level await', () => {
+test("simple module with non top-level await", () => {
   const foo = new SourceTextModule(`
     export const foo = 4
     export default 5;
@@ -39,7 +39,7 @@ test('simple module with non top-level await', () => {
   assert.strictEqual(foo.hasTopLevelAwait(), false);
 });
 
-test('module with a dependency containing top-level await', () => {
+test("module with a dependency containing top-level await", () => {
   const foo = new SourceTextModule(`
     export const foo = 4
     export default 5;

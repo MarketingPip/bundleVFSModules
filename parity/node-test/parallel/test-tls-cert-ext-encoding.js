@@ -1,9 +1,8 @@
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const { hasOpenSSL3 } = require('../common/crypto');
+const { hasOpenSSL3 } = require("../common/crypto");
 
 if (hasOpenSSL3)
   // TODO(danbev) This test fails with the following error:
@@ -13,7 +12,7 @@ if (hasOpenSSL3)
   // is a note in https://wiki.openssl.org/index.php/OpenSSL_3.0 which
   // indicates that this might not work at the moment:
   // "OCSP, PEM, ASN.1 have some very limited library context support"
-  common.skip('when using OpenSSL 3.x');
+  common.skip("when using OpenSSL 3.x");
 
 // NOTE: This certificate is hand-generated, hence it is not located in
 // `test/fixtures/keys` to avoid confusion.
@@ -67,7 +66,7 @@ f79uOowv3lLTzQ9na5EThA0tp8d837hdYrrIHh5cfTqBDxG0Tu8=
 -----END CERTIFICATE-----
 `;
 
-const tls = require('tls');
+const tls = require("tls");
 
 const options = {
   key: pem,
@@ -77,15 +76,21 @@ const options = {
 const server = tls.createServer(options, (socket) => {
   socket.end();
 });
-server.listen(0, common.mustCall(function() {
-  const client = tls.connect({
-    port: this.address().port,
-    rejectUnauthorized: false
-  }, common.mustCall(() => {
-    // This should not crash process:
-    client.getPeerCertificate();
+server.listen(
+  0,
+  common.mustCall(function () {
+    const client = tls.connect(
+      {
+        port: this.address().port,
+        rejectUnauthorized: false,
+      },
+      common.mustCall(() => {
+        // This should not crash process:
+        client.getPeerCertificate();
 
-    server.close();
-    client.end();
-  }));
-}));
+        server.close();
+        client.end();
+      }),
+    );
+  }),
+);

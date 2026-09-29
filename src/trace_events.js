@@ -46,23 +46,23 @@
  * @returns {string}
  */
 function formatReceived(v) {
-  if (v === null) return 'null';
-  if (v === undefined) return 'undefined';
+  if (v === null) return "null";
+  if (v === undefined) return "undefined";
   const t = typeof v;
   switch (t) {
-    case 'string':
+    case "string":
       return `type string ('${v}')`;
-    case 'number':
-    case 'boolean':
-    case 'bigint':
+    case "number":
+    case "boolean":
+    case "bigint":
       return `type ${t} (${String(v)})`;
-    case 'symbol':
+    case "symbol":
       return `type symbol (${String(v)})`;
-    case 'function':
-      return `type function (${v.name || 'anonymous'})`;
+    case "function":
+      return `type function (${v.name || "anonymous"})`;
     default:
       // Node reports objects as "an instance of <ConstructorName>".
-      return `an instance of ${v.constructor?.name ?? 'Object'}`;
+      return `an instance of ${v.constructor?.name ?? "Object"}`;
   }
 }
 
@@ -72,20 +72,24 @@ function formatReceived(v) {
  * @param {unknown} received
  */
 function errInvalidArgType(name, expected, received) {
-  const verb = expected === 'object' ? 'argument must be of type object'
-    : expected === 'an Array' ? 'property must be an instance of Array'
-    : 'property must be of type string';
+  const verb =
+    expected === "object"
+      ? "argument must be of type object"
+      : expected === "an Array"
+        ? "property must be an instance of Array"
+        : "property must be of type string";
   return Object.assign(
-    new TypeError(`The "${name}" ${verb}. Received ${formatReceived(received)}`),
-    { code: 'ERR_INVALID_ARG_TYPE' },
+    new TypeError(
+      `The "${name}" ${verb}. Received ${formatReceived(received)}`,
+    ),
+    { code: "ERR_INVALID_ARG_TYPE" },
   );
 }
 
 function errCategoryRequired() {
-  return Object.assign(
-    new TypeError('At least one category is required'),
-    { code: 'ERR_TRACE_EVENTS_CATEGORY_REQUIRED' },
-  );
+  return Object.assign(new TypeError("At least one category is required"), {
+    code: "ERR_TRACE_EVENTS_CATEGORY_REQUIRED",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -120,14 +124,16 @@ function _removeRefs(cats) {
 
 function _warnLeak() {
   const msg =
-    'Possible trace_events memory leak detected. ' +
-    'There are more than 10 enabled Tracing objects.';
-  const proc = typeof globalThis.process !== 'undefined'
-    ? globalThis.process
-    : undefined;
-  if (proc && typeof proc.emitWarning === 'function') {
+    "Possible trace_events memory leak detected. " +
+    "There are more than 10 enabled Tracing objects.";
+  const proc =
+    typeof globalThis.process !== "undefined" ? globalThis.process : undefined;
+  if (proc && typeof proc.emitWarning === "function") {
     proc.emitWarning(msg);
-  } else if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+  } else if (
+    typeof console !== "undefined" &&
+    typeof console.warn === "function"
+  ) {
     console.warn(`Warning: ${msg}`);
   }
 }
@@ -176,14 +182,19 @@ class Tracing {
   }
 
   /** Whether this Tracing is currently enabled. */
-  get enabled() { return this.#enabled; }
+  get enabled() {
+    return this.#enabled;
+  }
 
   /** Comma-separated list of this object's categories. */
-  get categories() { return this.#categories.join(','); }
+  get categories() {
+    return this.#categories.join(",");
+  }
 
   /** Mirrors Node's `Tracing { enabled: …, categories: '…' }` inspect output. */
-  get [Symbol.for('nodejs.util.inspect.custom')]() {
-    return () => `Tracing { enabled: ${this.#enabled}, categories: '${this.categories}' }`;
+  get [Symbol.for("nodejs.util.inspect.custom")]() {
+    return () =>
+      `Tracing { enabled: ${this.#enabled}, categories: '${this.categories}' }`;
   }
 }
 
@@ -201,16 +212,24 @@ class Tracing {
  *   or code `ERR_TRACE_EVENTS_CATEGORY_REQUIRED` when `categories` is empty.
  */
 export function createTracing(options) {
-  if (options === null || typeof options !== 'object' || Array.isArray(options)) {
-    throw errInvalidArgType('options', 'object', options);
+  if (
+    options === null ||
+    typeof options !== "object" ||
+    Array.isArray(options)
+  ) {
+    throw errInvalidArgType("options", "object", options);
   }
   const { categories } = options;
   if (!Array.isArray(categories)) {
-    throw errInvalidArgType('options.categories', 'an Array', categories);
+    throw errInvalidArgType("options.categories", "an Array", categories);
   }
   for (let i = 0; i < categories.length; i++) {
-    if (typeof categories[i] !== 'string') {
-      throw errInvalidArgType(`options.categories[${i}]`, 'a string', categories[i]);
+    if (typeof categories[i] !== "string") {
+      throw errInvalidArgType(
+        `options.categories[${i}]`,
+        "a string",
+        categories[i],
+      );
     }
   }
   if (categories.length === 0) throw errCategoryRequired();
@@ -226,7 +245,7 @@ export function createTracing(options) {
  */
 export function getEnabledCategories() {
   if (_categoryRefs.size === 0) return undefined;
-  return [..._categoryRefs.keys()].join(',');
+  return [..._categoryRefs.keys()].join(",");
 }
 
 export default { createTracing, getEnabledCategories };

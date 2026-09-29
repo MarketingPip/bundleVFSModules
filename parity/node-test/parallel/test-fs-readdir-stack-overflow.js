@@ -1,19 +1,16 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const assert = require('assert');
-const fs = require('fs');
+const assert = require("assert");
+const fs = require("fs");
 
 function recurse() {
-  fs.readdirSync('.');
+  fs.readdirSync(".");
   recurse();
 }
 
-assert.throws(
-  () => recurse(),
-  {
-    name: 'RangeError',
-    message: 'Maximum call stack size exceeded'
-  }
-);
+assert.throws(() => recurse(), {
+  name: "RangeError",
+  message: "Maximum call stack size exceeded",
+});
