@@ -18,6 +18,20 @@ unimplementable-in-browser APIs stay honest noop stubs, never throws.
 
 ## Recently completed
 
+- **Vite 7 browser E2E — M3** (2026-09-29, `feat/vite7-browser`): real
+  Vite 7.3.6 `vite.build()` executes in headed Firefox through the browser
+  runtime — 5060 ms, emits 1 chunk, verdict `ok:true`. Rollup runs via
+  `@rollup/browser` ESM build with WASM embedded as a data URL; sandbox
+  exposes a stable `globalThis._RUNTIME_` alias per realm so platform shims
+  (`esbuild-shim.cjs`, `fs.js`) find the VFS. `build.minify` is `false` —
+  esbuild-wasm `transform()` hangs in the sandbox worker (init succeeds).
+  Full writeup: `docs/VITE_BROWSER.md`.
+- **Vite 7 browser E2E — M4** (2026-09-29, `feat/vite7-browser`): real
+  Vitest 5.0.2 runs in headed Firefox — 1 suite, 1 test, 1 passed, via
+  genuine `expect(add(1,2)).toBe(3)` through Vitest's actual matcher code.
+  `expect-type` is stubbed with a minimal ESM shim in the harness (sandbox
+  CJS transformer cannot handle its `__exportStar`) — proper fix still open.
+
 - **http.js virtual-network round trip — phase 1** (PR #99, merged
   2026-09-26): incremental HTTP/1.x parser (`src/_http_parser.js`); real
   virtual-socket `http.Server` accept path over `net.js` (byte-level parsing,
@@ -99,6 +113,16 @@ bytes" and "run wasm bytes on my VFS".
   library — npm install-time behavior (reads each package's `bin` field,
   routes through the runtime's `node`) plus sample code. Clearly marked
   demo; never on the product path (AGENTS.md rule 11).
+- **Vite 7 browser E2E gaps** (follow-ups to M3/M4, `docs/VITE_BROWSER.md`):
+  - esbuild-wasm `transform()` hang → evaluate `terser` (pure JS, no WASM)
+    for the minify path instead of fixing esbuild-wasm; only revisit
+    esbuild if a real TS fixture needs `vite:esbuild-transpile`.
+  - Proper `expect-type` support — the M4 harness stubs it with minimal
+    ESM; the sandbox CJS transformer must handle `__exportStar`.
+  - Canonicalize Rollup WASM data-URL loading into the runtime
+    package-loading path (currently harness-only).
+  - Red-first test proving the `@rollup/browser` ESM interception target
+    and named exports.
 
 ### 3. Full-suite open-handle investigation
 
