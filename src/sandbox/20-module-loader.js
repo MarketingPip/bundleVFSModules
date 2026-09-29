@@ -96,7 +96,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
         // things like resolving sibling imports or source-map hints.
         
         const vfs = globalThis[_BVM_RT_KEY_].__USER_FILES__
-        let source = await interopChannel.callParent(
+        let importResult = await interopChannel.callParent(
           '_dynamic_import',
           modulePath,
           moduleType,
@@ -108,16 +108,24 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
         );
         
           
-        if(!source){
+        if(!importResult || !importResult.source){
         throw new Error(`[ERR_MODULE_NOT_FOUND]: Cannot find module ${modulePath}`)
         return;
-        }  
+        }
+
+        let source = importResult.source;
+        // Vitest E2E gap #1: the host resolves the request to a VFS path.
+        // _build_file must receive the RESOLVED path as its fileName — it
+        // becomes the entryPoint that transformImportsToLoadModule stamps
+        // into nested imports. Passing the raw request string lost the VFS
+        // prefix at import depth ≥2 (nested relative imports 404'd).
+        const buildFileName = importResult.resolvedPath || modulePath;
           
           if (extension != 'json' && extension != 'css') {
         source = await interopChannel.callParent(
           '_build_file',
           source,
-          modulePath,
+          buildFileName,
           moduleType,
           entryPoint,
           parentEntryPoint,
