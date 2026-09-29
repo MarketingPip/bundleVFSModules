@@ -3543,9 +3543,70 @@ ${code}
           throw bvmBuildEmpty;
         }
         return "data:text/javascript;charset=utf-8," + encodeURIComponent(data);
-       } 
-          
-       
+       }
+
+       // Platform fix (AGENTS.md rule 6): intercept file:// URLs and absolute
+       // VFS paths. Vite's terser plugin does await import(pathToFileURL(p).href)
+       // which produces file:///node_modules/...; es-module-shims would try to
+       // fetch these as network URLs and die with a NetworkError. Route them
+       // through the parent _dynamic_import + _build_file interop instead — the
+       // parent already normalizes file:// → absolute VFS path. Any file://
+       // import was broken, not just Vite's terser path.
+       if (specifier.startsWith("file://") || specifier.startsWith("/")) {
+         var bvmFilePath = specifier;
+         if (bvmFilePath.startsWith("file://")) {
+           bvmFilePath = bvmFilePath.slice("file://".length);
+           // file:///x -> /x (keep the leading slash); file://host/x -> /x (VFS has no hosts)
+           if (!bvmFilePath.startsWith("/")) bvmFilePath = "/" + bvmFilePath;
+         }
+         var bvmFileInterop = globalThis[Symbol.for("bvm.interop")];
+         var bvmFileCwd = globalThis._RUNTIME${iframe.sandbox.uuid}_.cwd;
+         var bvmFileData;
+         try {
+           bvmFileData = await bvmFileInterop.callParent(
+             '_dynamic_import',
+             bvmFilePath,
+             'import',
+             '/',
+             '/',
+             false,
+             bvmFileCwd,
+             undefined
+           );
+         } catch (err) {
+           console.error('[bvm:resolve] _dynamic_import failed for file URL "' + specifier + '": ' + ((err && err.message) || err));
+           throw err;
+         }
+         if (!bvmFileData || bvmFileData.source === null || bvmFileData.source === undefined || bvmFileData.source === '') {
+           var bvmFileNotFound = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + specifier + "'");
+           bvmFileNotFound.code = 'ERR_MODULE_NOT_FOUND';
+           console.error('[bvm:resolve] ' + bvmFileNotFound.message);
+           throw bvmFileNotFound;
+         }
+         var bvmFileName = (bvmFileData && bvmFileData.resolvedPath) || bvmFilePath;
+         try {
+           bvmFileData = await bvmFileInterop.callParent(
+             '_build_file',
+             bvmFileData.source,
+             bvmFileName,
+             'import',
+             '/',
+             '/',
+             false
+           );
+         } catch (err) {
+           console.error('[bvm:resolve] _build_file failed for file URL "' + specifier + '": ' + ((err && err.message) || err));
+           throw err;
+         }
+         if (bvmFileData === null || bvmFileData === undefined || bvmFileData === '') {
+           var bvmFileBuildEmpty = new Error("[bvm:resolve] _build_file returned empty source for file URL '" + specifier + "'");
+           console.error('[bvm:resolve] ' + bvmFileBuildEmpty.message);
+           throw bvmFileBuildEmpty;
+         }
+         return "data:text/javascript;charset=utf-8," + encodeURIComponent(bvmFileData);
+       }
+
+
         return defaultResolve(specifier, parentURL);
       }
     };
