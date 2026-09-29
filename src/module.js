@@ -40,6 +40,8 @@
 // Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 // undefined under real Node / direct import).
 // ---------------------------------------------------------------------------
+import { interceptNativeSpecifier } from "./browser-builds.js";
+
 function getRT() {
   return typeof globalThis._RUNTIME_ !== "undefined"
     ? globalThis._RUNTIME_
@@ -1001,6 +1003,15 @@ function _resolveFilename(request, parent, isMain, options) {
     return request;
   }
 
+  // Browser-build substitution (src/browser-builds.js): when the browser
+  // runtime VFS is present, native-only packages (rollup, esbuild) resolve
+  // to the vendors' own browser/WASM builds. Returns an absolute VFS path,
+  // so no further lookup is needed. No-op under real Node (parity lane).
+  const intercepted = interceptNativeSpecifier(request);
+  if (intercepted !== null) {
+    return intercepted;
+  }
+
   let paths;
 
   if (typeof options === "object" && options !== null) {
@@ -1084,7 +1095,11 @@ function loadBuiltinModule(normalizedId, originalRequest) {
       typeof process.getBuiltinModule === "function"
     ) {
       const mod = process.getBuiltinModule(normalizedId);
-      if (mod !== undefined) return mod;
+      // CJS interop: require() unwraps the default export, exactly like the
+      // RT.loadModule branch above. (Vite's ws does
+      // `class WebSocket extends require("events")` — the namespace object
+      // is not a constructor.)
+      if (mod !== undefined) return interopDefault(mod);
     }
   } catch {
     /* browser-fallback lane: no native delegation */
@@ -1171,7 +1186,17 @@ function createRequire(filenameOrURL) {
       // If it's a relative path, it would not parse and would be considered
       // invalid per the documented contract.
       fileURL = new URL(filenameOrURL);
-      filepath = fileURLToPathShim(fileURL);
+      if (fileURL.protocol === "file:") {
+        filepath = fileURLToPathShim(fileURL);
+      } else {
+        // Browser-platform divergence: VFS modules load from data:/blob:/
+        // http(s): URLs, so import.meta.url is never a file: URL (e.g.
+        // vite's bundled chunk.js does createRequire(import.meta.url)).
+        // A non-file base has no filesystem path, but builtin requires need
+        // none — keep the URL href as the base instead of throwing
+        // ERR_INVALID_URL_SCHEME like Node does.
+        filepath = fileURL.href;
+      }
     } catch {
       throw errInvalidArgValue("filename", filenameOrURL, createRequireError);
     }

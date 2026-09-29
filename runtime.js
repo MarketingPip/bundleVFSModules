@@ -3,6 +3,12 @@ import { importAssertions } from "https://esm.sh/acorn-import-assertions";
 import { escape, split, join } from "https://esm.sh/shellwords?target=node";
 import { v4 as uuid } from "https://esm.sh/uuid";
 import { Terminal } from "https://esm.sh/xterm@5.3.0";
+// Vendor browser/WASM builds for native-only packages (real Vite 7:
+// rollup → @rollup/browser, esbuild → esbuild-wasm shim). Used by the
+// parent `_dynamic_import` handler so ESM `import 'rollup'` resolves
+// exactly like CJS require('rollup') (src/module.js). Ungated lookup: the
+// handler only runs when serving the browser runtime's VFS.
+import { lookupNativeInterception } from "./src/browser-builds.js";
 /**
  * Inlined IIFE bundle of src/cookieJar.js (RFC 6265 virtual cookie jar).
  * The sandbox cannot fetch dist files at runtime without a network round
@@ -810,7 +816,15 @@ export function convertCjsToEsm(code, options = {}) {
     hires: true,
     includeContent: true,
   });
-  return { code: outCode, map };
+  // Mark CJS-converted modules so the sandbox's ESM interop (buildModuleProxy)
+  // can resolve named imports against module.exports — Node's cjs-module-lexer
+  // parity. Without this, `import { build } from "esbuild"` (a CJS shim)
+  // throws "does not provide an export named 'build'".
+  const converted = lastModuleExport !== null || exportsProps.length > 0;
+  const finalCode = converted
+    ? outCode + "\nexport const __bvm_cjs__ = true;\n"
+    : outCode;
+  return { code: finalCode, map };
 }
 
 export function convertCjsToEsm_backup(code) {
@@ -1332,8 +1346,17 @@ export function transformImportsToLoadModule(
         typeof node.source.value === "string"
       ) {
         const modulePath = node.source.value;
-        const v = getLiftedVar(modulePath); // always create/reuse lifted variable
-        setImportType(modulePath, "import");
+        // Dynamic import() is transformed in-situ only: it must NOT be
+        // registered as a lifted module. The preamble
+        // `const __lm_xxx = await loadModule(...)` was dead code for dynamic
+        // imports (the in-situ call below never references a lifted var) but
+        // its await still ran before any user code — stalling the whole
+        // module on slow loads (real vite@7: ~30 chunks through interop
+        // _dynamic_import/_build_file) before the user's own drain-hold timer
+        // was even registered, so execute() resolved early with no output.
+        // Static ImportDeclarations keep their preamble hoist; dynamic
+        // import() keeps real import() semantics (lazy, returns a promise).
+        void modulePath;
 
         const enclosingFunc = findEnclosingFunction(node);
 
@@ -3245,7 +3268,9 @@ ${code}
         // garbage data: URL that fails later with a cryptic SyntaxError.
         var bvmInterop = globalThis[Symbol.for("bvm.interop")];
         var bvmCwd = globalThis._RUNTIME${iframe.sandbox.uuid}_.cwd;
-        var bvmVfs = globalThis._RUNTIME${iframe.sandbox.uuid}_.__USER_FILES__;
+        // The seed is served host-side (pickDynamicImportVfs): never post
+        // __USER_FILES__ across the boundary — structured-cloning ~22MB per
+        // call stalled bootstrap for minutes.
         var data;
         try {
           data = await bvmInterop.callParent(
@@ -3256,7 +3281,7 @@ ${code}
             '/',
             true,
             bvmCwd,
-            bvmVfs
+            undefined
           );
         } catch (err) {
           console.error('[bvm:resolve] _dynamic_import failed for "' + specifier + '": ' + ((err && err.message) || err));
@@ -4107,6 +4132,11 @@ class SandboxRuntime {
 
 
 globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}, __SEA_ASSETS__:${JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined)}};
+// Stable alias for platform shims: they write globalThis._RUNTIME_ expecting the
+// sandbox-scoped object, but the AST rewrite only applies to Node builtins, not
+// VFS-loaded CJS. Per-realm (each sandbox has its own globalThis), so isolation
+// is preserved.
+globalThis._RUNTIME_ = globalThis._RUNTIME${config.uuid}_;
 
 // Builtin manifest for the sandbox-side sync require: createSyncRequire
 // checks _builtinManifest/_builtinCache, but the parent-scope originals are
@@ -4463,8 +4493,9 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
             : undefined;
         // Pass the entry point to the parent so _build_file can use it for
         // things like resolving sibling imports or source-map hints.
-        
-        const vfs = globalThis._RUNTIME${config.uuid}_.__USER_FILES__
+        // The seed is served host-side (pickDynamicImportVfs): pass undefined
+        // instead of __USER_FILES__ — structured-cloning ~22MB per call
+        // stalled bootstrap for minutes.
         let importResult = await interopChannel.callParent(
           '_dynamic_import',
           modulePath,
@@ -4473,7 +4504,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
           parentEntryPoint,
           isNodeBuiltIn, 
           cwd,
-          vfs   
+          undefined   
         );
         
           
@@ -4519,14 +4550,17 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
           return resolved;
         } else {
           if (moduleType === 'require') {
-            // Provide sync require bound to THIS module's own path
-            // (modulePath), so its relative require() calls resolve against
-            // its own directory. Binding to the entry point instead would
-            // break nested requires (e.g. '../util.js' from lib/deep/x.js).
+            // Provide sync require bound to THIS module's own RESOLVED path
+            // (buildFileName: importResult.resolvedPath, always an absolute
+            // VFS path), so its relative require() calls resolve against its
+            // own directory. Binding to modulePath (the as-written request,
+            // which may be relative like './lib/picomatch') broke nested
+            // requires — e.g. picomatch's require('./scan') resolving to
+            // lib/scan.js instead of /node_modules/picomatch/lib/scan.js.
             // vfsLookup walks a nested tree, so unflatten the flat
             // __USER_FILES__ map first (keys may carry a leading slash).
             const vfsForRequire = unflattenUserFiles(globalThis._RUNTIME${config.uuid}_.__USER_FILES__ || {});
-            globalThis.__syncRequire__ = createSyncRequire(modulePath, vfsForRequire);
+            globalThis.__syncRequire__ = createSyncRequire(buildFileName, vfsForRequire);
             source = wrapCommonJS(source, modulePath, vfsForRequire);
           }
  
@@ -4815,15 +4849,23 @@ function createSyncRequire(parentPath, vfs, cache) {
     // 2. Resolve path (relative/absolute)
     let resolved;
     if (request.startsWith('./') || request.startsWith('../') || request.startsWith('/')) {
-      const fromDir = parentPath ? parentPath.split('/').slice(0, -1).join('/') : '';
-      const joined = fromDir ? fromDir + '/' + request : request;
+      // Absolute requests ignore the parent directory (Node semantics: an
+      // absolute require() path is used as-is).
+      const joined = request.startsWith('/')
+        ? request
+        : (parentPath ? parentPath.split('/').slice(0, -1).join('/') : '') + '/' + request;
+      const isAbs = joined.charAt(0) === '/';
       const parts = joined.split('/');
       const normalized = [];
       for (const p of parts) {
         if (p === '..') normalized.pop();
         else if (p !== '.' && p !== '') normalized.push(p);
       }
-      resolved = normalized.join('/');
+      // Preserve the leading slash. VFS paths are absolute; dropping it
+      // produced relative resolved paths and non-canonical __filename
+      // values (e.g. picomatch's require('./scan') resolving to lib/scan.js
+      // instead of /node_modules/picomatch/lib/scan.js).
+      resolved = (isAbs ? '/' : '') + normalized.join('/');
       // Try .js extension
       if (!resolved.endsWith('.js')) {
         const withJs = resolved + '.js';
@@ -4915,6 +4957,12 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
     enumerable: false,
   });
 
+  // CJS marker (see convertCjsToEsm): named ESM imports from a CJS module
+  // resolve against module.exports (Node cjs-module-lexer parity). Keep the
+  // marker out of the visible namespace.
+  const isCjs = !!moduleObject.__bvm_cjs__;
+  delete moduleObject.__bvm_cjs__;
+
   if (moduleType === 'require') {
     return moduleObject.default ?? moduleObject;
   }
@@ -4944,6 +4992,20 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
       if (prop === '__esModule') return true;
 
       if (!(prop in target)) {
+        // CJS interop (Node parity): a named import from a CJS module
+        // resolves against module.exports, including keys it inherited
+        // via spread (which static analysis cannot see).
+        if (isCjs) {
+          const cjsExports = target.default;
+          if (
+            cjsExports !== null &&
+            (typeof cjsExports === 'object' ||
+              typeof cjsExports === 'function') &&
+            prop in cjsExports
+          ) {
+            return cjsExports[prop];
+          }
+        }
         const displayPath = relativeName ?? modulePath;
         throw new SyntaxError(
           \`The requested module '\${displayPath}' does not provide an export named '\${String(prop)}'\`
@@ -6058,6 +6120,10 @@ Object.defineProperty(window, 'process', {
   });
    
    globalThis.process = processFinal;
+   // Node.js global alias for browser runtime (vite needs it)
+   if (typeof globalThis.global === 'undefined') {
+     globalThis.global = globalThis;
+   }
   }catch(err){
   
   }
@@ -8099,9 +8165,13 @@ function _parseKey(s) {
           if (part === "..") resolved.pop();
           else if (part !== ".") resolved.push(part);
         }
-        const resolvedPath = resolved.join("/");
+        // 3. Ensure absolute VFS path (leading slash) for consistency.
+        // Without this, relative resolvedPaths cascade: a relative importer
+        // produces a relative resolvedPath, which becomes the next importer.
+        let resolvedPath = resolved.join("/");
+        if (!resolvedPath.startsWith("/")) resolvedPath = "/" + resolvedPath;
 
-        // 3. Walk the VFS tree
+        // 4. Walk the VFS tree
         const source = vfsLookup(resolvedPath, vfs);
         return source != null ? { resolvedPath, source } : null;
       }
@@ -8385,6 +8455,57 @@ function _parseKey(s) {
         },
       );
 
+      // Hoisted VFS helpers for the real `_dynamic_import` below. The sandbox
+      // used to post its entire __USER_FILES__ seed (~22MB with the WASM
+      // shims) on every call; structured-cloning that through postMessage
+      // stalled bootstrap for minutes (~30 eager builtin preloads x ~7s).
+      // The iframe copy is never mutated at runtime (fs writes land in the
+      // memfs Volume, not __USER_FILES__), so it is always identical to the
+      // host's config.fs. Serve from the host seed (zero clone); honor an
+      // explicitly-passed VFS only when the host has no seed of its own.
+      function unflattenFileSystem(flatObj) {
+        const result = {};
+
+        for (const [rawPath, value] of Object.entries(flatObj)) {
+          // User file keys may be '/lib/util.js' or 'lib/util.js'; resolution
+          // walks segments without a leading slash, so normalize here. Without
+          // this, '/lib/util.js'.split('/') yields a phantom '' root segment and
+          // every lookup misses (MODULE_NOT_FOUND).
+          const parts = String(rawPath).replace(/^\/+/, "").split("/");
+          let current = result;
+
+          // Traverse (or create) folders until the last segment (the file name)
+          for (let i = 0; i < parts.length - 1; i++) {
+            const part = parts[i];
+            if (!current[part] || typeof current[part] !== "object") {
+              current[part] = {};
+            }
+            current = current[part];
+          }
+
+          // Assign the file content to the final key
+          current[parts[parts.length - 1]] = value;
+        }
+
+        return result;
+      }
+
+      function pickDynamicImportVfs(passedVfs, hostSeed, unflatten) {
+        const hostEmpty =
+          !hostSeed ||
+          typeof hostSeed !== "object" ||
+          Object.keys(hostSeed).length === 0;
+        if (
+          hostEmpty &&
+          passedVfs &&
+          typeof passedVfs === "object" &&
+          Object.keys(passedVfs).length > 0
+        ) {
+          return unflatten(passedVfs);
+        }
+        return unflatten(hostSeed || {});
+      }
+
       this.registerInterop(
         "_dynamic_import",
         async (
@@ -8396,34 +8517,10 @@ function _parseKey(s) {
           cwd,
           vfs = {},
         ) => {
-          function unflattenFileSystem(flatObj) {
-            const result = {};
-
-            for (const [rawPath, value] of Object.entries(flatObj)) {
-              // User file keys may be '/lib/util.js' or 'lib/util.js'; resolution
-              // walks segments without a leading slash, so normalize here. Without
-              // this, '/lib/util.js'.split('/') yields a phantom '' root segment and
-              // every lookup misses (MODULE_NOT_FOUND).
-              const parts = String(rawPath).replace(/^\/+/, "").split("/");
-              let current = result;
-
-              // Traverse (or create) folders until the last segment (the file name)
-              for (let i = 0; i < parts.length - 1; i++) {
-                const part = parts[i];
-                if (!current[part] || typeof current[part] !== "object") {
-                  current[part] = {};
-                }
-                current = current[part];
-              }
-
-              // Assign the file content to the final key
-              current[parts[parts.length - 1]] = value;
-            }
-
-            return result;
-          }
-
-          vfs = unflattenFileSystem(vfs);
+          // Serve from the host's own seed: the sandbox no longer ships its
+          // __USER_FILES__ across postMessage (see pickDynamicImportVfs).
+          // `this` is the CodeSandbox instance (arrow closure over execute()).
+          vfs = pickDynamicImportVfs(vfs, this.config.fs, unflattenFileSystem);
 
           // 1. For Node built-ins, hand off to your shim resolver as before.
           // resolvedPath is null: builtins aren't VFS files, so the sandbox keeps
@@ -8459,6 +8556,21 @@ function _parseKey(s) {
 
           // 3. Handle Bare Specifiers (node_modules lookup)
           if (!isRelative) {
+            // Vendor browser/WASM builds for native-only packages (real
+            // Vite 7: rollup → @rollup/browser, esbuild → esbuild-wasm
+            // shim). Specifier-based, so ESM `import 'rollup'` resolves
+            // exactly like CJS require('rollup') (src/module.js). The table
+            // is static — no VFS-presence gate needed: this handler only
+            // runs when serving the browser runtime's VFS.
+            const intercepted = lookupNativeInterception(path);
+            if (intercepted) {
+              const hit = resolveVFS(intercepted, "", vfs);
+              if (hit) {
+                return { source: hit.source, resolvedPath: hit.resolvedPath };
+              }
+              // Target not seeded in this VFS: fall through to the normal
+              // lookup so the miss stays an honest MODULE_NOT_FOUND.
+            }
             const resolvedPackage = resolveNodeModule(
               path,
               importerVFSPath,
@@ -10226,6 +10338,40 @@ function base64EncodeBytes(bytes) {
   return btoa(binary);
 }
 
+// A file-seed value of exactly { encoding: 'utf8'|'base64', data: string }
+// is a binary/text envelope, NOT a directory (mirrors the normalizeSeaAssets
+// convention, which documents these shapes as the fs -> __USER_FILES__
+// leniency). flattenFileTree must keep it as a leaf so seedVolume in the
+// sandbox can decode it; recursing would create bogus `encoding`/`data`
+// files. The two-key strictness keeps a user directory that merely happens
+// to contain encoding/data files from being reinterpreted.
+function isSeedEnvelope(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !(value instanceof Uint8Array) &&
+    !(value instanceof Blob) &&
+    (value.encoding === "utf8" || value.encoding === "base64") &&
+    typeof value.data === "string" &&
+    Object.keys(value).length === 2
+  );
+}
+
+// Normalize raw bytes (Uint8Array/Buffer/ArrayBuffer) to a JSON-safe
+// { encoding: 'base64', data } envelope. __USER_FILES__ is JSON-serialized
+// into the sandbox bootstrap, where raw bytes would corrupt to {"0":..}.
+function seedBytesToBase64(value) {
+  const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+  if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
+    return Buffer.from(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength,
+    ).toString("base64");
+  }
+  return base64EncodeBytes(bytes);
+}
+
 function flattenFileTree(obj, parentPath = "") {
   let flat = {};
   if (!obj || typeof obj !== "object") return flat;
@@ -10235,11 +10381,14 @@ function flattenFileTree(obj, parentPath = "") {
 
     if (value === null) {
       continue;
-    } else if (
-      typeof value === "object" &&
-      !(value instanceof Uint8Array) &&
-      !(value instanceof Blob)
-    ) {
+    } else if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+      // Binary leaf: JSON-safe envelope (raw bytes cannot survive
+      // JSON.stringify into the bootstrap).
+      flat[fullPath] = { encoding: "base64", data: seedBytesToBase64(value) };
+    } else if (isSeedEnvelope(value)) {
+      // Already an envelope: keep as a leaf for seedVolume to decode.
+      flat[fullPath] = value;
+    } else if (typeof value === "object" && !(value instanceof Blob)) {
       Object.assign(flat, flattenFileTree(value, fullPath));
     } else {
       flat[fullPath] = value;

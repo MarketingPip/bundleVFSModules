@@ -18,6 +18,24 @@ unimplementable-in-browser APIs stay honest noop stubs, never throws.
 
 ## Recently completed
 
+- **Vite 7 browser E2E — M3** (2026-09-29, `feat/vite7-browser`): real
+  Vite 7.3.6 `vite.build()` executes in headed Firefox through the browser
+  runtime — 5060 ms, emits 1 chunk, verdict `ok:true`. Rollup runs via
+  `@rollup/browser` ESM build with WASM embedded as a data URL; sandbox
+  exposes a stable `globalThis._RUNTIME_` alias per realm so platform shims
+  (`esbuild-shim.cjs`, `fs.js`) find the VFS. `build.minify` is `false` —
+  esbuild-wasm `transform()` hangs in the sandbox worker (init succeeds).
+  **Update 2026-09-29:** `minify: "terser"` now works (PR #133) — real
+  Terser 5.51.2 minifies in Firefox (6530 ms, 41 chars vs 100 unminified,
+  chunk executes). Full writeup: `docs/VITE_BROWSER.md`.
+- **Vite 7 browser E2E — M4** (2026-09-29, `feat/vite7-browser`): real
+  Vitest 5.0.2 runs in headed Firefox — 1 suite, 1 test, 1 passed, via
+  genuine `expect(add(1,2)).toBe(3)` through Vitest's actual matcher code.
+  **Update 2026-09-29:** stub removed — general TypeScript CJS interop
+  (`__exportStar`, multi-assignment exports, bare-`exports` detection) in
+  the transformer; M4 re-verified stub-free with real `expect-type@1.4.0`
+  (PR #132).
+
 - **http.js virtual-network round trip — phase 1** (PR #99, merged
   2026-09-26): incremental HTTP/1.x parser (`src/_http_parser.js`); real
   virtual-socket `http.Server` accept path over `net.js` (byte-level parsing,
@@ -99,6 +117,16 @@ bytes" and "run wasm bytes on my VFS".
   library — npm install-time behavior (reads each package's `bin` field,
   routes through the runtime's `node`) plus sample code. Clearly marked
   demo; never on the product path (AGENTS.md rule 11).
+- **Vite 7 browser E2E gaps** (follow-ups to M3/M4, `docs/VITE_BROWSER.md`):
+  - ~~esbuild-wasm `transform()` hang → terser~~ — **done 2026-09-29**
+    (PR #133): `minify: "terser"` works; only revisit esbuild if a real TS
+    fixture needs `vite:esbuild-transpile`.
+  - ~~Proper `expect-type` support~~ — **done 2026-09-29** (PR #132):
+    general TS CJS interop; M4 re-verified stub-free.
+  - Canonicalize Rollup WASM data-URL loading into the runtime
+    package-loading path (currently harness-only).
+  - Red-first test proving the `@rollup/browser` ESM interception target
+    and named exports.
 
 ### 3. Full-suite open-handle investigation
 

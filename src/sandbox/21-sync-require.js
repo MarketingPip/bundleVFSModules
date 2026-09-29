@@ -41,17 +41,25 @@ function createSyncRequire(parentPath, vfs) {
       request.startsWith("../") ||
       request.startsWith("/")
     ) {
-      const fromDir = parentPath
-        ? parentPath.split("/").slice(0, -1).join("/")
-        : "";
-      const joined = fromDir ? fromDir + "/" + request : request;
+      // Absolute requests ignore the parent directory (Node semantics: an
+      // absolute require() path is used as-is).
+      const joined = request.startsWith("/")
+        ? request
+        : (parentPath ? parentPath.split("/").slice(0, -1).join("/") : "") +
+          "/" +
+          request;
+      const isAbs = joined.charAt(0) === "/";
       const parts = joined.split("/");
       const normalized = [];
       for (const p of parts) {
         if (p === "..") normalized.pop();
         else if (p !== "." && p !== "") normalized.push(p);
       }
-      resolved = normalized.join("/");
+      // Preserve the leading slash. VFS paths are absolute; dropping it
+      // produced relative resolved paths and non-canonical __filename values
+      // (e.g. picomatch's require('./scan') resolving to lib/scan.js instead
+      // of /node_modules/picomatch/lib/scan.js).
+      resolved = (isAbs ? "/" : "") + normalized.join("/");
       // Try .js extension
       if (!resolved.endsWith(".js")) {
         const withJs = resolved + ".js";
@@ -163,6 +171,12 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
     enumerable: false,
   });
 
+  // CJS marker (see convertCjsToEsm): named ESM imports from a CJS module
+  // resolve against module.exports (Node cjs-module-lexer parity). Keep the
+  // marker out of the visible namespace.
+  const isCjs = !!moduleObject.__bvm_cjs__;
+  delete moduleObject.__bvm_cjs__;
+
   if (moduleType === "require") {
     return moduleObject.default ?? moduleObject;
   }
@@ -191,6 +205,20 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
       if (prop === "__esModule") return true;
 
       if (!(prop in target)) {
+        // CJS interop (Node parity): a named import from a CJS module
+        // resolves against module.exports, including keys it inherited
+        // via spread (which static analysis cannot see).
+        if (isCjs) {
+          const cjsExports = target.default;
+          if (
+            cjsExports !== null &&
+            (typeof cjsExports === "object" ||
+              typeof cjsExports === "function") &&
+            prop in cjsExports
+          ) {
+            return cjsExports[prop];
+          }
+        }
         const displayPath = relativeName ?? modulePath;
         throw new SyntaxError(
           `The requested module '${displayPath}' does not provide an export named '${String(prop)}'`,

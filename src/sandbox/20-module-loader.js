@@ -130,8 +130,9 @@ async function loadModule(
             : undefined;
         // Pass the entry point to the parent so _build_file can use it for
         // things like resolving sibling imports or source-map hints.
-
-        const vfs = globalThis[_BVM_RT_KEY_].__USER_FILES__;
+        // The seed is served host-side (pickDynamicImportVfs in runtime.js):
+        // pass undefined instead of __USER_FILES__ — structured-cloning ~22MB
+        // per call stalled bootstrap for minutes.
         let importResult = await interopChannel.callParent(
           "_dynamic_import",
           modulePath,
@@ -140,7 +141,7 @@ async function loadModule(
           parentEntryPoint,
           isNodeBuiltIn,
           cwd,
-          vfs,
+          undefined,
         );
 
         if (!importResult || !importResult.source) {
@@ -183,11 +184,17 @@ async function loadModule(
           return resolved;
         } else {
           if (moduleType === "require") {
-            // Provide sync require bound to this module's path
+            // Provide sync require bound to this module's RESOLVED path
+            // (buildFileName: importResult.resolvedPath, always an absolute
+            // VFS path), so its relative require() calls resolve against its
+            // own directory. Binding to the as-written request (modulePath,
+            // parentEntryPoint, or entryPoint — any of which may be relative)
+            // broke nested requires: picomatch's require('./scan') resolved
+            // to lib/scan.js instead of /node_modules/picomatch/lib/scan.js.
             const vfsForRequire =
               globalThis[_BVM_RT_KEY_]?.__USER_FILES__ || {};
             globalThis.__syncRequire__ = createSyncRequire(
-              parentEntryPoint || entryPoint || modulePath,
+              buildFileName,
               vfsForRequire,
             );
             source = wrapCommonJS(

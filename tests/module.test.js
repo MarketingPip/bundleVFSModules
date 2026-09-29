@@ -906,3 +906,80 @@ describe("browser fallback lane (no native delegation)", () => {
     expect(Object.getPrototypeOf(shim.Module._pathCache)).toBe(null);
   });
 });
+
+// ---------------------------------------------------------------------------
+// createRequire with non-file URLs (browser-platform divergence)
+// ---------------------------------------------------------------------------
+// Intentional divergence from Node: in the browser, VFS modules load from
+// data:/blob:/http: URLs, so import.meta.url is never a file: URL. Bundled
+// code (vite 7's chunk.js: `createRequire(import.meta.url)`) depends on this
+// working. Real Node v24 throws ERR_INVALID_ARG_VALUE for a data: URL base;
+// the browser platform accepts any URL scheme because builtin requires do
+// not need a filesystem path.
+describe("createRequire with non-file URL base", () => {
+  test("accepts a data: URL base (vite chunk.js pattern)", () => {
+    const req = shim.createRequire("data:text/javascript,export default 1");
+    expect(typeof req).toBe("function");
+  });
+
+  test("builtin require works from a data: URL base", () => {
+    const req = shim.createRequire("data:text/javascript,export default 1");
+    expect(req("fs")).toBeDefined();
+    expect(req("node:path")).toBeDefined();
+  });
+
+  test("accepts http:/https: URL bases", () => {
+    for (const base of [
+      "http://example.com/dir/mod.js",
+      "https://example.com/dir/mod.js",
+    ]) {
+      const req = shim.createRequire(base);
+      expect(typeof req).toBe("function");
+      expect(req("fs")).toBeDefined();
+    }
+  });
+
+  test("still rejects non-URL garbage and relative paths", () => {
+    throwsCode(
+      () => shim.createRequire("not a url at all"),
+      "ERR_INVALID_ARG_VALUE",
+    );
+    throwsCode(
+      () => shim.createRequire("./relative.js"),
+      "ERR_INVALID_ARG_VALUE",
+    );
+  });
+
+  // CJS interop: require() must unwrap the default export, exactly like the
+  // RT.loadModule branch of loadBuiltinModule already does. Without this,
+  // require("events") returns the ESM namespace instead of the EventEmitter
+  // class (vite's ws: `class WebSocket extends EventEmitter` → "not a
+  // constructor"). Verified against real Node: require("events") is the
+  // EventEmitter constructor.
+  test("require() unwraps default export from getBuiltinModule (CJS interop)", () => {
+    const realGetBuiltinModule = process.getBuiltinModule.bind(process);
+    const FakeClass = class FakeEvents {};
+    const fakeNs = { default: FakeClass, namedExport: 42 };
+    process.getBuiltinModule = (id) =>
+      id === "events" ? fakeNs : realGetBuiltinModule(id);
+    try {
+      const req = shim.createRequire("data:text/javascript,");
+      expect(req("events")).toBe(FakeClass);
+    } finally {
+      process.getBuiltinModule = realGetBuiltinModule;
+    }
+  });
+
+  test("require() falls back to namespace when no default export", () => {
+    const realGetBuiltinModule = process.getBuiltinModule.bind(process);
+    const fakeNs = { namedExport: 42 };
+    process.getBuiltinModule = (id) =>
+      id === "events" ? fakeNs : realGetBuiltinModule(id);
+    try {
+      const req = shim.createRequire("data:text/javascript,");
+      expect(req("events")).toBe(fakeNs);
+    } finally {
+      process.getBuiltinModule = realGetBuiltinModule;
+    }
+  });
+});

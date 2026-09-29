@@ -6,6 +6,14 @@ globalThis.Buffer = Buffer.Buffer;
 globalThis.clearImmediate = clearImmediate;
 globalThis.setImmediate = setImmediate;
 
+// Node.js `global` alias: bundlers and frameworks (Vite, Vitest) reference
+// the bare `global` identifier. In a browser realm it does not exist, so
+// install it as an alias of globalThis — exactly like Node, where
+// global === globalThis. Guarded so a host-provided value is never clobbered.
+if (typeof globalThis.global === "undefined") {
+  globalThis.global = globalThis;
+}
+
 if (typeof globalThis.queueMicrotask !== "function") {
   globalThis.queueMicrotask = function (callback) {
     if (typeof callback !== "function") {

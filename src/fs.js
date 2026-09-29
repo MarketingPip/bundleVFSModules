@@ -219,8 +219,34 @@ function enrichErr(err, methodName) {
 function isUint8ArrayLike(v) {
   return typeof Uint8Array !== "undefined" && v instanceof Uint8Array;
 }
+// Duck-type URL check (cross-realm safe: a URL from another realm fails
+// `instanceof URL` but still has protocol/pathname).
+function isURLLike(p) {
+  return (
+    p !== null &&
+    typeof p === "object" &&
+    typeof p.protocol === "string" &&
+    typeof p.pathname === "string"
+  );
+}
+function fileURLToPathString(url) {
+  if (url.protocol !== "file:") {
+    const e = new TypeError("The URL must be of scheme file");
+    e.code = "ERR_INVALID_URL_SCHEME";
+    throw e;
+  }
+  let pathname = url.pathname;
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    const e = new TypeError("Invalid URL");
+    e.code = "ERR_INVALID_URL";
+    throw e;
+  }
+  return pathname;
+}
 function validatePath(p, name = "path") {
-  if (typeof p !== "string" && !isUint8ArrayLike(p)) {
+  if (typeof p !== "string" && !isUint8ArrayLike(p) && !isURLLike(p)) {
     // Match Node's exact message format.
     let received;
     if (p === null) received = "null";
@@ -236,9 +262,12 @@ function validatePath(p, name = "path") {
     err.code = "ERR_INVALID_ARG_TYPE";
     throw err;
   }
+  // Node.js fs accepts file: URL objects; non-file schemes are rejected.
+  if (isURLLike(p)) fileURLToPathString(p);
 }
 function toPathString(p) {
   if (typeof p === "string") return p;
+  if (isURLLike(p)) return fileURLToPathString(p);
   if (isUint8ArrayLike(p)) {
     if (typeof Buffer !== "undefined" && Buffer.isBuffer(p))
       return p.toString("utf8");
@@ -278,11 +307,34 @@ function getUmask() {
   return 0o022;
 }
 
+// Decode a { encoding: 'utf8'|'base64', data: string } seed envelope back to
+// its file content. The envelope is the JSON-safe form flattenFileTree
+// (runtime.js) produces for binary seeds: raw bytes cannot survive the
+// JSON.stringify of __USER_FILES__ into the sandbox bootstrap. Strict shape
+// (exactly two keys) so a user directory that merely happens to contain
+// `encoding`/`data` files is never silently reinterpreted.
+function decodeSeedValue(data) {
+  if (
+    data !== null &&
+    typeof data === "object" &&
+    !ArrayBuffer.isView(data) &&
+    (data.encoding === "utf8" || data.encoding === "base64") &&
+    typeof data.data === "string" &&
+    Object.keys(data).length === 2
+  ) {
+    if (data.encoding === "utf8") return data.data;
+    const bin = atob(data.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  return data;
+}
 function seedVolume(vol, files) {
   if (!files || typeof files !== "object") return;
   for (const rawPath of Object.keys(files)) {
     const p = toPathString(rawPath);
-    const data = files[rawPath];
+    const data = decodeSeedValue(files[rawPath]);
     try {
       const dir = posixDirname(p);
       if (dir !== "/") vol.mkdirSync(dir, { recursive: true });
@@ -1598,7 +1650,8 @@ function buildApi(vol) {
   // ── exists/existsSync: false for invalid paths (never throws) ──
   fs.existsSync = function (p) {
     try {
-      if (typeof p !== "string" && !isUint8ArrayLike(p)) return false;
+      if (typeof p !== "string" && !isUint8ArrayLike(p) && !isURLLike(p))
+        return false;
       vol.statSync(toPathString(p));
       return true;
     } catch {
