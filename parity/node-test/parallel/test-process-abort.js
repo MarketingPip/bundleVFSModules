@@ -1,11 +1,11 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { isMainThread } = require('worker_threads');
+const common = require("../common");
+const assert = require("assert");
+const { isMainThread } = require("worker_threads");
 
 if (!isMainThread) {
-  common.skip('process.abort() is not available in Workers');
+  common.skip("process.abort() is not available in Workers");
 }
 
 // Check that our built-in methods do not have a prototype/constructor behaviour

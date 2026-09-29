@@ -1,19 +1,19 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
-const { Readable } = require('stream');
+const { Readable } = require("stream");
 
 const readable = new Readable({
-  read() {}
+  read() {},
 });
 
 function read() {}
 
-readable.setEncoding('utf8');
-readable.on('readable', read);
-readable.removeListener('readable', read);
+readable.setEncoding("utf8");
+readable.on("readable", read);
+readable.removeListener("readable", read);
 
-process.nextTick(function() {
-  readable.on('data', common.mustCall());
-  readable.push('hello');
+process.nextTick(function () {
+  readable.on("data", common.mustCall());
+  readable.push("hello");
 });

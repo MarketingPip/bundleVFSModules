@@ -19,42 +19,54 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const zlib = require('zlib');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const zlib = require("zlib");
 
 // String "test" encoded with dictionary "dict".
-const input = Buffer.from([0x78, 0xBB, 0x04, 0x09, 0x01, 0xA5]);
+const input = Buffer.from([0x78, 0xbb, 0x04, 0x09, 0x01, 0xa5]);
 
 {
   const stream = zlib.createInflate();
 
-  stream.on('error', common.mustCall(function(err) {
-    assert.match(err.message, /Missing dictionary/);
-  }));
+  stream.on(
+    "error",
+    common.mustCall(function (err) {
+      assert.match(err.message, /Missing dictionary/);
+    }),
+  );
 
   stream.write(input);
 }
 
 {
-  const stream = zlib.createInflate({ dictionary: Buffer.from('fail') });
+  const stream = zlib.createInflate({ dictionary: Buffer.from("fail") });
 
-  stream.on('error', common.mustCall(function(err) {
-    assert.match(err.message, /Bad dictionary/);
-  }));
+  stream.on(
+    "error",
+    common.mustCall(function (err) {
+      assert.match(err.message, /Bad dictionary/);
+    }),
+  );
 
   stream.write(input);
 }
 
 {
-  const stream = zlib.createInflateRaw({ dictionary: Buffer.from('fail') });
+  const stream = zlib.createInflateRaw({ dictionary: Buffer.from("fail") });
 
-  stream.on('error', common.mustCall(function(err) {
-    // It's not possible to separate invalid dict and invalid data when using
-    // the raw format
-    assert.match(err.message, /(invalid|Operation-Ending-Supplemental Code is 0x12)/);
-  }));
+  stream.on(
+    "error",
+    common.mustCall(function (err) {
+      // It's not possible to separate invalid dict and invalid data when using
+      // the raw format
+      assert.match(
+        err.message,
+        /(invalid|Operation-Ending-Supplemental Code is 0x12)/,
+      );
+    }),
+  );
 
   stream.write(input);
 }

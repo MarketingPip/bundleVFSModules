@@ -1,16 +1,12 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const stream = require('stream');
-const {
-  Readable, Writable, promises,
-} = stream;
-const {
-  finished, pipeline,
-} = require('stream/promises');
-const fs = require('fs');
-const assert = require('assert');
-const { promisify } = require('util');
+const common = require("../common");
+const stream = require("stream");
+const { Readable, Writable, promises } = stream;
+const { finished, pipeline } = require("stream/promises");
+const fs = require("fs");
+const assert = require("assert");
+const { promisify } = require("util");
 
 assert.strictEqual(promises.pipeline, pipeline);
 assert.strictEqual(promises.finished, finished);
@@ -21,21 +17,20 @@ assert.strictEqual(finished, promisify(stream.finished));
 {
   let finished = false;
   const processed = [];
-  const expected = [Buffer.from('a'), Buffer.from('b'), Buffer.from('c')];
+  const expected = [Buffer.from("a"), Buffer.from("b"), Buffer.from("c")];
 
   const read = new Readable({
-    read() {
-    }
+    read() {},
   });
 
   const write = new Writable({
     write(data, enc, cb) {
       processed.push(data);
       cb();
-    }
+    },
   });
 
-  write.on('finish', () => {
+  write.on("finish", () => {
     finished = true;
   });
 
@@ -44,31 +39,34 @@ assert.strictEqual(finished, promisify(stream.finished));
   }
   read.push(null);
 
-  pipeline(read, write).then(common.mustCall((value) => {
-    assert.ok(finished);
-    assert.deepStrictEqual(processed, expected);
-  }));
+  pipeline(read, write).then(
+    common.mustCall((value) => {
+      assert.ok(finished);
+      assert.deepStrictEqual(processed, expected);
+    }),
+  );
 }
 
 // pipeline error
 {
   const read = new Readable({
-    read() {
-    }
+    read() {},
   });
 
   const write = new Writable({
     write(data, enc, cb) {
       cb();
-    }
+    },
   });
 
-  read.push('data');
+  read.push("data");
   setImmediate(() => read.destroy());
 
-  pipeline(read, write).catch(common.mustCall((err) => {
-    assert.ok(err, 'should have an error');
-  }));
+  pipeline(read, write).catch(
+    common.mustCall((err) => {
+      assert.ok(err, "should have an error");
+    }),
+  );
 }
 
 // finished success
@@ -78,7 +76,7 @@ assert.strictEqual(finished, promisify(stream.finished));
 
     let ended = false;
     rs.resume();
-    rs.on('end', () => {
+    rs.on("end", () => {
       ended = true;
     });
     await finished(rs);
@@ -90,20 +88,25 @@ assert.strictEqual(finished, promisify(stream.finished));
 
 // finished error
 {
-  const rs = fs.createReadStream('file-does-not-exist');
+  const rs = fs.createReadStream("file-does-not-exist");
 
-  assert.rejects(finished(rs), {
-    code: 'ENOENT'
-  }).then(common.mustCall());
+  assert
+    .rejects(finished(rs), {
+      code: "ENOENT",
+    })
+    .then(common.mustCall());
 }
 
 {
   const streamObj = new Readable();
-  assert.throws(() => {
-    // Passing cleanup option not as boolean
-    // should throw error
-    finished(streamObj, { cleanup: 2 });
-  }, { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.throws(
+    () => {
+      // Passing cleanup option not as boolean
+      // should throw error
+      finished(streamObj, { cleanup: 2 });
+    },
+    { code: "ERR_INVALID_ARG_TYPE" },
+  );
 }
 
 // Below code should not throw any errors as the
@@ -113,15 +116,16 @@ assert.strictEqual(finished, promisify(stream.finished));
   finished(streamObj, { cleanup: true });
 }
 
-
 // Cleanup function should not be called when cleanup is set to false
 // listenerCount should be 1 after calling finish
 {
   const streamObj = new Writable();
-  assert.strictEqual(streamObj.listenerCount('end'), 0);
-  finished(streamObj, { cleanup: false }).then(common.mustCall(() => {
-    assert.strictEqual(streamObj.listenerCount('end'), 1);
-  }));
+  assert.strictEqual(streamObj.listenerCount("end"), 0);
+  finished(streamObj, { cleanup: false }).then(
+    common.mustCall(() => {
+      assert.strictEqual(streamObj.listenerCount("end"), 1);
+    }),
+  );
   streamObj.end();
 }
 
@@ -129,10 +133,12 @@ assert.strictEqual(finished, promisify(stream.finished));
 // listenerCount should be 0 after calling finish
 {
   const streamObj = new Writable();
-  assert.strictEqual(streamObj.listenerCount('end'), 0);
-  finished(streamObj, { cleanup: true }).then(common.mustCall(() => {
-    assert.strictEqual(streamObj.listenerCount('end'), 0);
-  }));
+  assert.strictEqual(streamObj.listenerCount("end"), 0);
+  finished(streamObj, { cleanup: true }).then(
+    common.mustCall(() => {
+      assert.strictEqual(streamObj.listenerCount("end"), 0);
+    }),
+  );
   streamObj.end();
 }
 
@@ -140,9 +146,11 @@ assert.strictEqual(finished, promisify(stream.finished));
 // listenerCount should be 1 after calling finish
 {
   const streamObj = new Writable();
-  assert.strictEqual(streamObj.listenerCount('end'), 0);
-  finished(streamObj).then(common.mustCall(() => {
-    assert.strictEqual(streamObj.listenerCount('end'), 1);
-  }));
+  assert.strictEqual(streamObj.listenerCount("end"), 0);
+  finished(streamObj).then(
+    common.mustCall(() => {
+      assert.strictEqual(streamObj.listenerCount("end"), 1);
+    }),
+  );
   streamObj.end();
 }

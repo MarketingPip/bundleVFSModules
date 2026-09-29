@@ -1,21 +1,26 @@
 // Flags: --expose-gc
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { channel } = require('diagnostics_channel');
+const common = require("../common");
+const assert = require("assert");
+const { channel } = require("diagnostics_channel");
 
 function test() {
   function subscribe() {
-    channel('test-gc').subscribe(function noop() {});
+    channel("test-gc").subscribe(function noop() {});
   }
 
   subscribe();
 
-  setTimeout(common.mustCall(() => {
-    global.gc();
-    assert.ok(channel('test-gc').hasSubscribers, 'Channel must have subscribers');
-  }));
+  setTimeout(
+    common.mustCall(() => {
+      global.gc();
+      assert.ok(
+        channel("test-gc").hasSubscribers,
+        "Channel must have subscribers",
+      );
+    }),
+  );
 }
 
 test();

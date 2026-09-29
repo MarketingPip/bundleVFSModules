@@ -1,13 +1,13 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 common.skipIfInspectorDisabled();
 
-const { Session } = require('inspector');
-const { Worker, isMainThread, workerData } = require('worker_threads');
+const { Session } = require("inspector");
+const { Worker, isMainThread, workerData } = require("worker_threads");
 
 if (!workerData && !isMainThread) {
-  common.skip('This test only works on a main thread');
+  common.skip("This test only works on a main thread");
 }
 
 if (isMainThread) {

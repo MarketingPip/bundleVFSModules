@@ -1,14 +1,14 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 if (!common.hasCrypto) {
-  common.skip('missing crypto');
+  common.skip("missing crypto");
 }
 
-const assert = require('assert');
-const { spawn } = require('child_process');
-const tls = require('tls');
-const fixtures = require('../common/fixtures');
+const assert = require("assert");
+const { spawn } = require("child_process");
+const tls = require("tls");
+const fixtures = require("../common/fixtures");
 
 function loadPEM(n) {
   return fixtures.readKey(`${n}.pem`);
@@ -22,16 +22,16 @@ function checkResults(result, expected) {
 }
 
 function runTest(clientsOptions, serverOptions, cb) {
-  serverOptions.key = loadPEM('agent2-key');
-  serverOptions.cert = loadPEM('agent2-cert');
+  serverOptions.key = loadPEM("agent2-key");
+  serverOptions.cert = loadPEM("agent2-cert");
   const results = [];
   let clientIndex = 0;
   let serverIndex = 0;
-  const server = tls.createServer(serverOptions, function(c) {
+  const server = tls.createServer(serverOptions, function (c) {
     results[serverIndex++].server = { ALPN: c.alpnProtocol };
   });
 
-  server.listen(0, serverIP, function() {
+  server.listen(0, serverIP, function () {
     connectClient(clientsOptions);
   });
 
@@ -49,51 +49,50 @@ function runTest(clientsOptions, serverOptions, cb) {
         connectClient(options);
       } else {
         server.close();
-        server.on('close', () => {
+        server.on("close", () => {
           cb(results);
         });
       }
     }
 
-    const client = tls.connect(opt, function() {
-      results[clientIndex].client = { ALPN: client.alpnProtocol };
-      client.end();
-      startNextClient();
-    }).on('error', function(err) {
-      results[clientIndex].client = { error: err };
-      startNextClient();
-    });
+    const client = tls
+      .connect(opt, function () {
+        results[clientIndex].client = { ALPN: client.alpnProtocol };
+        client.end();
+        startNextClient();
+      })
+      .on("error", function (err) {
+        results[clientIndex].client = { error: err };
+        startNextClient();
+      });
   }
-
 }
 
 // Server: ALPN, Client: ALPN
 function Test1() {
   const serverOptions = {
-    ALPNProtocols: ['a', 'b', 'c'],
+    ALPNProtocols: ["a", "b", "c"],
   };
 
-  const clientsOptions = [{
-    ALPNProtocols: ['a', 'b', 'c'],
-  }, {
-    ALPNProtocols: ['c', 'b', 'e'],
-  }, {
-    ALPNProtocols: ['x', 'y', 'c'],
-  }];
+  const clientsOptions = [
+    {
+      ALPNProtocols: ["a", "b", "c"],
+    },
+    {
+      ALPNProtocols: ["c", "b", "e"],
+    },
+    {
+      ALPNProtocols: ["x", "y", "c"],
+    },
+  ];
 
-  runTest(clientsOptions, serverOptions, function(results) {
+  runTest(clientsOptions, serverOptions, function (results) {
     // 'a' is selected by ALPN
-    checkResults(results[0],
-                 { server: { ALPN: 'a' },
-                   client: { ALPN: 'a' } });
+    checkResults(results[0], { server: { ALPN: "a" }, client: { ALPN: "a" } });
     // 'b' is selected by ALPN
-    checkResults(results[1],
-                 { server: { ALPN: 'b' },
-                   client: { ALPN: 'b' } });
+    checkResults(results[1], { server: { ALPN: "b" }, client: { ALPN: "b" } });
     // Nothing is selected by ALPN
-    checkResults(results[2],
-                 { server: { ALPN: 'c' },
-                   client: { ALPN: 'c' } });
+    checkResults(results[2], { server: { ALPN: "c" }, client: { ALPN: "c" } });
     // execute next test
     Test2();
   });
@@ -102,24 +101,27 @@ function Test1() {
 // Server: ALPN, Client: Nothing
 function Test2() {
   const serverOptions = {
-    ALPNProtocols: ['a', 'b', 'c'],
+    ALPNProtocols: ["a", "b", "c"],
   };
 
   const clientsOptions = [{}, {}, {}];
 
-  runTest(clientsOptions, serverOptions, function(results) {
+  runTest(clientsOptions, serverOptions, function (results) {
     // Nothing is selected by ALPN
-    checkResults(results[0],
-                 { server: { ALPN: false },
-                   client: { ALPN: false } });
+    checkResults(results[0], {
+      server: { ALPN: false },
+      client: { ALPN: false },
+    });
     // Nothing is selected by ALPN
-    checkResults(results[1],
-                 { server: { ALPN: false },
-                   client: { ALPN: false } });
+    checkResults(results[1], {
+      server: { ALPN: false },
+      client: { ALPN: false },
+    });
     // Nothing is selected by ALPN
-    checkResults(results[2],
-                 { server: { ALPN: false },
-                   client: { ALPN: false } });
+    checkResults(results[2], {
+      server: { ALPN: false },
+      client: { ALPN: false },
+    });
     // execute next test
     Test3();
   });
@@ -129,25 +131,34 @@ function Test2() {
 function Test3() {
   const serverOptions = {};
 
-  const clientsOptions = [{
-    ALPNrotocols: ['a', 'b', 'c'],
-  }, {
-    ALPNProtocols: ['c', 'b', 'e'],
-  }, {
-    ALPNProtocols: ['first-priority-unsupported', 'x', 'y'],
-  }];
+  const clientsOptions = [
+    {
+      ALPNrotocols: ["a", "b", "c"],
+    },
+    {
+      ALPNProtocols: ["c", "b", "e"],
+    },
+    {
+      ALPNProtocols: ["first-priority-unsupported", "x", "y"],
+    },
+  ];
 
-  runTest(clientsOptions, serverOptions, function(results) {
+  runTest(clientsOptions, serverOptions, function (results) {
     // nothing is selected
-    checkResults(results[0], { server: { ALPN: false },
-                               client: { ALPN: false } });
+    checkResults(results[0], {
+      server: { ALPN: false },
+      client: { ALPN: false },
+    });
     // nothing is selected
-    checkResults(results[1], { server: { ALPN: false },
-                               client: { ALPN: false } });
+    checkResults(results[1], {
+      server: { ALPN: false },
+      client: { ALPN: false },
+    });
     // nothing is selected
-    checkResults(results[2],
-                 { server: { ALPN: false },
-                   client: { ALPN: false } });
+    checkResults(results[2], {
+      server: { ALPN: false },
+      client: { ALPN: false },
+    });
     // execute next test
     Test4();
   });
@@ -159,66 +170,95 @@ function Test4() {
 
   const clientsOptions = [{}, {}, {}];
 
-  runTest(clientsOptions, serverOptions, function(results) {
+  runTest(clientsOptions, serverOptions, function (results) {
     // nothing is selected
-    checkResults(results[0], { server: { ALPN: false },
-                               client: { ALPN: false } });
+    checkResults(results[0], {
+      server: { ALPN: false },
+      client: { ALPN: false },
+    });
     // nothing is selected
-    checkResults(results[1], { server: { ALPN: false },
-                               client: { ALPN: false } });
+    checkResults(results[1], {
+      server: { ALPN: false },
+      client: { ALPN: false },
+    });
     // nothing is selected
-    checkResults(results[2],
-                 { server: { ALPN: false },
-                   client: { ALPN: false } });
+    checkResults(results[2], {
+      server: { ALPN: false },
+      client: { ALPN: false },
+    });
   });
 
   TestFatalAlert();
 }
 
 function TestFatalAlert() {
-  const server = tls.createServer({
-    ALPNProtocols: ['foo'],
-    key: loadPEM('agent2-key'),
-    cert: loadPEM('agent2-cert')
-  }, common.mustNotCall());
+  const server = tls.createServer(
+    {
+      ALPNProtocols: ["foo"],
+      key: loadPEM("agent2-key"),
+      cert: loadPEM("agent2-cert"),
+    },
+    common.mustNotCall(),
+  );
 
-  server.listen(0, serverIP, common.mustCall(() => {
-    const { port } = server.address();
+  server.listen(
+    0,
+    serverIP,
+    common.mustCall(() => {
+      const { port } = server.address();
 
-    // The Node.js client will just report ECONNRESET (older OpenSSL) or
-    // ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL because the connection
-    // is severed before the TLS handshake completes.
-    tls.connect({
-      host: serverIP,
-      port,
-      rejectUnauthorized: false,
-      ALPNProtocols: ['bar']
-    }, common.mustNotCall()).on('error', common.mustCall((err) => {
-      const allowedErrors = ['ECONNRESET', 'ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL'];
-      assert.ok(allowedErrors.includes(err.code), `'${err.code}' was not one of ${allowedErrors}.`);
+      // The Node.js client will just report ECONNRESET (older OpenSSL) or
+      // ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL because the connection
+      // is severed before the TLS handshake completes.
+      tls
+        .connect(
+          {
+            host: serverIP,
+            port,
+            rejectUnauthorized: false,
+            ALPNProtocols: ["bar"],
+          },
+          common.mustNotCall(),
+        )
+        .on(
+          "error",
+          common.mustCall((err) => {
+            const allowedErrors = [
+              "ECONNRESET",
+              "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL",
+            ];
+            assert.ok(
+              allowedErrors.includes(err.code),
+              `'${err.code}' was not one of ${allowedErrors}.`,
+            );
 
-      // OpenSSL's s_client should output the TLS alert number, which is 120
-      // for the 'no_application_protocol' alert.
-      const { opensslCli } = require('../common/crypto');
-      if (opensslCli) {
-        const addr = `${serverIP}:${port}`;
-        let stderr = '';
-        spawn(opensslCli, ['s_client', '--alpn', 'bar', addr], {
-          stdio: ['ignore', 'ignore', 'pipe']
-        }).stderr
-          .setEncoding('utf8')
-          .on('data', (chunk) => stderr += chunk)
-          .on('close', common.mustCall(() => {
-            assert.match(stderr, /SSL alert number 120/);
-            server.close();
-            TestALPNCallback();
-          }));
-      } else {
-        server.close();
-        TestALPNCallback();
-      }
-    }));
-  }));
+            // OpenSSL's s_client should output the TLS alert number, which is 120
+            // for the 'no_application_protocol' alert.
+            const { opensslCli } = require("../common/crypto");
+            if (opensslCli) {
+              const addr = `${serverIP}:${port}`;
+              let stderr = "";
+              spawn(opensslCli, ["s_client", "--alpn", "bar", addr], {
+                stdio: ["ignore", "ignore", "pipe"],
+              })
+                .stderr.setEncoding("utf8")
+                .on("data", (chunk) => (stderr += chunk))
+                .on(
+                  "close",
+                  common.mustCall(() => {
+                    assert.match(stderr, /SSL alert number 120/);
+                    server.close();
+                    TestALPNCallback();
+                  }),
+                );
+            } else {
+              server.close();
+              TestALPNCallback();
+            }
+          }),
+        );
+    }),
+  );
 }
 
 function TestALPNCallback() {
@@ -226,70 +266,107 @@ function TestALPNCallback() {
   const serverOptions = {
     ALPNCallback: common.mustCall(({ protocols }) => {
       return protocols[1];
-    }, 2)
+    }, 2),
   };
 
-  const clientsOptions = [{
-    ALPNProtocols: ['a', 'b', 'c'],
-  }, {
-    ALPNProtocols: ['a'],
-  }];
+  const clientsOptions = [
+    {
+      ALPNProtocols: ["a", "b", "c"],
+    },
+    {
+      ALPNProtocols: ["a"],
+    },
+  ];
 
-  runTest(clientsOptions, serverOptions, common.mustCall((results) => {
-    // Callback picks 2nd preference => picks 'b'
-    checkResults(results[0],
-                 { server: { ALPN: 'b' },
-                   client: { ALPN: 'b' } });
+  runTest(
+    clientsOptions,
+    serverOptions,
+    common.mustCall((results) => {
+      // Callback picks 2nd preference => picks 'b'
+      checkResults(results[0], {
+        server: { ALPN: "b" },
+        client: { ALPN: "b" },
+      });
 
-    // Callback picks 2nd preference => undefined => ALPN rejected:
-    assert.strictEqual(results[1].server, undefined);
-    const allowedErrors = ['ECONNRESET', 'ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL'];
-    assert.ok(allowedErrors.includes(results[1].client.error.code), `'${results[1].client.error.code}' was not one of ${allowedErrors}.`);
+      // Callback picks 2nd preference => undefined => ALPN rejected:
+      assert.strictEqual(results[1].server, undefined);
+      const allowedErrors = [
+        "ECONNRESET",
+        "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL",
+      ];
+      assert.ok(
+        allowedErrors.includes(results[1].client.error.code),
+        `'${results[1].client.error.code}' was not one of ${allowedErrors}.`,
+      );
 
-    TestBadALPNCallback();
-  }));
+      TestBadALPNCallback();
+    }),
+  );
 }
 
 function TestBadALPNCallback() {
   // Server always returns a fixed invalid value:
   const serverOptions = {
-    key: loadPEM('agent2-key'),
-    cert: loadPEM('agent2-cert'),
-    ALPNCallback: common.mustCall(() => 'http/5')
+    key: loadPEM("agent2-key"),
+    cert: loadPEM("agent2-cert"),
+    ALPNCallback: common.mustCall(() => "http/5"),
   };
 
   const server = tls.createServer(serverOptions);
 
   // Error should be emitted via tlsClientError, not as uncaughtException
-  server.on('tlsClientError', common.mustCall((error, socket) => {
-    assert.strictEqual(error.code, 'ERR_TLS_ALPN_CALLBACK_INVALID_RESULT');
-    socket.destroy();
-  }));
+  server.on(
+    "tlsClientError",
+    common.mustCall((error, socket) => {
+      assert.strictEqual(error.code, "ERR_TLS_ALPN_CALLBACK_INVALID_RESULT");
+      socket.destroy();
+    }),
+  );
 
-  server.listen(0, serverIP, common.mustCall(() => {
-    const client = tls.connect({
-      port: server.address().port,
-      host: serverIP,
-      rejectUnauthorized: false,
-      ALPNProtocols: ['http/1', 'h2'],
-    }, common.mustNotCall());
+  server.listen(
+    0,
+    serverIP,
+    common.mustCall(() => {
+      const client = tls.connect(
+        {
+          port: server.address().port,
+          host: serverIP,
+          rejectUnauthorized: false,
+          ALPNProtocols: ["http/1", "h2"],
+        },
+        common.mustNotCall(),
+      );
 
-    client.on('error', common.mustCall((err) => {
-      // Client gets reset when server handles error via tlsClientError
-      const allowedErrors = ['ECONNRESET', 'ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL'];
-      assert.ok(allowedErrors.includes(err.code), `'${err.code}' was not one of ${allowedErrors}.`);
-      server.close();
-      TestALPNOptionsCallback();
-    }));
-  }));
+      client.on(
+        "error",
+        common.mustCall((err) => {
+          // Client gets reset when server handles error via tlsClientError
+          const allowedErrors = [
+            "ECONNRESET",
+            "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL",
+          ];
+          assert.ok(
+            allowedErrors.includes(err.code),
+            `'${err.code}' was not one of ${allowedErrors}.`,
+          );
+          server.close();
+          TestALPNOptionsCallback();
+        }),
+      );
+    }),
+  );
 }
 
 function TestALPNOptionsCallback() {
   // Server sets two incompatible ALPN options:
-  assert.throws(() => tls.createServer({
-    ALPNCallback: () => 'a',
-    ALPNProtocols: ['b', 'c']
-  }), (error) => error.code === 'ERR_TLS_ALPN_CALLBACK_WITH_PROTOCOLS');
+  assert.throws(
+    () =>
+      tls.createServer({
+        ALPNCallback: () => "a",
+        ALPNProtocols: ["b", "c"],
+      }),
+    (error) => error.code === "ERR_TLS_ALPN_CALLBACK_WITH_PROTOCOLS",
+  );
 }
 
 Test1();

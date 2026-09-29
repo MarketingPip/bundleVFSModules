@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
 // Test that monkeypatching console._stdout and console._stderr works.
-const common = require('../common');
+const common = require("../common");
 
-const { Writable } = require('stream');
+const { Writable } = require("stream");
 
 const streamToNowhere = new Writable({ write: common.mustCall() });
 const anotherStreamToNowhere = new Writable({ write: common.mustCall() });
@@ -14,5 +14,5 @@ const anotherStreamToNowhere = new Writable({ write: common.mustCall() });
 console._stdout = streamToNowhere;
 console._stderr = anotherStreamToNowhere;
 
-console.log('fhqwhgads');
-console.error('fhqwhgads');
+console.log("fhqwhgads");
+console.error("fhqwhgads");

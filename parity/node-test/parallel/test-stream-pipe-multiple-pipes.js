@@ -1,10 +1,10 @@
-'use strict';
-const common = require('../common');
-const stream = require('stream');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const stream = require("stream");
+const assert = require("assert");
 
 const readable = new stream.Readable({
-  read: () => {}
+  read: () => {},
 });
 
 const writables = [];
@@ -14,13 +14,12 @@ for (let i = 0; i < 5; i++) {
     write: common.mustCall((chunk, encoding, callback) => {
       target.output.push(chunk);
       callback();
-    }, 1)
+    }, 1),
   });
   target.output = [];
 
-  target.on('pipe', common.mustCall());
+  target.on("pipe", common.mustCall());
   readable.pipe(target);
-
 
   writables.push(target);
 }
@@ -31,21 +30,26 @@ readable.push(input);
 
 // The pipe() calls will postpone emission of the 'resume' event using nextTick,
 // so no data will be available to the writable streams until then.
-process.nextTick(common.mustCall(() => {
-  for (const target of writables) {
-    assert.deepStrictEqual(target.output, [input]);
+process.nextTick(
+  common.mustCall(() => {
+    for (const target of writables) {
+      assert.deepStrictEqual(target.output, [input]);
 
-    target.on('unpipe', common.mustCall());
-    readable.unpipe(target);
-  }
+      target.on("unpipe", common.mustCall());
+      readable.unpipe(target);
+    }
 
-  readable.push('something else'); // This does not get through.
-  readable.push(null);
-  readable.resume(); // Make sure the 'end' event gets emitted.
-}));
+    readable.push("something else"); // This does not get through.
+    readable.push(null);
+    readable.resume(); // Make sure the 'end' event gets emitted.
+  }),
+);
 
-readable.on('end', common.mustCall(() => {
-  for (const target of writables) {
-    assert.deepStrictEqual(target.output, [input]);
-  }
-}));
+readable.on(
+  "end",
+  common.mustCall(() => {
+    for (const target of writables) {
+      assert.deepStrictEqual(target.output, [input]);
+    }
+  }),
+);

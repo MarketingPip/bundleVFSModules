@@ -1,8 +1,8 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const http = require('http');
+const http = require("http");
 const OutgoingMessage = http.OutgoingMessage;
 
 {
@@ -16,39 +16,47 @@ const OutgoingMessage = http.OutgoingMessage;
 }
 
 {
-  const server = http.createServer(common.mustCall(function(req, res) {
-    const hwm = req.socket.writableHighWaterMark;
-    assert.strictEqual(res.writableHighWaterMark, hwm);
+  const server = http.createServer(
+    common.mustCall(function (req, res) {
+      const hwm = req.socket.writableHighWaterMark;
+      assert.strictEqual(res.writableHighWaterMark, hwm);
 
-    assert.strictEqual(res.writableLength, 0);
-    res.write('');
-    const len = res.writableLength;
-    res.write('asd');
-    assert.strictEqual(res.writableLength, len + 8);
-    res.end();
-    res.on('finish', common.mustCall(() => {
       assert.strictEqual(res.writableLength, 0);
-      server.close();
-    }));
-  }));
+      res.write("");
+      const len = res.writableLength;
+      res.write("asd");
+      assert.strictEqual(res.writableLength, len + 8);
+      res.end();
+      res.on(
+        "finish",
+        common.mustCall(() => {
+          assert.strictEqual(res.writableLength, 0);
+          server.close();
+        }),
+      );
+    }),
+  );
 
   server.listen(0);
 
-  server.on('listening', common.mustCall(function() {
-    const clientRequest = http.request({
-      port: server.address().port,
-      method: 'GET',
-      path: '/'
-    });
-    clientRequest.end();
-  }));
+  server.on(
+    "listening",
+    common.mustCall(function () {
+      const clientRequest = http.request({
+        port: server.address().port,
+        method: "GET",
+        path: "/",
+      });
+      clientRequest.end();
+    }),
+  );
 }
 
 {
   const msg = new OutgoingMessage();
-  msg._implicitHeader = function() {};
+  msg._implicitHeader = function () {};
   assert.strictEqual(msg.writableLength, 0);
-  msg.write('asd');
+  msg.write("asd");
   assert.strictEqual(msg.writableLength, 3);
 }
 
@@ -60,17 +68,20 @@ const OutgoingMessage = http.OutgoingMessage;
 
   server.listen(0);
 
-  server.on('listening', common.mustCall(() => {
-    const req = http.request({
-      port: server.address().port,
-      method: 'GET',
-      path: '/'
-    });
+  server.on(
+    "listening",
+    common.mustCall(() => {
+      const req = http.request({
+        port: server.address().port,
+        method: "GET",
+        path: "/",
+      });
 
-    assert.strictEqual(req.path, '/');
-    assert.strictEqual(req.method, 'GET');
-    assert.strictEqual(req.host, 'localhost');
-    assert.strictEqual(req.protocol, 'http:');
-    req.end();
-  }));
+      assert.strictEqual(req.path, "/");
+      assert.strictEqual(req.method, "GET");
+      assert.strictEqual(req.host, "localhost");
+      assert.strictEqual(req.protocol, "http:");
+      req.end();
+    }),
+  );
 }

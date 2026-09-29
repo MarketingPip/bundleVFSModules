@@ -1,17 +1,17 @@
 // domain.active live binding (Node v24.20.0 parity).
-import domain, { active, create, createDomain, Domain } from '../src/domain.js';
-import * as ns from '../src/domain.js';
-import { describe, test, expect } from '@jest/globals';
+import domain, { active, create, createDomain, Domain } from "../src/domain.js";
+import * as ns from "../src/domain.js";
+import { describe, test, expect } from "@jest/globals";
 
-describe('domain.active', () => {
-  test('active is present in the module namespace and starts null', () => {
-    expect('active' in ns).toBe(true);
+describe("domain.active", () => {
+  test("active is present in the module namespace and starts null", () => {
+    expect("active" in ns).toBe(true);
     // After any prior enter/exit dance from other suites the safest check is
     // that the binding agrees with the default export.
     expect(active).toBe(domain.active);
   });
 
-  test('binding tracks enter()/exit()', () => {
+  test("binding tracks enter()/exit()", () => {
     const d = create();
     d.enter();
     expect(active).toBe(d);
@@ -23,7 +23,7 @@ describe('domain.active', () => {
     expect(domain.active).toBe(undefined);
   });
 
-  test('binding tracks the default-export setter', () => {
+  test("binding tracks the default-export setter", () => {
     const d = createDomain();
     domain.active = d;
     expect(active).toBe(d);
@@ -32,7 +32,7 @@ describe('domain.active', () => {
     expect(domain.active).toBe(null);
   });
 
-  test('nested domains track the innermost', () => {
+  test("nested domains track the innermost", () => {
     const a = create();
     const b = create();
     a.enter();
@@ -45,7 +45,7 @@ describe('domain.active', () => {
     expect(active).toBe(domain.active);
   });
 
-  test('Domain class is still exported and usable', () => {
+  test("Domain class is still exported and usable", () => {
     expect(Domain).toBe(domain.Domain);
     const d = new Domain();
     d.enter();

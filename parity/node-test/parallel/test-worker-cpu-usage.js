@@ -1,13 +1,11 @@
-'use strict';
-const common = require('../common');
-const { isSunOS } = require('../common');
-const assert = require('assert');
-const {
-  Worker,
-} = require('worker_threads');
+"use strict";
+const common = require("../common");
+const { isSunOS } = require("../common");
+const assert = require("assert");
+const { Worker } = require("worker_threads");
 
 function validate(result) {
-  assert.ok(typeof result == 'object' && result !== null);
+  assert.ok(typeof result == "object" && result !== null);
   assert.ok(result.user >= 0);
   assert.ok(result.system >= 0);
   assert.ok(Number.isFinite(result.user));
@@ -15,11 +13,7 @@ function validate(result) {
 }
 
 function check(worker) {
-  [
-    NaN,
-    undefined,
-    null,
-  ].forEach((value) => {
+  [NaN, undefined, null].forEach((value) => {
     worker.cpuUsage(value);
   });
   [
@@ -27,7 +21,7 @@ function check(worker) {
     1.1,
     {},
     [],
-    function() {},
+    function () {},
     Symbol(),
     true,
     Infinity,
@@ -40,44 +34,50 @@ function check(worker) {
   });
 }
 
-const worker = new Worker(`
+const worker = new Worker(
+  `
   const { parentPort } = require('worker_threads');
   parentPort.on('message', () => {});
-  `, { eval: true });
+  `,
+  { eval: true },
+);
 
 // See test-process-threadCpuUsage-main-thread.js
 if (isSunOS) {
-  assert.throws(
-    () => worker.cpuUsage(),
-    {
-      code: 'ERR_OPERATION_FAILED',
-      name: 'Error',
-      message: 'Operation failed: worker.cpuUsage() is not available on SunOS'
-    }
-  );
+  assert.throws(() => worker.cpuUsage(), {
+    code: "ERR_OPERATION_FAILED",
+    name: "Error",
+    message: "Operation failed: worker.cpuUsage() is not available on SunOS",
+  });
   worker.terminate();
 } else {
-  worker.on('online', common.mustCall(async () => {
-    check(worker);
+  worker.on(
+    "online",
+    common.mustCall(async () => {
+      check(worker);
 
-    const prev = await worker.cpuUsage();
-    validate(prev);
+      const prev = await worker.cpuUsage();
+      validate(prev);
 
-    const curr = await worker.cpuUsage();
-    validate(curr);
+      const curr = await worker.cpuUsage();
+      validate(curr);
 
-    assert.ok(curr.user >= prev.user);
-    assert.ok(curr.system >= prev.system);
+      assert.ok(curr.user >= prev.user);
+      assert.ok(curr.system >= prev.system);
 
-    const delta = await worker.cpuUsage(curr);
-    validate(delta);
+      const delta = await worker.cpuUsage(curr);
+      validate(delta);
 
-    worker.terminate();
-  }));
+      worker.terminate();
+    }),
+  );
 
-  worker.once('exit', common.mustCall(async () => {
-    await assert.rejects(worker.cpuUsage(), {
-      code: 'ERR_WORKER_NOT_RUNNING'
-    });
-  }));
+  worker.once(
+    "exit",
+    common.mustCall(async () => {
+      await assert.rejects(worker.cpuUsage(), {
+        code: "ERR_WORKER_NOT_RUNNING",
+      });
+    }),
+  );
 }

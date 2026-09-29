@@ -19,10 +19,10 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
-const stream = require('stream');
+"use strict";
+require("../common");
+const assert = require("assert");
+const stream = require("stream");
 
 const readable = new stream.Readable();
 
@@ -33,7 +33,7 @@ readable._read = Function();
 assert.ok(!readable.isPaused());
 
 // Make the stream start flowing...
-readable.on('data', Function());
+readable.on("data", Function());
 
 // still not paused.
 assert.ok(!readable.isPaused());

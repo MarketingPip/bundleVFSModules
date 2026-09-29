@@ -1,15 +1,13 @@
 // Flags: --expose-gc --noconcurrent_recompilation
-'use strict';
+"use strict";
 
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
-if (common.isASan)
-  common.skip('ASan messes with memory measurements');
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
+if (common.isASan) common.skip("ASan messes with memory measurements");
 
-const assert = require('assert');
-const crypto = require('crypto');
-const { hasOpenSSL3 } = require('../common/crypto');
+const assert = require("assert");
+const crypto = require("crypto");
+const { hasOpenSSL3 } = require("../common/crypto");
 
 const before = process.memoryUsage.rss();
 {

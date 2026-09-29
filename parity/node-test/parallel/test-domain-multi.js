@@ -19,60 +19,72 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 // Tests of multiple domains happening at once.
 
-const common = require('../common');
-const domain = require('domain');
-const http = require('http');
+const common = require("../common");
+const domain = require("domain");
+const http = require("http");
 
-process.on('warning', common.mustNotCall());
+process.on("warning", common.mustNotCall());
 
 const a = domain.create();
 a.enter(); // This will be our "root" domain
 
-a.on('error', common.mustNotCall());
+a.on("error", common.mustNotCall());
 
-const server = http.createServer(common.mustCallAtLeast((req, res) => {
-  // child domain of a.
-  const b = domain.create();
-  a.add(b);
+const server = http
+  .createServer(
+    common.mustCallAtLeast((req, res) => {
+      // child domain of a.
+      const b = domain.create();
+      a.add(b);
 
-  // Treat these EE objects as if they are a part of the b domain
-  // so, an 'error' event on them propagates to the domain, rather
-  // than being thrown.
-  b.add(req);
-  b.add(res);
+      // Treat these EE objects as if they are a part of the b domain
+      // so, an 'error' event on them propagates to the domain, rather
+      // than being thrown.
+      b.add(req);
+      b.add(res);
 
-  b.on('error', common.mustCall((er) => {
-    if (res) {
-      // Introduce an error on the client by writing unexpected data.
-      // The client is now expecting a chunk header so any letter will have the parser throw an error.
-      res.socket.write('H');
-    }
-    // res.writeHead(500), res.destroy, etc.
-    server.close();
-  }));
+      b.on(
+        "error",
+        common.mustCall((er) => {
+          if (res) {
+            // Introduce an error on the client by writing unexpected data.
+            // The client is now expecting a chunk header so any letter will have the parser throw an error.
+            res.socket.write("H");
+          }
+          // res.writeHead(500), res.destroy, etc.
+          server.close();
+        }),
+      );
 
-  // XXX this bind should not be necessary.
-  // the write cb behavior in http/net should use an
-  // event so that it picks up the domain handling.
-  res.write('HELLO\n', b.bind(() => {
-    throw new Error('this kills domain B, not A');
-  }));
+      // XXX this bind should not be necessary.
+      // the write cb behavior in http/net should use an
+      // event so that it picks up the domain handling.
+      res.write(
+        "HELLO\n",
+        b.bind(() => {
+          throw new Error("this kills domain B, not A");
+        }),
+      );
+    }),
+  )
+  .listen(
+    0,
+    common.mustCall(() => {
+      const c = domain.create();
+      const req = http.get({ host: "localhost", port: server.address().port });
 
-})).listen(0, common.mustCall(() => {
-  const c = domain.create();
-  const req = http.get({ host: 'localhost', port: server.address().port });
+      // Add the request to the C domain
+      c.add(req);
 
-  // Add the request to the C domain
-  c.add(req);
+      req.on("response", (res) => {
+        // Add the response object to the C domain
+        c.add(res);
+        res.pipe(process.stdout);
+      });
 
-  req.on('response', (res) => {
-    // Add the response object to the C domain
-    c.add(res);
-    res.pipe(process.stdout);
-  });
-
-  c.on('error', common.mustCall());
-}));
+      c.on("error", common.mustCall());
+    }),
+  );

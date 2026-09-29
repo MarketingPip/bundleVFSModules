@@ -1,11 +1,11 @@
-'use strict';
+"use strict";
 
-require('../common');
+require("../common");
 
-const { Script } = require('vm');
-const assert = require('assert');
+const { Script } = require("vm");
+const assert = require("assert");
 
-const source = 'function x() {} const y = x();';
+const source = "function x() {} const y = x();";
 
 const script = new Script(source);
 let cachedData = script.createCachedData();

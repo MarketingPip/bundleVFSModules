@@ -1,1 +1,1 @@
-require('./warning-esm-transpiled-a.js').missingPropESM;
+require("./warning-esm-transpiled-a.js").missingPropESM;

@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const { hijackStderr, restoreStderr } = require('../common/hijackstdio');
-const assert = require('assert');
-const { startNewREPLServer } = require('../common/repl');
+const common = require("../common");
+const { hijackStderr, restoreStderr } = require("../common/hijackstdio");
+const assert = require("assert");
+const { startNewREPLServer } = require("../common/repl");
 
 const { replServer, input } = startNewREPLServer();
 
@@ -22,23 +22,23 @@ for (const type of [
   Float32Array,
   Float64Array,
 ]) {
-  input.run(['.clear']);
+  input.run([".clear"]);
 
   if (type === Array) {
     input.run([
-      'var ele = [];',
-      'for (let i = 0; i < 1e6 + 1; i++) ele[i] = 0;',
-      'ele.biu = 1;',
+      "var ele = [];",
+      "for (let i = 0; i < 1e6 + 1; i++) ele[i] = 0;",
+      "ele.biu = 1;",
     ]);
   } else if (type === Buffer) {
-    input.run(['var ele = Buffer.alloc(1e6 + 1); ele.biu = 1;']);
+    input.run(["var ele = Buffer.alloc(1e6 + 1); ele.biu = 1;"]);
   } else {
     input.run([`var ele = new ${type.name}(1e6 + 1); ele.biu = 1;`]);
   }
 
   hijackStderr(common.mustNotCall());
   replServer.complete(
-    'ele.',
+    "ele.",
     common.mustCall((err, data) => {
       restoreStderr();
       assert.ifError(err);
@@ -46,17 +46,17 @@ for (const type of [
       const ele =
         type === Array ? [] : type === Buffer ? Buffer.alloc(0) : new type(0);
 
-      assert.strictEqual(data[0].includes('ele.biu'), true);
+      assert.strictEqual(data[0].includes("ele.biu"), true);
 
       for (const key of data[0]) {
-        if (!key || key === 'ele.biu') return;
+        if (!key || key === "ele.biu") return;
         assert.notStrictEqual(ele[key.slice(4)], undefined);
       }
-    })
+    }),
   );
 }
 
 // check Buffer.prototype.length not crashing.
 // Refs: https://github.com/nodejs/node/pull/11961
-input.run(['.clear']);
-replServer.complete('Buffer.prototype.', common.mustCall());
+input.run([".clear"]);
+replServer.complete("Buffer.prototype.", common.mustCall());

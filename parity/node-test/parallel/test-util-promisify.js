@@ -1,50 +1,62 @@
-'use strict';
+"use strict";
 // Flags: --expose-internals
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
-const vm = require('vm');
-const { promisify } = require('util');
-const { customPromisifyArgs } = require('internal/util');
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
+const vm = require("vm");
+const { promisify } = require("util");
+const { customPromisifyArgs } = require("internal/util");
 
 {
   const warningHandler = common.mustNotCall();
-  process.on('warning', warningHandler);
+  process.on("warning", warningHandler);
   function foo() {}
   foo.constructor = (async () => {}).constructor;
   promisify(foo);
-  process.off('warning', warningHandler);
+  process.off("warning", warningHandler);
 }
 
 common.expectWarning(
-  'DeprecationWarning',
-  'Calling promisify on a function that returns a Promise is likely a mistake.',
-  'DEP0174');
-promisify(async (callback) => { callback(); })().then(common.mustCall(() => {
-  // We must add the second `expectWarning` call in the `.then` handler, when
-  // the first warning has already been triggered.
-  common.expectWarning(
-    'DeprecationWarning',
-    'Calling promisify on a function that returns a Promise is likely a mistake.',
-    'DEP0174');
-  promisify(async () => {})().then(common.mustNotCall('never settling promise expected'));
-}));
+  "DeprecationWarning",
+  "Calling promisify on a function that returns a Promise is likely a mistake.",
+  "DEP0174",
+);
+promisify(async (callback) => {
+  callback();
+})().then(
+  common.mustCall(() => {
+    // We must add the second `expectWarning` call in the `.then` handler, when
+    // the first warning has already been triggered.
+    common.expectWarning(
+      "DeprecationWarning",
+      "Calling promisify on a function that returns a Promise is likely a mistake.",
+      "DEP0174",
+    );
+    promisify(async () => {})().then(
+      common.mustNotCall("never settling promise expected"),
+    );
+  }),
+);
 
 const stat = promisify(fs.stat);
 
 {
   const promise = stat(__filename);
   assert(promise instanceof Promise);
-  promise.then(common.mustCall((value) => {
-    assert.deepStrictEqual(value, fs.statSync(__filename));
-  }));
+  promise.then(
+    common.mustCall((value) => {
+      assert.deepStrictEqual(value, fs.statSync(__filename));
+    }),
+  );
 }
 
 {
-  const promise = stat('/dontexist');
-  promise.catch(common.mustCall((error) => {
-    assert(error.message.includes('ENOENT: no such file or directory, stat'));
-  }));
+  const promise = stat("/dontexist");
+  promise.catch(
+    common.mustCall((error) => {
+      assert(error.message.includes("ENOENT: no such file or directory, stat"));
+    }),
+  );
 }
 
 {
@@ -63,7 +75,7 @@ const stat = promisify(fs.stat);
 
   // util.promisify.custom is a shared symbol which can be accessed
   // as `Symbol.for("nodejs.util.promisify.custom")`.
-  const kCustomPromisifiedSymbol = Symbol.for('nodejs.util.promisify.custom');
+  const kCustomPromisifiedSymbol = Symbol.for("nodejs.util.promisify.custom");
   fn[kCustomPromisifiedSymbol] = promisifiedFn;
 
   assert.strictEqual(kCustomPromisifiedSymbol, promisify.custom);
@@ -74,10 +86,10 @@ const stat = promisify(fs.stat);
 {
   function fn() {}
   fn[promisify.custom] = 42;
-  assert.throws(
-    () => promisify(fn),
-    { code: 'ERR_INVALID_ARG_TYPE', name: 'TypeError' }
-  );
+  assert.throws(() => promisify(fn), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+  });
 }
 
 {
@@ -88,62 +100,76 @@ const stat = promisify(fs.stat);
     callback(null, firstValue, secondValue);
   }
 
-  fn[customPromisifyArgs] = ['first', 'second'];
+  fn[customPromisifyArgs] = ["first", "second"];
 
-  promisify(fn)().then(common.mustCall((obj) => {
-    assert.deepStrictEqual(obj, { first: firstValue, second: secondValue });
-  }));
+  promisify(fn)().then(
+    common.mustCall((obj) => {
+      assert.deepStrictEqual(obj, { first: firstValue, second: secondValue });
+    }),
+  );
 }
 
 {
-  const fn = vm.runInNewContext('(function() {})');
-  assert.notStrictEqual(Object.getPrototypeOf(promisify(fn)),
-                        Function.prototype);
+  const fn = vm.runInNewContext("(function() {})");
+  assert.notStrictEqual(
+    Object.getPrototypeOf(promisify(fn)),
+    Function.prototype,
+  );
 }
 
 {
   function fn(callback) {
-    callback(null, 'foo', 'bar');
+    callback(null, "foo", "bar");
   }
-  promisify(fn)().then(common.mustCall((value) => {
-    assert.strictEqual(value, 'foo');
-  }));
+  promisify(fn)().then(
+    common.mustCall((value) => {
+      assert.strictEqual(value, "foo");
+    }),
+  );
 }
 
 {
   function fn(callback) {
     callback(null);
   }
-  promisify(fn)().then(common.mustCall((value) => {
-    assert.strictEqual(value, undefined);
-  }));
+  promisify(fn)().then(
+    common.mustCall((value) => {
+      assert.strictEqual(value, undefined);
+    }),
+  );
 }
 
 {
   function fn(callback) {
     callback();
   }
-  promisify(fn)().then(common.mustCall((value) => {
-    assert.strictEqual(value, undefined);
-  }));
+  promisify(fn)().then(
+    common.mustCall((value) => {
+      assert.strictEqual(value, undefined);
+    }),
+  );
 }
 
 {
   function fn(err, val, callback) {
     callback(err, val);
   }
-  promisify(fn)(null, 42).then(common.mustCall((value) => {
-    assert.strictEqual(value, 42);
-  }));
+  promisify(fn)(null, 42).then(
+    common.mustCall((value) => {
+      assert.strictEqual(value, 42);
+    }),
+  );
 }
 
 {
   function fn(err, val, callback) {
     callback(err, val);
   }
-  promisify(fn)(new Error('oops'), null).catch(common.mustCall((err) => {
-    assert.strictEqual(err.message, 'oops');
-  }));
+  promisify(fn)(new Error("oops"), null).catch(
+    common.mustCall((err) => {
+      assert.strictEqual(err.message, "oops");
+    }),
+  );
 }
 
 {
@@ -159,21 +185,24 @@ const stat = promisify(fs.stat);
 
 {
   const o = {};
-  const fn = promisify(function(cb) {
-
+  const fn = promisify(function (cb) {
     cb(null, this === o);
   });
 
   o.fn = fn;
 
-  o.fn().then(common.mustCall((val) => { assert(val); }));
+  o.fn().then(
+    common.mustCall((val) => {
+      assert(val);
+    }),
+  );
 }
 
 {
-  const err = new Error('Should not have called the callback with the error.');
+  const err = new Error("Should not have called the callback with the error.");
   const stack = err.stack;
 
-  const fn = promisify(function(cb) {
+  const fn = promisify(function (cb) {
     cb(null);
     cb(err);
   });
@@ -186,8 +215,8 @@ const stat = promisify(fs.stat);
 }
 
 {
-  function c() { }
-  const a = promisify(function() { });
+  function c() {}
+  const a = promisify(function () {});
   const b = promisify(a);
   assert.notStrictEqual(c, a);
   assert.strictEqual(a, b);
@@ -195,7 +224,7 @@ const stat = promisify(fs.stat);
 
 {
   let errToThrow;
-  const thrower = promisify(function(a, b, c, cb) {
+  const thrower = promisify(function (a, b, c, cb) {
     errToThrow = new Error();
     throw errToThrow;
   });
@@ -209,25 +238,26 @@ const stat = promisify(fs.stat);
   const err = new Error();
 
   const a = promisify((cb) => cb(err))();
-  const b = promisify(() => { throw err; })();
+  const b = promisify(() => {
+    throw err;
+  })();
 
   Promise.all([
-    a.then(assert.fail, function(e) {
+    a.then(assert.fail, function (e) {
       assert.strictEqual(err, e);
     }),
-    b.then(assert.fail, function(e) {
+    b.then(assert.fail, function (e) {
       assert.strictEqual(err, e);
     }),
   ]);
 }
 
-[undefined, null, true, 0, 'str', {}, [], Symbol()].forEach((input) => {
-  assert.throws(
-    () => promisify(input),
-    {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-      message: 'The "original" argument must be of type function.' +
-               common.invalidArgTypeHelper(input)
-    });
+[undefined, null, true, 0, "str", {}, [], Symbol()].forEach((input) => {
+  assert.throws(() => promisify(input), {
+    code: "ERR_INVALID_ARG_TYPE",
+    name: "TypeError",
+    message:
+      'The "original" argument must be of type function.' +
+      common.invalidArgTypeHelper(input),
+  });
 });

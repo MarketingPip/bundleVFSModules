@@ -19,22 +19,25 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const spawn = require('child_process').spawn;
+const spawn = require("child_process").spawn;
 
-if (process.argv[2] === 'child') {
+if (process.argv[2] === "child") {
   // Just reference stdin, it should start it
   process.stdin; // eslint-disable-line no-unused-expressions
   return;
 }
 
-const proc = spawn(process.execPath, [__filename, 'child'], {
-  stdio: ['ipc', 'inherit', 'inherit']
+const proc = spawn(process.execPath, [__filename, "child"], {
+  stdio: ["ipc", "inherit", "inherit"],
 });
 
-proc.on('exit', common.mustCall(function(code) {
-  assert.strictEqual(code, 0);
-}));
+proc.on(
+  "exit",
+  common.mustCall(function (code) {
+    assert.strictEqual(code, 0);
+  }),
+);

@@ -1,13 +1,13 @@
-import '../common/index.mjs';
-import * as fixtures from '../common/fixtures.mjs';
-import fs from 'fs';
-import assert from 'assert';
+import "../common/index.mjs";
+import * as fixtures from "../common/fixtures.mjs";
+import fs from "fs";
+import assert from "assert";
 
 // This test ensures that "position" argument is correctly validated
 
-const filepath = fixtures.path('x.txt');
+const filepath = fixtures.path("x.txt");
 
-const buffer = Buffer.from('xyz\n');
+const buffer = Buffer.from("xyz\n");
 const offset = 0;
 const length = buffer.byteLength;
 
@@ -16,7 +16,7 @@ const length = buffer.byteLength;
 async function testValid(position, allowedErrors = []) {
   let fh;
   try {
-    fh = await fs.promises.open(filepath, 'r');
+    fh = await fs.promises.open(filepath, "r");
     await fh.read(buffer, offset, length, position);
     await fh.read({ buffer, offset, length, position });
     await fh.read(buffer, { offset, length, position });
@@ -32,19 +32,14 @@ async function testValid(position, allowedErrors = []) {
 async function testInvalid(code, position) {
   let fh;
   try {
-    fh = await fs.promises.open(filepath, 'r');
-    await assert.rejects(
-      fh.read(buffer, offset, length, position),
-      { code }
-    );
-    await assert.rejects(
-      fh.read({ buffer, offset, length, position }),
-      { code }
-    );
-    await assert.rejects(
-      fh.read(buffer, { offset, length, position }),
-      { code }
-    );
+    fh = await fs.promises.open(filepath, "r");
+    await assert.rejects(fh.read(buffer, offset, length, position), { code });
+    await assert.rejects(fh.read({ buffer, offset, length, position }), {
+      code,
+    });
+    await assert.rejects(fh.read(buffer, { offset, length, position }), {
+      code,
+    });
   } finally {
     await fh?.close();
   }
@@ -62,24 +57,31 @@ async function testInvalid(code, position) {
   await testValid(1n);
   await testValid(9);
   await testValid(9n);
-  await testValid(Number.MAX_SAFE_INTEGER, [ 'EFBIG', 'EOVERFLOW']);
+  await testValid(Number.MAX_SAFE_INTEGER, ["EFBIG", "EOVERFLOW"]);
 
-  await testValid(2n ** 63n - 1n - BigInt(length), [ 'EFBIG', 'EOVERFLOW']);
-  await testInvalid('ERR_OUT_OF_RANGE', 2n ** 63n);
-  await testInvalid('ERR_OUT_OF_RANGE', 2n ** 63n - BigInt(length));
+  await testValid(2n ** 63n - 1n - BigInt(length), ["EFBIG", "EOVERFLOW"]);
+  await testInvalid("ERR_OUT_OF_RANGE", 2n ** 63n);
+  await testInvalid("ERR_OUT_OF_RANGE", 2n ** 63n - BigInt(length));
 
-  await testInvalid('ERR_OUT_OF_RANGE', NaN);
-  await testInvalid('ERR_OUT_OF_RANGE', -Infinity);
-  await testInvalid('ERR_OUT_OF_RANGE', Infinity);
-  await testInvalid('ERR_OUT_OF_RANGE', -0.999);
-  await testInvalid('ERR_OUT_OF_RANGE', -(2n ** 64n));
-  await testInvalid('ERR_OUT_OF_RANGE', Number.MAX_SAFE_INTEGER + 1);
-  await testInvalid('ERR_OUT_OF_RANGE', Number.MAX_VALUE);
+  await testInvalid("ERR_OUT_OF_RANGE", NaN);
+  await testInvalid("ERR_OUT_OF_RANGE", -Infinity);
+  await testInvalid("ERR_OUT_OF_RANGE", Infinity);
+  await testInvalid("ERR_OUT_OF_RANGE", -0.999);
+  await testInvalid("ERR_OUT_OF_RANGE", -(2n ** 64n));
+  await testInvalid("ERR_OUT_OF_RANGE", Number.MAX_SAFE_INTEGER + 1);
+  await testInvalid("ERR_OUT_OF_RANGE", Number.MAX_VALUE);
 
   for (const badTypeValue of [
-    false, true, '1', Symbol(1), {}, [], () => {}, Promise.resolve(1),
+    false,
+    true,
+    "1",
+    Symbol(1),
+    {},
+    [],
+    () => {},
+    Promise.resolve(1),
   ]) {
-    await testInvalid('ERR_INVALID_ARG_TYPE', badTypeValue);
+    await testInvalid("ERR_INVALID_ARG_TYPE", badTypeValue);
   }
 }
 
@@ -87,20 +89,24 @@ async function testInvalid(code, position) {
   const emptyBuffer = Buffer.alloc(0);
   let fh;
   try {
-    fh = await fs.promises.open(filepath, 'r');
-    await assert.rejects(
-      fh.read(emptyBuffer, 0, 0, { not: 'a number' }),
-      { code: 'ERR_INVALID_ARG_TYPE' }
-    );
+    fh = await fs.promises.open(filepath, "r");
+    await assert.rejects(fh.read(emptyBuffer, 0, 0, { not: "a number" }), {
+      code: "ERR_INVALID_ARG_TYPE",
+    });
   } finally {
     await fh?.close();
   }
 
   try {
-    fh = await fs.promises.open(filepath, 'r');
+    fh = await fs.promises.open(filepath, "r");
     await assert.rejects(
-      fh.read({ buffer: emptyBuffer, offset: 0, length: 0, position: 'string' }),
-      { code: 'ERR_INVALID_ARG_TYPE' }
+      fh.read({
+        buffer: emptyBuffer,
+        offset: 0,
+        length: 0,
+        position: "string",
+      }),
+      { code: "ERR_INVALID_ARG_TYPE" },
     );
   } finally {
     await fh?.close();

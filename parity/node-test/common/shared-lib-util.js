@@ -1,6 +1,6 @@
-'use strict';
-const common = require('../common');
-const path = require('path');
+"use strict";
+const common = require("../common");
+const path = require("path");
 
 const kNodeShared = Boolean(process.config.variables.node_shared);
 const kShlibSuffix = process.config.variables.shlib_suffix;
@@ -16,24 +16,22 @@ function addLibraryPath(env) {
   env ||= process.env;
 
   env.LD_LIBRARY_PATH =
-    (env.LD_LIBRARY_PATH ? env.LD_LIBRARY_PATH + path.delimiter : '') +
+    (env.LD_LIBRARY_PATH ? env.LD_LIBRARY_PATH + path.delimiter : "") +
     kExecPath;
   // For AIX.
-  env.LIBPATH =
-    (env.LIBPATH ? env.LIBPATH + path.delimiter : '') +
-    kExecPath;
+  env.LIBPATH = (env.LIBPATH ? env.LIBPATH + path.delimiter : "") + kExecPath;
   // For macOS.
   env.DYLD_LIBRARY_PATH =
-    (env.DYLD_LIBRARY_PATH ? env.DYLD_LIBRARY_PATH + path.delimiter : '') +
+    (env.DYLD_LIBRARY_PATH ? env.DYLD_LIBRARY_PATH + path.delimiter : "") +
     kExecPath;
   // For Windows.
-  env.PATH = (env.PATH ? env.PATH + path.delimiter : '') + kExecPath;
+  env.PATH = (env.PATH ? env.PATH + path.delimiter : "") + kExecPath;
 }
 
 // Get the full path of shared lib.
 function getSharedLibPath() {
   if (common.isWindows) {
-    return path.join(kExecPath, 'node.dll');
+    return path.join(kExecPath, "node.dll");
   }
   return path.join(kExecPath, `libnode.${kShlibSuffix}`);
 }

@@ -16,7 +16,6 @@ export function getEnvironmentOnlyGlobals() {
 
 const { browserOnly, nodeOnly } = getEnvironmentOnlyGlobals();
 
-
 /* import globals from "https://esm.sh/globals";
 
  

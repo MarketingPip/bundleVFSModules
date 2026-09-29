@@ -19,52 +19,49 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const childProcess = require('child_process');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const childProcess = require("child_process");
 
 // Child pipe test
-if (process.argv[2] === 'pipe') {
-  process.stdout.write('stdout message');
-  process.stderr.write('stderr message');
-
-} else if (process.argv[2] === 'ipc') {
+if (process.argv[2] === "pipe") {
+  process.stdout.write("stdout message");
+  process.stderr.write("stderr message");
+} else if (process.argv[2] === "ipc") {
   // Child IPC test
-  process.send('message from child');
-  process.on('message', function() {
-    process.send('got message from primary');
+  process.send("message from child");
+  process.on("message", function () {
+    process.send("got message from primary");
   });
-
-} else if (process.argv[2] === 'primary') {
+} else if (process.argv[2] === "primary") {
   // Primary | start child pipe test
 
-  const child = childProcess.fork(process.argv[1], ['pipe'], { silent: true });
+  const child = childProcess.fork(process.argv[1], ["pipe"], { silent: true });
 
   // Allow child process to self terminate
   child.disconnect();
 
-  child.on('exit', common.mustCall());
-
+  child.on("exit", common.mustCall());
 } else {
   // Testcase | start primary && child IPC test
 
   // testing: is stderr and stdout piped to primary
-  const args = [process.argv[1], 'primary'];
+  const args = [process.argv[1], "primary"];
   const primary = childProcess.spawn(process.execPath, args);
 
   // Got any stderr or std data
   let stdoutData = false;
-  primary.stdout.on('data', function() {
+  primary.stdout.on("data", function () {
     stdoutData = true;
   });
   let stderrData = false;
-  primary.stderr.on('data', function() {
+  primary.stderr.on("data", function () {
     stderrData = true;
   });
 
   // testing: do message system work when using silent
-  const child = childProcess.fork(process.argv[1], ['ipc'], { silent: true });
+  const child = childProcess.fork(process.argv[1], ["ipc"], { silent: true });
 
   // Manual pipe so we will get errors
   child.stderr.pipe(process.stderr, { end: false });
@@ -72,23 +69,23 @@ if (process.argv[2] === 'pipe') {
 
   let childSending = false;
   let childReceiving = false;
-  child.on('message', function(message) {
+  child.on("message", function (message) {
     if (childSending === false) {
-      childSending = (message === 'message from child');
+      childSending = message === "message from child";
     }
 
     if (childReceiving === false) {
-      childReceiving = (message === 'got message from primary');
+      childReceiving = message === "got message from primary";
     }
 
     if (childReceiving === true) {
       child.kill();
     }
   });
-  child.send('message to child');
+  child.send("message to child");
 
   // Check all values
-  process.on('exit', function() {
+  process.on("exit", function () {
     // clean up
     child.kill();
     primary.kill();

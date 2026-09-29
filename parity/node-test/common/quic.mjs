@@ -6,14 +6,14 @@
 // Provides pre-loaded TLS credentials and thin wrappers around node:quic
 // listen/connect that apply default options suitable for most tests.
 
-import * as fixtures from '../common/fixtures.mjs';
+import * as fixtures from "../common/fixtures.mjs";
 
-const { createPrivateKey } = await import('node:crypto');
-const quic = await import('node:quic');
+const { createPrivateKey } = await import("node:crypto");
+const quic = await import("node:quic");
 
 // Pre-loaded TLS credentials from the standard agent1 fixture pair.
-const key = createPrivateKey(fixtures.readKey('agent1-key.pem'));
-const cert = fixtures.readKey('agent1-cert.pem');
+const key = createPrivateKey(fixtures.readKey("agent1-key.pem"));
+const cert = fixtures.readKey("agent1-cert.pem");
 
 /**
  * Start a QUIC server with sensible test defaults.
@@ -26,8 +26,8 @@ const cert = fixtures.readKey('agent1-cert.pem');
  */
 async function listen(callback, options = {}) {
   const {
-    sni = { '*': { keys: [key], certs: [cert] } },
-    alpn = ['quic-test'],
+    sni = { "*": { keys: [key], certs: [cert] } },
+    alpn = ["quic-test"],
     ...rest
   } = options;
   return quic.listen(callback, { sni, alpn, ...rest });
@@ -43,19 +43,14 @@ async function listen(callback, options = {}) {
  */
 async function connect(address, options = {}) {
   const {
-    alpn = 'quic-test',
+    alpn = "quic-test",
     // Test helper defaults to 'manual' because tests use self-signed
     // certs without a CA. Tests that want to verify cert validation
     // behavior should set verifyPeer explicitly.
-    verifyPeer = 'manual',
+    verifyPeer = "manual",
     ...rest
   } = options;
   return quic.connect(address, { alpn, verifyPeer, ...rest });
 }
 
-export {
-  key,
-  cert,
-  listen,
-  connect,
-};
+export { key, cert, listen, connect };

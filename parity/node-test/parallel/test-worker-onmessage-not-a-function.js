@@ -3,9 +3,9 @@
 // listener from holding the event loop open. This test confirms that
 // functionality.
 
-'use strict';
-const common = require('../common');
-const { Worker, parentPort } = require('worker_threads');
+"use strict";
+const common = require("../common");
+const { Worker, parentPort } = require("worker_threads");
 
 // Do not use isMainThread so that this test itself can be run inside a Worker.
 if (!process.env.HAS_STARTED_WORKER) {
@@ -21,5 +21,5 @@ if (!process.env.HAS_STARTED_WORKER) {
   // Setting `onmessage` to a value that is not a function should clear the
   // previous value and also should allow the event loop to exit. (In other
   // words, this test should exit rather than run indefinitely.)
-  parentPort.onmessage = 'fhqwhgads';
+  parentPort.onmessage = "fhqwhgads";
 }

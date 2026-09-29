@@ -1,8 +1,8 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 common.skipIfInspectorDisabled();
 
-const spawn = require('child_process').spawn;
+const spawn = require("child_process").spawn;
 
 const script = `
 const assert = require('assert');
@@ -19,11 +19,11 @@ assert(
   'inspector.isEnabled() should be false after _debugEnd()');
 `;
 
-const args = ['--inspect=0', '-e', script];
+const args = ["--inspect=0", "-e", script];
 const child = spawn(process.execPath, args, {
-  stdio: 'inherit',
-  env: { ...process.env, NODE_V8_COVERAGE: '' }
+  stdio: "inherit",
+  env: { ...process.env, NODE_V8_COVERAGE: "" },
 });
-child.on('exit', (code, signal) => {
+child.on("exit", (code, signal) => {
   process.exit(code || signal);
 });

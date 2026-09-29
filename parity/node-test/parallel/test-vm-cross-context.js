@@ -19,11 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
-const vm = require('vm');
+const vm = require("vm");
 const ctx = vm.createContext(globalThis);
 
 // Should not throw.
-vm.runInContext('!function() { var x = console.log; }()', ctx);
+vm.runInContext("!function() { var x = console.log; }()", ctx);

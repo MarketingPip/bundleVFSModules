@@ -19,113 +19,131 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const http = require('http');
+const http = require("http");
 
-http.createServer(common.mustCall(function(req, res) {
-  const expectRawHeaders = [
-    'Host',
-    `localhost:${this.address().port}`,
-    'transfer-ENCODING',
-    'CHUNKED',
-    'x-BaR',
-    'yoyoyo',
-    'Connection',
-    'keep-alive',
-  ];
-  const expectHeaders = {
-    'host': `localhost:${this.address().port}`,
-    'transfer-encoding': 'CHUNKED',
-    'x-bar': 'yoyoyo',
-    'connection': 'keep-alive'
-  };
-  const expectRawTrailers = [
-    'x-bAr',
-    'yOyOyOy',
-    'x-baR',
-    'OyOyOyO',
-    'X-bAr',
-    'yOyOyOy',
-    'X-baR',
-    'OyOyOyO',
-  ];
-  const expectTrailers = { 'x-bar': 'yOyOyOy, OyOyOyO, yOyOyOy, OyOyOyO' };
-
-  this.close();
-
-  assert.deepStrictEqual(req.rawHeaders, expectRawHeaders);
-  assert.deepStrictEqual(req.headers, expectHeaders);
-
-  req.on('end', common.mustCall(() => {
-    assert.deepStrictEqual(req.rawTrailers, expectRawTrailers);
-    assert.deepStrictEqual(req.trailers, expectTrailers);
-  }));
-
-  req.resume();
-  res.setHeader('Keep-Alive', 'timeout=1');
-  res.setHeader('Trailer', 'x-foo');
-  res.addTrailers([
-    ['x-fOo', 'xOxOxOx'],
-    ['x-foO', 'OxOxOxO'],
-    ['X-fOo', 'xOxOxOx'],
-    ['X-foO', 'OxOxOxO'],
-  ]);
-  res.end('x f o o');
-})).listen(0, common.mustCall(function() {
-  const req = http.request({ port: this.address().port, path: '/' });
-  req.addTrailers([
-    ['x-bAr', 'yOyOyOy'],
-    ['x-baR', 'OyOyOyO'],
-    ['X-bAr', 'yOyOyOy'],
-    ['X-baR', 'OyOyOyO'],
-  ]);
-  req.setHeader('transfer-ENCODING', 'CHUNKED');
-  req.setHeader('x-BaR', 'yoyoyo');
-  req.end('y b a r');
-  req.on('response', common.mustCall((res) => {
-    const expectRawHeaders = [
-      'Keep-Alive',
-      'timeout=1',
-      'Trailer',
-      'x-foo',
-      'Date',
-      null,
-      'Connection',
-      'keep-alive',
-      'Transfer-Encoding',
-      'chunked',
-    ];
-    const expectHeaders = {
-      'keep-alive': 'timeout=1',
-      'trailer': 'x-foo',
-      'date': null,
-      'connection': 'keep-alive',
-      'transfer-encoding': 'chunked'
-    };
-    res.rawHeaders[5] = null;
-    res.headers.date = null;
-    assert.deepStrictEqual(res.rawHeaders, expectRawHeaders);
-    assert.deepStrictEqual(res.headers, expectHeaders);
-    res.on('end', common.mustCall(() => {
-      const expectRawTrailers = [
-        'x-fOo',
-        'xOxOxOx',
-        'x-foO',
-        'OxOxOxO',
-        'X-fOo',
-        'xOxOxOx',
-        'X-foO',
-        'OxOxOxO',
+http
+  .createServer(
+    common.mustCall(function (req, res) {
+      const expectRawHeaders = [
+        "Host",
+        `localhost:${this.address().port}`,
+        "transfer-ENCODING",
+        "CHUNKED",
+        "x-BaR",
+        "yoyoyo",
+        "Connection",
+        "keep-alive",
       ];
-      const expectTrailers = { 'x-foo': 'xOxOxOx, OxOxOxO, xOxOxOx, OxOxOxO' };
+      const expectHeaders = {
+        host: `localhost:${this.address().port}`,
+        "transfer-encoding": "CHUNKED",
+        "x-bar": "yoyoyo",
+        connection: "keep-alive",
+      };
+      const expectRawTrailers = [
+        "x-bAr",
+        "yOyOyOy",
+        "x-baR",
+        "OyOyOyO",
+        "X-bAr",
+        "yOyOyOy",
+        "X-baR",
+        "OyOyOyO",
+      ];
+      const expectTrailers = { "x-bar": "yOyOyOy, OyOyOyO, yOyOyOy, OyOyOyO" };
 
-      assert.deepStrictEqual(res.rawTrailers, expectRawTrailers);
-      assert.deepStrictEqual(res.trailers, expectTrailers);
-      console.log('ok');
-    }));
-    res.resume();
-  }));
-}));
+      this.close();
+
+      assert.deepStrictEqual(req.rawHeaders, expectRawHeaders);
+      assert.deepStrictEqual(req.headers, expectHeaders);
+
+      req.on(
+        "end",
+        common.mustCall(() => {
+          assert.deepStrictEqual(req.rawTrailers, expectRawTrailers);
+          assert.deepStrictEqual(req.trailers, expectTrailers);
+        }),
+      );
+
+      req.resume();
+      res.setHeader("Keep-Alive", "timeout=1");
+      res.setHeader("Trailer", "x-foo");
+      res.addTrailers([
+        ["x-fOo", "xOxOxOx"],
+        ["x-foO", "OxOxOxO"],
+        ["X-fOo", "xOxOxOx"],
+        ["X-foO", "OxOxOxO"],
+      ]);
+      res.end("x f o o");
+    }),
+  )
+  .listen(
+    0,
+    common.mustCall(function () {
+      const req = http.request({ port: this.address().port, path: "/" });
+      req.addTrailers([
+        ["x-bAr", "yOyOyOy"],
+        ["x-baR", "OyOyOyO"],
+        ["X-bAr", "yOyOyOy"],
+        ["X-baR", "OyOyOyO"],
+      ]);
+      req.setHeader("transfer-ENCODING", "CHUNKED");
+      req.setHeader("x-BaR", "yoyoyo");
+      req.end("y b a r");
+      req.on(
+        "response",
+        common.mustCall((res) => {
+          const expectRawHeaders = [
+            "Keep-Alive",
+            "timeout=1",
+            "Trailer",
+            "x-foo",
+            "Date",
+            null,
+            "Connection",
+            "keep-alive",
+            "Transfer-Encoding",
+            "chunked",
+          ];
+          const expectHeaders = {
+            "keep-alive": "timeout=1",
+            trailer: "x-foo",
+            date: null,
+            connection: "keep-alive",
+            "transfer-encoding": "chunked",
+          };
+          res.rawHeaders[5] = null;
+          res.headers.date = null;
+          assert.deepStrictEqual(res.rawHeaders, expectRawHeaders);
+          assert.deepStrictEqual(res.headers, expectHeaders);
+          res.on(
+            "end",
+            common.mustCall(() => {
+              const expectRawTrailers = [
+                "x-fOo",
+                "xOxOxOx",
+                "x-foO",
+                "OxOxOxO",
+                "X-fOo",
+                "xOxOxOx",
+                "X-foO",
+                "OxOxOxO",
+              ];
+              const expectTrailers = {
+                "x-foo": "xOxOxOx, OxOxOxO, xOxOxOx, OxOxOxO",
+              };
+
+              assert.deepStrictEqual(res.rawTrailers, expectRawTrailers);
+              assert.deepStrictEqual(res.trailers, expectTrailers);
+              console.log("ok");
+            }),
+          );
+          res.resume();
+        }),
+      );
+    }),
+  );

@@ -1,12 +1,11 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
 
-const assert = require('assert');
-const crypto = require('crypto');
-const { hasOpenSSL } = require('../common/crypto');
+const assert = require("assert");
+const crypto = require("crypto");
+const { hasOpenSSL } = require("../common/crypto");
 
 function getOutcome(fn) {
   try {
@@ -40,16 +39,22 @@ function assertSameErrorOrSuccess(actual, expected) {
 
 {
   const expected = getOutcome(() =>
-    crypto.hkdfSync('sha256', 'key', 'salt', 'info', 0),
+    crypto.hkdfSync("sha256", "key", "salt", "info", 0),
   );
   assertSameOutcome(
-    getOutcome(() => crypto.hkdfSync('sha256', 'key', 'salt', 'info', -0)),
+    getOutcome(() => crypto.hkdfSync("sha256", "key", "salt", "info", -0)),
     expected,
   );
-  crypto.hkdf('sha256', 'key', 'salt', 'info', -0,
-              common.mustCall((err, result) => {
-                assertSameOutcome({ err, result }, expected);
-              }));
+  crypto.hkdf(
+    "sha256",
+    "key",
+    "salt",
+    "info",
+    -0,
+    common.mustCall((err, result) => {
+      assertSameOutcome({ err, result }, expected);
+    }),
+  );
 }
 
 {
@@ -57,30 +62,36 @@ function assertSameErrorOrSuccess(actual, expected) {
     crypto.checkPrimeSync(Buffer.from([3]), { checks: -0 }),
     true,
   );
-  crypto.checkPrime(Buffer.from([3]), { checks: -0 },
-                    common.mustSucceed((result) => {
-                      assert.strictEqual(result, true);
-                    }));
+  crypto.checkPrime(
+    Buffer.from([3]),
+    { checks: -0 },
+    common.mustSucceed((result) => {
+      assert.strictEqual(result, true);
+    }),
+  );
 }
 
 {
   assert.throws(() => crypto.createDiffieHellman(-0, 2), {
-    name: 'Error',
+    name: "Error",
   });
 }
 
 {
   for (const [type, getOptions] of [
-    ['rsa', (zero) => ({ modulusLength: zero })],
-    ['rsa', (zero) => ({ modulusLength: 512, publicExponent: zero })],
-    ['rsa-pss', (zero) => ({
-      modulusLength: 512,
-      publicExponent: 65537,
-      saltLength: zero,
-    })],
-    ['dsa', (zero) => ({ modulusLength: zero })],
-    ['dh', (zero) => ({ primeLength: zero })],
-    ['dh', (zero) => ({ primeLength: 2, generator: zero })],
+    ["rsa", (zero) => ({ modulusLength: zero })],
+    ["rsa", (zero) => ({ modulusLength: 512, publicExponent: zero })],
+    [
+      "rsa-pss",
+      (zero) => ({
+        modulusLength: 512,
+        publicExponent: 65537,
+        saltLength: zero,
+      }),
+    ],
+    ["dsa", (zero) => ({ modulusLength: zero })],
+    ["dh", (zero) => ({ primeLength: zero })],
+    ["dh", (zero) => ({ primeLength: 2, generator: zero })],
   ]) {
     assertSameErrorOrSuccess(
       getOutcome(() => crypto.generateKeyPairSync(type, getOptions(-0))),
@@ -90,41 +101,47 @@ function assertSameErrorOrSuccess(actual, expected) {
 
   if (!hasOpenSSL(3)) {
     common.printSkipMessage(
-      'Skipping DSA divisorLength 0 key generation on OpenSSL 1.1.1');
+      "Skipping DSA divisorLength 0 key generation on OpenSSL 1.1.1",
+    );
   } else {
     assertSameErrorOrSuccess(
-      getOutcome(() => crypto.generateKeyPairSync('dsa', {
-        modulusLength: 512,
-        divisorLength: -0,
-      })),
-      getOutcome(() => crypto.generateKeyPairSync('dsa', {
-        modulusLength: 512,
-        divisorLength: 0,
-      })),
+      getOutcome(() =>
+        crypto.generateKeyPairSync("dsa", {
+          modulusLength: 512,
+          divisorLength: -0,
+        }),
+      ),
+      getOutcome(() =>
+        crypto.generateKeyPairSync("dsa", {
+          modulusLength: 512,
+          divisorLength: 0,
+        }),
+      ),
     );
   }
 
-  crypto.generateKeyPair('rsa', { modulusLength: -0 },
-                         common.mustCall((err) => {
-                           assert(err instanceof Error);
-                         }));
+  crypto.generateKeyPair(
+    "rsa",
+    { modulusLength: -0 },
+    common.mustCall((err) => {
+      assert(err instanceof Error);
+    }),
+  );
 }
 
 if (!process.features.openssl_is_boringssl) {
   assert.strictEqual(
-    crypto.createHash('shake128', { outputLength: -0 }).digest('hex'),
-    '',
+    crypto.createHash("shake128", { outputLength: -0 }).digest("hex"),
+    "",
   );
   assert.strictEqual(
-    crypto.createHash('shake128', { outputLength: 5 })
-          .copy({ outputLength: -0 })
-          .digest('hex'),
-    '',
+    crypto
+      .createHash("shake128", { outputLength: 5 })
+      .copy({ outputLength: -0 })
+      .digest("hex"),
+    "",
   );
-  assert.strictEqual(
-    crypto.hash('shake128', 'data', { outputLength: -0 }),
-    '',
-  );
+  assert.strictEqual(crypto.hash("shake128", "data", { outputLength: -0 }), "");
 }
 
 {
@@ -132,29 +149,31 @@ if (!process.features.openssl_is_boringssl) {
   const iv = Buffer.alloc(12);
 
   assertSameErrorOrSuccess(
-    getOutcome(() => crypto.createCipheriv(
-      'aes-128-gcm', key, iv, { authTagLength: -0 })),
-    getOutcome(() => crypto.createCipheriv(
-      'aes-128-gcm', key, iv, { authTagLength: 0 })),
+    getOutcome(() =>
+      crypto.createCipheriv("aes-128-gcm", key, iv, { authTagLength: -0 }),
+    ),
+    getOutcome(() =>
+      crypto.createCipheriv("aes-128-gcm", key, iv, { authTagLength: 0 }),
+    ),
   );
   assertSameErrorOrSuccess(
-    getOutcome(() => crypto.createCipheriv(
-      'aes-128-gcm', key, iv).setAAD(
-      Buffer.alloc(0),
-      { plaintextLength: -0 },
-    )),
-    getOutcome(() => crypto.createCipheriv(
-      'aes-128-gcm', key, iv).setAAD(
-      Buffer.alloc(0),
-      { plaintextLength: 0 },
-    )),
+    getOutcome(() =>
+      crypto
+        .createCipheriv("aes-128-gcm", key, iv)
+        .setAAD(Buffer.alloc(0), { plaintextLength: -0 }),
+    ),
+    getOutcome(() =>
+      crypto
+        .createCipheriv("aes-128-gcm", key, iv)
+        .setAAD(Buffer.alloc(0), { plaintextLength: 0 }),
+    ),
   );
   assert.strictEqual(
-    crypto.getCipherInfo('aes-128-cbc', { keyLength: -0 }),
+    crypto.getCipherInfo("aes-128-cbc", { keyLength: -0 }),
     undefined,
   );
   assert.strictEqual(
-    crypto.getCipherInfo('aes-128-cbc', { ivLength: -0 }),
+    crypto.getCipherInfo("aes-128-cbc", { ivLength: -0 }),
     undefined,
   );
 }

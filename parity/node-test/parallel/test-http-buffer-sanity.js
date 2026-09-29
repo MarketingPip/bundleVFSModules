@@ -19,10 +19,10 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
 const bufferSize = 5 * 1024 * 1024;
 let measuredSize = 0;
@@ -32,40 +32,57 @@ for (let i = 0; i < buffer.length; i++) {
   buffer[i] = i % 256;
 }
 
-const server = http.Server(common.mustCallAtLeast(function(req, res) {
-  server.close();
+const server = http.Server(
+  common.mustCallAtLeast(function (req, res) {
+    server.close();
 
-  let i = 0;
+    let i = 0;
 
-  req.on('data', common.mustCallAtLeast((d) => {
-    measuredSize += d.length;
-    for (let j = 0; j < d.length; j++) {
-      assert.strictEqual(d[j], buffer[i]);
-      i++;
-    }
-  }));
+    req.on(
+      "data",
+      common.mustCallAtLeast((d) => {
+        measuredSize += d.length;
+        for (let j = 0; j < d.length; j++) {
+          assert.strictEqual(d[j], buffer[i]);
+          i++;
+        }
+      }),
+    );
 
-  req.on('end', common.mustCall(() => {
-    assert.strictEqual(measuredSize, bufferSize);
-    res.writeHead(200);
-    res.write('thanks');
-    res.end();
-  }));
-}));
+    req.on(
+      "end",
+      common.mustCall(() => {
+        assert.strictEqual(measuredSize, bufferSize);
+        res.writeHead(200);
+        res.write("thanks");
+        res.end();
+      }),
+    );
+  }),
+);
 
-server.listen(0, common.mustCall(() => {
-  const req = http.request({
-    port: server.address().port,
-    method: 'POST',
-    path: '/',
-    headers: { 'content-length': buffer.length }
-  }, common.mustCall((res) => {
-    res.setEncoding('utf8');
-    let data = '';
-    res.on('data', (chunk) => data += chunk);
-    res.on('end', common.mustCall(() => {
-      assert.strictEqual(data, 'thanks');
-    }));
-  }));
-  req.end(buffer);
-}));
+server.listen(
+  0,
+  common.mustCall(() => {
+    const req = http.request(
+      {
+        port: server.address().port,
+        method: "POST",
+        path: "/",
+        headers: { "content-length": buffer.length },
+      },
+      common.mustCall((res) => {
+        res.setEncoding("utf8");
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on(
+          "end",
+          common.mustCall(() => {
+            assert.strictEqual(data, "thanks");
+          }),
+        );
+      }),
+    );
+    req.end(buffer);
+  }),
+);

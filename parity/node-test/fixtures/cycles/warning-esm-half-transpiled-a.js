@@ -1,1 +1,1 @@
-require('./warning-esm-half-transpiled-b.js');
+require("./warning-esm-half-transpiled-b.js");

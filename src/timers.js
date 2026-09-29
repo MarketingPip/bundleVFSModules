@@ -21,15 +21,13 @@
  * with full Node.js v24.20.0 API parity when running under Node.js.
  */
 
-import {
-  validateFunction,
-} from './timers/errors.js';
-import * as promisesNamespace from './timers/promises.js';
+import { validateFunction } from "./timers/errors.js";
+import * as promisesNamespace from "./timers/promises.js";
 
 /** Resolved global scope — avoids typeof window checks. */
 const scope =
-  (typeof global !== 'undefined' && global) ||
-  (typeof self !== 'undefined' && self) ||
+  (typeof global !== "undefined" && global) ||
+  (typeof self !== "undefined" && self) ||
   globalThis;
 
 // ---------------------------------------------------------------------------
@@ -50,10 +48,13 @@ const _clearInterval = scope.clearInterval.bind(scope);
 // numeric and ref()/unref() are no-ops, matching timers-browserify behavior.
 let _setImmediate;
 let _clearImmediate;
-if (typeof scope.setImmediate === 'function' && typeof scope.clearImmediate === 'function') {
+if (
+  typeof scope.setImmediate === "function" &&
+  typeof scope.clearImmediate === "function"
+) {
   _setImmediate = scope.setImmediate.bind(scope);
   _clearImmediate = scope.clearImmediate.bind(scope);
-} else if (typeof MessageChannel !== 'undefined') {
+} else if (typeof MessageChannel !== "undefined") {
   let nextImmediateId = 1;
   const pendingImmediates = new Map();
   const channel = new MessageChannel();
@@ -88,7 +89,7 @@ const HAS_OBJECT_TIMER_HANDLES = (() => {
   try {
     const probe = _setTimeout(() => {}, 0);
     _clearTimeout(probe);
-    return typeof probe === 'object' && probe !== null;
+    return typeof probe === "object" && probe !== null;
   } catch {
     return false;
   }
@@ -102,11 +103,14 @@ let warnedNegativeTimeout = false;
 
 function emitTimerWarning(message, name) {
   if (
-    typeof process !== 'undefined' &&
-    typeof process.emitWarning === 'function'
+    typeof process !== "undefined" &&
+    typeof process.emitWarning === "function"
   ) {
     process.emitWarning(message, name);
-  } else if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+  } else if (
+    typeof console !== "undefined" &&
+    typeof console.warn === "function"
+  ) {
     console.warn(`${name}: ${message}`);
   }
 }
@@ -122,19 +126,19 @@ function normalizeDelay(after) {
     if (after > TIMEOUT_MAX) {
       emitTimerWarning(
         `${after} does not fit into a 32-bit signed integer.\nTimeout duration was set to 1.`,
-        'TimeoutOverflowWarning',
+        "TimeoutOverflowWarning",
       );
     } else if (after < 0 && !warnedNegativeTimeout) {
       warnedNegativeTimeout = true;
       emitTimerWarning(
         `${after} is a negative number.\nTimeout duration was set to 1.`,
-        'TimeoutNegativeWarning',
+        "TimeoutNegativeWarning",
       );
     } else if (Number.isNaN(after) && !warnedNaNTimeout) {
       warnedNaNTimeout = true;
       emitTimerWarning(
         `${after} is not a number.\nTimeout duration was set to 1.`,
-        'TimeoutNaNWarning',
+        "TimeoutNaNWarning",
       );
     }
     after = 1; // Schedule on next tick, follows browser behavior
@@ -157,39 +161,39 @@ class Timeout {
     // Mirror Node: coercing a Timeout to a primitive yields its numeric id
     // (and registers it for clearTimeout(id) lookups).
     this._id =
-      typeof native === 'object' && native !== null ? Number(native) : native;
+      typeof native === "object" && native !== null ? Number(native) : native;
   }
 
   ref() {
-    if (this._native !== null && typeof this._native === 'object') {
+    if (this._native !== null && typeof this._native === "object") {
       this._native.ref();
     }
     return this;
   }
 
   unref() {
-    if (this._native !== null && typeof this._native === 'object') {
+    if (this._native !== null && typeof this._native === "object") {
       this._native.unref();
     }
     return this;
   }
 
   hasRef() {
-    if (this._native !== null && typeof this._native === 'object') {
+    if (this._native !== null && typeof this._native === "object") {
       return this._native.hasRef();
     }
     return true;
   }
 
   refresh() {
-    if (this._native !== null && typeof this._native === 'object') {
+    if (this._native !== null && typeof this._native === "object") {
       this._native.refresh();
     }
     return this;
   }
 
   close() {
-    if (this._native !== null && typeof this._native === 'object') {
+    if (this._native !== null && typeof this._native === "object") {
       this._native.close();
     } else {
       _clearTimeout(this._id);
@@ -217,21 +221,21 @@ class Immediate {
   }
 
   ref() {
-    if (this._native !== null && typeof this._native === 'object') {
+    if (this._native !== null && typeof this._native === "object") {
       this._native.ref();
     }
     return this;
   }
 
   unref() {
-    if (this._native !== null && typeof this._native === 'object') {
+    if (this._native !== null && typeof this._native === "object") {
       this._native.unref();
     }
     return this;
   }
 
   hasRef() {
-    if (this._native !== null && typeof this._native === 'object') {
+    if (this._native !== null && typeof this._native === "object") {
       return this._native.hasRef();
     }
     return true;
@@ -257,7 +261,7 @@ class Immediate {
  * by normalizeDelay() in browsers).
  */
 export function setTimeout(callback, after, ...args) {
-  validateFunction(callback, 'callback');
+  validateFunction(callback, "callback");
   if (!HAS_OBJECT_TIMER_HANDLES) after = normalizeDelay(after);
   // Use _setTimeout — the reference captured at module load, never our own export.
   return new Timeout(_setTimeout(callback, after, ...args));
@@ -267,7 +271,7 @@ export function setTimeout(callback, after, ...args) {
  * Schedules `callback` to run repeatedly every `delay` ms.
  */
 export function setInterval(callback, after, ...args) {
-  validateFunction(callback, 'callback');
+  validateFunction(callback, "callback");
   if (!HAS_OBJECT_TIMER_HANDLES) after = normalizeDelay(after);
   return new Timeout(_setInterval(callback, after, ...args));
 }
@@ -297,7 +301,7 @@ export function clearInterval(timer) {
  * Schedules `callback` to run after I/O callbacks (before timers).
  */
 export function setImmediate(callback, ...args) {
-  validateFunction(callback, 'callback');
+  validateFunction(callback, "callback");
   return new Immediate(_setImmediate(callback, ...args));
 }
 
@@ -319,7 +323,7 @@ export function clearImmediate(immediate) {
 export { promisesNamespace as promises };
 
 // util.promisify hooks, mirroring Node's customPromisify definitions.
-const customPromisify = Symbol.for('nodejs.util.promisify.custom');
+const customPromisify = Symbol.for("nodejs.util.promisify.custom");
 Object.defineProperty(setTimeout, customPromisify, {
   __proto__: null,
   enumerable: true,

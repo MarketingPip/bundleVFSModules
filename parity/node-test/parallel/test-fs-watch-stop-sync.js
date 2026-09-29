@@ -1,5 +1,5 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // This test checks that the `stop` event is emitted asynchronously.
 //
@@ -9,13 +9,13 @@ const common = require('../common');
 // If it is asynchronous, then the listener will be removed before the event is
 // emitted.
 
-const fs = require('fs');
+const fs = require("fs");
 
 const listener = common.mustNotCall(
-  'listener should have been removed before the event was emitted'
+  "listener should have been removed before the event was emitted",
 );
 
 const watch = fs.watchFile(__filename, common.mustNotCall());
-watch.once('stop', listener);
+watch.once("stop", listener);
 watch.stop();
-watch.removeListener('stop', listener);
+watch.removeListener("stop", listener);

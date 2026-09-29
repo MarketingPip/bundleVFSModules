@@ -1,6 +1,6 @@
-'use strict';
-const common = require('../common');
-const { Readable, PassThrough } = require('stream');
+"use strict";
+const common = require("../common");
+const { Readable, PassThrough } = require("stream");
 
 function test(r) {
   const wrapper = new Readable({
@@ -12,7 +12,7 @@ function test(r) {
         return;
       }
 
-      r.once('readable', function() {
+      r.once("readable", function () {
         data = r.read();
         if (data) {
           wrapper.push(data);
@@ -22,20 +22,20 @@ function test(r) {
     },
   });
 
-  r.once('end', function() {
+  r.once("end", function () {
     wrapper.push(null);
   });
 
   wrapper.resume();
-  wrapper.once('end', common.mustCall());
+  wrapper.once("end", common.mustCall());
 }
 
 {
   const source = new Readable({
-    read: () => {}
+    read: () => {},
   });
-  source.push('foo');
-  source.push('bar');
+  source.push("foo");
+  source.push("bar");
   source.push(null);
 
   const pt = source.pipe(new PassThrough());
@@ -44,7 +44,7 @@ function test(r) {
 
 {
   // This is the underlying cause of the above test case.
-  const pushChunks = ['foo', 'bar'];
+  const pushChunks = ["foo", "bar"];
   const r = new Readable({
     read: () => {
       const chunk = pushChunks.shift();

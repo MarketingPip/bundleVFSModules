@@ -1,8 +1,8 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const { Readable } = require('stream');
+const common = require("../common");
+const assert = require("assert");
+const { Readable } = require("stream");
 
 const MAX = 42;
 const BATCH = 10;
@@ -10,24 +10,27 @@ const BATCH = 10;
 {
   const readable = new Readable({
     objectMode: true,
-    read: common.mustCall(function() {
-      console.log('>> READ');
-      fetchData((err, data) => {
-        if (err) {
-          this.destroy(err);
-          return;
-        }
+    read: common.mustCall(
+      function () {
+        console.log(">> READ");
+        fetchData((err, data) => {
+          if (err) {
+            this.destroy(err);
+            return;
+          }
 
-        if (data.length === 0) {
-          console.log('pushing null');
-          this.push(null);
-          return;
-        }
+          if (data.length === 0) {
+            console.log("pushing null");
+            this.push(null);
+            return;
+          }
 
-        console.log('pushing');
-        data.forEach((d) => this.push(d));
-      });
-    }, Math.floor(MAX / BATCH) + 2)
+          console.log("pushing");
+          data.forEach((d) => this.push(d));
+        });
+      },
+      Math.floor(MAX / BATCH) + 2,
+    ),
   });
 
   let i = 0;
@@ -44,40 +47,46 @@ const BATCH = 10;
     }
   }
 
-  readable.on('readable', () => {
+  readable.on("readable", () => {
     let data;
-    console.log('readable emitted');
+    console.log("readable emitted");
     while ((data = readable.read()) !== null) {
       console.log(data);
     }
   });
 
-  readable.on('end', common.mustCall(() => {
-    assert.strictEqual(i, (Math.floor(MAX / BATCH) + 1) * BATCH);
-  }));
+  readable.on(
+    "end",
+    common.mustCall(() => {
+      assert.strictEqual(i, (Math.floor(MAX / BATCH) + 1) * BATCH);
+    }),
+  );
 }
 
 {
   const readable = new Readable({
     objectMode: true,
-    read: common.mustCall(function() {
-      console.log('>> READ');
-      fetchData((err, data) => {
-        if (err) {
-          this.destroy(err);
-          return;
-        }
+    read: common.mustCall(
+      function () {
+        console.log(">> READ");
+        fetchData((err, data) => {
+          if (err) {
+            this.destroy(err);
+            return;
+          }
 
-        if (data.length === 0) {
-          console.log('pushing null');
-          this.push(null);
-          return;
-        }
+          if (data.length === 0) {
+            console.log("pushing null");
+            this.push(null);
+            return;
+          }
 
-        console.log('pushing');
-        data.forEach((d) => this.push(d));
-      });
-    }, Math.floor(MAX / BATCH) + 2)
+          console.log("pushing");
+          data.forEach((d) => this.push(d));
+        });
+      },
+      Math.floor(MAX / BATCH) + 2,
+    ),
   });
 
   let i = 0;
@@ -94,35 +103,41 @@ const BATCH = 10;
     }
   }
 
-  readable.on('data', (data) => {
-    console.log('data emitted', data);
+  readable.on("data", (data) => {
+    console.log("data emitted", data);
   });
 
-  readable.on('end', common.mustCall(() => {
-    assert.strictEqual(i, (Math.floor(MAX / BATCH) + 1) * BATCH);
-  }));
+  readable.on(
+    "end",
+    common.mustCall(() => {
+      assert.strictEqual(i, (Math.floor(MAX / BATCH) + 1) * BATCH);
+    }),
+  );
 }
 
 {
   const readable = new Readable({
     objectMode: true,
-    read: common.mustCall(function() {
-      console.log('>> READ');
-      fetchData((err, data) => {
-        if (err) {
-          this.destroy(err);
-          return;
-        }
+    read: common.mustCall(
+      function () {
+        console.log(">> READ");
+        fetchData((err, data) => {
+          if (err) {
+            this.destroy(err);
+            return;
+          }
 
-        console.log('pushing');
-        data.forEach((d) => this.push(d));
+          console.log("pushing");
+          data.forEach((d) => this.push(d));
 
-        if (data[BATCH - 1] >= MAX) {
-          console.log('pushing null');
-          this.push(null);
-        }
-      });
-    }, Math.floor(MAX / BATCH) + 1)
+          if (data[BATCH - 1] >= MAX) {
+            console.log("pushing null");
+            this.push(null);
+          }
+        });
+      },
+      Math.floor(MAX / BATCH) + 1,
+    ),
   });
 
   let i = 0;
@@ -135,22 +150,25 @@ const BATCH = 10;
     setTimeout(cb, 10, null, array);
   }
 
-  readable.on('data', (data) => {
-    console.log('data emitted', data);
+  readable.on("data", (data) => {
+    console.log("data emitted", data);
   });
 
-  readable.on('end', common.mustCall(() => {
-    assert.strictEqual(i, (Math.floor(MAX / BATCH) + 1) * BATCH);
-  }));
+  readable.on(
+    "end",
+    common.mustCall(() => {
+      assert.strictEqual(i, (Math.floor(MAX / BATCH) + 1) * BATCH);
+    }),
+  );
 }
 
 {
   const readable = new Readable({
     objectMode: true,
-    read: common.mustNotCall()
+    read: common.mustNotCall(),
   });
 
-  readable.on('data', common.mustNotCall());
+  readable.on("data", common.mustNotCall());
 
   readable.push(null);
 
@@ -159,25 +177,28 @@ const BATCH = 10;
     nextTickPassed = true;
   });
 
-  readable.on('end', common.mustCall(() => {
-    assert.strictEqual(nextTickPassed, true);
-  }));
+  readable.on(
+    "end",
+    common.mustCall(() => {
+      assert.strictEqual(nextTickPassed, true);
+    }),
+  );
 }
 
 {
   const readable = new Readable({
     objectMode: true,
-    read: common.mustCall()
+    read: common.mustCall(),
   });
 
-  readable.on('data', (data) => {
-    console.log('data emitted', data);
+  readable.on("data", (data) => {
+    console.log("data emitted", data);
   });
 
-  readable.on('end', common.mustCall());
+  readable.on("end", common.mustCall());
 
   setImmediate(() => {
-    readable.push('aaa');
+    readable.push("aaa");
     readable.push(null);
   });
 }

@@ -1,19 +1,19 @@
-'use strict';
+"use strict";
 
 // Flags: --experimental-vm-modules
 
-const common = require('../common');
+const common = require("../common");
 
-const assert = require('assert');
+const assert = require("assert");
 
-const { SourceTextModule } = require('vm');
+const { SourceTextModule } = require("vm");
 
 const finished = common.mustCall();
 
 (async function main() {
   {
     globalThis.count = 0;
-    const m = new SourceTextModule('count += 1;');
+    const m = new SourceTextModule("count += 1;");
     await m.link(common.mustNotCall());
     assert.strictEqual(await m.evaluate(), undefined);
     assert.strictEqual(globalThis.count, 1);
@@ -25,7 +25,7 @@ const finished = common.mustCall();
   }
 
   {
-    const m = new SourceTextModule('throw new Error()');
+    const m = new SourceTextModule("throw new Error()");
     await m.link(common.mustNotCall());
 
     let threw = false;

@@ -1,8 +1,9 @@
-'use strict';
-const common = require('../common');
-const { Worker } = require('worker_threads');
+"use strict";
+const common = require("../common");
+const { Worker } = require("worker_threads");
 
-const w = new Worker(`
+const w = new Worker(
+  `
 const { createHook } = require('async_hooks');
 
 setImmediate(async () => {
@@ -10,6 +11,8 @@ setImmediate(async () => {
   await 0;
   process.exit();
 });
-`, { eval: true });
+`,
+  { eval: true },
+);
 
-w.on('exit', common.mustCall());
+w.on("exit", common.mustCall());

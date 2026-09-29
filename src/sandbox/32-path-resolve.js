@@ -10,14 +10,11 @@ globalThis.__filename = "";
 globalThis.__dirname = "";
 */
 
-
-
-   // Track pending module imports
+// Track pending module imports
 const pendingModules = new Map();
 
- 
 function waitForAllModules() {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const check = () => {
       if (pendingModules.size === 0) {
         resolve();
@@ -29,12 +26,4 @@ function waitForAllModules() {
   });
 }
 
-
-
-    
-
-
 const startTime = performance.now();
-
-
-

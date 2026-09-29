@@ -19,27 +19,38 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 
 // Trivial test of fs.readFile on an empty file.
-const common = require('../common');
-const fs = require('fs');
-const assert = require('assert');
-const fixtures = require('../common/fixtures');
+const common = require("../common");
+const fs = require("fs");
+const assert = require("assert");
+const fixtures = require("../common/fixtures");
 
-const fn = fixtures.path('empty.txt');
+const fn = fixtures.path("empty.txt");
 
-fs.readFile(fn, common.mustCall((err, data) => {
-  assert.ok(data);
-}));
+fs.readFile(
+  fn,
+  common.mustCall((err, data) => {
+    assert.ok(data);
+  }),
+);
 
-fs.readFile(fn, 'utf8', common.mustCall((err, data) => {
-  assert.strictEqual(data, '');
-}));
+fs.readFile(
+  fn,
+  "utf8",
+  common.mustCall((err, data) => {
+    assert.strictEqual(data, "");
+  }),
+);
 
-fs.readFile(fn, { encoding: 'utf8' }, common.mustCall((err, data) => {
-  assert.strictEqual(data, '');
-}));
+fs.readFile(
+  fn,
+  { encoding: "utf8" },
+  common.mustCall((err, data) => {
+    assert.strictEqual(data, "");
+  }),
+);
 
 assert.ok(fs.readFileSync(fn));
-assert.strictEqual(fs.readFileSync(fn, 'utf8'), '');
+assert.strictEqual(fs.readFileSync(fn, "utf8"), "");

@@ -1,22 +1,18 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
 // Coverage tests for broadcast.js: signal abort on pending write,
 // sync iterable from, ringbuffer grow.
 
-const common = require('../common');
-const assert = require('assert');
-const {
-  broadcast,
-  Broadcast,
-  text,
-} = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { broadcast, Broadcast, text } = require("stream/iter");
 
 // Signal abort on pending write (covers wireBroadcastWriteSignal + removeAt)
 async function testBroadcastWriteAbort() {
   const { writer, broadcast: bc } = broadcast({
     budget: 16384,
-    backpressure: 'unbounded',
+    backpressure: "unbounded",
   });
   const consumer = bc.push();
 
@@ -25,13 +21,14 @@ async function testBroadcastWriteAbort() {
 
   // Next write will block — pass a signal
   const ac = new AbortController();
-  const writePromise = writer.write(new Uint8Array(16384).fill(2),
-                                    { signal: ac.signal });
+  const writePromise = writer.write(new Uint8Array(16384).fill(2), {
+    signal: ac.signal,
+  });
 
   // Abort the signal
   ac.abort();
 
-  await assert.rejects(writePromise, { name: 'AbortError' });
+  await assert.rejects(writePromise, { name: "AbortError" });
 
   // Clean up
   writer.endSync();
@@ -63,13 +60,13 @@ async function testBroadcastFromSyncIterable() {
 // Broadcast.from with sync iterable — string chunks
 async function testBroadcastFromSyncIterableStrings() {
   function* source() {
-    yield 'hello';
-    yield ' world';
+    yield "hello";
+    yield " world";
   }
   const { broadcast: bc } = Broadcast.from(source());
   const consumer = bc.push();
   const result = await text(consumer);
-  assert.strictEqual(result, 'hello world');
+  assert.strictEqual(result, "hello world");
 }
 
 // Ringbuffer grow — push > 16 items without consumer draining
@@ -120,7 +117,7 @@ async function testFanOutMinCursorTrimming() {
 
 // Broadcast drainableProtocol after close returns null
 async function testDrainableAfterClose() {
-  const { drainableProtocol } = require('stream/iter');
+  const { drainableProtocol } = require("stream/iter");
   const { writer } = broadcast();
   writer.endSync();
   const result = writer[drainableProtocol]();

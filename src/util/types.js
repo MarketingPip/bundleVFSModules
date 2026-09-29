@@ -53,13 +53,13 @@ function getTag(v) {
   try {
     return objectToString.call(v);
   } catch {
-    return '';
+    return "";
   }
 }
 
 /** @param {unknown} v @returns {boolean} */
 function isObjectLike(v) {
-  return v !== null && (typeof v === 'object' || typeof v === 'function');
+  return v !== null && (typeof v === "object" || typeof v === "function");
 }
 
 // ─── ArrayBuffers ───────────────────────────────────────────────────────────
@@ -69,11 +69,11 @@ function isObjectLike(v) {
 
 const arrayBufferByteLength = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
-  'byteLength',
+  "byteLength",
 ).get;
 const sharedArrayBufferByteLength =
-  typeof SharedArrayBuffer === 'function'
-    ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength')
+  typeof SharedArrayBuffer === "function"
+    ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, "byteLength")
         .get
     : null;
 
@@ -126,32 +126,32 @@ export function isArrayBufferView(v) {
 const typedArrayProto = Object.getPrototypeOf(Uint8Array.prototype);
 const typedArrayLength = Object.getOwnPropertyDescriptor(
   typedArrayProto,
-  'length',
+  "length",
 ).get;
 const typedArrayByteLength = Object.getOwnPropertyDescriptor(
   typedArrayProto,
-  'byteLength',
+  "byteLength",
 ).get;
 
 const KIND_BY_PROTO = new Map();
 const KIND_NAMES = new Set();
 const BYTES_PER_ELEMENT = new Map();
 for (const name of [
-  'Int8Array',
-  'Uint8Array',
-  'Uint8ClampedArray',
-  'Int16Array',
-  'Uint16Array',
-  'Int32Array',
-  'Uint32Array',
-  'Float16Array',
-  'Float32Array',
-  'Float64Array',
-  'BigInt64Array',
-  'BigUint64Array',
+  "Int8Array",
+  "Uint8Array",
+  "Uint8ClampedArray",
+  "Int16Array",
+  "Uint16Array",
+  "Int32Array",
+  "Uint32Array",
+  "Float16Array",
+  "Float32Array",
+  "Float64Array",
+  "BigInt64Array",
+  "BigUint64Array",
 ]) {
   const Ctor = globalThis[name];
-  if (typeof Ctor === 'function') {
+  if (typeof Ctor === "function") {
     KIND_BY_PROTO.set(Ctor.prototype, name);
     KIND_NAMES.add(name);
     BYTES_PER_ELEMENT.set(name, Ctor.BYTES_PER_ELEMENT);
@@ -221,7 +221,7 @@ function typedArrayKind(v) {
     // re-materialise via structuredClone, whose result carries the true kind
     // on a freshly minted (hence genuine) prototype. Identified by
     // constructor NAME, not identity — see isNativeError.
-    if (typeof structuredClone === 'function') {
+    if (typeof structuredClone === "function") {
       try {
         const p = Object.getPrototypeOf(structuredClone(v));
         const n = p?.constructor?.name;
@@ -242,62 +242,62 @@ export function isTypedArray(v) {
 
 /** @param {unknown} v @returns {boolean} */
 export function isUint8Array(v) {
-  return typedArrayKind(v) === 'Uint8Array';
+  return typedArrayKind(v) === "Uint8Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isUint8ClampedArray(v) {
-  return typedArrayKind(v) === 'Uint8ClampedArray';
+  return typedArrayKind(v) === "Uint8ClampedArray";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isUint16Array(v) {
-  return typedArrayKind(v) === 'Uint16Array';
+  return typedArrayKind(v) === "Uint16Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isUint32Array(v) {
-  return typedArrayKind(v) === 'Uint32Array';
+  return typedArrayKind(v) === "Uint32Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isInt8Array(v) {
-  return typedArrayKind(v) === 'Int8Array';
+  return typedArrayKind(v) === "Int8Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isInt16Array(v) {
-  return typedArrayKind(v) === 'Int16Array';
+  return typedArrayKind(v) === "Int16Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isInt32Array(v) {
-  return typedArrayKind(v) === 'Int32Array';
+  return typedArrayKind(v) === "Int32Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isFloat16Array(v) {
-  return typedArrayKind(v) === 'Float16Array';
+  return typedArrayKind(v) === "Float16Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isFloat32Array(v) {
-  return typedArrayKind(v) === 'Float32Array';
+  return typedArrayKind(v) === "Float32Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isFloat64Array(v) {
-  return typedArrayKind(v) === 'Float64Array';
+  return typedArrayKind(v) === "Float64Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isBigInt64Array(v) {
-  return typedArrayKind(v) === 'BigInt64Array';
+  return typedArrayKind(v) === "BigInt64Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isBigUint64Array(v) {
-  return typedArrayKind(v) === 'BigUint64Array';
+  return typedArrayKind(v) === "BigUint64Array";
 }
 
 /** @param {unknown} v @returns {boolean} */
@@ -368,7 +368,7 @@ export function isMapIterator(v) {
   } catch {
     return false;
   }
-  return getTag(v) === '[object Map Iterator]';
+  return getTag(v) === "[object Map Iterator]";
 }
 
 /** @param {unknown} v @returns {boolean} */
@@ -379,7 +379,7 @@ export function isSetIterator(v) {
   } catch {
     return false;
   }
-  return getTag(v) === '[object Set Iterator]';
+  return getTag(v) === "[object Set Iterator]";
 }
 
 // ─── Boxed primitives ───────────────────────────────────────────────────────
@@ -453,7 +453,7 @@ export function isBoxedPrimitive(v) {
 
 const regexpSourceGetter = Object.getOwnPropertyDescriptor(
   RegExp.prototype,
-  'source',
+  "source",
 ).get;
 
 /** @param {unknown} v @returns {boolean} */
@@ -482,18 +482,24 @@ export function isRegExp(v) {
 
 /** @param {unknown} v @returns {boolean} */
 export function isAsyncFunction(v) {
-  if (typeof v !== 'function') return false;
+  if (typeof v !== "function") return false;
   const tag = getTag(v);
   // Node also reports true for async generator functions.
-  return tag === '[object AsyncFunction]' || tag === '[object AsyncGeneratorFunction]';
+  return (
+    tag === "[object AsyncFunction]" ||
+    tag === "[object AsyncGeneratorFunction]"
+  );
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isGeneratorFunction(v) {
-  if (typeof v !== 'function') return false;
+  if (typeof v !== "function") return false;
   const tag = getTag(v);
   // Node also reports true for async generator functions.
-  return tag === '[object GeneratorFunction]' || tag === '[object AsyncGeneratorFunction]';
+  return (
+    tag === "[object GeneratorFunction]" ||
+    tag === "[object AsyncGeneratorFunction]"
+  );
 }
 
 /** @param {unknown} v @returns {boolean} */
@@ -501,7 +507,7 @@ export function isGeneratorObject(v) {
   if (!isObjectLike(v)) return false;
   const tag = getTag(v);
   // Node also reports true for async generator objects.
-  return tag === '[object Generator]' || tag === '[object AsyncGenerator]';
+  return tag === "[object Generator]" || tag === "[object AsyncGenerator]";
 }
 
 /** @param {unknown} v @returns {boolean} */
@@ -510,7 +516,7 @@ export function isPromise(v) {
     if (!isObjectLike(v)) return false;
     if (v instanceof Promise) return true;
     // Cross-realm promise: the tag is driven by the internal slot.
-    return getTag(v) === '[object Promise]' && typeof v.then === 'function';
+    return getTag(v) === "[object Promise]" && typeof v.then === "function";
   } catch {
     return false;
   }
@@ -527,8 +533,8 @@ export function isNativeError(v) {
     if (!isObjectLike(v)) return false;
     const tag = getTag(v);
     const looksErr =
-      tag === '[object Error]' || tag === '[object DOMException]';
-    if (typeof structuredClone === 'function') {
+      tag === "[object Error]" || tag === "[object DOMException]";
+    if (typeof structuredClone === "function") {
       // structuredClone preserves V8's internal error brand (survives
       // prototype swaps; lost through proxies) while reducing fakes and
       // tag-forgeries to plain objects. Note: `instanceof Error` alone is
@@ -551,7 +557,7 @@ export function isNativeError(v) {
         p = Object.getPrototypeOf(p)
       ) {
         const n = p.constructor?.name;
-        if (n === 'Error' || n === 'DOMException') return true;
+        if (n === "Error" || n === "DOMException") return true;
       }
       return false;
     }
@@ -560,7 +566,7 @@ export function isNativeError(v) {
     return (
       looksErr &&
       (v instanceof Error ||
-        (typeof DOMException !== 'undefined' && v instanceof DOMException))
+        (typeof DOMException !== "undefined" && v instanceof DOMException))
     );
   } catch {
     return false;
@@ -571,23 +577,23 @@ export function isNativeError(v) {
 
 /** @param {unknown} v @returns {boolean} */
 export function isArgumentsObject(v) {
-  return isObjectLike(v) && getTag(v) === '[object Arguments]';
+  return isObjectLike(v) && getTag(v) === "[object Arguments]";
 }
 
 /** @param {unknown} v @returns {boolean} */
 export function isModuleNamespaceObject(v) {
-  return isObjectLike(v) && getTag(v) === '[object Module]';
+  return isObjectLike(v) && getTag(v) === "[object Module]";
 }
 
 // WebIDL 'type' getter brand-checks genuine CryptoKeys (cross-realm safe).
 const cryptoKeyTypeGetter =
-  typeof CryptoKey !== 'undefined'
-    ? Object.getOwnPropertyDescriptor(CryptoKey.prototype, 'type')?.get
+  typeof CryptoKey !== "undefined"
+    ? Object.getOwnPropertyDescriptor(CryptoKey.prototype, "type")?.get
     : undefined;
 
 /** @param {unknown} v @returns {boolean} */
 export function isCryptoKey(v) {
-  if (!isObjectLike(v) || typeof cryptoKeyTypeGetter !== 'function') {
+  if (!isObjectLike(v) || typeof cryptoKeyTypeGetter !== "function") {
     return false;
   }
   try {

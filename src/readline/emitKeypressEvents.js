@@ -10,14 +10,14 @@
  *   characters manually (e.g. from a WebSocket or a custom input handler).
  */
 
-import { StringDecoder } from 'string_decoder';
-import { CSI, charLengthAt, emitKeys } from './utils.js';
-import { kSawKeyPress } from './interface.js';
+import { StringDecoder } from "string_decoder";
+import { CSI, charLengthAt, emitKeys } from "./utils.js";
+import { kSawKeyPress } from "./interface.js";
 
 const { kEscape } = CSI;
 
-const KEYPRESS_DECODER = Symbol('keypress-decoder');
-const ESCAPE_DECODER   = Symbol('escape-decoder');
+const KEYPRESS_DECODER = Symbol("keypress-decoder");
+const ESCAPE_DECODER = Symbol("escape-decoder");
 
 // GNU readline default: 500 ms
 const ESCAPE_CODE_TIMEOUT = 500;
@@ -34,17 +34,17 @@ function emitKeypressEvents(stream, iface = {}) {
   // Idempotent: only install once per stream.
   if (stream[KEYPRESS_DECODER]) return;
 
-  stream[KEYPRESS_DECODER] = new StringDecoder('utf8');
-  stream[ESCAPE_DECODER]   = emitKeys(stream);
+  stream[KEYPRESS_DECODER] = new StringDecoder("utf8");
+  stream[ESCAPE_DECODER] = emitKeys(stream);
   stream[ESCAPE_DECODER].next(); // prime the generator
 
   const { escapeCodeTimeout = ESCAPE_CODE_TIMEOUT } = iface;
   let timeoutId;
 
-  const triggerEscape = () => stream[ESCAPE_DECODER].next('');
+  const triggerEscape = () => stream[ESCAPE_DECODER].next("");
 
   function onData(input) {
-    if (stream.listenerCount('keypress') > 0) {
+    if (stream.listenerCount("keypress") > 0) {
       const string = stream[KEYPRESS_DECODER].write(input);
       if (string) {
         globalThis.clearTimeout(timeoutId);
@@ -55,7 +55,8 @@ function emitKeypressEvents(stream, iface = {}) {
         iface.isCompletionEnabled = false;
 
         let length = 0;
-        for (const character of string) {         // iterates Unicode code points
+        for (const character of string) {
+          // iterates Unicode code points
           length += character.length;
           if (length === string.length) iface.isCompletionEnabled = true;
 
@@ -63,7 +64,10 @@ function emitKeypressEvents(stream, iface = {}) {
             stream[ESCAPE_DECODER].next(character);
             // If the last character is ESC, start the escape-code timeout window
             if (length === string.length && character === kEscape) {
-              timeoutId = globalThis.setTimeout(triggerEscape, escapeCodeTimeout);
+              timeoutId = globalThis.setTimeout(
+                triggerEscape,
+                escapeCodeTimeout,
+              );
             }
           } catch (err) {
             // If the generator throws (e.g. re-thrown from a keypress listener),
@@ -76,22 +80,22 @@ function emitKeypressEvents(stream, iface = {}) {
       }
     } else {
       // No listeners — stop processing until someone subscribes again.
-      stream.removeListener('data', onData);
-      stream.on('newListener', onNewListener);
+      stream.removeListener("data", onData);
+      stream.on("newListener", onNewListener);
     }
   }
 
   function onNewListener(event) {
-    if (event === 'keypress') {
-      stream.on('data', onData);
-      stream.removeListener('newListener', onNewListener);
+    if (event === "keypress") {
+      stream.on("data", onData);
+      stream.removeListener("newListener", onNewListener);
     }
   }
 
-  if (stream.listenerCount('keypress') > 0) {
-    stream.on('data', onData);
+  if (stream.listenerCount("keypress") > 0) {
+    stream.on("data", onData);
   } else {
-    stream.on('newListener', onNewListener);
+    stream.on("newListener", onNewListener);
   }
 }
 

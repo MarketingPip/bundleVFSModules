@@ -1,18 +1,18 @@
-'use strict';
-require('../common');
+"use strict";
+require("../common");
 
 // This test ensures that Node.js doesn't crash because of a TypeError by
 // checking in `connectionListener` that the socket still has the parser.
 // https://github.com/nodejs/node/issues/3508
 
-const http = require('http');
-const net = require('net');
+const http = require("http");
+const net = require("net");
 
 let once = false;
 let first = null;
 let second = null;
 
-const chunk = Buffer.alloc(1024, 'X');
+const chunk = Buffer.alloc(1024, "X");
 
 let size = 0;
 
@@ -41,21 +41,21 @@ const server = http
     }
     done();
   })
-  .on('upgrade', (req, socket) => {
+  .on("upgrade", (req, socket) => {
     second.end(chunk, () => {
       socket.end();
     });
-    first.end('hello');
+    first.end("hello");
   })
   .listen(0, () => {
     const s = net.connect(server.address().port);
     more = () => {
-      s.write('GET / HTTP/1.1\r\nHost: example.com\r\n\r\n');
+      s.write("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n");
     };
     done = () => {
       s.write(
-        'GET / HTTP/1.1\r\n\r\n' +
-          'GET / HTTP/1.1\r\nConnection: upgrade\r\nUpgrade: ws\r\n\r\naaa'
+        "GET / HTTP/1.1\r\n\r\n" +
+          "GET / HTTP/1.1\r\nConnection: upgrade\r\nUpgrade: ws\r\n\r\naaa",
       );
     };
     more();

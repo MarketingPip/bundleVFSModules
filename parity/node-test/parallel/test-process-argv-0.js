@@ -19,22 +19,22 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const path = require('path');
-const assert = require('assert');
-const spawn = require('child_process').spawn;
+"use strict";
+require("../common");
+const path = require("path");
+const assert = require("assert");
+const spawn = require("child_process").spawn;
 
-if (process.argv[2] !== 'child') {
-  const child = spawn(process.execPath, [__filename, 'child'], {
-    cwd: path.dirname(process.execPath)
+if (process.argv[2] !== "child") {
+  const child = spawn(process.execPath, [__filename, "child"], {
+    cwd: path.dirname(process.execPath),
   });
 
-  let childArgv0 = '';
-  child.stdout.on('data', function(chunk) {
+  let childArgv0 = "";
+  child.stdout.on("data", function (chunk) {
     childArgv0 += chunk;
   });
-  process.on('exit', function() {
+  process.on("exit", function () {
     assert.strictEqual(childArgv0, process.execPath);
   });
 } else {

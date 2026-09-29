@@ -9,15 +9,15 @@
  * overwrites local copies that differ. Files that don't exist at the ref
  * are reported and left untouched. No GitHub token needed (public repo).
  */
-import { readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = join(fileURLToPath(import.meta.url), '..', 'node-test');
-const REF = process.argv[2] || 'v24.20.0';
+const ROOT = join(fileURLToPath(import.meta.url), "..", "node-test");
+const REF = process.argv[2] || "v24.20.0";
 const BASE_URL = `https://raw.githubusercontent.com/nodejs/node/${REF}/test`;
 // Files we own (not vendored from nodejs/node), keyed by path relative to node-test/.
-const OWNED = new Set(['package.json']);
+const OWNED = new Set(["package.json"]);
 
 function walk(dir) {
   const out = [];
@@ -29,9 +29,11 @@ function walk(dir) {
   return out;
 }
 
-let updated = 0, identical = 0, missing = 0;
+let updated = 0,
+  identical = 0,
+  missing = 0;
 for (const local of walk(ROOT)) {
-  const repoPath = relative(ROOT, local).split(sep).join('/');
+  const repoPath = relative(ROOT, local).split(sep).join("/");
   if (OWNED.has(repoPath)) continue; // our own file, not vendored
   const url = `${BASE_URL}/${repoPath}`;
   const res = await fetch(url);
@@ -50,4 +52,6 @@ for (const local of walk(ROOT)) {
     updated++;
   }
 }
-console.log(`\nref ${REF}: ${identical} identical, ${updated} updated, ${missing} missing`);
+console.log(
+  `\nref ${REF}: ${identical} identical, ${updated} updated, ${missing} missing`,
+);

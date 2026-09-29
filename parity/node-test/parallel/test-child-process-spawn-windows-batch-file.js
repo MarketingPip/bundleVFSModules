@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 
 // Node.js on Windows should not be able to spawn batch files directly,
 // only when the 'shell' option is set. An undocumented feature of the
@@ -14,24 +14,28 @@
 //
 // exec() and execSync() are unchanged.
 
-const common = require('../common');
-const cp = require('child_process');
-const assert = require('assert');
+const common = require("../common");
+const cp = require("child_process");
+const assert = require("assert");
 const { isWindows } = common;
 
-const expectedCode = isWindows ? 'EINVAL' : 'ENOENT';
+const expectedCode = isWindows ? "EINVAL" : "ENOENT";
 const expectedStatus = isWindows ? 1 : 127;
 
 const suffixes =
-    'BAT|bAT|BaT|baT|BAt|bAt|Bat|bat|CMD|cMD|CmD|cmD|CMd|cMd|Cmd|cmd|cmd |cmd .|cmd ....'
-    .split('|');
+  "BAT|bAT|BaT|baT|BAt|bAt|Bat|bat|CMD|cMD|CmD|cmD|CMd|cMd|Cmd|cmd|cmd |cmd .|cmd ....".split(
+    "|",
+  );
 
 function testExec(filename) {
   return new Promise((resolve) => {
-    cp.exec(filename).once('exit', common.mustCall(function(status) {
-      assert.strictEqual(status, expectedStatus);
-      resolve();
-    }));
+    cp.exec(filename).once(
+      "exit",
+      common.mustCall(function (status) {
+        assert.strictEqual(status, expectedStatus);
+        resolve();
+      }),
+    );
   });
 }
 
@@ -48,7 +52,7 @@ function testExecSync(filename) {
 
 function testSpawn(filename, code) {
   // Batch file case is a synchronous error, file-not-found is asynchronous.
-  if (code === 'EINVAL') {
+  if (code === "EINVAL") {
     let e;
     try {
       cp.spawn(filename);
@@ -59,10 +63,13 @@ function testSpawn(filename, code) {
     assert.strictEqual(e.code, code);
   } else {
     return new Promise((resolve) => {
-      cp.spawn(filename).once('error', common.mustCall(function(e) {
-        assert.strictEqual(e.code, code);
-        resolve();
-      }));
+      cp.spawn(filename).once(
+        "error",
+        common.mustCall(function (e) {
+          assert.strictEqual(e.code, code);
+          resolve();
+        }),
+      );
     });
   }
 }
@@ -78,18 +85,20 @@ function testSpawnSync(filename, code) {
   }
 }
 
-testExecSync('./nosuchdir/nosuchfile');
-testSpawnSync('./nosuchdir/nosuchfile', 'ENOENT');
+testExecSync("./nosuchdir/nosuchfile");
+testSpawnSync("./nosuchdir/nosuchfile", "ENOENT");
 for (const suffix of suffixes) {
   testExecSync(`./nosuchdir/nosuchfile.${suffix}`);
   testSpawnSync(`./nosuchdir/nosuchfile.${suffix}`, expectedCode);
 }
 
-go().catch((ex) => { throw ex; });
+go().catch((ex) => {
+  throw ex;
+});
 
 async function go() {
-  await testExec('./nosuchdir/nosuchfile');
-  await testSpawn('./nosuchdir/nosuchfile', 'ENOENT');
+  await testExec("./nosuchdir/nosuchfile");
+  await testSpawn("./nosuchdir/nosuchfile", "ENOENT");
   for (const suffix of suffixes) {
     await testExec(`./nosuchdir/nosuchfile.${suffix}`);
     await testSpawn(`./nosuchdir/nosuchfile.${suffix}`, expectedCode);

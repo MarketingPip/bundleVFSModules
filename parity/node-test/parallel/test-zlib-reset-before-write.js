@@ -1,7 +1,7 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const zlib = require('zlib');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const zlib = require("zlib");
 
 // Tests that zlib streams support .reset() and .params()
 // before the first write. That is important to ensure that
@@ -21,14 +21,18 @@ for (const fn of [
 
   const output = [];
   inflate
-    .on('error', common.mustNotCall())
-    .on('data', (chunk) => output.push(chunk))
-    .on('end', common.mustCall(
-      () => assert.strictEqual(Buffer.concat(output).toString(), 'abc')));
+    .on("error", common.mustNotCall())
+    .on("data", (chunk) => output.push(chunk))
+    .on(
+      "end",
+      common.mustCall(() =>
+        assert.strictEqual(Buffer.concat(output).toString(), "abc"),
+      ),
+    );
 
   fn(deflate, () => {
     fn(inflate, () => {
-      deflate.write('abc');
+      deflate.write("abc");
       deflate.end();
     });
   });

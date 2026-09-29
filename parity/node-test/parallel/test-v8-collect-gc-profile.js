@@ -1,7 +1,7 @@
 // Flags: --expose-gc
-'use strict';
-require('../common');
-const { testGCProfiler } = require('../common/v8');
+"use strict";
+require("../common");
+const { testGCProfiler } = require("../common/v8");
 
 testGCProfiler();
 

@@ -1,11 +1,11 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const repl = require('repl');
-const { startNewREPLServer } = require('../common/repl');
+const common = require("../common");
+const assert = require("assert");
+const repl = require("repl");
+const { startNewREPLServer } = require("../common/repl");
 
-const testingReplPrompt = '_REPL_TESTING_PROMPT_>';
+const testingReplPrompt = "_REPL_TESTING_PROMPT_>";
 
 testSloppyMode();
 testStrictMode();
@@ -34,18 +34,18 @@ function testSloppyMode() {
           `);
 
   assertOutput(output, [
-    'undefined',
-    'undefined',
-    'undefined',
-    '10',
-    '10',
-    'Expression assignment to _ now disabled.',
-    '20',
-    '20',
-    '30',
-    '30',
-    '40',
-    '30',
+    "undefined",
+    "undefined",
+    "undefined",
+    "10",
+    "10",
+    "Expression assignment to _ now disabled.",
+    "20",
+    "20",
+    "30",
+    "30",
+    "40",
+    "30",
   ]);
 }
 
@@ -70,18 +70,18 @@ function testStrictMode() {
           `);
 
   assertOutput(output, [
-    'undefined',
-    'undefined',
-    'undefined',
-    'undefined',
-    '20',
-    '30',
-    '30',
-    'undefined',
-    '30',
-    'undefined',
-    'undefined',
-    '30',
+    "undefined",
+    "undefined",
+    "undefined",
+    "undefined",
+    "20",
+    "30",
+    "30",
+    "undefined",
+    "30",
+    "undefined",
+    "undefined",
+    "30",
   ]);
 }
 
@@ -99,13 +99,13 @@ function testResetContext() {
           `);
 
   assertOutput(output, [
-    'Expression assignment to _ now disabled.',
-    '10',
-    '10',
-    'Clearing context...',
-    '10',
-    '20',
-    '20',
+    "Expression assignment to _ now disabled.",
+    "10",
+    "10",
+    "Clearing context...",
+    "10",
+    "20",
+    "20",
   ]);
 }
 
@@ -122,10 +122,10 @@ function testResetContextGlobal() {
           `);
 
   assertOutput(output, [
-    'Expression assignment to _ now disabled.',
-    '10',
-    '10',
-    '10',
+    "Expression assignment to _ now disabled.",
+    "10",
+    "10",
+    "10",
   ]);
 
   // Delete globals leaked by REPL when `useGlobal` is `true`
@@ -134,13 +134,16 @@ function testResetContextGlobal() {
 }
 
 function testError() {
-  const { replServer, output } = startNewREPLServer({
-    prompt: testingReplPrompt,
-    replMode: repl.REPL_MODE_STRICT,
-    preview: false,
-  }, {
-    disableDomainErrorAssert: true
-  });
+  const { replServer, output } = startNewREPLServer(
+    {
+      prompt: testingReplPrompt,
+      replMode: repl.REPL_MODE_STRICT,
+      preview: false,
+    },
+    {
+      disableDomainErrorAssert: true,
+    },
+  );
 
   replServer.write(`_error;                                // initial value undefined
            throw new Error('foo');                // throws error
@@ -152,63 +155,71 @@ function testError() {
                                                   // throws error, async
            `);
 
-  setImmediate(common.mustCall(() => {
-    const lines = output.accumulator.trim().split('\n').filter(
-      (line) => !line.includes(testingReplPrompt) || line.includes('Uncaught Error')
-    );
-    const expectedLines = [
-      'undefined',
+  setImmediate(
+    common.mustCall(() => {
+      const lines = output.accumulator
+        .trim()
+        .split("\n")
+        .filter(
+          (line) =>
+            !line.includes(testingReplPrompt) ||
+            line.includes("Uncaught Error"),
+        );
+      const expectedLines = [
+        "undefined",
 
-      // The error, both from the original throw and the `_error` echo.
-      'Uncaught Error: foo',
-      '[Error: foo]',
+        // The error, both from the original throw and the `_error` echo.
+        "Uncaught Error: foo",
+        "[Error: foo]",
 
-      // The sync error, with individual property echoes
-      /^Uncaught Error: ENOENT: no such file or directory, scandir '.*nonexistent\?'/,
-      /Object\.readdirSync/,
-      /^ {2}errno: -(2|4058),$/,
-      "  code: 'ENOENT',",
-      "  syscall: 'scandir',",
-      /^ {2}path: '*'/,
-      '}',
-      "'ENOENT'",
-      "'scandir'",
+        // The sync error, with individual property echoes
+        /^Uncaught Error: ENOENT: no such file or directory, scandir '.*nonexistent\?'/,
+        /Object\.readdirSync/,
+        /^ {2}errno: -(2|4058),$/,
+        "  code: 'ENOENT',",
+        "  syscall: 'scandir',",
+        /^ {2}path: '*'/,
+        "}",
+        "'ENOENT'",
+        "'scandir'",
 
-      // Dummy 'undefined' from the explicit silencer + one from the comment
-      'undefined',
-      'undefined',
+        // Dummy 'undefined' from the explicit silencer + one from the comment
+        "undefined",
+        "undefined",
 
-      // The message from the original throw
-      /Uncaught Error: baz/,
-    ];
-    for (const line of lines) {
-      const expected = expectedLines.shift();
-      if (typeof expected === 'string')
-        assert.strictEqual(line, expected);
-      else
-        assert.match(line, expected);
-    }
-    assert.strictEqual(expectedLines.length, 0);
+        // The message from the original throw
+        /Uncaught Error: baz/,
+      ];
+      for (const line of lines) {
+        const expected = expectedLines.shift();
+        if (typeof expected === "string") assert.strictEqual(line, expected);
+        else assert.match(line, expected);
+      }
+      assert.strictEqual(expectedLines.length, 0);
 
-    // Reset output, check that '_error' is the asynchronously caught error.
-    output.accumulator = '';
-    replServer.write(`_error.message                 // show the message
+      // Reset output, check that '_error' is the asynchronously caught error.
+      output.accumulator = "";
+      replServer.write(`_error.message                 // show the message
              _error = 0;                    // disable auto-assignment
              throw new Error('quux');       // new error
              _error;                        // should not see the new error
              `);
 
-    assertOutput(output, [
-      "'baz'",
-      'Expression assignment to _error now disabled.',
-      '0',
-      'Uncaught Error: quux',
-      '0',
-    ]);
-  }));
+      assertOutput(output, [
+        "'baz'",
+        "Expression assignment to _error now disabled.",
+        "0",
+        "Uncaught Error: quux",
+        "0",
+      ]);
+    }),
+  );
 }
 
 function assertOutput(output, expected) {
-  const lines = output.accumulator.trim().split('\n').filter((line) => !line.includes(testingReplPrompt));
+  const lines = output.accumulator
+    .trim()
+    .split("\n")
+    .filter((line) => !line.includes(testingReplPrompt));
   assert.deepStrictEqual(lines, expected);
 }

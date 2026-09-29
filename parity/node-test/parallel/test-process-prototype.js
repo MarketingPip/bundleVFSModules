@@ -1,14 +1,14 @@
-'use strict';
-require('../common');
-const assert = require('assert');
-const EventEmitter = require('events');
+"use strict";
+require("../common");
+const assert = require("assert");
+const EventEmitter = require("events");
 
 const proto = Object.getPrototypeOf(process);
 
 assert(process instanceof process.constructor);
 assert(proto instanceof EventEmitter);
 
-const desc = Object.getOwnPropertyDescriptor(proto, 'constructor');
+const desc = Object.getOwnPropertyDescriptor(proto, "constructor");
 
 assert.strictEqual(desc.value, process.constructor);
 assert.strictEqual(desc.writable, true);

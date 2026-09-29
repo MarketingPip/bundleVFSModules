@@ -19,20 +19,19 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
-const fixtures = require('../common/fixtures');
+"use strict";
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
+const fixtures = require("../common/fixtures");
 
-const assert = require('assert');
-const https = require('https');
-const url = require('url');
+const assert = require("assert");
+const https = require("https");
+const url = require("url");
 
 // https options
 const httpsOptions = {
-  key: fixtures.readKey('agent1-key.pem'),
-  cert: fixtures.readKey('agent1-cert.pem')
+  key: fixtures.readKey("agent1-key.pem"),
+  cert: fixtures.readKey("agent1-cert.pem"),
 };
 
 function check(request) {
@@ -40,22 +39,25 @@ function check(request) {
   assert.ok(request.socket._secureEstablished);
 }
 
-const server = https.createServer(httpsOptions, function(request, response) {
+const server = https.createServer(httpsOptions, function (request, response) {
   // Run the check function
   check(request);
   response.writeHead(200, {});
-  response.end('ok');
+  response.end("ok");
   server.close();
 });
 
-server.listen(0, common.mustCall(function() {
-  const testURL = url.parse(`https://localhost:${this.address().port}`);
-  testURL.rejectUnauthorized = false;
+server.listen(
+  0,
+  common.mustCall(function () {
+    const testURL = url.parse(`https://localhost:${this.address().port}`);
+    testURL.rejectUnauthorized = false;
 
-  // make the request
-  const clientRequest = https.request(testURL);
-  // Since there is a little magic with the agent
-  // make sure that the request uses the https.Agent
-  assert.ok(clientRequest.agent instanceof https.Agent);
-  clientRequest.end();
-}));
+    // make the request
+    const clientRequest = https.request(testURL);
+    // Since there is a little magic with the agent
+    // make sure that the request uses the https.Agent
+    assert.ok(clientRequest.agent instanceof https.Agent);
+    clientRequest.end();
+  }),
+);

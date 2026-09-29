@@ -3,11 +3,11 @@
 // when declaring new variables with `var`. The other rules (strict, no-var, no-delete-var) have been disabled
 // in order to be able to test this specific not-strict case playing with `var` and `delete`.
 // Related to bug report: https://github.com/nodejs/node/issues/43129
-var assert = require('assert');
-var vm = require('vm');
+var assert = require("assert");
+var vm = require("vm");
 
 var data = [];
-var a = 'direct';
+var a = "direct";
 delete a;
 data.push(a);
 
@@ -28,10 +28,10 @@ var c = "new";
 delete c;
 data.push(c);
 `,
-  vm.createContext({ data: data })
+  vm.createContext({ data: data }),
 );
 
-assert.deepStrictEqual(data, ['direct', 'this', 'new']);
+assert.deepStrictEqual(data, ["direct", "this", "new"]);
 
-assert.strictEqual(typeof unusedB, 'number'); // Declared within runInThisContext
-assert.strictEqual(typeof unusedC, 'undefined'); // Declared within runInContext
+assert.strictEqual(typeof unusedB, "number"); // Declared within runInThisContext
+assert.strictEqual(typeof unusedC, "undefined"); // Declared within runInContext

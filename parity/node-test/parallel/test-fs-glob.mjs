@@ -1,12 +1,19 @@
-import * as common from '../common/index.mjs';
-import tmpdir from '../common/tmpdir.js';
-import { resolve, dirname, sep, relative, join, isAbsolute } from 'node:path';
-import { mkdir, writeFile, symlink, glob as asyncGlob } from 'node:fs/promises';
-import { glob, globSync, Dirent, chmodSync, writeFileSync, rmSync } from 'node:fs';
-import { test, describe } from 'node:test';
-import { pathToFileURL } from 'node:url';
-import { promisify } from 'node:util';
-import assert from 'node:assert';
+import * as common from "../common/index.mjs";
+import tmpdir from "../common/tmpdir.js";
+import { resolve, dirname, sep, relative, join, isAbsolute } from "node:path";
+import { mkdir, writeFile, symlink, glob as asyncGlob } from "node:fs/promises";
+import {
+  glob,
+  globSync,
+  Dirent,
+  chmodSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
+import { test, describe } from "node:test";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
+import assert from "node:assert";
 
 function assertDirents(dirents) {
   assert.ok(dirents.every((dirent) => dirent instanceof Dirent));
@@ -14,201 +21,212 @@ function assertDirents(dirents) {
 
 tmpdir.refresh();
 
-const fixtureDir = tmpdir.resolve('fixtures');
-const absDir = tmpdir.resolve('abs');
+const fixtureDir = tmpdir.resolve("fixtures");
+const absDir = tmpdir.resolve("abs");
 
 async function setup() {
   await mkdir(fixtureDir, { recursive: true });
   await mkdir(absDir, { recursive: true });
   const files = [
-    'a/.abcdef/x/y/z/a',
-    'a/abcdef/g/h',
-    'a/abcfed/g/h',
-    'a/b/c/d',
-    'a/bc/e/f',
-    'a/c/d/c/b',
-    'a/cb/e/f',
-    'a/x/.y/b',
-    'a/z/.y/b',
-    'a/.b',
-    'a/b/.b',
+    "a/.abcdef/x/y/z/a",
+    "a/abcdef/g/h",
+    "a/abcfed/g/h",
+    "a/b/c/d",
+    "a/bc/e/f",
+    "a/c/d/c/b",
+    "a/cb/e/f",
+    "a/x/.y/b",
+    "a/z/.y/b",
+    "a/.b",
+    "a/b/.b",
   ].map((f) => resolve(fixtureDir, f));
 
-  const symlinkTo = resolve(fixtureDir, 'a/symlink/a/b/c');
-  const symlinkFrom = '../..';
-  const followTarget = resolve(fixtureDir, 'follow/target');
-  const followLink = resolve(fixtureDir, 'follow/link');
-  const followCycle = resolve(fixtureDir, 'follow/cycle');
+  const symlinkTo = resolve(fixtureDir, "a/symlink/a/b/c");
+  const symlinkFrom = "../..";
+  const followTarget = resolve(fixtureDir, "follow/target");
+  const followLink = resolve(fixtureDir, "follow/link");
+  const followCycle = resolve(fixtureDir, "follow/cycle");
 
   for (const file of files) {
     const f = resolve(fixtureDir, file);
     const d = dirname(f);
     await mkdir(d, { recursive: true });
-    await writeFile(f, 'i like tests');
+    await writeFile(f, "i like tests");
   }
 
   await mkdir(followTarget, { recursive: true });
-  await writeFile(resolve(followTarget, 'file.txt'), 'follow symlinks');
+  await writeFile(resolve(followTarget, "file.txt"), "follow symlinks");
 
   if (!common.isWindows) {
     const d = dirname(symlinkTo);
     await mkdir(d, { recursive: true });
-    await symlink(symlinkFrom, symlinkTo, 'dir');
+    await symlink(symlinkFrom, symlinkTo, "dir");
   }
 
-  const linkType = common.isWindows ? 'junction' : 'dir';
+  const linkType = common.isWindows ? "junction" : "dir";
   await symlink(followTarget, followLink, linkType);
-  await symlink(resolve(fixtureDir, 'follow'), followCycle, linkType);
+  await symlink(resolve(fixtureDir, "follow"), followCycle, linkType);
 
-  await Promise.all(['foo', 'bar', 'baz', 'asdf', 'quux', 'qwer', 'rewq'].map(async function(w) {
-    await mkdir(resolve(absDir, w), { recursive: true });
-  }));
+  await Promise.all(
+    ["foo", "bar", "baz", "asdf", "quux", "qwer", "rewq"].map(
+      async function (w) {
+        await mkdir(resolve(absDir, w), { recursive: true });
+      },
+    ),
+  );
 }
 
 await setup();
 
 const patterns = {
-  'a/c/d/*/b': ['a/c/d/c/b'],
-  'a//c//d//*//b': ['a/c/d/c/b'],
-  'a/*/d/*/b': ['a/c/d/c/b'],
-  'a/*/+(c|g)/./d': ['a/b/c/d'],
-  'a/**/[cg]/../[cg]': [
-    'a/abcdef/g',
-    'a/abcfed/g',
-    'a/b/c',
-    'a/c',
-    'a/c/d/c',
-    common.isWindows ? null : 'a/symlink/a/b/c',
+  "a/c/d/*/b": ["a/c/d/c/b"],
+  "a//c//d//*//b": ["a/c/d/c/b"],
+  "a/*/d/*/b": ["a/c/d/c/b"],
+  "a/*/+(c|g)/./d": ["a/b/c/d"],
+  "a/**/[cg]/../[cg]": [
+    "a/abcdef/g",
+    "a/abcfed/g",
+    "a/b/c",
+    "a/c",
+    "a/c/d/c",
+    common.isWindows ? null : "a/symlink/a/b/c",
   ],
-  'a/{b,c,d,e,f}/**/g': [],
-  'a/b/**': ['a/b', 'a/b/c', 'a/b/c/d'],
-  'a/{b/**,b/c}': ['a/b', 'a/b/c', 'a/b/c/d'],
-  './**/g': ['a/abcdef/g', 'a/abcfed/g'],
-  'a/abc{fed,def}/g/h': ['a/abcdef/g/h', 'a/abcfed/g/h'],
-  'a/abc{fed/g,def}/**/': ['a/abcdef', 'a/abcdef/g', 'a/abcfed/g'],
-  'a/abc{fed/g,def}/**///**/': ['a/abcdef', 'a/abcdef/g', 'a/abcfed/g'],
-  '**/a': common.isWindows ? ['a'] : ['a', 'a/symlink/a'],
-  '**/a/**': [
-    'a',
-    'a/abcdef',
-    'a/abcdef/g',
-    'a/abcdef/g/h',
-    'a/abcfed',
-    'a/abcfed/g',
-    'a/abcfed/g/h',
-    'a/b',
-    'a/b/c',
-    'a/b/c/d',
-    'a/bc',
-    'a/bc/e',
-    'a/bc/e/f',
-    'a/c',
-    'a/c/d',
-    'a/c/d/c',
-    'a/c/d/c/b',
-    'a/cb',
-    'a/cb/e',
-    'a/cb/e/f',
-    ...(common.isWindows ? [] : [
-      'a/symlink',
-      'a/symlink/a',
-      'a/symlink/a/b',
-      'a/symlink/a/b/c',
-    ]),
-    'a/x',
-    'a/z',
+  "a/{b,c,d,e,f}/**/g": [],
+  "a/b/**": ["a/b", "a/b/c", "a/b/c/d"],
+  "a/{b/**,b/c}": ["a/b", "a/b/c", "a/b/c/d"],
+  "./**/g": ["a/abcdef/g", "a/abcfed/g"],
+  "a/abc{fed,def}/g/h": ["a/abcdef/g/h", "a/abcfed/g/h"],
+  "a/abc{fed/g,def}/**/": ["a/abcdef", "a/abcdef/g", "a/abcfed/g"],
+  "a/abc{fed/g,def}/**///**/": ["a/abcdef", "a/abcdef/g", "a/abcfed/g"],
+  "**/a": common.isWindows ? ["a"] : ["a", "a/symlink/a"],
+  "**/a/**": [
+    "a",
+    "a/abcdef",
+    "a/abcdef/g",
+    "a/abcdef/g/h",
+    "a/abcfed",
+    "a/abcfed/g",
+    "a/abcfed/g/h",
+    "a/b",
+    "a/b/c",
+    "a/b/c/d",
+    "a/bc",
+    "a/bc/e",
+    "a/bc/e/f",
+    "a/c",
+    "a/c/d",
+    "a/c/d/c",
+    "a/c/d/c/b",
+    "a/cb",
+    "a/cb/e",
+    "a/cb/e/f",
+    ...(common.isWindows
+      ? []
+      : ["a/symlink", "a/symlink/a", "a/symlink/a/b", "a/symlink/a/b/c"]),
+    "a/x",
+    "a/z",
   ],
-  './**/a': common.isWindows ? ['a'] : ['a', 'a/symlink/a', 'a/symlink/a/b/c/a'],
-  './**/a/**/': [
-    'a',
-    'a/abcdef',
-    'a/abcdef/g',
-    'a/abcfed',
-    'a/abcfed/g',
-    'a/b',
-    'a/b/c',
-    'a/bc',
-    'a/bc/e',
-    'a/c',
-    'a/c/d',
-    'a/c/d/c',
-    'a/cb',
-    'a/cb/e',
-    ...(common.isWindows ? [] : [
-      'a/symlink',
-      'a/symlink/a',
-      'a/symlink/a/b',
-      'a/symlink/a/b/c',
-      'a/symlink/a/b/c/a',
-      'a/symlink/a/b/c/a/b',
-      'a/symlink/a/b/c/a/b/c',
-    ]),
-    'a/x',
-    'a/z',
+  "./**/a": common.isWindows
+    ? ["a"]
+    : ["a", "a/symlink/a", "a/symlink/a/b/c/a"],
+  "./**/a/**/": [
+    "a",
+    "a/abcdef",
+    "a/abcdef/g",
+    "a/abcfed",
+    "a/abcfed/g",
+    "a/b",
+    "a/b/c",
+    "a/bc",
+    "a/bc/e",
+    "a/c",
+    "a/c/d",
+    "a/c/d/c",
+    "a/cb",
+    "a/cb/e",
+    ...(common.isWindows
+      ? []
+      : [
+          "a/symlink",
+          "a/symlink/a",
+          "a/symlink/a/b",
+          "a/symlink/a/b/c",
+          "a/symlink/a/b/c/a",
+          "a/symlink/a/b/c/a/b",
+          "a/symlink/a/b/c/a/b/c",
+        ]),
+    "a/x",
+    "a/z",
   ],
-  './**/a/**': [
-    'a',
-    'a/abcdef',
-    'a/abcdef/g',
-    'a/abcdef/g/h',
-    'a/abcfed',
-    'a/abcfed/g',
-    'a/abcfed/g/h',
-    'a/b',
-    'a/b/c',
-    'a/b/c/d',
-    'a/bc',
-    'a/bc/e',
-    'a/bc/e/f',
-    'a/c',
-    'a/c/d',
-    'a/c/d/c',
-    'a/c/d/c/b',
-    'a/cb',
-    'a/cb/e',
-    'a/cb/e/f',
-    ...(common.isWindows ? [] : [
-      'a/symlink',
-      'a/symlink/a',
-      'a/symlink/a/b',
-      'a/symlink/a/b/c',
-      'a/symlink/a/b/c/a',
-      'a/symlink/a/b/c/a/b',
-      'a/symlink/a/b/c/a/b/c',
-    ]),
-    'a/x',
-    'a/z',
+  "./**/a/**": [
+    "a",
+    "a/abcdef",
+    "a/abcdef/g",
+    "a/abcdef/g/h",
+    "a/abcfed",
+    "a/abcfed/g",
+    "a/abcfed/g/h",
+    "a/b",
+    "a/b/c",
+    "a/b/c/d",
+    "a/bc",
+    "a/bc/e",
+    "a/bc/e/f",
+    "a/c",
+    "a/c/d",
+    "a/c/d/c",
+    "a/c/d/c/b",
+    "a/cb",
+    "a/cb/e",
+    "a/cb/e/f",
+    ...(common.isWindows
+      ? []
+      : [
+          "a/symlink",
+          "a/symlink/a",
+          "a/symlink/a/b",
+          "a/symlink/a/b/c",
+          "a/symlink/a/b/c/a",
+          "a/symlink/a/b/c/a/b",
+          "a/symlink/a/b/c/a/b/c",
+        ]),
+    "a/x",
+    "a/z",
   ],
-  './**/a/**/a/**/': common.isWindows ? [] : [
-    'a/symlink/a',
-    'a/symlink/a/b',
-    'a/symlink/a/b/c',
-    'a/symlink/a/b/c/a',
-    'a/symlink/a/b/c/a/b',
-    'a/symlink/a/b/c/a/b/c',
-    'a/symlink/a/b/c/a/b/c/a',
-    'a/symlink/a/b/c/a/b/c/a/b',
-    'a/symlink/a/b/c/a/b/c/a/b/c',
+  "./**/a/**/a/**/": common.isWindows
+    ? []
+    : [
+        "a/symlink/a",
+        "a/symlink/a/b",
+        "a/symlink/a/b/c",
+        "a/symlink/a/b/c/a",
+        "a/symlink/a/b/c/a/b",
+        "a/symlink/a/b/c/a/b/c",
+        "a/symlink/a/b/c/a/b/c/a",
+        "a/symlink/a/b/c/a/b/c/a/b",
+        "a/symlink/a/b/c/a/b/c/a/b/c",
+      ],
+  "+(a|b|c)/a{/,bc*}/**": [
+    "a/abcdef",
+    "a/abcdef/g",
+    "a/abcdef/g/h",
+    "a/abcfed",
+    "a/abcfed/g",
+    "a/abcfed/g/h",
   ],
-  '+(a|b|c)/a{/,bc*}/**': [
-    'a/abcdef',
-    'a/abcdef/g',
-    'a/abcdef/g/h',
-    'a/abcfed',
-    'a/abcfed/g',
-    'a/abcfed/g/h',
-  ],
-  '*/*/*/f': ['a/bc/e/f', 'a/cb/e/f'],
-  './**/f': ['a/bc/e/f', 'a/cb/e/f'],
-  '**/.b': ['a/.b', 'a/b/.b'],
-  './**/.b': ['a/.b', 'a/b/.b'],
-  'a/**/.b': ['a/.b', 'a/b/.b'],
-  'a/symlink/a/b/c/a/b/c/a/b/c//a/b/c////a/b/c/**/b/c/**': common.isWindows ? [] : [
-    'a/symlink/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c',
-    'a/symlink/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a',
-    'a/symlink/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b',
-    'a/symlink/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c',
-  ],
+  "*/*/*/f": ["a/bc/e/f", "a/cb/e/f"],
+  "./**/f": ["a/bc/e/f", "a/cb/e/f"],
+  "**/.b": ["a/.b", "a/b/.b"],
+  "./**/.b": ["a/.b", "a/b/.b"],
+  "a/**/.b": ["a/.b", "a/b/.b"],
+  "a/symlink/a/b/c/a/b/c/a/b/c//a/b/c////a/b/c/**/b/c/**": common.isWindows
+    ? []
+    : [
+        "a/symlink/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c",
+        "a/symlink/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a",
+        "a/symlink/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b",
+        "a/symlink/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c/a/b/c",
+      ],
   [`{./*/*,${absDir}/*}`]: [
     `${absDir}/asdf`,
     `${absDir}/bar`,
@@ -217,18 +235,18 @@ const patterns = {
     `${absDir}/quux`,
     `${absDir}/qwer`,
     `${absDir}/rewq`,
-    'a/abcdef',
-    'a/abcfed',
-    'a/b',
-    'a/bc',
-    'a/c',
-    'a/cb',
-    common.isWindows ? null : 'a/symlink',
-    'a/x',
-    'a/z',
-    'follow/cycle',
-    'follow/link',
-    'follow/target',
+    "a/abcdef",
+    "a/abcfed",
+    "a/b",
+    "a/bc",
+    "a/c",
+    "a/cb",
+    common.isWindows ? null : "a/symlink",
+    "a/x",
+    "a/z",
+    "follow/cycle",
+    "follow/link",
+    "follow/target",
   ],
   [`{${absDir}/*,*}`]: [
     `${absDir}/asdf`,
@@ -238,224 +256,269 @@ const patterns = {
     `${absDir}/quux`,
     `${absDir}/qwer`,
     `${absDir}/rewq`,
-    'a',
-    'follow',
+    "a",
+    "follow",
   ],
-  'a/!(symlink)/**': [
-    'a/abcdef',
-    'a/abcdef/g',
-    'a/abcdef/g/h',
-    'a/abcfed',
-    'a/abcfed/g',
-    'a/abcfed/g/h',
-    'a/b',
-    'a/b/c',
-    'a/b/c/d',
-    'a/bc',
-    'a/bc/e',
-    'a/bc/e/f',
-    'a/c',
-    'a/c/d',
-    'a/c/d/c',
-    'a/c/d/c/b',
-    'a/cb',
-    'a/cb/e',
-    'a/cb/e/f',
-    'a/x',
-    'a/z',
+  "a/!(symlink)/**": [
+    "a/abcdef",
+    "a/abcdef/g",
+    "a/abcdef/g/h",
+    "a/abcfed",
+    "a/abcfed/g",
+    "a/abcfed/g/h",
+    "a/b",
+    "a/b/c",
+    "a/b/c/d",
+    "a/bc",
+    "a/bc/e",
+    "a/bc/e/f",
+    "a/c",
+    "a/c/d",
+    "a/c/d/c",
+    "a/c/d/c/b",
+    "a/cb",
+    "a/cb/e",
+    "a/cb/e/f",
+    "a/x",
+    "a/z",
   ],
-  'a/symlink/a/**/*': common.isWindows ? [] : [
-    'a/symlink/a/b',
-    'a/symlink/a/b/c',
-    'a/symlink/a/b/c/a',
+  "a/symlink/a/**/*": common.isWindows
+    ? []
+    : ["a/symlink/a/b", "a/symlink/a/b/c", "a/symlink/a/b/c/a"],
+  "a/!(symlink)/**/..": [
+    "a",
+    "a/abcdef",
+    "a/abcfed",
+    "a/b",
+    "a/bc",
+    "a/c",
+    "a/c/d",
+    "a/cb",
   ],
-  'a/!(symlink)/**/..': [
-    'a',
-    'a/abcdef',
-    'a/abcfed',
-    'a/b',
-    'a/bc',
-    'a/c',
-    'a/c/d',
-    'a/cb',
+  "a/!(symlink)/**/../": [
+    "a",
+    "a/abcdef",
+    "a/abcfed",
+    "a/b",
+    "a/bc",
+    "a/c",
+    "a/c/d",
+    "a/cb",
   ],
-  'a/!(symlink)/**/../': [
-    'a',
-    'a/abcdef',
-    'a/abcfed',
-    'a/b',
-    'a/bc',
-    'a/c',
-    'a/c/d',
-    'a/cb',
+  "a/!(symlink)/**/../*": [
+    "a/abcdef",
+    "a/abcdef/g",
+    "a/abcfed",
+    "a/abcfed/g",
+    "a/b",
+    "a/b/c",
+    "a/bc",
+    "a/bc/e",
+    "a/c",
+    "a/c/d",
+    "a/c/d/c",
+    "a/cb",
+    "a/cb/e",
+    common.isWindows ? null : "a/symlink",
+    "a/x",
+    "a/z",
   ],
-  'a/!(symlink)/**/../*': [
-    'a/abcdef',
-    'a/abcdef/g',
-    'a/abcfed',
-    'a/abcfed/g',
-    'a/b',
-    'a/b/c',
-    'a/bc',
-    'a/bc/e',
-    'a/c',
-    'a/c/d',
-    'a/c/d/c',
-    'a/cb',
-    'a/cb/e',
-    common.isWindows ? null : 'a/symlink',
-    'a/x',
-    'a/z',
-  ],
-  'a/!(symlink)/**/../*/*': [
-    'a/abcdef/g',
-    'a/abcdef/g/h',
-    'a/abcfed/g',
-    'a/abcfed/g/h',
-    'a/b/c',
-    'a/b/c/d',
-    'a/bc/e',
-    'a/bc/e/f',
-    'a/c/d',
-    'a/c/d/c',
-    'a/c/d/c/b',
-    'a/cb/e',
-    'a/cb/e/f',
-    common.isWindows ? null : 'a/symlink/a',
+  "a/!(symlink)/**/../*/*": [
+    "a/abcdef/g",
+    "a/abcdef/g/h",
+    "a/abcfed/g",
+    "a/abcfed/g/h",
+    "a/b/c",
+    "a/b/c/d",
+    "a/bc/e",
+    "a/bc/e/f",
+    "a/c/d",
+    "a/c/d/c",
+    "a/c/d/c/b",
+    "a/cb/e",
+    "a/cb/e/f",
+    common.isWindows ? null : "a/symlink/a",
   ],
 };
 
-describe('glob', function() {
+describe("glob", function () {
   const promisified = promisify(glob);
   for (const [pattern, expected] of Object.entries(patterns)) {
     test(pattern, async () => {
       const actual = (await promisified(pattern, { cwd: fixtureDir })).sort();
-      const normalized = expected.filter(Boolean).map((item) => item.replaceAll('/', sep)).sort();
+      const normalized = expected
+        .filter(Boolean)
+        .map((item) => item.replaceAll("/", sep))
+        .sort();
       assert.deepStrictEqual(actual, normalized);
     });
   }
 });
 
-describe('globSync', function() {
+describe("globSync", function () {
   for (const [pattern, expected] of Object.entries(patterns)) {
     test(pattern, () => {
       const actual = globSync(pattern, { cwd: fixtureDir }).sort();
-      const normalized = expected.filter(Boolean).map((item) => item.replaceAll('/', sep)).sort();
+      const normalized = expected
+        .filter(Boolean)
+        .map((item) => item.replaceAll("/", sep))
+        .sort();
       assert.deepStrictEqual(actual, normalized);
     });
   }
 });
 
-describe('fsPromises glob', function() {
+describe("fsPromises glob", function () {
   for (const [pattern, expected] of Object.entries(patterns)) {
     test(pattern, async () => {
       const actual = [];
-      for await (const item of asyncGlob(pattern, { cwd: fixtureDir })) actual.push(item);
+      for await (const item of asyncGlob(pattern, { cwd: fixtureDir }))
+        actual.push(item);
       actual.sort();
-      const normalized = expected.filter(Boolean).map((item) => item.replaceAll('/', sep)).sort();
+      const normalized = expected
+        .filter(Boolean)
+        .map((item) => item.replaceAll("/", sep))
+        .sort();
       assert.deepStrictEqual(actual, normalized);
     });
   }
 });
 
-describe('glob - with file: URL as cwd', function() {
+describe("glob - with file: URL as cwd", function () {
   const promisified = promisify(glob);
   for (const [pattern, expected] of Object.entries(patterns)) {
     test(pattern, async () => {
-      const actual = (await promisified(pattern, { cwd: pathToFileURL(fixtureDir) })).sort();
-      const normalized = expected.filter(Boolean).map((item) => item.replaceAll('/', sep)).sort();
+      const actual = (
+        await promisified(pattern, { cwd: pathToFileURL(fixtureDir) })
+      ).sort();
+      const normalized = expected
+        .filter(Boolean)
+        .map((item) => item.replaceAll("/", sep))
+        .sort();
       assert.deepStrictEqual(actual, normalized);
     });
   }
 });
 
-describe('globSync - with file: URL as cwd', function() {
+describe("globSync - with file: URL as cwd", function () {
   for (const [pattern, expected] of Object.entries(patterns)) {
     test(pattern, () => {
-      const actual = globSync(pattern, { cwd: pathToFileURL(fixtureDir) }).sort();
-      const normalized = expected.filter(Boolean).map((item) => item.replaceAll('/', sep)).sort();
+      const actual = globSync(pattern, {
+        cwd: pathToFileURL(fixtureDir),
+      }).sort();
+      const normalized = expected
+        .filter(Boolean)
+        .map((item) => item.replaceAll("/", sep))
+        .sort();
       assert.deepStrictEqual(actual, normalized);
     });
   }
 });
 
-describe('fsPromises.glob - with file: URL as cwd', function() {
+describe("fsPromises.glob - with file: URL as cwd", function () {
   for (const [pattern, expected] of Object.entries(patterns)) {
     test(pattern, async () => {
       const actual = [];
-      for await (const item of asyncGlob(pattern, { cwd: pathToFileURL(fixtureDir) })) actual.push(item);
+      for await (const item of asyncGlob(pattern, {
+        cwd: pathToFileURL(fixtureDir),
+      }))
+        actual.push(item);
       actual.sort();
-      const normalized = expected.filter(Boolean).map((item) => item.replaceAll('/', sep)).sort();
+      const normalized = expected
+        .filter(Boolean)
+        .map((item) => item.replaceAll("/", sep))
+        .sort();
       assert.deepStrictEqual(actual, normalized);
     });
   }
 });
 
-const normalizeDirent = (dirent) => relative(fixtureDir, join(dirent.parentPath, dirent.name));
+const normalizeDirent = (dirent) =>
+  relative(fixtureDir, join(dirent.parentPath, dirent.name));
 // The call to `join()` with only one argument is important, as
 // it ensures that the proper path separators are applied.
-const normalizePath = (path) => (isAbsolute(path) ? relative(fixtureDir, path) : join(path));
+const normalizePath = (path) =>
+  isAbsolute(path) ? relative(fixtureDir, path) : join(path);
 
-describe('glob - withFileTypes', function() {
+describe("glob - withFileTypes", function () {
   const promisified = promisify(glob);
   for (const [pattern, expected] of Object.entries(patterns)) {
     test(pattern, async () => {
       const actual = await promisified(pattern, {
         cwd: fixtureDir,
         withFileTypes: true,
-        exclude: common.mustCallAtLeast((dirent) => assert.ok(dirent instanceof Dirent), 0),
+        exclude: common.mustCallAtLeast(
+          (dirent) => assert.ok(dirent instanceof Dirent),
+          0,
+        ),
       });
       assertDirents(actual);
-      assert.deepStrictEqual(actual.map(normalizeDirent).sort(), expected.filter(Boolean).map(normalizePath).sort());
+      assert.deepStrictEqual(
+        actual.map(normalizeDirent).sort(),
+        expected.filter(Boolean).map(normalizePath).sort(),
+      );
     });
   }
 });
 
-describe('globSync - withFileTypes', function() {
+describe("globSync - withFileTypes", function () {
   for (const [pattern, expected] of Object.entries(patterns)) {
     test(pattern, () => {
       const actual = globSync(pattern, {
         cwd: fixtureDir,
         withFileTypes: true,
-        exclude: common.mustCallAtLeast((dirent) => assert.ok(dirent instanceof Dirent), 0),
+        exclude: common.mustCallAtLeast(
+          (dirent) => assert.ok(dirent instanceof Dirent),
+          0,
+        ),
       });
       assertDirents(actual);
-      assert.deepStrictEqual(actual.map(normalizeDirent).sort(), expected.filter(Boolean).map(normalizePath).sort());
+      assert.deepStrictEqual(
+        actual.map(normalizeDirent).sort(),
+        expected.filter(Boolean).map(normalizePath).sort(),
+      );
     });
   }
 });
 
-describe('fsPromises glob - withFileTypes', function() {
+describe("fsPromises glob - withFileTypes", function () {
   for (const [pattern, expected] of Object.entries(patterns)) {
     test(pattern, async () => {
       const actual = [];
       for await (const item of asyncGlob(pattern, {
         cwd: fixtureDir,
         withFileTypes: true,
-        exclude: common.mustCallAtLeast((dirent) => assert.ok(dirent instanceof Dirent), 0),
-      })) actual.push(item);
+        exclude: common.mustCallAtLeast(
+          (dirent) => assert.ok(dirent instanceof Dirent),
+          0,
+        ),
+      }))
+        actual.push(item);
       assertDirents(actual);
-      assert.deepStrictEqual(actual.map(normalizeDirent).sort(), expected.filter(Boolean).map(normalizePath).sort());
+      assert.deepStrictEqual(
+        actual.map(normalizeDirent).sort(),
+        expected.filter(Boolean).map(normalizePath).sort(),
+      );
     });
   }
 });
 
 // [pattern, exclude option, expected result]
 const patterns2 = [
-  ['a/{b,c}*', ['a/*c'], ['a/b', 'a/cb']],
-  ['a/{a,b,c}*', ['a/*bc*', 'a/cb'], ['a/b', 'a/c']],
-  ['a/**/[cg]', ['**/c'], ['a/abcdef/g', 'a/abcfed/g']],
-  ['a/**/[cg]', ['./**/c'], ['a/abcdef/g', 'a/abcfed/g']],
-  ['a/**/[cg]', ['a/**/[cg]/../c'], ['a/abcdef/g', 'a/abcfed/g']],
-  ['a/*/+(c|g)/*', ['**/./h'], ['a/b/c/d']],
+  ["a/{b,c}*", ["a/*c"], ["a/b", "a/cb"]],
+  ["a/{a,b,c}*", ["a/*bc*", "a/cb"], ["a/b", "a/c"]],
+  ["a/**/[cg]", ["**/c"], ["a/abcdef/g", "a/abcfed/g"]],
+  ["a/**/[cg]", ["./**/c"], ["a/abcdef/g", "a/abcfed/g"]],
+  ["a/**/[cg]", ["a/**/[cg]/../c"], ["a/abcdef/g", "a/abcfed/g"]],
+  ["a/*/+(c|g)/*", ["**/./h"], ["a/b/c/d"]],
   [
-    'a/**/[cg]/../[cg]',
-    ['a/ab{cde,cfe}*'],
+    "a/**/[cg]/../[cg]",
+    ["a/ab{cde,cfe}*"],
     [
-      'a/b/c',
-      'a/c',
-      'a/c/d/c',
-      ...(common.isWindows ? [] : ['a/symlink/a/b/c']),
+      "a/b/c",
+      "a/c",
+      "a/c/d/c",
+      ...(common.isWindows ? [] : ["a/symlink/a/b/c"]),
     ],
   ],
   [
@@ -476,18 +539,21 @@ const patterns2 = [
     ],
   ],
   [
-    [`${absDir}/*`, 'a/**/[cg]'],
-    [`${absDir}/*{a,q}*`, './a/*{c,b}*/*'],
-    [`${absDir}/foo`, 'a/c', ...(common.isWindows ? [] : ['a/symlink/a/b/c'])],
+    [`${absDir}/*`, "a/**/[cg]"],
+    [`${absDir}/*{a,q}*`, "./a/*{c,b}*/*"],
+    [`${absDir}/foo`, "a/c", ...(common.isWindows ? [] : ["a/symlink/a/b/c"])],
   ],
-  [ 'a/**', () => true, [] ],
-  [ 'a/**', [ '*' ], [] ],
-  [ 'a/**', [ '**' ], [] ],
-  [ 'a/**', [ 'a/**' ], [] ],
+  ["a/**", () => true, []],
+  ["a/**", ["*"], []],
+  ["a/**", ["**"], []],
+  ["a/**", ["a/**"], []],
 ];
 
-describe('globSync - exclude', function() {
-  for (const [pattern, exclude] of Object.entries(patterns).map(([k, v]) => [k, v.filter(Boolean)])) {
+describe("globSync - exclude", function () {
+  for (const [pattern, exclude] of Object.entries(patterns).map(([k, v]) => [
+    k,
+    v.filter(Boolean),
+  ])) {
     test(`${pattern} - exclude: ${exclude}`, () => {
       const actual = globSync(pattern, { cwd: fixtureDir, exclude }).sort();
       assert.strictEqual(actual.length, 0);
@@ -496,34 +562,51 @@ describe('globSync - exclude', function() {
   for (const [pattern, exclude, expected] of patterns2) {
     test(`${pattern} - exclude: ${exclude}`, () => {
       const actual = globSync(pattern, { cwd: fixtureDir, exclude }).sort();
-      const normalized = expected.filter(Boolean).map((item) => item.replaceAll('/', sep)).sort();
+      const normalized = expected
+        .filter(Boolean)
+        .map((item) => item.replaceAll("/", sep))
+        .sort();
       assert.deepStrictEqual(actual, normalized);
     });
   }
 });
 
-describe('glob - exclude', function() {
+describe("glob - exclude", function () {
   const promisified = promisify(glob);
-  for (const [pattern, exclude] of Object.entries(patterns).map(([k, v]) => [k, v.filter(Boolean)])) {
+  for (const [pattern, exclude] of Object.entries(patterns).map(([k, v]) => [
+    k,
+    v.filter(Boolean),
+  ])) {
     test(`${pattern} - exclude: ${exclude}`, async () => {
-      const actual = (await promisified(pattern, { cwd: fixtureDir, exclude })).sort();
+      const actual = (
+        await promisified(pattern, { cwd: fixtureDir, exclude })
+      ).sort();
       assert.strictEqual(actual.length, 0);
     });
   }
   for (const [pattern, exclude, expected] of patterns2) {
     test(`${pattern} - exclude: ${exclude}`, async () => {
-      const actual = (await promisified(pattern, { cwd: fixtureDir, exclude })).sort();
-      const normalized = expected.filter(Boolean).map((item) => item.replaceAll('/', sep)).sort();
+      const actual = (
+        await promisified(pattern, { cwd: fixtureDir, exclude })
+      ).sort();
+      const normalized = expected
+        .filter(Boolean)
+        .map((item) => item.replaceAll("/", sep))
+        .sort();
       assert.deepStrictEqual(actual, normalized);
     });
   }
 });
 
-describe('fsPromises glob - exclude', function() {
-  for (const [pattern, exclude] of Object.entries(patterns).map(([k, v]) => [k, v.filter(Boolean)])) {
+describe("fsPromises glob - exclude", function () {
+  for (const [pattern, exclude] of Object.entries(patterns).map(([k, v]) => [
+    k,
+    v.filter(Boolean),
+  ])) {
     test(`${pattern} - exclude: ${exclude}`, async () => {
       const actual = [];
-      for await (const item of asyncGlob(pattern, { cwd: fixtureDir, exclude })) actual.push(item);
+      for await (const item of asyncGlob(pattern, { cwd: fixtureDir, exclude }))
+        actual.push(item);
       actual.sort();
       assert.strictEqual(actual.length, 0);
     });
@@ -531,66 +614,79 @@ describe('fsPromises glob - exclude', function() {
   for (const [pattern, exclude, expected] of patterns2) {
     test(`${pattern} - exclude: ${exclude}`, async () => {
       const actual = [];
-      for await (const item of asyncGlob(pattern, { cwd: fixtureDir, exclude })) actual.push(item);
-      const normalized = expected.filter(Boolean).map((item) => item.replaceAll('/', sep)).sort();
+      for await (const item of asyncGlob(pattern, { cwd: fixtureDir, exclude }))
+        actual.push(item);
+      const normalized = expected
+        .filter(Boolean)
+        .map((item) => item.replaceAll("/", sep))
+        .sort();
       assert.deepStrictEqual(actual.sort(), normalized);
     });
   }
 });
 
-const followSymlinkPattern = 'follow/**';
+const followSymlinkPattern = "follow/**";
 const followSymlinkExpected = [
-  'follow',
-  'follow/cycle',
-  'follow/link',
-  'follow/target',
-  'follow/target/file.txt',
-].map((item) => item.replaceAll('/', sep)).sort();
+  "follow",
+  "follow/cycle",
+  "follow/link",
+  "follow/target",
+  "follow/target/file.txt",
+]
+  .map((item) => item.replaceAll("/", sep))
+  .sort();
 const followSymlinkExpectedWithFollow = [
   ...followSymlinkExpected,
-  'follow/link/file.txt'.replaceAll('/', sep),
+  "follow/link/file.txt".replaceAll("/", sep),
 ].sort();
 
 const getNestedCycleMatches = (matches) => {
   return matches.filter((match) => match.startsWith(`follow${sep}cycle${sep}`));
 };
 
-describe('glob - followSymlinks', function() {
+describe("glob - followSymlinks", function () {
   const promisified = promisify(glob);
 
-  test('does not follow symlinks by default', async () => {
-    const actual = (await promisified(followSymlinkPattern, { cwd: fixtureDir })).sort();
+  test("does not follow symlinks by default", async () => {
+    const actual = (
+      await promisified(followSymlinkPattern, { cwd: fixtureDir })
+    ).sort();
     assert.deepStrictEqual(actual, followSymlinkExpected);
   });
 
-  test('follows symlinked directories when enabled', async () => {
-    const actual = (await promisified(followSymlinkPattern, {
-      cwd: fixtureDir,
-      followSymlinks: true,
-    })).sort();
+  test("follows symlinked directories when enabled", async () => {
+    const actual = (
+      await promisified(followSymlinkPattern, {
+        cwd: fixtureDir,
+        followSymlinks: true,
+      })
+    ).sort();
     assert.deepStrictEqual(actual, followSymlinkExpectedWithFollow);
     assert.deepStrictEqual(getNestedCycleMatches(actual), []);
   });
 });
 
-describe('globSync - followSymlinks', function() {
-  test('does not follow symlinks by default', () => {
+describe("globSync - followSymlinks", function () {
+  test("does not follow symlinks by default", () => {
     const actual = globSync(followSymlinkPattern, { cwd: fixtureDir }).sort();
     assert.deepStrictEqual(actual, followSymlinkExpected);
   });
 
-  test('validates followSymlinks', () => {
-    assert.throws(() => {
-      globSync(followSymlinkPattern, {
-        cwd: fixtureDir,
-        followSymlinks: 1,
-      });
-    }, {
-      code: 'ERR_INVALID_ARG_TYPE',
-    });
+  test("validates followSymlinks", () => {
+    assert.throws(
+      () => {
+        globSync(followSymlinkPattern, {
+          cwd: fixtureDir,
+          followSymlinks: 1,
+        });
+      },
+      {
+        code: "ERR_INVALID_ARG_TYPE",
+      },
+    );
   });
 
-  test('follows symlinked directories when enabled', () => {
+  test("follows symlinked directories when enabled", () => {
     const actual = globSync(followSymlinkPattern, {
       cwd: fixtureDir,
       followSymlinks: true,
@@ -599,7 +695,7 @@ describe('globSync - followSymlinks', function() {
     assert.deepStrictEqual(getNestedCycleMatches(actual), []);
   });
 
-  test('supports withFileTypes when following symlinked directories', () => {
+  test("supports withFileTypes when following symlinked directories", () => {
     const actual = globSync(followSymlinkPattern, {
       cwd: fixtureDir,
       followSymlinks: true,
@@ -612,34 +708,38 @@ describe('globSync - followSymlinks', function() {
   });
 });
 
-describe('fsPromises glob - followSymlinks', function() {
-  test('does not follow symlinks by default', async () => {
+describe("fsPromises glob - followSymlinks", function () {
+  test("does not follow symlinks by default", async () => {
     const actual = [];
-    for await (const item of asyncGlob(followSymlinkPattern, { cwd: fixtureDir })) actual.push(item);
+    for await (const item of asyncGlob(followSymlinkPattern, {
+      cwd: fixtureDir,
+    }))
+      actual.push(item);
     actual.sort();
     assert.deepStrictEqual(actual, followSymlinkExpected);
   });
 
-  test('follows symlinked directories when enabled', async () => {
+  test("follows symlinked directories when enabled", async () => {
     const actual = [];
     for await (const item of asyncGlob(followSymlinkPattern, {
       cwd: fixtureDir,
       followSymlinks: true,
-    })) actual.push(item);
+    }))
+      actual.push(item);
     actual.sort();
     assert.deepStrictEqual(actual, followSymlinkExpectedWithFollow);
     assert.deepStrictEqual(getNestedCycleMatches(actual), []);
   });
 });
 
-describe('glob - with restricted directory', function() {
-  test('*', async () => {
-    const restrictedDir = tmpdir.resolve('restricted');
+describe("glob - with restricted directory", function () {
+  test("*", async () => {
+    const restrictedDir = tmpdir.resolve("restricted");
     await mkdir(restrictedDir, { recursive: true });
     chmodSync(restrictedDir, 0o000);
     try {
       const results = [];
-      for await (const match of asyncGlob('*', { cwd: restrictedDir })) {
+      for await (const match of asyncGlob("*", { cwd: restrictedDir })) {
         results.push(match);
       }
     } finally {
@@ -652,14 +752,14 @@ describe('glob - with restricted directory', function() {
   });
 });
 
-describe('globSync - ENOTDIR', function() {
-  test('should return empty array when a file is treated as a directory', () => {
-    const file = tmpdir.resolve('foo');
-    writeFileSync(file, '');
+describe("globSync - ENOTDIR", function () {
+  test("should return empty array when a file is treated as a directory", () => {
+    const file = tmpdir.resolve("foo");
+    writeFileSync(file, "");
     try {
-      const pattern = 'foo{,/bar}';
+      const pattern = "foo{,/bar}";
       const actual = globSync(pattern, { cwd: tmpdir.path }).sort();
-      assert.deepStrictEqual(actual, ['foo']);
+      assert.deepStrictEqual(actual, ["foo"]);
     } finally {
       try {
         rmSync(file);

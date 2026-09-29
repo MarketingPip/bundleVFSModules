@@ -9,9 +9,10 @@
 // Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 // undefined under real Node / direct import).
 // ---------------------------------------------------------------------------
-const RT = (typeof globalThis._RUNTIME_ !== "undefined")
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 void RT;
 
 // ---------------------------------------------------------------------------
@@ -19,22 +20,262 @@ void RT;
 // ---------------------------------------------------------------------------
 const tokenRegExp = /^[\^_`a-zA-Z\-0-9!#$%&'*+.|~]+$/;
 const validTokenChars = new Uint8Array([
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0-15
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 16-31
-  0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0, // 32-47 (!"#$%&'()*+,-./)
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, // 48-63 (0-9:;<=>?)
-  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 64-79 (@A-O)
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, // 80-95 (P-Z[\]^_)
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 96-111 (`a-o)
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, // 112-127 (p-z{|}~)
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 128-143
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 144-159
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 160-175
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 176-191
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 192-207
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 208-223
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 224-239
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 240-255
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 0-15
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 16-31
+  0,
+  1,
+  0,
+  1,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  1,
+  1,
+  0,
+  1,
+  1,
+  0, // 32-47 (!"#$%&'()*+,-./)
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 48-63 (0-9:;<=>?)
+  0,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1, // 64-79 (@A-O)
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  0,
+  1,
+  1, // 80-95 (P-Z[\]^_)
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1, // 96-111 (`a-o)
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  0,
+  1,
+  0,
+  1,
+  0, // 112-127 (p-z{|}~)
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 128-143
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 144-159
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 160-175
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 176-191
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 192-207
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 208-223
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 224-239
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0, // 240-255
 ]);
 
 /**
@@ -81,19 +322,49 @@ export function _checkInvalidHeaderChar(val, lenient = false) {
 
 export const chunkExpression = /(?:^|\W)chunked(?:$|\W)/i;
 export const continueExpression = /(?:^|\W)100-continue(?:$|\W)/i;
-export const CRLF = '\r\n'; // TODO: Deprecate this.
+export const CRLF = "\r\n"; // TODO: Deprecate this.
 
 // Method list in llhttp's native order (matches node:_http_common exactly).
 export const methods = [
-  'DELETE', 'GET', 'HEAD', 'POST', 'PUT', 'CONNECT', 'OPTIONS', 'TRACE',
-  'COPY', 'LOCK', 'MKCOL', 'MOVE', 'PROPFIND', 'PROPPATCH', 'SEARCH',
-  'UNLOCK', 'BIND', 'REBIND', 'UNBIND', 'ACL', 'REPORT', 'MKACTIVITY',
-  'CHECKOUT', 'MERGE', 'M-SEARCH', 'NOTIFY', 'SUBSCRIBE', 'UNSUBSCRIBE',
-  'PATCH', 'PURGE', 'MKCALENDAR', 'LINK', 'UNLINK', 'SOURCE', 'QUERY',
+  "DELETE",
+  "GET",
+  "HEAD",
+  "POST",
+  "PUT",
+  "CONNECT",
+  "OPTIONS",
+  "TRACE",
+  "COPY",
+  "LOCK",
+  "MKCOL",
+  "MOVE",
+  "PROPFIND",
+  "PROPPATCH",
+  "SEARCH",
+  "UNLOCK",
+  "BIND",
+  "REBIND",
+  "UNBIND",
+  "ACL",
+  "REPORT",
+  "MKACTIVITY",
+  "CHECKOUT",
+  "MERGE",
+  "M-SEARCH",
+  "NOTIFY",
+  "SUBSCRIBE",
+  "UNSUBSCRIBE",
+  "PATCH",
+  "PURGE",
+  "MKCALENDAR",
+  "LINK",
+  "UNLINK",
+  "SOURCE",
+  "QUERY",
 ];
 
-export const kIncomingMessage = Symbol('IncomingMessage');
-export const kSkipPendingData = Symbol('SkipPendingData');
+export const kIncomingMessage = Symbol("IncomingMessage");
+export const kSkipPendingData = Symbol("SkipPendingData");
 
 // ---------------------------------------------------------------------------
 // Parser-pool machinery: no llhttp in the browser. Honest stubs.
@@ -114,14 +385,16 @@ export function isLenient() {
 }
 
 /** Lenient flags require the native parser; always strict (0) here. */
-export function calculateLenientFlags(/* httpValidation, insecureHTTPParserOption */) {
+export function calculateLenientFlags(
+  /* httpValidation, insecureHTTPParserOption */
+) {
   return 0;
 }
 
 /** Attach parse-error context the way Node does (without a native parser). */
 export function prepareError(err, parser, rawPacket) {
   err.rawPacket = rawPacket || parser?.getCurrentBuffer?.();
-  if (typeof err.reason === 'string') {
+  if (typeof err.reason === "string") {
     err.message = `Parse Error: ${err.reason}`;
   }
   return err;

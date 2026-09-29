@@ -1,16 +1,16 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const Duplex = require('stream').Duplex;
+const common = require("../common");
+const assert = require("assert");
+const Duplex = require("stream").Duplex;
 
 {
   const stream = new Duplex({
-    read() {}
+    read() {},
   });
   assert.strictEqual(stream.allowHalfOpen, true);
-  stream.on('finish', common.mustNotCall());
-  assert.strictEqual(stream.listenerCount('end'), 0);
+  stream.on("finish", common.mustNotCall());
+  assert.strictEqual(stream.listenerCount("end"), 0);
   stream.resume();
   stream.push(null);
 }
@@ -18,11 +18,11 @@ const Duplex = require('stream').Duplex;
 {
   const stream = new Duplex({
     read() {},
-    allowHalfOpen: false
+    allowHalfOpen: false,
   });
   assert.strictEqual(stream.allowHalfOpen, false);
-  stream.on('finish', common.mustCall());
-  assert.strictEqual(stream.listenerCount('end'), 0);
+  stream.on("finish", common.mustCall());
+  assert.strictEqual(stream.listenerCount("end"), 0);
   stream.resume();
   stream.push(null);
 }
@@ -30,12 +30,12 @@ const Duplex = require('stream').Duplex;
 {
   const stream = new Duplex({
     read() {},
-    allowHalfOpen: false
+    allowHalfOpen: false,
   });
   assert.strictEqual(stream.allowHalfOpen, false);
   stream._writableState.ended = true;
-  stream.on('finish', common.mustNotCall());
-  assert.strictEqual(stream.listenerCount('end'), 0);
+  stream.on("finish", common.mustNotCall());
+  assert.strictEqual(stream.listenerCount("end"), 0);
   stream.resume();
   stream.push(null);
 }

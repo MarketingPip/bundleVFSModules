@@ -1,15 +1,15 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 if (!process.config.variables.node_use_amaro) {
-  common.skip('Requires Amaro');
+  common.skip("Requires Amaro");
 }
-const fixtures = require('../common/fixtures');
-const file = fixtures.path('get-call-sites.js');
+const fixtures = require("../common/fixtures");
+const file = fixtures.path("get-call-sites.js");
 
-const { getCallSites } = require('node:util');
-const { spawnSync } = require('node:child_process');
-const assert = require('node:assert');
+const { getCallSites } = require("node:util");
+const { spawnSync } = require("node:child_process");
+const assert = require("node:assert");
 
 {
   const callSites = getCallSites();
@@ -17,7 +17,7 @@ const assert = require('node:assert');
   assert.match(
     callSites[0].scriptName,
     /test-util-getcallsites/,
-    'node:util should be ignored',
+    "node:util should be ignored",
   );
 }
 
@@ -27,52 +27,73 @@ const assert = require('node:assert');
   assert.match(
     callSites[0].scriptName,
     /test-util-getcallsites/,
-    'node:util should be ignored',
+    "node:util should be ignored",
   );
 }
 
 // frameCount must be an integer
 {
-  assert.throws(() => {
-    const callSites = getCallSites(3.6);
-    assert.strictEqual(callSites.length, 3);
-  }, common.expectsError({
-    code: 'ERR_OUT_OF_RANGE'
-  }));
+  assert.throws(
+    () => {
+      const callSites = getCallSites(3.6);
+      assert.strictEqual(callSites.length, 3);
+    },
+    common.expectsError({
+      code: "ERR_OUT_OF_RANGE",
+    }),
+  );
 }
 
 {
-  assert.throws(() => {
-    // Max than kDefaultMaxCallStackSizeToCapture
-    getCallSites(201);
-  }, common.expectsError({
-    code: 'ERR_OUT_OF_RANGE'
-  }));
-  assert.throws(() => {
-    getCallSites(0.5);
-  }, common.expectsError({
-    code: 'ERR_OUT_OF_RANGE'
-  }));
-  assert.throws(() => {
-    getCallSites(-1);
-  }, common.expectsError({
-    code: 'ERR_OUT_OF_RANGE'
-  }));
-  assert.throws(() => {
-    getCallSites([]);
-  }, common.expectsError({
-    code: 'ERR_INVALID_ARG_TYPE'
-  }));
-  assert.throws(() => {
-    getCallSites({}, {});
-  }, common.expectsError({
-    code: 'ERR_INVALID_ARG_TYPE'
-  }));
-  assert.throws(() => {
-    getCallSites(10, 10);
-  }, common.expectsError({
-    code: 'ERR_INVALID_ARG_TYPE'
-  }));
+  assert.throws(
+    () => {
+      // Max than kDefaultMaxCallStackSizeToCapture
+      getCallSites(201);
+    },
+    common.expectsError({
+      code: "ERR_OUT_OF_RANGE",
+    }),
+  );
+  assert.throws(
+    () => {
+      getCallSites(0.5);
+    },
+    common.expectsError({
+      code: "ERR_OUT_OF_RANGE",
+    }),
+  );
+  assert.throws(
+    () => {
+      getCallSites(-1);
+    },
+    common.expectsError({
+      code: "ERR_OUT_OF_RANGE",
+    }),
+  );
+  assert.throws(
+    () => {
+      getCallSites([]);
+    },
+    common.expectsError({
+      code: "ERR_INVALID_ARG_TYPE",
+    }),
+  );
+  assert.throws(
+    () => {
+      getCallSites({}, {});
+    },
+    common.expectsError({
+      code: "ERR_INVALID_ARG_TYPE",
+    }),
+  );
+  assert.throws(
+    () => {
+      getCallSites(10, 10);
+    },
+    common.expectsError({
+      code: "ERR_INVALID_ARG_TYPE",
+    }),
+  );
 }
 
 {
@@ -81,7 +102,7 @@ const assert = require('node:assert');
   assert.match(
     callSites[0].scriptName,
     /test-util-getcallsites/,
-    'node:util should be ignored',
+    "node:util should be ignored",
   );
 }
 
@@ -89,32 +110,26 @@ const assert = require('node:assert');
 {
   const callSites = getCallSites(1);
   assert.strictEqual(callSites.length, 1);
-  assert.strictEqual(typeof callSites[0].scriptId, 'string');
+  assert.strictEqual(typeof callSites[0].scriptId, "string");
 }
 
 // Guarantee [eval] will appear on stacktraces when using -e
 {
-  const { status, stderr, stdout } = spawnSync(
-    process.execPath,
-    [
-      '-e',
-      `const util = require('util');
+  const { status, stderr, stdout } = spawnSync(process.execPath, [
+    "-e",
+    `const util = require('util');
        const assert = require('assert');
        assert.ok(util.getCallSites().length > 1);
        process.stdout.write(util.getCallSites()[0].scriptName);
       `,
-    ],
-  );
+  ]);
   assert.strictEqual(status, 0, stderr.toString());
-  assert.strictEqual(stdout.toString(), '[eval]');
+  assert.strictEqual(stdout.toString(), "[eval]");
 }
 
 // Guarantee the stacktrace[0] is the filename
 {
-  const { status, stderr, stdout } = spawnSync(
-    process.execPath,
-    [file],
-  );
+  const { status, stderr, stdout } = spawnSync(process.execPath, [file]);
   assert.strictEqual(status, 0, stderr.toString());
   assert.strictEqual(stdout.toString(), file);
 }
@@ -130,13 +145,13 @@ const assert = require('node:assert');
 
 {
   const { status, stderr, stdout } = spawnSync(process.execPath, [
-    '--no-warnings',
-    '--experimental-transform-types',
-    fixtures.path('typescript/ts/test-get-callsites.ts'),
+    "--no-warnings",
+    "--experimental-transform-types",
+    fixtures.path("typescript/ts/test-get-callsites.ts"),
   ]);
 
   const output = stdout.toString();
-  assert.strictEqual(stderr.toString(), '');
+  assert.strictEqual(stderr.toString(), "");
   assert.match(output, /lineNumber: 8/);
   assert.match(output, /column: 18/);
   assert.match(output, /columnNumber: 18/);
@@ -146,14 +161,14 @@ const assert = require('node:assert');
 
 {
   const { status, stderr, stdout } = spawnSync(process.execPath, [
-    '--no-warnings',
-    '--experimental-transform-types',
-    '--no-enable-source-maps',
-    fixtures.path('typescript/ts/test-get-callsites.ts'),
+    "--no-warnings",
+    "--experimental-transform-types",
+    "--no-enable-source-maps",
+    fixtures.path("typescript/ts/test-get-callsites.ts"),
   ]);
 
   const output = stdout.toString();
-  assert.strictEqual(stderr.toString(), '');
+  assert.strictEqual(stderr.toString(), "");
   // Line should be wrong when sourcemaps are disable
   assert.match(output, /lineNumber: 2/);
   assert.match(output, /column: 18/);
@@ -165,13 +180,13 @@ const assert = require('node:assert');
 {
   // Source maps should be disabled when options.sourceMap is false
   const { status, stderr, stdout } = spawnSync(process.execPath, [
-    '--no-warnings',
-    '--experimental-transform-types',
-    fixtures.path('typescript/ts/test-get-callsites-explicit.ts'),
+    "--no-warnings",
+    "--experimental-transform-types",
+    fixtures.path("typescript/ts/test-get-callsites-explicit.ts"),
   ]);
 
   const output = stdout.toString();
-  assert.strictEqual(stderr.toString(), '');
+  assert.strictEqual(stderr.toString(), "");
   assert.match(output, /lineNumber: 2/);
   assert.match(output, /column: 18/);
   assert.match(output, /columnNumber: 18/);
@@ -182,10 +197,10 @@ const assert = require('node:assert');
 {
   // sourceMap must be a boolean
   assert.throws(() => getCallSites({ sourceMap: 1 }), {
-    code: 'ERR_INVALID_ARG_TYPE'
+    code: "ERR_INVALID_ARG_TYPE",
   });
   assert.throws(() => getCallSites(1, { sourceMap: 1 }), {
-    code: 'ERR_INVALID_ARG_TYPE'
+    code: "ERR_INVALID_ARG_TYPE",
   });
 
   // Not specifying the sourceMap option should not fail.

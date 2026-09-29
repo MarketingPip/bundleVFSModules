@@ -19,53 +19,59 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
 switch (process.argv[2]) {
-  case 'child':
+  case "child":
     return child();
   case undefined:
     return parent();
   default:
-    throw new Error('invalid');
+    throw new Error("invalid");
 }
 
 function parent() {
-  const spawn = require('child_process').spawn;
-  const child = spawn(process.execPath, [__filename, 'child']);
+  const spawn = require("child_process").spawn;
+  const child = spawn(process.execPath, [__filename, "child"]);
 
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', function(c) {
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", function (c) {
     console.error(`${c}`);
-    throw new Error('should not get stderr data');
+    throw new Error("should not get stderr data");
   });
 
-  child.stdout.setEncoding('utf8');
-  let out = '';
-  child.stdout.on('data', function(c) {
+  child.stdout.setEncoding("utf8");
+  let out = "";
+  child.stdout.on("data", function (c) {
     out += c;
   });
-  child.stdout.on('end', common.mustCall(() => {
-    assert.strictEqual(out, '10\n');
-    console.log('ok - got expected output');
-  }));
+  child.stdout.on(
+    "end",
+    common.mustCall(() => {
+      assert.strictEqual(out, "10\n");
+      console.log("ok - got expected output");
+    }),
+  );
 
-  child.on('exit', common.mustCall((c) => {
-    assert(!c);
-    console.log('ok - exit success');
-  }));
+  child.on(
+    "exit",
+    common.mustCall((c) => {
+      assert(!c);
+      console.log("ok - exit success");
+    }),
+  );
 }
 
 function child() {
-  const vm = require('vm');
+  const vm = require("vm");
   let caught;
   try {
-    vm.runInThisContext('haf!@##&$!@$*!@', { displayErrors: false });
+    vm.runInThisContext("haf!@##&$!@$*!@", { displayErrors: false });
   } catch {
     caught = true;
   }
   assert(caught);
-  vm.runInThisContext('console.log(10)', { displayErrors: false });
+  vm.runInThisContext("console.log(10)", { displayErrors: false });
 }

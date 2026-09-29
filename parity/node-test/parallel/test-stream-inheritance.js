@@ -1,7 +1,7 @@
-'use strict';
-require('../common');
-const assert = require('assert');
-const { Readable, Writable, Duplex, Transform } = require('stream');
+"use strict";
+require("../common");
+const assert = require("assert");
+const { Readable, Writable, Duplex, Transform } = require("stream");
 
 const readable = new Readable({ read() {} });
 const writable = new Writable({ write() {} });
@@ -35,12 +35,9 @@ assert.ok(!(undefined instanceof Writable));
 function CustomWritable() {
   assert.ok(
     this instanceof CustomWritable,
-    `${this} does not inherit from CustomWritable`
+    `${this} does not inherit from CustomWritable`,
   );
-  assert.ok(
-    this instanceof Writable,
-    `${this} does not inherit from Writable`
-  );
+  assert.ok(this instanceof Writable, `${this} does not inherit from Writable`);
 }
 
 Object.setPrototypeOf(CustomWritable, Writable);
@@ -48,14 +45,11 @@ Object.setPrototypeOf(CustomWritable.prototype, Writable.prototype);
 
 new CustomWritable();
 
-assert.throws(
-  CustomWritable,
-  {
-    code: 'ERR_ASSERTION',
-    constructor: assert.AssertionError,
-    message: 'undefined does not inherit from CustomWritable'
-  }
-);
+assert.throws(CustomWritable, {
+  code: "ERR_ASSERTION",
+  constructor: assert.AssertionError,
+  message: "undefined does not inherit from CustomWritable",
+});
 
 class OtherCustomWritable extends Writable {}
 

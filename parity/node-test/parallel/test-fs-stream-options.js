@@ -1,29 +1,31 @@
-'use strict';
-const { mustNotMutateObjectDeep } = require('../common');
+"use strict";
+const { mustNotMutateObjectDeep } = require("../common");
 
-const assert = require('assert');
-const fs = require('fs');
+const assert = require("assert");
+const fs = require("fs");
 
 {
-  const fd = 'k';
+  const fd = "k";
 
   assert.throws(
     () => {
       fs.createReadStream(null, mustNotMutateObjectDeep({ fd }));
     },
     {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-    });
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    },
+  );
 
   assert.throws(
     () => {
       fs.createWriteStream(null, mustNotMutateObjectDeep({ fd }));
     },
     {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-    });
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    },
+  );
 }
 
 {
@@ -34,16 +36,18 @@ const fs = require('fs');
       fs.createReadStream(path);
     },
     {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-    });
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    },
+  );
 
   assert.throws(
     () => {
       fs.createWriteStream(path);
     },
     {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError',
-    });
+      code: "ERR_INVALID_ARG_TYPE",
+      name: "TypeError",
+    },
+  );
 }

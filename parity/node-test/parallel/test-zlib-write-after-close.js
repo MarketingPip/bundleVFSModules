@@ -19,19 +19,28 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
-const zlib = require('node:zlib');
-const assert = require('node:assert');
+const zlib = require("node:zlib");
+const assert = require("node:assert");
 
-zlib.gzip('hello', common.mustCall(() => {
-  const unzip = zlib.createGunzip();
-  unzip.close(common.mustCall());
-  unzip.write('asd', common.mustCall((err) => {
-    assert.strictEqual(err.code, 'ERR_STREAM_DESTROYED');
-    assert.strictEqual(err.name, 'Error');
-    assert.strictEqual(err.message, 'Cannot call write after a stream was destroyed');
-  }));
-}));
+zlib.gzip(
+  "hello",
+  common.mustCall(() => {
+    const unzip = zlib.createGunzip();
+    unzip.close(common.mustCall());
+    unzip.write(
+      "asd",
+      common.mustCall((err) => {
+        assert.strictEqual(err.code, "ERR_STREAM_DESTROYED");
+        assert.strictEqual(err.name, "Error");
+        assert.strictEqual(
+          err.message,
+          "Cannot call write after a stream was destroyed",
+        );
+      }),
+    );
+  }),
+);

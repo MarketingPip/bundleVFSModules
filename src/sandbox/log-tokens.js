@@ -2,13 +2,17 @@
 // Maps log placeholder suffixes to the JS debug statement they expand to
 // when config.logNetworkRequests is true.
 export const LOG_TOKENS = {
-  FETCH_PARENT_FALLBACK: "console.log('[FETCH] Parent failed, falling back:', requestInfo);",
-  FETCH_COMPLETED: "console.log('[FETCH] Completed:', requestInfo, '- Status:', response.status);",
+  FETCH_PARENT_FALLBACK:
+    "console.log('[FETCH] Parent failed, falling back:', requestInfo);",
+  FETCH_COMPLETED:
+    "console.log('[FETCH] Completed:', requestInfo, '- Status:', response.status);",
   FETCH_TIMEOUT: "console.log('[FETCH] Timeout:', requestInfo);",
-  FETCH_FAILED: "console.log('[FETCH] Failed:', requestInfo, '- Error:', error.message);",
+  FETCH_FAILED:
+    "console.log('[FETCH] Failed:', requestInfo, '- Error:', error.message);",
   FETCH_STARTED: "console.log('[FETCH] Request started:', requestInfo);",
   XHR_STARTED: "console.log('[XHR] Request started:', method, url);",
-  XHR_COMPLETED: "console.log('[XHR] Completed:', method, url, '- Status:', xhr.status);",
+  XHR_COMPLETED:
+    "console.log('[XHR] Completed:', method, url, '- Status:', xhr.status);",
   XHR_FAILED: "console.log('[XHR] Failed:', method, url);",
   XHR_ABORTED: "console.log('[XHR] Aborted:', method, url);",
 };

@@ -1,15 +1,18 @@
-'use strict';
+"use strict";
 // Refs: https://github.com/nodejs/node/issues/6287
 
-require('../common');
-const assert = require('assert');
-const vm = require('vm');
+require("../common");
+const assert = require("assert");
+const vm = require("vm");
 
 const context = vm.createContext();
-const res = vm.runInContext(`
+const res = vm.runInContext(
+  `
   this.x = 'prop';
   delete this.x;
   Object.getOwnPropertyDescriptor(this, 'x');
-`, context);
+`,
+  context,
+);
 
 assert.strictEqual(res, undefined);

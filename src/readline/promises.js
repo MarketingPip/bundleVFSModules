@@ -12,8 +12,8 @@
 //   - No `window`/`document` at module scope.
 //   - No global pollution.
 
-import { EventEmitter } from '../events.js';
-import { StringDecoder } from '../string_decoder.js';
+import { EventEmitter } from "../events.js";
+import { StringDecoder } from "../string_decoder.js";
 
 // ======================================================================
 // Inlined from src/readline/utils.js
@@ -27,26 +27,27 @@ import { StringDecoder } from '../string_decoder.js';
 //
 // Dependency-free ESM, browser-safe. No bare imports.
 
-const RT = (typeof globalThis._RUNTIME_ !== "undefined")
-  ? globalThis._RUNTIME_
-  : undefined;
+const RT =
+  typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
 
 // ---------------------------------------------------------------------------
 // Errors (shapes match Node's internal/errors codes used by readline)
 // ---------------------------------------------------------------------------
 
 class AbortError extends Error {
-  constructor(message = 'The operation was aborted', options = {}) {
+  constructor(message = "The operation was aborted", options = {}) {
     super(message, options);
-    this.name = 'AbortError';
-    this.code = 'ABORT_ERR';
+    this.name = "AbortError";
+    this.code = "ABORT_ERR";
   }
 }
 
 function makeCodeError(code, Base, message) {
   return class extends Base {
     constructor(...args) {
-      super(typeof message === 'function' ? message(...args) : message);
+      super(typeof message === "function" ? message(...args) : message);
       this.code = code;
     }
     toString() {
@@ -56,36 +57,45 @@ function makeCodeError(code, Base, message) {
 }
 
 const ERR_INVALID_ARG_VALUE = makeCodeError(
-  'ERR_INVALID_ARG_VALUE', TypeError,
-  (name, value, reason = 'is invalid') =>
+  "ERR_INVALID_ARG_VALUE",
+  TypeError,
+  (name, value, reason = "is invalid") =>
     `The argument '${name}' ${reason}. Received ${inspectValue(value)}`,
 );
 const ERR_INVALID_ARG_TYPE = makeCodeError(
-  'ERR_INVALID_ARG_TYPE', TypeError,
+  "ERR_INVALID_ARG_TYPE",
+  TypeError,
   (name, expected, actual) =>
     `The "${name}" argument must be of type ${expected}. ` +
     `Received ${inspectValue(actual)}`,
 );
 const ERR_INVALID_CURSOR_POS = makeCodeError(
-  'ERR_INVALID_CURSOR_POS', TypeError,
-  'Cannot set cursor row without setting its column',
+  "ERR_INVALID_CURSOR_POS",
+  TypeError,
+  "Cannot set cursor row without setting its column",
 );
 const ERR_USE_AFTER_CLOSE = makeCodeError(
-  'ERR_USE_AFTER_CLOSE', Error,
+  "ERR_USE_AFTER_CLOSE",
+  Error,
   (name) => `${name} was closed`,
 );
 const ERR_OUT_OF_RANGE = makeCodeError(
-  'ERR_OUT_OF_RANGE', RangeError,
-  (name, range = 'a valid range', value) => {
+  "ERR_OUT_OF_RANGE",
+  RangeError,
+  (name, range = "a valid range", value) => {
     let msg = `The value of "${name}" is out of range.`;
-    if (range !== 'a valid range') msg += ` It must be ${range}.`;
+    if (range !== "a valid range") msg += ` It must be ${range}.`;
     return `${msg} Received ${inspectValue(value)}`;
   },
 );
 
 function inspectValue(v) {
-  if (typeof v === 'string') return `'${v}'`;
-  try { return String(v); } catch { return '?'; }
+  if (typeof v === "string") return `'${v}'`;
+  try {
+    return String(v);
+  } catch {
+    return "?";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -93,17 +103,17 @@ function inspectValue(v) {
 // ---------------------------------------------------------------------------
 
 function validateFunction(value, name) {
-  if (typeof value !== 'function') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'Function', value);
+  if (typeof value !== "function") {
+    throw new ERR_INVALID_ARG_TYPE(name, "Function", value);
   }
 }
 
 function validateInteger(value, name, min = -2147483648, max = 2147483647) {
-  if (typeof value !== 'number') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'integer', value);
+  if (typeof value !== "number") {
+    throw new ERR_INVALID_ARG_TYPE(name, "integer", value);
   }
   if (!Number.isInteger(value)) {
-    throw new ERR_OUT_OF_RANGE(name, 'an integer', value);
+    throw new ERR_OUT_OF_RANGE(name, "an integer", value);
   }
   if (value < min || value > max) {
     throw new ERR_OUT_OF_RANGE(name, `>= ${min} and <= ${max}`, value);
@@ -111,23 +121,23 @@ function validateInteger(value, name, min = -2147483648, max = 2147483647) {
 }
 
 function validateString(value, name) {
-  if (typeof value !== 'string') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'string', value);
+  if (typeof value !== "string") {
+    throw new ERR_INVALID_ARG_TYPE(name, "string", value);
   }
 }
 
 function validateBoolean(value, name) {
-  if (typeof value !== 'boolean') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'boolean', value);
+  if (typeof value !== "boolean") {
+    throw new ERR_INVALID_ARG_TYPE(name, "boolean", value);
   }
 }
 
 function validateUint32(value, name, positive = false) {
-  if (typeof value !== 'number') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
+  if (typeof value !== "number") {
+    throw new ERR_INVALID_ARG_TYPE(name, "number", value);
   }
   if (!Number.isInteger(value)) {
-    throw new ERR_OUT_OF_RANGE(name, 'an integer', value);
+    throw new ERR_OUT_OF_RANGE(name, "an integer", value);
   }
   const min = positive ? 1 : 0;
   const max = 4294967295;
@@ -137,29 +147,35 @@ function validateUint32(value, name, positive = false) {
 }
 
 function validateAbortSignal(signal, name) {
-  if (signal === undefined || signal === null ||
-      typeof signal !== 'object' ||
-      typeof signal.aborted !== 'boolean' ||
-      typeof signal.addEventListener !== 'function') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'AbortSignal', signal);
+  if (
+    signal === undefined ||
+    signal === null ||
+    typeof signal !== "object" ||
+    typeof signal.aborted !== "boolean" ||
+    typeof signal.addEventListener !== "function"
+  ) {
+    throw new ERR_INVALID_ARG_TYPE(name, "AbortSignal", signal);
   }
 }
 
 function validateArray(value, name) {
   if (!Array.isArray(value)) {
-    throw new ERR_INVALID_ARG_TYPE(name, 'Array', value);
+    throw new ERR_INVALID_ARG_TYPE(name, "Array", value);
   }
 }
 
 function validateNumber(value, name, min = undefined, max = undefined) {
-  if (typeof value !== 'number') {
-    throw new ERR_INVALID_ARG_TYPE(name, 'number', value);
+  if (typeof value !== "number") {
+    throw new ERR_INVALID_ARG_TYPE(name, "number", value);
   }
-  if ((min !== undefined && value < min) ||
-      (max !== undefined && value > max) ||
-      ((min !== undefined || max !== undefined) && Number.isNaN(value))) {
-    let range = 'a valid range';
-    if (min !== undefined && max !== undefined) range = `>= ${min} and <= ${max}`;
+  if (
+    (min !== undefined && value < min) ||
+    (max !== undefined && value > max) ||
+    ((min !== undefined || max !== undefined) && Number.isNaN(value))
+  ) {
+    let range = "a valid range";
+    if (min !== undefined && max !== undefined)
+      range = `>= ${min} and <= ${max}`;
     else if (min !== undefined) range = `>= ${min}`;
     else if (max !== undefined) range = `<= ${max}`;
     throw new ERR_OUT_OF_RANGE(name, range, value);
@@ -169,9 +185,9 @@ function validateNumber(value, name, min = undefined, max = undefined) {
 // process.nextTick where available, else queueMicrotask (browser-safe).
 function nextTick(cb, ...args) {
   const proc = (RT && RT.process) || globalThis.process;
-  if (proc && typeof proc.nextTick === 'function') {
+  if (proc && typeof proc.nextTick === "function") {
     proc.nextTick(cb, ...args);
-  } else if (typeof globalThis.queueMicrotask === 'function') {
+  } else if (typeof globalThis.queueMicrotask === "function") {
     globalThis.queueMicrotask(() => cb(...args));
   } else {
     globalThis.setTimeout(() => cb(...args), 0);
@@ -181,19 +197,19 @@ function nextTick(cb, ...args) {
 // Attaches a one-shot abort listener; returns a disposable.
 function addAbortListener(signal, listener) {
   if (signal === undefined) {
-    throw new ERR_INVALID_ARG_TYPE('signal', 'AbortSignal', signal);
+    throw new ERR_INVALID_ARG_TYPE("signal", "AbortSignal", signal);
   }
-  validateAbortSignal(signal, 'signal');
-  validateFunction(listener, 'listener');
+  validateAbortSignal(signal, "signal");
+  validateFunction(listener, "listener");
 
   if (signal.aborted) {
     nextTick(listener);
   } else {
-    signal.addEventListener('abort', listener, { once: true });
+    signal.addEventListener("abort", listener, { once: true });
   }
   return {
     [Symbol.dispose]() {
-      signal.removeEventListener('abort', listener);
+      signal.removeEventListener("abort", listener);
     },
   };
 }
@@ -203,7 +219,7 @@ function addAbortListener(signal, listener) {
 // ---------------------------------------------------------------------------
 
 const kUTF16SurrogateThreshold = 0x10000; // 2 ** 16
-const kSubstringSearch = Symbol('kSubstringSearch');
+const kSubstringSearch = Symbol("kSubstringSearch");
 
 /**
  * Builds an ANSI CSI escape sequence.
@@ -212,7 +228,7 @@ const kSubstringSearch = Symbol('kSubstringSearch');
  * @returns {string}
  */
 function CSI(strings, ...args) {
-  let ret = '\x1b[';
+  let ret = "\x1b[";
   for (let n = 0; n < strings.length; n++) {
     ret += strings[n];
     if (n < args.length) ret += args[n];
@@ -220,7 +236,7 @@ function CSI(strings, ...args) {
   return ret;
 }
 
-CSI.kEscape = '\x1b';
+CSI.kEscape = "\x1b";
 CSI.kClearToLineBeginning = CSI`1K`;
 CSI.kClearToLineEnd = CSI`0K`;
 CSI.kClearLine = CSI`2K`;
@@ -242,7 +258,8 @@ function charLengthLeft(str, i) {
   if (
     (i > 1 && str.codePointAt(i - 2) >= kUTF16SurrogateThreshold) ||
     str.codePointAt(i - 1) >= kUTF16SurrogateThreshold
-  ) return 2;
+  )
+    return 2;
   return 1;
 }
 
@@ -287,37 +304,43 @@ function* emitKeys(stream) {
 
     if (ch === kEscape) {
       escaped = true;
-      s += (ch = yield);
-      if (ch === kEscape) s += (ch = yield);
+      s += ch = yield;
+      if (ch === kEscape) s += ch = yield;
     }
 
-    if (escaped && (ch === 'O' || ch === '[')) {
+    if (escaped && (ch === "O" || ch === "[")) {
       let code = ch;
       let modifier = 0;
 
-      if (ch === 'O') {
+      if (ch === "O") {
         // ESC O letter / ESC O modifier letter
-        s += (ch = yield);
-        if (ch >= '0' && ch <= '9') { modifier = (ch >> 0) - 1; s += (ch = yield); }
+        s += ch = yield;
+        if (ch >= "0" && ch <= "9") {
+          modifier = (ch >> 0) - 1;
+          s += ch = yield;
+        }
         code += ch;
-      } else if (ch === '[') {
-        s += (ch = yield);
+      } else if (ch === "[") {
+        s += ch = yield;
 
-        if (ch === '[') { code += ch; s += (ch = yield); }
+        if (ch === "[") {
+          code += ch;
+          s += ch = yield;
+        }
 
         const cmdStart = s.length - 1;
 
-        if (ch >= '0' && ch <= '9') {
-          s += (ch = yield);
-          if (ch >= '0' && ch <= '9') {
-            s += (ch = yield);
-            if (ch >= '0' && ch <= '9') s += (ch = yield);
+        if (ch >= "0" && ch <= "9") {
+          s += ch = yield;
+          if (ch >= "0" && ch <= "9") {
+            s += ch = yield;
+            if (ch >= "0" && ch <= "9") s += ch = yield;
           }
         }
 
-        if (ch === ';') {
-          s += (ch = yield);
-          if (ch >= '0' && ch <= '9') s += yield;
+        if (ch === ";") {
+          s += ch = yield;
+          if (ch >= "0" && ch <= "9") s += yield;
         }
 
         const cmd = s.slice(cmdStart);
@@ -338,99 +361,256 @@ function* emitKeys(stream) {
         }
       }
 
-      key.ctrl  = !!(modifier & 4);
-      key.meta  = !!(modifier & 10);
+      key.ctrl = !!(modifier & 4);
+      key.meta = !!(modifier & 10);
       key.shift = !!(modifier & 1);
-      key.code  = code;
+      key.code = code;
 
       switch (code) {
-        case '[P': case 'OP': case '[11~': case '[[A': key.name = 'f1';  break;
-        case '[Q': case 'OQ': case '[12~': case '[[B': key.name = 'f2';  break;
-        case '[R': case 'OR': case '[13~': case '[[C': key.name = 'f3';  break;
-        case '[S': case 'OS': case '[14~': case '[[D': key.name = 'f4';  break;
-        case '[[E':   key.name = 'f5';  break;
-        case '[15~':  key.name = 'f5';  break;
-        case '[17~':  key.name = 'f6';  break;
-        case '[18~':  key.name = 'f7';  break;
-        case '[19~':  key.name = 'f8';  break;
-        case '[20~':  key.name = 'f9';  break;
-        case '[21~':  key.name = 'f10'; break;
-        case '[23~':  key.name = 'f11'; break;
-        case '[24~':  key.name = 'f12'; break;
-        case '[200~': key.name = 'paste-start'; break;
-        case '[201~': key.name = 'paste-end';   break;
-        case '[A': case 'OA': key.name = 'up';    break;
-        case '[B': case 'OB': key.name = 'down';  break;
-        case '[C': case 'OC': key.name = 'right'; break;
-        case '[D': case 'OD': key.name = 'left';  break;
-        case '[E': case 'OE': key.name = 'clear'; break;
-        case '[F': case 'OF': key.name = 'end';   break;
-        case '[H': case 'OH': key.name = 'home';  break;
-        case '[1~': key.name = 'home';     break;
-        case '[2~': key.name = 'insert';   break;
-        case '[3~': key.name = 'delete';   break;
-        case '[4~': key.name = 'end';      break;
-        case '[5~': case '[[5~': key.name = 'pageup';   break;
-        case '[6~': case '[[6~': key.name = 'pagedown'; break;
-        case '[7~': key.name = 'home'; break;
-        case '[8~': key.name = 'end';  break;
-        case '[a': key.name = 'up';    key.shift = true; break;
-        case '[b': key.name = 'down';  key.shift = true; break;
-        case '[c': key.name = 'right'; key.shift = true; break;
-        case '[d': key.name = 'left';  key.shift = true; break;
-        case '[e': key.name = 'clear'; key.shift = true; break;
-        case '[2$': key.name = 'insert';   key.shift = true; break;
-        case '[3$': key.name = 'delete';   key.shift = true; break;
-        case '[5$': key.name = 'pageup';   key.shift = true; break;
-        case '[6$': key.name = 'pagedown'; key.shift = true; break;
-        case '[7$': key.name = 'home';     key.shift = true; break;
-        case '[8$': key.name = 'end';      key.shift = true; break;
-        case 'Oa': key.name = 'up';    key.ctrl = true; break;
-        case 'Ob': key.name = 'down';  key.ctrl = true; break;
-        case 'Oc': key.name = 'right'; key.ctrl = true; break;
-        case 'Od': key.name = 'left';  key.ctrl = true; break;
-        case 'Oe': key.name = 'clear'; key.ctrl = true; break;
-        case '[2^': key.name = 'insert';   key.ctrl = true; break;
-        case '[3^': key.name = 'delete';   key.ctrl = true; break;
-        case '[5^': key.name = 'pageup';   key.ctrl = true; break;
-        case '[6^': key.name = 'pagedown'; key.ctrl = true; break;
-        case '[7^': key.name = 'home';     key.ctrl = true; break;
-        case '[8^': key.name = 'end';      key.ctrl = true; break;
-        case '[Z': key.name = 'tab'; key.shift = true; break;
-        default:   key.name = 'undefined'; break;
+        case "[P":
+        case "OP":
+        case "[11~":
+        case "[[A":
+          key.name = "f1";
+          break;
+        case "[Q":
+        case "OQ":
+        case "[12~":
+        case "[[B":
+          key.name = "f2";
+          break;
+        case "[R":
+        case "OR":
+        case "[13~":
+        case "[[C":
+          key.name = "f3";
+          break;
+        case "[S":
+        case "OS":
+        case "[14~":
+        case "[[D":
+          key.name = "f4";
+          break;
+        case "[[E":
+          key.name = "f5";
+          break;
+        case "[15~":
+          key.name = "f5";
+          break;
+        case "[17~":
+          key.name = "f6";
+          break;
+        case "[18~":
+          key.name = "f7";
+          break;
+        case "[19~":
+          key.name = "f8";
+          break;
+        case "[20~":
+          key.name = "f9";
+          break;
+        case "[21~":
+          key.name = "f10";
+          break;
+        case "[23~":
+          key.name = "f11";
+          break;
+        case "[24~":
+          key.name = "f12";
+          break;
+        case "[200~":
+          key.name = "paste-start";
+          break;
+        case "[201~":
+          key.name = "paste-end";
+          break;
+        case "[A":
+        case "OA":
+          key.name = "up";
+          break;
+        case "[B":
+        case "OB":
+          key.name = "down";
+          break;
+        case "[C":
+        case "OC":
+          key.name = "right";
+          break;
+        case "[D":
+        case "OD":
+          key.name = "left";
+          break;
+        case "[E":
+        case "OE":
+          key.name = "clear";
+          break;
+        case "[F":
+        case "OF":
+          key.name = "end";
+          break;
+        case "[H":
+        case "OH":
+          key.name = "home";
+          break;
+        case "[1~":
+          key.name = "home";
+          break;
+        case "[2~":
+          key.name = "insert";
+          break;
+        case "[3~":
+          key.name = "delete";
+          break;
+        case "[4~":
+          key.name = "end";
+          break;
+        case "[5~":
+        case "[[5~":
+          key.name = "pageup";
+          break;
+        case "[6~":
+        case "[[6~":
+          key.name = "pagedown";
+          break;
+        case "[7~":
+          key.name = "home";
+          break;
+        case "[8~":
+          key.name = "end";
+          break;
+        case "[a":
+          key.name = "up";
+          key.shift = true;
+          break;
+        case "[b":
+          key.name = "down";
+          key.shift = true;
+          break;
+        case "[c":
+          key.name = "right";
+          key.shift = true;
+          break;
+        case "[d":
+          key.name = "left";
+          key.shift = true;
+          break;
+        case "[e":
+          key.name = "clear";
+          key.shift = true;
+          break;
+        case "[2$":
+          key.name = "insert";
+          key.shift = true;
+          break;
+        case "[3$":
+          key.name = "delete";
+          key.shift = true;
+          break;
+        case "[5$":
+          key.name = "pageup";
+          key.shift = true;
+          break;
+        case "[6$":
+          key.name = "pagedown";
+          key.shift = true;
+          break;
+        case "[7$":
+          key.name = "home";
+          key.shift = true;
+          break;
+        case "[8$":
+          key.name = "end";
+          key.shift = true;
+          break;
+        case "Oa":
+          key.name = "up";
+          key.ctrl = true;
+          break;
+        case "Ob":
+          key.name = "down";
+          key.ctrl = true;
+          break;
+        case "Oc":
+          key.name = "right";
+          key.ctrl = true;
+          break;
+        case "Od":
+          key.name = "left";
+          key.ctrl = true;
+          break;
+        case "Oe":
+          key.name = "clear";
+          key.ctrl = true;
+          break;
+        case "[2^":
+          key.name = "insert";
+          key.ctrl = true;
+          break;
+        case "[3^":
+          key.name = "delete";
+          key.ctrl = true;
+          break;
+        case "[5^":
+          key.name = "pageup";
+          key.ctrl = true;
+          break;
+        case "[6^":
+          key.name = "pagedown";
+          key.ctrl = true;
+          break;
+        case "[7^":
+          key.name = "home";
+          key.ctrl = true;
+          break;
+        case "[8^":
+          key.name = "end";
+          key.ctrl = true;
+          break;
+        case "[Z":
+          key.name = "tab";
+          key.shift = true;
+          break;
+        default:
+          key.name = "undefined";
+          break;
       }
-
-    } else if (ch === '\r') {
-      key.name = 'return'; key.meta = escaped;
-    } else if (ch === '\n') {
-      key.name = 'enter'; key.meta = escaped;
-    } else if (ch === '\t') {
-      key.name = 'tab'; key.meta = escaped;
-    } else if (ch === '\b' || ch === '\x7f') {
-      key.name = 'backspace'; key.meta = escaped;
+    } else if (ch === "\r") {
+      key.name = "return";
+      key.meta = escaped;
+    } else if (ch === "\n") {
+      key.name = "enter";
+      key.meta = escaped;
+    } else if (ch === "\t") {
+      key.name = "tab";
+      key.meta = escaped;
+    } else if (ch === "\b" || ch === "\x7f") {
+      key.name = "backspace";
+      key.meta = escaped;
     } else if (ch === kEscape) {
-      key.name = 'escape'; key.meta = escaped;
-    } else if (ch === ' ') {
-      key.name = 'space'; key.meta = escaped;
-    } else if (!escaped && ch <= '\x1a') {
+      key.name = "escape";
+      key.meta = escaped;
+    } else if (ch === " ") {
+      key.name = "space";
+      key.meta = escaped;
+    } else if (!escaped && ch <= "\x1a") {
       // ctrl+letter
-      key.name = String.fromCharCode(ch.charCodeAt(0) + 'a'.charCodeAt(0) - 1);
+      key.name = String.fromCharCode(ch.charCodeAt(0) + "a".charCodeAt(0) - 1);
       key.ctrl = true;
     } else if (/^[0-9A-Za-z]$/.test(ch)) {
-      key.name  = ch.toLowerCase();
+      key.name = ch.toLowerCase();
       key.shift = /^[A-Z]$/.test(ch);
-      key.meta  = escaped;
+      key.meta = escaped;
     } else if (escaped) {
-      key.name = ch.length ? undefined : 'escape';
+      key.name = ch.length ? undefined : "escape";
       key.meta = true;
     }
 
     key.sequence = s;
 
     if (s.length !== 0 && (key.name !== undefined || escaped)) {
-      stream.emit('keypress', escaped ? undefined : s, key);
+      stream.emit("keypress", escaped ? undefined : s, key);
     } else if (charLengthAt(s, 0) === s.length) {
-      stream.emit('keypress', s, key);
+      stream.emit("keypress", s, key);
     }
     // Unrecognised / broken sequence: emit nothing
   }
@@ -446,7 +626,7 @@ function* emitKeys(stream) {
  * @returns {string}
  */
 function commonPrefix(strings) {
-  if (strings.length === 0) return '';
+  if (strings.length === 0) return "";
   if (strings.length === 1) return strings[0];
   const sorted = [...strings].sort();
   const min = sorted[0];
@@ -464,9 +644,9 @@ function commonPrefix(strings) {
  * @param {string} [to='\r']
  * @returns {string}
  */
-function reverseString(line, from = '\r', to = '\r') {
+function reverseString(line, from = "\r", to = "\r") {
   const parts = line.split(from);
-  let result = '';
+  let result = "";
   for (let i = parts.length - 1; i > 0; i--) result += parts[i] + to;
   result += parts[0];
   return result;
@@ -477,47 +657,51 @@ function reverseString(line, from = '\r', to = '\r') {
 // non-ICU branch — plus stripVTControlCharacters)
 // ---------------------------------------------------------------------------
 
-const ansiPattern = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+const ansiPattern =
+  /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 
 function stripVTControlCharacters(str) {
-  validateString(str, 'str');
-  if (str.indexOf('\u001B') === -1 && str.indexOf('\u009B') === -1) return str;
+  validateString(str, "str");
+  if (str.indexOf("\u001B") === -1 && str.indexOf("\u009B") === -1) return str;
   ansiPattern.lastIndex = 0;
-  return str.replace(ansiPattern, '');
+  return str.replace(ansiPattern, "");
 }
 
 function isFullWidthCodePoint(code) {
-  return code >= 0x1100 && (
-    code <= 0x115f ||
-    code === 0x2329 ||
-    code === 0x232a ||
-    (code >= 0x2e80 && code <= 0x3247 && code !== 0x303f) ||
-    (code >= 0x3250 && code <= 0x4dbf) ||
-    (code >= 0x4e00 && code <= 0xa4c6) ||
-    (code >= 0xa960 && code <= 0xa97c) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe10 && code <= 0xfe19) ||
-    (code >= 0xfe30 && code <= 0xfe6b) ||
-    (code >= 0xff01 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1b000 && code <= 0x1b001) ||
-    (code >= 0x1f200 && code <= 0x1f251) ||
-    (code >= 0x1f300 && code <= 0x1f64f) ||
-    (code >= 0x20000 && code <= 0x3fffd)
+  return (
+    code >= 0x1100 &&
+    (code <= 0x115f ||
+      code === 0x2329 ||
+      code === 0x232a ||
+      (code >= 0x2e80 && code <= 0x3247 && code !== 0x303f) ||
+      (code >= 0x3250 && code <= 0x4dbf) ||
+      (code >= 0x4e00 && code <= 0xa4c6) ||
+      (code >= 0xa960 && code <= 0xa97c) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe10 && code <= 0xfe19) ||
+      (code >= 0xfe30 && code <= 0xfe6b) ||
+      (code >= 0xff01 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1b000 && code <= 0x1b001) ||
+      (code >= 0x1f200 && code <= 0x1f251) ||
+      (code >= 0x1f300 && code <= 0x1f64f) ||
+      (code >= 0x20000 && code <= 0x3fffd))
   );
 }
 
 function isZeroWidthCodePoint(code) {
-  return code <= 0x1F || // C0 control codes
-    (code >= 0x7F && code <= 0x9F) || // C1 control codes
-    (code >= 0x300 && code <= 0x36F) || // Combining Diacritical Marks
-    (code >= 0x200B && code <= 0x200F) || // Modifying Invisible Characters
+  return (
+    code <= 0x1f || // C0 control codes
+    (code >= 0x7f && code <= 0x9f) || // C1 control codes
+    (code >= 0x300 && code <= 0x36f) || // Combining Diacritical Marks
+    (code >= 0x200b && code <= 0x200f) || // Modifying Invisible Characters
     // Combining Diacritical Marks for Symbols
-    (code >= 0x20D0 && code <= 0x20FF) ||
-    (code >= 0xFE00 && code <= 0xFE0F) || // Variation Selectors
-    (code >= 0xFE20 && code <= 0xFE2F) || // Combining Half Marks
-    (code >= 0xE0100 && code <= 0xE01EF); // Variation Selectors
+    (code >= 0x20d0 && code <= 0x20ff) ||
+    (code >= 0xfe00 && code <= 0xfe0f) || // Variation Selectors
+    (code >= 0xfe20 && code <= 0xfe2f) || // Combining Half Marks
+    (code >= 0xe0100 && code <= 0xe01ef)
+  ); // Variation Selectors
 }
 
 /**
@@ -529,7 +713,7 @@ function isZeroWidthCodePoint(code) {
 function getStringWidth(str, removeControlChars = true) {
   let width = 0;
   if (removeControlChars) str = stripVTControlCharacters(str);
-  str = str.normalize('NFC');
+  str = str.normalize("NFC");
   for (const char of str) {
     const code = char.codePointAt(0);
     if (isFullWidthCodePoint(code)) {
@@ -545,32 +729,33 @@ function getStringWidth(str, removeControlChars = true) {
 // Cursor/screen callbacks (port of internal/readline/callbacks.js)
 // ---------------------------------------------------------------------------
 
-const { kClearLine, kClearScreenDown, kClearToLineBeginning, kClearToLineEnd } = CSI;
+const { kClearLine, kClearScreenDown, kClearToLineBeginning, kClearToLineEnd } =
+  CSI;
 
 /**
  * Moves the cursor to the x and y coordinate on the given stream.
  */
 function cursorTo(stream, x, y, callback) {
   if (callback !== undefined) {
-    validateFunction(callback, 'callback');
+    validateFunction(callback, "callback");
   }
 
-  if (typeof y === 'function') {
+  if (typeof y === "function") {
     callback = y;
     y = undefined;
   }
 
-  if (Number.isNaN(x)) throw new ERR_INVALID_ARG_VALUE('x', x);
-  if (Number.isNaN(y)) throw new ERR_INVALID_ARG_VALUE('y', y);
+  if (Number.isNaN(x)) throw new ERR_INVALID_ARG_VALUE("x", x);
+  if (Number.isNaN(y)) throw new ERR_INVALID_ARG_VALUE("y", y);
 
-  if (stream == null || (typeof x !== 'number' && typeof y !== 'number')) {
-    if (typeof callback === 'function') nextTick(callback, null);
+  if (stream == null || (typeof x !== "number" && typeof y !== "number")) {
+    if (typeof callback === "function") nextTick(callback, null);
     return true;
   }
 
-  if (typeof x !== 'number') throw new ERR_INVALID_CURSOR_POS();
+  if (typeof x !== "number") throw new ERR_INVALID_CURSOR_POS();
 
-  const data = typeof y !== 'number' ? CSI`${x + 1}G` : CSI`${y + 1};${x + 1}H`;
+  const data = typeof y !== "number" ? CSI`${x + 1}G` : CSI`${y + 1};${x + 1}H`;
   return stream.write(data, callback);
 }
 
@@ -579,15 +764,15 @@ function cursorTo(stream, x, y, callback) {
  */
 function moveCursor(stream, dx, dy, callback) {
   if (callback !== undefined) {
-    validateFunction(callback, 'callback');
+    validateFunction(callback, "callback");
   }
 
   if (stream == null || !(dx || dy)) {
-    if (typeof callback === 'function') nextTick(callback, null);
+    if (typeof callback === "function") nextTick(callback, null);
     return true;
   }
 
-  let data = '';
+  let data = "";
 
   if (dx < 0) {
     data += CSI`${-dx}D`;
@@ -610,11 +795,11 @@ function moveCursor(stream, dx, dy, callback) {
  */
 function clearLine(stream, dir, callback) {
   if (callback !== undefined) {
-    validateFunction(callback, 'callback');
+    validateFunction(callback, "callback");
   }
 
   if (stream === null || stream === undefined) {
-    if (typeof callback === 'function') nextTick(callback, null);
+    if (typeof callback === "function") nextTick(callback, null);
     return true;
   }
 
@@ -628,11 +813,11 @@ function clearLine(stream, dir, callback) {
  */
 function clearScreenDown(stream, callback) {
   if (callback !== undefined) {
-    validateFunction(callback, 'callback');
+    validateFunction(callback, "callback");
   }
 
   if (stream === null || stream === undefined) {
-    if (typeof callback === 'function') nextTick(callback, null);
+    if (typeof callback === "function") nextTick(callback, null);
     return true;
   }
 
@@ -655,12 +840,10 @@ function clearScreenDown(stream, callback) {
 //   - TTY-only host operations (raw mode, SIGTSTP suspend) degrade to
 //     guarded no-ops outside Node; everything else is real.
 
-
-
 // Guarded host process (real Node, the sandbox's process shim, or undefined).
 function getProcess() {
   if (RT && RT.process) return RT.process;
-  if (typeof globalThis.process !== 'undefined') return globalThis.process;
+  if (typeof globalThis.process !== "undefined") return globalThis.process;
   return undefined;
 }
 function getTerm() {
@@ -672,68 +855,68 @@ function getTerm() {
 // Well-known symbols (same identities as Node's internal interface)
 // ---------------------------------------------------------------------------
 
-const kAddHistory        = Symbol('kAddHistory');
-const kDecoder           = Symbol('kDecoder');
-const kDeleteLeft        = Symbol('kDeleteLeft');
-const kDeleteLineLeft    = Symbol('kDeleteLineLeft');
-const kDeleteLineRight   = Symbol('kDeleteLineRight');
-const kDeleteRight       = Symbol('kDeleteRight');
-const kDeleteWordLeft    = Symbol('kDeleteWordLeft');
-const kDeleteWordRight   = Symbol('kDeleteWordRight');
-const kGetDisplayPos     = Symbol('kGetDisplayPos');
-const kHistoryNext       = Symbol('kHistoryNext');
-const kMoveDownOrHistoryNext = Symbol('kMoveDownOrHistoryNext');
-const kHistoryPrev       = Symbol('kHistoryPrev');
-const kMoveUpOrHistoryPrev = Symbol('kMoveUpOrHistoryPrev');
-const kInsertString      = Symbol('kInsertString');
-const kLine              = Symbol('kLine');
-const kLine_buffer       = Symbol('kLine_buffer');
-const kMoveCursor        = Symbol('kMoveCursor');
-const kNormalWrite       = Symbol('kNormalWrite');
-const kOldPrompt         = Symbol('kOldPrompt');
-const kOnLine            = Symbol('kOnLine');
-const kSetLine           = Symbol('kSetLine');
-const kPreviousKey       = Symbol('kPreviousKey');
-const kPrompt            = Symbol('kPrompt');
-const kQuestion          = Symbol('kQuestion');
-const kQuestionCallback  = Symbol('kQuestionCallback');
-const kQuestionCancel    = Symbol('kQuestionCancel');
-const kQuestionReject    = Symbol('kQuestionReject');
-const kRefreshLine       = Symbol('kRefreshLine');
-const kSawKeyPress       = Symbol('kSawKeyPress');
-const kSawReturnAt       = Symbol('kSawReturnAt');
-const kSetRawMode        = Symbol('kSetRawMode');
-const kTabComplete       = Symbol('kTabComplete');
-const kTabCompleter      = Symbol('kTabCompleter');
-const kTtyWrite          = Symbol('kTtyWrite');
-const kWordLeft          = Symbol('kWordLeft');
-const kWordRight         = Symbol('kWordRight');
-const kWriteToOutput     = Symbol('kWriteToOutput');
-const kIsMultiline       = Symbol('kIsMultiline');
-const kUndo              = Symbol('kUndo');
-const kRedo              = Symbol('kRedo');
-const kUndoStack         = Symbol('kUndoStack');
-const kRedoStack         = Symbol('kRedoStack');
-const kKillRing          = Symbol('kKillRing');
-const kKillRingCursor    = Symbol('kKillRingCursor');
-const kPushToKillRing    = Symbol('kPushToKillRing');
-const kPushToUndoStack   = Symbol('kPushToUndoStack');
-const kBeforeEdit        = Symbol('kBeforeEdit');
-const kYank              = Symbol('kYank');
-const kYankPop           = Symbol('kYankPop');
-const kYanking           = Symbol('kYanking');
-const kSavePreviousState = Symbol('kSavePreviousState');
-const kRestorePreviousState = Symbol('kRestorePreviousState');
-const kPreviousLine      = Symbol('kPreviousLine');
-const kPreviousCursor    = Symbol('kPreviousCursor');
-const kPreviousCursorCols = Symbol('kPreviousCursorCols');
-const kPreviousPrevRows  = Symbol('kPreviousPrevRows');
-const kMultilineMove     = Symbol('kMultilineMove');
-const kAddNewLineOnTTY   = Symbol('kAddNewLineOnTTY');
-const kLastCommandErrored = Symbol('kLastCommandErrored');
+const kAddHistory = Symbol("kAddHistory");
+const kDecoder = Symbol("kDecoder");
+const kDeleteLeft = Symbol("kDeleteLeft");
+const kDeleteLineLeft = Symbol("kDeleteLineLeft");
+const kDeleteLineRight = Symbol("kDeleteLineRight");
+const kDeleteRight = Symbol("kDeleteRight");
+const kDeleteWordLeft = Symbol("kDeleteWordLeft");
+const kDeleteWordRight = Symbol("kDeleteWordRight");
+const kGetDisplayPos = Symbol("kGetDisplayPos");
+const kHistoryNext = Symbol("kHistoryNext");
+const kMoveDownOrHistoryNext = Symbol("kMoveDownOrHistoryNext");
+const kHistoryPrev = Symbol("kHistoryPrev");
+const kMoveUpOrHistoryPrev = Symbol("kMoveUpOrHistoryPrev");
+const kInsertString = Symbol("kInsertString");
+const kLine = Symbol("kLine");
+const kLine_buffer = Symbol("kLine_buffer");
+const kMoveCursor = Symbol("kMoveCursor");
+const kNormalWrite = Symbol("kNormalWrite");
+const kOldPrompt = Symbol("kOldPrompt");
+const kOnLine = Symbol("kOnLine");
+const kSetLine = Symbol("kSetLine");
+const kPreviousKey = Symbol("kPreviousKey");
+const kPrompt = Symbol("kPrompt");
+const kQuestion = Symbol("kQuestion");
+const kQuestionCallback = Symbol("kQuestionCallback");
+const kQuestionCancel = Symbol("kQuestionCancel");
+const kQuestionReject = Symbol("kQuestionReject");
+const kRefreshLine = Symbol("kRefreshLine");
+const kSawKeyPress = Symbol("kSawKeyPress");
+const kSawReturnAt = Symbol("kSawReturnAt");
+const kSetRawMode = Symbol("kSetRawMode");
+const kTabComplete = Symbol("kTabComplete");
+const kTabCompleter = Symbol("kTabCompleter");
+const kTtyWrite = Symbol("kTtyWrite");
+const kWordLeft = Symbol("kWordLeft");
+const kWordRight = Symbol("kWordRight");
+const kWriteToOutput = Symbol("kWriteToOutput");
+const kIsMultiline = Symbol("kIsMultiline");
+const kUndo = Symbol("kUndo");
+const kRedo = Symbol("kRedo");
+const kUndoStack = Symbol("kUndoStack");
+const kRedoStack = Symbol("kRedoStack");
+const kKillRing = Symbol("kKillRing");
+const kKillRingCursor = Symbol("kKillRingCursor");
+const kPushToKillRing = Symbol("kPushToKillRing");
+const kPushToUndoStack = Symbol("kPushToUndoStack");
+const kBeforeEdit = Symbol("kBeforeEdit");
+const kYank = Symbol("kYank");
+const kYankPop = Symbol("kYankPop");
+const kYanking = Symbol("kYanking");
+const kSavePreviousState = Symbol("kSavePreviousState");
+const kRestorePreviousState = Symbol("kRestorePreviousState");
+const kPreviousLine = Symbol("kPreviousLine");
+const kPreviousCursor = Symbol("kPreviousCursor");
+const kPreviousCursorCols = Symbol("kPreviousCursorCols");
+const kPreviousPrevRows = Symbol("kPreviousPrevRows");
+const kMultilineMove = Symbol("kMultilineMove");
+const kAddNewLineOnTTY = Symbol("kAddNewLineOnTTY");
+const kLastCommandErrored = Symbol("kLastCommandErrored");
 
-const kLineObjectStream = Symbol('line object stream');
-const kMultilinePrompt = Symbol('| ');
+const kLineObjectStream = Symbol("line object stream");
+const kMultilinePrompt = Symbol("| ");
 const kEmptyObject = Object.freeze(Object.create(null));
 
 const kMaxUndoRedoStackSize = 2048;
@@ -771,28 +954,28 @@ function inspectError(err) {
 // isFlushing) behaves identically.
 // ---------------------------------------------------------------------------
 
-const kHSize = Symbol('kSize');
-const kHHistory = Symbol('kHistory');
-const kHIndex = Symbol('kIndex');
-const kHRemoveDuplicates = Symbol('kRemoveHistoryDuplicates');
-const kHIsFlushing = Symbol('kIsFlushing');
+const kHSize = Symbol("kSize");
+const kHHistory = Symbol("kHistory");
+const kHIndex = Symbol("kIndex");
+const kHRemoveDuplicates = Symbol("kRemoveHistoryDuplicates");
+const kHIsFlushing = Symbol("kIsFlushing");
 
 class ReplHistory {
   constructor(context, options) {
     options = options ?? {};
-    if (options !== null && typeof options !== 'object') {
-      throw new ERR_INVALID_ARG_TYPE('options', 'object', options);
+    if (options !== null && typeof options !== "object") {
+      throw new ERR_INVALID_ARG_TYPE("options", "object", options);
     }
-    if (typeof options.history !== 'undefined') {
-      validateArray(options.history, 'history');
+    if (typeof options.history !== "undefined") {
+      validateArray(options.history, "history");
     }
-    if (typeof options.size !== 'undefined') {
-      validateNumber(options.size, 'size', 0);
+    if (typeof options.size !== "undefined") {
+      validateNumber(options.size, "size", 0);
     }
     this[kHRemoveDuplicates] = !!options.removeHistoryDuplicates;
     this[kHIsFlushing] = false;
     this[kHSize] = options.size ?? context.historySize ?? kHistorySize;
-    if (typeof this[kHSize] !== 'number' || !(this[kHSize] >= 0)) {
+    if (typeof this[kHSize] !== "number" || !(this[kHSize] >= 0)) {
       this[kHSize] = kHistorySize;
     }
     this[kHHistory] = options.history ?? [];
@@ -802,7 +985,7 @@ class ReplHistory {
 
   // No history file in the browser: immediately ready, in-memory only.
   initialize(onReadyCallback) {
-    if (typeof onReadyCallback === 'function') {
+    if (typeof onReadyCallback === "function") {
       nextTick(onReadyCallback, null, this._context);
     }
   }
@@ -810,7 +993,7 @@ class ReplHistory {
   addHistory(isMultiline, lastCommandErrored) {
     const line = this._context.line;
 
-    if (line.length === 0) return '';
+    if (line.length === 0) return "";
 
     // If the history is disabled then return the line
     if (this[kHSize] === 0) return line;
@@ -828,7 +1011,7 @@ class ReplHistory {
       this[kHHistory].shift();
     }
 
-    const normalizedLine = ReplHistory.normalizeLineEndings(line, '\n', '\r');
+    const normalizedLine = ReplHistory.normalizeLineEndings(line, "\n", "\r");
 
     if (this[kHHistory].length === 0 || this[kHHistory][0] !== normalizedLine) {
       if (this[kHRemoveDuplicates]) {
@@ -845,12 +1028,14 @@ class ReplHistory {
 
     this[kHIndex] = -1;
 
-    const finalLine = isMultiline ? reverseString(this[kHHistory][0]) : this[kHHistory][0];
+    const finalLine = isMultiline
+      ? reverseString(this[kHHistory][0])
+      : this[kHHistory][0];
 
     // The listener could change the history object, possibly to remove the
     // last added entry if it is sensitive and should not be persisted in the
     // history, like a password.
-    this._context.emit('history', this[kHHistory]);
+    this._context.emit("history", this[kHHistory]);
 
     return finalLine;
   }
@@ -863,7 +1048,7 @@ class ReplHistory {
     if (!this.canNavigateToNext()) {
       return null;
     }
-    const search = substringSearch || '';
+    const search = substringSearch || "";
     let index = this[kHIndex] - 1;
 
     while (
@@ -880,18 +1065,20 @@ class ReplHistory {
       return search;
     }
 
-    return ReplHistory.normalizeLineEndings(this[kHHistory][index], '\r', '\n');
+    return ReplHistory.normalizeLineEndings(this[kHHistory][index], "\r", "\n");
   }
 
   canNavigateToPrevious() {
-    return this[kHHistory].length !== this[kHIndex] && this[kHHistory].length > 0;
+    return (
+      this[kHHistory].length !== this[kHIndex] && this[kHHistory].length > 0
+    );
   }
 
-  navigateToPrevious(substringSearch = '') {
+  navigateToPrevious(substringSearch = "") {
     if (!this.canNavigateToPrevious()) {
       return null;
     }
-    const search = substringSearch || '';
+    const search = substringSearch || "";
     let index = this[kHIndex] + 1;
 
     while (
@@ -908,19 +1095,31 @@ class ReplHistory {
       return search;
     }
 
-    return ReplHistory.normalizeLineEndings(this[kHHistory][index], '\r', '\n');
+    return ReplHistory.normalizeLineEndings(this[kHHistory][index], "\r", "\n");
   }
 
   static normalizeLineEndings(line, from, to) {
     return line.split(from).join(to);
   }
 
-  get size() { return this[kHSize]; }
-  get isFlushing() { return this[kHIsFlushing]; }
-  get history() { return this[kHHistory]; }
-  set history(value) { this[kHHistory] = value; }
-  get index() { return this[kHIndex]; }
-  set index(value) { this[kHIndex] = value; }
+  get size() {
+    return this[kHSize];
+  }
+  get isFlushing() {
+    return this[kHIsFlushing];
+  }
+  get history() {
+    return this[kHHistory];
+  }
+  set history(value) {
+    this[kHHistory] = value;
+  }
+  get index() {
+    return this[kHIndex];
+  }
+  set index(value) {
+    this[kHIndex] = value;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -942,7 +1141,7 @@ function InterfaceConstructor(input, output, completer, terminal) {
   EventEmitter.init.call(this);
 
   let crlfDelay;
-  let prompt = '> ';
+  let prompt = "> ";
   let signal;
   let historyOptions;
 
@@ -959,7 +1158,7 @@ function InterfaceConstructor(input, output, completer, terminal) {
     const removeHistoryDuplicates = input.removeHistoryDuplicates;
 
     if (input.tabSize !== undefined) {
-      validateUint32(input.tabSize, 'tabSize', true);
+      validateUint32(input.tabSize, "tabSize", true);
       this.tabSize = input.tabSize;
     }
     if (input.prompt !== undefined) {
@@ -970,14 +1169,14 @@ function InterfaceConstructor(input, output, completer, terminal) {
         this.escapeCodeTimeout = input.escapeCodeTimeout;
       } else {
         throw new ERR_INVALID_ARG_VALUE(
-          'input.escapeCodeTimeout',
+          "input.escapeCodeTimeout",
           this.escapeCodeTimeout,
         );
       }
     }
 
     if (signal) {
-      validateAbortSignal(signal, 'options.signal');
+      validateAbortSignal(signal, "options.signal");
     }
 
     crlfDelay = input.crlfDelay;
@@ -993,8 +1192,8 @@ function InterfaceConstructor(input, output, completer, terminal) {
 
   this.setupHistoryManager(historyOptions ?? input);
 
-  if (completer !== undefined && typeof completer !== 'function') {
-    throw new ERR_INVALID_ARG_VALUE('completer', completer);
+  if (completer !== undefined && typeof completer !== "function") {
+    throw new ERR_INVALID_ARG_VALUE("completer", completer);
   }
 
   // Backwards compat; check the isTTY prop of the output stream
@@ -1005,7 +1204,7 @@ function InterfaceConstructor(input, output, completer, terminal) {
 
   const self = this;
 
-  this.line = '';
+  this.line = "";
   this[kIsMultiline] = false;
   this[kSubstringSearch] = null;
   this.output = output;
@@ -1020,9 +1219,9 @@ function InterfaceConstructor(input, output, completer, terminal) {
   this[kKillRing] = [];
   this[kKillRingCursor] = 0;
 
-  this.crlfDelay = crlfDelay ?
-    Math.max(kMincrlfDelay, crlfDelay) :
-    kMincrlfDelay;
+  this.crlfDelay = crlfDelay
+    ? Math.max(kMincrlfDelay, crlfDelay)
+    : kMincrlfDelay;
   this.completer = completer;
 
   this.setPrompt(prompt);
@@ -1030,7 +1229,7 @@ function InterfaceConstructor(input, output, completer, terminal) {
   this.terminal = !!terminal;
 
   function onerror(err) {
-    self.emit('error', err);
+    self.emit("error", err);
   }
 
   function ondata(data) {
@@ -1039,17 +1238,17 @@ function InterfaceConstructor(input, output, completer, terminal) {
 
   function onend() {
     if (
-      typeof self[kLine_buffer] === 'string' &&
-        self[kLine_buffer].length > 0
+      typeof self[kLine_buffer] === "string" &&
+      self[kLine_buffer].length > 0
     ) {
-      self.emit('line', self[kLine_buffer]);
+      self.emit("line", self[kLine_buffer]);
     }
     self.close();
   }
 
   function ontermend() {
-    if (typeof self.line === 'string' && self.line.length > 0) {
-      self.emit('line', self.line);
+    if (typeof self.line === "string" && self.line.length > 0) {
+      self.emit("line", self.line);
     }
     self.close();
   }
@@ -1071,34 +1270,34 @@ function InterfaceConstructor(input, output, completer, terminal) {
 
   this[kLineObjectStream] = undefined;
 
-  input.on('error', onerror);
+  input.on("error", onerror);
 
   if (!this.terminal) {
     function onSelfCloseWithoutTerminal() {
-      input.removeListener('data', ondata);
-      input.removeListener('error', onerror);
-      input.removeListener('end', onend);
+      input.removeListener("data", ondata);
+      input.removeListener("error", onerror);
+      input.removeListener("end", onend);
     }
 
-    input.on('data', ondata);
-    input.on('end', onend);
-    self.once('close', onSelfCloseWithoutTerminal);
-    this[kDecoder] = new StringDecoder('utf8');
+    input.on("data", ondata);
+    input.on("end", onend);
+    self.once("close", onSelfCloseWithoutTerminal);
+    this[kDecoder] = new StringDecoder("utf8");
   } else {
     function onSelfCloseWithTerminal() {
-      input.removeListener('keypress', onkeypress);
-      input.removeListener('error', onerror);
-      input.removeListener('end', ontermend);
+      input.removeListener("keypress", onkeypress);
+      input.removeListener("error", onerror);
+      input.removeListener("end", ontermend);
       if (output !== null && output !== undefined) {
-        output.removeListener('resize', onresize);
+        output.removeListener("resize", onresize);
       }
     }
 
     emitKeypressEvents(input, this);
 
     // `input` usually refers to stdin
-    input.on('keypress', onkeypress);
-    input.on('end', ontermend);
+    input.on("keypress", onkeypress);
+    input.on("end", ontermend);
 
     this[kSetRawMode](true);
     this.terminal = true;
@@ -1106,10 +1305,9 @@ function InterfaceConstructor(input, output, completer, terminal) {
     // Cursor position on the line.
     this.cursor = 0;
 
-    if (output !== null && output !== undefined)
-      output.on('resize', onresize);
+    if (output !== null && output !== undefined) output.on("resize", onresize);
 
-    self.once('close', onSelfCloseWithTerminal);
+    self.once("close", onSelfCloseWithTerminal);
   }
 
   if (signal) {
@@ -1118,12 +1316,12 @@ function InterfaceConstructor(input, output, completer, terminal) {
       nextTick(onAborted);
     } else {
       const disposable = addAbortListener(signal, onAborted);
-      self.once('close', () => disposable[Symbol.dispose]());
+      self.once("close", () => disposable[Symbol.dispose]());
     }
   }
 
   // Current line
-  this[kSetLine]('');
+  this[kSetLine]("");
 
   input.resume();
 }
@@ -1135,22 +1333,42 @@ Object.setPrototypeOf(InterfaceConstructor, EventEmitter);
 const kHistoryAccessorDescriptors = {
   __proto__: null,
   history: {
-    __proto__: null, configurable: true, enumerable: true,
-    get() { return this.historyManager.history; },
-    set(newHistory) { return this.historyManager.history = newHistory; },
+    __proto__: null,
+    configurable: true,
+    enumerable: true,
+    get() {
+      return this.historyManager.history;
+    },
+    set(newHistory) {
+      return (this.historyManager.history = newHistory);
+    },
   },
   historyIndex: {
-    __proto__: null, configurable: true, enumerable: true,
-    get() { return this.historyManager.index; },
-    set(historyIndex) { return this.historyManager.index = historyIndex; },
+    __proto__: null,
+    configurable: true,
+    enumerable: true,
+    get() {
+      return this.historyManager.index;
+    },
+    set(historyIndex) {
+      return (this.historyManager.index = historyIndex);
+    },
   },
   historySize: {
-    __proto__: null, configurable: true, enumerable: true,
-    get() { return this.historyManager.size; },
+    __proto__: null,
+    configurable: true,
+    enumerable: true,
+    get() {
+      return this.historyManager.size;
+    },
   },
   isFlushing: {
-    __proto__: null, configurable: true, enumerable: true,
-    get() { return this.historyManager.isFlushing; },
+    __proto__: null,
+    configurable: true,
+    enumerable: true,
+    get() {
+      return this.historyManager.isFlushing;
+    },
   },
 };
 
@@ -1190,7 +1408,7 @@ class _Interface extends InterfaceConstructor {
   [kSetRawMode](mode) {
     const wasInRawMode = this.input.isRaw;
 
-    if (typeof this.input.setRawMode === 'function') {
+    if (typeof this.input.setRawMode === "function") {
       this.input.setRawMode(mode);
     }
 
@@ -1204,7 +1422,7 @@ class _Interface extends InterfaceConstructor {
    */
   prompt(preserveCursor) {
     if (this.paused) this.resume();
-    if (this.terminal && getTerm() !== 'dumb') {
+    if (this.terminal && getTerm() !== "dumb") {
       if (!preserveCursor) this.cursor = 0;
       this[kRefreshLine]();
     } else {
@@ -1214,7 +1432,7 @@ class _Interface extends InterfaceConstructor {
 
   [kQuestion](query, cb) {
     if (this.closed) {
-      throw new ERR_USE_AFTER_CLOSE('readline');
+      throw new ERR_USE_AFTER_CLOSE("readline");
     }
     if (this[kQuestionCallback]) {
       this.prompt();
@@ -1226,9 +1444,9 @@ class _Interface extends InterfaceConstructor {
     }
   }
 
-  [kSetLine](line = '') {
+  [kSetLine](line = "") {
     this.line = line;
-    this[kIsMultiline] = line.includes('\n');
+    this[kIsMultiline] = line.includes("\n");
   }
 
   [kOnLine](line) {
@@ -1238,7 +1456,7 @@ class _Interface extends InterfaceConstructor {
       this.setPrompt(this[kOldPrompt]);
       cb(line);
     } else {
-      this.emit('line', line);
+      this.emit("line", line);
     }
   }
 
@@ -1255,7 +1473,7 @@ class _Interface extends InterfaceConstructor {
   }
 
   [kWriteToOutput](stringToWrite) {
-    validateString(stringToWrite, 'stringToWrite');
+    validateString(stringToWrite, "stringToWrite");
 
     if (this.output !== null && this.output !== undefined) {
       this.output.write(stringToWrite);
@@ -1263,7 +1481,10 @@ class _Interface extends InterfaceConstructor {
   }
 
   [kAddHistory]() {
-    return this.historyManager.addHistory(this[kIsMultiline], this[kLastCommandErrored]);
+    return this.historyManager.addHistory(
+      this[kIsMultiline],
+      this[kLastCommandErrored],
+    );
   }
 
   [kRefreshLine]() {
@@ -1288,7 +1509,7 @@ class _Interface extends InterfaceConstructor {
     clearScreenDown(this.output);
 
     if (this[kIsMultiline]) {
-      const lines = this.line.split('\n');
+      const lines = this.line.split("\n");
       // Write first line with normal prompt
       this[kWriteToOutput](this[kPrompt] + lines[0]);
 
@@ -1303,7 +1524,7 @@ class _Interface extends InterfaceConstructor {
 
     // Force terminal to allocate a new line
     if (lineCols === 0) {
-      this[kWriteToOutput](' ');
+      this[kWriteToOutput](" ");
     }
 
     // Move cursor to original position.
@@ -1328,7 +1549,7 @@ class _Interface extends InterfaceConstructor {
       this[kSetRawMode](false);
     }
     this.closed = true;
-    this.emit('close');
+    this.emit("close");
   }
 
   /**
@@ -1337,12 +1558,12 @@ class _Interface extends InterfaceConstructor {
    */
   pause() {
     if (this.closed) {
-      throw new ERR_USE_AFTER_CLOSE('readline');
+      throw new ERR_USE_AFTER_CLOSE("readline");
     }
     if (this.paused) return;
     this.input.pause();
     this.paused = true;
-    this.emit('pause');
+    this.emit("pause");
     return this;
   }
 
@@ -1352,12 +1573,12 @@ class _Interface extends InterfaceConstructor {
    */
   resume() {
     if (this.closed) {
-      throw new ERR_USE_AFTER_CLOSE('readline');
+      throw new ERR_USE_AFTER_CLOSE("readline");
     }
     if (!this.paused) return;
     this.input.resume();
     this.paused = false;
-    this.emit('resume');
+    this.emit("resume");
     return this;
   }
 
@@ -1370,7 +1591,7 @@ class _Interface extends InterfaceConstructor {
    */
   write(d, key) {
     if (this.closed) {
-      throw new ERR_USE_AFTER_CLOSE('readline');
+      throw new ERR_USE_AFTER_CLOSE("readline");
     }
     if (this.paused) this.resume();
     if (this.terminal) {
@@ -1399,11 +1620,11 @@ class _Interface extends InterfaceConstructor {
 
     // Split the new string chunk, not the entire line buffer.
     const lines =
-      string.includes('\r') ||
-      string.includes('\u2028') ||
-      string.includes('\u2029') ?
-        string.split(lineEnding) :
-        string.split('\n');
+      string.includes("\r") ||
+      string.includes("\u2028") ||
+      string.includes("\u2029")
+        ? string.split(lineEnding)
+        : string.split("\n");
     // Reset the global regex state (split with /g/ advances lastIndex).
     lineEnding.lastIndex = 0;
     const lastIndex = lines.length - 1;
@@ -1417,9 +1638,7 @@ class _Interface extends InterfaceConstructor {
       return;
     }
 
-    this[kSawReturnAt] = string.endsWith('\r') ?
-      Date.now() :
-      0;
+    this[kSawReturnAt] = string.endsWith("\r") ? Date.now() : 0;
 
     let first = lines[0];
     if (this[kLine_buffer]) {
@@ -1438,10 +1657,7 @@ class _Interface extends InterfaceConstructor {
     if (!this.isCompletionEnabled) {
       if (this.cursor < this.line.length) {
         const beg = this.line.slice(0, this.cursor);
-        const end = this.line.slice(
-          this.cursor,
-          this.line.length,
-        );
+        const end = this.line.slice(this.cursor, this.line.length);
         this.line = beg + c + end;
       } else {
         this.line += c;
@@ -1452,10 +1668,7 @@ class _Interface extends InterfaceConstructor {
     }
     if (this.cursor < this.line.length) {
       const beg = this.line.slice(0, this.cursor);
-      const end = this.line.slice(
-        this.cursor,
-        this.line.length,
-      );
+      const end = this.line.slice(this.cursor, this.line.length);
       this[kSetLine](beg + c + end);
       this.cursor += c.length;
       this[kRefreshLine]();
@@ -1496,17 +1709,16 @@ class _Interface extends InterfaceConstructor {
     }
 
     // If there is a common prefix to all matches, then apply that portion.
-    const prefix = commonPrefix(
-      completions.filter((e) => e !== ''),
-    );
-    if (prefix.startsWith(completeOn) &&
-        prefix.length > completeOn.length) {
+    const prefix = commonPrefix(completions.filter((e) => e !== ""));
+    if (prefix.startsWith(completeOn) && prefix.length > completeOn.length) {
       this[kInsertString](prefix.slice(completeOn.length));
       return;
     } else if (!completeOn.startsWith(prefix)) {
-      this[kSetLine](this.line.slice(0, this.cursor - completeOn.length) +
-                  prefix +
-                  this.line.slice(this.cursor, this.line.length));
+      this[kSetLine](
+        this.line.slice(0, this.cursor - completeOn.length) +
+          prefix +
+          this.line.slice(this.cursor, this.line.length),
+      );
       this.cursor = this.cursor - completeOn.length + prefix.length;
       this[kRefreshLine]();
       return;
@@ -1519,36 +1731,34 @@ class _Interface extends InterfaceConstructor {
     this[kBeforeEdit](this.line, this.cursor);
 
     // Apply/show completions.
-    const completionsWidth = completions.map((e) =>
-      getStringWidth(e),
-    );
+    const completionsWidth = completions.map((e) => getStringWidth(e));
     const width = Math.max(...completionsWidth) + 2; // 2 space padding
     let maxColumns = Math.floor(this.columns / width) || 1;
     if (maxColumns === Infinity) {
       maxColumns = 1;
     }
-    let output = '\r\n';
+    let output = "\r\n";
     let lineIndex = 0;
     let whitespace = 0;
     for (let i = 0; i < completions.length; i++) {
       const completion = completions[i];
-      if (completion === '' || lineIndex === maxColumns) {
-        output += '\r\n';
+      if (completion === "" || lineIndex === maxColumns) {
+        output += "\r\n";
         lineIndex = 0;
         whitespace = 0;
       } else {
-        output += ' '.repeat(whitespace);
+        output += " ".repeat(whitespace);
       }
-      if (completion !== '') {
+      if (completion !== "") {
         output += completion;
         whitespace = width - completionsWidth[i];
         lineIndex++;
       } else {
-        output += '\r\n';
+        output += "\r\n";
       }
     }
     if (lineIndex !== 0) {
-      output += '\r\n\r\n';
+      output += "\r\n\r\n";
     }
     this[kWriteToOutput](output);
     this[kRefreshLine]();
@@ -1559,7 +1769,7 @@ class _Interface extends InterfaceConstructor {
       // Reverse the string and match a word near beginning
       // to avoid quadratic time complexity
       const leading = this.line.slice(0, this.cursor);
-      const reversed = [...leading].reverse().join('');
+      const reversed = [...leading].reverse().join("");
       const match = /^\s*(?:[^\w\s]+|\w+)?/.exec(reversed);
       this[kMoveCursor](-match[0].length);
     }
@@ -1594,10 +1804,7 @@ class _Interface extends InterfaceConstructor {
       const charSize = charLengthAt(this.line, this.cursor);
       this.line =
         this.line.slice(0, this.cursor) +
-        this.line.slice(
-          this.cursor + charSize,
-          this.line.length,
-        );
+        this.line.slice(this.cursor + charSize, this.line.length);
       this[kRefreshLine]();
     }
   }
@@ -1608,15 +1815,10 @@ class _Interface extends InterfaceConstructor {
       // Reverse the string and match a word near beginning
       // to avoid quadratic time complexity
       let leading = this.line.slice(0, this.cursor);
-      const reversed = [...leading].reverse().join('');
+      const reversed = [...leading].reverse().join("");
       const match = /^\s*(?:[^\w\s]+|\w+)?/.exec(reversed);
-      leading = leading.slice(
-        0,
-        leading.length - match[0].length,
-      );
-      this.line =
-        leading +
-        this.line.slice(this.cursor, this.line.length);
+      leading = leading.slice(0, leading.length - match[0].length);
+      this.line = leading + this.line.slice(this.cursor, this.line.length);
       this.cursor = leading.length;
       this[kRefreshLine]();
     }
@@ -1628,8 +1830,7 @@ class _Interface extends InterfaceConstructor {
       const trailing = this.line.slice(this.cursor);
       const match = /^(?:\s+|\W+|\w+)\s*/.exec(trailing);
       this.line =
-        this.line.slice(0, this.cursor) +
-        trailing.slice(match[0].length);
+        this.line.slice(0, this.cursor) + trailing.slice(match[0].length);
       this[kRefreshLine]();
     }
   }
@@ -1655,8 +1856,7 @@ class _Interface extends InterfaceConstructor {
     if (!del || del === this[kKillRing][0]) return;
     this[kKillRing].unshift(del);
     this[kKillRingCursor] = 0;
-    while (this[kKillRing].length > kMaxLengthOfKillRing)
-      this[kKillRing].pop();
+    while (this[kKillRing].length > kMaxLengthOfKillRing) this[kKillRing].pop();
   }
 
   [kYank]() {
@@ -1699,8 +1899,8 @@ class _Interface extends InterfaceConstructor {
 
   clearLine() {
     this[kMoveCursor](+Infinity);
-    this[kWriteToOutput]('\r\n');
-    this[kSetLine]('');
+    this[kWriteToOutput]("\r\n");
+    this[kSetLine]("");
     this.cursor = 0;
     this.prevRows = 0;
   }
@@ -1735,24 +1935,26 @@ class _Interface extends InterfaceConstructor {
 
     // Handle cursor positioning based on different scenarios
     if (hasContentAfterCursor) {
-      const splitBeg = beforeCursor.split('\n');
+      const splitBeg = beforeCursor.split("\n");
       // Determine if we need to rewrite the first line
       needsRewriteFirstLine = splitBeg.length < 2;
 
       // If the cursor is not on the first line
       if (cursorIsNotOnFirstLine) {
-        const splitEnd = afterCursor.split('\n');
+        const splitEnd = afterCursor.split("\n");
 
         const dy = splitEnd.length + 1;
 
         // Calculate how many Xs we need to move on the right to get to the end of the line
-        const dxEndOfLineAbove = (splitBeg[splitBeg.length - 2] || '').length + kMultilinePrompt.description.length;
+        const dxEndOfLineAbove =
+          (splitBeg[splitBeg.length - 2] || "").length +
+          kMultilinePrompt.description.length;
         moveCursor(this.output, dxEndOfLineAbove, -dy);
 
         afterCursor = `${splitBeg[splitBeg.length - 1]}\n${afterCursor}`;
       } else {
         // Otherwise, go to the very beginning of the first line and erase everything
-        const dy = originalLine.split('\n').length;
+        const dy = originalLine.split("\n").length;
         moveCursor(this.output, 0, -dy);
       }
 
@@ -1760,12 +1962,14 @@ class _Interface extends InterfaceConstructor {
       clearScreenDown(this.output);
 
       if (cursorIsNotOnFirstLine) {
-        this[kWriteToOutput]('\n');
+        this[kWriteToOutput]("\n");
       }
     }
 
     if (needsRewriteFirstLine) {
-      this[kWriteToOutput](`${this[kPrompt]}${beforeCursor}\n${kMultilinePrompt.description}`);
+      this[kWriteToOutput](
+        `${this[kPrompt]}${beforeCursor}\n${kMultilinePrompt.description}`,
+      );
     } else {
       this[kWriteToOutput](kMultilinePrompt.description);
     }
@@ -1777,7 +1981,7 @@ class _Interface extends InterfaceConstructor {
 
       // Write everything after the cursor which has been deleted by clearScreenDown
       const formattedEndContent = afterCursor.replaceAll(
-        '\n',
+        "\n",
         `\n${kMultilinePrompt.description}`,
       );
 
@@ -1786,7 +1990,11 @@ class _Interface extends InterfaceConstructor {
       const newCursor = this[kGetDisplayPos](this.line);
 
       // Go back to where the cursor was, with relative movement
-      moveCursor(this.output, oldCursor.cols - newCursor.cols, oldCursor.rows - newCursor.rows);
+      moveCursor(
+        this.output,
+        oldCursor.cols - newCursor.cols,
+        oldCursor.rows - newCursor.rows,
+      );
 
       // Setting how many rows we have on top of the cursor
       // Necessary for kRefreshLine
@@ -1794,13 +2002,12 @@ class _Interface extends InterfaceConstructor {
     } else {
       // Setting how many rows we have on top of the cursor
       // Necessary for kRefreshLine
-      this.prevRows = this.line.split('\n').length - 1;
+      this.prevRows = this.line.split("\n").length - 1;
     }
   }
 
   [kPushToUndoStack](text, cursor) {
-    if (this[kUndoStack].push({ text, cursor }) >
-        kMaxUndoRedoStackSize) {
+    if (this[kUndoStack].push({ text, cursor }) > kMaxUndoRedoStackSize) {
       this[kUndoStack].shift();
     }
   }
@@ -1808,9 +2015,7 @@ class _Interface extends InterfaceConstructor {
   [kUndo]() {
     if (this[kUndoStack].length <= 0) return;
 
-    this[kRedoStack].push(
-      { text: this.line, cursor: this.cursor },
-    );
+    this[kRedoStack].push({ text: this.line, cursor: this.cursor });
 
     const entry = this[kUndoStack].pop();
     this[kSetLine](entry.text);
@@ -1822,9 +2027,7 @@ class _Interface extends InterfaceConstructor {
   [kRedo]() {
     if (this[kRedoStack].length <= 0) return;
 
-    this[kUndoStack].push(
-      { text: this.line, cursor: this.cursor },
-    );
+    this[kUndoStack].push({ text: this.line, cursor: this.cursor });
 
     const entry = this[kRedoStack].pop();
     this[kSetLine](entry.text);
@@ -1840,9 +2043,9 @@ class _Interface extends InterfaceConstructor {
     const promptLen = kMultilinePrompt.description.length;
     let amountToMove;
     // Clamp distance to end of current + prompt + next/prev line + newline
-    const clamp = down ?
-      curr.length - cols + promptLen + adj.length + 1 :
-      -cols + 1;
+    const clamp = down
+      ? curr.length - cols + promptLen + adj.length + 1
+      : -cols + 1;
     const shouldClamp = cols > adj.length + 1;
 
     if (shouldClamp) {
@@ -1871,7 +2074,7 @@ class _Interface extends InterfaceConstructor {
 
   [kMoveDownOrHistoryNext]() {
     const cursorPos = this.getCursorPos();
-    const splitLines = this.line.split('\n');
+    const splitLines = this.line.split("\n");
     if (this[kIsMultiline] && cursorPos.rows < splitLines.length - 1) {
       this[kMultilineMove](1, splitLines, cursorPos);
       return;
@@ -1881,7 +2084,9 @@ class _Interface extends InterfaceConstructor {
   }
 
   [kHistoryNext]() {
-    if (!this.historyManager.canNavigateToNext()) { return; }
+    if (!this.historyManager.canNavigateToNext()) {
+      return;
+    }
 
     this[kBeforeEdit](this.line, this.cursor);
     this[kSetLine](this.historyManager.navigateToNext(this[kSubstringSearch]));
@@ -1892,7 +2097,7 @@ class _Interface extends InterfaceConstructor {
   [kMoveUpOrHistoryPrev]() {
     const cursorPos = this.getCursorPos();
     if (this[kIsMultiline] && cursorPos.rows > 0) {
-      const splitLines = this.line.split('\n');
+      const splitLines = this.line.split("\n");
       this[kMultilineMove](-1, splitLines, cursorPos);
       return;
     }
@@ -1901,10 +2106,14 @@ class _Interface extends InterfaceConstructor {
   }
 
   [kHistoryPrev]() {
-    if (!this.historyManager.canNavigateToPrevious()) { return; }
+    if (!this.historyManager.canNavigateToPrevious()) {
+      return;
+    }
 
     this[kBeforeEdit](this.line, this.cursor);
-    this[kSetLine](this.historyManager.navigateToPrevious(this[kSubstringSearch]));
+    this[kSetLine](
+      this.historyManager.navigateToPrevious(this[kSubstringSearch]),
+    );
     this.cursor = this.line.length; // Set cursor to end of line.
     this[kRefreshLine]();
   }
@@ -1917,7 +2126,7 @@ class _Interface extends InterfaceConstructor {
     str = stripVTControlCharacters(str);
 
     for (const char of str) {
-      if (char === '\n') {
+      if (char === "\n") {
         // Rows must be incremented by 1 even if offset = 0 or col = +Infinity.
         rows += Math.ceil(offset / col) || 1;
         // Only add prefix offset for continuation lines in user input (not prompts)
@@ -1925,7 +2134,7 @@ class _Interface extends InterfaceConstructor {
         continue;
       }
       // Tabs must be aligned by an offset of the tab size.
-      if (char === '\t') {
+      if (char === "\t") {
         offset += this.tabSize - (offset % this.tabSize);
         continue;
       }
@@ -1992,23 +2201,20 @@ class _Interface extends InterfaceConstructor {
     this[kPreviousKey] = key;
     let shouldResetPreviousCursorCols = true;
 
-    if (!key.meta || key.name !== 'y') {
+    if (!key.meta || key.name !== "y") {
       // Reset yanking state unless we are doing yank pop.
       this[kYanking] = false;
     }
 
     // Activate or deactivate substring search.
     if (
-      (key.name === 'up' || key.name === 'down') &&
+      (key.name === "up" || key.name === "down") &&
       !key.ctrl &&
       !key.meta &&
       !key.shift
     ) {
       if (this[kSubstringSearch] === null && !this[kIsMultiline]) {
-        this[kSubstringSearch] = this.line.slice(
-          0,
-          this.cursor,
-        );
+        this[kSubstringSearch] = this.line.slice(0, this.cursor);
       }
     } else if (this[kSubstringSearch] !== null) {
       this[kSubstringSearch] = null;
@@ -2019,7 +2225,7 @@ class _Interface extends InterfaceConstructor {
     }
 
     // Undo & Redo
-    if (typeof key.sequence === 'string') {
+    if (typeof key.sequence === "string") {
       switch (key.sequence.codePointAt(0)) {
         case 0x1f:
           this[kUndo]();
@@ -2034,18 +2240,18 @@ class _Interface extends InterfaceConstructor {
 
     // Ignore escape key, fixes
     // https://github.com/nodejs/node-v0.x-archive/issues/2876.
-    if (key.name === 'escape') return;
+    if (key.name === "escape") return;
 
     if (key.ctrl && key.shift) {
       /* Control and shift pressed */
       switch (key.name) {
         // TODO(BridgeAR): The transmitted escape sequence is `\b` and that is
         // identical to <ctrl>-h. It should have a unique escape sequence.
-        case 'backspace':
+        case "backspace":
           this[kDeleteLineLeft]();
           break;
 
-        case 'delete':
+        case "delete":
           this[kDeleteLineRight]();
           break;
       }
@@ -2053,85 +2259,89 @@ class _Interface extends InterfaceConstructor {
       /* Control key pressed */
 
       switch (key.name) {
-        case 'c':
-          if (this.listenerCount('SIGINT') > 0) {
-            this.emit('SIGINT');
+        case "c":
+          if (this.listenerCount("SIGINT") > 0) {
+            this.emit("SIGINT");
           } else {
             // This readline instance is finished
             this.close();
-            this[kQuestionReject]?.(new AbortError('Aborted with Ctrl+C'));
+            this[kQuestionReject]?.(new AbortError("Aborted with Ctrl+C"));
           }
           break;
 
-        case 'h': // delete left
+        case "h": // delete left
           this[kDeleteLeft]();
           break;
 
-        case 'd': // delete right or EOF
+        case "d": // delete right or EOF
           if (this.cursor === 0 && this.line.length === 0) {
             // This readline instance is finished
             this.close();
-            this[kQuestionReject]?.(new AbortError('Aborted with Ctrl+D'));
+            this[kQuestionReject]?.(new AbortError("Aborted with Ctrl+D"));
           } else if (this.cursor < this.line.length) {
             this[kDeleteRight]();
           }
           break;
 
-        case 'u': // Delete from current to start of line
+        case "u": // Delete from current to start of line
           this[kDeleteLineLeft]();
           break;
 
-        case 'k': // Delete from current to end of line
+        case "k": // Delete from current to end of line
           this[kDeleteLineRight]();
           break;
 
-        case 'a': // Go to the start of the line
+        case "a": // Go to the start of the line
           this[kMoveCursor](-Infinity);
           break;
 
-        case 'e': // Go to the end of the line
+        case "e": // Go to the end of the line
           this[kMoveCursor](+Infinity);
           break;
 
-        case 'b': // back one character
+        case "b": // back one character
           this[kMoveCursor](-charLengthLeft(this.line, this.cursor));
           break;
 
-        case 'f': // Forward one character
+        case "f": // Forward one character
           this[kMoveCursor](+charLengthAt(this.line, this.cursor));
           break;
 
-        case 'l': // Clear the whole screen
+        case "l": // Clear the whole screen
           cursorTo(this.output, 0, 0);
           clearScreenDown(this.output);
           this[kRefreshLine]();
           break;
 
-        case 'n': // next history item
+        case "n": // next history item
           this[kHistoryNext]();
           break;
 
-        case 'p': // Previous history item
+        case "p": // Previous history item
           this[kHistoryPrev]();
           break;
 
-        case 'y': // Yank killed string
+        case "y": // Yank killed string
           this[kYank]();
           break;
 
-        case 'z': {
+        case "z": {
           const proc = getProcess();
-          if (proc && proc.platform === 'win32') break;
-          if (this.listenerCount('SIGTSTP') > 0) {
-            this.emit('SIGTSTP');
-          } else if (proc && typeof proc.kill === 'function' && typeof proc.once === 'function') {
-            proc.once('SIGCONT', () => {
+          if (proc && proc.platform === "win32") break;
+          if (this.listenerCount("SIGTSTP") > 0) {
+            this.emit("SIGTSTP");
+          } else if (
+            proc &&
+            typeof proc.kill === "function" &&
+            typeof proc.once === "function"
+          ) {
+            proc.once("SIGCONT", () => {
               // Don't raise events if stream has already been abandoned.
               if (!this.paused) {
                 // Stream must be paused and resumed after SIGCONT to catch
                 // SIGINT, SIGTSTP, and EOF.
                 this.pause();
-                this.emit('SIGCONT');
+                this.emit("SIGCONT");
               }
               // Explicitly re-enable "raw mode" and move the cursor to
               // the correct position.
@@ -2139,30 +2349,30 @@ class _Interface extends InterfaceConstructor {
               this[kRefreshLine]();
             });
             this[kSetRawMode](false);
-            proc.kill(proc.pid, 'SIGTSTP');
+            proc.kill(proc.pid, "SIGTSTP");
           }
           // Without a host process (browser) this is a no-op unless a
           // SIGTSTP listener was registered above.
           break;
         }
 
-        case 'w': // Delete backwards to a word boundary
+        case "w": // Delete backwards to a word boundary
         // TODO(BridgeAR): The transmitted escape sequence is `\b` and that is
         // identical to <ctrl>-h. It should have a unique escape sequence.
         // Falls through
-        case 'backspace':
+        case "backspace":
           this[kDeleteWordLeft]();
           break;
 
-        case 'delete': // Delete forward to a word boundary
+        case "delete": // Delete forward to a word boundary
           this[kDeleteWordRight]();
           break;
 
-        case 'left':
+        case "left":
           this[kWordLeft]();
           break;
 
-        case 'right':
+        case "right":
           this[kWordRight]();
           break;
       }
@@ -2170,24 +2380,24 @@ class _Interface extends InterfaceConstructor {
       /* Meta key pressed */
 
       switch (key.name) {
-        case 'b': // backward word
+        case "b": // backward word
           this[kWordLeft]();
           break;
 
-        case 'f': // forward word
+        case "f": // forward word
           this[kWordRight]();
           break;
 
-        case 'd': // delete forward word
-        case 'delete':
+        case "d": // delete forward word
+        case "delete":
           this[kDeleteWordRight]();
           break;
 
-        case 'backspace': // Delete backwards to a word boundary
+        case "backspace": // Delete backwards to a word boundary
           this[kDeleteWordLeft]();
           break;
 
-        case 'y': // Doing yank pop
+        case "y": // Doing yank pop
           this[kYankPop]();
           break;
       }
@@ -2195,15 +2405,15 @@ class _Interface extends InterfaceConstructor {
       /* No modifier keys used */
 
       // \r bookkeeping is only relevant if a \n comes right after.
-      if (this[kSawReturnAt] && key.name !== 'enter') this[kSawReturnAt] = 0;
+      if (this[kSawReturnAt] && key.name !== "enter") this[kSawReturnAt] = 0;
 
       switch (key.name) {
-        case 'return': // Carriage return, i.e. \r
+        case "return": // Carriage return, i.e. \r
           this[kSawReturnAt] = Date.now();
           this[kLine]();
           break;
 
-        case 'enter':
+        case "enter":
           // When key interval > crlfDelay
           if (
             this[kSawReturnAt] === 0 ||
@@ -2214,55 +2424,55 @@ class _Interface extends InterfaceConstructor {
           this[kSawReturnAt] = 0;
           break;
 
-        case 'backspace':
+        case "backspace":
           this[kDeleteLeft]();
           break;
 
-        case 'delete':
+        case "delete":
           this[kDeleteRight]();
           break;
 
-        case 'left':
+        case "left":
           // Obtain the code point to the left
           this[kMoveCursor](-charLengthLeft(this.line, this.cursor));
           break;
 
-        case 'right':
+        case "right":
           this[kMoveCursor](+charLengthAt(this.line, this.cursor));
           break;
 
-        case 'home':
+        case "home":
           this[kMoveCursor](-Infinity);
           break;
 
-        case 'end':
+        case "end":
           this[kMoveCursor](+Infinity);
           break;
 
-        case 'up':
+        case "up":
           shouldResetPreviousCursorCols = false;
           this[kMoveUpOrHistoryPrev]();
           break;
 
-        case 'down':
+        case "down":
           shouldResetPreviousCursorCols = false;
           this[kMoveDownOrHistoryNext]();
           break;
 
-        case 'tab':
+        case "tab":
           // If tab completion enabled, do that...
           if (
-            typeof this.completer === 'function' &&
+            typeof this.completer === "function" &&
             this.isCompletionEnabled
           ) {
             const lastKeypressWasTab =
-              previousKey && previousKey.name === 'tab';
+              previousKey && previousKey.name === "tab";
             this[kTabComplete](lastKeypressWasTab);
             break;
           }
         // falls through
         default:
-          if (typeof s === 'string' && s) {
+          if (typeof s === "string" && s) {
             // Erase state of previous searches.
             lineEnding.lastIndex = 0;
             let nextMatch;
@@ -2293,13 +2503,12 @@ class _Interface extends InterfaceConstructor {
    */
   [Symbol.asyncIterator]() {
     if (this[kLineObjectStream] === undefined) {
-      const kFirstEventParam = Symbol.for('nodejs.kFirstEventParam');
-      this[kLineObjectStream] = EventEmitter.on(
-        this, 'line', {
-          close: ['close'],
-          highWaterMark: 1024,
-          [kFirstEventParam]: true,
-        });
+      const kFirstEventParam = Symbol.for("nodejs.kFirstEventParam");
+      this[kLineObjectStream] = EventEmitter.on(this, "line", {
+        close: ["close"],
+        highWaterMark: 1024,
+        [kFirstEventParam]: true,
+      });
     }
     return this[kLineObjectStream];
   }
@@ -2324,11 +2533,10 @@ class _Interface extends InterfaceConstructor {
  *   characters manually (e.g. from a WebSocket or a custom input handler).
  */
 
-
 const { kEscape } = CSI;
 
-const KEYPRESS_DECODER = Symbol('keypress-decoder');
-const ESCAPE_DECODER   = Symbol('escape-decoder');
+const KEYPRESS_DECODER = Symbol("keypress-decoder");
+const ESCAPE_DECODER = Symbol("escape-decoder");
 
 // GNU readline default: 500 ms
 
@@ -2344,17 +2552,17 @@ function emitKeypressEvents(stream, iface = {}) {
   // Idempotent: only install once per stream.
   if (stream[KEYPRESS_DECODER]) return;
 
-  stream[KEYPRESS_DECODER] = new StringDecoder('utf8');
-  stream[ESCAPE_DECODER]   = emitKeys(stream);
+  stream[KEYPRESS_DECODER] = new StringDecoder("utf8");
+  stream[ESCAPE_DECODER] = emitKeys(stream);
   stream[ESCAPE_DECODER].next(); // prime the generator
 
   const { escapeCodeTimeout = ESCAPE_CODE_TIMEOUT } = iface;
   let timeoutId;
 
-  const triggerEscape = () => stream[ESCAPE_DECODER].next('');
+  const triggerEscape = () => stream[ESCAPE_DECODER].next("");
 
   function onData(input) {
-    if (stream.listenerCount('keypress') > 0) {
+    if (stream.listenerCount("keypress") > 0) {
       const string = stream[KEYPRESS_DECODER].write(input);
       if (string) {
         globalThis.clearTimeout(timeoutId);
@@ -2365,7 +2573,8 @@ function emitKeypressEvents(stream, iface = {}) {
         iface.isCompletionEnabled = false;
 
         let length = 0;
-        for (const character of string) {         // iterates Unicode code points
+        for (const character of string) {
+          // iterates Unicode code points
           length += character.length;
           if (length === string.length) iface.isCompletionEnabled = true;
 
@@ -2373,7 +2582,10 @@ function emitKeypressEvents(stream, iface = {}) {
             stream[ESCAPE_DECODER].next(character);
             // If the last character is ESC, start the escape-code timeout window
             if (length === string.length && character === kEscape) {
-              timeoutId = globalThis.setTimeout(triggerEscape, escapeCodeTimeout);
+              timeoutId = globalThis.setTimeout(
+                triggerEscape,
+                escapeCodeTimeout,
+              );
             }
           } catch (err) {
             // If the generator throws (e.g. re-thrown from a keypress listener),
@@ -2386,22 +2598,22 @@ function emitKeypressEvents(stream, iface = {}) {
       }
     } else {
       // No listeners — stop processing until someone subscribes again.
-      stream.removeListener('data', onData);
-      stream.on('newListener', onNewListener);
+      stream.removeListener("data", onData);
+      stream.on("newListener", onNewListener);
     }
   }
 
   function onNewListener(event) {
-    if (event === 'keypress') {
-      stream.on('data', onData);
-      stream.removeListener('newListener', onNewListener);
+    if (event === "keypress") {
+      stream.on("data", onData);
+      stream.removeListener("newListener", onNewListener);
     }
   }
 
-  if (stream.listenerCount('keypress') > 0) {
-    stream.on('data', onData);
+  if (stream.listenerCount("keypress") > 0) {
+    stream.on("data", onData);
   } else {
-    stream.on('newListener', onNewListener);
+    stream.on("newListener", onNewListener);
   }
 }
 
@@ -2409,10 +2621,12 @@ function emitKeypressEvents(stream, iface = {}) {
 // Promises API surface
 // ======================================================================
 function isWritable(stream) {
-  return stream !== null &&
-    typeof stream === 'object' &&
-    typeof stream.write === 'function' &&
-    stream.writable !== false;
+  return (
+    stream !== null &&
+    typeof stream === "object" &&
+    typeof stream.write === "function" &&
+    stream.writable !== false
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2425,10 +2639,11 @@ export class Interface extends _Interface {
       let cb = resolve;
 
       if (options?.signal) {
-        validateAbortSignal(options.signal, 'options.signal');
+        validateAbortSignal(options.signal, "options.signal");
         if (options.signal.aborted) {
           return reject(
-            new AbortError(undefined, { cause: options.signal.reason }));
+            new AbortError(undefined, { cause: options.signal.reason }),
+          );
         }
 
         const onAbort = () => {
@@ -2464,10 +2679,10 @@ export class Readline {
 
   constructor(stream, options = undefined) {
     if (!isWritable(stream))
-      throw new ERR_INVALID_ARG_TYPE('stream', 'Writable', stream);
+      throw new ERR_INVALID_ARG_TYPE("stream", "Writable", stream);
     this.#stream = stream;
     if (options?.autoCommit != null) {
-      validateBoolean(options.autoCommit, 'options.autoCommit');
+      validateBoolean(options.autoCommit, "options.autoCommit");
       this.#autoCommit = options.autoCommit;
     }
   }
@@ -2479,8 +2694,8 @@ export class Readline {
    * @returns {Readline} this
    */
   cursorTo(x, y = undefined) {
-    validateInteger(x, 'x');
-    if (y != null) validateInteger(y, 'y');
+    validateInteger(x, "x");
+    if (y != null) validateInteger(y, "y");
 
     const data = y == null ? CSI`${x + 1}G` : CSI`${y + 1};${x + 1}H`;
     if (this.#autoCommit) nextTick(() => this.#stream.write(data));
@@ -2497,10 +2712,10 @@ export class Readline {
    */
   moveCursor(dx, dy) {
     if (dx || dy) {
-      validateInteger(dx, 'dx');
-      validateInteger(dy, 'dy');
+      validateInteger(dx, "dx");
+      validateInteger(dy, "dy");
 
-      let data = '';
+      let data = "";
 
       if (dx < 0) {
         data += CSI`${-dx}D`;
@@ -2528,12 +2743,10 @@ export class Readline {
    * @returns {Readline} this
    */
   clearLine(dir) {
-    validateInteger(dir, 'dir', -1, 1);
+    validateInteger(dir, "dir", -1, 1);
 
     const data =
-      dir < 0 ? kClearToLineBeginning :
-        dir > 0 ? kClearToLineEnd :
-          kClearLine;
+      dir < 0 ? kClearToLineBeginning : dir > 0 ? kClearToLineEnd : kClearLine;
     if (this.#autoCommit) nextTick(() => this.#stream.write(data));
     else this.#todo.push(data);
     return this;
@@ -2560,7 +2773,7 @@ export class Readline {
    */
   commit() {
     return new Promise((resolve) => {
-      this.#stream.write(this.#todo.join(''), resolve);
+      this.#stream.write(this.#todo.join(""), resolve);
       this.#todo = [];
     });
   }

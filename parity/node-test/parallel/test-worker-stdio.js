@@ -1,10 +1,10 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const fs = require('fs');
-const util = require('util');
-const { Writable } = require('stream');
-const { Worker, isMainThread } = require('worker_threads');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const fs = require("fs");
+const util = require("util");
+const { Writable } = require("stream");
+const { Worker, isMainThread } = require("worker_threads");
 
 class BufferingWritable extends Writable {
   constructor() {
@@ -32,11 +32,17 @@ if (isMainThread) {
   source.pipe(original);
   w.stdout.pipe(passed);
 
-  passed.on('finish', common.mustCall(() => {
-    assert.strictEqual(original.buffer.compare(passed.buffer), 0,
-                       `Original: ${util.inspect(original.buffer)}, ` +
-                       `Actual: ${util.inspect(passed.buffer)}`);
-  }));
+  passed.on(
+    "finish",
+    common.mustCall(() => {
+      assert.strictEqual(
+        original.buffer.compare(passed.buffer),
+        0,
+        `Original: ${util.inspect(original.buffer)}, ` +
+          `Actual: ${util.inspect(passed.buffer)}`,
+      );
+    }),
+  );
 } else {
   process.stdin.pipe(process.stdout);
 }

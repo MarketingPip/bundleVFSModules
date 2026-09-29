@@ -1,8 +1,16 @@
- 
-import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import {
+  jest,
+  describe,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+} from "@jest/globals";
 
-import { convertEsmToCjs, convertCjsToEsm } from '../src/runtime/transformModules.js';
-
+import {
+  convertEsmToCjs,
+  convertCjsToEsm,
+} from "../src/runtime/transformModules.js";
 
 describe("convertEsmToCjs", () => {
   test("converts default export of a literal", () => {
@@ -52,8 +60,8 @@ describe("convertEsmToCjs", () => {
     `;
     const cjs = convertEsmToCjs(code);
     expect(cjs).toContain(`Object.assign(exports, require('./lib.js'));`);
-    expect(cjs).toContain('exports.x = _tmp_');
-    expect(cjs).toContain('exports.z = _tmp_');
+    expect(cjs).toContain("exports.x = _tmp_");
+    expect(cjs).toContain("exports.z = _tmp_");
   });
 });
 
@@ -100,5 +108,3 @@ describe("convertCjsToEsm", () => {
     expect(esm).toContain("export default 42;");
   });
 });
- 
-

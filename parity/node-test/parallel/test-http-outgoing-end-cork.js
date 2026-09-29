@@ -1,7 +1,7 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
 const REQ_TIMEOUT = common.platformTimeout(500); // Set max ms of request time before abort
 
@@ -17,7 +17,7 @@ let metReusedSocket = false; // Flag for request loop termination.
 
 const doubleEndResponse = common.mustCall((res) => {
   // First end the request while sending some normal data
-  res.end('regular end of request', 'utf8', common.mustCall());
+  res.end("regular end of request", "utf8", common.mustCall());
   // Make sure the response socket is uncorked after first call of end
   assert.strictEqual(res.writableCorked, 0);
   res.end(); // Double end the response to prep for next socket re-use.
@@ -31,16 +31,18 @@ const sendDrainNeedingData = common.mustCall((res) => {
   const ret = res.write(bufferToSend); // Write the request data.
   // Make sure that we had back pressure on response stream.
   assert.strictEqual(ret, false);
-  res.once('drain', () => res.end()); // End on drain.
+  res.once("drain", () => res.end()); // End on drain.
 });
 
 const server = http.createServer((req, res) => {
   const { socket: responseSocket } = res;
-  if (handledSockets.has(responseSocket)) { // re-used socket, send big data!
+  if (handledSockets.has(responseSocket)) {
+    // re-used socket, send big data!
     metReusedSocket = true; // stop request loop
-    console.debug('FOUND REUSED SOCKET!');
+    console.debug("FOUND REUSED SOCKET!");
     sendDrainNeedingData(res);
-  } else { // not used again
+  } else {
+    // not used again
     // add to make sure we recognise it when we meet socket again
     handledSockets.add(responseSocket);
     doubleEndResponse(res);
@@ -49,26 +51,43 @@ const server = http.createServer((req, res) => {
 
 server.listen(0); // Start the server on a random port.
 
-const sendRequest = common.mustCallAtLeast((agent) => new Promise((resolve) => {
-  const timeout = setTimeout(common.mustNotCall('Request timed out'), REQ_TIMEOUT);
-  http.get({
-    port: server.address().port,
-    path: '/',
-    agent
-  }, common.mustCall((res) => {
-    const resData = [];
-    res.on('data', (data) => resData.push(data));
-    res.on('end', common.mustCall(() => {
-      const totalData = resData.reduce((total, elem) => total + elem.length, 0);
-      clearTimeout(timeout); // Cancel rejection timeout.
-      resolve(totalData); // fulfill promise
-    }));
-  }));
-}));
+const sendRequest = common.mustCallAtLeast(
+  (agent) =>
+    new Promise((resolve) => {
+      const timeout = setTimeout(
+        common.mustNotCall("Request timed out"),
+        REQ_TIMEOUT,
+      );
+      http.get(
+        {
+          port: server.address().port,
+          path: "/",
+          agent,
+        },
+        common.mustCall((res) => {
+          const resData = [];
+          res.on("data", (data) => resData.push(data));
+          res.on(
+            "end",
+            common.mustCall(() => {
+              const totalData = resData.reduce(
+                (total, elem) => total + elem.length,
+                0,
+              );
+              clearTimeout(timeout); // Cancel rejection timeout.
+              resolve(totalData); // fulfill promise
+            }),
+          );
+        }),
+      );
+    }),
+);
 
-server.once('listening', async () => {
+server.once("listening", async () => {
   const testTimeout = setTimeout(
-    common.mustNotCall('Test running for a while but could not met re-used socket'),
+    common.mustNotCall(
+      "Test running for a while but could not met re-used socket",
+    ),
     TOTAL_TEST_TIMEOUT,
   );
   // Explicitly start agent to force socket reuse.
@@ -87,7 +106,7 @@ server.once('listening', async () => {
   }
   // Successfully tested conditions and ended loop
   clearTimeout(testTimeout);
-  console.log('Closing server');
+  console.log("Closing server");
   agent.destroy();
   server.close();
 });

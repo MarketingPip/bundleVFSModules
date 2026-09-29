@@ -19,10 +19,10 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-require('../common');
-const assert = require('assert');
-const vm = require('vm');
+"use strict";
+require("../common");
+const assert = require("assert");
+const vm = require("vm");
 
 let sbx = {};
 sbx.window = sbx;

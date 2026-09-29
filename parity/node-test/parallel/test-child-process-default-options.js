@@ -19,33 +19,35 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const { isWindows } = require('../common');
-const assert = require('assert');
+"use strict";
+const { isWindows } = require("../common");
+const assert = require("assert");
 
-const spawn = require('child_process').spawn;
-const debug = require('util').debuglog('test');
+const spawn = require("child_process").spawn;
+const debug = require("util").debuglog("test");
 
-process.env.HELLO = 'WORLD';
+process.env.HELLO = "WORLD";
 
 let child;
 if (isWindows) {
-  child = spawn('cmd.exe', ['/c', 'set'], {});
+  child = spawn("cmd.exe", ["/c", "set"], {});
 } else {
-  child = spawn('/usr/bin/env', [], {});
+  child = spawn("/usr/bin/env", [], {});
 }
 
-let response = '';
+let response = "";
 
-child.stdout.setEncoding('utf8');
+child.stdout.setEncoding("utf8");
 
-child.stdout.on('data', function(chunk) {
+child.stdout.on("data", function (chunk) {
   debug(`stdout: ${chunk}`);
   response += chunk;
 });
 
-process.on('exit', function() {
-  assert.ok(response.includes('HELLO=WORLD'),
-            'spawn did not use process.env as default ' +
-            `(process.env.HELLO = ${process.env.HELLO})`);
+process.on("exit", function () {
+  assert.ok(
+    response.includes("HELLO=WORLD"),
+    "spawn did not use process.env as default " +
+      `(process.env.HELLO = ${process.env.HELLO})`,
+  );
 });

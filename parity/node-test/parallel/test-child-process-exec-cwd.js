@@ -19,21 +19,25 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const exec = require('child_process').exec;
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const exec = require("child_process").exec;
 
 let pwdcommand, dir;
 
 if (common.isWindows) {
-  pwdcommand = 'echo %cd%';
-  dir = 'c:\\windows';
+  pwdcommand = "echo %cd%";
+  dir = "c:\\windows";
 } else {
-  pwdcommand = 'pwd';
-  dir = '/dev';
+  pwdcommand = "pwd";
+  dir = "/dev";
 }
 
-exec(pwdcommand, { cwd: dir }, common.mustSucceed((stdout, stderr) => {
-  assert(stdout.toLowerCase().startsWith(dir));
-}));
+exec(
+  pwdcommand,
+  { cwd: dir },
+  common.mustSucceed((stdout, stderr) => {
+    assert(stdout.toLowerCase().startsWith(dir));
+  }),
+);

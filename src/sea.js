@@ -79,26 +79,34 @@
 
 /** @param {unknown} v @returns {string} */
 function inspectReceived(v) {
-  if (v === null) return 'null';
-  if (v === undefined) return 'undefined';
+  if (v === null) return "null";
+  if (v === undefined) return "undefined";
   const t = typeof v;
-  if (t === 'function') return `function ${v.name}`;
-  if (t === 'object') {
+  if (t === "function") return `function ${v.name}`;
+  if (t === "object") {
     const ctor = v.constructor;
-    if (typeof ctor === 'function' && typeof ctor.name === 'string' && ctor.name !== '') {
+    if (
+      typeof ctor === "function" &&
+      typeof ctor.name === "string" &&
+      ctor.name !== ""
+    ) {
       return `an instance of ${ctor.name}`;
     }
     // Null-prototype objects: Node falls back to an inspect-style tag.
     // Observed Node v24 rendering: empty → `[Object: null prototype] {}`,
     // non-empty → `[Object: null prototype]`; arrays analogously.
     if (Array.isArray(v)) {
-      return v.length === 0 ? '[Array(0): null prototype] []' : '[Array: null prototype]';
+      return v.length === 0
+        ? "[Array(0): null prototype] []"
+        : "[Array: null prototype]";
     }
-    return Object.keys(v).length === 0 ? '[Object: null prototype] {}' : '[Object: null prototype]';
+    return Object.keys(v).length === 0
+      ? "[Object: null prototype] {}"
+      : "[Object: null prototype]";
   }
   let repr;
-  if (t === 'bigint') repr = `${String(v)}n`;
-  else if (t === 'number' && Object.is(v, -0)) repr = '-0';
+  if (t === "bigint") repr = `${String(v)}n`;
+  else if (t === "number" && Object.is(v, -0)) repr = "-0";
   else repr = String(v);
   return `type ${t} (${repr})`;
 }
@@ -113,7 +121,7 @@ function errInvalidArgType(name, received) {
     new TypeError(
       `The "${name}" argument must be of type string. Received ${inspectReceived(received)}`,
     ),
-    { code: 'ERR_INVALID_ARG_TYPE' },
+    { code: "ERR_INVALID_ARG_TYPE" },
   );
 }
 
@@ -123,7 +131,7 @@ function errInvalidArgType(name, received) {
  */
 function errUnknownEncoding(encoding) {
   return Object.assign(new Error(`Unknown encoding: ${encoding}`), {
-    code: 'ERR_UNKNOWN_ENCODING',
+    code: "ERR_UNKNOWN_ENCODING",
   });
 }
 
@@ -134,7 +142,7 @@ function errUnknownEncoding(encoding) {
 
 /** @param {unknown} v @param {string} name */
 function validateString(v, name) {
-  if (typeof v !== 'string') throw errInvalidArgType(name, v);
+  if (typeof v !== "string") throw errInvalidArgType(name, v);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,9 +162,9 @@ function validateString(v, name) {
  * @returns {object|undefined}
  */
 function getStore() {
-  if (typeof globalThis._RUNTIME_ === 'undefined') return undefined;
+  if (typeof globalThis._RUNTIME_ === "undefined") return undefined;
   const store = globalThis._RUNTIME_.__SEA_ASSETS__;
-  if (!store || typeof store !== 'object') return undefined;
+  if (!store || typeof store !== "object") return undefined;
   return store;
 }
 
@@ -176,7 +184,7 @@ function base64ToBytes(s) {
 
 /** @param {Uint8Array} bytes @returns {string} */
 function bytesToBase64(bytes) {
-  let binary = '';
+  let binary = "";
   const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) {
     binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
@@ -195,24 +203,26 @@ function bytesToBase64(bytes) {
  * @returns {Uint8Array|undefined}
  */
 function entryBytes(entry) {
-  if (typeof entry === 'string') return new TextEncoder().encode(entry);
-  if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(entry)) {
+  if (typeof entry === "string") return new TextEncoder().encode(entry);
+  if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(entry)) {
     if (entry instanceof DataView) return undefined;
-    return new Uint8Array(entry.buffer.slice(entry.byteOffset, entry.byteOffset + entry.byteLength));
+    return new Uint8Array(
+      entry.buffer.slice(entry.byteOffset, entry.byteOffset + entry.byteLength),
+    );
   }
   if (
     entry &&
-    typeof entry === 'object' &&
-    Object.prototype.toString.call(entry) === '[object ArrayBuffer]'
+    typeof entry === "object" &&
+    Object.prototype.toString.call(entry) === "[object ArrayBuffer]"
   ) {
     return new Uint8Array(entry.slice(0));
   }
-  if (entry && typeof entry === 'object' && typeof entry.data === 'string') {
+  if (entry && typeof entry === "object" && typeof entry.data === "string") {
     try {
-      if (entry.encoding === 'utf8' || entry.encoding === 'utf-8') {
+      if (entry.encoding === "utf8" || entry.encoding === "utf-8") {
         return new TextEncoder().encode(entry.data);
       }
-      if (entry.encoding === 'base64') {
+      if (entry.encoding === "base64") {
         return base64ToBytes(entry.data);
       }
     } catch {
@@ -243,27 +253,29 @@ function lookupBytes(key) {
 function decodeWithEncoding(bytes, encoding) {
   const name = String(encoding).toLowerCase();
   switch (name) {
-    case 'utf8':
-    case 'utf-8':
-      return new TextDecoder('utf-8').decode(bytes);
-    case 'utf16le':
-    case 'utf-16le':
-    case 'ucs2':
-    case 'ucs-2':
-      return new TextDecoder('utf-16le').decode(bytes);
-    case 'latin1':
-    case 'binary':
-      return new TextDecoder('latin1').decode(bytes);
-    case 'ascii': {
-      let s = '';
-      for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] & 0x7f);
+    case "utf8":
+    case "utf-8":
+      return new TextDecoder("utf-8").decode(bytes);
+    case "utf16le":
+    case "utf-16le":
+    case "ucs2":
+    case "ucs-2":
+      return new TextDecoder("utf-16le").decode(bytes);
+    case "latin1":
+    case "binary":
+      return new TextDecoder("latin1").decode(bytes);
+    case "ascii": {
+      let s = "";
+      for (let i = 0; i < bytes.length; i++)
+        s += String.fromCharCode(bytes[i] & 0x7f);
       return s;
     }
-    case 'base64':
+    case "base64":
       return bytesToBase64(bytes);
-    case 'hex': {
-      let s = '';
-      for (let i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, '0');
+    case "hex": {
+      let s = "";
+      for (let i = 0; i < bytes.length; i++)
+        s += bytes[i].toString(16).padStart(2, "0");
       return s;
     }
     default:
@@ -296,7 +308,7 @@ export function isSea() {
  * @returns {ArrayBuffer|undefined}
  */
 export function getRawAsset(key) {
-  validateString(key, 'key');
+  validateString(key, "key");
   const bytes = lookupBytes(key);
   return bytes ? bytes.buffer : undefined;
 }
@@ -313,8 +325,8 @@ export function getRawAsset(key) {
  * @returns {Uint8Array|string|undefined}
  */
 export function getAsset(key, encoding) {
-  validateString(key, 'key');
-  if (encoding !== undefined) validateString(encoding, 'encoding');
+  validateString(key, "key");
+  if (encoding !== undefined) validateString(encoding, "encoding");
   const bytes = lookupBytes(key);
   if (!bytes) return undefined;
   if (encoding === undefined) return bytes;
@@ -333,13 +345,15 @@ export function getAsset(key, encoding) {
  * @returns {Blob|undefined}
  */
 export function getAssetAsBlob(key, options) {
-  validateString(key, 'key');
+  validateString(key, "key");
   const bytes = lookupBytes(key);
   if (!bytes) return undefined;
   const type =
-    options != null && typeof options === 'object' && typeof options.type === 'string'
+    options != null &&
+    typeof options === "object" &&
+    typeof options.type === "string"
       ? options.type
-      : '';
+      : "";
   return new Blob([bytes], type ? { type } : undefined);
 }
 

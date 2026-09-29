@@ -20,29 +20,29 @@
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* eslint-disable strict */
-const common = require('../common');
-const assert = require('assert');
-const vm = require('vm');
+const common = require("../common");
+const assert = require("assert");
+const vm = require("vm");
 
 // Run a string
-const result = vm.runInThisContext('\'passed\';');
-assert.strictEqual(result, 'passed');
+const result = vm.runInThisContext("'passed';");
+assert.strictEqual(result, "passed");
 
 // thrown error
-assert.throws(function() {
-  vm.runInThisContext('throw new Error(\'test\');');
+assert.throws(function () {
+  vm.runInThisContext("throw new Error('test');");
 }, /test/);
 
 globalThis.hello = 5;
-vm.runInThisContext('hello = 2');
+vm.runInThisContext("hello = 2");
 assert.strictEqual(globalThis.hello, 2);
 
-
 // pass values
-const code = 'foo = 1;' +
-             'bar = 2;' +
-             'if (typeof baz !== \'undefined\')' +
-             'throw new Error(\'test fail\');';
+const code =
+  "foo = 1;" +
+  "bar = 2;" +
+  "if (typeof baz !== 'undefined')" +
+  "throw new Error('test fail');";
 globalThis.foo = 2;
 globalThis.obj = { foo: 0, baz: 3 };
 /* eslint-disable no-unused-vars */
@@ -53,13 +53,15 @@ assert.strictEqual(globalThis.bar, 2);
 assert.strictEqual(globalThis.foo, 1);
 
 // call a function
-globalThis.f = function() { globalThis.foo = 100; };
-vm.runInThisContext('f()');
+globalThis.f = function () {
+  globalThis.foo = 100;
+};
+vm.runInThisContext("f()");
 assert.strictEqual(globalThis.foo, 100);
 
 common.allowGlobals(
   globalThis.hello,
   globalThis.foo,
   globalThis.obj,
-  globalThis.f
+  globalThis.f,
 );

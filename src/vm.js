@@ -44,93 +44,139 @@ function codedError(Class, code, message) {
 }
 
 function receivedText(input) {
-  if (input === null) return 'Received null';
-  if (input === undefined) return 'Received undefined';
+  if (input === null) return "Received null";
+  if (input === undefined) return "Received undefined";
   const t = typeof input;
-  if (t === 'function') return `Received function ${input.name || '(anonymous)'}`;
-  if (t === 'object') {
+  if (t === "function")
+    return `Received function ${input.name || "(anonymous)"}`;
+  if (t === "object") {
     const name = input.constructor && input.constructor.name;
-    return name ? `Received an instance of ${name}` : `Received ${String(input)}`;
+    return name
+      ? `Received an instance of ${name}`
+      : `Received ${String(input)}`;
   }
-  let inspected = t === 'string' ? `'${input}'` : String(input);
+  let inspected = t === "string" ? `'${input}'` : String(input);
   if (inspected.length > 28) inspected = `${inspected.slice(0, 25)}...`;
   return `Received type ${t} (${inspected})`;
 }
 
 function argOrProp(name) {
-  return name.includes('.') ? 'property' : 'argument';
+  return name.includes(".") ? "property" : "argument";
 }
 
 function validateObject(value, name) {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "${name}" ${argOrProp(name)} must be of type object. ${receivedText(value)}`);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" ${argOrProp(name)} must be of type object. ${receivedText(value)}`,
+    );
   }
 }
 
 function validateString(value, name) {
-  if (typeof value !== 'string') {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "${name}" ${argOrProp(name)} must be of type string. ${receivedText(value)}`);
+  if (typeof value !== "string") {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" ${argOrProp(name)} must be of type string. ${receivedText(value)}`,
+    );
   }
 }
 
 function validateBoolean(value, name) {
-  if (typeof value !== 'boolean') {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "${name}" ${argOrProp(name)} must be of type boolean. ${receivedText(value)}`);
+  if (typeof value !== "boolean") {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" ${argOrProp(name)} must be of type boolean. ${receivedText(value)}`,
+    );
   }
 }
 
 function validateFunction(value, name) {
-  if (typeof value !== 'function') {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "${name}" ${argOrProp(name)} must be of type function. ${receivedText(value)}`);
+  if (typeof value !== "function") {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" ${argOrProp(name)} must be of type function. ${receivedText(value)}`,
+    );
   }
 }
 
 function validateStringArray(value, name) {
   if (!Array.isArray(value)) {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "${name}" ${argOrProp(name)} must be an instance of Array. ${receivedText(value)}`);
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" ${argOrProp(name)} must be an instance of Array. ${receivedText(value)}`,
+    );
   }
   for (let k = 0; k < value.length; k++) {
-    if (typeof value[k] !== 'string') {
-      throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-        `The "${name}[${k}]" ${argOrProp(name)} must be of type string. ${receivedText(value[k])}`);
+    if (typeof value[k] !== "string") {
+      throw codedError(
+        TypeError,
+        "ERR_INVALID_ARG_TYPE",
+        `The "${name}[${k}]" ${argOrProp(name)} must be of type string. ${receivedText(value[k])}`,
+      );
     }
   }
 }
 
 function validateInt32(value, name) {
-  if (typeof value !== 'number' || !Number.isInteger(value) ||
-      value < -2147483648 || value > 2147483647) {
-    throw codedError(RangeError, 'ERR_OUT_OF_RANGE',
-      `The value of "${name}" is out of range. It must be >= -2147483648 and <= 2147483647. ${receivedText(value)}`);
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < -2147483648 ||
+    value > 2147483647
+  ) {
+    throw codedError(
+      RangeError,
+      "ERR_OUT_OF_RANGE",
+      `The value of "${name}" is out of range. It must be >= -2147483648 and <= 2147483647. ${receivedText(value)}`,
+    );
   }
 }
 
 function validateUint32(value, name) {
-  if (typeof value !== 'number' || !Number.isInteger(value) ||
-      value < 0 || value > 4294967295) {
-    throw codedError(RangeError, 'ERR_OUT_OF_RANGE',
-      `The value of "${name}" is out of range. It must be >= 0 and <= 4294967295. ${receivedText(value)}`);
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > 4294967295
+  ) {
+    throw codedError(
+      RangeError,
+      "ERR_OUT_OF_RANGE",
+      `The value of "${name}" is out of range. It must be >= 0 and <= 4294967295. ${receivedText(value)}`,
+    );
   }
 }
 
 function validateOneOf(value, name, allowed) {
   if (!allowed.includes(value)) {
-    const list = allowed.map((v) => (v === undefined ? 'undefined' : `'${v}'`)).join(', ');
-    throw codedError(TypeError, 'ERR_INVALID_ARG_VALUE',
-      `The property '${name}' must be one of: ${list}. ${receivedText(value)}`);
+    const list = allowed
+      .map((v) => (v === undefined ? "undefined" : `'${v}'`))
+      .join(", ");
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_VALUE",
+      `The property '${name}' must be one of: ${list}. ${receivedText(value)}`,
+    );
   }
 }
 
 function validateAbortSignal(value, name) {
-  if (typeof value !== 'object' || value === null ||
-      (typeof AbortSignal !== 'undefined' && !(value instanceof AbortSignal))) {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "${name}" argument must be an instance of AbortSignal. ${receivedText(value)}`);
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    (typeof AbortSignal !== "undefined" && !(value instanceof AbortSignal))
+  ) {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument must be an instance of AbortSignal. ${receivedText(value)}`,
+    );
   }
 }
 
@@ -139,11 +185,11 @@ function validateAbortSignal(value, name) {
 // ---------------------------------------------------------------------------
 
 export const constants = Object.freeze({
-  USE_MAIN_CONTEXT_DEFAULT_LOADER: Symbol('vm.USE_MAIN_CONTEXT_DEFAULT_LOADER'),
-  DONT_CONTEXTIFY: Symbol('vm.DONT_CONTEXTIFY'),
+  USE_MAIN_CONTEXT_DEFAULT_LOADER: Symbol("vm.USE_MAIN_CONTEXT_DEFAULT_LOADER"),
+  DONT_CONTEXTIFY: Symbol("vm.DONT_CONTEXTIFY"),
 });
 
-const DEFAULT_FILENAME = 'evalmachine.<anonymous>';
+const DEFAULT_FILENAME = "evalmachine.<anonymous>";
 
 // ---------------------------------------------------------------------------
 // 3. Context tracking
@@ -158,23 +204,33 @@ function markContext(obj) {
 }
 
 export function isContext(object) {
-  if (typeof object !== 'object' || object === null || Array.isArray(object)) {
+  if (typeof object !== "object" || object === null || Array.isArray(object)) {
     if (Array.isArray(object)) return false;
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "object" argument must be of type object. ${receivedText(object)}`);
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "object" argument must be of type object. ${receivedText(object)}`,
+    );
   }
   return contextified.has(object);
 }
 
 function validateContext(contextifiedObject) {
-  if (typeof contextifiedObject !== 'object' || contextifiedObject === null) {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "object" argument must be of type object. ${receivedText(contextifiedObject)}`);
+  if (typeof contextifiedObject !== "object" || contextifiedObject === null) {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "object" argument must be of type object. ${receivedText(contextifiedObject)}`,
+    );
   }
   if (!contextified.has(contextifiedObject)) {
-    const name = contextifiedObject.constructor && contextifiedObject.constructor.name;
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "contextifiedObject" argument must be an vm.Context. Received an instance of ${name || 'Object'}`);
+    const name =
+      contextifiedObject.constructor && contextifiedObject.constructor.name;
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "contextifiedObject" argument must be an vm.Context. Received an instance of ${name || "Object"}`,
+    );
   }
 }
 
@@ -183,24 +239,27 @@ export function createContext(contextObject = {}, options = {}) {
     return markContext({});
   }
   if (contextified.has(contextObject)) return contextObject;
-  validateObject(contextObject, 'sandbox');
-  validateObject(options, 'options');
+  validateObject(contextObject, "sandbox");
+  validateObject(options, "options");
   const {
     name = `VM Context ${++contextNameIndex}`,
     origin,
     codeGeneration,
     microtaskMode,
   } = options;
-  validateString(name, 'options.name');
-  if (origin !== undefined) validateString(origin, 'options.origin');
+  validateString(name, "options.name");
+  if (origin !== undefined) validateString(origin, "options.origin");
   if (codeGeneration !== undefined) {
-    validateObject(codeGeneration, 'options.codeGeneration');
+    validateObject(codeGeneration, "options.codeGeneration");
     const { strings = true, wasm = true } = codeGeneration;
-    validateBoolean(strings, 'options.codeGeneration.strings');
-    validateBoolean(wasm, 'options.codeGeneration.wasm');
+    validateBoolean(strings, "options.codeGeneration.strings");
+    validateBoolean(wasm, "options.codeGeneration.wasm");
   }
   if (microtaskMode !== undefined) {
-    validateOneOf(microtaskMode, 'options.microtaskMode', ['afterEvaluate', undefined]);
+    validateOneOf(microtaskMode, "options.microtaskMode", [
+      "afterEvaluate",
+      undefined,
+    ]);
   }
   return markContext(contextObject);
 }
@@ -214,15 +273,15 @@ export function createScript(code, options) {
 // ---------------------------------------------------------------------------
 
 const GLOBAL_NAMES = (
-  'Infinity NaN undefined eval isFinite isNaN parseFloat parseInt ' +
-  'decodeURI decodeURIComponent encodeURI encodeURIComponent escape unescape ' +
-  'Object Function Boolean Symbol Error AggregateError EvalError RangeError ' +
-  'ReferenceError SyntaxError TypeError URIError Number BigInt Math Date String ' +
-  'RegExp Array Int8Array Uint8Array Uint8ClampedArray Int16Array Uint16Array ' +
-  'Int32Array Uint32Array Float32Array Float64Array BigInt64Array BigUint64Array ' +
-  'Map Set WeakMap WeakSet WeakRef ArrayBuffer SharedArrayBuffer Atomics ' +
-  'DataView JSON Promise Reflect Proxy Intl WebAssembly console'
-).split(' ');
+  "Infinity NaN undefined eval isFinite isNaN parseFloat parseInt " +
+  "decodeURI decodeURIComponent encodeURI encodeURIComponent escape unescape " +
+  "Object Function Boolean Symbol Error AggregateError EvalError RangeError " +
+  "ReferenceError SyntaxError TypeError URIError Number BigInt Math Date String " +
+  "RegExp Array Int8Array Uint8Array Uint8ClampedArray Int16Array Uint16Array " +
+  "Int32Array Uint32Array Float32Array Float64Array BigInt64Array BigUint64Array " +
+  "Map Set WeakMap WeakSet WeakRef ArrayBuffer SharedArrayBuffer Atomics " +
+  "DataView JSON Promise Reflect Proxy Intl WebAssembly console"
+).split(" ");
 
 let _standardGlobals = null;
 function standardGlobals() {
@@ -231,7 +290,11 @@ function standardGlobals() {
     const g = globalThis;
     for (const name of GLOBAL_NAMES) {
       if (name in g) {
-        try { table[name] = g[name]; } catch (_) { /* ignore getters that throw */ }
+        try {
+          table[name] = g[name];
+        } catch (_) {
+          /* ignore getters that throw */
+        }
       }
     }
     _standardGlobals = table;
@@ -246,14 +309,14 @@ function standardGlobals() {
 function countNewlines(s) {
   let count = 0;
   for (let k = 0; k < s.length; k++) {
-    if (s[k] === '\n') count++;
+    if (s[k] === "\n") count++;
   }
   return count;
 }
 
 /** Pre-declare a name on the context object as a non-configurable binding. */
 function ensureDeclared(target, name) {
-  if (name === '__proto__') return;
+  if (name === "__proto__") return;
   if (Reflect.has(target, name)) return;
   try {
     Object.defineProperty(target, name, {
@@ -262,19 +325,21 @@ function ensureDeclared(target, name) {
       enumerable: true,
       configurable: false,
     });
-  } catch (_) { /* host Proxy rejected it; reads fall back to globals */ }
+  } catch (_) {
+    /* host Proxy rejected it; reads fall back to globals */
+  }
 }
 
 /** Replace spans with whitespace, preserving line breaks for stack mapping. */
 function blankSpans(code, spans) {
   if (spans.length === 0) return code;
   spans.sort((a, b) => a[0] - b[0]);
-  let out = '';
+  let out = "";
   let last = 0;
   for (const [s, e] of spans) {
     if (s < last) continue;
     out += code.slice(last, s);
-    out += code.slice(s, e).replace(/[^\r\n\u2028\u2029]/g, ' ');
+    out += code.slice(s, e).replace(/[^\r\n\u2028\u2029]/g, " ");
     last = e;
   }
   out += code.slice(last);
@@ -285,17 +350,29 @@ function skipWsCommentsFlat(code, j) {
   const n = code.length;
   while (j < n) {
     const c = code[j];
-    if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\v' ||
-        c === '\f' || c === '\u00a0' || c === '\ufeff' ||
-        c === '\u2028' || c === '\u2029') { j++; continue; }
-    if (c === '/' && code[j + 1] === '/') {
-      j += 2;
-      while (j < n && code[j] !== '\n' && code[j] !== '\r') j++;
+    if (
+      c === " " ||
+      c === "\t" ||
+      c === "\n" ||
+      c === "\r" ||
+      c === "\v" ||
+      c === "\f" ||
+      c === "\u00a0" ||
+      c === "\ufeff" ||
+      c === "\u2028" ||
+      c === "\u2029"
+    ) {
+      j++;
       continue;
     }
-    if (c === '/' && code[j + 1] === '*') {
+    if (c === "/" && code[j + 1] === "/") {
       j += 2;
-      while (j < n && !(code[j] === '*' && code[j + 1] === '/')) j++;
+      while (j < n && code[j] !== "\n" && code[j] !== "\r") j++;
+      continue;
+    }
+    if (c === "/" && code[j + 1] === "*") {
+      j += 2;
+      while (j < n && !(code[j] === "*" && code[j + 1] === "/")) j++;
       j += 2;
       continue;
     }
@@ -310,9 +387,12 @@ function skipStringFlat(code, j) {
   j++;
   while (j < n) {
     const c = code[j];
-    if (c === '\\') { j += 2; continue; }
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
     if (c === q) return j + 1;
-    if (c === '\n' || c === '\r') break;
+    if (c === "\n" || c === "\r") break;
     j++;
   }
   return j;
@@ -345,16 +425,19 @@ const ID_START_RE = /^\p{ID_Start}$/u;
 const ID_PART_RE = /^[\p{ID_Continue}\u200C\u200D]$/u;
 
 const KEYWORDS = new Set(
-  ('break case catch class const continue debugger default delete do else ' +
-   'enum export extends finally for function if implements import in instanceof ' +
-   'interface let new package private protected public return static super ' +
-   'switch this throw try typeof var void while with yield await').split(' ')
+  (
+    "break case catch class const continue debugger default delete do else " +
+    "enum export extends finally for function if implements import in instanceof " +
+    "interface let new package private protected public return static super " +
+    "switch this throw try typeof var void while with yield await"
+  ).split(" "),
 );
 
 function isIdStartChar(c) {
   if (!c) return false;
   const n = c.charCodeAt(0);
-  if (n === 36 || n === 95 || (n >= 65 && n <= 90) || (n >= 97 && n <= 122)) return true;
+  if (n === 36 || n === 95 || (n >= 65 && n <= 90) || (n >= 97 && n <= 122))
+    return true;
   if (n < 128) return false;
   return ID_START_RE.test(c);
 }
@@ -362,8 +445,14 @@ function isIdStartChar(c) {
 function isIdPartChar(c) {
   if (!c) return false;
   const n = c.charCodeAt(0);
-  if (n === 36 || n === 95 || (n >= 48 && n <= 57) ||
-      (n >= 65 && n <= 90) || (n >= 97 && n <= 122)) return true;
+  if (
+    n === 36 ||
+    n === 95 ||
+    (n >= 48 && n <= 57) ||
+    (n >= 65 && n <= 90) ||
+    (n >= 97 && n <= 122)
+  )
+    return true;
   if (n < 128) return false;
   return ID_PART_RE.test(c);
 }
@@ -380,9 +469,12 @@ function skipStringLex(code, j) {
   j++;
   while (j < n) {
     const c = code[j];
-    if (c === '\\') { j += 2; continue; }
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
     if (c === q) return j + 1;
-    if (c === '\n' || c === '\r') break;
+    if (c === "\n" || c === "\r") break;
     j++;
   }
   return j;
@@ -392,8 +484,15 @@ function skipNumberLex(code, j) {
   const n = code.length;
   while (j < n) {
     const c = code[j];
-    if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
-        (c >= 'A' && c <= 'Z') || c === '_' || c === '.' || c === '$') j++;
+    if (
+      (c >= "0" && c <= "9") ||
+      (c >= "a" && c <= "z") ||
+      (c >= "A" && c <= "Z") ||
+      c === "_" ||
+      c === "." ||
+      c === "$"
+    )
+      j++;
     else break;
   }
   return j;
@@ -405,11 +504,16 @@ function skipRegexLex(code, j) {
   let inClass = false;
   while (j < n) {
     const c = code[j];
-    if (c === '\\') { j += 2; continue; }
-    if (c === '[') inClass = true;
-    else if (c === ']') inClass = false;
-    else if (c === '/' && !inClass) { j++; break; }
-    else if ((c === '\n' || c === '\r') && !inClass) break;
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
+    if (c === "[") inClass = true;
+    else if (c === "]") inClass = false;
+    else if (c === "/" && !inClass) {
+      j++;
+      break;
+    } else if ((c === "\n" || c === "\r") && !inClass) break;
     j++;
   }
   while (j < n && isIdPartChar(code[j])) j++;
@@ -424,24 +528,45 @@ function matchBalanced(code, j) {
   let operand = false;
   while (j < n && stack.length > 0) {
     const c = code[j];
-    if (c === '"' || c === "'") { j = skipStringLex(code, j); operand = true; continue; }
-    if (c === '`') { j = skipTemplateLex(code, j); operand = true; continue; }
-    if (c === '/' && code[j + 1] === '/') {
-      j += 2;
-      while (j < n && code[j] !== '\n' && code[j] !== '\r') j++;
+    if (c === '"' || c === "'") {
+      j = skipStringLex(code, j);
+      operand = true;
       continue;
     }
-    if (c === '/' && code[j + 1] === '*') {
+    if (c === "`") {
+      j = skipTemplateLex(code, j);
+      operand = true;
+      continue;
+    }
+    if (c === "/" && code[j + 1] === "/") {
       j += 2;
-      while (j < n && !(code[j] === '*' && code[j + 1] === '/')) j++;
+      while (j < n && code[j] !== "\n" && code[j] !== "\r") j++;
+      continue;
+    }
+    if (c === "/" && code[j + 1] === "*") {
+      j += 2;
+      while (j < n && !(code[j] === "*" && code[j + 1] === "/")) j++;
       j += 2;
       continue;
     }
-    if (c === '/' && !operand) { j = skipRegexLex(code, j); operand = true; continue; }
-    if (c === '(' || c === '[' || c === '{') { stack.push(c); operand = false; j++; continue; }
-    if (c === ')' || c === ']' || c === '}') {
+    if (c === "/" && !operand) {
+      j = skipRegexLex(code, j);
+      operand = true;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{") {
+      stack.push(c);
+      operand = false;
+      j++;
+      continue;
+    }
+    if (c === ")" || c === "]" || c === "}") {
       const o = stack[stack.length - 1];
-      if ((o === '(' && c === ')') || (o === '[' && c === ']') || (o === '{' && c === '}')) {
+      if (
+        (o === "(" && c === ")") ||
+        (o === "[" && c === "]") ||
+        (o === "{" && c === "}")
+      ) {
         stack.pop();
       } else {
         break;
@@ -455,8 +580,22 @@ function matchBalanced(code, j) {
       operand = true;
       continue;
     }
-    if (c >= '0' && c <= '9') { j = skipNumberLex(code, j); operand = true; continue; }
-    if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\v' || c === '\f') { j++; continue; }
+    if (c >= "0" && c <= "9") {
+      j = skipNumberLex(code, j);
+      operand = true;
+      continue;
+    }
+    if (
+      c === " " ||
+      c === "\t" ||
+      c === "\n" ||
+      c === "\r" ||
+      c === "\v" ||
+      c === "\f"
+    ) {
+      j++;
+      continue;
+    }
     operand = false;
     j++;
   }
@@ -468,9 +607,15 @@ function skipTemplateLex(code, j) {
   j++;
   while (j < n) {
     const c = code[j];
-    if (c === '\\') { j += 2; continue; }
-    if (c === '`') return j + 1;
-    if (c === '$' && code[j + 1] === '{') { j = matchBalanced(code, j + 1); continue; }
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
+    if (c === "`") return j + 1;
+    if (c === "$" && code[j + 1] === "{") {
+      j = matchBalanced(code, j + 1);
+      continue;
+    }
     j++;
   }
   return j;
@@ -478,16 +623,25 @@ function skipTemplateLex(code, j) {
 
 /** Best-effort binding identifiers from a destructuring pattern's text. */
 function collectPatternIds(text, vars) {
-  const clean = text.replace(/'(?:[^'\\\r\n]|\\.)*'|"(?:[^"\\\r\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '');
+  const clean = text.replace(
+    /'(?:[^'\\\r\n]|\\.)*'|"(?:[^"\\\r\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g,
+    "",
+  );
   const re = /[$A-Z_a-z][$\w]*/g;
   let m;
   while ((m = re.exec(clean)) !== null) {
     const word = m[0];
     if (KEYWORDS.has(word)) continue;
     let k = m.index + word.length;
-    while (k < clean.length && (clean[k] === ' ' || clean[k] === '\t' ||
-           clean[k] === '\n' || clean[k] === '\r')) k++;
-    if (clean[k] === ':') continue; // property key, not a binding
+    while (
+      k < clean.length &&
+      (clean[k] === " " ||
+        clean[k] === "\t" ||
+        clean[k] === "\n" ||
+        clean[k] === "\r")
+    )
+      k++;
+    if (clean[k] === ":") continue; // property key, not a binding
     vars.push(word);
   }
 }
@@ -507,23 +661,35 @@ function scanScript(code) {
   let asyncStart = -1;
   let operand = false;
   let declPos = true;
-  let sigChar = '';
+  let sigChar = "";
   let paramDepth = 0;
 
   function skipWs(j) {
     while (j < n) {
       const c = code[j];
-      if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\v' ||
-          c === '\f' || c === '\u00a0' || c === '\ufeff' ||
-          c === '\u2028' || c === '\u2029') { j++; continue; }
-      if (c === '/' && code[j + 1] === '/') {
-        j += 2;
-        while (j < n && code[j] !== '\n' && code[j] !== '\r') j++;
+      if (
+        c === " " ||
+        c === "\t" ||
+        c === "\n" ||
+        c === "\r" ||
+        c === "\v" ||
+        c === "\f" ||
+        c === "\u00a0" ||
+        c === "\ufeff" ||
+        c === "\u2028" ||
+        c === "\u2029"
+      ) {
+        j++;
         continue;
       }
-      if (c === '/' && code[j + 1] === '*') {
+      if (c === "/" && code[j + 1] === "/") {
         j += 2;
-        while (j < n && !(code[j] === '*' && code[j + 1] === '/')) j++;
+        while (j < n && code[j] !== "\n" && code[j] !== "\r") j++;
+        continue;
+      }
+      if (c === "/" && code[j + 1] === "*") {
+        j += 2;
+        while (j < n && !(code[j] === "*" && code[j + 1] === "/")) j++;
         j += 2;
         continue;
       }
@@ -534,26 +700,92 @@ function scanScript(code) {
 
   // Skip an initializer/expression until `,` or `;` at depth 0.
   function skipInitializer(j) {
-    let d0 = 0, d1 = 0, d2 = 0;
+    let d0 = 0,
+      d1 = 0,
+      d2 = 0;
     let op = false;
     while (j < n) {
       const c = code[j];
-      if (c === '"' || c === "'") { j = skipStringLex(code, j); op = true; continue; }
-      if (c === '`') { j = skipTemplateLex(code, j); op = true; continue; }
-      if (c === '/' && (code[j + 1] === '/' || code[j + 1] === '*')) {
-        j = skipWs(code, j); continue;
+      if (c === '"' || c === "'") {
+        j = skipStringLex(code, j);
+        op = true;
+        continue;
       }
-      if (c === '/' && !op) { j = skipRegexLex(code, j); op = true; continue; }
-      if (c === '(') { d0++; op = false; j++; continue; }
-      if (c === ')') { if (d0 === 0) break; d0--; op = true; j++; continue; }
-      if (c === '[') { d1++; op = false; j++; continue; }
-      if (c === ']') { if (d1 === 0) break; d1--; op = true; j++; continue; }
-      if (c === '{') { d2++; op = false; j++; continue; }
-      if (c === '}') { if (d2 === 0) break; d2--; op = true; j++; continue; }
-      if ((c === ',' || c === ';') && d0 === 0 && d1 === 0 && d2 === 0) break;
-      if (isIdStartChar(c)) { j = readId(code, j).end; op = true; continue; }
-      if (c >= '0' && c <= '9') { j = skipNumberLex(code, j); op = true; continue; }
-      if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\v' || c === '\f') { j++; continue; }
+      if (c === "`") {
+        j = skipTemplateLex(code, j);
+        op = true;
+        continue;
+      }
+      if (c === "/" && (code[j + 1] === "/" || code[j + 1] === "*")) {
+        j = skipWs(code, j);
+        continue;
+      }
+      if (c === "/" && !op) {
+        j = skipRegexLex(code, j);
+        op = true;
+        continue;
+      }
+      if (c === "(") {
+        d0++;
+        op = false;
+        j++;
+        continue;
+      }
+      if (c === ")") {
+        if (d0 === 0) break;
+        d0--;
+        op = true;
+        j++;
+        continue;
+      }
+      if (c === "[") {
+        d1++;
+        op = false;
+        j++;
+        continue;
+      }
+      if (c === "]") {
+        if (d1 === 0) break;
+        d1--;
+        op = true;
+        j++;
+        continue;
+      }
+      if (c === "{") {
+        d2++;
+        op = false;
+        j++;
+        continue;
+      }
+      if (c === "}") {
+        if (d2 === 0) break;
+        d2--;
+        op = true;
+        j++;
+        continue;
+      }
+      if ((c === "," || c === ";") && d0 === 0 && d1 === 0 && d2 === 0) break;
+      if (isIdStartChar(c)) {
+        j = readId(code, j).end;
+        op = true;
+        continue;
+      }
+      if (c >= "0" && c <= "9") {
+        j = skipNumberLex(code, j);
+        op = true;
+        continue;
+      }
+      if (
+        c === " " ||
+        c === "\t" ||
+        c === "\n" ||
+        c === "\r" ||
+        c === "\v" ||
+        c === "\f"
+      ) {
+        j++;
+        continue;
+      }
       op = false;
       j++;
     }
@@ -562,28 +794,67 @@ function scanScript(code) {
 
   /** Skip a let/const declarator list (we only need its extent, not its names). */
   function skipLexical(j) {
-    let d0 = 0, d1 = 0, d2 = 0;
+    let d0 = 0,
+      d1 = 0,
+      d2 = 0;
     while (j < n) {
       const c = code[j];
-      if (c === '"' || c === "'" || c === '`') { j = skipStringLex(code, j); continue; }
-      if (c === '/' && (code[j + 1] === '/' || code[j + 1] === '*')) { j = skipCommentLex(code, j); continue; }
-      if (c === '(') { d0++; j++; continue; }
-      if (c === ')') { if (d0 === 0) break; d0--; j++; continue; }
-      if (c === '[') { d1++; j++; continue; }
-      if (c === ']') { if (d1 === 0) break; d1--; j++; continue; }
-      if (c === '{') { d2++; j++; continue; }
-      if (c === '}') { if (d2 === 0) break; d2--; j++; continue; }
-      if (c === ';' && d0 === 0 && d1 === 0 && d2 === 0) { j++; break; }
+      if (c === '"' || c === "'" || c === "`") {
+        j = skipStringLex(code, j);
+        continue;
+      }
+      if (c === "/" && (code[j + 1] === "/" || code[j + 1] === "*")) {
+        j = skipCommentLex(code, j);
+        continue;
+      }
+      if (c === "(") {
+        d0++;
+        j++;
+        continue;
+      }
+      if (c === ")") {
+        if (d0 === 0) break;
+        d0--;
+        j++;
+        continue;
+      }
+      if (c === "[") {
+        d1++;
+        j++;
+        continue;
+      }
+      if (c === "]") {
+        if (d1 === 0) break;
+        d1--;
+        j++;
+        continue;
+      }
+      if (c === "{") {
+        d2++;
+        j++;
+        continue;
+      }
+      if (c === "}") {
+        if (d2 === 0) break;
+        d2--;
+        j++;
+        continue;
+      }
+      if (c === ";" && d0 === 0 && d1 === 0 && d2 === 0) {
+        j++;
+        break;
+      }
       j++;
     }
     return j;
   }
 
-  function parseVarDeclarators(j) {    while (true) {
+  function parseVarDeclarators(j) {
+    while (true) {
       j = skipWs(j);
       if (j >= n) break;
       const c = code[j];
-      if (c === '{' || c === '[') {
+      if (c === "{" || c === "[") {
         const end = matchBalanced(code, j);
         collectPatternIds(code.slice(j + 1, end - 1), vars);
         j = end;
@@ -595,60 +866,84 @@ function scanScript(code) {
         break;
       }
       j = skipWs(j);
-      if (code[j] === '=') j = skipInitializer(j + 1);
+      if (code[j] === "=") j = skipInitializer(j + 1);
       j = skipWs(j);
-      if (code[j] === ',') { j++; continue; }
+      if (code[j] === ",") {
+        j++;
+        continue;
+      }
       break;
     }
     return j;
   }
 
   function onWord(word, start) {
-    const isProp = sigChar === '.';
+    const isProp = sigChar === ".";
     const topLevel = braceDepth === 0 && parenDepth === 0 && bracketDepth === 0;
     // Skip lexical declarations so their names are not misclassified as
     // bare assignments. `let` is also a valid sloppy-mode identifier, so
     // only skip when it opens a binding.
-    if (!isProp && (word === 'let' || word === 'const') && topLevel && declPos) {
+    if (
+      !isProp &&
+      (word === "let" || word === "const") &&
+      topLevel &&
+      declPos
+    ) {
       const j = skipWs(start + word.length);
       const c = code[j];
-      if (c === '{' || c === '[' || isIdStartChar(c)) {
+      if (c === "{" || c === "[" || isIdStartChar(c)) {
         i = skipLexical(j);
         return;
       }
     }
-    if (!isProp && word === 'function' && topLevel && declPos) {
+    if (!isProp && word === "function" && topLevel && declPos) {
       let j = skipWs(start + 8);
-      if (code[j] === '*') j = skipWs(j + 1);
-      let name = '';
-      if (isIdStartChar(code[j] || '')) name = readId(code, j).word;
+      if (code[j] === "*") j = skipWs(j + 1);
+      let name = "";
+      if (isIdStartChar(code[j] || "")) name = readId(code, j).word;
       let capture = null;
-      if (name !== '') {
-        capture = { name, start: asyncStart >= 0 ? asyncStart : start, level: 0 };
+      if (name !== "") {
+        capture = {
+          name,
+          start: asyncStart >= 0 ? asyncStart : start,
+          level: 0,
+        };
       }
       fnStack.push({ paren: parenDepth, stage: 0, capture });
       asyncStart = -1;
-    } else if (!isProp && word === 'function') {
+    } else if (!isProp && word === "function") {
       fnStack.push({ paren: parenDepth, stage: 0, capture: null });
       asyncStart = -1;
-    } else if (!isProp && word === 'async' && topLevel && declPos) {
+    } else if (!isProp && word === "async" && topLevel && declPos) {
       const j = skipWs(start + 5);
-      asyncStart = (code.startsWith('function', j) && !isIdPartChar(code[j + 8] || ''))
-        ? start : -1;
+      asyncStart =
+        code.startsWith("function", j) && !isIdPartChar(code[j + 8] || "")
+          ? start
+          : -1;
     } else {
       asyncStart = -1;
-      if (!isProp && word === 'var' && topLevel && declPos) {
+      if (!isProp && word === "var" && topLevel && declPos) {
         i = parseVarDeclarators(start + 3);
-      } else if (!isProp && !KEYWORDS.has(word) && topLevel && paramDepth === 0) {
+      } else if (
+        !isProp &&
+        !KEYWORDS.has(word) &&
+        topLevel &&
+        paramDepth === 0
+      ) {
         // Possible bare assignment target: `name = …` (not `==`, `=>`).
         const j = skipWs(start + word.length);
-        if (code[j] === '=' && code[j + 1] !== '=' && code[j + 1] !== '>') {
+        if (code[j] === "=" && code[j + 1] !== "=" && code[j + 1] !== ">") {
           assigned.push(word);
         }
       }
     }
-    if (word === 'this' || word === 'super' || word === 'true' ||
-        word === 'false' || word === 'null') {
+    if (
+      word === "this" ||
+      word === "super" ||
+      word === "true" ||
+      word === "false" ||
+      word === "null"
+    ) {
       operand = true;
     } else if (KEYWORDS.has(word)) {
       operand = false;
@@ -661,26 +956,52 @@ function scanScript(code) {
 
   while (i < n) {
     const c = code[i];
-    if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\v' ||
-        c === '\f' || c === '\u00a0' || c === '\ufeff' ||
-        c === '\u2028' || c === '\u2029') { i++; continue; }
-    if (c === '/' && (code[i + 1] === '/' || code[i + 1] === '*')) {
-      i = skipWs(i); continue;
+    if (
+      c === " " ||
+      c === "\t" ||
+      c === "\n" ||
+      c === "\r" ||
+      c === "\v" ||
+      c === "\f" ||
+      c === "\u00a0" ||
+      c === "\ufeff" ||
+      c === "\u2028" ||
+      c === "\u2029"
+    ) {
+      i++;
+      continue;
+    }
+    if (c === "/" && (code[i + 1] === "/" || code[i + 1] === "*")) {
+      i = skipWs(i);
+      continue;
     }
     if (c === '"' || c === "'") {
       i = skipStringLex(code, i);
-      operand = true; declPos = false; asyncStart = -1; sigChar = c;
+      operand = true;
+      declPos = false;
+      asyncStart = -1;
+      sigChar = c;
       continue;
     }
-    if (c === '`') {
+    if (c === "`") {
       i = skipTemplateLex(code, i);
-      operand = true; declPos = false; asyncStart = -1; sigChar = '`';
+      operand = true;
+      declPos = false;
+      asyncStart = -1;
+      sigChar = "`";
       continue;
     }
-    if (c === '/') {
-      if (!operand) { i = skipRegexLex(code, i); operand = true; }
-      else { i++; operand = false; }
-      declPos = false; asyncStart = -1; sigChar = '/';
+    if (c === "/") {
+      if (!operand) {
+        i = skipRegexLex(code, i);
+        operand = true;
+      } else {
+        i++;
+        operand = false;
+      }
+      declPos = false;
+      asyncStart = -1;
+      sigChar = "/";
       continue;
     }
     if (isIdStartChar(c)) {
@@ -690,12 +1011,18 @@ function scanScript(code) {
       onWord(r.word, start);
       continue;
     }
-    if ((c >= '0' && c <= '9') || (c === '.' && code[i + 1] >= '0' && code[i + 1] <= '9')) {
+    if (
+      (c >= "0" && c <= "9") ||
+      (c === "." && code[i + 1] >= "0" && code[i + 1] <= "9")
+    ) {
       i = skipNumberLex(code, i);
-      operand = true; declPos = false; asyncStart = -1; sigChar = '0';
+      operand = true;
+      declPos = false;
+      asyncStart = -1;
+      sigChar = "0";
       continue;
     }
-    if (c === '{') {
+    if (c === "{") {
       const top = fnStack.length > 0 ? fnStack[fnStack.length - 1] : null;
       if (top !== null && top.stage === 2) {
         fnStack.pop();
@@ -708,13 +1035,20 @@ function scanScript(code) {
         braceIsFunc.push(false);
       }
       braceDepth++;
-      operand = false; declPos = true; asyncStart = -1; sigChar = '{';
+      operand = false;
+      declPos = true;
+      asyncStart = -1;
+      sigChar = "{";
       i++;
       continue;
     }
-    if (c === '}') {
+    if (c === "}") {
       const wasFunc = braceIsFunc.pop();
-      if (wasFunc && activeCapture !== null && activeCapture.level === braceDepth) {
+      if (
+        wasFunc &&
+        activeCapture !== null &&
+        activeCapture.level === braceDepth
+      ) {
         functions.push({
           name: activeCapture.name,
           start: activeCapture.start,
@@ -723,51 +1057,72 @@ function scanScript(code) {
         activeCapture = null;
       }
       braceDepth--;
-      operand = true; declPos = true; asyncStart = -1; sigChar = '}';
+      operand = true;
+      declPos = true;
+      asyncStart = -1;
+      sigChar = "}";
       i++;
       continue;
     }
-    if (c === '(') {
+    if (c === "(") {
       const top = fnStack.length > 0 ? fnStack[fnStack.length - 1] : null;
       if (top !== null && top.stage === 0 && parenDepth === top.paren) {
         top.stage = 1;
         paramDepth++;
       }
       parenDepth++;
-      operand = false; declPos = false; asyncStart = -1; sigChar = '(';
+      operand = false;
+      declPos = false;
+      asyncStart = -1;
+      sigChar = "(";
       i++;
       continue;
     }
-    if (c === ')') {
+    if (c === ")") {
       parenDepth--;
       const top = fnStack.length > 0 ? fnStack[fnStack.length - 1] : null;
       if (top !== null && top.stage === 1 && parenDepth === top.paren) {
         top.stage = 2;
         paramDepth--;
       }
-      operand = true; declPos = false; asyncStart = -1; sigChar = ')';
+      operand = true;
+      declPos = false;
+      asyncStart = -1;
+      sigChar = ")";
       i++;
       continue;
     }
-    if (c === '[') {
+    if (c === "[") {
       bracketDepth++;
-      operand = false; declPos = false; asyncStart = -1; sigChar = '[';
+      operand = false;
+      declPos = false;
+      asyncStart = -1;
+      sigChar = "[";
       i++;
       continue;
     }
-    if (c === ']') {
+    if (c === "]") {
       bracketDepth--;
-      operand = true; declPos = false; asyncStart = -1; sigChar = ']';
+      operand = true;
+      declPos = false;
+      asyncStart = -1;
+      sigChar = "]";
       i++;
       continue;
     }
-    if (c === ';') {
-      operand = false; declPos = true; asyncStart = -1; sigChar = ';';
+    if (c === ";") {
+      operand = false;
+      declPos = true;
+      asyncStart = -1;
+      sigChar = ";";
       i++;
       continue;
     }
     // All other punctuation / operators.
-    operand = false; declPos = false; asyncStart = -1; sigChar = c;
+    operand = false;
+    declPos = false;
+    asyncStart = -1;
+    sigChar = c;
     i++;
   }
 
@@ -782,8 +1137,8 @@ function makeScope(target) {
   const globals = standardGlobals();
   return new Proxy(target, {
     has(t, prop) {
-      if (typeof prop === 'symbol') return Reflect.has(t, prop);
-      if (prop === 'globalThis') return true;
+      if (typeof prop === "symbol") return Reflect.has(t, prop);
+      if (prop === "globalThis") return true;
       if (Reflect.has(t, prop)) return true;
       if (prop in globals) return true;
       // Block host globals from leaking into the sandbox: claim them so the
@@ -791,8 +1146,8 @@ function makeScope(target) {
       return prop in globalThis;
     },
     get(t, prop, receiver) {
-      if (typeof prop === 'symbol') return Reflect.get(t, prop);
-      if (prop === 'globalThis') {
+      if (typeof prop === "symbol") return Reflect.get(t, prop);
+      if (prop === "globalThis") {
         return Reflect.has(t, prop) ? Reflect.get(t, prop) : t;
       }
       if (Reflect.has(t, prop)) return Reflect.get(t, prop, receiver);
@@ -805,13 +1160,13 @@ function makeScope(target) {
       return undefined;
     },
     set(t, prop, value) {
-      if (typeof prop === 'symbol') return Reflect.set(t, prop, value);
+      if (typeof prop === "symbol") return Reflect.set(t, prop, value);
       // `has` already returned true: the name is either on the target or a
       // standard global. Standard globals shadow onto the sandbox global.
       return Reflect.set(t, prop, value);
     },
     defineProperty(t, prop, desc) {
-      if (prop === '__proto__') return false;
+      if (prop === "__proto__") return false;
       return Reflect.defineProperty(t, prop, desc);
     },
     deleteProperty(t, prop) {
@@ -856,10 +1211,11 @@ function mapEvalFrame(line, ctx) {
  * header (`filename:line`, source line, caret).
  */
 function enrichScriptError(err, ctx) {
-  if (err === null || (typeof err !== 'object' && typeof err !== 'function')) return err;
+  if (err === null || (typeof err !== "object" && typeof err !== "function"))
+    return err;
   const stack = err.stack;
-  if (typeof stack !== 'string') return err;
-  const lines = stack.split('\n');
+  if (typeof stack !== "string") return err;
+  const lines = stack.split("\n");
   if (lines.length < 2) return err;
   const out = [lines[0]];
   let top = null;
@@ -873,14 +1229,16 @@ function enrichScriptError(err, ctx) {
     }
   }
   if (top === null) return err;
-  let finalStack = out.join('\n');
+  let finalStack = out.join("\n");
   if (ctx.header) {
-    const sourceLine = ctx.code.split('\n')[top.codeLine - 1] ?? '';
+    const sourceLine = ctx.code.split("\n")[top.codeLine - 1] ?? "";
     finalStack = `${ctx.filename}:${top.dispLine}\n${sourceLine}\n ^\n\n${finalStack}`;
   }
   try {
     err.stack = finalStack;
-  } catch (_) { /* frozen error; leave the original stack */ }
+  } catch (_) {
+    /* frozen error; leave the original stack */
+  }
   return err;
 }
 
@@ -895,7 +1253,7 @@ function runWithContext(code, target, opts) {
   // Pre-declare everything the code may define at the top level so it lands
   // on the context object instead of the wrapper's function scope.
   const seen = new Set();
-  let prefix = '';
+  let prefix = "";
   for (const f of scanned.functions) {
     if (!seen.has(f.name)) {
       seen.add(f.name);
@@ -904,31 +1262,40 @@ function runWithContext(code, target, opts) {
     prefix += `${f.name} = ${code.slice(f.start, f.end)};\n`;
   }
   for (const name of scanned.vars) {
-    if (!seen.has(name)) { seen.add(name); ensureDeclared(target, name); }
+    if (!seen.has(name)) {
+      seen.add(name);
+      ensureDeclared(target, name);
+    }
   }
   // Note: lexical (let/const/class) names are NOT pre-declared on the target;
   // they live in the eval's declarative scope and must not become context
   // properties (Node keeps them off globalThis too).
   for (const name of scanned.assigned) {
-    if (!seen.has(name)) { seen.add(name); ensureDeclared(target, name); }
+    if (!seen.has(name)) {
+      seen.add(name);
+      ensureDeclared(target, name);
+    }
   }
 
   // Remove the original top-level function declarations (they are installed
   // by the prefix instead); blanking preserves line numbers.
-  const bodyCode = blankSpans(code, scanned.functions.map((f) => [f.start, f.end]));
+  const bodyCode = blankSpans(
+    code,
+    scanned.functions.map((f) => [f.start, f.end]),
+  );
   // The prefix must come after a strict prologue so the eval stays strict.
-  const evalCode = (strict ? '"use strict";\n' : '') + prefix + bodyCode;
+  const evalCode = (strict ? '"use strict";\n' : "") + prefix + bodyCode;
   // Lines before the user's code inside the eval'd source.
   const headLines = (strict ? 1 : 0) + scanned.functions.length;
 
   // Direct eval inside the `with` keeps the scope chain and yields the
   // completion value as the return value. `eval` resolves through the scope
   // proxy to the intrinsic, so this stays a direct eval.
-  const factoryBody = 'with(__vm_p__){\nreturn eval(__vm_c__);\n}';
+  const factoryBody = "with(__vm_p__){\nreturn eval(__vm_c__);\n}";
   const scope = makeScope(target);
   let runner;
   try {
-    runner = new Function('__vm_p__', '__vm_c__', factoryBody);
+    runner = new Function("__vm_p__", "__vm_c__", factoryBody);
   } catch (e) {
     throw e;
   }
@@ -953,27 +1320,34 @@ function runWithContext(code, target, opts) {
 // ---------------------------------------------------------------------------
 
 function normalizeScriptOptions(options) {
-  if (typeof options === 'string') return { filename: options };
-  validateObject(options, 'options');
+  if (typeof options === "string") return { filename: options };
+  validateObject(options, "options");
   return options;
 }
 
 function normalizeMethodOptions(options) {
   if (options === undefined) return {};
-  validateObject(options, 'options');
+  validateObject(options, "options");
   return options;
 }
 
 function normalizeTopOptions(options) {
-  if (typeof options === 'string') return { filename: options };
+  if (typeof options === "string") return { filename: options };
   return { ...options };
 }
 
 function validateTimeout(value) {
-  if (typeof value !== 'number' || !Number.isInteger(value) ||
-      value < 1 || value > 4294967295) {
-    throw codedError(RangeError, 'ERR_OUT_OF_RANGE',
-      `The value of "options.timeout" is out of range. It must be >= 1 && <= 4294967295. ${receivedText(value)}`);
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > 4294967295
+  ) {
+    throw codedError(
+      RangeError,
+      "ERR_OUT_OF_RANGE",
+      `The value of "options.timeout" is out of range. It must be >= 1 && <= 4294967295. ${receivedText(value)}`,
+    );
   }
 }
 
@@ -986,12 +1360,12 @@ function getRunOptions(options) {
     displayErrors = true,
     breakOnSigint = false,
   } = options;
-  validateString(filename, 'options.filename');
-  validateInt32(lineOffset, 'options.lineOffset');
-  validateInt32(columnOffset, 'options.columnOffset');
+  validateString(filename, "options.filename");
+  validateInt32(lineOffset, "options.lineOffset");
+  validateInt32(columnOffset, "options.columnOffset");
   if (timeout !== undefined) validateTimeout(timeout);
-  validateBoolean(displayErrors, 'options.displayErrors');
-  validateBoolean(breakOnSigint, 'options.breakOnSigint');
+  validateBoolean(displayErrors, "options.displayErrors");
+  validateBoolean(breakOnSigint, "options.breakOnSigint");
   return { filename, lineOffset, columnOffset };
 }
 
@@ -1000,26 +1374,32 @@ function getContextOptions(options) {
   if (!options) return {};
   const contextOptions = {};
   if (options.contextName !== undefined) {
-    validateString(options.contextName, 'options.contextName');
+    validateString(options.contextName, "options.contextName");
     contextOptions.name = options.contextName;
   }
   if (options.contextOrigin !== undefined) {
-    validateString(options.contextOrigin, 'options.contextOrigin');
+    validateString(options.contextOrigin, "options.contextOrigin");
     contextOptions.origin = options.contextOrigin;
   }
   if (options.contextCodeGeneration !== undefined) {
-    validateObject(options.contextCodeGeneration, 'options.contextCodeGeneration');
+    validateObject(
+      options.contextCodeGeneration,
+      "options.contextCodeGeneration",
+    );
     const { strings, wasm } = options.contextCodeGeneration;
     if (strings !== undefined) {
-      validateBoolean(strings, 'options.contextCodeGeneration.strings');
+      validateBoolean(strings, "options.contextCodeGeneration.strings");
     }
     if (wasm !== undefined) {
-      validateBoolean(wasm, 'options.contextCodeGeneration.wasm');
+      validateBoolean(wasm, "options.contextCodeGeneration.wasm");
     }
     contextOptions.codeGeneration = { strings, wasm };
   }
   if (options.microtaskMode !== undefined) {
-    validateOneOf(options.microtaskMode, 'options.microtaskMode', ['afterEvaluate', undefined]);
+    validateOneOf(options.microtaskMode, "options.microtaskMode", [
+      "afterEvaluate",
+      undefined,
+    ]);
     contextOptions.microtaskMode = options.microtaskMode;
   }
   return contextOptions;
@@ -1027,8 +1407,11 @@ function getContextOptions(options) {
 
 function validateCachedData(value, name) {
   if (!ArrayBuffer.isView(value)) {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "${name}" argument must be an instance of Buffer, TypedArray, or DataView. ${receivedText(value)}`);
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument must be an instance of Buffer, TypedArray, or DataView. ${receivedText(value)}`,
+    );
   }
 }
 
@@ -1048,11 +1431,18 @@ function synthesizeCachedData(source) {
   const h = hashSource(source);
   const len = source.length >>> 0;
   const bytes = new Uint8Array(16);
-  bytes[0] = 0x56; bytes[1] = 0x4d; bytes[2] = 0x43; bytes[3] = 0x44; // 'VMCD'
-  bytes[4] = (h >>> 24) & 0xff; bytes[5] = (h >>> 16) & 0xff;
-  bytes[6] = (h >>> 8) & 0xff; bytes[7] = h & 0xff;
-  bytes[8] = (len >>> 24) & 0xff; bytes[9] = (len >>> 16) & 0xff;
-  bytes[10] = (len >>> 8) & 0xff; bytes[11] = len & 0xff;
+  bytes[0] = 0x56;
+  bytes[1] = 0x4d;
+  bytes[2] = 0x43;
+  bytes[3] = 0x44; // 'VMCD'
+  bytes[4] = (h >>> 24) & 0xff;
+  bytes[5] = (h >>> 16) & 0xff;
+  bytes[6] = (h >>> 8) & 0xff;
+  bytes[7] = h & 0xff;
+  bytes[8] = (len >>> 24) & 0xff;
+  bytes[9] = (len >>> 16) & 0xff;
+  bytes[10] = (len >>> 8) & 0xff;
+  bytes[11] = len & 0xff;
   for (let k = 12; k < 16; k++) bytes[k] = (h >>> ((k % 4) * 8)) & 0xff;
   return bytes;
 }
@@ -1061,14 +1451,26 @@ function cachedDataMatches(source, cachedData) {
   let bytes = null;
   if (cachedData instanceof Uint8Array) bytes = cachedData;
   else if (ArrayBuffer.isView(cachedData)) {
-    bytes = new Uint8Array(cachedData.buffer, cachedData.byteOffset, cachedData.byteLength);
+    bytes = new Uint8Array(
+      cachedData.buffer,
+      cachedData.byteOffset,
+      cachedData.byteLength,
+    );
   }
   if (bytes === null || bytes.length < 12) return false;
-  if (bytes[0] !== 0x56 || bytes[1] !== 0x4d || bytes[2] !== 0x43 || bytes[3] !== 0x44) return false;
+  if (
+    bytes[0] !== 0x56 ||
+    bytes[1] !== 0x4d ||
+    bytes[2] !== 0x43 ||
+    bytes[3] !== 0x44
+  )
+    return false;
   const h = hashSource(source);
-  const storedHash = (((bytes[4] << 24) | (bytes[5] << 16) | (bytes[6] << 8) | bytes[7]) >>> 0);
-  const storedLen = (((bytes[8] << 24) | (bytes[9] << 16) | (bytes[10] << 8) | bytes[11]) >>> 0);
-  return storedHash === h && storedLen === (source.length >>> 0);
+  const storedHash =
+    ((bytes[4] << 24) | (bytes[5] << 16) | (bytes[6] << 8) | bytes[7]) >>> 0;
+  const storedLen =
+    ((bytes[8] << 24) | (bytes[9] << 16) | (bytes[10] << 8) | bytes[11]) >>> 0;
+  return storedHash === h && storedLen === source.length >>> 0;
 }
 
 export class Script {
@@ -1090,42 +1492,62 @@ export class Script {
       produceCachedData = false,
       importModuleDynamically,
     } = options;
-    validateString(filename, 'options.filename');
-    validateInt32(lineOffset, 'options.lineOffset');
-    validateInt32(columnOffset, 'options.columnOffset');
+    validateString(filename, "options.filename");
+    validateInt32(lineOffset, "options.lineOffset");
+    validateInt32(columnOffset, "options.columnOffset");
     if (cachedData !== undefined && cachedData !== null) {
-      validateCachedData(cachedData, 'options.cachedData');
+      validateCachedData(cachedData, "options.cachedData");
     }
-    validateBoolean(produceCachedData, 'options.produceCachedData');
+    validateBoolean(produceCachedData, "options.produceCachedData");
     if (importModuleDynamically !== undefined) {
-      validateFunction(importModuleDynamically, 'options.importModuleDynamically');
+      validateFunction(
+        importModuleDynamically,
+        "options.importModuleDynamically",
+      );
     }
 
     this.#code = code;
     this.#filename = filename;
     this.#lineOffset = lineOffset;
     this.#columnOffset = columnOffset;
-    this.#cachedDataRejected = (cachedData !== undefined && cachedData !== null)
-      ? !cachedDataMatches(code, cachedData)
+    this.#cachedDataRejected =
+      cachedData !== undefined && cachedData !== null
+        ? !cachedDataMatches(code, cachedData)
+        : undefined;
+    this.#cachedData = produceCachedData
+      ? synthesizeCachedData(code)
       : undefined;
-    this.#cachedData = produceCachedData ? synthesizeCachedData(code) : undefined;
 
     Object.defineProperties(this, {
       sourceURL: {
-        value: undefined, writable: true, enumerable: true, configurable: true,
+        value: undefined,
+        writable: true,
+        enumerable: true,
+        configurable: true,
       },
       sourceMapURL: {
-        value: undefined, writable: true, enumerable: true, configurable: true,
+        value: undefined,
+        writable: true,
+        enumerable: true,
+        configurable: true,
       },
     });
   }
 
-  get cachedDataRejected() { return this.#cachedDataRejected; }
-  get cachedData() { return this.#cachedData; }
-  get cachedDataProduced() { return this.#cachedData !== undefined; }
+  get cachedDataRejected() {
+    return this.#cachedDataRejected;
+  }
+  get cachedData() {
+    return this.#cachedData;
+  }
+  get cachedDataProduced() {
+    return this.#cachedData !== undefined;
+  }
 
   createCachedData() {
-    return this.#cachedData !== undefined ? this.#cachedData.slice() : new Uint8Array(0);
+    return this.#cachedData !== undefined
+      ? this.#cachedData.slice()
+      : new Uint8Array(0);
   }
 
   #runOptions(options) {
@@ -1140,7 +1562,11 @@ export class Script {
   runInContext(contextifiedObject, options = {}) {
     validateContext(contextifiedObject);
     options = normalizeMethodOptions(options);
-    return runWithContext(this.#code, contextifiedObject, this.#runOptions(options));
+    return runWithContext(
+      this.#code,
+      contextifiedObject,
+      this.#runOptions(options),
+    );
   }
 
   runInNewContext(contextObject, options = {}) {
@@ -1194,12 +1620,12 @@ export function runInThisContext(code, options) {
 // ---------------------------------------------------------------------------
 
 export function compileFunction(code, params = [], options = {}) {
-  validateString(code, 'code');
+  validateString(code, "code");
   if (params === undefined) params = [];
-  else validateStringArray(params, 'params');
-  validateObject(options, 'options');
+  else validateStringArray(params, "params");
+  validateObject(options, "options");
   const {
-    filename = '',
+    filename = "",
     lineOffset = 0,
     columnOffset = 0,
     cachedData,
@@ -1208,31 +1634,47 @@ export function compileFunction(code, params = [], options = {}) {
     contextExtensions = [],
     importModuleDynamically,
   } = options;
-  validateString(filename, 'options.filename');
-  validateInt32(lineOffset, 'options.lineOffset');
-  validateInt32(columnOffset, 'options.columnOffset');
-  if (cachedData !== undefined) validateCachedData(cachedData, 'options.cachedData');
-  validateBoolean(produceCachedData, 'options.produceCachedData');
+  validateString(filename, "options.filename");
+  validateInt32(lineOffset, "options.lineOffset");
+  validateInt32(columnOffset, "options.columnOffset");
+  if (cachedData !== undefined)
+    validateCachedData(cachedData, "options.cachedData");
+  validateBoolean(produceCachedData, "options.produceCachedData");
   if (parsingContext !== undefined) {
-    if (typeof parsingContext !== 'object' || parsingContext === null ||
-        !contextified.has(parsingContext)) {
-      throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-        `The "options.parsingContext" property must be an instance of Context. ${receivedText(parsingContext)}`);
+    if (
+      typeof parsingContext !== "object" ||
+      parsingContext === null ||
+      !contextified.has(parsingContext)
+    ) {
+      throw codedError(
+        TypeError,
+        "ERR_INVALID_ARG_TYPE",
+        `The "options.parsingContext" property must be an instance of Context. ${receivedText(parsingContext)}`,
+      );
     }
   }
   if (!Array.isArray(contextExtensions)) {
-    throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-      `The "options.contextExtensions" property must be an instance of Array. ${receivedText(contextExtensions)}`);
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "options.contextExtensions" property must be an instance of Array. ${receivedText(contextExtensions)}`,
+    );
   }
   for (let k = 0; k < contextExtensions.length; k++) {
     const ext = contextExtensions[k];
-    if (typeof ext !== 'object' || ext === null || Array.isArray(ext)) {
-      throw codedError(TypeError, 'ERR_INVALID_ARG_TYPE',
-        `The "options.contextExtensions[${k}]" property must be of type object. ${receivedText(ext)}`);
+    if (typeof ext !== "object" || ext === null || Array.isArray(ext)) {
+      throw codedError(
+        TypeError,
+        "ERR_INVALID_ARG_TYPE",
+        `The "options.contextExtensions[${k}]" property must be of type object. ${receivedText(ext)}`,
+      );
     }
   }
   if (importModuleDynamically !== undefined) {
-    validateFunction(importModuleDynamically, 'options.importModuleDynamically');
+    validateFunction(
+      importModuleDynamically,
+      "options.importModuleDynamically",
+    );
   }
 
   // Scope target: the parsing context itself (extensions are applied onto it,
@@ -1241,23 +1683,31 @@ export function compileFunction(code, params = [], options = {}) {
   const target = parsingContext !== undefined ? parsingContext : {};
   for (const ext of contextExtensions) {
     for (const key of Reflect.ownKeys(ext)) {
-      if (key === '__proto__') continue;
+      if (key === "__proto__") continue;
       let desc = null;
-      try { desc = Reflect.getOwnPropertyDescriptor(ext, key); } catch (_) { /* skip */ }
+      try {
+        desc = Reflect.getOwnPropertyDescriptor(ext, key);
+      } catch (_) {
+        /* skip */
+      }
       if (desc === null || desc === undefined) continue;
-      try { Object.defineProperty(target, key, desc); } catch (_) { /* skip */ }
+      try {
+        Object.defineProperty(target, key, desc);
+      } catch (_) {
+        /* skip */
+      }
     }
   }
 
   const factoryBody =
-    'with(__vm_s__){\n' +
-    `return function(${params.join(',')}) {\n` +
+    "with(__vm_s__){\n" +
+    `return function(${params.join(",")}) {\n` +
     code +
-    '\n};\n}';
+    "\n};\n}";
   const scope = makeScope(target);
   let fn;
   try {
-    fn = new Function('__vm_s__', factoryBody)(scope);
+    fn = new Function("__vm_s__", factoryBody)(scope);
   } catch (e) {
     // Note: SyntaxError messages/positions reflect the scoped wrapper, not
     // the raw code (V8's Function constructor also reports some malformed
@@ -1267,7 +1717,7 @@ export function compileFunction(code, params = [], options = {}) {
 
   const thisArg = parsingContext !== undefined ? target : undefined;
   const ctx = {
-    filename: filename || '<anonymous>',
+    filename: filename || "<anonymous>",
     lineOffset,
     columnOffset,
     code,
@@ -1283,16 +1733,16 @@ export function compileFunction(code, params = [], options = {}) {
     }
   };
   // Match Node's Function#toString for compiled functions.
-  Object.defineProperty(compiled, 'toString', {
+  Object.defineProperty(compiled, "toString", {
     value: function toString() {
-      return `function (${params.join(', ')}) {\n${code}\n}`;
+      return `function (${params.join(", ")}) {\n${code}\n}`;
     },
     writable: true,
     enumerable: false,
     configurable: true,
   });
 
-  const sourceKey = `${code}\n${params.join(',')}`;
+  const sourceKey = `${code}\n${params.join(",")}`;
   if (produceCachedData) {
     compiled.cachedData = synthesizeCachedData(sourceKey);
     compiled.cachedDataProduced = true;
@@ -1300,9 +1750,10 @@ export function compileFunction(code, params = [], options = {}) {
     compiled.cachedData = undefined;
     compiled.cachedDataProduced = false;
   }
-  compiled.cachedDataRejected = cachedData !== undefined
-    ? !cachedDataMatches(sourceKey, cachedData)
-    : undefined;
+  compiled.cachedDataRejected =
+    cachedData !== undefined
+      ? !cachedDataMatches(sourceKey, cachedData)
+      : undefined;
   return compiled;
 }
 
@@ -1312,10 +1763,10 @@ export function compileFunction(code, params = [], options = {}) {
 
 export async function measureMemory(options = {}) {
   if (options === undefined) options = {};
-  validateObject(options, 'options');
-  const { mode = 'summary', execution = 'default' } = options;
-  validateOneOf(mode, 'options.mode', ['summary', 'detailed']);
-  validateOneOf(execution, 'options.execution', ['default', 'eager']);
+  validateObject(options, "options");
+  const { mode = "summary", execution = "default" } = options;
+  validateOneOf(mode, "options.mode", ["summary", "detailed"]);
+  validateOneOf(execution, "options.execution", ["default", "eager"]);
   return {
     total: {
       jsMemoryEstimate: 0,

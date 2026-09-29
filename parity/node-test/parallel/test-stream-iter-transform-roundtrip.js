@@ -1,14 +1,9 @@
 // Flags: --experimental-stream-iter
-'use strict';
+"use strict";
 
-const common = require('../common');
-const assert = require('assert');
-const {
-  from,
-  pull,
-  bytes,
-  text,
-} = require('stream/iter');
+const common = require("../common");
+const assert = require("assert");
+const { from, pull, bytes, text } = require("stream/iter");
 const {
   compressGzip,
   compressDeflate,
@@ -18,7 +13,7 @@ const {
   decompressDeflate,
   decompressBrotli,
   decompressZstd,
-} = require('zlib/iter');
+} = require("zlib/iter");
 
 // =============================================================================
 // Helper: compress then decompress, verify round-trip equality
@@ -37,25 +32,27 @@ async function roundTripBytes(inputBuf, compress, decompress) {
 // =============================================================================
 
 async function testGzipRoundTrip() {
-  const input = 'Hello, gzip compression!';
+  const input = "Hello, gzip compression!";
   const result = await roundTrip(input, compressGzip(), decompressGzip());
   assert.strictEqual(result, input);
 }
 
 async function testGzipLargeData() {
   // 100KB of repeated text - exercises multi-chunk path
-  const input = 'gzip large data test. '.repeat(5000);
+  const input = "gzip large data test. ".repeat(5000);
   const result = await roundTrip(input, compressGzip(), decompressGzip());
   assert.strictEqual(result, input);
 }
 
 async function testGzipActuallyCompresses() {
-  const input = 'Repeated data compresses well. '.repeat(1000);
+  const input = "Repeated data compresses well. ".repeat(1000);
   const inputBuf = Buffer.from(input);
   const source = from(inputBuf);
   const compressed = await bytes(pull(source, compressGzip()));
-  assert.ok(compressed.byteLength < inputBuf.byteLength,
-            `Compressed ${compressed.byteLength} should be < original ${inputBuf.byteLength}`);
+  assert.ok(
+    compressed.byteLength < inputBuf.byteLength,
+    `Compressed ${compressed.byteLength} should be < original ${inputBuf.byteLength}`,
+  );
 }
 
 // =============================================================================
@@ -63,24 +60,26 @@ async function testGzipActuallyCompresses() {
 // =============================================================================
 
 async function testDeflateRoundTrip() {
-  const input = 'Hello, deflate compression!';
+  const input = "Hello, deflate compression!";
   const result = await roundTrip(input, compressDeflate(), decompressDeflate());
   assert.strictEqual(result, input);
 }
 
 async function testDeflateLargeData() {
-  const input = 'deflate large data test. '.repeat(5000);
+  const input = "deflate large data test. ".repeat(5000);
   const result = await roundTrip(input, compressDeflate(), decompressDeflate());
   assert.strictEqual(result, input);
 }
 
 async function testDeflateActuallyCompresses() {
-  const input = 'Repeated data compresses well. '.repeat(1000);
+  const input = "Repeated data compresses well. ".repeat(1000);
   const inputBuf = Buffer.from(input);
   const source = from(inputBuf);
   const compressed = await bytes(pull(source, compressDeflate()));
-  assert.ok(compressed.byteLength < inputBuf.byteLength,
-            `Compressed ${compressed.byteLength} should be < original ${inputBuf.byteLength}`);
+  assert.ok(
+    compressed.byteLength < inputBuf.byteLength,
+    `Compressed ${compressed.byteLength} should be < original ${inputBuf.byteLength}`,
+  );
 }
 
 // =============================================================================
@@ -88,23 +87,25 @@ async function testDeflateActuallyCompresses() {
 // =============================================================================
 
 async function testBrotliRoundTrip() {
-  const input = 'Hello, brotli compression!';
+  const input = "Hello, brotli compression!";
   const result = await roundTrip(input, compressBrotli(), decompressBrotli());
   assert.strictEqual(result, input);
 }
 
 async function testBrotliLargeData() {
-  const input = 'brotli large data test. '.repeat(5000);
+  const input = "brotli large data test. ".repeat(5000);
   const result = await roundTrip(input, compressBrotli(), decompressBrotli());
   assert.strictEqual(result, input);
 }
 
 async function testBrotliActuallyCompresses() {
-  const input = 'Repeated data compresses well. '.repeat(1000);
+  const input = "Repeated data compresses well. ".repeat(1000);
   const inputBuf = Buffer.from(input);
   const compressed = await bytes(pull(from(inputBuf), compressBrotli()));
-  assert.ok(compressed.byteLength < inputBuf.byteLength,
-            `Compressed ${compressed.byteLength} should be < original ${inputBuf.byteLength}`);
+  assert.ok(
+    compressed.byteLength < inputBuf.byteLength,
+    `Compressed ${compressed.byteLength} should be < original ${inputBuf.byteLength}`,
+  );
 }
 
 // =============================================================================
@@ -112,23 +113,25 @@ async function testBrotliActuallyCompresses() {
 // =============================================================================
 
 async function testZstdRoundTrip() {
-  const input = 'Hello, zstd compression!';
+  const input = "Hello, zstd compression!";
   const result = await roundTrip(input, compressZstd(), decompressZstd());
   assert.strictEqual(result, input);
 }
 
 async function testZstdLargeData() {
-  const input = 'zstd large data test. '.repeat(5000);
+  const input = "zstd large data test. ".repeat(5000);
   const result = await roundTrip(input, compressZstd(), decompressZstd());
   assert.strictEqual(result, input);
 }
 
 async function testZstdActuallyCompresses() {
-  const input = 'Repeated data compresses well. '.repeat(1000);
+  const input = "Repeated data compresses well. ".repeat(1000);
   const inputBuf = Buffer.from(input);
   const compressed = await bytes(pull(from(inputBuf), compressZstd()));
-  assert.ok(compressed.byteLength < inputBuf.byteLength,
-            `Compressed ${compressed.byteLength} should be < original ${inputBuf.byteLength}`);
+  assert.ok(
+    compressed.byteLength < inputBuf.byteLength,
+    `Compressed ${compressed.byteLength} should be < original ${inputBuf.byteLength}`,
+  );
 }
 
 // =============================================================================
@@ -138,7 +141,7 @@ async function testZstdActuallyCompresses() {
 // Create a buffer with a repeating byte pattern covering all 256 values.
 function makeBinaryTestData(size = 1024) {
   const buf = Buffer.alloc(size);
-  for (let i = 0; i < size; i++) buf[i] = i & 0xFF;
+  for (let i = 0; i < size; i++) buf[i] = i & 0xff;
   return buf;
 }
 
@@ -151,16 +154,22 @@ async function testBinaryRoundTripGzip() {
 
 async function testBinaryRoundTripDeflate() {
   const input = makeBinaryTestData();
-  const result = await roundTripBytes(input, compressDeflate(),
-                                      decompressDeflate());
+  const result = await roundTripBytes(
+    input,
+    compressDeflate(),
+    decompressDeflate(),
+  );
   assert.strictEqual(result.byteLength, input.byteLength);
   assert.deepStrictEqual(Buffer.from(result), input);
 }
 
 async function testBinaryRoundTripBrotli() {
   const input = makeBinaryTestData();
-  const result = await roundTripBytes(input, compressBrotli(),
-                                      decompressBrotli());
+  const result = await roundTripBytes(
+    input,
+    compressBrotli(),
+    decompressBrotli(),
+  );
   assert.strictEqual(result.byteLength, input.byteLength);
   assert.deepStrictEqual(Buffer.from(result), input);
 }
@@ -177,23 +186,23 @@ async function testBinaryRoundTripZstd() {
 // =============================================================================
 
 async function testEmptyInputGzip() {
-  const result = await roundTrip('', compressGzip(), decompressGzip());
-  assert.strictEqual(result, '');
+  const result = await roundTrip("", compressGzip(), decompressGzip());
+  assert.strictEqual(result, "");
 }
 
 async function testEmptyInputDeflate() {
-  const result = await roundTrip('', compressDeflate(), decompressDeflate());
-  assert.strictEqual(result, '');
+  const result = await roundTrip("", compressDeflate(), decompressDeflate());
+  assert.strictEqual(result, "");
 }
 
 async function testEmptyInputBrotli() {
-  const result = await roundTrip('', compressBrotli(), decompressBrotli());
-  assert.strictEqual(result, '');
+  const result = await roundTrip("", compressBrotli(), decompressBrotli());
+  assert.strictEqual(result, "");
 }
 
 async function testEmptyInputZstd() {
-  const result = await roundTrip('', compressZstd(), decompressZstd());
-  assert.strictEqual(result, '');
+  const result = await roundTrip("", compressZstd(), decompressZstd());
+  assert.strictEqual(result, "");
 }
 
 // =============================================================================
@@ -201,12 +210,14 @@ async function testEmptyInputZstd() {
 // =============================================================================
 
 async function testChainedGzipDeflate() {
-  const input = 'Double compression test data. '.repeat(100);
+  const input = "Double compression test data. ".repeat(100);
   // Compress: gzip then deflate
   const compressed = pull(pull(from(input), compressGzip()), compressDeflate());
   // Decompress: deflate then gzip (reverse order)
-  const decompressed = pull(pull(compressed, decompressDeflate()),
-                            decompressGzip());
+  const decompressed = pull(
+    pull(compressed, decompressDeflate()),
+    decompressGzip(),
+  );
   const result = await text(decompressed);
   assert.strictEqual(result, input);
 }
@@ -217,12 +228,21 @@ async function testChainedGzipDeflate() {
 
 function testTransformProtocol() {
   [
-    compressGzip, compressDeflate, compressBrotli, compressZstd,
-    decompressGzip, decompressDeflate, decompressBrotli, decompressZstd,
+    compressGzip,
+    compressDeflate,
+    compressBrotli,
+    compressZstd,
+    decompressGzip,
+    decompressDeflate,
+    decompressBrotli,
+    decompressZstd,
   ].forEach((factory) => {
     const t = factory();
-    assert.strictEqual(typeof t.transform, 'function',
-                       `${factory.name}() should have a transform function`);
+    assert.strictEqual(
+      typeof t.transform,
+      "function",
+      `${factory.name}() should have a transform function`,
+    );
   });
 }
 
@@ -231,7 +251,7 @@ function testTransformProtocol() {
 // =============================================================================
 
 async function testGzipWithLevel() {
-  const data = 'a'.repeat(10000);
+  const data = "a".repeat(10000);
   const level1 = await bytes(pull(from(data), compressGzip({ level: 1 })));
   const level9 = await bytes(pull(from(data), compressGzip({ level: 9 })));
   // Higher compression level should produce smaller output

@@ -1,19 +1,18 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-if (!common.hasCrypto)
-  common.skip('missing crypto');
-const assert = require('assert');
-const http2 = require('http2');
+const common = require("../common");
+if (!common.hasCrypto) common.skip("missing crypto");
+const assert = require("assert");
+const http2 = require("http2");
 
 // Check if correct errors are emitted when wrong type of data is passed
 // to certain options of ClientHttp2Session request method
 
 const optionsToTest = {
-  endStream: 'boolean',
-  parent: 'number',
-  exclusive: 'boolean',
-  silent: 'boolean'
+  endStream: "boolean",
+  parent: "number",
+  exclusive: "boolean",
+  silent: "boolean",
 };
 
 const types = {
@@ -23,34 +22,45 @@ const types = {
   object: {},
   array: [],
   null: null,
-  symbol: Symbol('test')
+  symbol: Symbol("test"),
 };
 
 const server = http2.createServer(common.mustNotCall());
 
-server.listen(0, common.mustCall(() => {
-  const port = server.address().port;
-  const client = http2.connect(`http://localhost:${port}`);
+server.listen(
+  0,
+  common.mustCall(() => {
+    const port = server.address().port;
+    const client = http2.connect(`http://localhost:${port}`);
 
-  client.on('connect', common.mustCall(() => {
-    Object.keys(optionsToTest).forEach((option) => {
-      Object.keys(types).forEach((type) => {
-        if (type === optionsToTest[option])
-          return;
+    client.on(
+      "connect",
+      common.mustCall(() => {
+        Object.keys(optionsToTest).forEach((option) => {
+          Object.keys(types).forEach((type) => {
+            if (type === optionsToTest[option]) return;
 
-        assert.throws(
-          () => client.request({
-            ':method': 'CONNECT',
-            ':authority': `localhost:${port}`
-          }, {
-            [option]: types[type]
-          }), {
-            name: 'TypeError',
-            code: 'ERR_INVALID_ARG_TYPE',
+            assert.throws(
+              () =>
+                client.request(
+                  {
+                    ":method": "CONNECT",
+                    ":authority": `localhost:${port}`,
+                  },
+                  {
+                    [option]: types[type],
+                  },
+                ),
+              {
+                name: "TypeError",
+                code: "ERR_INVALID_ARG_TYPE",
+              },
+            );
           });
-      });
-    });
-    server.close();
-    client.close();
-  }));
-}));
+        });
+        server.close();
+        client.close();
+      }),
+    );
+  }),
+);

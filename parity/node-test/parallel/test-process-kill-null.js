@@ -19,24 +19,30 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const { mustCall } = require('../common');
-const assert = require('assert');
-const { spawn } = require('child_process');
+"use strict";
+const { mustCall } = require("../common");
+const assert = require("assert");
+const { spawn } = require("child_process");
 
-const cat = spawn('cat');
+const cat = spawn("cat");
 
 assert.ok(process.kill(cat.pid, 0));
 
-cat.on('exit', mustCall(function() {
-  assert.throws(function() {
-    process.kill(cat.pid, 0);
-  }, Error);
-}));
+cat.on(
+  "exit",
+  mustCall(function () {
+    assert.throws(function () {
+      process.kill(cat.pid, 0);
+    }, Error);
+  }),
+);
 
-cat.stdout.on('data', mustCall(function() {
-  process.kill(cat.pid, 'SIGKILL');
-}));
+cat.stdout.on(
+  "data",
+  mustCall(function () {
+    process.kill(cat.pid, "SIGKILL");
+  }),
+);
 
 // EPIPE when null sig fails
-cat.stdin.write('test');
+cat.stdin.write("test");

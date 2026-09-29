@@ -6,9 +6,9 @@
 //
 // The deprecated `domain` module has no `dispose()` upstream — the port
 // matches that (there is intentionally no `dispose`/`_disposed`).
-import domain, { Domain, createDomain, create } from '../src/domain.js';
-import { EventEmitter } from '../src/events.js';
-import { execFileSync } from 'node:child_process';
+import domain, { Domain, createDomain, create } from "../src/domain.js";
+import { EventEmitter } from "../src/events.js";
+import { execFileSync } from "node:child_process";
 
 // Drain the domain stack between tests so no test observes another's active
 // domain. exit() on the top domain pops it; updateExceptionCapture clears the
@@ -16,51 +16,54 @@ import { execFileSync } from 'node:child_process';
 function drain() {
   while (domain._stack.length > 0) {
     const top = domain._stack[domain._stack.length - 1];
-    try { top.removeAllListeners('error'); } catch { /* ignore */ }
+    try {
+      top.removeAllListeners("error");
+    } catch {
+      /* ignore */
+    }
     top.exit();
   }
 }
 beforeEach(drain);
 afterEach(drain);
 
-describe('module shape (matches node:domain)', () => {
-  test('create === createDomain', () => {
+describe("module shape (matches node:domain)", () => {
+  test("create === createDomain", () => {
     expect(domain.create).toBe(domain.createDomain);
     expect(create).toBe(domain.create);
     expect(createDomain).toBe(domain.create);
   });
 
-  test('exports Domain, active, _stack', () => {
-    expect(typeof domain.Domain).toBe('function');
+  test("exports Domain, active, _stack", () => {
+    expect(typeof domain.Domain).toBe("function");
     expect(Array.isArray(domain._stack)).toBe(true);
   });
 
-  test('no dispose() upstream — the port does not add one', () => {
+  test("no dispose() upstream — the port does not add one", () => {
     const d = domain.create();
-    expect(typeof d.dispose).toBe('undefined');
-    expect('_disposed' in d).toBe(false);
+    expect(typeof d.dispose).toBe("undefined");
+    expect("_disposed" in d).toBe(false);
   });
 
-  test('Domain instances are EventEmitters with a members list', () => {
+  test("Domain instances are EventEmitters with a members list", () => {
     const d = domain.create();
     expect(d).toBeInstanceOf(Domain);
     expect(d).toBeInstanceOf(EventEmitter);
-    expect(typeof d.on).toBe('function');
+    expect(typeof d.on).toBe("function");
     expect(d.members).toEqual([]);
   });
 
-  test('setUncaughtExceptionCaptureCallback throws after load', () => {
-    expect(() => process.setUncaughtExceptionCaptureCallback(() => {}))
-      .toThrow(
-        expect.objectContaining({
-          code: 'ERR_DOMAIN_CANNOT_SET_UNCAUGHT_EXCEPTION_CAPTURE',
-        }),
-      );
+  test("setUncaughtExceptionCaptureCallback throws after load", () => {
+    expect(() => process.setUncaughtExceptionCaptureCallback(() => {})).toThrow(
+      expect.objectContaining({
+        code: "ERR_DOMAIN_CANNOT_SET_UNCAUGHT_EXCEPTION_CAPTURE",
+      }),
+    );
   });
 });
 
-describe('enter/exit/active/_stack', () => {
-  test('stack push/pop shape', () => {
+describe("enter/exit/active/_stack", () => {
+  test("stack push/pop shape", () => {
     const a = domain.create();
     const b = domain.create();
     const c = domain.create();
@@ -84,7 +87,7 @@ describe('enter/exit/active/_stack', () => {
     expect(domain._stack).toEqual([a, b]);
   });
 
-  test('active transitions: domain while entered, undefined after final exit', () => {
+  test("active transitions: domain while entered, undefined after final exit", () => {
     const d = domain.create();
     d.enter();
     expect(domain.active).toBe(d);
@@ -95,7 +98,7 @@ describe('enter/exit/active/_stack', () => {
     expect(domain._stack).toHaveLength(0);
   });
 
-  test('exit() on a non-entered domain is a no-op', () => {
+  test("exit() on a non-entered domain is a no-op", () => {
     const d = domain.create();
     expect(() => d.exit()).not.toThrow();
     expect(domain._stack).toHaveLength(0);
@@ -103,70 +106,80 @@ describe('enter/exit/active/_stack', () => {
   });
 });
 
-describe('run()', () => {
-  test('returns the callback result and forwards arguments', () => {
+describe("run()", () => {
+  test("returns the callback result and forwards arguments", () => {
     const d = domain.create();
     expect(d.run((a, b) => a + b, 2, 3)).toBe(5);
   });
 
-  test('calls back with the domain as `this`', () => {
+  test("calls back with the domain as `this`", () => {
     const d = domain.create();
     let seen = null;
-    d.run(function () { seen = this; });
+    d.run(function () {
+      seen = this;
+    });
     expect(seen).toBe(d);
   });
 
-  test('active domain is set inside run and cleared after', () => {
+  test("active domain is set inside run and cleared after", () => {
     const d = domain.create();
     let inside = null;
-    d.run(() => { inside = domain.active; });
+    d.run(() => {
+      inside = domain.active;
+    });
     expect(inside).toBe(d);
     expect(domain.active).toBeUndefined();
   });
 });
 
-describe('bind()', () => {
-  test('forwards `this` and arguments, returns the result', () => {
+describe("bind()", () => {
+  test("forwards `this` and arguments, returns the result", () => {
     const d = domain.create();
     let seenThis = null;
     let seenArgs = null;
     const fn = d.bind(function (a, b) {
       seenThis = this;
       seenArgs = [a, b];
-      return 'ret';
+      return "ret";
     });
     const ctx = { tag: 1 };
-    expect(fn.call(ctx, 'x', 'y')).toBe('ret');
+    expect(fn.call(ctx, "x", "y")).toBe("ret");
     expect(seenThis).toBe(ctx);
-    expect(seenArgs).toEqual(['x', 'y']);
+    expect(seenArgs).toEqual(["x", "y"]);
   });
 
-  test('bound function carries a non-enumerable .domain', () => {
+  test("bound function carries a non-enumerable .domain", () => {
     const d = domain.create();
     const fn = d.bind(() => {});
     expect(fn.domain).toBe(d);
-    expect(Object.prototype.propertyIsEnumerable.call(fn, 'domain')).toBe(false);
+    expect(Object.prototype.propertyIsEnumerable.call(fn, "domain")).toBe(
+      false,
+    );
   });
 
-  test('throw inside bound function routes to the domain error handler', (done) => {
+  test("throw inside bound function routes to the domain error handler", (done) => {
     const d = domain.create();
-    d.on('error', (er) => {
+    d.on("error", (er) => {
       try {
-        expect(er.message).toBe('bound-boom');
+        expect(er.message).toBe("bound-boom");
         expect(er.domain).toBe(d);
         expect(er.domainThrown).toBe(true);
         done();
-      } catch (e) { done(e); }
+      } catch (e) {
+        done(e);
+      }
     });
-    const fn = d.bind(() => { throw new Error('bound-boom'); });
+    const fn = d.bind(() => {
+      throw new Error("bound-boom");
+    });
     // Deferred so the throw escapes jest's sync try/catch and becomes a
     // real uncaught exception; the bind's enter() installs the capture.
     setTimeout(fn, 5);
   });
 });
 
-describe('intercept()', () => {
-  test('passes through non-error calls with args/`this`/return', () => {
+describe("intercept()", () => {
+  test("passes through non-error calls with args/`this`/return", () => {
     const d = domain.create();
     let seenThis = null;
     const fn = d.intercept(function (a, b) {
@@ -178,45 +191,53 @@ describe('intercept()', () => {
     expect(seenThis).toBe(ctx);
   });
 
-  test('routes Error first-args to the error handler with annotations', (done) => {
+  test("routes Error first-args to the error handler with annotations", (done) => {
     const d = domain.create();
     const cb = (v) => v;
     const fn = d.intercept(cb);
-    d.on('error', (er) => {
+    d.on("error", (er) => {
       try {
-        expect(er.message).toBe('intercept-boom');
+        expect(er.message).toBe("intercept-boom");
         expect(er.domain).toBe(d);
         expect(er.domainThrown).toBe(false);
         expect(er.domainBound).toBe(cb);
-        expect(Object.prototype.propertyIsEnumerable.call(er, 'domain')).toBe(false);
+        expect(Object.prototype.propertyIsEnumerable.call(er, "domain")).toBe(
+          false,
+        );
         done();
-      } catch (e) { done(e); }
+      } catch (e) {
+        done(e);
+      }
     });
-    fn(new Error('intercept-boom'));
+    fn(new Error("intercept-boom"));
   });
 
-  test('non-Error first-arg is treated as data, not an error', () => {
+  test("non-Error first-arg is treated as data, not an error", () => {
     const d = domain.create();
     let routed = null;
-    d.on('error', (er) => { routed = er; });
+    d.on("error", (er) => {
+      routed = er;
+    });
     // intercept() strips the error slot: the callback sees ('data', 1).
     const fn = d.intercept((a, b) => [a, b]);
-    expect(fn(null, 'data', 1)).toEqual(['data', 1]);
+    expect(fn(null, "data", 1)).toEqual(["data", 1]);
     expect(routed).toBeNull();
   });
 });
 
-describe('add()/remove()', () => {
-  test('add assigns ee.domain (non-enumerable) and tracks members', () => {
+describe("add()/remove()", () => {
+  test("add assigns ee.domain (non-enumerable) and tracks members", () => {
     const d = domain.create();
     const ee = new EventEmitter();
     d.add(ee);
     expect(ee.domain).toBe(d);
-    expect(Object.prototype.propertyIsEnumerable.call(ee, 'domain')).toBe(false);
+    expect(Object.prototype.propertyIsEnumerable.call(ee, "domain")).toBe(
+      false,
+    );
     expect(d.members).toContain(ee);
   });
 
-  test('add is idempotent for the same domain', () => {
+  test("add is idempotent for the same domain", () => {
     const d = domain.create();
     const ee = new EventEmitter();
     d.add(ee);
@@ -224,7 +245,7 @@ describe('add()/remove()', () => {
     expect(d.members.filter((m) => m === ee)).toHaveLength(1);
   });
 
-  test('add moves an emitter from another domain', () => {
+  test("add moves an emitter from another domain", () => {
     const d1 = domain.create();
     const d2 = domain.create();
     const ee = new EventEmitter();
@@ -235,7 +256,7 @@ describe('add()/remove()', () => {
     expect(d2.members).toContain(ee);
   });
 
-  test('remove clears ee.domain to null and drops the member', () => {
+  test("remove clears ee.domain to null and drops the member", () => {
     const d = domain.create();
     const ee = new EventEmitter();
     d.add(ee);
@@ -244,42 +265,50 @@ describe('add()/remove()', () => {
     expect(d.members).not.toContain(ee);
   });
 
-  test('emitter errors are routed to the owning domain', (done) => {
+  test("emitter errors are routed to the owning domain", (done) => {
     const d = domain.create();
     const ee = new EventEmitter();
     d.add(ee);
-    d.on('error', (er) => {
+    d.on("error", (er) => {
       try {
-        expect(er.message).toBe('ee-boom');
+        expect(er.message).toBe("ee-boom");
         expect(er.domain).toBe(d);
         done();
-      } catch (e) { done(e); }
+      } catch (e) {
+        done(e);
+      }
     });
-    ee.emit('error', new Error('ee-boom'));
+    ee.emit("error", new Error("ee-boom"));
   });
 });
 
-describe('error routing', () => {
-  test('throw inside run() reaches the domain error handler', (done) => {
+describe("error routing", () => {
+  test("throw inside run() reaches the domain error handler", (done) => {
     const d = domain.create();
-    d.on('error', (er) => {
+    d.on("error", (er) => {
       try {
-        expect(er.message).toBe('run-boom');
+        expect(er.message).toBe("run-boom");
         expect(er.domain).toBe(d);
         expect(er.domainThrown).toBe(true);
         done();
-      } catch (e) { done(e); }
+      } catch (e) {
+        done(e);
+      }
     });
     // Deferred so the throw escapes jest's sync try/catch and becomes a
     // real uncaught exception instead of a test failure.
-    setTimeout(() => { d.run(() => { throw new Error('run-boom'); }); }, 5);
+    setTimeout(() => {
+      d.run(() => {
+        throw new Error("run-boom");
+      });
+    }, 5);
   });
 
-  test('throw in a nextTick scheduled inside run() is routed', (done) => {
+  test("throw in a nextTick scheduled inside run() is routed", (done) => {
     const d = domain.create();
-    d.on('error', (er) => {
+    d.on("error", (er) => {
       try {
-        expect(er.message).toBe('tick-boom');
+        expect(er.message).toBe("tick-boom");
         expect(er.domain).toBe(d);
         expect(er.domainThrown).toBe(true);
         // Matches real node:domain — the stack is drained before 'error'
@@ -287,10 +316,14 @@ describe('error routing', () => {
         expect(domain._stack).toHaveLength(0);
         expect(domain.active).toBeUndefined();
         done();
-      } catch (e) { done(e); }
+      } catch (e) {
+        done(e);
+      }
     });
     d.run(() => {
-      process.nextTick(() => { throw new Error('tick-boom'); });
+      process.nextTick(() => {
+        throw new Error("tick-boom");
+      });
     });
   });
 
@@ -300,8 +333,8 @@ describe('error routing', () => {
   // runner's own uncaught handling, so it is not duplicated here.
 });
 
-describe('implicit binding', () => {
-  test('setTimeout scheduled while entered runs with the domain active', (done) => {
+describe("implicit binding", () => {
+  test("setTimeout scheduled while entered runs with the domain active", (done) => {
     const d = domain.create();
     d.run(() => {
       setTimeout(() => {
@@ -309,21 +342,25 @@ describe('implicit binding', () => {
           expect(domain.active).toBe(d);
           expect(process.domain).toBe(d);
           done();
-        } catch (e) { done(e); }
+        } catch (e) {
+          done(e);
+        }
       }, 5);
     });
   });
 
-  test('setTimeout scheduled outside any domain stays unbound', (done) => {
+  test("setTimeout scheduled outside any domain stays unbound", (done) => {
     setTimeout(() => {
       try {
         expect(domain.active == null).toBe(true);
         done();
-      } catch (e) { done(e); }
+      } catch (e) {
+        done(e);
+      }
     }, 5);
   });
 
-  test('promise reactions created while entered observe the domain', (done) => {
+  test("promise reactions created while entered observe the domain", (done) => {
     const d = domain.create();
     d.run(() => {
       Promise.resolve(1).then((v) => {
@@ -331,12 +368,14 @@ describe('implicit binding', () => {
           expect(v).toBe(1);
           expect(domain.active).toBe(d);
           done();
-        } catch (e) { done(e); }
+        } catch (e) {
+          done(e);
+        }
       });
     });
   });
 
-  test('global timers are pristine when no domain is active', () => {
+  test("global timers are pristine when no domain is active", () => {
     // The lazy timer patching must not leak wrapper identities: with an
     // empty stack the globals are the original host functions.
     expect(domain._stack).toHaveLength(0);
@@ -348,30 +387,30 @@ describe('implicit binding', () => {
   });
 });
 
-describe('explicit require-time behavior', () => {
-  test('domain module exposes the documented API surface only', () => {
+describe("explicit require-time behavior", () => {
+  test("domain module exposes the documented API surface only", () => {
     expect(Object.keys(domain).sort()).toEqual(
-      ['Domain', '_stack', 'active', 'create', 'createDomain'].sort(),
+      ["Domain", "_stack", "active", "create", "createDomain"].sort(),
     );
   });
 });
 
-describe('browser fallback (no native delegation)', () => {
+describe("browser fallback (no native delegation)", () => {
   let fb;
   const realGbm = process.getBuiltinModule;
-  const sharedState = globalThis[Symbol.for('bundleVFSModules.domain.shared')];
+  const sharedState = globalThis[Symbol.for("bundleVFSModules.domain.shared")];
 
   beforeAll(async () => {
     // Any native-delegation attempt throws: the import and every operation
     // below must work with zero native delegation.
     process.getBuiltinModule = () => {
-      throw new Error('native delegation attempted');
+      throw new Error("native delegation attempted");
     };
     try {
       // Force this instance through the full installHostPatches path so the
       // guarded native bridge is genuinely exercised (and skipped).
       sharedState.installed = false;
-      fb = (await import('../src/domain.js?fallback=domain')).default;
+      fb = (await import("../src/domain.js?fallback=domain")).default;
     } finally {
       process.getBuiltinModule = realGbm;
     }
@@ -381,12 +420,12 @@ describe('browser fallback (no native delegation)', () => {
     process.getBuiltinModule = realGbm;
   });
 
-  test('module loads with the native bridge disabled', () => {
-    expect(typeof fb.create).toBe('function');
+  test("module loads with the native bridge disabled", () => {
+    expect(typeof fb.create).toBe("function");
     expect(fb.create).toBe(fb.createDomain);
   });
 
-  test('core domain tracking works without natives', () => {
+  test("core domain tracking works without natives", () => {
     const d = fb.create();
     d.enter();
     try {
@@ -398,77 +437,89 @@ describe('browser fallback (no native delegation)', () => {
     expect(fb._stack).not.toContain(d);
   });
 
-  test('run/bind/intercept work without natives', () => {
+  test("run/bind/intercept work without natives", () => {
     const d = fb.create();
     expect(d.run((a, b) => a + b, 20, 22)).toBe(42);
     let seenThis = null;
     const ctx = {};
-    d.bind(function () { seenThis = this; }).call(ctx);
+    d.bind(function () {
+      seenThis = this;
+    }).call(ctx);
     expect(seenThis).toBe(ctx);
     expect(d.intercept((x) => x * 2)(null, 21)).toBe(42);
   });
 
-  test('explicit emitter errors route without natives', () => {
+  test("explicit emitter errors route without natives", () => {
     const d = fb.create();
     const ee = new EventEmitter();
     d.add(ee);
     let routed = null;
-    d.on('error', (er) => { routed = er; });
-    ee.emit('error', new Error('fb-ee-boom'));
-    expect(routed && routed.message).toBe('fb-ee-boom');
+    d.on("error", (er) => {
+      routed = er;
+    });
+    ee.emit("error", new Error("fb-ee-boom"));
+    expect(routed && routed.message).toBe("fb-ee-boom");
     expect(routed.domain).toBe(d);
-    d.removeAllListeners('error');
+    d.removeAllListeners("error");
   });
 
-  test('implicit timer binding works without natives', (done) => {
+  test("implicit timer binding works without natives", (done) => {
     const d = fb.create();
     d.run(() => {
       setTimeout(() => {
         try {
           expect(fb.active).toBe(d);
           done();
-        } catch (e) { done(e); }
+        } catch (e) {
+          done(e);
+        }
       }, 5);
     });
   });
 
-  test('without uncaught capture, a synchronous throw propagates (browser semantic)', () => {
+  test("without uncaught capture, a synchronous throw propagates (browser semantic)", () => {
     // Under this lane the uncaught-exception capture callback is unavailable
     // (in a real browser there is no process at all), so a throw inside run()
     // propagates to the caller instead of being routed. The window 'error'
     // hook is the browser's routing mechanism for truly uncaught errors.
     const d = fb.create();
-    d.on('error', () => { throw new Error('should not route without capture'); });
-    expect(() => d.run(() => { throw new Error('fb-sync-boom'); }))
-      .toThrow('fb-sync-boom');
-    d.removeAllListeners('error');
+    d.on("error", () => {
+      throw new Error("should not route without capture");
+    });
+    expect(() =>
+      d.run(() => {
+        throw new Error("fb-sync-boom");
+      }),
+    ).toThrow("fb-sync-boom");
+    d.removeAllListeners("error");
   });
 });
 
-describe('differential vs real node:domain', () => {
-  const SHIM_URL = new URL('../src/domain.js', import.meta.url).href;
+describe("differential vs real node:domain", () => {
+  const SHIM_URL = new URL("../src/domain.js", import.meta.url).href;
 
   function runCase(impl, body) {
     const load =
-      impl === 'real'
+      impl === "real"
         ? `const ns = await import('node:domain');`
         : `const ns = await import(${JSON.stringify(SHIM_URL)});`;
     const code = `${load}\nconst domain = ns.default ?? ns;\n${body}`;
-    return execFileSync(
-      process.execPath,
-      ['--input-type=module', '-e', code],
-      { timeout: 15000, encoding: 'utf8' },
-    ).trim();
+    return execFileSync(process.execPath, ["--input-type=module", "-e", code], {
+      timeout: 15000,
+      encoding: "utf8",
+    }).trim();
   }
 
   function expectSameOutput(name, body) {
-    const realOut = runCase('real', body);
-    const shimOut = runCase('shim', body);
+    const realOut = runCase("real", body);
+    const shimOut = runCase("shim", body);
     expect({ name, shimOut }).toEqual({ name, shimOut: realOut });
   }
 
-  test('module shape and initial state', () => {
-    expectSameOutput('shape', `
+  test("module shape and initial state", () => {
+    expectSameOutput(
+      "shape",
+      `
       console.log(JSON.stringify({
         createIsCreateDomain: domain.create === domain.createDomain,
         activeNull: domain.active === null,
@@ -476,11 +527,14 @@ describe('differential vs real node:domain', () => {
         stackIsArray: Array.isArray(domain._stack),
         stackEmpty: domain._stack.length === 0,
       }));
-    `);
+    `,
+    );
   }, 30000);
 
-  test('enter/exit/active/process.domain/_stack tracking', () => {
-    expectSameOutput('tracking', `
+  test("enter/exit/active/process.domain/_stack tracking", () => {
+    expectSameOutput(
+      "tracking",
+      `
       const out = [];
       const a = domain.create();
       const b = domain.create();
@@ -494,11 +548,14 @@ describe('differential vs real node:domain', () => {
       out.push(domain.active === undefined, process.domain === undefined,
                domain._stack.length);
       console.log(JSON.stringify(out));
-    `);
+    `,
+    );
   }, 30000);
 
-  test('run/bind/intercept argument and this forwarding', () => {
-    expectSameOutput('forwarding', `
+  test("run/bind/intercept argument and this forwarding", () => {
+    expectSameOutput(
+      "forwarding",
+      `
       const out = [];
       const dom = domain.create();
       out.push(dom.run((x, y) => x + y, 2, 3));
@@ -519,11 +576,14 @@ describe('differential vs real node:domain', () => {
       const ictx = {};
       out.push(ic.call(ictx, null, 21), intThis === ictx);
       console.log(JSON.stringify(out));
-    `);
+    `,
+    );
   }, 30000);
 
-  test('intercept error annotations', () => {
-    expectSameOutput('intercept-annotations', `
+  test("intercept error annotations", () => {
+    expectSameOutput(
+      "intercept-annotations",
+      `
       const dom = domain.create();
       const cb = (v) => v;
       const fn = dom.intercept(cb);
@@ -540,11 +600,14 @@ describe('differential vs real node:domain', () => {
       });
       fn(new Error('boom'));
       console.log(JSON.stringify(routed));
-    `);
+    `,
+    );
   }, 30000);
 
-  test('error routing: throw in run with an error listener', () => {
-    expectSameOutput('error-routing', `
+  test("error routing: throw in run with an error listener", () => {
+    expectSameOutput(
+      "error-routing",
+      `
       const dom = domain.create();
       let got = null;
       dom.on('error', (er) => {
@@ -562,11 +625,14 @@ describe('differential vs real node:domain', () => {
           activeNull: domain.active === null,
         }));
       }, 20);
-    `);
+    `,
+    );
   }, 30000);
 
-  test('add/remove member bookkeeping', () => {
-    expectSameOutput('add-remove', `
+  test("add/remove member bookkeeping", () => {
+    expectSameOutput(
+      "add-remove",
+      `
       const { EventEmitter } = await import('node:events');
       const out = [];
       const dom = domain.create();
@@ -579,11 +645,14 @@ describe('differential vs real node:domain', () => {
       dom.remove(ee);
       out.push(ee.domain === null, !dom.members.includes(ee));
       console.log(JSON.stringify(out));
-    `);
+    `,
+    );
   }, 30000);
 
-  test('implicit nextTick binding', () => {
-    expectSameOutput('nexttick', `
+  test("implicit nextTick binding", () => {
+    expectSameOutput(
+      "nexttick",
+      `
       const dom = domain.create();
       dom.run(() => {
         process.nextTick(() => {
@@ -593,11 +662,14 @@ describe('differential vs real node:domain', () => {
           }));
         });
       });
-    `);
+    `,
+    );
   }, 30000);
 
-  test('implicit setTimeout binding', () => {
-    expectSameOutput('timer', `
+  test("implicit setTimeout binding", () => {
+    expectSameOutput(
+      "timer",
+      `
       const dom = domain.create();
       dom.run(() => {
         setTimeout(() => {
@@ -607,6 +679,7 @@ describe('differential vs real node:domain', () => {
           }));
         }, 5);
       });
-    `);
+    `,
+    );
   }, 30000);
 });

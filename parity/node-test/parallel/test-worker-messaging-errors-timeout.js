@@ -1,25 +1,34 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 const {
   postMessageToThread,
   workerData,
   Worker,
-} = require('node:worker_threads');
-const assert = require('node:assert');
+} = require("node:worker_threads");
+const assert = require("node:assert");
 
 const memory = new SharedArrayBuffer(4);
 
 async function test() {
-  const worker = new Worker(__filename, { workerData: { memory, children: true } });
+  const worker = new Worker(__filename, {
+    workerData: { memory, children: true },
+  });
   const array = new Int32Array(memory);
 
-  await assert.rejects(common.mustCall(function() {
-    return postMessageToThread(worker.threadId, 0, common.platformTimeout(500));
-  }), {
-    name: 'Error',
-    code: 'ERR_WORKER_MESSAGING_TIMEOUT',
-  });
+  await assert.rejects(
+    common.mustCall(function () {
+      return postMessageToThread(
+        worker.threadId,
+        0,
+        common.platformTimeout(500),
+      );
+    }),
+    {
+      name: "Error",
+      code: "ERR_WORKER_MESSAGING_TIMEOUT",
+    },
+  );
 
   Atomics.store(array, 0, 1);
   Atomics.notify(array, 0);
@@ -28,7 +37,7 @@ async function test() {
 if (!workerData?.children) {
   test();
 } else {
-  process.on('beforeExit', common.mustCall());
+  process.on("beforeExit", common.mustCall());
 
   const array = new Int32Array(workerData.memory);
 

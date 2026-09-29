@@ -19,18 +19,18 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 if (!common.hasCrypto) {
-  common.skip('missing crypto');
+  common.skip("missing crypto");
 }
 
-const assert = require('assert');
-const crypto = require('crypto');
-const { hasOpenSSL3 } = require('../common/crypto');
+const assert = require("assert");
+const crypto = require("crypto");
+const { hasOpenSSL3 } = require("../common/crypto");
 
 function test() {
-  const odd = Buffer.alloc(39, 'A');
+  const odd = Buffer.alloc(39, "A");
 
   const c = crypto.createDiffieHellman(hasOpenSSL3 ? 1024 : 32);
   c.setPrivateKey(odd);
@@ -41,5 +41,7 @@ function test() {
 if (!crypto.getFips()) {
   test();
 } else {
-  assert.throws(function() { test(); }, /key size too small/);
+  assert.throws(function () {
+    test();
+  }, /key size too small/);
 }

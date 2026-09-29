@@ -1,20 +1,20 @@
-import * as common from '../common/index.mjs';
+import * as common from "../common/index.mjs";
 
 // Test timestamps returned by fsPromises.stat and fs.statSync
 
-import fs from 'node:fs';
-import fsPromises from 'node:fs/promises';
-import assert from 'node:assert';
-import tmpdir from '../common/tmpdir.js';
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import assert from "node:assert";
+import tmpdir from "../common/tmpdir.js";
 
 // On some platforms (for example, ppc64) boundaries are tighter
 // than usual. If we catch these errors, skip corresponding test.
-const ignoredErrors = new Set(['EINVAL', 'EOVERFLOW']);
+const ignoredErrors = new Set(["EINVAL", "EOVERFLOW"]);
 
 tmpdir.refresh();
-const filepath = tmpdir.resolve('timestamp');
+const filepath = tmpdir.resolve("timestamp");
 
-await (await fsPromises.open(filepath, 'w')).close();
+await (await fsPromises.open(filepath, "w")).close();
 
 // Perform a trivial check to determine if filesystem supports setting
 // and retrieving atime and mtime. If it doesn't, skip the test.
@@ -27,7 +27,7 @@ if (atimeMs !== 2000 || mtimeMs !== 2000) {
 // Date might round down timestamp
 function closeEnough(actual, expected, margin) {
   // On ppc64, value is rounded to seconds
-  if (process.arch === 'ppc64') {
+  if (process.arch === "ppc64") {
     margin += 1000;
   }
 
@@ -38,15 +38,17 @@ function closeEnough(actual, expected, margin) {
     return;
   }
 
-  assert.ok(Math.abs(Number(actual - expected)) < margin,
-            `expected ${expected} ± ${margin}, got ${actual}`);
+  assert.ok(
+    Math.abs(Number(actual - expected)) < margin,
+    `expected ${expected} ± ${margin}, got ${actual}`,
+  );
 }
 
 // Ensure that accessed atime and mtime are enumerable
 function validateEnumerability(stats) {
   const keys = Object.keys(stats);
-  assert.ok(keys.includes('atime'));
-  assert.ok(keys.includes('mtime'));
+  assert.ok(keys.includes("atime"));
+  assert.ok(keys.includes("mtime"));
 }
 
 async function runTest(atime, mtime, margin = 0) {
@@ -82,8 +84,16 @@ async function runTest(atime, mtime, margin = 0) {
   const statsSyncBigint = fs.statSync(filepath, { bigint: true });
   closeEnough(statsSyncBigint.atimeMs, BigInt(atime), margin);
   closeEnough(statsSyncBigint.mtimeMs, BigInt(mtime), margin);
-  closeEnough(statsSyncBigint.atime.getTime(), new Date(atime).getTime(), margin);
-  closeEnough(statsSyncBigint.mtime.getTime(), new Date(mtime).getTime(), margin);
+  closeEnough(
+    statsSyncBigint.atime.getTime(),
+    new Date(atime).getTime(),
+    margin,
+  );
+  closeEnough(
+    statsSyncBigint.mtime.getTime(),
+    new Date(mtime).getTime(),
+    margin,
+  );
   validateEnumerability(statsSyncBigint);
 }
 
@@ -94,7 +104,7 @@ async function runTest(atime, mtime, margin = 0) {
   // after Y2038 is preferred over supporting dates before 1970-01-01.
   if (!common.isFreeBSD && !common.isWindows) {
     await runTest(-40691, -355, 1); // Potential precision loss on 32bit
-    await runTest(-355, -40691, 1);  // Potential precision loss on 32bit
+    await runTest(-355, -40691, 1); // Potential precision loss on 32bit
     await runTest(-1, -1);
   }
   await runTest(0, 0);

@@ -1,62 +1,62 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
+const common = require("../common");
 
 const invalids = [
   {
-    code: '',
+    code: "",
     expected: 1,
     pattern: "Received type string \\(''\\)$",
   },
   {
-    code: '1 one',
+    code: "1 one",
     expected: 1,
     pattern: "Received type string \\('1 one'\\)$",
   },
   {
-    code: 'two',
+    code: "two",
     expected: 1,
     pattern: "Received type string \\('two'\\)$",
   },
   {
     code: {},
     expected: 1,
-    pattern: 'Received an instance of Object$',
+    pattern: "Received an instance of Object$",
   },
   {
     code: [],
     expected: 1,
-    pattern: 'Received an instance of Array$',
+    pattern: "Received an instance of Array$",
   },
   {
     code: true,
     expected: 1,
-    pattern: 'Received type boolean \\(true\\)$',
+    pattern: "Received type boolean \\(true\\)$",
   },
   {
     code: false,
     expected: 1,
-    pattern: 'Received type boolean \\(false\\)$',
+    pattern: "Received type boolean \\(false\\)$",
   },
   {
     code: 2n,
     expected: 1,
-    pattern: 'Received type bigint \\(2n\\)$',
+    pattern: "Received type bigint \\(2n\\)$",
   },
   {
     code: 2.1,
     expected: 1,
-    pattern: 'Received 2.1$',
+    pattern: "Received 2.1$",
   },
   {
     code: Infinity,
     expected: 1,
-    pattern: 'Received Infinity$',
+    pattern: "Received Infinity$",
   },
   {
     code: NaN,
     expected: 1,
-    pattern: 'Received NaN$',
+    pattern: "Received NaN$",
   },
 ];
 const valids = [
@@ -65,7 +65,7 @@ const valids = [
     expected: 1,
   },
   {
-    code: '2',
+    code: "2",
     expected: 2,
   },
   {
@@ -81,18 +81,18 @@ const valids = [
     expected: 0,
   },
   {
-    code: '0',
+    code: "0",
     expected: 0,
   },
 ];
 const args = [...invalids, ...valids];
 
 if (process.argv[2] === undefined) {
-  const { spawnSync } = require('node:child_process');
-  const { inspect, debuglog } = require('node:util');
-  const assert = require('node:assert');
+  const { spawnSync } = require("node:child_process");
+  const { inspect, debuglog } = require("node:util");
+  const assert = require("node:assert");
 
-  const debug = debuglog('test');
+  const debug = debuglog("test");
   const node = process.execPath;
   const test = common.mustCallAtLeast((index, useProcessExitCode) => {
     const { status: code } = spawnSync(node, [
@@ -104,7 +104,7 @@ if (process.argv[2] === undefined) {
     assert.strictEqual(
       code,
       args[index].expected,
-      `actual: ${code}, ${inspect(args[index])}`
+      `actual: ${code}, ${inspect(args[index])}`,
     );
   });
 
@@ -130,7 +130,7 @@ if (process.argv[2] === undefined) {
   }
 } else {
   const index = parseInt(process.argv[2]);
-  const useProcessExitCode = process.argv[3] !== 'undefined';
+  const useProcessExitCode = process.argv[3] !== "undefined";
   if (Number.isNaN(index)) {
     return process.exit(100);
   }

@@ -1,3 +1,3 @@
-import worker from 'worker_threads';
+import worker from "worker_threads";
 
-worker.parentPort.postMessage('Hello, world!');
+worker.parentPort.postMessage("Hello, world!");

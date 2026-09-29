@@ -1,18 +1,18 @@
-'use strict';
+"use strict";
 
 // Flags: --experimental-vm-modules
 
-const common = require('../common');
+const common = require("../common");
 
-const assert = require('assert');
+const assert = require("assert");
 
-const { types } = require('util');
-const { SourceTextModule } = require('vm');
+const { types } = require("util");
+const { SourceTextModule } = require("vm");
 
 (async () => {
   const m = new SourceTextModule('globalThis.importResult = import("");', {
     importModuleDynamically: common.mustCall(async (specifier, wrap) => {
-      const m = new SourceTextModule('');
+      const m = new SourceTextModule("");
       await m.link(() => 0);
       await m.evaluate();
       return m.namespace;

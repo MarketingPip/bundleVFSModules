@@ -41,7 +41,7 @@
 // undefined under real Node / direct import).
 // ---------------------------------------------------------------------------
 function getRT() {
-  return (typeof globalThis._RUNTIME_ !== 'undefined')
+  return typeof globalThis._RUNTIME_ !== "undefined"
     ? globalThis._RUNTIME_
     : undefined;
 }
@@ -52,48 +52,53 @@ function getRT() {
 // ---------------------------------------------------------------------------
 function getCwd() {
   try {
-    if (typeof process !== 'undefined' && typeof process.cwd === 'function') {
+    if (typeof process !== "undefined" && typeof process.cwd === "function") {
       const cwd = process.cwd();
-      if (typeof cwd === 'string' && cwd.length > 0) return cwd;
+      if (typeof cwd === "string" && cwd.length > 0) return cwd;
     }
-  } catch { /* fall through to '/' */ }
-  return '/';
+  } catch {
+    /* fall through to '/' */
+  }
+  return "/";
 }
 
 function validatePathArg(part, i) {
-  if (typeof part !== 'string') {
-    throw errInvalidArgType(`paths[${i}]`, 'string', part);
+  if (typeof part !== "string") {
+    throw errInvalidArgType(`paths[${i}]`, "string", part);
   }
 }
 
 function posixNormalize(p) {
   validatePathArg(p, 0);
-  const isAbs = p.charAt(0) === '/';
-  const segs = p.split('/');
+  const isAbs = p.charAt(0) === "/";
+  const segs = p.split("/");
   const out = [];
   for (const s of segs) {
-    if (s === '' || s === '.') continue;
-    if (s === '..') {
-      if (out.length > 0 && out[out.length - 1] !== '..') out.pop();
-      else if (!isAbs) out.push('..');
+    if (s === "" || s === ".") continue;
+    if (s === "..") {
+      if (out.length > 0 && out[out.length - 1] !== "..") out.pop();
+      else if (!isAbs) out.push("..");
     } else {
       out.push(s);
     }
   }
   // Like Node's path.normalize, trailing slashes are stripped (except root).
-  const res = (isAbs ? '/' : '') + out.join('/');
-  return res || (isAbs ? '/' : '.');
+  const res = (isAbs ? "/" : "") + out.join("/");
+  return res || (isAbs ? "/" : ".");
 }
 
 function posixResolve(...parts) {
-  let resolved = '';
+  let resolved = "";
   let abs = false;
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
     validatePathArg(p, i);
     if (p.length === 0) continue;
     resolved = resolved ? `${p}/${resolved}` : p;
-    if (p.charAt(0) === '/') { abs = true; break; }
+    if (p.charAt(0) === "/") {
+      abs = true;
+      break;
+    }
   }
   if (!abs) resolved = `${getCwd()}/${resolved}`;
   return posixNormalize(resolved);
@@ -101,57 +106,69 @@ function posixResolve(...parts) {
 
 function posixDirname(p) {
   validatePathArg(p, 0);
-  if (p === '/') return '/';
+  if (p === "/") return "/";
   let end = p.length;
-  while (end > 1 && p.charAt(end - 1) === '/') end--;
-  const slash = p.lastIndexOf('/', end - 1);
-  if (slash === -1) return '.';
-  if (slash === 0) return '/';
+  while (end > 1 && p.charAt(end - 1) === "/") end--;
+  const slash = p.lastIndexOf("/", end - 1);
+  if (slash === -1) return ".";
+  if (slash === 0) return "/";
   return p.slice(0, slash);
 }
 
 function posixBasename(p) {
   validatePathArg(p, 0);
   let end = p.length;
-  while (end > 1 && p.charAt(end - 1) === '/') end--;
-  const slash = p.lastIndexOf('/', end - 1);
+  while (end > 1 && p.charAt(end - 1) === "/") end--;
+  const slash = p.lastIndexOf("/", end - 1);
   return p.slice(slash + 1, end);
 }
 
 function posixIsAbsolute(p) {
-  return typeof p === 'string' && p.charAt(0) === '/';
+  return typeof p === "string" && p.charAt(0) === "/";
 }
 
 function posixJoin(...parts) {
-  return posixNormalize(parts.filter((p) => typeof p === 'string' && p.length > 0).join('/'));
+  return posixNormalize(
+    parts.filter((p) => typeof p === "string" && p.length > 0).join("/"),
+  );
 }
 
 function isRelative(request) {
-  return request === '.' || request === '..' ||
-    request.startsWith('./') || request.startsWith('../');
+  return (
+    request === "." ||
+    request === ".." ||
+    request.startsWith("./") ||
+    request.startsWith("../")
+  );
 }
 
 function isURLObject(v) {
-  return v !== null && typeof v === 'object' && typeof v.href === 'string' &&
-    typeof v.protocol === 'string';
+  return (
+    v !== null &&
+    typeof v === "object" &&
+    typeof v.href === "string" &&
+    typeof v.protocol === "string"
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Error factories — same codes and message shapes as Node's internal/errors.
 // ---------------------------------------------------------------------------
 function inspectValue(v) {
-  if (typeof v === 'string') return `'${v}'`;
-  if (typeof v === 'undefined') return 'undefined';
-  if (typeof v === 'bigint') return `${v}n`;
-  if (typeof v === 'symbol') return String(v);
-  if (typeof v === 'function') return `[Function: ${v.name || 'anonymous'}]`;
-  if (v === null) return 'null';
-  if (typeof v === 'object') {
-    if (Object.getPrototypeOf(v) === null) return '[Object: null prototype] {}';
+  if (typeof v === "string") return `'${v}'`;
+  if (typeof v === "undefined") return "undefined";
+  if (typeof v === "bigint") return `${v}n`;
+  if (typeof v === "symbol") return String(v);
+  if (typeof v === "function") return `[Function: ${v.name || "anonymous"}]`;
+  if (v === null) return "null";
+  if (typeof v === "object") {
+    if (Object.getPrototypeOf(v) === null) return "[Object: null prototype] {}";
     try {
       const j = JSON.stringify(v);
       return j === undefined ? String(v) : j;
-    } catch { return String(v); }
+    } catch {
+      return String(v);
+    }
   }
   return String(v);
 }
@@ -160,10 +177,10 @@ function inspectValue(v) {
 // builder (lib/internal/errors.js).
 function receivedSuffix(actual) {
   if (actual === null || actual === undefined) return ` Received ${actual}`;
-  if (typeof actual === 'function') return ` Received function ${actual.name}`;
-  if (typeof actual === 'object') {
+  if (typeof actual === "function") return ` Received function ${actual.name}`;
+  if (typeof actual === "object") {
     const ctor = actual.constructor;
-    if (typeof ctor === 'function' && ctor.name) {
+    if (typeof ctor === "function" && ctor.name) {
       return ` Received an instance of ${ctor.name}`;
     }
     return ` Received ${inspectValue(actual)}`;
@@ -179,7 +196,7 @@ function stampCode(err, includeInToString) {
   if (includeInToString) {
     const name = err.name;
     const code = err.code;
-    Object.defineProperty(err, 'toString', {
+    Object.defineProperty(err, "toString", {
       __proto__: null,
       value() {
         return `${name} [${code}]: ${err.message}`;
@@ -204,61 +221,67 @@ function typeError(code, message, includeInToString = true) {
 
 function errInvalidArgType(name, expected, actual) {
   // Node uses "property" when the name contains a dot (e.g. options.foo).
-  const kind = name.includes('.') ? 'property' : 'argument';
+  const kind = name.includes(".") ? "property" : "argument";
   const list = Array.isArray(expected) ? expected : [expected];
-  const exp = list.map((e) => `of type ${e}`).join(' or ');
+  const exp = list.map((e) => `of type ${e}`).join(" or ");
   return typeError(
-    'ERR_INVALID_ARG_TYPE',
+    "ERR_INVALID_ARG_TYPE",
     `The "${name}" ${kind} must be ${exp}.${receivedSuffix(actual)}`,
   );
 }
 function errInvalidPropertyType(name, expected, actual) {
   return errInvalidArgType(name, expected, actual);
 }
-function errInvalidArgValue(name, actual, reason = 'is invalid') {
+function errInvalidArgValue(name, actual, reason = "is invalid") {
   // Node says "property" when the name is dotted (e.g. 'options.paths').
-  const kind = String(name).includes('.') ? 'property' : 'argument';
+  const kind = String(name).includes(".") ? "property" : "argument";
   return typeError(
-    'ERR_INVALID_ARG_VALUE',
+    "ERR_INVALID_ARG_VALUE",
     `The ${kind} '${name}' ${reason}. Received ${inspectValue(actual)}`,
   );
 }
 function errMissingArgs(name) {
   return typeError(
-    'ERR_MISSING_ARGS',
+    "ERR_MISSING_ARGS",
     `The "${name}" argument must be specified`,
   );
 }
 function validateString(v, name) {
-  if (typeof v !== 'string') throw errInvalidArgType(name, 'string', v);
+  if (typeof v !== "string") throw errInvalidArgType(name, "string", v);
 }
 function validateBoolean(v, name) {
-  if (typeof v !== 'boolean') throw errInvalidArgType(name, 'boolean', v);
+  if (typeof v !== "boolean") throw errInvalidArgType(name, "boolean", v);
 }
 function validateObject(v, name) {
-  if (v === null || typeof v !== 'object') throw errInvalidArgType(name, 'object', v);
+  if (v === null || typeof v !== "object")
+    throw errInvalidArgType(name, "object", v);
 }
 function validateFunction(v, name) {
-  if (typeof v !== 'function') throw errInvalidPropertyType(name, 'function', v);
+  if (typeof v !== "function")
+    throw errInvalidPropertyType(name, "function", v);
 }
 function moduleNotFound(request, requireStack) {
   let message = `Cannot find module '${request}'`;
   if (requireStack && requireStack.length > 0) {
-    message += `\nRequire stack:\n- ${requireStack.join('\n- ')}`;
+    message += `\nRequire stack:\n- ${requireStack.join("\n- ")}`;
   }
   const e = new Error(message);
-  e.code = 'MODULE_NOT_FOUND';
+  e.code = "MODULE_NOT_FOUND";
   e.requireStack = requireStack || [];
   return stampCode(e, false);
 }
 
 function emitDeprecationWarning(code, message) {
   try {
-    if (typeof process !== 'undefined' &&
-        typeof process.emitWarning === 'function') {
-      process.emitWarning(message, 'DeprecationWarning', code);
+    if (
+      typeof process !== "undefined" &&
+      typeof process.emitWarning === "function"
+    ) {
+      process.emitWarning(message, "DeprecationWarning", code);
     }
-  } catch { /* warning is best-effort */ }
+  } catch {
+    /* warning is best-effort */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,24 +290,24 @@ function emitDeprecationWarning(code, message) {
 // ---------------------------------------------------------------------------
 function createMemoryFs() {
   const files = new Map();
-  const dirs = new Set(['/']);
+  const dirs = new Set(["/"]);
   const norm = (p) => posixNormalize(String(p));
   function ensureParentDirs(p) {
     let d = posixDirname(p);
-    while (d !== '/' && d !== '.' && !dirs.has(d)) {
+    while (d !== "/" && d !== "." && !dirs.has(d)) {
       dirs.add(d);
       d = posixDirname(d);
     }
   }
   function enoent(op, p) {
     const e = new Error(`ENOENT: no such file or directory, ${op} '${p}'`);
-    e.code = 'ENOENT';
+    e.code = "ENOENT";
     return e;
   }
   return {
     readFileSync(p, encoding) {
       p = norm(p);
-      if (!files.has(p)) throw enoent('open', p);
+      if (!files.has(p)) throw enoent("open", p);
       return files.get(p);
     },
     writeFileSync(p, data) {
@@ -300,7 +323,7 @@ function createMemoryFs() {
       p = norm(p);
       const f = files.has(p);
       const d = dirs.has(p);
-      if (!f && !d) throw enoent('stat', p);
+      if (!f && !d) throw enoent("stat", p);
       return { isFile: () => f, isDirectory: () => d && !f };
     },
     mkdirSync(p) {
@@ -322,32 +345,44 @@ let realFsAdapter; // caches only a successful probe; failures re-probe so a
 function getRealFsAdapter() {
   if (realFsAdapter) return realFsAdapter;
   try {
-    if (typeof process !== 'undefined' &&
-        typeof process.getBuiltinModule === 'function') {
-      const fs = process.getBuiltinModule('fs');
-      if (fs && typeof fs.readFileSync === 'function' &&
-          typeof fs.existsSync === 'function' &&
-          typeof fs.statSync === 'function') {
+    if (
+      typeof process !== "undefined" &&
+      typeof process.getBuiltinModule === "function"
+    ) {
+      const fs = process.getBuiltinModule("fs");
+      if (
+        fs &&
+        typeof fs.readFileSync === "function" &&
+        typeof fs.existsSync === "function" &&
+        typeof fs.statSync === "function"
+      ) {
         realFsAdapter = {
           readFileSync: (p, enc) => fs.readFileSync(p, enc),
           existsSync: (p) => {
-            try { return fs.existsSync(p); } catch { return false; }
+            try {
+              return fs.existsSync(p);
+            } catch {
+              return false;
+            }
           },
           statSync: (p) => fs.statSync(p),
-          realpathSync: (p) => (typeof fs.realpathSync === 'function'
-            ? fs.realpathSync(p)
-            : posixResolve(p)),
+          realpathSync: (p) =>
+            typeof fs.realpathSync === "function"
+              ? fs.realpathSync(p)
+              : posixResolve(p),
         };
       }
     }
-  } catch { /* unavailable: fall through to memory FS */ }
+  } catch {
+    /* unavailable: fall through to memory FS */
+  }
   return realFsAdapter;
 }
 
 function getFS() {
   const RT = getRT();
   const vfs = RT && RT.__FS__;
-  if (vfs && typeof vfs === 'object') return vfs;
+  if (vfs && typeof vfs === "object") return vfs;
   return getRealFsAdapter() || getMemoryFs();
 }
 
@@ -358,30 +393,34 @@ function _stat(p) {
     if (st.isDirectory()) return 1;
     if (st.isFile()) return 0;
     return -1;
-  } catch { return -1; }
+  } catch {
+    return -1;
+  }
 }
 
 function readFileText(p) {
   const fs = getFS();
-  if (!fs || typeof fs.readFileSync !== 'function') {
+  if (!fs || typeof fs.readFileSync !== "function") {
     const e = new Error(`ENOENT: no such file or directory, open '${p}'`);
-    e.code = 'ENOENT';
+    e.code = "ENOENT";
     throw e;
   }
-  const data = fs.readFileSync(p, 'utf8');
-  return typeof data === 'string' ? data : String(data);
+  const data = fs.readFileSync(p, "utf8");
+  return typeof data === "string" ? data : String(data);
 }
 
 function toRealPath(p) {
   const fs = getFS();
   try {
-    if (fs && typeof fs.realpathSync === 'function') return fs.realpathSync(p);
-  } catch { /* fall through */ }
+    if (fs && typeof fs.realpathSync === "function") return fs.realpathSync(p);
+  } catch {
+    /* fall through */
+  }
   return posixResolve(p);
 }
 
 function stripBOM(content) {
-  if (content.charCodeAt(0) === 0xFEFF) return content.slice(1);
+  if (content.charCodeAt(0) === 0xfeff) return content.slice(1);
   return content;
 }
 
@@ -389,85 +428,85 @@ function stripBOM(content) {
 // builtinModules / isBuiltin — exact v24.20.0 list and semantics.
 // ---------------------------------------------------------------------------
 const builtinModules = Object.freeze([
-  '_http_agent',
-  '_http_client',
-  '_http_common',
-  '_http_incoming',
-  '_http_outgoing',
-  '_http_server',
-  '_stream_duplex',
-  '_stream_passthrough',
-  '_stream_readable',
-  '_stream_transform',
-  '_stream_wrap',
-  '_stream_writable',
-  '_tls_common',
-  '_tls_wrap',
-  'assert',
-  'assert/strict',
-  'async_hooks',
-  'buffer',
-  'child_process',
-  'cluster',
-  'console',
-  'constants',
-  'crypto',
-  'dgram',
-  'diagnostics_channel',
-  'dns',
-  'dns/promises',
-  'domain',
-  'events',
-  'fs',
-  'fs/promises',
-  'http',
-  'http2',
-  'https',
-  'inspector',
-  'inspector/promises',
-  'module',
-  'net',
-  'os',
-  'path',
-  'path/posix',
-  'path/win32',
-  'perf_hooks',
-  'process',
-  'punycode',
-  'querystring',
-  'readline',
-  'readline/promises',
-  'repl',
-  'stream',
-  'stream/consumers',
-  'stream/promises',
-  'stream/web',
-  'string_decoder',
-  'sys',
-  'timers',
-  'timers/promises',
-  'tls',
-  'trace_events',
-  'tty',
-  'url',
-  'util',
-  'util/types',
-  'v8',
-  'vm',
-  'wasi',
-  'worker_threads',
-  'zlib',
-  'node:sea',
-  'node:sqlite',
-  'node:test',
-  'node:test/reporters',
+  "_http_agent",
+  "_http_client",
+  "_http_common",
+  "_http_incoming",
+  "_http_outgoing",
+  "_http_server",
+  "_stream_duplex",
+  "_stream_passthrough",
+  "_stream_readable",
+  "_stream_transform",
+  "_stream_wrap",
+  "_stream_writable",
+  "_tls_common",
+  "_tls_wrap",
+  "assert",
+  "assert/strict",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "dns/promises",
+  "domain",
+  "events",
+  "fs",
+  "fs/promises",
+  "http",
+  "http2",
+  "https",
+  "inspector",
+  "inspector/promises",
+  "module",
+  "net",
+  "os",
+  "path",
+  "path/posix",
+  "path/win32",
+  "perf_hooks",
+  "process",
+  "punycode",
+  "querystring",
+  "readline",
+  "readline/promises",
+  "repl",
+  "stream",
+  "stream/consumers",
+  "stream/promises",
+  "stream/web",
+  "string_decoder",
+  "sys",
+  "timers",
+  "timers/promises",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "util/types",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib",
+  "node:sea",
+  "node:sqlite",
+  "node:test",
+  "node:test/reporters",
 ]);
 
 const schemelessBuiltinSet = new Set(
-  builtinModules.filter((id) => !id.startsWith('node:')),
+  builtinModules.filter((id) => !id.startsWith("node:")),
 );
 const requirableByUsersSet = new Set(
-  builtinModules.map((id) => (id.startsWith('node:') ? id.slice(5) : id)),
+  builtinModules.map((id) => (id.startsWith("node:") ? id.slice(5) : id)),
 );
 
 function canBeRequiredWithoutScheme(id) {
@@ -479,7 +518,7 @@ function canBeRequiredByUsers(id) {
 // Mirrors BuiltinModule.normalizeRequirableId: returns the bare id for
 // requirable builtins, undefined otherwise.
 function normalizeRequirableId(id) {
-  if (typeof id === 'string' && id.startsWith('node:')) {
+  if (typeof id === "string" && id.startsWith("node:")) {
     const normalized = id.slice(5);
     if (canBeRequiredByUsers(normalized)) return normalized;
   } else if (canBeRequiredWithoutScheme(id)) {
@@ -489,16 +528,18 @@ function normalizeRequirableId(id) {
 }
 
 function isBuiltin(id) {
-  return canBeRequiredWithoutScheme(id) ||
-    (typeof id === 'string' &&
-      id.startsWith('node:') &&
-      canBeRequiredByUsers(id.slice(5)));
+  return (
+    canBeRequiredWithoutScheme(id) ||
+    (typeof id === "string" &&
+      id.startsWith("node:") &&
+      canBeRequiredByUsers(id.slice(5)))
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Module class.
 // ---------------------------------------------------------------------------
-const kFirstModuleParent = Symbol('kFirstModuleParent');
+const kFirstModuleParent = Symbol("kFirstModuleParent");
 let isPreloading = false;
 
 function updateChildren(parent, child, scan) {
@@ -507,7 +548,7 @@ function updateChildren(parent, child, scan) {
   parent.children.push(child);
 }
 
-function Module(id = '', parent) {
+function Module(id = "", parent) {
   this.id = id;
   this.path = posixDirname(String(id));
   this.exports = {};
@@ -518,28 +559,30 @@ function Module(id = '', parent) {
   this.children = [];
 }
 
-Object.defineProperty(Module.prototype, 'isPreloading', {
+Object.defineProperty(Module.prototype, "isPreloading", {
   __proto__: null,
-  get() { return isPreloading; },
+  get() {
+    return isPreloading;
+  },
   configurable: true,
 });
 
 // DEP0144: module.parent is deprecated; kept as an accessor like Node's.
-Object.defineProperty(Module.prototype, 'parent', {
+Object.defineProperty(Module.prototype, "parent", {
   __proto__: null,
   get() {
     emitDeprecationWarning(
-      'DEP0144',
-      'module.parent is deprecated due to accuracy issues. Please use ' +
-      'require.main to find program entry point instead.',
+      "DEP0144",
+      "module.parent is deprecated due to accuracy issues. Please use " +
+        "require.main to find program entry point instead.",
     );
     return this[kFirstModuleParent];
   },
   set(value) {
     emitDeprecationWarning(
-      'DEP0144',
-      'module.parent is deprecated due to accuracy issues. Please use ' +
-      'require.main to find program entry point instead.',
+      "DEP0144",
+      "module.parent is deprecated due to accuracy issues. Please use " +
+        "require.main to find program entry point instead.",
     );
     this[kFirstModuleParent] = value;
   },
@@ -547,9 +590,9 @@ Object.defineProperty(Module.prototype, 'parent', {
 });
 
 Module.prototype.require = function require(id) {
-  validateString(id, 'id');
-  if (id === '') {
-    throw errInvalidArgValue('id', id, 'must be a non-empty string');
+  validateString(id, "id");
+  if (id === "") {
+    throw errInvalidArgValue("id", id, "must be a non-empty string");
   }
   return Module._load(id, this, /* isMain */ false);
 };
@@ -570,11 +613,11 @@ Module.prototype._compile = function _compile(content, filename) {
   // module source itself. (Passing Module.wrap(content) as the body would
   // merely evaluate and discard the wrapper expression.)
   const compiled = new Function(
-    'exports',
-    'require',
-    'module',
-    '__filename',
-    '__dirname',
+    "exports",
+    "require",
+    "module",
+    "__filename",
+    "__dirname",
     content,
   );
   const dirname = posixDirname(filename);
@@ -592,12 +635,12 @@ const _pathCache = Object.create(null);
 
 const _extensions = {
   __proto__: null,
-  '.js'(module, filename) {
+  ".js"(module, filename) {
     const content = readFileText(filename);
     maybeThrowRequireESM(module, filename, content);
     module._compile(content, filename);
   },
-  '.json'(module, filename) {
+  ".json"(module, filename) {
     const content = readFileText(filename);
     try {
       module.exports = JSON.parse(stripBOM(content));
@@ -607,19 +650,19 @@ const _extensions = {
     }
   },
   // Native addons cannot load in the browser; honest noop (Node would dlopen).
-  '.node'() {},
+  ".node"() {},
 };
 
 function wrap(script) {
   return (
     `(function (exports, require, module, __filename, __dirname) { ${script}` +
-    '\n});'
+    "\n});"
   );
 }
 
 const wrapper = [
-  '(function (exports, require, module, __filename, __dirname) { ',
-  '\n});',
+  "(function (exports, require, module, __filename, __dirname) { ",
+  "\n});",
 ];
 
 // Find the longest registered extension (supports multi-dot like ".foo.js").
@@ -627,25 +670,25 @@ function findLongestRegisteredExtension(filename) {
   const name = posixBasename(filename);
   let startIndex = 0;
   let index;
-  while ((index = name.indexOf('.', startIndex)) !== -1) {
+  while ((index = name.indexOf(".", startIndex)) !== -1) {
     startIndex = index + 1;
     if (index === 0) continue; // Skip dotfiles like .gitignore
     const currentExtension = name.slice(index);
     if (_extensions[currentExtension]) return currentExtension;
   }
-  return '.js';
+  return ".js";
 }
 
 // package.json lookup through the FS backend: { exists, main, pjsonPath, data }.
 function readPackageJson(requestPath) {
-  const pjsonPath = posixResolve(requestPath, 'package.json');
+  const pjsonPath = posixResolve(requestPath, "package.json");
   try {
     const data = JSON.parse(stripBOM(readFileText(pjsonPath)));
     return {
       exists: true,
       pjsonPath,
       data,
-      main: data && typeof data.main === 'string' ? data.main : undefined,
+      main: data && typeof data.main === "string" ? data.main : undefined,
       type: data && data.type,
       name: data && data.name,
     };
@@ -669,13 +712,13 @@ function getNearestParentPackageJSON(from) {
 // require() of a `.js` file inside a `"type": "module"` package scope.
 function maybeThrowRequireESM(module, filename, content) {
   const pkg = getNearestParentPackageJSON(filename);
-  if (pkg && pkg.type === 'module') {
+  if (pkg && pkg.type === "module") {
     const e = new Error(
       `require() of ES Module ${filename} not supported.\n` +
-      'Instead change the require of the .js file to a dynamic import() ' +
-      'which is available in all CommonJS modules.',
+        "Instead change the require of the .js file to a dynamic import() " +
+        "which is available in all CommonJS modules.",
     );
-    e.code = 'ERR_REQUIRE_ESM';
+    e.code = "ERR_REQUIRE_ESM";
     throw e;
   }
 }
@@ -697,28 +740,29 @@ function tryExtensions(basePath, exts, isMain) {
 function tryPackage(requestPath, exts, isMain, originalPath) {
   const pkg = Module._readPackage(requestPath);
   if (!pkg.exists || !pkg.main) {
-    return tryExtensions(posixResolve(requestPath, 'index'), exts, isMain);
+    return tryExtensions(posixResolve(requestPath, "index"), exts, isMain);
   }
   const filename = posixResolve(requestPath, pkg.main);
-  let actual = tryFile(filename, isMain) ||
+  let actual =
+    tryFile(filename, isMain) ||
     tryExtensions(filename, exts, isMain) ||
-    tryExtensions(posixResolve(filename, 'index'), exts, isMain);
+    tryExtensions(posixResolve(filename, "index"), exts, isMain);
   if (actual === false) {
-    actual = tryExtensions(posixResolve(requestPath, 'index'), exts, isMain);
+    actual = tryExtensions(posixResolve(requestPath, "index"), exts, isMain);
     if (!actual) {
       const err = new Error(
         `Cannot find module '${filename}'. ` +
-        'Please verify that the package.json has a valid "main" entry',
+          'Please verify that the package.json has a valid "main" entry',
       );
-      err.code = 'MODULE_NOT_FOUND';
+      err.code = "MODULE_NOT_FOUND";
       err.path = pkg.pjsonPath;
       err.requestPath = originalPath;
       throw stampCode(err, false);
     }
     emitDeprecationWarning(
-      'DEP0128',
+      "DEP0128",
       `Invalid 'main' field in '${pkg.pjsonPath}' of '${pkg.main}'. ` +
-      'Please either fix that or report it to the module author',
+        "Please either fix that or report it to the module author",
     );
   }
   return actual;
@@ -734,11 +778,15 @@ function trySelfParentPath(parent) {
 function trySelf(parentPath, request) {
   if (!parentPath || normalizeRequirableId(request) !== undefined) return false;
   const pkg = getNearestParentPackageJSON(parentPath);
-  if (!pkg || !pkg.exists || typeof pkg.name !== 'string') return false;
+  if (!pkg || !pkg.exists || typeof pkg.name !== "string") return false;
   if (request !== pkg.name && !request.startsWith(`${pkg.name}/`)) return false;
   const pkgDir = posixDirname(pkg.pjsonPath);
-  const subpath = request === pkg.name ? '.' : request.slice(pkg.name.length);
-  const resolved = Module._findPath(subpath === '.' ? pkgDir : posixJoin(pkgDir, subpath), [''], false);
+  const subpath = request === pkg.name ? "." : request.slice(pkg.name.length);
+  const resolved = Module._findPath(
+    subpath === "." ? pkgDir : posixJoin(pkgDir, subpath),
+    [""],
+    false,
+  );
   return resolved || false;
 }
 
@@ -756,7 +804,7 @@ function _nodeModulePaths(from) {
   from = posixResolve(from);
   // Return early not only to avoid unnecessary work, but to *avoid* returning
   // an array of two items for a root: [ '//node_modules', '/node_modules' ]
-  if (from === '/') return ['/node_modules'];
+  if (from === "/") return ["/node_modules"];
 
   const paths = [];
   for (let i = from.length - 1, p = 0, last = from.length; i >= 0; --i) {
@@ -772,7 +820,7 @@ function _nodeModulePaths(from) {
   }
 
   // Append /node_modules to handle root paths.
-  paths.push('/node_modules');
+  paths.push("/node_modules");
   return paths;
 }
 
@@ -780,42 +828,47 @@ function _nodeModulePaths(from) {
 // NODE_PATH entries first, then home-based paths, then the install prefix's
 // lib/node. In the browser sandbox there is no home directory or install
 // prefix, so only NODE_PATH (from the sandbox process env) applies there.
-let globalPaths = ['/node_modules'];
+let globalPaths = ["/node_modules"];
 let modulePaths = globalPaths;
 
 function readEnv(name) {
   try {
     const RT = getRT();
-    const env = (RT && RT.process && RT.process.env) ||
-      (typeof process !== 'undefined' ? process.env : undefined);
+    const env =
+      (RT && RT.process && RT.process.env) ||
+      (typeof process !== "undefined" ? process.env : undefined);
     return env ? env[name] : undefined;
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
 }
 
 function _initPaths() {
   const paths = [];
-  const nodePath = readEnv('NODE_PATH');
-  if (typeof nodePath === 'string' && nodePath.length > 0) {
-    for (const p of nodePath.split(':')) {
+  const nodePath = readEnv("NODE_PATH");
+  if (typeof nodePath === "string" && nodePath.length > 0) {
+    for (const p of nodePath.split(":")) {
       if (p && !paths.includes(p)) paths.push(p);
     }
   }
   const RT = getRT();
-  if (!RT && typeof process !== 'undefined') {
+  if (!RT && typeof process !== "undefined") {
     // Real-Node fidelity only: home and install-prefix paths have no
     // meaning inside the browser sandbox.
-    const homeDir = readEnv('HOME') || readEnv('USERPROFILE');
+    const homeDir = readEnv("HOME") || readEnv("USERPROFILE");
     if (homeDir) {
-      paths.push(posixResolve(homeDir, '.node_modules'));
-      paths.push(posixResolve(homeDir, '.node_libraries'));
+      paths.push(posixResolve(homeDir, ".node_modules"));
+      paths.push(posixResolve(homeDir, ".node_libraries"));
     }
     try {
-      if (typeof process.execPath === 'string') {
-        paths.push(posixResolve(process.execPath, '..', '..', 'lib', 'node'));
+      if (typeof process.execPath === "string") {
+        paths.push(posixResolve(process.execPath, "..", "..", "lib", "node"));
       }
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
   }
-  if (paths.length === 0) paths.push('/node_modules');
+  if (paths.length === 0) paths.push("/node_modules");
   globalPaths = paths;
   modulePaths = globalPaths;
   // Keep the Module static in sync, like Node's _initPaths does.
@@ -829,10 +882,12 @@ function _resolveLookupPaths(request, parent) {
   }
 
   // Check for node modules paths.
-  if (request.charAt(0) !== '.' ||
-      (request.length > 1 &&
-        request.charAt(1) !== '.' &&
-        request.charAt(1) !== '/')) {
+  if (
+    request.charAt(0) !== "." ||
+    (request.length > 1 &&
+      request.charAt(1) !== "." &&
+      request.charAt(1) !== "/")
+  ) {
     let paths;
     if (parent && parent.paths && parent.paths.length) {
       paths = modulePaths.slice();
@@ -847,7 +902,7 @@ function _resolveLookupPaths(request, parent) {
   if (!parent || !parent.id || !parent.filename) {
     // Make require('./path/to/foo') work - normally the path is taken
     // from realpath(__filename) but in REPL there is no filename
-    return ['.'];
+    return ["."];
   }
 
   return [posixDirname(parent.filename)];
@@ -856,37 +911,39 @@ function _resolveLookupPaths(request, parent) {
 function _findPath(request, paths, isMain) {
   const absoluteRequest = posixIsAbsolute(request);
   if (absoluteRequest) {
-    paths = [''];
+    paths = [""];
   } else if (!paths || paths.length === 0) {
     return false;
   }
 
-  const cacheKey = `${request}\x00${paths.join('\x00')}`;
+  const cacheKey = `${request}\x00${paths.join("\x00")}`;
   const cached = _pathCache[cacheKey];
   if (cached) return cached;
 
   let exts;
-  const trailingSlash = request.length > 0 &&
+  const trailingSlash =
+    request.length > 0 &&
     (request.charCodeAt(request.length - 1) === CHAR_FORWARD_SLASH ||
       (request.charCodeAt(request.length - 1) === 46 /* . */ &&
         (request.length === 1 ||
           request.charCodeAt(request.length - 2) === CHAR_FORWARD_SLASH ||
           (request.charCodeAt(request.length - 2) === 46 &&
             (request.length === 2 ||
-              request.charCodeAt(request.length - 3) === CHAR_FORWARD_SLASH)))));
+              request.charCodeAt(request.length - 3) ===
+                CHAR_FORWARD_SLASH)))));
 
   let insidePath = true;
   if (isRelative(request)) {
     const normalizedRequest = posixNormalize(request);
-    if (normalizedRequest.startsWith('..')) insidePath = false;
+    if (normalizedRequest.startsWith("..")) insidePath = false;
   }
 
   // For each path
   for (let i = 0; i < paths.length; i++) {
     // Don't search further if path doesn't exist
     const curPath = paths[i];
-    if (typeof curPath !== 'string') {
-      throw errInvalidArgType('paths', 'array of strings', paths);
+    if (typeof curPath !== "string") {
+      throw errInvalidArgType("paths", "array of strings", paths);
     }
     if (insidePath && curPath && _stat(curPath) < 1) {
       continue;
@@ -897,7 +954,8 @@ function _findPath(request, paths, isMain) {
 
     const rc = _stat(basePath);
     if (!trailingSlash) {
-      if (rc === 0) { // File.
+      if (rc === 0) {
+        // File.
         filename = toRealPath(basePath);
       }
 
@@ -908,7 +966,8 @@ function _findPath(request, paths, isMain) {
       }
     }
 
-    if (!filename && rc === 1) { // Directory.
+    if (!filename && rc === 1) {
+      // Directory.
       // try it with each of the extensions at "index"
       if (exts === undefined) exts = Object.keys(_extensions);
       filename = tryPackage(basePath, exts, isMain, request);
@@ -930,7 +989,7 @@ function getRequireStack(parent) {
   while (p && !seen.has(p)) {
     seen.add(p);
     if (p.filename) stack.push(p.filename);
-    else if (p.id && p.id !== '<repl>') stack.push(p.id);
+    else if (p.id && p.id !== "<repl>") stack.push(p.id);
     p = p[kFirstModuleParent];
   }
   return stack;
@@ -944,12 +1003,12 @@ function _resolveFilename(request, parent, isMain, options) {
 
   let paths;
 
-  if (typeof options === 'object' && options !== null) {
+  if (typeof options === "object" && options !== null) {
     if (Array.isArray(options.paths)) {
       if (isRelative(request)) {
         paths = options.paths;
       } else {
-        const fakeParent = new Module('', null);
+        const fakeParent = new Module("", null);
         paths = [];
         for (let i = 0; i < options.paths.length; i++) {
           const p = options.paths[i];
@@ -965,7 +1024,7 @@ function _resolveFilename(request, parent, isMain, options) {
     } else if (options.paths === undefined) {
       paths = _resolveLookupPaths(request, parent);
     } else {
-      throw errInvalidArgValue('options.paths', options.paths);
+      throw errInvalidArgValue("options.paths", options.paths);
     }
   } else {
     paths = _resolveLookupPaths(request, parent);
@@ -976,8 +1035,8 @@ function _resolveFilename(request, parent, isMain, options) {
   // Try module self resolution first
   const selfResolved = trySelf(parentPath, request);
   if (selfResolved) {
-    const cacheKey = `${request}\x00` +
-      (paths.length === 1 ? paths[0] : paths.join('\x00'));
+    const cacheKey =
+      `${request}\x00` + (paths.length === 1 ? paths[0] : paths.join("\x00"));
     _pathCache[cacheKey] = selfResolved;
     return selfResolved;
   }
@@ -995,11 +1054,11 @@ function _resolveFilename(request, parent, isMain, options) {
 
 // Bundle-key mapping for the runtime: 'timers/promises' -> 'timers_promises'.
 function toBundleKey(id) {
-  return id.replace(/\//g, '_');
+  return id.replace(/\//g, "_");
 }
 
 function interopDefault(ns) {
-  return (ns && typeof ns === 'object' && 'default' in ns) ? ns.default : ns;
+  return ns && typeof ns === "object" && "default" in ns ? ns.default : ns;
 }
 
 // Load a builtin module object synchronously from the available providers:
@@ -1007,23 +1066,29 @@ function interopDefault(ns) {
 // under Node without a runtime. Throws MODULE_NOT_FOUND otherwise.
 function loadBuiltinModule(normalizedId, originalRequest) {
   const RT = getRT();
-  if (RT && typeof RT.loadModule === 'function') {
+  if (RT && typeof RT.loadModule === "function") {
     try {
       const loaded = RT.loadModule(toBundleKey(normalizedId));
-      if (loaded && typeof loaded.then !== 'function') {
+      if (loaded && typeof loaded.then !== "function") {
         return interopDefault(loaded);
       }
       // Async result: sync require() cannot wait for it (the host rewrites
       // `import` statements itself); fall through to MODULE_NOT_FOUND.
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
   }
   try {
-    if (typeof process !== 'undefined' &&
-        typeof process.getBuiltinModule === 'function') {
+    if (
+      typeof process !== "undefined" &&
+      typeof process.getBuiltinModule === "function"
+    ) {
       const mod = process.getBuiltinModule(normalizedId);
       if (mod !== undefined) return mod;
     }
-  } catch { /* browser-fallback lane: no native delegation */ }
+  } catch {
+    /* browser-fallback lane: no native delegation */
+  }
   throw moduleNotFound(originalRequest, []);
 }
 
@@ -1063,20 +1128,20 @@ function _load(request, parent, isMain) {
 // createRequire / makeRequireFunction.
 // ---------------------------------------------------------------------------
 const createRequireError =
-  'must be a file URL object, file URL string, or absolute path string';
+  "must be a file URL object, file URL string, or absolute path string";
 
 function fileURLToPathShim(url) {
-  if (url.protocol !== 'file:') {
-    const e = new TypeError('The URL must be of scheme file');
-    e.code = 'ERR_INVALID_URL_SCHEME';
+  if (url.protocol !== "file:") {
+    const e = new TypeError("The URL must be of scheme file");
+    e.code = "ERR_INVALID_URL_SCHEME";
     throw e;
   }
   let pathname = url.pathname;
   try {
     pathname = decodeURIComponent(pathname);
   } catch {
-    const e = new TypeError('Invalid URL');
-    e.code = 'ERR_INVALID_URL';
+    const e = new TypeError("Invalid URL");
+    e.code = "ERR_INVALID_URL";
     throw e;
   }
   return pathname;
@@ -1084,8 +1149,8 @@ function fileURLToPathShim(url) {
 
 function createRequireFromPath(filename, fileURL) {
   // Allow a directory to be passed as the filename
-  const trailingSlash = filename.endsWith('/');
-  const proxyPath = trailingSlash ? posixJoin(filename, 'noop.js') : filename;
+  const trailingSlash = filename.endsWith("/");
+  const proxyPath = trailingSlash ? posixJoin(filename, "noop.js") : filename;
 
   const m = new Module(proxyPath);
   m.filename = proxyPath;
@@ -1097,8 +1162,10 @@ function createRequire(filenameOrURL) {
   let filepath;
   let fileURL;
 
-  if (isURLObject(filenameOrURL) ||
-      (typeof filenameOrURL === 'string' && !posixIsAbsolute(filenameOrURL))) {
+  if (
+    isURLObject(filenameOrURL) ||
+    (typeof filenameOrURL === "string" && !posixIsAbsolute(filenameOrURL))
+  ) {
     try {
       // It might be a URL, try to convert it.
       // If it's a relative path, it would not parse and would be considered
@@ -1106,10 +1173,10 @@ function createRequire(filenameOrURL) {
       fileURL = new URL(filenameOrURL);
       filepath = fileURLToPathShim(fileURL);
     } catch {
-      throw errInvalidArgValue('filename', filenameOrURL, createRequireError);
+      throw errInvalidArgValue("filename", filenameOrURL, createRequireError);
     }
-  } else if (typeof filenameOrURL !== 'string') {
-    throw errInvalidArgValue('filename', filenameOrURL, createRequireError);
+  } else if (typeof filenameOrURL !== "string") {
+    throw errInvalidArgValue("filename", filenameOrURL, createRequireError);
   } else {
     filepath = filenameOrURL;
   }
@@ -1122,12 +1189,12 @@ function makeRequireFunction(mod) {
   }
 
   function resolve(request, options) {
-    validateString(request, 'request');
+    validateString(request, "request");
     const normalized = normalizeRequirableId(request);
     if (normalized !== undefined) return request;
     let resolveOptions;
     if (options !== undefined && options !== null) {
-      if (typeof options === 'object' && options.paths !== undefined) {
+      if (typeof options === "object" && options.paths !== undefined) {
         resolveOptions = { paths: options.paths };
       }
     }
@@ -1135,7 +1202,7 @@ function makeRequireFunction(mod) {
   }
 
   function paths(request) {
-    validateString(request, 'request');
+    validateString(request, "request");
     return _resolveLookupPaths(request, mod);
   }
 
@@ -1167,8 +1234,8 @@ const constants = {
 };
 
 function enableCompileCache(cacheDir) {
-  if (cacheDir !== undefined && typeof cacheDir !== 'string') {
-    throw typeError('ERR_INVALID_ARG_TYPE', 'cacheDir should be a string');
+  if (cacheDir !== undefined && typeof cacheDir !== "string") {
+    throw typeError("ERR_INVALID_ARG_TYPE", "cacheDir should be a string");
   }
   return { status: constants.compileCacheStatus.FAILED, directory: undefined };
 }
@@ -1197,11 +1264,11 @@ function getSourceMapsSupport() {
 }
 
 function setSourceMapsSupport(enabled, options = {}) {
-  validateBoolean(enabled, 'enabled');
-  validateObject(options, 'options');
+  validateBoolean(enabled, "enabled");
+  validateObject(options, "options");
   const { nodeModules = false, generatedCode = false } = options;
-  validateBoolean(nodeModules, 'options.nodeModules');
-  validateBoolean(generatedCode, 'options.generatedCode');
+  validateBoolean(nodeModules, "options.nodeModules");
+  validateBoolean(generatedCode, "options.generatedCode");
   sourceMapsSupport = Object.freeze({
     __proto__: null,
     enabled,
@@ -1215,7 +1282,7 @@ function setSourceMapsSupport(enabled, options = {}) {
 // lib/internal/source_map/source_map.js.
 // ---------------------------------------------------------------------------
 const base64Digits =
-  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const base64Map = {};
 for (let i = 0; i < base64Digits.length; ++i) base64Map[base64Digits[i]] = i;
 const VLQ_BASE_SHIFT = 5;
@@ -1239,7 +1306,7 @@ class StringCharIterator {
 }
 
 function isSeparator(char) {
-  return char === ',' || char === ';';
+  return char === "," || char === ";";
 }
 
 function decodeVLQ(stringCharIterator) {
@@ -1262,11 +1329,13 @@ function compareSourceMapEntry(entry1, entry2) {
 }
 
 function cloneSourceMapV3(payload) {
-  validateObject(payload, 'payload');
+  validateObject(payload, "payload");
   payload = { ...payload };
   for (const key in payload) {
-    if (Object.prototype.hasOwnProperty.call(payload, key) &&
-        Array.isArray(payload[key])) {
+    if (
+      Object.prototype.hasOwnProperty.call(payload, key) &&
+      Array.isArray(payload[key])
+    ) {
       payload[key] = payload[key].slice();
     }
   }
@@ -1302,13 +1371,13 @@ function parseMap(sm, map, lineNumber, columnNumber) {
     }
   }
 
-  const stringCharIterator = new StringCharIterator(map.mappings || '');
+  const stringCharIterator = new StringCharIterator(map.mappings || "");
   let sourceURL = sources[sourceIndex];
   while (true) {
-    if (stringCharIterator.peek() === ',') {
+    if (stringCharIterator.peek() === ",") {
       stringCharIterator.next();
     } else {
-      while (stringCharIterator.peek() === ';') {
+      while (stringCharIterator.peek() === ";") {
         lineNumber += 1;
         columnNumber = 0;
         stringCharIterator.next();
@@ -1376,8 +1445,10 @@ class SourceMap {
       const step = count >> 1;
       const middle = first + step;
       const mapping = this._mappings[middle];
-      if (lineOffset < mapping[0] ||
-          (lineOffset === mapping[0] && columnOffset < mapping[1])) {
+      if (
+        lineOffset < mapping[0] ||
+        (lineOffset === mapping[0] && columnOffset < mapping[1])
+      ) {
         count = step;
       } else {
         first = middle;
@@ -1385,8 +1456,12 @@ class SourceMap {
       }
     }
     const entry = this._mappings[first];
-    if (!first && entry && (lineOffset < entry[0] ||
-        (lineOffset === entry[0] && columnOffset < entry[1]))) {
+    if (
+      !first &&
+      entry &&
+      (lineOffset < entry[0] ||
+        (lineOffset === entry[0] && columnOffset < entry[1]))
+    ) {
       return {};
     } else if (!entry) {
       return {};
@@ -1403,11 +1478,13 @@ class SourceMap {
 
   findOrigin(lineNumber, columnNumber) {
     const range = this.findEntry(lineNumber - 1, columnNumber - 1);
-    if (range.originalSource === undefined ||
-        range.originalLine === undefined ||
-        range.originalColumn === undefined ||
-        range.generatedLine === undefined ||
-        range.generatedColumn === undefined) {
+    if (
+      range.originalSource === undefined ||
+      range.originalLine === undefined ||
+      range.originalColumn === undefined ||
+      range.generatedLine === undefined ||
+      range.generatedColumn === undefined
+    ) {
       return {};
     }
     const lineOffset = lineNumber - range.generatedLine;
@@ -1425,13 +1502,15 @@ class SourceMap {
 const sourceMapRegistry = new Map();
 
 function base64ToUtf8(b64) {
-  if (typeof globalThis.atob !== 'function') return undefined;
+  if (typeof globalThis.atob !== "function") return undefined;
   try {
     const bin = globalThis.atob(b64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new TextDecoder().decode(bytes);
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
 }
 
 function maybeRegisterSourceMap(filename, content) {
@@ -1440,10 +1519,10 @@ function maybeRegisterSourceMap(filename, content) {
     if (!match) return;
     const url = match[1].trim();
     let data;
-    if (url.startsWith('data:')) {
-      const b64Index = url.indexOf('base64,');
+    if (url.startsWith("data:")) {
+      const b64Index = url.indexOf("base64,");
       if (b64Index === -1) return;
-      const json = base64ToUtf8(url.slice(b64Index + 'base64,'.length));
+      const json = base64ToUtf8(url.slice(b64Index + "base64,".length));
       if (json === undefined) return;
       data = JSON.parse(json);
     } else {
@@ -1453,13 +1532,15 @@ function maybeRegisterSourceMap(filename, content) {
     const entry = { data, sourceMap: undefined };
     sourceMapRegistry.set(filename, entry);
     sourceMapRegistry.set(`file://${filename}`, entry);
-  } catch { /* source maps are best-effort */ }
+  } catch {
+    /* source maps are best-effort */
+  }
 }
 
 function findSourceMap(sourceURL) {
-  if (typeof sourceURL !== 'string') return undefined;
+  if (typeof sourceURL !== "string") return undefined;
   // No source maps for builtin modules.
-  if (sourceURL.startsWith('node:')) return undefined;
+  if (sourceURL.startsWith("node:")) return undefined;
   const entry = sourceMapRegistry.get(sourceURL);
   if (!entry || entry.data == null) return undefined;
   if (entry.sourceMap === undefined) {
@@ -1483,8 +1564,8 @@ class ModuleHooks {
 function registerHooks(hooks) {
   // Destructuring throws a TypeError for undefined/null, like Node's.
   const { resolve, load } = hooks;
-  if (resolve) validateFunction(resolve, 'hooks.resolve');
-  if (load) validateFunction(load, 'hooks.load');
+  if (resolve) validateFunction(resolve, "hooks.resolve");
+  if (load) validateFunction(load, "hooks.load");
   return new ModuleHooks(resolve, load);
 }
 
@@ -1496,9 +1577,9 @@ function register(specifier, parentURL, options) {
     // [CODE] in the string form).
     const e = new TypeError(
       `Failed to resolve module specifier "${specifier}" from "data:": ` +
-      'Invalid relative URL or base scheme is not hierarchical.',
+        "Invalid relative URL or base scheme is not hierarchical.",
     );
-    e.code = 'ERR_UNSUPPORTED_RESOLVE_REQUEST';
+    e.code = "ERR_UNSUPPORTED_RESOLVE_REQUEST";
     throw stampCode(e, false);
   }
   return undefined;
@@ -1508,15 +1589,15 @@ function register(specifier, parentURL, options) {
 // findPackageJSON — argument validation mirrors Node's; lookup runs against
 // the FS backend (virtual FS in the sandbox, real fs under Node).
 // ---------------------------------------------------------------------------
-function findPackageJSON(specifier, base = 'data:') {
+function findPackageJSON(specifier, base = "data:") {
   if (arguments.length === 0) {
-    throw errMissingArgs('specifier');
+    throw errMissingArgs("specifier");
   }
   let spec;
   try {
     spec = `${specifier}`;
   } catch {
-    throw errInvalidArgType('specifier', 'string', specifier);
+    throw errInvalidArgType("specifier", "string", specifier);
   }
 
   let basePath;
@@ -1527,7 +1608,7 @@ function findPackageJSON(specifier, base = 'data:') {
     baseFileUrl = base;
     basePath = fileURLToPathShim(base); // throws ERR_INVALID_URL_SCHEME
   } else {
-    validateString(base, 'base');
+    validateString(base, "base");
     baseHref = base;
     if (posixIsAbsolute(base)) {
       basePath = base;
@@ -1539,7 +1620,7 @@ function findPackageJSON(specifier, base = 'data:') {
       } catch {
         // Node's URL parse errors are TypeErrors carrying ERR_INVALID_URL
         // but with no [CODE] in the string form.
-        throw typeError('ERR_INVALID_URL', 'Invalid URL', false);
+        throw typeError("ERR_INVALID_URL", "Invalid URL", false);
       }
       baseHref = url.href;
       baseFileUrl = url;
@@ -1550,7 +1631,7 @@ function findPackageJSON(specifier, base = 'data:') {
   if (normalizeRequirableId(spec) !== undefined) {
     // Matches Node's quirk: builtins fail inside defaultResolve with
     // ERR_INVALID_URL_SCHEME.
-    throw typeError('ERR_INVALID_URL_SCHEME', 'The URL must be of scheme file');
+    throw typeError("ERR_INVALID_URL_SCHEME", "The URL must be of scheme file");
   }
 
   const errModuleNotFound = (isPackage, target) => {
@@ -1559,19 +1640,22 @@ function findPackageJSON(specifier, base = 'data:') {
         ? `Cannot find package '${spec}' imported from ${baseHref}`
         : `Cannot find module '${target}' imported from ${baseHref}`,
     );
-    e.code = 'ERR_MODULE_NOT_FOUND';
+    e.code = "ERR_MODULE_NOT_FOUND";
     throw e;
   };
 
   let startDir;
-  const bare = spec !== '' && spec.charAt(0) !== '.' && spec.charAt(0) !== '/' &&
+  const bare =
+    spec !== "" &&
+    spec.charAt(0) !== "." &&
+    spec.charAt(0) !== "/" &&
     !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(spec);
   if (bare) {
     // Walk node_modules folders for the package directory.
     let dir = posixDirname(basePath);
     let pkgDir;
     while (true) {
-      const candidate = posixJoin(dir, 'node_modules', spec);
+      const candidate = posixJoin(dir, "node_modules", spec);
       if (_stat(candidate) === 1) {
         pkgDir = candidate;
         break;
@@ -1590,7 +1674,7 @@ function findPackageJSON(specifier, base = 'data:') {
     try {
       targetUrl = new URL(spec, baseFileUrl);
     } catch {
-      throw new TypeError('Invalid URL');
+      throw new TypeError("Invalid URL");
     }
     const target = fileURLToPathShim(targetUrl); // throws ERR_INVALID_URL_SCHEME
     if (_stat(target) < 0) errModuleNotFound(false, target);
@@ -1599,7 +1683,7 @@ function findPackageJSON(specifier, base = 'data:') {
 
   let dir = startDir;
   while (true) {
-    const candidate = posixJoin(dir, 'package.json');
+    const candidate = posixJoin(dir, "package.json");
     if (_stat(candidate) === 0) return candidate;
     const parent = posixDirname(dir);
     if (parent === dir) return undefined;
@@ -1618,38 +1702,42 @@ function emitStripTypesWarning() {
   if (stripTypesWarningEmitted) return;
   stripTypesWarningEmitted = true;
   try {
-    if (typeof process !== 'undefined' &&
-        typeof process.emitWarning === 'function') {
+    if (
+      typeof process !== "undefined" &&
+      typeof process.emitWarning === "function"
+    ) {
       process.emitWarning(
-        'stripTypeScriptTypes is an experimental feature and might ' +
-        'change at any time',
+        "stripTypeScriptTypes is an experimental feature and might " +
+          "change at any time",
         // Real Node: name 'ExperimentalWarning', code undefined.
-        'ExperimentalWarning',
+        "ExperimentalWarning",
       );
     }
-  } catch { /* warning is best-effort */ }
+  } catch {
+    /* warning is best-effort */
+  }
 }
 
 function stripTypeScriptTypes(code, options = {}) {
-  validateString(code, 'code');
-  validateObject(options, 'options');
-  const { mode = 'strip', sourceMap = false, sourceUrl = undefined } = options;
-  if (mode !== 'strip' && mode !== 'transform') {
+  validateString(code, "code");
+  validateObject(options, "options");
+  const { mode = "strip", sourceMap = false, sourceUrl = undefined } = options;
+  if (mode !== "strip" && mode !== "transform") {
     throw typeError(
-      'ERR_INVALID_ARG_VALUE',
+      "ERR_INVALID_ARG_VALUE",
       `The property 'options.mode' must be one of: 'strip', 'transform'. ` +
-      `Received ${inspectValue(mode)}`,
+        `Received ${inspectValue(mode)}`,
     );
   }
   if (sourceMap !== false && sourceMap !== undefined) {
     throw typeError(
-      'ERR_INVALID_ARG_VALUE',
+      "ERR_INVALID_ARG_VALUE",
       `The property 'options.sourceMap' must be one of: false, undefined. ` +
-      `Received ${inspectValue(sourceMap)}`,
+        `Received ${inspectValue(sourceMap)}`,
     );
   }
   if (sourceUrl !== undefined) {
-    validateString(sourceUrl, 'options.sourceUrl');
+    validateString(sourceUrl, "options.sourceUrl");
   }
   // The experimental warning fires after validation, once per process.
   emitStripTypesWarning();
@@ -1686,11 +1774,15 @@ function _preloadModules(_requests) {
 // official tests poke at directly (e.g. Module._pathCache).
 function getRealModule() {
   try {
-    if (typeof process !== 'undefined' &&
-        typeof process.getBuiltinModule === 'function') {
-      return process.getBuiltinModule('module');
+    if (
+      typeof process !== "undefined" &&
+      typeof process.getBuiltinModule === "function"
+    ) {
+      return process.getBuiltinModule("module");
     }
-  } catch { /* browser-fallback lane: no native delegation */ }
+  } catch {
+    /* browser-fallback lane: no native delegation */
+  }
   return undefined;
 }
 
@@ -1706,7 +1798,7 @@ Module._extensions = _extensions;
 // `_pathCache`: official tests reassign it to invalidate real resolution
 // (`Module._pathCache = { __proto__: null }`). In the browser (or the
 // no-delegation lane) it is our own store.
-Object.defineProperty(Module, '_pathCache', {
+Object.defineProperty(Module, "_pathCache", {
   __proto__: null,
   configurable: true,
   enumerable: true,
@@ -1749,7 +1841,7 @@ Module.findPackageJSON = findPackageJSON;
 Module.stripTypeScriptTypes = stripTypeScriptTypes;
 // Back-compat: the previous shim exposed the virtual FS snapshot here.
 // Now a live getter so late-attached runtimes are honored.
-Object.defineProperty(Module, 'fs', {
+Object.defineProperty(Module, "fs", {
   __proto__: null,
   get: getFS,
   configurable: true,

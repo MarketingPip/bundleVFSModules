@@ -13,19 +13,24 @@
 // like tests/sync_require.test.js — these tests extract the exact shipped
 // source and evaluate it.
 
-import { describe, test, expect } from '@jest/globals';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { describe, test, expect } from "@jest/globals";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const RUNTIME_SRC = fs.readFileSync(path.join(__dirname, '..', 'runtime.js'), 'utf8');
+const RUNTIME_SRC = fs.readFileSync(
+  path.join(__dirname, "..", "runtime.js"),
+  "utf8",
+);
 
 function extractBlock(src, startMarker, endMarker) {
   const start = src.indexOf(startMarker);
-  if (start === -1) throw new Error('start marker not found in runtime.js: ' + startMarker);
+  if (start === -1)
+    throw new Error("start marker not found in runtime.js: " + startMarker);
   const end = src.indexOf(endMarker, start);
-  if (end === -1) throw new Error('end marker not found in runtime.js: ' + endMarker);
+  if (end === -1)
+    throw new Error("end marker not found in runtime.js: " + endMarker);
   return src.slice(start, end);
 }
 
@@ -33,107 +38,122 @@ function extractBlock(src, startMarker, endMarker) {
 // `builtinModules` in runtime.js: mostly bare names, a few literal
 // `node:`-prefixed entries, and the RUNTIME: special key.
 const NODE_BUILTINS = [
-  'child_process', 'fs', 'fs/promises', 'test',
-  'node:sea', 'node:sqlite', 'node:test', 'node:test/reporters',
-  'RUNTIME:NODE_GLOBALS',
+  "child_process",
+  "fs",
+  "fs/promises",
+  "test",
+  "node:sea",
+  "node:sqlite",
+  "node:test",
+  "node:test/reporters",
+  "RUNTIME:NODE_GLOBALS",
 ];
 
 function loadNormalizer() {
   const code = extractBlock(
     RUNTIME_SRC,
-    '// --- begin node: builtin normalization (gap #6) ---',
-    '// --- end node: builtin normalization (gap #6) ---'
+    "// --- begin node: builtin normalization (gap #6) ---",
+    "// --- end node: builtin normalization (gap #6) ---",
   );
-  const factory = new Function(code + '\nreturn normalizeBuiltinSpecifier;');
+  const factory = new Function(code + "\nreturn normalizeBuiltinSpecifier;");
   return factory();
 }
 
-describe('normalizeBuiltinSpecifier (gap #6)', () => {
-  test('node:child_process is recognized as the child_process builtin', () => {
+describe("normalizeBuiltinSpecifier (gap #6)", () => {
+  test("node:child_process is recognized as the child_process builtin", () => {
     const normalize = loadNormalizer();
-    expect(normalize('node:child_process', NODE_BUILTINS)).toEqual({
+    expect(normalize("node:child_process", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: true,
-      modulePath: 'child_process',
+      modulePath: "child_process",
     });
   });
 
-  test('node:fs and node:fs/promises normalize to their bundle keys', () => {
+  test("node:fs and node:fs/promises normalize to their bundle keys", () => {
     const normalize = loadNormalizer();
-    expect(normalize('node:fs', NODE_BUILTINS)).toEqual({
+    expect(normalize("node:fs", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: true,
-      modulePath: 'fs',
+      modulePath: "fs",
     });
-    expect(normalize('node:fs/promises', NODE_BUILTINS)).toEqual({
+    expect(normalize("node:fs/promises", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: true,
-      modulePath: 'fs_promises',
+      modulePath: "fs_promises",
     });
   });
 
-  test('bare builtin names still resolve unchanged', () => {
+  test("bare builtin names still resolve unchanged", () => {
     const normalize = loadNormalizer();
-    expect(normalize('child_process', NODE_BUILTINS)).toEqual({
+    expect(normalize("child_process", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: true,
-      modulePath: 'child_process',
+      modulePath: "child_process",
     });
   });
 
-  test('legacy node:-prefixed list entries keep their old mapping', () => {
+  test("legacy node:-prefixed list entries keep their old mapping", () => {
     const normalize = loadNormalizer();
-    expect(normalize('node:test', NODE_BUILTINS)).toEqual({
+    expect(normalize("node:test", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: true,
-      modulePath: 'test',
+      modulePath: "test",
     });
-    expect(normalize('node:test/reporters', NODE_BUILTINS)).toEqual({
+    expect(normalize("node:test/reporters", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: true,
-      modulePath: 'test_reporters',
+      modulePath: "test_reporters",
     });
-    expect(normalize('node:sea', NODE_BUILTINS)).toEqual({
+    expect(normalize("node:sea", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: true,
-      modulePath: 'sea',
+      modulePath: "sea",
     });
   });
 
-  test('RUNTIME:NODE_GLOBALS keeps its RUNTIME_ mapping', () => {
+  test("RUNTIME:NODE_GLOBALS keeps its RUNTIME_ mapping", () => {
     const normalize = loadNormalizer();
-    expect(normalize('RUNTIME:NODE_GLOBALS', NODE_BUILTINS)).toEqual({
+    expect(normalize("RUNTIME:NODE_GLOBALS", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: true,
-      modulePath: 'RUNTIME_NODE_GLOBALS',
+      modulePath: "RUNTIME_NODE_GLOBALS",
     });
   });
 
-  test('non-builtins pass through untouched', () => {
+  test("non-builtins pass through untouched", () => {
     const normalize = loadNormalizer();
-    expect(normalize('./foo.js', NODE_BUILTINS)).toEqual({
+    expect(normalize("./foo.js", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: false,
-      modulePath: './foo.js',
+      modulePath: "./foo.js",
     });
-    expect(normalize('vite', NODE_BUILTINS)).toEqual({
+    expect(normalize("vite", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: false,
-      modulePath: 'vite',
+      modulePath: "vite",
     });
-    expect(normalize('node:nonexistent', NODE_BUILTINS)).toEqual({
+    expect(normalize("node:nonexistent", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: false,
-      modulePath: 'node:nonexistent',
+      modulePath: "node:nonexistent",
     });
-    expect(normalize('https://esm.sh/react', NODE_BUILTINS)).toEqual({
+    expect(normalize("https://esm.sh/react", NODE_BUILTINS)).toEqual({
       isNodeBuiltIn: false,
-      modulePath: 'https://esm.sh/react',
+      modulePath: "https://esm.sh/react",
     });
   });
 });
 
-describe('ImportResolver node: pass-through wiring (gap #6)', () => {
-  test('_transformSource guards node:-prefixed builtins before the CDN fallback', () => {
-    // The guard itself delegates to normalizeBuiltinSpecifier (unit-tested
-    // above); this pins the wiring so a future edit cannot silently drop
-    // the guard and reintroduce the esm.sh 400. The real proof is the
-    // iframe probe (result-gap6.json).
-    const start = RUNTIME_SRC.indexOf('_transformSource(source, kind) {');
+describe("ImportResolver builtin pass-through wiring (gap #6, generalized by gap #5)", () => {
+  test("_transformSource guards recognized builtins before the CDN fallback", () => {
+    // The guard delegates to normalizeBuiltinSpecifier (unit-tested above);
+    // this pins the wiring so a future edit cannot silently drop the guard
+    // and reintroduce the esm.sh 400 (gap #6) or the esm.sh shim
+    // substitution (gap #5). Gap #5 generalized the guard from
+    // `node:`-prefixed to all recognized builtins (Node treats `node:X`
+    // and `X` identically). Behavioral coverage lives in
+    // tests/sync_require_bare_builtins.test.js; the iframe probe is the
+    // real proof.
+    const start = RUNTIME_SRC.indexOf("_transformSource(source, kind) {");
     expect(start).not.toBe(-1);
-    const fallback = RUNTIME_SRC.indexOf('this.cdnBase}', start);
-    const guard = RUNTIME_SRC.indexOf("indexOf('node:') === 0", start);
-    expect(guard).not.toBe(-1);
-    expect(guard).toBeLessThan(fallback);
-    expect(RUNTIME_SRC.slice(guard, fallback)).toContain('normalizeBuiltinSpecifier');
+    const fallback = RUNTIME_SRC.indexOf("this.cdnBase}", start);
+    expect(fallback).not.toBe(-1);
+    const guardRe =
+      /normalizeBuiltinSpecifier\(\s*transformed\s*,\s*builtinModules\s*,?\s*\)/g;
+    guardRe.lastIndex = start;
+    const guardMatch = guardRe.exec(RUNTIME_SRC);
+    expect(guardMatch).not.toBeNull();
+    const guardCall = guardMatch.index;
+    expect(guardCall).toBeLessThan(fallback);
+    expect(RUNTIME_SRC.slice(guardCall, fallback)).toContain("isNodeBuiltIn");
   });
 });

@@ -1,33 +1,39 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 common.skipIfInspectorDisabled();
 
-const { Worker, isMainThread, parentPort, workerData } =
-  require('worker_threads');
+const {
+  Worker,
+  isMainThread,
+  parentPort,
+  workerData,
+} = require("worker_threads");
 
-if (!isMainThread || workerData !== 'launched by test') {
-  common.skip('This test only works on a main thread');
+if (!isMainThread || workerData !== "launched by test") {
+  common.skip("This test only works on a main thread");
 }
 
-const { Session } = require('inspector');
+const { Session } = require("inspector");
 
 const MAX_DEPTH = 3;
 
 let rootWorker = null;
 
-const runTest = common.mustCall(function() {
+const runTest = common.mustCall(function () {
   let reportedWorkersCount = 0;
   const session = new Session();
   session.connect();
-  session.on('NodeWorker.attachedToWorker', common.mustCall(
-    ({ params: { workerInfo } }) => {
+  session.on(
+    "NodeWorker.attachedToWorker",
+    common.mustCall(({ params: { workerInfo } }) => {
       console.log(`Worker ${workerInfo.title} was reported`);
       if (++reportedWorkersCount === MAX_DEPTH) {
         rootWorker.postMessage({ done: true });
       }
-    }, MAX_DEPTH));
-  session.post('NodeWorker.enable', { waitForDebuggerOnStart: false });
+    }, MAX_DEPTH),
+  );
+  session.post("NodeWorker.enable", { waitForDebuggerOnStart: false });
 });
 
 function processMessage({ child }) {
@@ -42,8 +48,8 @@ function workerCallback(message) {
 }
 
 function startWorker(depth, messageCallback) {
-  const worker = new Worker(__filename, { workerData: 'launched by test' });
-  worker.on('message', messageCallback);
+  const worker = new Worker(__filename, { workerData: "launched by test" });
+  worker.on("message", messageCallback);
   worker.postMessage({ depth });
   return worker;
 }
@@ -54,7 +60,7 @@ function runMainThread() {
 
 function runChildWorkerThread() {
   let worker = null;
-  parentPort.on('message', ({ child, depth, done }) => {
+  parentPort.on("message", ({ child, depth, done }) => {
     if (done) {
       if (worker) {
         worker.postMessage({ done: true });

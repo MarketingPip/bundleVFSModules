@@ -19,19 +19,19 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
 // This test verifies that stream.unshift(Buffer.alloc(0)) or
 // stream.unshift('') does not set state.reading=false.
-const Readable = require('stream').Readable;
+const Readable = require("stream").Readable;
 
 const r = new Readable();
 let nChunks = 10;
-const chunk = Buffer.alloc(10, 'x');
+const chunk = Buffer.alloc(10, "x");
 
-r._read = function(n) {
+r._read = function (n) {
   setImmediate(() => {
     r.push(--nChunks === 0 ? null : chunk);
   });
@@ -39,7 +39,7 @@ r._read = function(n) {
 
 let readAll = false;
 const seen = [];
-r.on('readable', () => {
+r.on("readable", () => {
   let chunk;
   while ((chunk = r.read()) !== null) {
     seen.push(chunk.toString());
@@ -48,33 +48,37 @@ r.on('readable', () => {
     // stream, like a parser might do.  We just fill it with
     // 'y' so that it's easy to see which bits were touched,
     // and which were not.
-    const putBack = Buffer.alloc(readAll ? 0 : 5, 'y');
+    const putBack = Buffer.alloc(readAll ? 0 : 5, "y");
     readAll = !readAll;
     r.unshift(putBack);
   }
 });
 
-const expect =
-  [ 'xxxxxxxxxx',
-    'yyyyy',
-    'xxxxxxxxxx',
-    'yyyyy',
-    'xxxxxxxxxx',
-    'yyyyy',
-    'xxxxxxxxxx',
-    'yyyyy',
-    'xxxxxxxxxx',
-    'yyyyy',
-    'xxxxxxxxxx',
-    'yyyyy',
-    'xxxxxxxxxx',
-    'yyyyy',
-    'xxxxxxxxxx',
-    'yyyyy',
-    'xxxxxxxxxx',
-    'yyyyy' ];
+const expect = [
+  "xxxxxxxxxx",
+  "yyyyy",
+  "xxxxxxxxxx",
+  "yyyyy",
+  "xxxxxxxxxx",
+  "yyyyy",
+  "xxxxxxxxxx",
+  "yyyyy",
+  "xxxxxxxxxx",
+  "yyyyy",
+  "xxxxxxxxxx",
+  "yyyyy",
+  "xxxxxxxxxx",
+  "yyyyy",
+  "xxxxxxxxxx",
+  "yyyyy",
+  "xxxxxxxxxx",
+  "yyyyy",
+];
 
-r.on('end', common.mustCall(() => {
-  assert.deepStrictEqual(seen, expect);
-  console.log('ok');
-}));
+r.on(
+  "end",
+  common.mustCall(() => {
+    assert.deepStrictEqual(seen, expect);
+    console.log("ok");
+  }),
+);

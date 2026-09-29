@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 
 function getHeapProfiles(dir) {
   const list = fs.readdirSync(dir);
   return list
-    .filter((file) => file.endsWith('.heapprofile'))
+    .filter((file) => file.endsWith(".heapprofile"))
     .map((file) => path.join(dir, file));
 }
 
@@ -28,7 +28,7 @@ function findFirstFrameInNode(root, func) {
 }
 
 function findFirstFrame(file, func) {
-  const data = fs.readFileSync(file, 'utf8');
+  const data = fs.readFileSync(file, "utf8");
   const profile = JSON.parse(data);
   const first = findFirstFrameInNode(profile.head, func);
   return { frame: first, roots: profile.head.children };
@@ -53,7 +53,7 @@ const TEST_ALLOCATION = kHeapProfInterval * 2;
 const env = {
   ...process.env,
   TEST_ALLOCATION,
-  NODE_DEBUG_NATIVE: 'INSPECTOR_PROFILER',
+  NODE_DEBUG_NATIVE: "INSPECTOR_PROFILER",
 };
 
 // TODO(joyeecheung): share the fixutres with v8 coverage tests

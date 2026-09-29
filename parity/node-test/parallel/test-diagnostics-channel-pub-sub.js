@@ -1,13 +1,13 @@
-'use strict';
+"use strict";
 
-const common = require('../common');
-const dc = require('diagnostics_channel');
-const assert = require('assert');
+const common = require("../common");
+const dc = require("diagnostics_channel");
+const assert = require("assert");
 const { Channel } = dc;
 
-const name = 'test';
+const name = "test";
 const input = {
-  foo: 'bar'
+  foo: "bar",
 };
 
 // Individual channel objects can be created to avoid future lookups
@@ -39,9 +39,12 @@ assert.ok(!channel.hasSubscribers);
 // unsubscribe() should return false when subscriber is not found
 assert.ok(!dc.unsubscribe(name, subscriber));
 
-assert.throws(() => {
-  dc.subscribe(name, null);
-}, { code: 'ERR_INVALID_ARG_TYPE' });
+assert.throws(
+  () => {
+    dc.subscribe(name, null);
+  },
+  { code: "ERR_INVALID_ARG_TYPE" },
+);
 
 // Reaching zero subscribers should not delete from the channels map as there
 // will be no more weakref to incRef if another subscribe happens while the

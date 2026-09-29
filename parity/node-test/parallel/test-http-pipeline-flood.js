@@ -1,5 +1,5 @@
-'use strict';
-const common = require('../common');
+"use strict";
+const common = require("../common");
 
 // Here we are testing the HTTP server module's flood prevention mechanism.
 // When writeable.write returns false (ie the underlying send() indicated the
@@ -17,19 +17,19 @@ const common = require('../common');
 switch (process.argv[2]) {
   case undefined:
     return parent();
-  case 'child':
+  case "child":
     return child();
   default:
     throw new Error(`Unexpected value: ${process.argv[2]}`);
 }
 
 function parent() {
-  const http = require('http');
-  const bigResponse = Buffer.alloc(10240, 'x');
+  const http = require("http");
+  const bigResponse = Buffer.alloc(10240, "x");
   let backloggedReqs = 0;
 
-  const server = http.createServer(function(req, res) {
-    res.setHeader('content-length', bigResponse.length);
+  const server = http.createServer(function (req, res) {
+    res.setHeader("content-length", bigResponse.length);
     if (!res.write(bigResponse)) {
       if (backloggedReqs === 0) {
         // Once the native buffer fills (ie write() returns false), the flood
@@ -38,7 +38,7 @@ function parent() {
         // may still be asked to process more requests if they were read before
         // the flood-prevention mechanism activated.
         setImmediate(() => {
-          req.socket.on('data', common.mustNotCall('Unexpected data received'));
+          req.socket.on("data", common.mustNotCall("Unexpected data received"));
         });
       }
       backloggedReqs++;
@@ -46,24 +46,33 @@ function parent() {
     res.end();
   });
 
-  server.on('connection', common.mustCall());
+  server.on("connection", common.mustCall());
 
-  server.listen(0, common.mustCall(function() {
-    const spawn = require('child_process').spawn;
-    const args = [__filename, 'child', this.address().port];
-    const child = spawn(process.execPath, args, { stdio: 'inherit' });
-    child.on('close', common.mustCall(function() {
-      server.close();
-    }));
+  server.listen(
+    0,
+    common.mustCall(function () {
+      const spawn = require("child_process").spawn;
+      const args = [__filename, "child", this.address().port];
+      const child = spawn(process.execPath, args, { stdio: "inherit" });
+      child.on(
+        "close",
+        common.mustCall(function () {
+          server.close();
+        }),
+      );
 
-    server.setTimeout(200, common.mustCallAtLeast(function() {
-      child.kill();
-    }, 1));
-  }));
+      server.setTimeout(
+        200,
+        common.mustCallAtLeast(function () {
+          child.kill();
+        }, 1),
+      );
+    }),
+  );
 }
 
 function child() {
-  const net = require('net');
+  const net = require("net");
 
   const port = +process.argv[3];
   const conn = net.connect({ port });
@@ -72,12 +81,12 @@ function child() {
 
   req = req.repeat(10240);
 
-  conn.on('connect', write);
+  conn.on("connect", write);
 
   // `drain` should fire once and only once
-  conn.on('drain', common.mustCall(write));
+  conn.on("drain", common.mustCall(write));
 
   function write() {
-    while (false !== conn.write(req, 'ascii'));
+    while (false !== conn.write(req, "ascii"));
   }
 }

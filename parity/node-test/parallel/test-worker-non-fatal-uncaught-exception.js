@@ -1,7 +1,7 @@
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const { Worker } = require('worker_threads');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const { Worker } = require("worker_threads");
 
 // Check that `process._fatalException()` returns a boolean when run inside a
 // worker.
@@ -10,13 +10,16 @@ const { Worker } = require('worker_threads');
 if (!process.env.HAS_STARTED_WORKER) {
   process.env.HAS_STARTED_WORKER = 1;
   const w = new Worker(__filename);
-  w.on('exit', common.mustCall((code) => {
-    assert.strictEqual(code, 0);
-  }));
+  w.on(
+    "exit",
+    common.mustCall((code) => {
+      assert.strictEqual(code, 0);
+    }),
+  );
   return;
 }
 
-process.once('uncaughtException', () => {
+process.once("uncaughtException", () => {
   process.nextTick(() => {
     assert.strictEqual(res, true);
   });

@@ -19,38 +19,39 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const spawn = require('child_process').spawn;
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const spawn = require("child_process").spawn;
 
-if (process.argv[2] === 'parent')
-  parent();
-else
-  grandparent();
+if (process.argv[2] === "parent") parent();
+else grandparent();
 
 function grandparent() {
-  const child = spawn(process.execPath, [__filename, 'parent']);
+  const child = spawn(process.execPath, [__filename, "parent"]);
   child.stderr.pipe(process.stderr);
-  let output = '';
-  const input = 'asdfasdf';
+  let output = "";
+  const input = "asdfasdf";
 
-  child.stdout.on('data', function(chunk) {
+  child.stdout.on("data", function (chunk) {
     output += chunk;
   });
-  child.stdout.setEncoding('utf8');
+  child.stdout.setEncoding("utf8");
 
   child.stdin.end(input);
 
-  child.on('close', common.mustCall((code, signal) => {
-    assert.strictEqual(code, 0);
-    assert.strictEqual(signal, null);
-    // 'cat' on windows adds a \r\n at the end.
-    assert.strictEqual(output.trim(), input.trim());
-  }));
+  child.on(
+    "close",
+    common.mustCall((code, signal) => {
+      assert.strictEqual(code, 0);
+      assert.strictEqual(signal, null);
+      // 'cat' on windows adds a \r\n at the end.
+      assert.strictEqual(output.trim(), input.trim());
+    }),
+  );
 }
 
 function parent() {
   // Should not immediately exit.
-  spawn('cat', [], { stdio: 'inherit' });
+  spawn("cat", [], { stdio: "inherit" });
 }

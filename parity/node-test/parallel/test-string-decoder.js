@@ -19,26 +19,26 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const inspect = require('util').inspect;
-const StringDecoder = require('string_decoder').StringDecoder;
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const inspect = require("util").inspect;
+const StringDecoder = require("string_decoder").StringDecoder;
 
 // Test default encoding
 let decoder = new StringDecoder();
-assert.strictEqual(decoder.encoding, 'utf8');
+assert.strictEqual(decoder.encoding, "utf8");
 
 // Should work without 'new' keyword
 const decoder2 = {};
 StringDecoder.call(decoder2);
-assert.strictEqual(decoder2.encoding, 'utf8');
+assert.strictEqual(decoder2.encoding, "utf8");
 
 // UTF-8
-test('utf-8', Buffer.from('$', 'utf-8'), '$');
-test('utf-8', Buffer.from('¢', 'utf-8'), '¢');
-test('utf-8', Buffer.from('€', 'utf-8'), '€');
-test('utf-8', Buffer.from('𤭢', 'utf-8'), '𤭢');
+test("utf-8", Buffer.from("$", "utf-8"), "$");
+test("utf-8", Buffer.from("¢", "utf-8"), "¢");
+test("utf-8", Buffer.from("€", "utf-8"), "€");
+test("utf-8", Buffer.from("𤭢", "utf-8"), "𤭢");
 // A mixed ascii and non-ascii string
 // Test stolen from deps/v8/test/cctest/test-strings.cc
 // U+02E4 -> CB A4
@@ -47,9 +47,9 @@ test('utf-8', Buffer.from('𤭢', 'utf-8'), '𤭢');
 // U+0030 -> 30
 // U+3045 -> E3 81 85
 test(
-  'utf-8',
-  Buffer.from([0xCB, 0xA4, 0x64, 0xE1, 0x8B, 0xA4, 0x30, 0xE3, 0x81, 0x85]),
-  '\u02e4\u0064\u12e4\u0030\u3045'
+  "utf-8",
+  Buffer.from([0xcb, 0xa4, 0x64, 0xe1, 0x8b, 0xa4, 0x30, 0xe3, 0x81, 0x85]),
+  "\u02e4\u0064\u12e4\u0030\u3045",
 );
 
 // Some invalid input, known to have caused trouble with chunking
@@ -62,159 +62,158 @@ test(
 // F0: 11110|000 four-byte head
 // F1: 11110|001'another four-byte head
 // FB: 111110|11 "five-byte head", not UTF-8
-test('utf-8', Buffer.from('C9B5A941', 'hex'), '\u0275\ufffdA');
-test('utf-8', Buffer.from('E2', 'hex'), '\ufffd');
-test('utf-8', Buffer.from('E241', 'hex'), '\ufffdA');
-test('utf-8', Buffer.from('CCCCB8', 'hex'), '\ufffd\u0338');
-test('utf-8', Buffer.from('F0B841', 'hex'), '\ufffdA');
-test('utf-8', Buffer.from('F1CCB8', 'hex'), '\ufffd\u0338');
-test('utf-8', Buffer.from('F0FB00', 'hex'), '\ufffd\ufffd\0');
-test('utf-8', Buffer.from('CCE2B8B8', 'hex'), '\ufffd\u2e38');
-test('utf-8', Buffer.from('E2B8CCB8', 'hex'), '\ufffd\u0338');
-test('utf-8', Buffer.from('E2FBCC01', 'hex'), '\ufffd\ufffd\ufffd\u0001');
-test('utf-8', Buffer.from('CCB8CDB9', 'hex'), '\u0338\u0379');
+test("utf-8", Buffer.from("C9B5A941", "hex"), "\u0275\ufffdA");
+test("utf-8", Buffer.from("E2", "hex"), "\ufffd");
+test("utf-8", Buffer.from("E241", "hex"), "\ufffdA");
+test("utf-8", Buffer.from("CCCCB8", "hex"), "\ufffd\u0338");
+test("utf-8", Buffer.from("F0B841", "hex"), "\ufffdA");
+test("utf-8", Buffer.from("F1CCB8", "hex"), "\ufffd\u0338");
+test("utf-8", Buffer.from("F0FB00", "hex"), "\ufffd\ufffd\0");
+test("utf-8", Buffer.from("CCE2B8B8", "hex"), "\ufffd\u2e38");
+test("utf-8", Buffer.from("E2B8CCB8", "hex"), "\ufffd\u0338");
+test("utf-8", Buffer.from("E2FBCC01", "hex"), "\ufffd\ufffd\ufffd\u0001");
+test("utf-8", Buffer.from("CCB8CDB9", "hex"), "\u0338\u0379");
 // CESU-8 of U+1D40D
 
 // V8 has changed their invalid UTF-8 handling, see
 // https://chromium-review.googlesource.com/c/v8/v8/+/671020 for more info.
-test('utf-8', Buffer.from('EDA0B5EDB08D', 'hex'),
-     '\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd');
+test(
+  "utf-8",
+  Buffer.from("EDA0B5EDB08D", "hex"),
+  "\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd",
+);
 
 // UCS-2
-test('ucs2', Buffer.from('ababc', 'ucs2'), 'ababc');
+test("ucs2", Buffer.from("ababc", "ucs2"), "ababc");
 
 // UTF-16LE
-test('utf16le', Buffer.from('3DD84DDC', 'hex'), '\ud83d\udc4d'); // thumbs up
+test("utf16le", Buffer.from("3DD84DDC", "hex"), "\ud83d\udc4d"); // thumbs up
 
 // Additional UTF-8 tests
-decoder = new StringDecoder('utf8');
-assert.strictEqual(decoder.write(Buffer.from('E1', 'hex')), '');
+decoder = new StringDecoder("utf8");
+assert.strictEqual(decoder.write(Buffer.from("E1", "hex")), "");
 
 // A quick test for lastChar, lastNeed & lastTotal which are undocumented.
 assert(decoder.lastChar.equals(new Uint8Array([0xe1, 0, 0, 0])));
 assert.strictEqual(decoder.lastNeed, 2);
 assert.strictEqual(decoder.lastTotal, 3);
 
-assert.strictEqual(decoder.end(), '\ufffd');
+assert.strictEqual(decoder.end(), "\ufffd");
 
 // ArrayBufferView tests
-const arrayBufferViewStr = 'String for ArrayBufferView tests\n';
-const inputBuffer = Buffer.from(arrayBufferViewStr.repeat(8), 'utf8');
+const arrayBufferViewStr = "String for ArrayBufferView tests\n";
+const inputBuffer = Buffer.from(arrayBufferViewStr.repeat(8), "utf8");
 for (const expectView of common.getArrayBufferViews(inputBuffer)) {
-  assert.strictEqual(
-    decoder.write(expectView),
-    inputBuffer.toString('utf8')
-  );
-  assert.strictEqual(decoder.end(), '');
+  assert.strictEqual(decoder.write(expectView), inputBuffer.toString("utf8"));
+  assert.strictEqual(decoder.end(), "");
 }
 
-decoder = new StringDecoder('utf8');
-assert.strictEqual(decoder.write(Buffer.from('E18B', 'hex')), '');
-assert.strictEqual(decoder.end(), '\ufffd');
+decoder = new StringDecoder("utf8");
+assert.strictEqual(decoder.write(Buffer.from("E18B", "hex")), "");
+assert.strictEqual(decoder.end(), "\ufffd");
 
-decoder = new StringDecoder('utf8');
-assert.strictEqual(decoder.write(Buffer.from('\ufffd')), '\ufffd');
-assert.strictEqual(decoder.end(), '');
+decoder = new StringDecoder("utf8");
+assert.strictEqual(decoder.write(Buffer.from("\ufffd")), "\ufffd");
+assert.strictEqual(decoder.end(), "");
 
-decoder = new StringDecoder('utf8');
-assert.strictEqual(decoder.write(Buffer.from('\ufffd\ufffd\ufffd')),
-                   '\ufffd\ufffd\ufffd');
-assert.strictEqual(decoder.end(), '');
+decoder = new StringDecoder("utf8");
+assert.strictEqual(
+  decoder.write(Buffer.from("\ufffd\ufffd\ufffd")),
+  "\ufffd\ufffd\ufffd",
+);
+assert.strictEqual(decoder.end(), "");
 
-decoder = new StringDecoder('utf8');
-assert.strictEqual(decoder.write(Buffer.from('EFBFBDE2', 'hex')), '\ufffd');
-assert.strictEqual(decoder.end(), '\ufffd');
+decoder = new StringDecoder("utf8");
+assert.strictEqual(decoder.write(Buffer.from("EFBFBDE2", "hex")), "\ufffd");
+assert.strictEqual(decoder.end(), "\ufffd");
 
-decoder = new StringDecoder('utf8');
-assert.strictEqual(decoder.write(Buffer.from('F1', 'hex')), '');
-assert.strictEqual(decoder.write(Buffer.from('41F2', 'hex')), '\ufffdA');
-assert.strictEqual(decoder.end(), '\ufffd');
+decoder = new StringDecoder("utf8");
+assert.strictEqual(decoder.write(Buffer.from("F1", "hex")), "");
+assert.strictEqual(decoder.write(Buffer.from("41F2", "hex")), "\ufffdA");
+assert.strictEqual(decoder.end(), "\ufffd");
 
 // Additional utf8Text test
-decoder = new StringDecoder('utf8');
-assert.strictEqual(decoder.text(Buffer.from([0x41]), 2), '');
+decoder = new StringDecoder("utf8");
+assert.strictEqual(decoder.text(Buffer.from([0x41]), 2), "");
 
 // Additional UTF-16LE surrogate pair tests
-decoder = new StringDecoder('utf16le');
-assert.strictEqual(decoder.write(Buffer.from('3DD8', 'hex')), '');
-assert.strictEqual(decoder.write(Buffer.from('4D', 'hex')), '');
-assert.strictEqual(decoder.write(Buffer.from('DC', 'hex')), '\ud83d\udc4d');
-assert.strictEqual(decoder.end(), '');
+decoder = new StringDecoder("utf16le");
+assert.strictEqual(decoder.write(Buffer.from("3DD8", "hex")), "");
+assert.strictEqual(decoder.write(Buffer.from("4D", "hex")), "");
+assert.strictEqual(decoder.write(Buffer.from("DC", "hex")), "\ud83d\udc4d");
+assert.strictEqual(decoder.end(), "");
 
-decoder = new StringDecoder('utf16le');
-assert.strictEqual(decoder.write(Buffer.from('3DD8', 'hex')), '');
-assert.strictEqual(decoder.end(), '\ud83d');
+decoder = new StringDecoder("utf16le");
+assert.strictEqual(decoder.write(Buffer.from("3DD8", "hex")), "");
+assert.strictEqual(decoder.end(), "\ud83d");
 
-decoder = new StringDecoder('utf16le');
-assert.strictEqual(decoder.write(Buffer.from('3DD8', 'hex')), '');
-assert.strictEqual(decoder.write(Buffer.from('4D', 'hex')), '');
-assert.strictEqual(decoder.end(), '\ud83d');
+decoder = new StringDecoder("utf16le");
+assert.strictEqual(decoder.write(Buffer.from("3DD8", "hex")), "");
+assert.strictEqual(decoder.write(Buffer.from("4D", "hex")), "");
+assert.strictEqual(decoder.end(), "\ud83d");
 
-decoder = new StringDecoder('utf16le');
-assert.strictEqual(decoder.write(Buffer.from('3DD84D', 'hex')), '\ud83d');
-assert.strictEqual(decoder.end(), '');
+decoder = new StringDecoder("utf16le");
+assert.strictEqual(decoder.write(Buffer.from("3DD84D", "hex")), "\ud83d");
+assert.strictEqual(decoder.end(), "");
 
 // Regression test for https://github.com/nodejs/node/issues/22358
 // (unaligned UTF-16 access).
-decoder = new StringDecoder('utf16le');
-assert.strictEqual(decoder.write(Buffer.alloc(1)), '');
-assert.strictEqual(decoder.write(Buffer.alloc(20)), '\0'.repeat(10));
-assert.strictEqual(decoder.write(Buffer.alloc(48)), '\0'.repeat(24));
-assert.strictEqual(decoder.end(), '');
+decoder = new StringDecoder("utf16le");
+assert.strictEqual(decoder.write(Buffer.alloc(1)), "");
+assert.strictEqual(decoder.write(Buffer.alloc(20)), "\0".repeat(10));
+assert.strictEqual(decoder.write(Buffer.alloc(48)), "\0".repeat(24));
+assert.strictEqual(decoder.end(), "");
 
 // Regression tests for https://github.com/nodejs/node/issues/22626
 // (not enough replacement chars when having seen more than one byte of an
 // incomplete multibyte characters).
-decoder = new StringDecoder('utf8');
-assert.strictEqual(decoder.write(Buffer.from('f69b', 'hex')), '');
-assert.strictEqual(decoder.write(Buffer.from('d1', 'hex')), '\ufffd\ufffd');
-assert.strictEqual(decoder.end(), '\ufffd');
-assert.strictEqual(decoder.write(Buffer.from('f4', 'hex')), '');
-assert.strictEqual(decoder.write(Buffer.from('bde5', 'hex')), '\ufffd\ufffd');
-assert.strictEqual(decoder.end(), '\ufffd');
+decoder = new StringDecoder("utf8");
+assert.strictEqual(decoder.write(Buffer.from("f69b", "hex")), "");
+assert.strictEqual(decoder.write(Buffer.from("d1", "hex")), "\ufffd\ufffd");
+assert.strictEqual(decoder.end(), "\ufffd");
+assert.strictEqual(decoder.write(Buffer.from("f4", "hex")), "");
+assert.strictEqual(decoder.write(Buffer.from("bde5", "hex")), "\ufffd\ufffd");
+assert.strictEqual(decoder.end(), "\ufffd");
 
-assert.throws(
-  () => new StringDecoder(1),
-  {
-    code: 'ERR_UNKNOWN_ENCODING',
-    name: 'TypeError',
-    message: 'Unknown encoding: 1'
-  }
-);
+assert.throws(() => new StringDecoder(1), {
+  code: "ERR_UNKNOWN_ENCODING",
+  name: "TypeError",
+  message: "Unknown encoding: 1",
+});
 
-assert.throws(
-  () => new StringDecoder('test'),
-  {
-    code: 'ERR_UNKNOWN_ENCODING',
-    name: 'TypeError',
-    message: 'Unknown encoding: test'
-  }
-);
+assert.throws(() => new StringDecoder("test"), {
+  code: "ERR_UNKNOWN_ENCODING",
+  name: "TypeError",
+  message: "Unknown encoding: test",
+});
 
-assert.throws(
-  () => new StringDecoder('utf8').write(null),
-  {
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError',
-    message: 'The "buf" argument must be an instance of Buffer, TypedArray,' +
-      ' or DataView. Received null'
-  }
-);
+assert.throws(() => new StringDecoder("utf8").write(null), {
+  code: "ERR_INVALID_ARG_TYPE",
+  name: "TypeError",
+  message:
+    'The "buf" argument must be an instance of Buffer, TypedArray,' +
+    " or DataView. Received null",
+});
 
 if (common.enoughTestMem) {
   assert.throws(
-    () => new StringDecoder().write(Buffer.alloc((process.arch === 'ia32' ? 0x18ffffe8 : 0x1fffffe8) + 1).fill('a')),
+    () =>
+      new StringDecoder().write(
+        Buffer.alloc(
+          (process.arch === "ia32" ? 0x18ffffe8 : 0x1fffffe8) + 1,
+        ).fill("a"),
+      ),
     {
-      code: 'ERR_STRING_TOO_LONG',
-    }
+      code: "ERR_STRING_TOO_LONG",
+    },
   );
 }
 
 assert.throws(
-  () => new StringDecoder('utf8').__proto__.write(Buffer.from('abc')), // eslint-disable-line no-proto
+  () => new StringDecoder("utf8").__proto__.write(Buffer.from("abc")), // eslint-disable-line no-proto
   {
-    code: 'ERR_INVALID_THIS',
-  }
+    code: "ERR_INVALID_THIS",
+  },
 );
 
 // Test verifies that StringDecoder will correctly decode the given input
@@ -232,7 +231,7 @@ function test(encoding, input, expected, singleSequence) {
   const hexNumberRE = /.{2}/g;
   sequences.forEach((sequence) => {
     const decoder = new StringDecoder(encoding);
-    let output = '';
+    let output = "";
     sequence.forEach((write) => {
       output += decoder.write(input.slice(write[0], write[1]));
     });
@@ -241,7 +240,7 @@ function test(encoding, input, expected, singleSequence) {
       const message =
         `Expected "${unicodeEscape(expected)}", ` +
         `but got "${unicodeEscape(output)}"\n` +
-        `input: ${input.toString('hex').match(hexNumberRE)}\n` +
+        `input: ${input.toString("hex").match(hexNumberRE)}\n` +
         `Write sequence: ${JSON.stringify(sequence)}\n` +
         `Full Decoder State: ${inspect(decoder)}`;
       assert.fail(message);
@@ -251,7 +250,7 @@ function test(encoding, input, expected, singleSequence) {
 
 // unicodeEscape prints the str contents as unicode escape codes.
 function unicodeEscape(str) {
-  let r = '';
+  let r = "";
   for (let i = 0; i < str.length; i++) {
     r += `\\u${str.charCodeAt(i).toString(16)}`;
   }

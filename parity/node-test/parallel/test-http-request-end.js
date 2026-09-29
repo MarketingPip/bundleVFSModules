@@ -19,42 +19,54 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
-const http = require('http');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
+const http = require("http");
 
-const expected = 'Post Body For Test';
+const expected = "Post Body For Test";
 const expectedStatusCode = 200;
 
-const server = http.Server(common.mustCallAtLeast(function(req, res) {
-  let result = '';
+const server = http.Server(
+  common.mustCallAtLeast(function (req, res) {
+    let result = "";
 
-  req.setEncoding('utf8');
-  req.on('data', function(chunk) {
-    result += chunk;
-  });
+    req.setEncoding("utf8");
+    req.on("data", function (chunk) {
+      result += chunk;
+    });
 
-  req.on('end', common.mustCall(() => {
-    assert.strictEqual(result, expected);
-    res.writeHead(expectedStatusCode);
-    res.end('hello world\n');
-    server.close();
-  }));
+    req.on(
+      "end",
+      common.mustCall(() => {
+        assert.strictEqual(result, expected);
+        res.writeHead(expectedStatusCode);
+        res.end("hello world\n");
+        server.close();
+      }),
+    );
+  }),
+);
 
-}));
+server.listen(
+  0,
+  common.mustCall(function () {
+    const req = http
+      .request(
+        {
+          port: this.address().port,
+          path: "/",
+          method: "POST",
+        },
+        common.mustCall((res) => {
+          assert.strictEqual(res.statusCode, expectedStatusCode);
+          res.resume();
+        }),
+      )
+      .on("error", common.mustNotCall());
 
-server.listen(0, common.mustCall(function() {
-  const req = http.request({
-    port: this.address().port,
-    path: '/',
-    method: 'POST'
-  }, common.mustCall((res) => {
-    assert.strictEqual(res.statusCode, expectedStatusCode);
-    res.resume();
-  })).on('error', common.mustNotCall());
+    const result = req.end(expected);
 
-  const result = req.end(expected);
-
-  assert.strictEqual(req, result);
-}));
+    assert.strictEqual(req, result);
+  }),
+);

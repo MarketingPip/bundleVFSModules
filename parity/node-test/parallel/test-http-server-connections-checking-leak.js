@@ -1,14 +1,14 @@
-'use strict';
+"use strict";
 
 // Flags: --expose-gc
 
 // Check that creating a server without listening does not leak resources.
 
-require('../common');
-const { onGC } = require('../common/gc');
-const Countdown = require('../common/countdown');
+require("../common");
+const { onGC } = require("../common/gc");
+const Countdown = require("../common/countdown");
 
-const http = require('http');
+const http = require("http");
 const max = 100;
 
 // Note that Countdown internally calls common.mustCall, that's why it's not done here.

@@ -19,13 +19,13 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const common = require('../common');
-const assert = require('assert');
+"use strict";
+const common = require("../common");
+const assert = require("assert");
 
-const http = require('http');
+const http = require("http");
 
-const Stream = require('stream');
+const Stream = require("stream");
 
 function getSrc() {
   // An old-style readable stream.
@@ -34,23 +34,22 @@ function getSrc() {
 
   // Start out paused, just so we don't miss anything yet.
   let paused = false;
-  src.pause = function() {
+  src.pause = function () {
     paused = true;
   };
-  src.resume = function() {
+  src.resume = function () {
     paused = false;
   };
 
-  const chunks = [ '', 'asdf', '', 'foo', '', 'bar', '' ];
-  const interval = setInterval(function() {
-    if (paused)
-      return;
+  const chunks = ["", "asdf", "", "foo", "", "bar", ""];
+  const interval = setInterval(function () {
+    if (paused) return;
 
     const chunk = chunks.shift();
     if (chunk !== undefined) {
-      src.emit('data', chunk);
+      src.emit("data", chunk);
     } else {
-      src.emit('end');
+      src.emit("end");
       clearInterval(interval);
     }
   }, 1);
@@ -58,37 +57,50 @@ function getSrc() {
   return src;
 }
 
+const expect = "asdffoobar";
 
-const expect = 'asdffoobar';
-
-const server = http.createServer(common.mustCall((req, res) => {
-  let actual = '';
-  req.setEncoding('utf8');
-  req.on('data', function(c) {
-    actual += c;
-  });
-  req.on('end', common.mustCall(() => {
-    assert.strictEqual(actual, expect);
-    getSrc().pipe(res);
-  }));
-  server.close();
-}));
-
-server.listen(0, common.mustCall(function() {
-  const req = http.request({ port: this.address().port, method: 'POST' });
-  let actual = '';
-  req.on('response', common.mustCall((res) => {
-    res.setEncoding('utf8');
-    res.on('data', function(c) {
+const server = http.createServer(
+  common.mustCall((req, res) => {
+    let actual = "";
+    req.setEncoding("utf8");
+    req.on("data", function (c) {
       actual += c;
     });
-    res.on('end', common.mustCall(() => {
-      assert.strictEqual(actual, expect);
-    }));
-  }));
-  getSrc().pipe(req);
-}));
+    req.on(
+      "end",
+      common.mustCall(() => {
+        assert.strictEqual(actual, expect);
+        getSrc().pipe(res);
+      }),
+    );
+    server.close();
+  }),
+);
 
-process.on('exit', function(c) {
-  if (!c) console.log('ok');
+server.listen(
+  0,
+  common.mustCall(function () {
+    const req = http.request({ port: this.address().port, method: "POST" });
+    let actual = "";
+    req.on(
+      "response",
+      common.mustCall((res) => {
+        res.setEncoding("utf8");
+        res.on("data", function (c) {
+          actual += c;
+        });
+        res.on(
+          "end",
+          common.mustCall(() => {
+            assert.strictEqual(actual, expect);
+          }),
+        );
+      }),
+    );
+    getSrc().pipe(req);
+  }),
+);
+
+process.on("exit", function (c) {
+  if (!c) console.log("ok");
 });

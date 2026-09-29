@@ -19,44 +19,49 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'use strict';
-const {
-  mustCall,
-  mustCallAtLeast,
-  mustNotCall,
-} = require('../common');
-const assert = require('assert');
-const debug = require('util').debuglog('test');
-const spawn = require('child_process').spawn;
+"use strict";
+const { mustCall, mustCallAtLeast, mustNotCall } = require("../common");
+const assert = require("assert");
+const debug = require("util").debuglog("test");
+const spawn = require("child_process").spawn;
 
-const cat = spawn('cat');
-cat.stdin.write('hello');
-cat.stdin.write(' ');
-cat.stdin.write('world');
+const cat = spawn("cat");
+cat.stdin.write("hello");
+cat.stdin.write(" ");
+cat.stdin.write("world");
 
 assert.strictEqual(cat.stdin.writable, true);
 assert.strictEqual(cat.stdin.readable, false);
 
 cat.stdin.end();
 
-let response = '';
+let response = "";
 
-cat.stdout.setEncoding('utf8');
-cat.stdout.on('data', mustCallAtLeast((chunk) => {
-  debug(`stdout: ${chunk}`);
-  response += chunk;
-}));
+cat.stdout.setEncoding("utf8");
+cat.stdout.on(
+  "data",
+  mustCallAtLeast((chunk) => {
+    debug(`stdout: ${chunk}`);
+    response += chunk;
+  }),
+);
 
-cat.stdout.on('end', mustCall());
+cat.stdout.on("end", mustCall());
 
-cat.stderr.on('data', mustNotCall());
+cat.stderr.on("data", mustNotCall());
 
-cat.stderr.on('end', mustCall());
+cat.stderr.on("end", mustCall());
 
-cat.on('exit', mustCall((status) => {
-  assert.strictEqual(status, 0);
-}));
+cat.on(
+  "exit",
+  mustCall((status) => {
+    assert.strictEqual(status, 0);
+  }),
+);
 
-cat.on('close', mustCall(() => {
-  assert.strictEqual(response, 'hello world');
-}));
+cat.on(
+  "close",
+  mustCall(() => {
+    assert.strictEqual(response, "hello world");
+  }),
+);
