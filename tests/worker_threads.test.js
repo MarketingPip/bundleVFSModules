@@ -1,11 +1,4 @@
-import {
-  jest,
-  describe,
-  test,
-  expect,
-  beforeAll,
-  afterAll,
-} from "@jest/globals";
+import { describe, test, expect } from "@jest/globals";
 import vm from "node:vm";
 
 // ---------------------------------------------------------------------------
@@ -84,8 +77,16 @@ class FakeWorker {
     this._mainListeners = new Map(); // main-side listeners (the shim's)
     this._selfListeners = new Map(); // worker-side `self` listeners
     const code = blobCodes.get(url);
-    if (code === undefined)
-      throw new Error(`FakeWorker: unknown blob URL ${url}`);
+    if (code === undefined) {
+      // Faithful to real browsers: `new Worker(unknownUrl)` does NOT throw
+      // synchronously. The load fails asynchronously with an 'error' event
+      // whose `error` is null (hence the generic message) and `filename`
+      // set — exactly the shape that produced gap #9's "Worker error".
+      queueMicrotask(() =>
+        this._emitMain("error", { error: null, message: "", filename: url }),
+      );
+      return;
+    }
     // Defer so the shim can attach its listeners first (mirrors real Worker).
     setImmediate(() => this._start(code));
   }
@@ -101,7 +102,7 @@ class FakeWorker {
     for (const fn of [...(this._mainListeners.get(type) ?? [])]) fn(event);
   }
   // main -> worker
-  postMessage(data, transfer) {
+  postMessage(data) {
     queueMicrotask(() => {
       if (this.terminated) return;
       for (const fn of [...(this._selfListeners.get("message") ?? [])])
@@ -366,5 +367,179 @@ describe("worker_threads browser implementation (native bridge disabled)", () =>
   test("native bridge is genuinely disabled in this file", () => {
     // The Worker under test is the browser implementation, not Node's.
     expect(Worker.name).toBe("BrowserWorker");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gap #9 (red-first): URL-mode workers must resolve VFS-relative filenames
+// through the virtual filesystem instead of handing the raw path to the
+// native Worker. The native Worker resolves it against the HTTP origin
+// (http://host/probe/worker-task.js -> 404), the load failure carries no
+// e.error, and the shim fell back to a generic "Worker error" + exit 1.
+// ---------------------------------------------------------------------------
+describe("worker_threads URL-mode VFS resolution (gap #9)", () => {
+  const VFS_FILES = {
+    "/probe/worker-task.js": `parentPort.postMessage('task-ok:' + workerData);`,
+    "/probe/boom.js": `throw new Error('task-boom');`,
+    "/probe/echo.js": `parentPort.on('message', (m) => parentPort.postMessage(String(m).toUpperCase()));`,
+    "/probe/ids.js": `parentPort.postMessage({ threadId, threadName, isMainThread });`,
+    // The true E2E probe's task file style: require('worker_threads').
+    "/probe/require-style.js": `
+      const { parentPort, workerData } = require('worker_threads');
+      parentPort.postMessage({ fromWorker: true, wd: workerData });
+    `,
+    "/probe/require-bad.js": `require('fs');`,
+  };
+
+  // Installs a fake sandbox runtime exposing only __FS__.readFileSync.
+  function withFakeVfs(fn) {
+    const prev = globalThis._RUNTIME_;
+    globalThis._RUNTIME_ = {
+      __FS__: {
+        readFileSync: (p) => {
+          if (Object.hasOwn(VFS_FILES, p)) return VFS_FILES[p];
+          const e = new Error(`ENOENT: no such file or directory, open '${p}'`);
+          e.code = "ENOENT";
+          throw e;
+        },
+      },
+    };
+    return Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        if (prev === undefined) delete globalThis._RUNTIME_;
+        else globalThis._RUNTIME_ = prev;
+      });
+  }
+
+  test("relative filename resolves against the VFS and the task runs", async () => {
+    await withFakeVfs(async () => {
+      const w = new Worker("./probe/worker-task.js", { workerData: 7 });
+      // Attach every waiter up front: T_EXIT is emitted in the same
+      // microtask flush as the final message, so a later once('exit')
+      // would miss it.
+      const msgP = once(w, "message");
+      const exitP = once(w, "exit");
+      const [msg] = await msgP;
+      expect(msg).toBe("task-ok:7");
+      const [code] = await exitP;
+      expect(code).toBe(0);
+    });
+  });
+
+  test("absolute VFS path also resolves", async () => {
+    await withFakeVfs(async () => {
+      const w = new Worker("/probe/worker-task.js", { workerData: 3 });
+      const msgP = once(w, "message");
+      const exitP = once(w, "exit");
+      const [msg] = await msgP;
+      expect(msg).toBe("task-ok:3");
+      const [code] = await exitP;
+      expect(code).toBe(0);
+    });
+  });
+
+  test("throwing VFS task emits error with the REAL message before exit 1", async () => {
+    await withFakeVfs(async () => {
+      const w = new Worker("./probe/boom.js");
+      const events = [];
+      const exitP = once(w, "exit");
+      w.on("error", (e) => events.push(["error", e.message]));
+      w.on("exit", (c) => events.push(["exit", c]));
+      await exitP;
+      await new Promise((r) => setTimeout(r, 20)); // a late error would be wrong
+      expect(events).toEqual([
+        ["error", "task-boom"],
+        ["exit", 1],
+      ]);
+    });
+  });
+
+  test("main -> worker messaging works in VFS file mode", async () => {
+    await withFakeVfs(async () => {
+      const w = new Worker("./probe/echo.js");
+      await Promise.race([once(w, "online"), once(w, "exit")]);
+      w.postMessage("ping");
+      const [msg] = await once(w, "message");
+      expect(msg).toBe("PING");
+      await w.terminate();
+    });
+  });
+
+  test("threadId/threadName/isMainThread locals are injected in file mode", async () => {
+    await withFakeVfs(async () => {
+      const w = new Worker("./probe/ids.js", { name: "id-worker" });
+      const msgP = once(w, "message");
+      const exitP = once(w, "exit");
+      const [msg] = await msgP;
+      expect(msg.threadId).toBe(w.threadId);
+      expect(msg.threadName).toBe("id-worker");
+      expect(w.threadName).toBe("id-worker");
+      expect(msg.isMainThread).toBe(false);
+      const [code] = await exitP;
+      expect(code).toBe(0);
+    });
+  });
+
+  test("eval-mode uncaught error emits the real error before exit", async () => {
+    const w = new Worker(`throw new Error('eval-boom');`, { eval: true });
+    const events = [];
+    const exitP = once(w, "exit");
+    w.on("error", (e) => events.push(["error", e.message]));
+    w.on("exit", (c) => events.push(["exit", c]));
+    await exitP;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(events).toEqual([
+      ["error", "eval-boom"],
+      ["exit", 1],
+    ]);
+  });
+
+  test('require("worker_threads") in the task file resolves to the locals', async () => {
+    await withFakeVfs(async () => {
+      const w = new Worker("./probe/require-style.js", { workerData: 11 });
+      const msgP = once(w, "message");
+      const exitP = once(w, "exit");
+      const [msg] = await msgP;
+      expect(msg).toEqual({ fromWorker: true, wd: 11 });
+      const [code] = await exitP;
+      expect(code).toBe(0);
+    });
+  });
+
+  test("require() of anything else throws MODULE_NOT_FOUND with the real message", async () => {
+    await withFakeVfs(async () => {
+      const w = new Worker("./probe/require-bad.js");
+      const errP = once(w, "error");
+      const exitP = once(w, "exit");
+      const [err] = await errP;
+      expect(String(err.message)).toMatch(/Cannot find module 'fs'/);
+      const [code] = await exitP;
+      expect(code).toBe(1);
+    });
+  });
+
+  test("absolute http(s) URLs bypass the VFS (passthrough) with a useful error", async () => {
+    await withFakeVfs(async () => {
+      const w = new Worker("https://example.com/worker.js");
+      const errP = once(w, "error");
+      const exitP = once(w, "exit");
+      const [err] = await errP;
+      expect(String(err.message)).toMatch(/example\.com\/worker\.js/);
+      expect(String(err.message)).not.toMatch(/^Worker error$/);
+      const [code] = await exitP;
+      expect(code).toBe(1);
+    });
+  });
+
+  test("relative path missing from the VFS falls back to URL passthrough", async () => {
+    await withFakeVfs(async () => {
+      const w = new Worker("./probe/does-not-exist.js");
+      const errP = once(w, "error");
+      const exitP = once(w, "exit");
+      const [err] = await errP;
+      expect(String(err.message)).toMatch(/does-not-exist/);
+      await exitP;
+    });
   });
 });
