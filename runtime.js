@@ -5122,6 +5122,47 @@ function unflattenUserFiles(flatObj) {
   return result;
 }
 
+/**
+ * Resolves a require() request to an absolute VFS path (Node.js semantics).
+ * Used by both syncRequire() and syncRequire.resolve().
+ * - Relative requests (./, ../) resolve against parentPath's directory
+ * - Absolute requests (/) are used as-is
+ * - Appends .js extension if not present
+ * - Bare specifiers throw ERR_MODULE_NOT_FOUND (TODO: node_modules walk)
+ */
+function resolveSyncRequest(request, parentPath) {
+  if (request.startsWith('./') || request.startsWith('../') || request.startsWith('/')) {
+    // Absolute requests ignore the parent directory (Node semantics: an
+    // absolute require() path is used as-is).
+    const joined = request.startsWith('/')
+      ? request
+      : (parentPath ? parentPath.split('/').slice(0, -1).join('/') : '') + '/' + request;
+    const isAbs = joined.charAt(0) === '/';
+    const parts = joined.split('/');
+    const normalized = [];
+    for (const p of parts) {
+      if (p === '..') normalized.pop();
+      else if (p !== '.' && p !== '') normalized.push(p);
+    }
+    // Preserve the leading slash. VFS paths are absolute; dropping it
+    // produced relative resolved paths and non-canonical __filename
+    // values (e.g. picomatch's require('./scan') resolving to lib/scan.js
+    // instead of /node_modules/picomatch/lib/scan.js).
+    let resolved = (isAbs ? '/' : '') + normalized.join('/');
+    // Try .js extension
+    if (!resolved.endsWith('.js')) {
+      resolved = resolved + '.js';
+    }
+    return resolved;
+  } else {
+    // Bare specifier (node_modules): simplified resolution
+    // TODO: full node_modules walk with package.json exports
+    const err = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
+    err.code = 'ERR_MODULE_NOT_FOUND';
+    throw err;
+  }
+}
+
 function createSyncRequire(parentPath, vfs, cache) {
   // One cache shared across the whole require tree (passed down to recursive
   // requires). A fresh Map per recursion would break cache identity and turn
@@ -5145,34 +5186,13 @@ function createSyncRequire(parentPath, vfs, cache) {
     }
     
     // 2. Resolve path (relative/absolute)
+    // Uses resolveSyncRequest for Node.js-compatible path resolution.
+    // Bare specifiers (node_modules) throw ERR_MODULE_NOT_FOUND (TODO: full
+    // node_modules walk with package.json exports).
     let resolved;
-    if (request.startsWith('./') || request.startsWith('../') || request.startsWith('/')) {
-      // Absolute requests ignore the parent directory (Node semantics: an
-      // absolute require() path is used as-is).
-      const joined = request.startsWith('/')
-        ? request
-        : (parentPath ? parentPath.split('/').slice(0, -1).join('/') : '') + '/' + request;
-      const isAbs = joined.charAt(0) === '/';
-      const parts = joined.split('/');
-      const normalized = [];
-      for (const p of parts) {
-        if (p === '..') normalized.pop();
-        else if (p !== '.' && p !== '') normalized.push(p);
-      }
-      // Preserve the leading slash. VFS paths are absolute; dropping it
-      // produced relative resolved paths and non-canonical __filename
-      // values (e.g. picomatch's require('./scan') resolving to lib/scan.js
-      // instead of /node_modules/picomatch/lib/scan.js).
-      resolved = (isAbs ? '/' : '') + normalized.join('/');
-      // Try .js extension
-      if (!resolved.endsWith('.js')) {
-        const withJs = resolved + '.js';
-        // Check VFS for existence (simplified)
-        resolved = withJs; // assume .js for now
-      }
-    } else {
-      // Bare specifier (node_modules): simplified resolution
-      // TODO: full node_modules walk with package.json exports
+    try {
+      resolved = resolveSyncRequest(request, parentPath);
+    } catch (err) {
       throw new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
     }
     
@@ -5192,11 +5212,17 @@ function createSyncRequire(parentPath, vfs, cache) {
     cache.set(resolved, module);
     
     // 6. Wrap and execute
+    // Node.js CJS semantics: 'this' at module top-level === 'module.exports'.
+    // Invoke via .call(module.exports, ...) so 'this' is correct. A plain
+    // wrapper(...) call would make 'this' undefined (strict) or globalThis
+    // (sloppy), breaking 'this.foo = bar' (should set module.exports.foo,
+    // not a global).
     const wrapper = new Function('require', 'module', 'exports', '__filename', '__dirname',
       source + String.fromCharCode(10) + '//# sourceURL=' + resolved);
     const dirname = resolved.split('/').slice(0, -1).join('/') || '.';
     try {
-      wrapper(
+      wrapper.call(
+        module.exports, // 'this' === module.exports (Node CJS parity)
         createSyncRequire(resolved, vfs, cache), // recursive require shares the cache
         module,
         module.exports,
@@ -5212,7 +5238,16 @@ function createSyncRequire(parentPath, vfs, cache) {
   }
   
   syncRequire.cache = cache;
-  syncRequire.resolve = (request) => request; // simplified
+  // Node.js parity: require.resolve() locates the module entry point on
+  // the VFS without loading it. Uses the same resolution logic as require().
+  syncRequire.resolve = (request) => {
+    // Builtins resolve to their specifier (Node returns the builtin name).
+    let builtinKey = request.startsWith('node:') ? request.slice(5) : request;
+    if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
+      return request;
+    }
+    return resolveSyncRequest(request, parentPath);
+  };
   return syncRequire;
 }
 
@@ -5220,17 +5255,25 @@ function wrapCommonJS(source, parentPath, vfs) {
   // The require function is provided at module instantiation time via
   // the runtime's sync require. For ESM-converted CJS, we embed a
   // placeholder that gets replaced with the real require.
+  //
+  // Node.js CJS semantics:
+  // - 'this' at module top-level === 'module.exports' (via .call)
+  // - '__filename' and '__dirname' are available
+  const filename = parentPath;
+  const dirname = parentPath.split('/').slice(0, -1).join('/') || '.';
   return \`
 const exports = {};
 const module = { exports };
+const __filename = \${JSON.stringify(filename)};
+const __dirname = \${JSON.stringify(dirname)};
 // Sync require is provided by the runtime via __syncRequire__
-const require = typeof __syncRequire__ !== 'undefined' 
-  ? __syncRequire__ 
+const require = typeof __syncRequire__ !== 'undefined'
+  ? __syncRequire__
   : (() => { throw new Error('[ERR_REQUIRE_NOT_SUPPORTED]: sync require not available in this context'); });
 
-(function (require, module, exports) {
+(function (require, module, exports, __filename, __dirname) {
   \${source}
-})(require, module, exports);
+}).call(module.exports, require, module, exports, __filename, __dirname);
 
 export default module.exports;
 \`;
