@@ -35,6 +35,13 @@ unimplementable-in-browser APIs stay honest noop stubs, never throws.
   (`__exportStar`, multi-assignment exports, bare-`exports` detection) in
   the transformer; M4 re-verified stub-free with real `expect-type@1.4.0`
   (PR #132).
+- **VFS-aware `require.resolve`** (2026-09-29, PR #136): the sync-require
+  resolver replaced blind `.js`-appending with Node CJS semantics —
+  LOAD_AS_FILE (exact, `.js`, `.json`), LOAD_AS_DIRECTORY (`package.json`
+  `main`, `index.js`/`index.json`), bare specifiers walking `node_modules`
+  upward (nearest wins, mirroring `src/module.js`), live-memfs-first
+  probing, JSON via `JSON.parse`, `require.resolve()` without execution.
+  18/18 new unit tests (TDD red-first), 11/11 headed-Firefox E2E.
 
 - **http.js virtual-network round trip — phase 1** (PR #99, merged
   2026-09-26): incremental HTTP/1.x parser (`src/_http_parser.js`); real
@@ -90,6 +97,8 @@ bytes" and "run wasm bytes on my VFS".
 
 - Package `exports`/`imports` field resolution for the VFS — the resolution
   logic is a must (the npm-install product stays OUT per AGENTS.md rule 11).
+  **Update 2026-09-29 (PR #136):** `package.json` `main` + directory/index
+  probing done for the sync-require path; `exports`/`imports` still open.
 - WASI execution path (Nodepod's `wasi.ts` + `napi-wasm-worker.ts`) with
   wa-sqlite as the standing WASM-of-the-real-thing example (AGENTS.md
   rule 8).

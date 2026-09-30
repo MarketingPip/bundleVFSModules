@@ -65,6 +65,22 @@ function loadSyncRequireHelpers() {
     "function readModuleSourceLiveFirst(resolved, vfs)",
     "function vfsLookup(path, vfs)",
     "function unflattenUserFiles(flatObj)",
+    // VFS-aware resolver and its probing helpers (resolveSyncRequest is
+    // called by createSyncRequire).
+    "function vfsNodeAt(path, vfs)",
+    "function vfsLiveFs()",
+    "function vfsIsFile(path, vfs)",
+    "function vfsIsDir(path, vfs)",
+    "function vfsReadText(path, vfs)",
+    "function vfsNormalizePath(path)",
+    "function vfsDirname(path)",
+    "function vfsNodeModulePaths(from)",
+    "function vfsLoadAsFile(basePath, vfs)",
+    "function vfsLoadAsDirectory(dirPath, vfs)",
+    "function vfsLoadAsFileOrDirectory(basePath, vfs)",
+    "function vfsModuleNotFound(request)",
+    "function vfsIsRelativeRequest(request)",
+    "function resolveSyncRequest(request,",
     "function createSyncRequire(parentPath, vfs",
   ];
   const templateStart = RUNTIME_SRC.indexOf(

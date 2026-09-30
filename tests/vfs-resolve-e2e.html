@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>VFS sync-require browser E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script>
+// Browser E2E for the VFS-aware sync resolver (Jared, 2026-09-29).
+//
+// Runs the SHIPPED sync-require code — extracted verbatim from runtime.js —
+// in a real browser JS engine (headed Firefox under Xvfb). No Node bridge:
+// the page fetches runtime.js over HTTP, slices out the sync-require
+// section, evaluates it, and runs the fixture. Results are reported via
+// document.title ("E2E-PASS" / "E2E-FAIL: ...") and #out text.
+(async () => {
+  const out = [];
+  const log = (k, v) => out.push(k + '=' + v);
+  const results = [];
+  const check = (name, fn) => {
+    try {
+      fn();
+      results.push('PASS ' + name);
+    } catch (e) {
+      results.push('FAIL ' + name + ' :: ' + (e && e.message));
+    }
+  };
+  const eq = (a, b, msg) => {
+    if (a !== b) throw new Error(msg + ' — got ' + JSON.stringify(a) + ', want ' + JSON.stringify(b));
+  };
+  const deepEq = (a, b, msg) => {
+    if (JSON.stringify(a) !== JSON.stringify(b))
+      throw new Error(msg + ' — got ' + JSON.stringify(a) + ', want ' + JSON.stringify(b));
+  };
+
+  try {
+    // 1. Fetch the real runtime.js and extract the sync-require section.
+    const src = await (await fetch('/runtime.js')).text();
+    if (!src.includes('function resolveSyncRequest(')) throw new Error('resolveSyncRequest missing from runtime.js');
+    const start = src.indexOf('// Read a CJS module\'s source for the sync require path');
+    const end = src.indexOf('function wrapCommonJS(');
+    if (start < 0 || end < 0) throw new Error('sync-require section markers missing');
+    let code = src.slice(start, end);
+    // Pin the sandbox uuid placeholder (unit-test convention).
+    code = code.split('${config.uuid}').join('e2euuid');
+    // Provide the sandbox builtins manifest/cache the section expects.
+    code = 'var _builtinManifest = {};\nvar _builtinCache = new Map();\n' + code;
+    code += '\n;window.__e2e = { resolveSyncRequest, createSyncRequire, unflattenUserFiles };';
+    (0, eval)(code);
+    const { resolveSyncRequest, createSyncRequire, unflattenUserFiles } = window.__e2e;
+    log('extract', 'ok');
+
+    // 2. Fixture VFS.
+    const vfs = unflattenUserFiles({
+      '/pkg/main.js': 'module.exports = {};',
+      '/pkg/thismod.js': [
+        'var topThis = this;',
+        'var isExports = (this === module.exports);',
+        'var isNotGlobal = (this !== globalThis);',
+        'this.foo = "bar";',
+        'module.exports.__checks = { isExports: isExports, isNotGlobal: isNotGlobal,',
+        '  foo: module.exports.foo, globalFoo: globalThis.foo,',
+        '  filename: __filename, dirname: __dirname };',
+      ].join('\n'),
+      '/pkg/util.js': 'module.exports = { util: true };',
+      '/pkg/config.json': '{ "theme": "dark", "version": 2 }',
+      '/pkg/sub/index.js': 'module.exports = { sub: true };',
+      '/node_modules/lodash/package.json': '{ "main": "lodash.js" }',
+      '/node_modules/lodash/lodash.js': 'module.exports = { lodash: true };',
+    });
+    const req = createSyncRequire('/pkg/main.js', vfs);
+
+    // 3. Assertions.
+    check('cjs-this-is-module-exports', () => {
+      const m = req('./thismod.js');
+      eq(m.__checks.isExports, true, 'this === module.exports');
+    });
+    check('cjs-this-not-global', () => {
+      const m = req('./thismod.js');
+      eq(m.__checks.isNotGlobal, true, 'this !== globalThis');
+    });
+    check('cjs-this-assign-sets-exports', () => {
+      const m = req('./thismod.js');
+      eq(m.__checks.foo, 'bar', 'this.foo sets module.exports.foo');
+      eq(m.__checks.globalFoo, undefined, 'this.foo must not leak to globalThis');
+    });
+    check('cjs-filename-dirname', () => {
+      const m = req('./thismod.js');
+      eq(m.__checks.filename, '/pkg/thismod.js', '__filename');
+      eq(m.__checks.dirname, '/pkg', '__dirname');
+    });
+    check('resolve-bare-package', () => {
+      eq(resolveSyncRequest('lodash', '/pkg/main.js', vfs), '/node_modules/lodash/lodash.js', 'bare resolve');
+    });
+    check('require-bare-package', () => {
+      deepEq(req('lodash'), { lodash: true }, 'require(lodash)');
+    });
+    check('require-json-parsed', () => {
+      deepEq(req('./config.json'), { theme: 'dark', version: 2 }, 'require json');
+    });
+    check('resolve-json-extension-probe', () => {
+      eq(resolveSyncRequest('./config', '/pkg/main.js', vfs), '/pkg/config.json', 'json probe');
+    });
+    check('resolve-directory-index', () => {
+      eq(resolveSyncRequest('./sub', '/pkg/main.js', vfs), '/pkg/sub/index.js', 'dir index');
+    });
+    check('resolve-no-execute', () => {
+      // Use a module nothing has required yet: resolve must locate it
+      // without populating the module cache.
+      const r = req.resolve('./util');
+      eq(r, '/pkg/util.js', 'resolve path');
+      eq(req.cache.has(r), false, 'resolve must not populate cache');
+    });
+    check('resolve-missing-throws', () => {
+      let threw = false;
+      try { req.resolve('no-such-pkg-xyz'); } catch (e) { threw = /ERR_MODULE_NOT_FOUND/.test(e.message); }
+      eq(threw, true, 'missing throws ERR_MODULE_NOT_FOUND');
+    });
+
+    const failed = results.filter(r => r.indexOf('FAIL') === 0);
+    log('summary', (results.length - failed.length) + '/' + results.length + ' passed');
+    document.getElementById('out').textContent = results.join('\n');
+    document.title = failed.length === 0 ? 'E2E-PASS' : 'E2E-FAIL: ' + failed.join(' | ');
+  } catch (e) {
+    document.getElementById('out').textContent = 'HARNESS ERROR: ' + (e && e.stack || e);
+    document.title = 'E2E-FAIL: harness ' + (e && e.message);
+  }
+})();
+</script>
+</body>
+</html>

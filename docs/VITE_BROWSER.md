@@ -126,6 +126,13 @@ Each sandbox has its own realm, so isolation is preserved. TDD'd in
   `minify: "terser"` works (PR #133).
 - ~~`expect-type` stubbed~~ — **done 2026-09-29:** general TypeScript CJS
   interop in the transformer; M4 re-verified stub-free (PR #132).
+- ~~Blind `.js`-appending `resolveSyncRequest`~~ — **done 2026-09-29
+  (PR #136):** the sync-require resolver is now VFS-aware — LOAD_AS_FILE
+  (exact, `.js`, `.json`), LOAD_AS_DIRECTORY (`package.json` `main`,
+  `index.js`/`index.json`), bare specifiers walking `node_modules` upward
+  (nearest wins), live-memfs-first existence probing, JSON parsed via
+  `JSON.parse`, and `require.resolve()` locating without executing.
+  Headed-Firefox E2E 11/11 (`tests/vfs-resolve-e2e.html` + `.py`).
 - Rollup WASM data-URL embedding should move from the harness seed
   generator into the canonical runtime package-loading path.
 - Red-first test proving the Rollup ESM interception target and named

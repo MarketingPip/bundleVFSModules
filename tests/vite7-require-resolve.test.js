@@ -11,13 +11,51 @@ import { fileURLToPath } from "node:url";
 //
 // In the browser runtime's sync-require path, `syncRequire.resolve` was a
 // stub: `(request) => request` (identity function). It now uses the real
-// VFS path resolution logic.
+// VFS path resolution logic: the resolver probes the VFS for existence
+// (LOAD_AS_FILE then LOAD_AS_DIRECTORY), so tests pass a VFS.
+//
+// Full bare-package / extension / directory / JSON behavior is pinned in
+// tests/vite7-resolve-vfs-full.test.js; this file keeps the basic
+// relative/absolute/normalization coverage.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+
+function loadResolver() {
+  const start = RUNTIME_SRC.indexOf(
+    "// --- VFS existence probing for the sync resolver",
+  );
+  const end = RUNTIME_SRC.indexOf("function createSyncRequire(");
+  const fnSrc = RUNTIME_SRC.slice(start, end).replace(
+    /\$\{config\.uuid\}/g,
+    "testuuid",
+  );
+  const factory = new Function(`${fnSrc}; return resolveSyncRequest;`);
+  // unflattenUserFiles is defined just before the helpers block; slice to
+  // the block's opening comment.
+  const uStart = RUNTIME_SRC.indexOf("function unflattenUserFiles(flatObj)");
+  const uEnd = RUNTIME_SRC.indexOf(
+    "// --- VFS existence probing for the sync resolver",
+  );
+  const uSrc = RUNTIME_SRC.slice(uStart, uEnd);
+  const uFactory = new Function(`${uSrc}; return unflattenUserFiles;`);
+  const resolveSyncRequest = factory();
+  return { resolveSyncRequest, unflattenUserFiles: uFactory() };
+}
+
+const { resolveSyncRequest, unflattenUserFiles } = loadResolver();
+
+// Minimal VFS for the basic path-shape tests.
+const VFS = unflattenUserFiles({
+  "/pkg/sub/util.js": "module.exports = {};",
+  "/pkg/lib/helper.js": "module.exports = {};",
+  "/lib/util.js": "module.exports = {};",
+  "/pkg/b.js": "module.exports = {};",
+  "/pkg/c.js": "module.exports = {};",
+});
 
 describe("require.resolve() VFS resolution", () => {
   test("resolveSyncRequest function exists and is used", () => {
@@ -31,67 +69,43 @@ describe("require.resolve() VFS resolution", () => {
   });
 
   test("resolveSyncRequest handles relative paths", () => {
-    // Extract and test the function directly.
-    const start = RUNTIME_SRC.indexOf("function resolveSyncRequest(");
-    const end = RUNTIME_SRC.indexOf("function createSyncRequire(");
-    const fnSrc = RUNTIME_SRC.slice(start, end);
-    const resolveSyncRequest = new Function(
-      `${fnSrc}; return resolveSyncRequest;`,
-    )();
-
     // Relative from /pkg/sub/module.js
-    expect(resolveSyncRequest("./util", "/pkg/sub/module.js")).toBe(
+    expect(resolveSyncRequest("./util", "/pkg/sub/module.js", VFS)).toBe(
       "/pkg/sub/util.js",
     );
-    expect(resolveSyncRequest("../lib/helper", "/pkg/sub/module.js")).toBe(
+    expect(resolveSyncRequest("../lib/helper", "/pkg/sub/module.js", VFS)).toBe(
       "/pkg/lib/helper.js",
     );
     // Already has .js
-    expect(resolveSyncRequest("./util.js", "/pkg/sub/module.js")).toBe(
+    expect(resolveSyncRequest("./util.js", "/pkg/sub/module.js", VFS)).toBe(
       "/pkg/sub/util.js",
     );
   });
 
   test("resolveSyncRequest handles absolute paths", () => {
-    const start = RUNTIME_SRC.indexOf("function resolveSyncRequest(");
-    const end = RUNTIME_SRC.indexOf("function createSyncRequire(");
-    const fnSrc = RUNTIME_SRC.slice(start, end);
-    const resolveSyncRequest = new Function(
-      `${fnSrc}; return resolveSyncRequest;`,
-    )();
-
     // Absolute paths ignore parentPath (Node semantics).
-    expect(resolveSyncRequest("/lib/util", "/pkg/sub/module.js")).toBe(
+    expect(resolveSyncRequest("/lib/util", "/pkg/sub/module.js", VFS)).toBe(
       "/lib/util.js",
     );
-    expect(resolveSyncRequest("/lib/util.js", "/other/path.js")).toBe(
+    expect(resolveSyncRequest("/lib/util.js", "/other/path.js", VFS)).toBe(
       "/lib/util.js",
     );
   });
 
   test("resolveSyncRequest normalizes . and .. segments", () => {
-    const start = RUNTIME_SRC.indexOf("function resolveSyncRequest(");
-    const end = RUNTIME_SRC.indexOf("function createSyncRequire(");
-    const fnSrc = RUNTIME_SRC.slice(start, end);
-    const resolveSyncRequest = new Function(
-      `${fnSrc}; return resolveSyncRequest;`,
-    )();
-
-    expect(resolveSyncRequest("./a/../b", "/pkg/module.js")).toBe("/pkg/b.js");
-    expect(resolveSyncRequest("././c", "/pkg/module.js")).toBe("/pkg/c.js");
+    expect(resolveSyncRequest("./a/../b", "/pkg/module.js", VFS)).toBe(
+      "/pkg/b.js",
+    );
+    expect(resolveSyncRequest("././c", "/pkg/module.js", VFS)).toBe(
+      "/pkg/c.js",
+    );
   });
 
-  test("resolveSyncRequest throws for bare specifiers", () => {
-    const start = RUNTIME_SRC.indexOf("function resolveSyncRequest(");
-    const end = RUNTIME_SRC.indexOf("function createSyncRequire(");
-    const fnSrc = RUNTIME_SRC.slice(start, end);
-    const resolveSyncRequest = new Function(
-      `${fnSrc}; return resolveSyncRequest;`,
-    )();
-
-    // Bare specifiers (node_modules) not yet implemented — should throw
-    // ERR_MODULE_NOT_FOUND, not return garbage.
-    expect(() => resolveSyncRequest("lodash", "/pkg/module.js")).toThrow(
+  test("resolveSyncRequest throws for unresolvable bare specifiers", () => {
+    // Bare specifiers walk node_modules (nearest wins). With nothing to
+    // find, they throw ERR_MODULE_NOT_FOUND — not return garbage. Full
+    // bare-package behavior is pinned in vite7-resolve-vfs-full.test.js.
+    expect(() => resolveSyncRequest("lodash", "/pkg/module.js", VFS)).toThrow(
       /ERR_MODULE_NOT_FOUND/,
     );
   });

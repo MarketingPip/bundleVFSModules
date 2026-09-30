@@ -5128,39 +5128,191 @@ function unflattenUserFiles(flatObj) {
  * - Relative requests (./, ../) resolve against parentPath's directory
  * - Absolute requests (/) are used as-is
  * - Appends .js extension if not present
- * - Bare specifiers throw ERR_MODULE_NOT_FOUND (TODO: node_modules walk)
  */
-function resolveSyncRequest(request, parentPath) {
-  if (request.startsWith('./') || request.startsWith('../') || request.startsWith('/')) {
-    // Absolute requests ignore the parent directory (Node semantics: an
-    // absolute require() path is used as-is).
-    const joined = request.startsWith('/')
-      ? request
-      : (parentPath ? parentPath.split('/').slice(0, -1).join('/') : '') + '/' + request;
-    const isAbs = joined.charAt(0) === '/';
-    const parts = joined.split('/');
-    const normalized = [];
-    for (const p of parts) {
-      if (p === '..') normalized.pop();
-      else if (p !== '.' && p !== '') normalized.push(p);
-    }
-    // Preserve the leading slash. VFS paths are absolute; dropping it
-    // produced relative resolved paths and non-canonical __filename
-    // values (e.g. picomatch's require('./scan') resolving to lib/scan.js
-    // instead of /node_modules/picomatch/lib/scan.js).
-    let resolved = (isAbs ? '/' : '') + normalized.join('/');
-    // Try .js extension
-    if (!resolved.endsWith('.js')) {
-      resolved = resolved + '.js';
-    }
-    return resolved;
-  } else {
-    // Bare specifier (node_modules): simplified resolution
-    // TODO: full node_modules walk with package.json exports
-    const err = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
-    err.code = 'ERR_MODULE_NOT_FOUND';
-    throw err;
+// --- VFS existence probing for the sync resolver (template-safe: no
+// backticks, no dollar-brace, no backslash-slash in this code) ---
+
+// Walk the nested snapshot vfs tree ({dir: {file: 'source'}}). Returns the
+// node at path, or undefined. Directories are objects, files are strings.
+function vfsNodeAt(path, vfs) {
+  var segments = String(path).split('/').filter(Boolean);
+  var node = vfs;
+  for (var i = 0; i < segments.length; i++) {
+    if (node == null || typeof node !== 'object') return undefined;
+    node = node[segments[i]];
   }
+  return node;
+}
+
+// The sandbox's live memfs (__FS__), or null when absent (e.g. unit tests
+// extracting this code under Node).
+function vfsLiveFs() {
+  var rt = globalThis._RUNTIME${config.uuid}_;
+  return rt && rt.__FS__ ? rt.__FS__ : null;
+}
+
+function vfsIsFile(path, vfs) {
+  var live = vfsLiveFs();
+  if (live && typeof live.statSync === 'function') {
+    try {
+      if (live.statSync(path).isFile()) return true;
+    } catch (e) { /* fall through to snapshot */ }
+  }
+  return typeof vfsNodeAt(path, vfs) === 'string';
+}
+
+function vfsIsDir(path, vfs) {
+  var live = vfsLiveFs();
+  if (live && typeof live.statSync === 'function') {
+    try {
+      if (live.statSync(path).isDirectory()) return true;
+    } catch (e) { /* fall through to snapshot */ }
+  }
+  var node = vfsNodeAt(path, vfs);
+  return node != null && typeof node === 'object';
+}
+
+function vfsReadText(path, vfs) {
+  var live = vfsLiveFs();
+  if (live && typeof live.readFileSync === 'function') {
+    try {
+      var data = live.readFileSync(path, 'utf8');
+      if (typeof data === 'string') return data;
+    } catch (e) { /* fall through to snapshot */ }
+  }
+  var node = vfsNodeAt(path, vfs);
+  return typeof node === 'string' ? node : undefined;
+}
+
+// POSIX normalize: collapse . and .. segments, preserve leading slash.
+// Never escapes root (leading .. segments are dropped).
+function vfsNormalizePath(path) {
+  var isAbs = path.charAt(0) === '/';
+  var parts = String(path).split('/');
+  var out = [];
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (p === '..') {
+      if (out.length > 0) out.pop();
+    } else if (p !== '.' && p !== '') {
+      out.push(p);
+    }
+  }
+  return (isAbs ? '/' : '') + out.join('/');
+}
+
+function vfsDirname(path) {
+  var idx = String(path).lastIndexOf('/');
+  if (idx <= 0) return '/';
+  return path.slice(0, idx);
+}
+
+// Node's Module._nodeModulePaths (POSIX): from the start dir upward,
+// collecting each "<dir>/node_modules". Mirrors src/module.js in this repo.
+function vfsNodeModulePaths(from) {
+  var cur = vfsNormalizePath(from);
+  var paths = [];
+  while (true) {
+    paths.push(cur === '/' ? '/node_modules' : cur + '/node_modules');
+    if (cur === '/') break;
+    var parent = vfsDirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return paths;
+}
+
+// Node LOAD_AS_FILE: X, then X.js, X.json (extension probing order).
+function vfsLoadAsFile(basePath, vfs) {
+  if (vfsIsFile(basePath, vfs)) return basePath;
+  var exts = ['.js', '.json'];
+  for (var i = 0; i < exts.length; i++) {
+    var p = basePath + exts[i];
+    if (vfsIsFile(p, vfs)) return p;
+  }
+  return null;
+}
+
+// Node LOAD_AS_DIRECTORY: package.json "main", then index.js / index.json.
+function vfsLoadAsDirectory(dirPath, vfs) {
+  var pkgText = vfsReadText(dirPath + '/package.json', vfs);
+  if (typeof pkgText === 'string') {
+    try {
+      var pkg = JSON.parse(pkgText);
+      if (pkg && typeof pkg.main === 'string' && pkg.main) {
+        var mainPath = vfsNormalizePath(dirPath + '/' + pkg.main);
+        var viaMain = vfsLoadAsFile(mainPath, vfs);
+        if (viaMain) return viaMain;
+        if (vfsIsDir(mainPath, vfs)) {
+          var viaMainDir = vfsLoadAsDirectory(mainPath, vfs);
+          if (viaMainDir) return viaMainDir;
+        }
+      }
+    } catch (e) { /* invalid package.json: fall through to index */ }
+  }
+  return vfsLoadAsFile(dirPath + '/index', vfs);
+}
+
+function vfsLoadAsFileOrDirectory(basePath, vfs) {
+  var asFile = vfsLoadAsFile(basePath, vfs);
+  if (asFile) return asFile;
+  if (vfsIsDir(basePath, vfs)) return vfsLoadAsDirectory(basePath, vfs);
+  return null;
+}
+
+function vfsModuleNotFound(request) {
+  var err = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
+  err.code = 'ERR_MODULE_NOT_FOUND';
+  return err;
+}
+
+function vfsIsRelativeRequest(request) {
+  return (
+    request === '.' ||
+    request === '..' ||
+    request.charAt(0) === '/' ||
+    (request.charAt(0) === '.' &&
+      (request.charAt(1) === '/' ||
+        (request.charAt(1) === '.' &&
+          (request.length === 2 || request.charAt(2) === '/'))))
+  );
+}
+
+/**
+ * Resolves a require() request to an absolute VFS path (Node.js CJS
+ * semantics), WITHOUT loading or executing the module. Used by both
+ * syncRequire() and syncRequire.resolve().
+ * - Relative requests (./, ../, .) resolve against parentPath's directory.
+ * - Absolute requests (/) are used as-is.
+ * - Bare specifiers walk node_modules from the parent directory upward
+ *   (nearest wins), like Node and like src/module.js.
+ * - Each candidate goes through LOAD_AS_FILE (X, X.js, X.json) then
+ *   LOAD_AS_DIRECTORY (package.json "main", index.js, index.json), with
+ *   existence probed against the live memfs first, then the snapshot VFS.
+ * - Builtins are handled by the caller (syncRequire checks _builtinManifest
+ *   before calling this); a bare request that matches no VFS entry throws
+ *   ERR_MODULE_NOT_FOUND.
+ */
+function resolveSyncRequest(request, parentPath, vfs) {
+  var parentDir = vfsDirname(parentPath || '/');
+  var basePath;
+  if (vfsIsRelativeRequest(request)) {
+    basePath =
+      request.charAt(0) === '/'
+        ? vfsNormalizePath(request)
+        : vfsNormalizePath(parentDir + '/' + request);
+    var resolved = vfsLoadAsFileOrDirectory(basePath, vfs);
+    if (resolved) return resolved;
+    throw vfsModuleNotFound(request);
+  }
+  // Bare specifier: node_modules walk, nearest directory wins.
+  var nmPaths = vfsNodeModulePaths(parentDir);
+  for (var i = 0; i < nmPaths.length; i++) {
+    var candidate = vfsNormalizePath(nmPaths[i] + '/' + request);
+    var hit = vfsLoadAsFileOrDirectory(candidate, vfs);
+    if (hit) return hit;
+  }
+  throw vfsModuleNotFound(request);
 }
 
 function createSyncRequire(parentPath, vfs, cache) {
@@ -5191,7 +5343,7 @@ function createSyncRequire(parentPath, vfs, cache) {
     // node_modules walk with package.json exports).
     let resolved;
     try {
-      resolved = resolveSyncRequest(request, parentPath);
+      resolved = resolveSyncRequest(request, parentPath, vfs);
     } catch (err) {
       throw new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
     }
@@ -5210,6 +5362,19 @@ function createSyncRequire(parentPath, vfs, cache) {
     // 5. Create module object, cache BEFORE executing (for cycles)
     const module = { exports: {}, id: resolved, filename: resolved, loaded: false };
     cache.set(resolved, module);
+    
+    // 5b. JSON modules: parse the source as JSON (Node semantics)
+    // instead of executing it as JavaScript.
+    if (resolved.endsWith('.json')) {
+      try {
+        module.exports = JSON.parse(source);
+      } catch (err) {
+        cache.delete(resolved);
+        throw err;
+      }
+      module.loaded = true;
+      return module.exports;
+    }
     
     // 6. Wrap and execute
     // Node.js CJS semantics: 'this' at module top-level === 'module.exports'.
@@ -5246,7 +5411,7 @@ function createSyncRequire(parentPath, vfs, cache) {
     if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
       return request;
     }
-    return resolveSyncRequest(request, parentPath);
+    return resolveSyncRequest(request, parentPath, vfs);
   };
   return syncRequire;
 }
