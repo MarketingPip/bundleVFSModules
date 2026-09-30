@@ -50,7 +50,13 @@
         throw err;
       }
       const mod = _builtinCache.get(bare);
-      return mod && mod.default !== undefined ? mod.default : mod;
+      // Unwrap only callable defaults (e.g. events.js: export default
+      // EventEmitter); for object defaults preserve the namespace (see
+      // _builtinRequireValue: the interop Proxy's lazy getters live on
+      // the proxy, not the plain target object).
+      if (mod && typeof mod.default === 'function') return mod.default;
+      return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
+        ? mod.default : mod;
     },
     // --- end sandbox getBuiltinModule (gap #3) ---
       // --- Timing ---

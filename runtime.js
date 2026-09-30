@@ -4445,7 +4445,14 @@ function _builtinRequireValue(mod) {
   // export default (events.js: export default EventEmitter). Sync require()
   // must return that value, not the ESM namespace, or
   // const E = require("events"); new E() dies with "not a constructor".
-  return mod && mod.default !== undefined ? mod.default : mod;
+  // Unwrap only when the default is callable (a class like EventEmitter):
+  // for object defaults the namespace must be preserved, because loadModule
+  // returns an interop Proxy whose lazy getters (CJS named-export fallback,
+  // star re-exports) live on the proxy, not on the plain target object.
+  if (mod && typeof mod.default === 'function') return mod.default;
+  return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
+    ? mod.default
+    : mod;
 }
 // --- end sync builtin require interop (gap #3) ---
 
@@ -7031,7 +7038,7 @@ try {
     try {
       _builtinCache.set(_pkey, await globalThis._RUNTIME${config.uuid}_.loadModule(_pkey, 'import'));
     } catch (e) {
-      console.warn('[bvm] sync-builtin preload skipped ' + _pkey + ': ' + String((e && e.message) || e));
+      console.warn('[bvm] sync-builtin preload skipped ' + _pkey + ': ' + String((e && e.message) || e)));
     }
   }
 } catch (e) {

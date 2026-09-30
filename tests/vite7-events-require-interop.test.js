@@ -15,9 +15,14 @@
  * (ws's websocket.js inside vite's chunks/config.js) died.
  *
  * Node parity: `require("events")` IS the EventEmitter class
- * (`require("events") === require("events").EventEmitter`), and every
- * builtin port's `export default` is its CJS `module.exports` equivalent.
- * The rule must therefore prefer `default` whenever it is defined.
+ * (`require("events") === require("events").EventEmitter`).
+ *
+ * Refinement (2026-09-30): the naive "always unwrap default" rule regressed
+ * the browser preload — `loadModule` returns an interop Proxy whose lazy
+ * getters (CJS named-export fallback, star re-exports) live on the proxy,
+ * and unwrapping object defaults broke 16 builtins with "too much
+ * recursion". The rule now unwraps ONLY when the default is callable (a
+ * class like EventEmitter); object defaults keep the namespace.
  *
  * This test extracts the REAL `_builtinRequireValue` from the built
  * runtime.js generate() template (balanced-brace extraction, no copies) and
@@ -90,10 +95,25 @@ describe("sync builtin require interop (_builtinRequireValue)", () => {
     expect(typeof v.on).toBe("function");
   });
 
-  test("no regression: require('path') still returns its default export object", () => {
+  test("no regression: require('path') returns the namespace (object default)", () => {
+    // path's default is a plain object; unwrapping it would bypass the
+    // interop Proxy's lazy getters. The namespace must be preserved.
     const v = _builtinRequireValue(pathNs);
-    expect(v).toBe(pathNs.default);
+    expect(v).toBe(pathNs);
     expect(typeof v.join).toBe("function");
+    expect(v.default).toBe(pathNs.default);
+  });
+
+  test("single-key namespace (CJS-style) still unwraps its default", () => {
+    const def = { foo: 1 };
+    const ns = { default: def };
+    expect(_builtinRequireValue(ns)).toBe(def);
+  });
+
+  test("callable default unwraps even when the namespace has many keys", () => {
+    class Foo {}
+    const ns = { default: Foo, a: 1, b: 2, c: 3 };
+    expect(_builtinRequireValue(ns)).toBe(Foo);
   });
 
   test("fallback: namespace without a default export is returned as-is", () => {

@@ -22,7 +22,12 @@ function createSyncRequire(parentPath, vfs) {
         // Return the port's declared CJS module.exports (export default),
         // not the ESM namespace: require("events") must be the EventEmitter
         // class or `new (require("events"))()` dies with "not a constructor".
-        return mod && mod.default !== undefined ? mod.default : mod;
+        // Unwrap only callable defaults; for object defaults preserve the
+        // namespace (the interop Proxy's lazy getters live on the proxy).
+        if (mod && typeof mod.default === "function") return mod.default;
+        return mod && mod.default !== undefined && Object.keys(mod).length === 1
+          ? mod.default
+          : mod;
       }
       throw new Error(
         '[ERR_REQUIRE_ASYNC]: Built-in "' +
