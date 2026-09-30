@@ -7038,7 +7038,7 @@ try {
     try {
       _builtinCache.set(_pkey, await globalThis._RUNTIME${config.uuid}_.loadModule(_pkey, 'import'));
     } catch (e) {
-      console.warn('[bvm] sync-builtin preload skipped ' + _pkey + ': ' + String((e && e.message) || e)));
+      console.warn('[bvm] sync-builtin preload skipped ' + _pkey + ': ' + String((e && e.message) || e));
     }
   }
 } catch (e) {
