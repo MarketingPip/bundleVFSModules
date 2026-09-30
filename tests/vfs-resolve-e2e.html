@@ -65,6 +65,10 @@
       '/pkg/sub/index.js': 'module.exports = { sub: true };',
       '/node_modules/lodash/package.json': '{ "main": "lodash.js" }',
       '/node_modules/lodash/lodash.js': 'module.exports = { lodash: true };',
+      '/node_modules/exp-pkg/package.json': '{ "name": "exp-pkg", "exports": { ".": { "require": "./cjs.js", "import": "./esm.js" }, "./feat": "./feat.js" } }',
+      '/node_modules/exp-pkg/cjs.js': 'module.exports = { expPkg: "cjs" };',
+      '/node_modules/exp-pkg/esm.js': 'module.exports = { expPkg: "esm" };',
+      '/node_modules/exp-pkg/feat.js': 'module.exports = { feat: true };',
     });
     const req = createSyncRequire('/pkg/main.js', vfs);
 
@@ -113,6 +117,15 @@
       let threw = false;
       try { req.resolve('no-such-pkg-xyz'); } catch (e) { threw = /ERR_MODULE_NOT_FOUND/.test(e.message); }
       eq(threw, true, 'missing throws ERR_MODULE_NOT_FOUND');
+    });
+    check('resolve-exports-require-condition', () => {
+      eq(resolveSyncRequest('exp-pkg', '/pkg/main.js', vfs), '/node_modules/exp-pkg/cjs.js', 'exports require condition');
+    });
+    check('require-exports-package', () => {
+      deepEq(req('exp-pkg'), { expPkg: 'cjs' }, 'require(exp-pkg) via exports');
+    });
+    check('resolve-exports-subpath', () => {
+      eq(resolveSyncRequest('exp-pkg/feat', '/pkg/main.js', vfs), '/node_modules/exp-pkg/feat.js', 'exports subpath');
     });
 
     const failed = results.filter(r => r.indexOf('FAIL') === 0);

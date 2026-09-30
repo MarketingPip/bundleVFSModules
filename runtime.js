@@ -5235,22 +5235,27 @@ function vfsLoadAsFile(basePath, vfs) {
 
 // Node LOAD_AS_DIRECTORY: package.json "main", then index.js / index.json.
 function vfsLoadAsDirectory(dirPath, vfs) {
-  var pkgText = vfsReadText(dirPath + '/package.json', vfs);
-  if (typeof pkgText === 'string') {
-    try {
-      var pkg = JSON.parse(pkgText);
-      if (pkg && typeof pkg.main === 'string' && pkg.main) {
-        var mainPath = vfsNormalizePath(dirPath + '/' + pkg.main);
-        var viaMain = vfsLoadAsFile(mainPath, vfs);
-        if (viaMain) return viaMain;
-        if (vfsIsDir(mainPath, vfs)) {
-          var viaMainDir = vfsLoadAsDirectory(mainPath, vfs);
-          if (viaMainDir) return viaMainDir;
-        }
-      }
-    } catch (e) { /* invalid package.json: fall through to index */ }
+  var pkg = vfsReadPackageJson(dirPath, vfs);
+  // The 'exports' field wins over 'main' when present (Node parity, and the
+  // async path's tryResolveFileOrPackage). A present-but-unresolvable
+  // exports map is an honest miss — never fall through to main/index.
+  if (pkg && pkg.exports !== undefined && pkg.exports !== null) {
+    var target = vfsResolvePackageExportsSync(pkg, ".");
+    if (typeof target === "string") {
+      return vfsLoadAsFile(vfsNormalizePath(dirPath + "/" + target), vfs);
+    }
+    return null;
   }
-  return vfsLoadAsFile(dirPath + '/index', vfs);
+  if (pkg && typeof pkg.main === "string" && pkg.main) {
+    var mainPath = vfsNormalizePath(dirPath + "/" + pkg.main);
+    var viaMain = vfsLoadAsFile(mainPath, vfs);
+    if (viaMain) return viaMain;
+    if (vfsIsDir(mainPath, vfs)) {
+      var viaMainDir = vfsLoadAsDirectory(mainPath, vfs);
+      if (viaMainDir) return viaMainDir;
+    }
+  }
+  return vfsLoadAsFile(dirPath + "/index", vfs);
 }
 
 function vfsLoadAsFileOrDirectory(basePath, vfs) {
@@ -5279,6 +5284,199 @@ function vfsIsRelativeRequest(request) {
 }
 
 /**
+ * Sync-path package exports/imports resolution (Node's PACKAGE_EXPORTS_RESOLVE
+ * / PACKAGE_IMPORTS_RESOLVE, path-based edition for the sync require path).
+ * Mirrors the algorithm PR #122 added to vfsLookup for the async
+ * dynamic-import() path, but with the CJS require() condition set —
+ * ["node", "require", "default"] instead of ["node", "import", "default"] —
+ * and returning resolved VFS paths instead of { source } records.
+ */
+// Condition order mirrors Node's require() defaults.
+var VFS_SYNC_EXPORT_CONDITIONS = ["node", "require", "default"];
+
+function vfsSplitPackageSpecifier(request) {
+  // '@scope/pkg/sub/deep' -> { packageName: '@scope/pkg', subpath: './sub/deep' }
+  // 'pkg/sub'             -> { packageName: 'pkg',        subpath: './sub' }
+  // 'pkg'                 -> { packageName: 'pkg',        subpath: '.' }
+  if (request.charAt(0) === "@") {
+    var parts = request.split("/");
+    var packageName = parts.slice(0, 2).join("/");
+    var rest = parts.slice(2).join("/");
+    return { packageName: packageName, subpath: rest ? "./" + rest : "." };
+  }
+  var idx = request.indexOf("/");
+  if (idx === -1) return { packageName: request, subpath: "." };
+  return {
+    packageName: request.slice(0, idx),
+    subpath: "." + request.slice(idx),
+  };
+}
+
+function vfsResolvePackageTargetSync(target, conditions) {
+  // string | null (blocked subpath) | string[] (fallback chain) |
+  // { condition: target } — same shape as the async path's resolvePackageTarget.
+  if (target === null || target === undefined) return null;
+  if (typeof target === "string") return target;
+  if (Array.isArray(target)) {
+    for (var i = 0; i < target.length; i++) {
+      var r = vfsResolvePackageTargetSync(target[i], conditions);
+      if (r !== null) return r;
+    }
+    return null;
+  }
+  if (typeof target === "object") {
+    for (var c = 0; c < conditions.length; c++) {
+      var cond = conditions[c];
+      if (Object.prototype.hasOwnProperty.call(target, cond)) {
+        var resolved = vfsResolvePackageTargetSync(target[cond], conditions);
+        if (resolved !== null) return resolved;
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+function vfsResolvePackageExportsSync(pkg, subpath) {
+  var exportsField = pkg.exports;
+  if (exportsField === null || exportsField === undefined) return null;
+  var target;
+  if (typeof exportsField === "string") {
+    if (subpath !== ".") return null;
+    target = exportsField;
+  } else if (
+    typeof exportsField === "object" &&
+    !Array.isArray(exportsField)
+  ) {
+    var keys = Object.keys(exportsField);
+    var isSugar =
+      keys.length > 0 &&
+      keys.every(function (k) {
+        return k.charAt(0) !== ".";
+      });
+    if (isSugar) {
+      // Condition-only object: the main entry.
+      if (subpath !== ".") return null;
+      target = exportsField;
+    } else if (Object.prototype.hasOwnProperty.call(exportsField, subpath)) {
+      target = exportsField[subpath];
+    } else {
+      // Longest './x/*' pattern-key match.
+      var best = null;
+      for (var i = 0; i < keys.length; i++) {
+        var key = keys[i];
+        if (key.slice(-2) === "/*") {
+          var prefix = key.slice(0, -1);
+          if (
+            subpath.indexOf(prefix) === 0 &&
+            (best === null || key.length > best.length)
+          ) {
+            best = key;
+          }
+        }
+      }
+      if (best === null) return null;
+      var star = subpath.slice(best.length - 1);
+      var patternTarget = vfsResolvePackageTargetSync(
+        exportsField[best],
+        VFS_SYNC_EXPORT_CONDITIONS,
+      );
+      if (typeof patternTarget !== "string") return null;
+      return patternTarget.replace(/\*/g, star);
+    }
+  } else {
+    return null;
+  }
+  var resolved = vfsResolvePackageTargetSync(target, VFS_SYNC_EXPORT_CONDITIONS);
+  return typeof resolved === "string" ? resolved : null;
+}
+
+function vfsReadPackageJson(dirPath, vfs) {
+  var text = vfsReadText(dirPath + "/package.json", vfs);
+  if (typeof text !== "string") return null;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return null; // invalid package.json: callers fall through to legacy probing
+  }
+}
+
+function vfsPackageHasExports(dirPath, vfs) {
+  var pkg = vfsReadPackageJson(dirPath, vfs);
+  return !!pkg && pkg.exports !== undefined && pkg.exports !== null;
+}
+
+function vfsLoadPackageRoot(packageRoot, subpath, vfs) {
+  // 1. The 'exports' field wins when present (Node PACKAGE_EXPORTS_RESOLVE).
+  //    When present it is the ONLY legal route — a miss is honest, never
+  //    legacy probing (matches the async path's tryResolveFileOrPackage).
+  if (vfsPackageHasExports(packageRoot, vfs)) {
+    var pkg = vfsReadPackageJson(packageRoot, vfs);
+    var target = vfsResolvePackageExportsSync(pkg, subpath);
+    if (typeof target === "string") {
+      return vfsLoadAsFile(vfsNormalizePath(packageRoot + "/" + target), vfs);
+    }
+    return null;
+  }
+  // 2. Legacy probing: main/index for ".", file probing for subpaths.
+  if (subpath === ".") return vfsLoadAsDirectory(packageRoot, vfs);
+  return vfsLoadAsFileOrDirectory(
+    vfsNormalizePath(packageRoot + "/" + subpath.slice(2)),
+    vfs,
+  );
+}
+
+function vfsResolvePackageImportsSync(importPath, importerPath, vfs) {
+  // Node PACKAGE_IMPORTS_RESOLVE: nearest parent package.json scope wins;
+  // a scope without an 'imports' field means the specifier is unresolvable.
+  var dir = vfsDirname(importerPath || "/");
+  while (true) {
+    var pkg = vfsReadPackageJson(dir, vfs);
+    if (pkg && pkg.imports && typeof pkg.imports === "object") {
+      var imports = pkg.imports;
+      var target;
+      if (Object.prototype.hasOwnProperty.call(imports, importPath)) {
+        target = imports[importPath];
+      } else {
+        // Longest '#x/*' pattern-key match.
+        var best = null;
+        var keys = Object.keys(imports);
+        for (var i = 0; i < keys.length; i++) {
+          var key = keys[i];
+          if (
+            key.slice(-2) === "/*" &&
+            importPath.indexOf(key.slice(0, -1)) === 0 &&
+            (best === null || key.length > best.length)
+          ) {
+            best = key;
+          }
+        }
+        if (best === null) return null;
+        var star = importPath.slice(best.length - 1);
+        var patternTarget = vfsResolvePackageTargetSync(
+          imports[best],
+          VFS_SYNC_EXPORT_CONDITIONS,
+        );
+        if (typeof patternTarget !== "string") return null;
+        target = patternTarget.replace(/\*/g, star);
+      }
+      var resolved = vfsResolvePackageTargetSync(
+        target,
+        VFS_SYNC_EXPORT_CONDITIONS,
+      );
+      // Node requires imports targets to be relative (./-prefixed).
+      if (typeof resolved !== "string" || resolved.slice(0, 2) !== "./")
+        return null;
+      return vfsLoadAsFile(vfsNormalizePath(dir + "/" + resolved), vfs);
+    }
+    if (pkg) return null; // nearest scope has no 'imports' — unresolvable
+    if (dir === "/") break;
+    dir = vfsDirname(dir);
+  }
+  return null;
+}
+
+/**
  * Resolves a require() request to an absolute VFS path (Node.js CJS
  * semantics), WITHOUT loading or executing the module. Used by both
  * syncRequire() and syncRequire.resolve().
@@ -5287,14 +5485,25 @@ function vfsIsRelativeRequest(request) {
  * - Bare specifiers walk node_modules from the parent directory upward
  *   (nearest wins), like Node and like src/module.js.
  * - Each candidate goes through LOAD_AS_FILE (X, X.js, X.json) then
- *   LOAD_AS_DIRECTORY (package.json "main", index.js, index.json), with
- *   existence probed against the live memfs first, then the snapshot VFS.
+ *   LOAD_AS_DIRECTORY (package.json "exports" first — the only legal route
+ *   when present — then "main", index.js, index.json), with existence
+ *   probed against the live memfs first, then the snapshot VFS.
+ * - "#"-prefixed requests resolve via the nearest parent package.json
+ *   "imports" field (Node PACKAGE_IMPORTS_RESOLVE).
  * - Builtins are handled by the caller (syncRequire checks _builtinManifest
  *   before calling this); a bare request that matches no VFS entry throws
  *   ERR_MODULE_NOT_FOUND.
  */
 function resolveSyncRequest(request, parentPath, vfs) {
   var parentDir = vfsDirname(parentPath || '/');
+  // #-imports resolve against the nearest parent package.json scope
+  // (Node PACKAGE_IMPORTS_RESOLVE). Handled before the relative check:
+  // '#x' is not a relative request.
+  if (request.charAt(0) === '#') {
+    var viaImports = vfsResolvePackageImportsSync(request, parentPath, vfs);
+    if (viaImports) return viaImports;
+    throw vfsModuleNotFound(request);
+  }
   var basePath;
   if (vfsIsRelativeRequest(request)) {
     basePath =
@@ -5305,12 +5514,34 @@ function resolveSyncRequest(request, parentPath, vfs) {
     if (resolved) return resolved;
     throw vfsModuleNotFound(request);
   }
-  // Bare specifier: node_modules walk, nearest directory wins.
+  // Bare specifier: node_modules walk, nearest directory wins
+  // (Node LOAD_NODE_MODULES: per directory, LOAD_AS_FILE then
+  // LOAD_AS_DIRECTORY with package-aware resolution).
+  var spec = vfsSplitPackageSpecifier(request);
   var nmPaths = vfsNodeModulePaths(parentDir);
   for (var i = 0; i < nmPaths.length; i++) {
-    var candidate = vfsNormalizePath(nmPaths[i] + '/' + request);
-    var hit = vfsLoadAsFileOrDirectory(candidate, vfs);
-    if (hit) return hit;
+    var dir = nmPaths[i];
+    var packageRoot = vfsNormalizePath(dir + '/' + spec.packageName);
+    var isPkgDir = vfsIsDir(packageRoot, vfs);
+    // When 'exports' is present it is the ONLY legal route (Node
+    // PACKAGE_EXPORTS_RESOLVE): a subpath absent from the map is an honest
+    // miss even if the file exists on disk (real Node throws
+    // ERR_PACKAGE_PATH_NOT_EXPORTED). Stop walking — a parent
+    // node_modules must not shadow the denial.
+    if (isPkgDir && vfsPackageHasExports(packageRoot, vfs)) {
+      var viaExports = vfsLoadPackageRoot(packageRoot, spec.subpath, vfs);
+      if (viaExports) return viaExports;
+      throw vfsModuleNotFound(request);
+    }
+    // Legacy: LOAD_AS_FILE(DIR/X) first (preserves require('foo') resolving
+    // to /node_modules/foo.js, and file-wins-over-dir like Node), then
+    // package-aware directory probing ('main'/index when no 'exports').
+    var direct = vfsLoadAsFile(vfsNormalizePath(dir + '/' + request), vfs);
+    if (direct) return direct;
+    if (isPkgDir) {
+      var hit = vfsLoadPackageRoot(packageRoot, spec.subpath, vfs);
+      if (hit) return hit;
+    }
   }
   throw vfsModuleNotFound(request);
 }

@@ -70,6 +70,13 @@ function loadHelpers() {
     "function vfsLoadAsFileOrDirectory(basePath, vfs)",
     "function vfsModuleNotFound(request)",
     "function vfsIsRelativeRequest(request)",
+    "function vfsSplitPackageSpecifier(request)",
+    "function vfsResolvePackageTargetSync(target, conditions)",
+    "function vfsResolvePackageExportsSync(pkg, subpath)",
+    "function vfsReadPackageJson(dirPath, vfs)",
+    "function vfsPackageHasExports(dirPath, vfs)",
+    "function vfsLoadPackageRoot(packageRoot, subpath, vfs)",
+    "function vfsResolvePackageImportsSync(importPath, importerPath, vfs)",
     "function resolveSyncRequest(request,",
     "function readModuleSourceLiveFirst(resolved, vfs)",
     "function vfsLookup(path, vfs)",
@@ -85,6 +92,12 @@ function loadHelpers() {
   let code = "const _builtinManifest = {};\nconst _builtinCache = new Map();\n";
   for (const marker of markers)
     code += extractFunction(templateSrc, marker) + "\n";
+  // var-declared shared constants (condition lists) the helpers close over.
+  const cmStart = templateSrc.indexOf("var VFS_SYNC_EXPORT_CONDITIONS");
+  if (cmStart === -1)
+    throw new Error("VFS_SYNC_EXPORT_CONDITIONS not found in runtime.js");
+  code +=
+    templateSrc.slice(cmStart, templateSrc.indexOf(";", cmStart) + 1) + "\n";
   code = code.replace(/\$\{config\.uuid\}/g, TEST_UUID);
   const factory = new Function(
     code +
