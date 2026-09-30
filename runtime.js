@@ -5310,6 +5310,28 @@ function vfsPackageImportNotDefined(specifier, packageJsonPath) {
   return err;
 }
 
+// Node's message when no package.json scope exists above the importer:
+// "Package import specifier \"#x\" is not defined imported from <path>".
+function vfsPackageImportNotDefinedNoScope(specifier, importerPath) {
+  var err = new Error(
+    '[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier "' + specifier +
+    '" is not defined imported from ' + importerPath
+  );
+  err.code = 'ERR_PACKAGE_IMPORT_NOT_DEFINED';
+  return err;
+}
+
+// Node LOOKUP_PACKAGE_SCOPE: nearest ancestor dir (of a module FILE's dir)
+// containing a package.json, or null when none exists.
+function vfsLookupPackageScope(dir, vfs) {
+  var d = dir || "/";
+  while (true) {
+    if (vfsReadPackageJson(d, vfs) !== null) return d;
+    if (d === "/") return null;
+    d = vfsDirname(d);
+  }
+}
+
 function vfsIsRelativeRequest(request) {
   return (
     request === '.' ||
@@ -5541,7 +5563,12 @@ function resolveSyncRequest(request, parentPath, vfs) {
   if (request.charAt(0) === '#') {
     var viaImports = vfsResolvePackageImportsSync(request, parentPath, vfs);
     if (viaImports) return viaImports;
-    throw vfsPackageImportNotDefined(request, parentPath + "/package.json");
+    // Node PACKAGE_IMPORTS_RESOLVE names the NEAREST parent package.json
+    // scope in the error — never the importer FILE + "/package.json".
+    var scopeDir = vfsLookupPackageScope(vfsDirname(parentPath || '/'), vfs);
+    throw scopeDir
+      ? vfsPackageImportNotDefined(request, scopeDir + "/package.json")
+      : vfsPackageImportNotDefinedNoScope(request, parentPath);
   }
   var basePath;
   if (vfsIsRelativeRequest(request)) {

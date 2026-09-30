@@ -72,6 +72,8 @@ function loadHelpers() {
     "function vfsModuleNotFound(request)",
     "function vfsPackagePathNotExported(packageName,",
     "function vfsPackageImportNotDefined(specifier,",
+    "function vfsPackageImportNotDefinedNoScope(specifier,",
+    "function vfsLookupPackageScope(dir,",
     "function vfsIsRelativeRequest(request)",
     "function vfsSplitPackageSpecifier(request)",
     "function vfsResolvePackageTargetSync(target, conditions)",
@@ -315,6 +317,64 @@ describe("sync require(): package imports field", () => {
     expect(() =>
       resolveSyncRequest("cycle-pkg", "/app/entry.js", vfs),
     ).toThrow();
+  });
+});
+
+describe("sync require(): #-imports error names the real package scope (Node parity)", () => {
+  test("error names the nearest parent package.json, not the importer file", () => {
+    const { resolveSyncRequest, unflattenUserFiles } = loadHelpers();
+    const files = {
+      ...FILES,
+      "/app/deep/nested/entry.js": "module.exports = {};",
+    };
+    const vfs = unflattenUserFiles(files);
+    let err = null;
+    try {
+      resolveSyncRequest("#nope", "/app/deep/nested/entry.js", vfs);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).not.toBeNull();
+    expect(err.code).toBe("ERR_PACKAGE_IMPORT_NOT_DEFINED");
+    expect(err.message).toContain("/app/package.json");
+    expect(err.message).not.toContain("entry.js/package.json");
+  });
+
+  test("error names the nearest scope even when it has no imports field", () => {
+    const { resolveSyncRequest, unflattenUserFiles } = loadHelpers();
+    const files = {
+      "/pkg/package.json": JSON.stringify({ name: "pkg" }),
+      "/pkg/sub/entry.js": "module.exports = {};",
+    };
+    const vfs = unflattenUserFiles(files);
+    let err = null;
+    try {
+      resolveSyncRequest("#nope", "/pkg/sub/entry.js", vfs);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).not.toBeNull();
+    expect(err.code).toBe("ERR_PACKAGE_IMPORT_NOT_DEFINED");
+    expect(err.message).toContain("/pkg/package.json");
+    expect(err.message).not.toContain("entry.js/package.json");
+  });
+
+  test("error omits the package clause when no package.json scope exists", () => {
+    const { resolveSyncRequest, unflattenUserFiles } = loadHelpers();
+    const vfs = unflattenUserFiles({
+      "/loose/entry.js": "module.exports = {};",
+    });
+    let err = null;
+    try {
+      resolveSyncRequest("#nope", "/loose/entry.js", vfs);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).not.toBeNull();
+    expect(err.code).toBe("ERR_PACKAGE_IMPORT_NOT_DEFINED");
+    expect(err.message).toContain(
+      'Package import specifier "#nope" is not defined imported from /loose/entry.js',
+    );
   });
 });
 
