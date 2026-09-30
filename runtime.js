@@ -5234,7 +5234,15 @@ function vfsLoadAsFile(basePath, vfs) {
 }
 
 // Node LOAD_AS_DIRECTORY: package.json "main", then index.js / index.json.
-function vfsLoadAsDirectory(dirPath, vfs) {
+function vfsLoadAsDirectory(dirPath, vfs, _seen) {
+  _seen = _seen || {};
+  var normPath = vfsNormalizePath(dirPath);
+  if (_seen[normPath]) {
+    // Directory cycle via package.json main (a/main -> ./dir, a/dir/main -> ..).
+    // Node would eventually fail; we throw instead of infinite-looping.
+    return null;
+  }
+  _seen[normPath] = true;
   var pkg = vfsReadPackageJson(dirPath, vfs);
   // The 'exports' field wins over 'main' when present (Node parity, and the
   // async path's tryResolveFileOrPackage). A present-but-unresolvable
@@ -5251,7 +5259,7 @@ function vfsLoadAsDirectory(dirPath, vfs) {
     var viaMain = vfsLoadAsFile(mainPath, vfs);
     if (viaMain) return viaMain;
     if (vfsIsDir(mainPath, vfs)) {
-      var viaMainDir = vfsLoadAsDirectory(mainPath, vfs);
+      var viaMainDir = vfsLoadAsDirectory(mainPath, vfs, _seen);
       if (viaMainDir) return viaMainDir;
     }
   }
@@ -5268,6 +5276,24 @@ function vfsLoadAsFileOrDirectory(basePath, vfs) {
 function vfsModuleNotFound(request) {
   var err = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
   err.code = 'ERR_MODULE_NOT_FOUND';
+  return err;
+}
+
+function vfsPackagePathNotExported(packageName, subpath, packageJsonPath) {
+  var err = new Error(
+    "[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '" + subpath +
+    "' is not defined by \"exports\" in " + packageJsonPath
+  );
+  err.code = 'ERR_PACKAGE_PATH_NOT_EXPORTED';
+  return err;
+}
+
+function vfsPackageImportNotDefined(specifier, packageJsonPath) {
+  var err = new Error(
+    "[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier \"" + specifier +
+    "\" is not defined in package " + packageJsonPath
+  );
+  err.code = 'ERR_PACKAGE_IMPORT_NOT_DEFINED';
   return err;
 }
 
@@ -5502,7 +5528,7 @@ function resolveSyncRequest(request, parentPath, vfs) {
   if (request.charAt(0) === '#') {
     var viaImports = vfsResolvePackageImportsSync(request, parentPath, vfs);
     if (viaImports) return viaImports;
-    throw vfsModuleNotFound(request);
+    throw vfsPackageImportNotDefined(request, parentPath + "/package.json");
   }
   var basePath;
   if (vfsIsRelativeRequest(request)) {
@@ -5531,7 +5557,11 @@ function resolveSyncRequest(request, parentPath, vfs) {
     if (isPkgDir && vfsPackageHasExports(packageRoot, vfs)) {
       var viaExports = vfsLoadPackageRoot(packageRoot, spec.subpath, vfs);
       if (viaExports) return viaExports;
-      throw vfsModuleNotFound(request);
+      throw vfsPackagePathNotExported(
+        spec.packageName,
+        spec.subpath,
+        packageRoot + "/package.json"
+      );
     }
     // Legacy: LOAD_AS_FILE(DIR/X) first (preserves require('foo') resolving
     // to /node_modules/foo.js, and file-wins-over-dir like Node), then
