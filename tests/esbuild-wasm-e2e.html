@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>esbuild-wasm E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// M2 esbuild-wasm browser E2E (Jared, 2026-09-30).
+//
+// Tests the REAL esbuild-wasm through the project's runtime interception
+// in a REAL browser (headed Firefox). Node cannot run this: the vendor
+// WASM build requires Worker, which only exists in browser contexts.
+//
+// Flow:
+// 1. Import the runtime's sync-require machinery (same extraction as
+//    consumption-path-e2e.html).
+// 2. Seed VFS with the REAL esbuild-wasm vendor files + the repo's shim.
+// 3. require('esbuild') via the interception.
+// 4. initialize() then transform() TypeScript for real.
+// 5. Report via document.title ("E2E-PASS" / "E2E-FAIL: ...").
+import { interceptNativeSpecifier } from '/src/browser-builds.js';
+
+const results = [];
+const check = (name, fn) => {
+  try { fn(); results.push('PASS ' + name); }
+  catch (e) { results.push('FAIL ' + name + ' :: ' + (e && e.message)); }
+};
+const eq = (a, b, msg) => {
+  if (a !== b) throw new Error(msg + ' — got ' + JSON.stringify(a) + ', want ' + JSON.stringify(b));
+};
+
+async function main() {
+  try {
+    // 1. Extract genuine sync-require section from runtime.js.
+    const src = await (await fetch('/runtime.js')).text();
+    const start = src.indexOf("// Read a CJS module's source for the sync require path");
+    const end = src.indexOf('function wrapCommonJS(');
+    if (start < 0 || end < 0) throw new Error('sync-require section markers missing');
+    let code = src.slice(start, end);
+    code = code.split('${config.uuid}').join('e2euuid');
+    code = 'var _builtinManifest = {};\nvar _builtinCache = new Map();\n' + code;
+    code += '\n;window.__e2e = { resolveSyncRequest, createSyncRequire, unflattenUserFiles };';
+    (0, eval)(code);
+    const { createSyncRequire, unflattenUserFiles } = window.__e2e;
+
+    // 2. Seed VFS with REAL vendor files.
+    const vfsFlat = {};
+    // The shim source (repo file).
+    vfsFlat['/node_modules/.bvm/esbuild-shim.cjs'] = await (await fetch('/src/vendor/esbuild-shim.cjs')).text();
+    // The vendor browser build (real esbuild-wasm).
+    vfsFlat['/node_modules/esbuild-wasm/lib/browser.js'] = await (await fetch('/node_modules/esbuild-wasm/lib/browser.js')).text();
+    // The WASM bytes (fetched as array buffer, stored for the shim's __FS__).
+    const wasmBytes = new Uint8Array(await (await fetch('/node_modules/esbuild-wasm/esbuild.wasm')).arrayBuffer());
+
+    const vfs = unflattenUserFiles(vfsFlat);
+    const cache = new Map();
+
+    // Provide __FS__ with the WASM bytes for the shim's readWasmBytes().
+    const rt = { __FS__: { readFileSync: (p) => {
+      if (p === '/node_modules/esbuild-wasm/esbuild.wasm') return wasmBytes;
+      throw new Error('FS: file not found: ' + p);
+    }}};
+    // The shim reads globalThis._RUNTIME_.__FS__; provide it.
+    globalThis._RUNTIME_ = rt;
+
+    // 3. Verify interception maps 'esbuild' to the shim.
+    check('interception maps esbuild to shim', () => {
+      eq(interceptNativeSpecifier('esbuild'), '/node_modules/.bvm/esbuild-shim.cjs', 'esbuild interception');
+    });
+
+    // 4. require('esbuild') and use it for real.
+    const req = createSyncRequire('/vapp/main.js', vfs, cache);
+    // Manually resolve via interception (the full runtime does this; we emulate the lookup).
+    const shimPath = interceptNativeSpecifier('esbuild');
+    const esbuild = req(shimPath);
+
+    check('esbuild has version', () => {
+      if (!esbuild.version || typeof esbuild.version !== 'string') {
+        throw new Error('no version string, got: ' + JSON.stringify(esbuild.version));
+      }
+    });
+
+    // 5. initialize() then transform() TypeScript for real.
+    await esbuild.initialize();
+    results.push('PASS initialize()');
+
+    const out = await esbuild.transform('const x: number = 1', { loader: 'ts' });
+    check('transform() strips types', () => {
+      if (!out.code.includes('const x = 1')) {
+        throw new Error('transform output wrong: ' + JSON.stringify(out.code));
+      }
+    });
+
+    // Idempotent initialize.
+    await esbuild.initialize();
+    results.push('PASS initialize() idempotent');
+
+    const out2 = await esbuild.transform("let y: string = 'a'", { loader: 'ts' });
+    check('second transform()', () => {
+      if (!out2.code.includes('let y = "a"')) {
+        throw new Error('second transform wrong: ' + JSON.stringify(out2.code));
+      }
+    });
+
+    const fails = results.filter(r => r.startsWith('FAIL'));
+    if (fails.length === 0) {
+      document.title = 'E2E-PASS';
+      document.getElementById('out').textContent = results.join('\n');
+    } else {
+      document.title = 'E2E-FAIL: ' + fails.join('; ');
+      document.getElementById('out').textContent = results.join('\n');
+    }
+  } catch (e) {
+    document.title = 'E2E-FAIL: ' + (e && e.message);
+    document.getElementById('out').textContent = 'SETUP-FAIL: ' + (e && e.stack);
+  }
+}
+main();
+</script>
+</body>
+</html>
