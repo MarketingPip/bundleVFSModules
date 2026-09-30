@@ -2,14 +2,21 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
+/* global _builtinRequireValue, _builtinCache, _builtinManifest, resolveSyncRequest, readModuleSourceLiveFirst */
+// (cross-fragment globals, defined in other src/sandbox/*.js sections)
 /** Wraps a CommonJS source string in an ESM-compatible IIFE. */
 /**
  * Synchronous require() for CJS modules (vitest support).
  * Resolves against VFS, loads source synchronously, executes with
  * cycle tolerance (returns partial exports on circular require).
  */
-function createSyncRequire(parentPath, vfs) {
-  const cache = new Map(); // resolvedPath -> module.exports (for cycles)
+// eslint-disable-next-line no-unused-vars -- used cross-fragment by 20-module-loader.js
+function createSyncRequire(parentPath, vfs, cache) {
+  // One cache shared across the whole require tree (passed down to recursive
+  // requires). A fresh Map per recursion would break cache identity and turn
+  // circular requires into infinite recursion instead of Node-style partial
+  // exports.
+  cache = cache || new Map(); // resolvedPath -> module record (for cycles)
 
   function syncRequire(request) {
     // 1. Built-in modules: return from cache if loaded, else throw
@@ -18,16 +25,7 @@ function createSyncRequire(parentPath, vfs) {
     if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
       const key = _builtinManifest[builtinKey] ? builtinKey : request;
       if (_builtinCache.has(key)) {
-        const mod = _builtinCache.get(key);
-        // Return the port's declared CJS module.exports (export default),
-        // not the ESM namespace: require("events") must be the EventEmitter
-        // class or `new (require("events"))()` dies with "not a constructor".
-        // Unwrap only callable defaults; for object defaults preserve the
-        // namespace (the interop Proxy's lazy getters live on the proxy).
-        if (mod && typeof mod.default === "function") return mod.default;
-        return mod && mod.default !== undefined && Object.keys(mod).length === 1
-          ? mod.default
-          : mod;
+        return _builtinRequireValue(_builtinCache.get(key));
       }
       throw new Error(
         '[ERR_REQUIRE_ASYNC]: Built-in "' +
@@ -40,40 +38,13 @@ function createSyncRequire(parentPath, vfs) {
     }
 
     // 2. Resolve path (relative/absolute)
+    // Uses resolveSyncRequest for Node.js-compatible path resolution.
+    // Bare specifiers (node_modules) throw ERR_MODULE_NOT_FOUND (TODO: full
+    // node_modules walk with package.json exports).
     let resolved;
-    if (
-      request.startsWith("./") ||
-      request.startsWith("../") ||
-      request.startsWith("/")
-    ) {
-      // Absolute requests ignore the parent directory (Node semantics: an
-      // absolute require() path is used as-is).
-      const joined = request.startsWith("/")
-        ? request
-        : (parentPath ? parentPath.split("/").slice(0, -1).join("/") : "") +
-          "/" +
-          request;
-      const isAbs = joined.charAt(0) === "/";
-      const parts = joined.split("/");
-      const normalized = [];
-      for (const p of parts) {
-        if (p === "..") normalized.pop();
-        else if (p !== "." && p !== "") normalized.push(p);
-      }
-      // Preserve the leading slash. VFS paths are absolute; dropping it
-      // produced relative resolved paths and non-canonical __filename values
-      // (e.g. picomatch's require('./scan') resolving to lib/scan.js instead
-      // of /node_modules/picomatch/lib/scan.js).
-      resolved = (isAbs ? "/" : "") + normalized.join("/");
-      // Try .js extension
-      if (!resolved.endsWith(".js")) {
-        const withJs = resolved + ".js";
-        // Check VFS for existence (simplified)
-        resolved = withJs; // assume .js for now
-      }
-    } else {
-      // Bare specifier (node_modules): simplified resolution
-      // TODO: full node_modules walk with package.json exports
+    try {
+      resolved = resolveSyncRequest(request, parentPath, vfs);
+    } catch (err) {
       throw new Error(
         "[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'",
       );
@@ -84,9 +55,8 @@ function createSyncRequire(parentPath, vfs) {
       return cache.get(resolved).exports;
     }
 
-    // 4. Load source from VFS (sync)
-    // vfs is the unflattened filesystem object
-    const source = vfsLookup(resolved, vfs);
+    // 4. Load source synchronously: live memfs first, snapshot VFS fallback
+    const source = readModuleSourceLiveFirst(resolved, vfs);
     if (source == null) {
       throw new Error(
         "[ERR_MODULE_NOT_FOUND]: Cannot find module '" +
@@ -106,19 +76,38 @@ function createSyncRequire(parentPath, vfs) {
     };
     cache.set(resolved, module);
 
+    // 5b. JSON modules: parse the source as JSON (Node semantics)
+    // instead of executing it as JavaScript.
+    if (resolved.endsWith(".json")) {
+      try {
+        module.exports = JSON.parse(source);
+      } catch (err) {
+        cache.delete(resolved);
+        throw err;
+      }
+      module.loaded = true;
+      return module.exports;
+    }
+
     // 6. Wrap and execute
+    // Node.js CJS semantics: 'this' at module top-level === 'module.exports'.
+    // Invoke via .call(module.exports, ...) so 'this' is correct. A plain
+    // wrapper(...) call would make 'this' undefined (strict) or globalThis
+    // (sloppy), breaking 'this.foo = bar' (should set module.exports.foo,
+    // not a global).
     const wrapper = new Function(
       "require",
       "module",
       "exports",
       "__filename",
       "__dirname",
-      source + "\n//# sourceURL=" + resolved,
+      source + String.fromCharCode(10) + "//# sourceURL=" + resolved,
     );
     const dirname = resolved.split("/").slice(0, -1).join("/") || ".";
     try {
-      wrapper(
-        createSyncRequire(resolved, vfs), // recursive require with new parent
+      wrapper.call(
+        module.exports, // 'this' === module.exports (Node CJS parity)
+        createSyncRequire(resolved, vfs, cache), // recursive require shares the cache
         module,
         module.exports,
         resolved,
@@ -133,7 +122,16 @@ function createSyncRequire(parentPath, vfs) {
   }
 
   syncRequire.cache = cache;
-  syncRequire.resolve = (request) => request; // simplified
+  // Node.js parity: require.resolve() locates the module entry point on
+  // the VFS without loading it. Uses the same resolution logic as require().
+  syncRequire.resolve = (request) => {
+    // Builtins resolve to their specifier (Node returns the builtin name).
+    let builtinKey = request.startsWith("node:") ? request.slice(5) : request;
+    if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
+      return request;
+    }
+    return resolveSyncRequest(request, parentPath, vfs);
+  };
   return syncRequire;
 }
 
@@ -141,17 +139,25 @@ function wrapCommonJS(source, parentPath, vfs) {
   // The require function is provided at module instantiation time via
   // the runtime's sync require. For ESM-converted CJS, we embed a
   // placeholder that gets replaced with the real require.
+  //
+  // Node.js CJS semantics:
+  // - 'this' at module top-level === 'module.exports' (via .call)
+  // - '__filename' and '__dirname' are available
+  const filename = parentPath;
+  const dirname = parentPath.split("/").slice(0, -1).join("/") || ".";
   return `
 const exports = {};
 const module = { exports };
+const __filename = ${JSON.stringify(filename)};
+const __dirname = ${JSON.stringify(dirname)};
 // Sync require is provided by the runtime via __syncRequire__
-const require = typeof __syncRequire__ !== 'undefined' 
-  ? __syncRequire__ 
+const require = typeof __syncRequire__ !== 'undefined'
+  ? __syncRequire__
   : (() => { throw new Error('[ERR_REQUIRE_NOT_SUPPORTED]: sync require not available in this context'); });
 
-(function (require, module, exports) {
+(function (require, module, exports, __filename, __dirname) {
   ${source}
-})(require, module, exports);
+}).call(module.exports, require, module, exports, __filename, __dirname);
 
 export default module.exports;
 `;

@@ -176,8 +176,12 @@ try {
     }
   }
   check("postMessage: __CONSUMPTION_E2E__ marker arrived via result.logs", !!r && !r.__parseError,
-    "logs=" + logEntries.length);
+    "logs=" + logEntries.length +
+    " success=" + (result && result.success) +
+    " firstLogs=" + logEntries.slice(0, 3).join(" | ").slice(0, 900) +
+    " errors=" + String(JSON.stringify(result && (result.errors || result.error)) || "").slice(0, 600));
   phase("marker-parsed");
+  log("INTERIM:\n" + results.join("\n"));
   if (!r || r.__parseError) throw new Error("no E2E marker in logs");
 
   // ---- 5. Jared's assertion set ----
