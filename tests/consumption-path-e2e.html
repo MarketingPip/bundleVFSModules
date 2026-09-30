@@ -86,8 +86,10 @@ try {
       "globalThis.__lodashExecuted = true;\nmodule.exports = { lodash: true };",
     "/cjs-check.js": [
       "module.exports = {",
-      "  thisIsExports: (function(){ return this === module.exports; })(),",
-      "  thisNotGlobal: (function(){ return this !== globalThis; })(),",
+      "// Node CJS semantics: top-level `this` === module.exports (strict-mode",
+      "// nested functions get undefined/globalThis instead — assert the real one).",
+      "  thisIsExports: this === module.exports,",
+      "  thisNotGlobal: this !== globalThis,",
       "  filename: __filename,",
       "  dirname: __dirname,",
       "  seesShared: globalThis.__sharedValue === 'from-setup',",
@@ -171,7 +173,7 @@ try {
     } catch (e) {}
     const j = raw.indexOf("__CONSUMPTION_E2E__");
     if (j !== -1) {
-      try { r = JSON.parse(raw.slice(j + 20)); break; }
+      try { r = JSON.parse(raw.slice(j + "__CONSUMPTION_E2E__".length)); break; }
       catch (e) { r = { __parseError: raw.slice(j, j + 300) }; break; }
     }
   }

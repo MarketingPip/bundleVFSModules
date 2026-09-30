@@ -5697,7 +5697,11 @@ function wrapCommonJS(source, parentPath, vfs) {
   // - 'this' at module top-level === 'module.exports' (via .call)
   // - '__filename' and '__dirname' are available
   const filename = parentPath;
-  const dirname = parentPath.split('/').slice(0, -1).join('/') || '.';
+  // Node path.dirname semantics: "/x.js" -> "/", "a/b.js" -> "a", "x.js" -> "."
+  const _parts = parentPath.split('/');
+  _parts.pop();
+  const _dir = _parts.join('/');
+  const dirname = _dir === '' ? (parentPath.charAt(0) === '/' ? '/' : '.') : _dir;
   return \`
 const exports = {};
 const module = { exports };
