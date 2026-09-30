@@ -6921,12 +6921,16 @@ Object.defineProperty(window, 'process', {
   });
    
    globalThis.process = processFinal;
-   // Node.js global alias for browser runtime (vite needs it)
-   if (typeof globalThis.global === 'undefined') {
-     globalThis.global = globalThis;
-   }
   }catch(err){
   
+  }
+  // Node.js global alias — installed OUTSIDE the try block above on purpose.
+  // defineProperty(window, 'process') throws in some sandbox realms, which used
+  // to skip this alias and left bare global (e.g. vite's bundled isexe,
+  // global.TESTING_WINDOWS) as a ReferenceError. Platform-level: bare
+  // global must resolve in the sandbox generally, like Node.
+  if (typeof globalThis.global === 'undefined') {
+    globalThis.global = globalThis;
   }
   return processFinal;
 })(); 
