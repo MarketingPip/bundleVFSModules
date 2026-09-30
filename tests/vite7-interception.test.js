@@ -31,7 +31,7 @@ const ROLLUP_BROWSER_VERSION = JSON.parse(
 ).version;
 
 const ROLLUP_BROWSER_MAIN =
-  "/node_modules/@rollup/browser/dist/rollup.browser.js";
+  "/node_modules/@rollup/browser/dist/es/rollup.browser.js";
 const ESBUILD_SHIM_PATH = "/node_modules/.bvm/esbuild-shim.cjs";
 const ESBUILD_WASM_VERSION = JSON.parse(
   readVendorFile("esbuild-wasm", "package.json"),
