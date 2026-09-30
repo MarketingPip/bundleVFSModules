@@ -739,8 +739,124 @@ function tryExtensions(basePath, exts, isMain) {
   return false;
 }
 
+// Condition set for `exports` resolution from the CJS resolver
+// (require()/require.resolve()). Mirrors Node's ["node", "require", "default"].
+const EXPORTS_REQUIRE_CONDITIONS = ["node", "require", "default"];
+
+// Split a bare specifier: '@scope/pkg/sub/deep' -> { packageName: '@scope/pkg', subpath: './sub/deep' }.
+function splitPackageSpecifier(request) {
+  if (request.startsWith("@")) {
+    const parts = request.split("/");
+    const packageName = parts.slice(0, 2).join("/");
+    const rest = parts.slice(2).join("/");
+    return { packageName, subpath: rest ? "./" + rest : "." };
+  }
+  const idx = request.indexOf("/");
+  if (idx === -1) return { packageName: request, subpath: "." };
+  return {
+    packageName: request.slice(0, idx),
+    subpath: "./" + request.slice(idx + 1),
+  };
+}
+
+// Node PACKAGE_EXPORTS_RESOLVE target resolution (condition matching only).
+function resolveExportsTarget(target, conditions) {
+  if (target === null || target === undefined) return null;
+  if (typeof target === "string") return target;
+  if (Array.isArray(target)) {
+    for (const t of target) {
+      const r = resolveExportsTarget(t, conditions);
+      if (typeof r === "string") return r;
+    }
+    return null;
+  }
+  if (typeof target === "object") {
+    for (const key of Object.keys(target)) {
+      if (key === "default" || conditions.indexOf(key) !== -1) {
+        const r = resolveExportsTarget(target[key], conditions);
+        if (typeof r === "string") return r;
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+// Node PACKAGE_EXPORTS_RESOLVE for the require condition set: string-form,
+// subpath map, condition-sugar, and ./x/* patterns. Returns the target string
+// or null for an honest miss.
+function resolvePackageExportsField(exportsField, subpath, conditions) {
+  if (exportsField === null || exportsField === undefined) return null;
+  let target;
+  if (typeof exportsField === "string") {
+    if (subpath !== ".") return null;
+    target = exportsField;
+  } else if (typeof exportsField === "object" && !Array.isArray(exportsField)) {
+    const keys = Object.keys(exportsField);
+    const isSugar = keys.length > 0 && keys.every((k) => !k.startsWith("."));
+    if (isSugar) {
+      // Condition-only object: the main entry.
+      if (subpath !== ".") return null;
+      target = exportsField;
+    } else if (Object.prototype.hasOwnProperty.call(exportsField, subpath)) {
+      target = exportsField[subpath];
+    } else {
+      // Longest ./x/* pattern-key match.
+      let best = null;
+      for (const key of keys) {
+        if (
+          key.endsWith("/*") &&
+          subpath.startsWith(key.slice(0, -1)) &&
+          (best === null || key.length > best.length)
+        ) {
+          best = key;
+        }
+      }
+      if (best === null) return null;
+      const star = subpath.slice(best.length - 1);
+      const r = resolveExportsTarget(exportsField[best], conditions);
+      return typeof r === "string" ? r.replace(/\*/g, star) : null;
+    }
+  } else {
+    return null;
+  }
+  const resolved = resolveExportsTarget(target, conditions);
+  return typeof resolved === "string" ? resolved : null;
+}
+
 function tryPackage(requestPath, exts, isMain, originalPath) {
   const pkg = Module._readPackage(requestPath);
+  // Node parity (PACKAGE_EXPORTS_RESOLVE): when `exports` is present, `main`
+  // is ignored entirely — the package entry resolves through the exports
+  // field with the require condition set ["node", "require", "default"].
+  // This is the CJS resolver; the ESM/import side never reaches tryPackage.
+  if (
+    pkg.exists &&
+    pkg.data &&
+    pkg.data.exports !== undefined &&
+    pkg.data.exports !== null
+  ) {
+    const target = resolvePackageExportsField(
+      pkg.data.exports,
+      ".",
+      EXPORTS_REQUIRE_CONDITIONS,
+    );
+    if (typeof target === "string" && target.startsWith("./")) {
+      const filename = posixResolve(requestPath, target);
+      const actual =
+        tryFile(filename, isMain) ||
+        tryExtensions(filename, exts, isMain) ||
+        tryExtensions(posixResolve(filename, "index"), exts, isMain);
+      if (actual) return actual;
+    }
+    const err = new Error(
+      `[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '.' is not defined by "exports" in '${pkg.pjsonPath}' imported from '${originalPath}'`,
+    );
+    err.code = "ERR_PACKAGE_PATH_NOT_EXPORTED";
+    err.path = pkg.pjsonPath;
+    err.requestPath = originalPath;
+    throw stampCode(err, false);
+  }
   if (!pkg.exists || !pkg.main) {
     return tryExtensions(posixResolve(requestPath, "index"), exts, isMain);
   }
@@ -923,6 +1039,50 @@ function _findPath(request, paths, isMain) {
   if (cached) return cached;
 
   let exts;
+
+  // Node parity: a package.json `exports` field encapsulates the package.
+  // For bare specifiers, when the resolved package has `exports`, the
+  // subpath resolves through it — `main` is ignored and an unexported
+  // subpath is an honest ERR_PACKAGE_PATH_NOT_EXPORTED even if the file
+  // exists on disk. Packages without `exports` fall through to the legacy
+  // probing below.
+  if (!absoluteRequest && !isRelative(request)) {
+    if (exts === undefined) exts = Object.keys(_extensions);
+    const { packageName, subpath } = splitPackageSpecifier(request);
+    for (let i = 0; i < paths.length; i++) {
+      const pkgRoot = posixResolve(paths[i], packageName);
+      if (_stat(pkgRoot) !== 1) continue;
+      const pkg = Module._readPackage(pkgRoot);
+      if (
+        pkg.exists &&
+        pkg.data &&
+        pkg.data.exports !== undefined &&
+        pkg.data.exports !== null
+      ) {
+        const target = resolvePackageExportsField(
+          pkg.data.exports,
+          subpath,
+          EXPORTS_REQUIRE_CONDITIONS,
+        );
+        let filename = false;
+        if (typeof target === "string" && target.startsWith("./")) {
+          const base = posixResolve(pkgRoot, target);
+          filename = tryFile(base, isMain) || tryExtensions(base, exts, isMain);
+        }
+        if (!filename) {
+          const err = new Error(
+            `[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '${subpath}' is not defined by "exports" in '${pkg.pjsonPath}'`,
+          );
+          err.code = "ERR_PACKAGE_PATH_NOT_EXPORTED";
+          err.path = pkg.pjsonPath;
+          throw stampCode(err, false);
+        }
+        _pathCache[cacheKey] = filename;
+        return filename;
+      }
+    }
+  }
+
   const trailingSlash =
     request.length > 0 &&
     (request.charCodeAt(request.length - 1) === CHAR_FORWARD_SLASH ||

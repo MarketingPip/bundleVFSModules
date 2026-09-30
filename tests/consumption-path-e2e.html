@@ -3,160 +3,228 @@
 <head><meta charset="utf-8"><title>Consumption-path E2E</title></head>
 <body>
 <div id="out">pending</div>
-<script>
-// Full consumption-path E2E (Jared, 2026-09-30).
+<script type="module">
+// Genuine full-consumption-path E2E (Jared, 2026-09-30).
 //
-// Tests Jared's exact scenario with import.meta.url, using:
-// 1. The REAL transformImportsToLoadModule() output (tests/consumption-transformed.js)
-// 2. The GENUINE sync resolver from PR #137 (extracted from runtime.js, same as vfs-resolve-e2e.html)
-// 3. Real ESM execution order and shared globalThis
+// Uses ONLY the real public surface:
+//   - `CodeSandbox` / `transformImportsToLoadModule` imported from the REAL
+//     /local-repo/runtime.js (worktree file; the driver serves it with ONLY
+//     _builtinBaseUrl rewritten to the local worktree dist/)
+//   - `sandbox.execute(userCode)` runs the REAL pipeline:
+//     ImportResolver -> transformImportsToLoadModule -> SandboxRuntime.generate
+//     -> iframe bootstrap -> user code -> window.parent.postMessage
+//     ({type:'function_results', logs...}) -> result.logs
+//   - `import { createRequire } from "node:module"` loads the REAL node:module
+//     shim (local dist/module.js) through the REAL _dynamic_import interop;
+//     `require("express")` resolves through the REAL parent
+//     _dynamic_import/resolveNodeModule; `require.resolve(...)` runs the REAL
+//     Module._resolveFilename in dist/module.js; CJS modules required through
+//     the interop run through the REAL wrapCommonJS+createSyncRequire.
 //
-// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ...") and #out text.
-(async () => {
-  const out = [];
-  const log = (k, v) => out.push(k + '=' + v);
-  const results = [];
-  const check = (name, fn) => {
-    try { fn(); results.push('PASS ' + name); }
-    catch (e) { results.push('FAIL ' + name + ' :: ' + (e && e.message)); }
-  };
-  const eq = (a, b, msg) => {
-    if (a !== b) throw new Error(msg + ' — got ' + JSON.stringify(a) + ', want ' + JSON.stringify(b));
-  };
-
+// Jared's exact scenario, from ESM:
+//   import { createRequire } from "node:module";
+//   const require = createRequire(import.meta.url);
+//   const express = require("express");
+//   const config = require("./config.json");
+//   const lodashPath = require.resolve("lodash");
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text, and
+// POST /report (crash-proof). No screenshots.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { window.__phase = p; document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  window.__done__ = v;
   try {
-    // 1. Extract the genuine sync-require section from runtime.js.
-    const src = await (await fetch('/runtime.js')).text();
-    const start = src.indexOf("// Read a CJS module's source for the sync require path");
-    const end = src.indexOf('function wrapCommonJS(');
-    if (start < 0 || end < 0) throw new Error('sync-require section markers missing');
-    let code = src.slice(start, end);
-    code = code.split('${config.uuid}').join('e2euuid');
-    code = 'var _builtinManifest = {};\nvar _builtinCache = new Map();\n' + code;
-    code += '\n;window.__e2e = { resolveSyncRequest, createSyncRequire, unflattenUserFiles };';
-    (0, eval)(code);
-    const { createSyncRequire, unflattenUserFiles } = window.__e2e;
-    log('extract', 'ok');
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
 
-    // 2. Define the VFS (same as the generator).
-    const vfsFlat = {
-      "/setup.mjs": [
-        "globalThis.__setupOrder = (globalThis.__setupOrder || []).concat(['setup']);",
-        "globalThis.__sharedValue = 'from-setup';",
-        "export const setupDone = true;",
-      ].join("\n"),
-      "/consumer.mjs": [
-        "import { setupDone } from './setup.mjs';",
-        "globalThis.__setupOrder = (globalThis.__setupOrder || []).concat(['consumer']);",
-        "export const consumerSeesSetup = setupDone === true && globalThis.__sharedValue === 'from-setup';",
-      ].join("\n"),
-      "/node_modules/express/package.json": JSON.stringify({
-        name: "express", version: "5.0.0",
-        exports: { ".": { require: "./cjs.js", import: "./esm.js" } },
-      }),
-      "/node_modules/express/cjs.js": 'module.exports = { express: "cjs-via-exports" };',
-      "/node_modules/express/esm.js": 'export const express = "esm-via-exports";',
-      "/config.json": JSON.stringify({ theme: "dark", version: 2 }),
-      "/node_modules/lodash/package.json": JSON.stringify({
-        name: "lodash", version: "4.17.21", main: "lodash.js",
-      }),
-      "/node_modules/lodash/lodash.js": "module.exports = { lodash: true };",
-      "/cjs-check.js": [
-        "module.exports = {",
-        "  cjsGlobalIsShared: globalThis.__sharedValue === 'from-setup',",
-        "  cjsSeesSetupOrder: Array.isArray(globalThis.__setupOrder),",
-        "};",
-      ].join("\n"),
-    };
-    const vfs = unflattenUserFiles(vfsFlat);
-    const cache = new Map();
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
 
-    // 3. Provide node:module createRequire using the genuine sync resolver.
-    // import.meta.url was transformed to 'file:////consumer.mjs' by the real transform.
-    const createRequire = (url) => {
-      // Convert file:// URL to VFS path.
-      const parentPath = url.replace('file://', '');
-      return createSyncRequire(parentPath, vfs, cache);
-    };
+try {
+  // ---- 0. Real public host runtime ----
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  check("real runtime exports transformImportsToLoadModule", typeof rt.transformImportsToLoadModule === "function");
+  const { CodeSandbox, transformImportsToLoadModule } = rt;
+  phase("runtime-loaded");
 
-    // 4. Set up the _RUNTIME interop with loadModule.
-    const uuid = 'e2econsumption';
-    globalThis['_RUNTIME' + uuid + '_'] = {
-      async loadModule(specifier, kind, parentPath, opts) {
-        if (specifier === 'node:module' && kind === 'import') {
-          return { createRequire };
-        }
-        if (kind === 'import') {
-          // ESM: setup.mjs and consumer.mjs — execute in order.
-          const path = specifier === './setup.mjs' ? '/setup.mjs' :
-                       specifier === './consumer.mjs' ? '/consumer.mjs' : null;
-          if (!path) throw new Error('Unknown ESM: ' + specifier);
-          const code = vfsFlat[path];
-          if (path === '/setup.mjs') {
-            // Run setup: sets __setupOrder=['setup'], __sharedValue, exports setupDone.
-            (0, eval)(code.replace('export const setupDone = true;', ''));
-            return { setupDone: true };
-          }
-          if (path === '/consumer.mjs') {
-            // Run consumer: imports setupDone, pushes 'consumer', exports consumerSeesSetup.
-            // setupDone is true (from setup.mjs).
-            (0, eval)(
-              'const setupDone = true;\n' +
-              code
-                .replace("import { setupDone } from './setup.mjs';", '')
-                .replace('export const consumerSeesSetup =', 'globalThis.__consumerSeesSetup =')
-            );
-            return { consumerSeesSetup: globalThis.__consumerSeesSetup };
-          }
-        }
-        if (kind === 'require') {
-          // Sync CJS via the genuine PR #137 resolver.
-          const req = createSyncRequire(parentPath, vfs, cache);
-          return req(specifier);
-        }
-        throw new Error('Unhandled: ' + specifier + ' (' + kind + ')');
-      }
-    };
+  // ---- 1. Real transformImportsToLoadModule (called directly) ----
+  const probeSrc = 'import { createRequire } from "node:module";\nconst u = import.meta.url;';
+  const probe = transformImportsToLoadModule("probe-uuid", probeSrc, "consumer.mjs");
+  check("transform: import.meta.url -> 'file:///consumer.mjs'",
+    probe.code.includes("'file:///consumer.mjs'"), probe.code.slice(0, 200));
+  check("transform: static import -> loadModule(\"node:module\")",
+    /loadModule\(\s*["']node:module["']/.test(probe.code), probe.code.slice(0, 300));
+  phase("transform-proven");
 
-    // 5. Fetch and run the genuinely-transformed code.
-    const transformed = await (await fetch('/tests/consumption-transformed.js')).text();
-    // The transformed code uses top-level await, so wrap in async.
-    const runCode = transformed
-      .replace(/^\/\/ Generated.*\n/, '')
-      .replace(/const __lm_/g, 'var __lm_');
-    await (0, eval)(`(async () => { ${runCode} })()`);
+  // ---- 2. VFS seed ----
+  const seed = {
+    "/setup.mjs": [
+      "globalThis.__setupOrder = (globalThis.__setupOrder || []).concat(['setup']);",
+      "globalThis.__sharedValue = 'from-setup';",
+      "export const setupDone = true;",
+    ].join("\n"),
+    "/node_modules/express/package.json": JSON.stringify({
+      name: "express", version: "5.0.0",
+      exports: { ".": { require: "./cjs.js", import: "./esm.js" } },
+    }),
+    "/node_modules/express/cjs.js":
+      'module.exports = { flavor: "cjs-via-exports" };',
+    "/node_modules/express/esm.js":
+      'export const flavor = "esm-via-exports";',
+    "/config.json": JSON.stringify({ theme: "dark", version: 2 }),
+    "/node_modules/lodash/package.json": JSON.stringify({
+      name: "lodash", version: "4.17.21", main: "lodash.js",
+    }),
+    "/node_modules/lodash/lodash.js":
+      "globalThis.__lodashExecuted = true;\nmodule.exports = { lodash: true };",
+    "/cjs-check.js": [
+      "module.exports = {",
+      "// Node CJS semantics: top-level `this` === module.exports (strict-mode",
+      "// nested functions get undefined/globalThis instead — assert the real one).",
+      "  thisIsExports: this === module.exports,",
+      "  thisNotGlobal: this !== globalThis,",
+      "  filename: __filename,",
+      "  dirname: __dirname,",
+      "  seesShared: globalThis.__sharedValue === 'from-setup',",
+      "};",
+    ].join("\n"),
+  };
 
-    // 6. Verify results.
-    const r = globalThis.__results;
-    if (!r) throw new Error('__results not set');
+  // ---- 3. Entry: Jared's exact scenario, from ESM ----
+  // NOTE: the runtime's transform lifts EVERY require("x") call in the entry
+  // into `await loadModule("x", "require", ...)` (async interop path through
+  // the parent _dynamic_import). require.resolve("lodash") is NOT lifted
+  // (MemberExpression callee), so it runs the REAL createRequire require
+  // (dist/module.js Module._resolveFilename) synchronously.
+  const userCode = [
+    'import { createRequire } from "node:module";',
+    'import { setupDone } from "./setup.mjs";',
+    "const __hold = setTimeout(() => {}, 170000);",
+    "const __metaUrl = import.meta.url;",
+    "const require = createRequire(import.meta.url);",
+    'globalThis.__setupOrder = (globalThis.__setupOrder || []).concat(["consumer"]);',
+    'const express = require("express");',
+    'const config = require("./config.json");',
+    'const lodashPath = require.resolve("lodash");',
+    'const expressPath = require.resolve("express");',
+    'const cjsCheck = require("./cjs-check.js");',
+    "const __results = {",
+    "  setupDone: setupDone,",
+    "  setupOrder: globalThis.__setupOrder,",
+    "  sharedValue: globalThis.__sharedValue,",
+    "  metaUrl: __metaUrl,",
+    "  expressFlavor: express && express.flavor,",
+    "  configTheme: config && config.theme,",
+    "  lodashPath: lodashPath,",
+    "  lodashExecuted: globalThis.__lodashExecuted === true,",
+    "  expressPath: expressPath,",
+    "  cjs: cjsCheck,",
+    "};",
+    "clearTimeout(__hold);",
+    'console.log("__CONSUMPTION_E2E__" + JSON.stringify(__results));',
+  ].join("\n");
 
-    check('setupDone is true', () => eq(r.setupDone, true, 'setupDone'));
-    check('consumerSeesSetup is true', () => eq(r.consumerSeesSetup, true, 'consumerSeesSetup'));
-    check('express uses require condition', () => eq(r.expressIsCjs, true, 'expressIsCjs'));
-    check('config.json loads', () => eq(r.configTheme, true, 'configTheme'));
-    check('require.resolve returns VFS path', () => eq(r.lodashPathIsVfs, true, 'lodashPathIsVfs'));
-    check('CJS shares globalThis', () => eq(r.cjsGlobalIsShared, true, 'cjsGlobalIsShared'));
-    check('CJS sees setup order', () => eq(r.cjsSeesSetupOrder, true, 'cjsSeesSetupOrder'));
-    check('import.meta.url transformed', () => eq(r.importMetaUrl, 'file:////consumer.mjs', 'importMetaUrl'));
-    check('setup ran before consumer', () => {
-      eq(Array.isArray(r.setupOrder), true, 'setupOrder is array');
-      eq(r.setupOrder[0], 'setup', 'setup first');
-      eq(r.setupOrder[1], 'consumer', 'consumer second');
-    });
+  const sandbox = new CodeSandbox({
+    fs: seed,
+    fileName: "consumer.mjs",
+    timeout: 180000,
+    process: { env: {} },
+    fallbackCDN: false,
+  });
+  phase("sandbox-constructed");
 
-    log('results', results.filter(x => x.startsWith('FAIL')).length + ' failures');
-    const failures = results.filter(x => x.startsWith('FAIL'));
-    if (failures.length > 0) {
-      document.title = 'E2E-FAIL: ' + failures[0];
-    } else {
-      document.title = 'E2E-PASS';
-    }
-    document.getElementById('out').textContent = results.join('\n') + '\n' + out.join('\n');
+  setTimeout(() => {
+    if (!window.__done__) report({ ok: false, phase: "watchdog", lastPhase: window.__phase || null });
+  }, 175000);
+
+  let result;
+  try {
+    phase("execute-start");
+    result = await sandbox.execute(userCode);
+    phase("execute-resolved");
   } catch (e) {
-    document.title = 'E2E-FAIL: ' + (e && e.message);
-    document.getElementById('out').textContent = 'ERROR: ' + (e && e.stack);
+    report({ ok: false, phase: "execute", error: String((e && e.message) || e).slice(0, 2000) });
+    document.title = "E2E-FAIL: execute threw: " + String((e && e.message) || e).slice(0, 120);
+    log("execute REJECTED: " + String((e && e.message) || e).slice(0, 500));
+    throw e;
   }
-})();
+
+  // ---- 4. The verdict came back through the REAL postMessage channel ----
+  // (generate()'s template posts {type:'function_results', logs...}; the
+  // parent resolves execute() from it). result.success===true proves the
+  // EMITTED SandboxRuntime.generate output executed.
+  check("generate: execute() resolved via postMessage channel (result.success===true)",
+    result && result.success === true, JSON.stringify(result && { success: result.success, errors: result.errors }).slice(0, 300));
+
+  const logEntries = (result.logs || []).map((l) => (typeof l === "string" ? l : JSON.stringify(l)));
+  let r = null;
+  for (const entry of logEntries) {
+    let raw = entry;
+    try {
+      const parsed = JSON.parse(entry);
+      if (parsed && typeof parsed.args === "string") raw = parsed.args;
+    } catch (e) {}
+    const j = raw.indexOf("__CONSUMPTION_E2E__");
+    if (j !== -1) {
+      try { r = JSON.parse(raw.slice(j + "__CONSUMPTION_E2E__".length)); break; }
+      catch (e) { r = { __parseError: raw.slice(j, j + 300) }; break; }
+    }
+  }
+  check("postMessage: __CONSUMPTION_E2E__ marker arrived via result.logs", !!r && !r.__parseError,
+    "logs=" + logEntries.length +
+    " success=" + (result && result.success) +
+    " firstLogs=" + logEntries.slice(0, 3).join(" | ").slice(0, 900) +
+    " errors=" + String(JSON.stringify(result && (result.errors || result.error)) || "").slice(0, 600));
+  phase("marker-parsed");
+  log("INTERIM:\n" + results.join("\n"));
+  if (!r || r.__parseError) throw new Error("no E2E marker in logs");
+
+  // ---- 5. Jared's assertion set ----
+  check("ESM: setupDone is true", r.setupDone === true, JSON.stringify(r.setupDone));
+  check("ESM: static-import ordering ['setup','consumer']",
+    Array.isArray(r.setupOrder) && r.setupOrder[0] === "setup" && r.setupOrder[1] === "consumer",
+    JSON.stringify(r.setupOrder));
+  check("ESM: setup globalThis mutation visible", r.sharedValue === "from-setup", JSON.stringify(r.sharedValue));
+  check("ESM: createRequire(import.meta.url) — metaUrl is file:///consumer.mjs",
+    r.metaUrl === "file:///consumer.mjs", JSON.stringify(r.metaUrl));
+  check("exports: require() selects the require condition (cjs, not esm)",
+    r.expressFlavor === "cjs-via-exports", JSON.stringify(r.expressFlavor));
+  check("CJS: sync JSON loads", r.configTheme === "dark", JSON.stringify(r.configTheme));
+  check("resolve: require.resolve('lodash') returns VFS path",
+    r.lodashPath === "/node_modules/lodash/lodash.js", JSON.stringify(r.lodashPath));
+  check("resolve: require.resolve does not execute its target",
+    r.lodashExecuted === false, JSON.stringify(r.lodashExecuted));
+  check("resolve: require.resolve('express') honors exports -> /node_modules/express/cjs.js",
+    r.expressPath === "/node_modules/express/cjs.js", JSON.stringify(r.expressPath));
+  check("CJS: this === module.exports", r.cjs && r.cjs.thisIsExports === true, JSON.stringify(r.cjs));
+  check("CJS: this !== globalThis", r.cjs && r.cjs.thisNotGlobal === true, JSON.stringify(r.cjs));
+  check("CJS: exact __filename", r.cjs && r.cjs.filename === "/cjs-check.js", JSON.stringify(r.cjs && r.cjs.filename));
+  check("CJS: exact __dirname", r.cjs && r.cjs.dirname === "/", JSON.stringify(r.cjs && r.cjs.dirname));
+  check("shared: CJS sees ESM setup globalThis", r.cjs && r.cjs.seesShared === true, JSON.stringify(r.cjs));
+
+  const failures = results.filter((x) => x.startsWith("FAIL"));
+  log(results.join("\n"));
+  if (failures.length > 0) {
+    document.title = "E2E-FAIL: " + failures[0].slice(5, 125);
+    report({ ok: false, phase: "verdict", failures, results });
+  } else {
+    document.title = "E2E-PASS";
+    report({ ok: true, phase: "verdict", results });
+  }
+} catch (e) {
+  if (!window.__done__) {
+    document.title = "E2E-FAIL: " + String((e && e.message) || e).slice(0, 120);
+    report({ ok: false, phase: "harness-error", error: String((e && e.message) || e).slice(0, 1000) });
+  }
+  document.getElementById("out").textContent += "\nHARNESS ERROR: " + (e && e.stack);
+}
 </script>
 </body>
 </html>

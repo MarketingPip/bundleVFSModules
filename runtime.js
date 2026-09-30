@@ -4868,7 +4868,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
             // __USER_FILES__ map first (keys may carry a leading slash).
             const vfsForRequire = unflattenUserFiles(globalThis._RUNTIME${config.uuid}_.__USER_FILES__ || {});
             globalThis.__syncRequire__ = createSyncRequire(buildFileName, vfsForRequire);
-            source = wrapCommonJS(source, modulePath, vfsForRequire);
+            source = wrapCommonJS(source, buildFileName, vfsForRequire);
           }
  
          function makeIdentitySourceMap(source, filename) {
@@ -5697,7 +5697,11 @@ function wrapCommonJS(source, parentPath, vfs) {
   // - 'this' at module top-level === 'module.exports' (via .call)
   // - '__filename' and '__dirname' are available
   const filename = parentPath;
-  const dirname = parentPath.split('/').slice(0, -1).join('/') || '.';
+  // Node path.dirname semantics: "/x.js" -> "/", "a/b.js" -> "a", "x.js" -> "."
+  const _parts = parentPath.split('/');
+  _parts.pop();
+  const _dir = _parts.join('/');
+  const dirname = _dir === '' ? (parentPath.charAt(0) === '/' ? '/' : '.') : _dir;
   return \`
 const exports = {};
 const module = { exports };
@@ -9083,6 +9087,14 @@ function _parseKey(s) {
       // edition. Condition order mirrors Node's ESM-import defaults — the
       // runtime emulates Node in the browser, so 'node' wins over 'browser'.
       const PACKAGE_CONDITIONS = ["node", "import", "default"];
+      // Node parity: require()/require.resolve() resolve 'exports' with the
+      // require condition set; import uses the import set. The _dynamic_import
+      // interop receives type ("import" | "require") from the sandbox loader.
+      function packageConditionsFor(type) {
+        return type === "require"
+          ? ["node", "require", "default"]
+          : PACKAGE_CONDITIONS;
+      }
 
       function splitPackageSpecifier(importPath) {
         // '@scope/pkg/sub/deep' -> { packageName: '@scope/pkg', subpath: './sub/deep' }
@@ -9123,7 +9135,8 @@ function _parseKey(s) {
         return null;
       }
 
-      function resolvePackageExports(pkgJson, subpath) {
+      function resolvePackageExports(pkgJson, subpath, conditions) {
+        conditions = conditions || PACKAGE_CONDITIONS;
         const exportsField = pkgJson.exports;
         if (exportsField === null || exportsField === undefined) return null;
         let target;
@@ -9163,7 +9176,7 @@ function _parseKey(s) {
             const star = subpath.slice(best.length - 1);
             const patternTarget = resolvePackageTarget(
               exportsField[best],
-              PACKAGE_CONDITIONS,
+              conditions,
             );
             if (typeof patternTarget !== "string") return null;
             return patternTarget.replace(/\*/g, star);
@@ -9171,11 +9184,17 @@ function _parseKey(s) {
         } else {
           return null;
         }
-        const resolved = resolvePackageTarget(target, PACKAGE_CONDITIONS);
+        const resolved = resolvePackageTarget(target, conditions);
         return typeof resolved === "string" ? resolved : null;
       }
 
-      function resolvePackageImports(importPath, importerPath, vfs) {
+      function resolvePackageImports(
+        importPath,
+        importerPath,
+        vfs,
+        conditions,
+      ) {
+        conditions = conditions || PACKAGE_CONDITIONS;
         // Nearest parent package.json scope wins; a scope without an
         // 'imports' field means the specifier is unresolvable (Node parity).
         const segments = importerPath ? importerPath.split("/") : [];
@@ -9212,12 +9231,12 @@ function _parseKey(s) {
                 const star = importPath.slice(best.length - 1);
                 const patternTarget = resolvePackageTarget(
                   pkg.imports[best],
-                  PACKAGE_CONDITIONS,
+                  conditions,
                 );
                 if (typeof patternTarget !== "string") return null;
                 target = patternTarget.replace(/\*/g, star);
               }
-              const resolved = resolvePackageTarget(target, PACKAGE_CONDITIONS);
+              const resolved = resolvePackageTarget(target, conditions);
               if (typeof resolved !== "string" || !resolved.startsWith("./"))
                 return null;
               const dir = segments.join("/");
@@ -9423,6 +9442,7 @@ function _parseKey(s) {
               path,
               importerVFSPath,
               vfs,
+              packageConditionsFor(type),
             );
             if (resolvedImport) {
               return serve(resolvedImport);
@@ -9453,6 +9473,7 @@ function _parseKey(s) {
               path,
               importerVFSPath,
               vfs,
+              type,
             );
             if (resolvedPackage) {
               console.log(`Resolved from node_modules: ${path}`);
@@ -9490,7 +9511,10 @@ function _parseKey(s) {
         },
       );
 
-      function resolveNodeModule(importPath, importerPath, vfs) {
+      function resolveNodeModule(importPath, importerPath, vfs, type) {
+        // The sandbox loader passes type ("import" | "require"); require()
+        // resolves 'exports' with the require condition set (Node parity).
+        const conditions = packageConditionsFor(type);
         // Split off any subpath so package.json 'exports' can resolve it (gap #2).
         const { packageName, subpath } = splitPackageSpecifier(importPath);
 
@@ -9508,7 +9532,12 @@ function _parseKey(s) {
           ].join("/");
 
           // Attempt resolution at this level using your existing VFS resolver
-          const resolved = tryResolveFileOrPackage(candidatePath, subpath, vfs);
+          const resolved = tryResolveFileOrPackage(
+            candidatePath,
+            subpath,
+            vfs,
+            conditions,
+          );
           if (resolved) return resolved;
 
           // Stop if we've reached the root
@@ -9521,6 +9550,7 @@ function _parseKey(s) {
           `node_modules/${packageName}`,
           subpath,
           vfs,
+          conditions,
         );
       }
 
@@ -9528,7 +9558,7 @@ function _parseKey(s) {
       // present (gap #2 — the only legal route per Node); otherwise legacy
       // file/main/index.js probing. (Legacy order also corrected to Node parity:
       // package.json 'main' now beats a sibling index.js.)
-      function tryResolveFileOrPackage(packageRoot, subpath, vfs) {
+      function tryResolveFileOrPackage(packageRoot, subpath, vfs, conditions) {
         const pkgJsonCheck = resolveVFS(`${packageRoot}/package.json`, "", vfs);
         let pkg = null;
         if (pkgJsonCheck && pkgJsonCheck.source) {
@@ -9541,7 +9571,7 @@ function _parseKey(s) {
 
         // 1. Package 'exports' field (gap #2).
         if (pkg && pkg.exports) {
-          const target = resolvePackageExports(pkg, subpath);
+          const target = resolvePackageExports(pkg, subpath, conditions);
           if (typeof target === "string" && target.startsWith("./")) {
             return resolveVFS(`${packageRoot}/${target.slice(2)}`, "", vfs);
           }
