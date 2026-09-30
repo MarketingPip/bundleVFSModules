@@ -53,4 +53,17 @@ describe("runtime.js sandbox template keeps the operative `global` hunk", () => 
     expect(src).toMatch(/typeof globalThis\.global === ['"]undefined['"]/);
     expect(src).toMatch(/globalThis\.global = globalThis/);
   });
+  test("alias is installed outside the defineProperty try block", () => {
+    // The alias must survive a defineProperty(window,'process') throw, so it
+    // lives after the catch — never inside the try. This pins the ordering
+    // (regression: the alias used to sit inside the try and was skipped in
+    // the M3 sandbox realm, causing `global is not defined`).
+    const tryIdx = src.indexOf("Object.defineProperty(window, 'process'");
+    const catchIdx = src.indexOf("}catch(err){", tryIdx);
+    const aliasIdx = src.indexOf("globalThis.global = globalThis", catchIdx);
+    expect(tryIdx).toBeGreaterThan(-1);
+    expect(catchIdx).toBeGreaterThan(tryIdx);
+    expect(aliasIdx).toBeGreaterThan(catchIdx);
+    expect(src.slice(catchIdx, aliasIdx)).not.toMatch(/try\s*\{/);
+  });
 });
