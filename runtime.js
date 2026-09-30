@@ -5106,8 +5106,12 @@ function unflattenUserFiles(flatObj) {
   const result = {};
   if (!flatObj || typeof flatObj !== 'object') return result;
   for (const rawPath of Object.keys(flatObj)) {
-    // NOTE: no \/ escapes here — this code lives inside the generate()
-    // template literal, where \/ collapses to /. [/] avoids backslashes.
+    // NOTE: this code lives inside the generate() template literal, so every
+    // backslash here is template-cooked: \\/ becomes /, \\" becomes " (which
+    // breaks "..." strings — the wrapper needs \\\\\\" there), and /\\*/
+    // becomes /*/ (an unterminated comment — use /[*]/ instead). If the
+    // generated wrapper must contain a backslash, write two (\\). Pinned by
+    // tests/vite7-wrapper-vfs-syntax.test.js (2026-09-30: the 883:26 SyntaxError).
     const parts = String(rawPath).replace(/^[/]+/, '').split('/');
     let current = result;
     for (let i = 0; i < parts.length - 1; i++) {
@@ -5282,7 +5286,7 @@ function vfsModuleNotFound(request) {
 function vfsPackagePathNotExported(packageName, subpath, packageJsonPath) {
   var err = new Error(
     "[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '" + subpath +
-    "' is not defined by \"exports\" in " + packageJsonPath
+    "' is not defined by \\\"exports\\\" in " + packageJsonPath
   );
   err.code = 'ERR_PACKAGE_PATH_NOT_EXPORTED';
   return err;
@@ -5290,8 +5294,8 @@ function vfsPackagePathNotExported(packageName, subpath, packageJsonPath) {
 
 function vfsPackageImportNotDefined(specifier, packageJsonPath) {
   var err = new Error(
-    "[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier \"" + specifier +
-    "\" is not defined in package " + packageJsonPath
+    "[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier \\\"" + specifier +
+    "\\\" is not defined in package " + packageJsonPath
   );
   err.code = 'ERR_PACKAGE_IMPORT_NOT_DEFINED';
   return err;
@@ -5408,7 +5412,7 @@ function vfsResolvePackageExportsSync(pkg, subpath) {
         VFS_SYNC_EXPORT_CONDITIONS,
       );
       if (typeof patternTarget !== "string") return null;
-      return patternTarget.replace(/\*/g, star);
+      return patternTarget.replace(/[*]/g, star);
     }
   } else {
     return null;
@@ -5484,7 +5488,7 @@ function vfsResolvePackageImportsSync(importPath, importerPath, vfs) {
           VFS_SYNC_EXPORT_CONDITIONS,
         );
         if (typeof patternTarget !== "string") return null;
-        target = patternTarget.replace(/\*/g, star);
+        target = patternTarget.replace(/[*]/g, star);
       }
       var resolved = vfsResolvePackageTargetSync(
         target,
