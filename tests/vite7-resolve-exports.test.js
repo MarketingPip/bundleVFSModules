@@ -67,9 +67,11 @@ function loadHelpers() {
     "function vfsDirname(path)",
     "function vfsNodeModulePaths(from)",
     "function vfsLoadAsFile(basePath, vfs)",
-    "function vfsLoadAsDirectory(dirPath, vfs)",
+    "function vfsLoadAsDirectory(dirPath, vfs",
     "function vfsLoadAsFileOrDirectory(basePath, vfs)",
     "function vfsModuleNotFound(request)",
+    "function vfsPackagePathNotExported(packageName,",
+    "function vfsPackageImportNotDefined(specifier,",
     "function vfsIsRelativeRequest(request)",
     "function vfsSplitPackageSpecifier(request)",
     "function vfsResolvePackageTargetSync(target, conditions)",
@@ -186,11 +188,11 @@ describe("sync require(): package exports field", () => {
     ).toBe("/node_modules/cond-pkg/feat.js");
   });
 
-  test("unexported subpath is an honest miss even when the file exists", () => {
+  test("unexported subpath throws ERR_PACKAGE_PATH_NOT_EXPORTED (Node parity)", () => {
     const { resolveSyncRequest } = loadHelpers();
     expect(() =>
       resolveSyncRequest("locked-pkg/secret", "/app/entry.js", makeVfs()),
-    ).toThrow(/ERR_MODULE_NOT_FOUND/);
+    ).toThrow(/ERR_PACKAGE_PATH_NOT_EXPORTED/);
   });
 
   test("resolves ./x/* pattern exports", () => {
@@ -251,11 +253,68 @@ describe("sync require(): package imports field", () => {
     expect(require("#utils")).toEqual({ utils: true });
   });
 
-  test("unknown #-import throws ERR_MODULE_NOT_FOUND", () => {
+  test("unknown #-import throws ERR_PACKAGE_IMPORT_NOT_DEFINED", () => {
     const { resolveSyncRequest } = loadHelpers();
     expect(() =>
       resolveSyncRequest("#nope", "/app/entry.js", makeVfs()),
-    ).toThrow(/ERR_MODULE_NOT_FOUND/);
+    ).toThrow(/ERR_PACKAGE_IMPORT_NOT_DEFINED/);
+  });
+
+  test("resolves scoped package subpath via exports", () => {
+    const { resolveSyncRequest, unflattenUserFiles } = loadHelpers();
+    const files = {
+      ...FILES,
+      "/node_modules/@scope/feat-pkg/package.json": JSON.stringify({
+        name: "@scope/feat-pkg",
+        exports: { ".": "./index.js", "./feature": "./feature.js" },
+      }),
+      "/node_modules/@scope/feat-pkg/index.js": "module.exports = {};",
+      "/node_modules/@scope/feat-pkg/feature.js": "module.exports = {};",
+      "/app/entry.js": "module.exports = {};",
+    };
+    const vfs = unflattenUserFiles(files);
+    expect(
+      resolveSyncRequest("@scope/feat-pkg/feature", "/app/entry.js", vfs),
+    ).toBe("/node_modules/@scope/feat-pkg/feature.js");
+  });
+
+  test("scoped package unexported subpath throws ERR_PACKAGE_PATH_NOT_EXPORTED", () => {
+    const { resolveSyncRequest, unflattenUserFiles } = loadHelpers();
+    const files = {
+      ...FILES,
+      "/node_modules/@scope/locked-pkg/package.json": JSON.stringify({
+        name: "@scope/locked-pkg",
+        exports: { ".": "./index.js" },
+      }),
+      "/node_modules/@scope/locked-pkg/index.js": "module.exports = {};",
+      "/node_modules/@scope/locked-pkg/secret.js": "module.exports = {};",
+      "/app/entry.js": "module.exports = {};",
+    };
+    const vfs = unflattenUserFiles(files);
+    expect(() =>
+      resolveSyncRequest("@scope/locked-pkg/secret", "/app/entry.js", vfs),
+    ).toThrow(/ERR_PACKAGE_PATH_NOT_EXPORTED/);
+  });
+
+  test("package.json main directory cycle does not infinite-loop", () => {
+    const { resolveSyncRequest, unflattenUserFiles } = loadHelpers();
+    const files = {
+      ...FILES,
+      "/node_modules/cycle-pkg/package.json": JSON.stringify({
+        name: "cycle-pkg",
+        main: "./dir",
+      }),
+      "/node_modules/cycle-pkg/dir/package.json": JSON.stringify({
+        name: "cycle-pkg-dir",
+        main: "..",
+      }),
+      "/app/entry.js": "module.exports = {};",
+    };
+    const vfs = unflattenUserFiles(files);
+    // Should throw, not hang.
+    expect(() =>
+      resolveSyncRequest("cycle-pkg", "/app/entry.js", vfs),
+    ).toThrow();
   });
 });
 

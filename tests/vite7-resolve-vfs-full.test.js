@@ -66,7 +66,7 @@ function loadHelpers() {
     "function vfsDirname(path)",
     "function vfsNodeModulePaths(from)",
     "function vfsLoadAsFile(basePath, vfs)",
-    "function vfsLoadAsDirectory(dirPath, vfs)",
+    "function vfsLoadAsDirectory(dirPath, vfs",
     "function vfsLoadAsFileOrDirectory(basePath, vfs)",
     "function vfsModuleNotFound(request)",
     "function vfsIsRelativeRequest(request)",
