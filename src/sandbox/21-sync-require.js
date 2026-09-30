@@ -19,10 +19,10 @@ function createSyncRequire(parentPath, vfs) {
       const key = _builtinManifest[builtinKey] ? builtinKey : request;
       if (_builtinCache.has(key)) {
         const mod = _builtinCache.get(key);
-        // Return default export or namespace
-        return mod.default !== undefined && Object.keys(mod).length === 1
-          ? mod.default
-          : mod;
+        // Return the port's declared CJS module.exports (export default),
+        // not the ESM namespace: require("events") must be the EventEmitter
+        // class or `new (require("events"))()` dies with "not a constructor".
+        return mod && mod.default !== undefined ? mod.default : mod;
       }
       throw new Error(
         '[ERR_REQUIRE_ASYNC]: Built-in "' +

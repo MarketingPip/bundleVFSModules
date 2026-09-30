@@ -50,9 +50,7 @@
         throw err;
       }
       const mod = _builtinCache.get(bare);
-      return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
-        ? mod.default
-        : mod;
+      return mod && mod.default !== undefined ? mod.default : mod;
     },
     // --- end sandbox getBuiltinModule (gap #3) ---
       // --- Timing ---

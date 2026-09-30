@@ -4441,9 +4441,11 @@ const _builtinCache = new Map();
 // (createSyncRequire, process.getBuiltinModule): what a synchronous
 // require() of a builtin returns. Mirrors the unwrap in 21-sync-require.
 function _builtinRequireValue(mod) {
-  return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
-    ? mod.default
-    : mod;
+  // Every builtin port declares its CJS module.exports equivalent via
+  // export default (events.js: export default EventEmitter). Sync require()
+  // must return that value, not the ESM namespace, or
+  // const E = require("events"); new E() dies with "not a constructor".
+  return mod && mod.default !== undefined ? mod.default : mod;
 }
 // --- end sync builtin require interop (gap #3) ---
 
@@ -5594,9 +5596,7 @@ function createSyncRequire(parentPath, vfs, cache) {
     if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
       const key = _builtinManifest[builtinKey] ? builtinKey : request;
       if (_builtinCache.has(key)) {
-        const mod = _builtinCache.get(key);
-        // Return default export or namespace
-        return mod.default !== undefined && Object.keys(mod).length === 1 ? mod.default : mod;
+        return _builtinRequireValue(_builtinCache.get(key));
       }
       throw new Error('[ERR_REQUIRE_ASYNC]: Built-in "' + request + '" not yet loaded. ' +
         'Call await loadBuiltin("' + request + '") first, or use dynamic import().');
