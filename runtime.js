@@ -8994,6 +8994,52 @@ function _parseKey(s) {
           undefined
         );
       }
+      /**
+       * General WASM data-URL inlining for the package-loading path.
+       * Vendored WASM builds reference their binary via
+       * `new URL("<rel>.wasm", import.meta.url)`. Modules served by the
+       * parent _dynamic_import handler execute from `data:` URLs, where
+       * import.meta.url IS the data: URL — relative resolution throws.
+       * This rewrites such references to `data:application/wasm;base64,...`
+       * using the bytes resolved from the VFS relative to the module's own
+       * path. Platform-general (any package), not rollup-specific. A
+       * missing/unresolvable wasm file is left untouched (honest miss).
+       */
+      function inlineWasmDataUrls(source, moduleVfsPath, vfs) {
+        if (typeof source !== "string" || !source.includes("import.meta.url"))
+          return source;
+        const dir = String(moduleVfsPath || "")
+          .split("/")
+          .slice(0, -1);
+        const lookupNode = (absPath) => {
+          const segs = absPath.split("/").filter(Boolean);
+          let node = vfs;
+          for (const s of segs) {
+            if (node == null || typeof node !== "object") return undefined;
+            node = node[s];
+          }
+          return node;
+        };
+        return source.replace(
+          /new URL\(\s*(['"])([^'"]*?\.wasm)\1\s*,\s*import\.meta\.url\s*\)/g,
+          (m, _q, rel) => {
+            const parts = [...dir];
+            for (const seg of rel.split("/")) {
+              if (seg === "..") parts.pop();
+              else if (seg !== "." && seg !== "") parts.push(seg);
+            }
+            const node = lookupNode("/" + parts.join("/"));
+            if (
+              !node ||
+              typeof node !== "object" ||
+              node.encoding !== "base64" ||
+              typeof node.data !== "string"
+            )
+              return m; // honest miss: leave the reference alone
+            return JSON.stringify(`data:application/wasm;base64,${node.data}`);
+          },
+        );
+      }
       function toVFSPath(modulePath, fromFile) {
         // IDEMPOTENT (vitest E2E gap #1): an already-resolved VFS path — anything
         // not starting with ./ or ../ — is returned as-is. Re-joining it against
@@ -9342,6 +9388,19 @@ function _parseKey(s) {
           const isRelative = path.startsWith("./") || path.startsWith("../");
           const isAbsolute = path.startsWith("/");
 
+          // Canonical package-loading path: every VFS-served module goes
+          // through here, so vendored WASM builds get their
+          // `new URL(<rel>.wasm, import.meta.url)` references inlined as
+          // data: URLs before the child executes the source from a data:
+          // URL (where relative resolution would throw).
+          const serve = (hit) =>
+            hit && typeof hit.source === "string"
+              ? {
+                  source: inlineWasmDataUrls(hit.source, hit.resolvedPath, vfs),
+                  resolvedPath: hit.resolvedPath,
+                }
+              : hit;
+
           // 3a. Package-internal # imports (gap #2): resolve via the nearest
           // package.json 'imports' field before the node_modules walk.
           if (path.startsWith("#")) {
@@ -9351,10 +9410,7 @@ function _parseKey(s) {
               vfs,
             );
             if (resolvedImport) {
-              return {
-                source: resolvedImport.source,
-                resolvedPath: resolvedImport.resolvedPath,
-              };
+              return serve(resolvedImport);
             }
             return null;
           }
@@ -9373,7 +9429,7 @@ function _parseKey(s) {
             if (intercepted) {
               const hit = resolveVFS(intercepted, "", vfs);
               if (hit) {
-                return { source: hit.source, resolvedPath: hit.resolvedPath };
+                return serve(hit);
               }
               // Target not seeded in this VFS: fall through to the normal
               // lookup so the miss stays an honest MODULE_NOT_FOUND.
@@ -9385,10 +9441,7 @@ function _parseKey(s) {
             );
             if (resolvedPackage) {
               console.log(`Resolved from node_modules: ${path}`);
-              return {
-                source: resolvedPackage.source,
-                resolvedPath: resolvedPackage.resolvedPath,
-              };
+              return serve(resolvedPackage);
             }
             return null; // Fall through if package is completely missing
           }
@@ -9405,10 +9458,7 @@ function _parseKey(s) {
               );
             }
             // Gap #1: return the resolved VFS path alongside the source.
-            return {
-              source: absResult.source,
-              resolvedPath: absResult.resolvedPath,
-            };
+            return serve(absResult);
           }
 
           // 4. Handle Relative Paths
@@ -9421,7 +9471,7 @@ function _parseKey(s) {
 
           // Gap #1: return the resolved VFS path alongside the source so the sandbox
           // can thread it into _build_file as the nested entryPoint.
-          return { source: result.source, resolvedPath: result.resolvedPath };
+          return serve(result);
         },
       );
 

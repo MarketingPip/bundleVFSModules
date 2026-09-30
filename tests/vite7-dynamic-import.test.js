@@ -37,7 +37,7 @@ const RUNTIME_SRC = fs.readFileSync(
 const NM = path.join(__dirname, "..", "node_modules");
 
 const ROLLUP_BROWSER_SRC = fs.readFileSync(
-  path.join(NM, "@rollup/browser", "dist", "rollup.browser.js"),
+  path.join(NM, "@rollup/browser", "dist", "es", "rollup.browser.js"),
   "utf8",
 );
 const ESBUILD_SHIM_SRC = fs.readFileSync(
@@ -52,7 +52,7 @@ const FLAT_VFS = {
     path.join(NM, "@rollup/browser", "package.json"),
     "utf8",
   ),
-  "/node_modules/@rollup/browser/dist/rollup.browser.js": ROLLUP_BROWSER_SRC,
+  "/node_modules/@rollup/browser/dist/es/rollup.browser.js": ROLLUP_BROWSER_SRC,
   "/node_modules/.bvm/esbuild-shim.cjs": ESBUILD_SHIM_SRC,
   "/node_modules/lodash-es/package.json": JSON.stringify({
     name: "lodash-es",
@@ -99,22 +99,35 @@ function extractFunction(src, marker) {
 }
 
 // Real pure neighbors, extracted verbatim from runtime.js (constructor
-// scope): resolveVFS + its sibling vfsLookup, and toVFSPath.
+// scope): resolveVFS + its sibling vfsLookup, toVFSPath, and
+// inlineWasmDataUrls (the WASM data-URL inlining applied by serve()).
 function realNeighbors() {
   const resolveVFSSrc = extractFunction(RUNTIME_SRC, "function resolveVFS(");
   const vfsLookupIdx = RUNTIME_SRC.indexOf("function vfsLookup(", 8000);
   const vfsLookupSrc = extractFunctionAt(RUNTIME_SRC, vfsLookupIdx);
   const toVFSPathSrc = extractFunction(RUNTIME_SRC, "function toVFSPath(");
+  const inlineWasmSrc = extractFunction(
+    RUNTIME_SRC,
+    "function inlineWasmDataUrls(",
+  );
   const resolveVFS = new Function(
     `${resolveVFSSrc}\n${vfsLookupSrc}\nreturn resolveVFS;`,
   )();
   const toVFSPath = new Function(`${toVFSPathSrc}\nreturn toVFSPath;`)();
-  return { resolveVFSSrc, vfsLookupSrc, toVFSPathSrc, resolveVFS, toVFSPath };
+  return {
+    resolveVFSSrc,
+    vfsLookupSrc,
+    toVFSPathSrc,
+    inlineWasmSrc,
+    resolveVFS,
+    toVFSPath,
+  };
 }
 
 function loadHandler(deps) {
   const handlerSrc = extractLiveHandler(RUNTIME_SRC);
-  const { resolveVFSSrc, vfsLookupSrc, toVFSPathSrc } = realNeighbors();
+  const { resolveVFSSrc, vfsLookupSrc, toVFSPathSrc, inlineWasmSrc } =
+    realNeighbors();
   // The live handler now serves the VFS host-side via pickDynamicImportVfs
   // (unflattenFileSystem + this.config.fs); wire the real helpers in and
   // bind a fake host `this` with an empty seed so the handler falls back to
@@ -134,6 +147,7 @@ function loadHandler(deps) {
     "resolveNodeModule",
     "resolveVFS",
     "lookupNativeInterception",
+    "inlineWasmDataUrls",
     `${resolveVFSSrc}\n${vfsLookupSrc}\n${toVFSPathSrc}\n${pickVfsSrc}\n${unflattenSrc}\nreturn (${handlerSrc});`,
   );
   return factory.call(
@@ -144,6 +158,7 @@ function loadHandler(deps) {
     deps.resolveNodeModule,
     deps.resolveVFS,
     lookupNativeInterception,
+    new Function(`${inlineWasmSrc}\nreturn inlineWasmDataUrls;`)(),
   );
 }
 
@@ -185,7 +200,7 @@ describe("parent _dynamic_import consults the interception table (M1/M2 ESM path
     });
     expect(result.source).toBe(ROLLUP_BROWSER_SRC);
     expect(result.resolvedPath).toBe(
-      "/node_modules/@rollup/browser/dist/rollup.browser.js",
+      "/node_modules/@rollup/browser/dist/es/rollup.browser.js",
     );
     // Interception preempts the normal lookup entirely.
     expect(calls.resolveNodeModule).toEqual([]);
