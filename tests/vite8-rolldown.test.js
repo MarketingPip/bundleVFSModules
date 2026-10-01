@@ -57,4 +57,10 @@ describe("rolldown browser-build interception (Vite 8)", () => {
       "/node_modules/@emnapi/runtime/dist/emnapi.mjs",
     );
   });
+
+  test("@emnapi/core -> VFS path (dep of @napi-rs/wasm-runtime)", () => {
+    expect(lookupNativeInterception("@emnapi/core")).toBe(
+      "/node_modules/@emnapi/core/dist/emnapi-core.mjs",
+    );
+  });
 });

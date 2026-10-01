@@ -64,6 +64,7 @@ const ROLLDOWN_PARSEAST =
 const NAPI_WASM_RUNTIME = "/node_modules/@napi-rs/wasm-runtime/runtime.js";
 const NAPI_WASM_RUNTIME_FS = "/node_modules/@napi-rs/wasm-runtime/dist/fs.js";
 const EMNAPI_RUNTIME = "/node_modules/@emnapi/runtime/dist/emnapi.mjs";
+const EMNAPI_CORE = "/node_modules/@emnapi/core/dist/emnapi-core.mjs";
 
 function hasRuntimeVFS() {
   return (
@@ -213,6 +214,7 @@ export function lookupNativeInterception(request) {
   if (request === "@napi-rs/wasm-runtime") return NAPI_WASM_RUNTIME;
   if (request === "@napi-rs/wasm-runtime/fs") return NAPI_WASM_RUNTIME_FS;
   if (request === "@emnapi/runtime") return EMNAPI_RUNTIME;
+  if (request === "@emnapi/core") return EMNAPI_CORE;
 
   return null;
 }

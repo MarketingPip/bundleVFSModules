@@ -62,11 +62,13 @@ function addTree(pkgName, subDir) {
 addTree("@rolldown/browser", "dist");
 addTree("@napi-rs/wasm-runtime", ".");
 addTree("@emnapi/runtime", "dist");
+addTree("@emnapi/core", "dist");
 // package.json files for exports-condition resolution.
 for (const pkg of [
   "@rolldown/browser",
   "@napi-rs/wasm-runtime",
   "@emnapi/runtime",
+  "@emnapi/core",
 ]) {
   addFile(
     `/node_modules/${pkg}/package.json`,
