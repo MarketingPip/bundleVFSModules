@@ -34,12 +34,9 @@ const RUNTIME_SRC = fs.readFileSync(
   "utf8",
 );
 
-function extractFunction(src, marker) {
-  const start = src.indexOf(marker);
-  if (start === -1)
-    throw new Error("marker not found in runtime.js: " + marker);
-  // Skip the parameter list: find its balanced closing paren first, so a
-  // default like `opts = {}` doesn't end the scan early.
+function functionEnd(src, start) {
+  // start: index of "function name". Returns the index just past the
+  // function's closing brace (balanced paren/brace scan).
   let p = src.indexOf("(", start);
   let pdepth = 0;
   for (; p < src.length; p++) {
@@ -58,8 +55,16 @@ function extractFunction(src, marker) {
       if (depth === 0) break;
     }
   }
-  if (depth !== 0) throw new Error("unbalanced braces extracting: " + marker);
-  return src.slice(start, i + 1).replace(/^export\s+/, "");
+  if (depth !== 0)
+    throw new Error("unbalanced braces in runtime.js extraction");
+  return i + 1;
+}
+
+function extractFunction(src, marker) {
+  const start = src.indexOf(marker);
+  if (start === -1)
+    throw new Error("marker not found in runtime.js: " + marker);
+  return src.slice(start, functionEnd(src, start)).replace(/^export\s+/, "");
 }
 
 // Minimal walk.simple mirroring acorn-walk's contract (visit every node,
@@ -104,25 +109,28 @@ function loadTransform() {
 // template. ${config.uuid} is pinned to a test id; tests control
 // globalThis._RUNTIMEtestuuid_.__FS__ to switch between live memfs and the
 // snapshot fallback.
+//
+// The whole contiguous block is extracted (readModuleSourceLiveFirst through
+// createSyncRequire), not functions by name: createSyncRequire's dependency
+// closure (resolveSyncRequest + the vfs* resolvers) lives in this block, and
+// the by-name list went stale when resolution moved to the shared
+// resolveSyncRequire — the missing binding threw a ReferenceError that
+// createSyncRequire's catch re-wrapped as ERR_MODULE_NOT_FOUND.
 const TEST_UUID = "testuuid";
 function loadSyncRequireHelpers() {
-  const parts = [
-    "function readModuleSourceLiveFirst(resolved, vfs)",
-    "function vfsLookup(path, vfs)",
-    "function unflattenUserFiles(flatObj)",
-    "function createSyncRequire(parentPath, vfs",
-  ];
-  // vfsLookup exists twice (sandbox template copy + parent scope); the
-  // template copy follows the readModuleSourceLiveFirst comment block.
-  const templateStart = RUNTIME_SRC.indexOf(
+  const blockStart = RUNTIME_SRC.indexOf(
     "// Read a CJS module's source for the sync require path",
   );
-  if (templateStart === -1)
+  if (blockStart === -1)
     throw new Error("sync-require template block not found");
-  const templateSrc = RUNTIME_SRC.slice(templateStart);
+  const createStart = RUNTIME_SRC.indexOf(
+    "function createSyncRequire(parentPath, vfs",
+    blockStart,
+  );
+  if (createStart === -1)
+    throw new Error("createSyncRequire not found in sync-require block");
   let code = "const _builtinManifest = {};\nconst _builtinCache = new Map();\n";
-  for (const marker of parts)
-    code += extractFunction(templateSrc, marker) + "\n";
+  code += RUNTIME_SRC.slice(blockStart, functionEnd(RUNTIME_SRC, createStart));
   code = code.replace(/\$\{config\.uuid\}/g, TEST_UUID);
   const factory = new Function(
     code +
@@ -134,23 +142,36 @@ function loadSyncRequireHelpers() {
 function loadParentUnflatten() {
   const code = extractFunction(
     RUNTIME_SRC,
-    "        function unflattenFileSystem(flatObj)",
+    "function unflattenFileSystem(flatObj)",
   );
   return new Function(code + "\nreturn unflattenFileSystem;")();
 }
 
 // In-memory fake for the memfs __FS__ surface the sync loader uses.
+// Implements the statSync/readFileSync/writeFileSync surface the real
+// buildApi(vol) fs exposes (src/fs.js): the VFS resolvers probe the live
+// memfs via statSync, so a fake without it silently disables live-first
+// resolution.
 function makeFakeFs(seedFiles) {
   const store = new Map(Object.entries(seedFiles));
+  const enoent = (op, p) => {
+    const e = new Error(
+      "ENOENT: no such file or directory, " + op + " '" + p + "'",
+    );
+    e.code = "ENOENT";
+    return e;
+  };
   return {
+    statSync(p) {
+      if (store.has(p)) return { isFile: () => true, isDirectory: () => false };
+      const prefix = p.endsWith("/") ? p : p + "/";
+      for (const k of store.keys())
+        if (k.startsWith(prefix))
+          return { isFile: () => false, isDirectory: () => true };
+      throw enoent("stat", p);
+    },
     readFileSync(p, enc) {
-      if (!store.has(p)) {
-        const e = new Error(
-          "ENOENT: no such file or directory, open '" + p + "'",
-        );
-        e.code = "ENOENT";
-        throw e;
-      }
+      if (!store.has(p)) throw enoent("open", p);
       return store.get(p);
     },
     writeFileSync(p, data) {
