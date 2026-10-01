@@ -6,7 +6,7 @@
 //     via loadModule("RUNTIME:NODE_GLOBALS").
 //  2. runtime.js generate() template — the operative hand-maintained sandbox
 //     script (e4f3ed8f); guarded here so the hunk is never silently dropped.
-import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
+import { jest } from "@jest/globals"; // ESM: jest object is not a global here
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,7 @@ describe("node_globals installs the Node.js `global` alias", () => {
   let saved;
   beforeEach(() => {
     saved = globalThis.global;
-    vi.resetModules();
+    jest.resetModules();
   });
   afterEach(() => {
     if (saved === undefined) delete globalThis.global;

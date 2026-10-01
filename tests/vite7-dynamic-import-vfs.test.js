@@ -15,7 +15,7 @@
 // runtime.js like the other vite7 tests (runtime.js wires a demo DOM at
 // module scope and cannot be imported under Node).
 
-import { describe, expect, test } from "vitest";
+// jest globals (describe/expect/test) — converted from vitest 2026-10-01
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
