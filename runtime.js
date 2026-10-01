@@ -1668,6 +1668,30 @@ export function transformImportsToLoadModule(
       const starKey = `__bvm_star_${starSeq++}`;
       s.overwrite(node.start, node.end, `export const ${starKey} = ${v};`);
     },
+
+    // export { a, b as c } from "./x" — re-export with source.
+    // Like ExportAllDeclaration, the source must be lifted via loadModule
+    // because relative resolution fails from data: URLs. Destructure the
+    // lifted namespace and re-export the bindings.
+    ExportNamedDeclaration(node) {
+      if (!node.source) return; // export { x } without source: leave as-is
+      const modulePath = node.source.value;
+      const v = getLiftedVar(modulePath);
+      setImportType(modulePath, "import");
+      const named = node.specifiers.map((s) => {
+        // s.exported is the exported name, s.local is the imported name
+        // For `export { foo } from`, exported=foo, local=foo
+        // For `export { bar as baz } from`, exported=baz, local=bar
+        const imported = s.local.name;
+        const exported = s.exported.name;
+        return imported === exported ? exported : `${imported}: ${exported}`;
+      });
+      s.overwrite(
+        node.start,
+        node.end,
+        `export const { ${named.join(", ")} } = ${v};`,
+      );
+    },
   });
 
   // Make functions async if needed
