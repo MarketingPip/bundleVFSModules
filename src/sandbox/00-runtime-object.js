@@ -31,6 +31,16 @@ Object.defineProperty(globalThis, _BVM_RT_KEY_, {
 // 1. Force configurable:true on global defineProperty. All forks share one
 //    globalThis, and vitest sets globals (like __vitest_index__) non-configurably
 //    which crashes every re-run (watch mode). Neuter at the lowest level.
+//
+// maskFunction must be defined BEFORE its first use in source order: the
+// concatenated template is injected as type="module-shim" and executed by
+// es-module-shims, which does not hoist function declarations from later
+// fragments to earlier call sites (2026-10-01: early call threw
+// "ReferenceError: maskFunction is not defined", killing iframe bootstrap).
+function maskFunction(patchedFn, originalFn) {
+  Object.defineProperty(patchedFn, "name", { value: originalFn.name });
+  patchedFn.toString = () => originalFn.toString();
+}
 (function () {
   const origDefineProperty = Object.defineProperty;
   Object.defineProperty = function (obj, prop, descriptor) {
@@ -39,6 +49,8 @@ Object.defineProperty(globalThis, _BVM_RT_KEY_, {
     }
     return origDefineProperty.call(this, obj, prop, descriptor);
   };
+  // Cloak the patch: it wraps a host builtin, so it must read as native.
+  maskFunction(Object.defineProperty, origDefineProperty);
 })();
 
 // 2. process.exit semantics: in sync context throw to halt execution (like
@@ -65,6 +77,9 @@ Object.defineProperty(globalThis, _BVM_RT_KEY_, {
       err.exitCode = code;
       throw err;
     };
+    // Cloak the patch: it replaces a host builtin, so it must read as native.
+    Object.defineProperty(rt.process.exit, "name", { value: "exit" });
+    rt.process.exit.toString = () => "function exit() { [native code] }";
   }
 })();
 
@@ -76,3 +91,8 @@ if (!Array.prototype.toSorted) {
     return copy;
   };
 }
+// Cloak the polyfill so it reads as native (matches the native toString
+// shape on engines that already have toSorted).
+// cloak.test.js asserts this exact single-line snippet; keep it unwrapped.
+// prettier-ignore
+Array.prototype.toSorted.toString = () => "function toSorted() { [native code] }";

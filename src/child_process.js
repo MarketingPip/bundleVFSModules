@@ -2352,9 +2352,32 @@ export function fork(modulePath, args, options) {
 
   // Child-side process object. The worker entry (e.g. vitest's forks.js)
   // uses process.on('message') and process.send() directly.
-  const childProcess = {
-    // Copy parent process props
-    ...globalThis.process,
+  //
+  // Parent props are copied by descriptor, NOT by {...spread}: a spread
+  // evaluates the parent's accessor properties, and touching the lazy
+  // stdout/stdin/stderr getters materializes the host's stdio streams
+  // (PIPEWRAP handles) that outlive the fork and keep the host event loop
+  // alive. The three stdio streams stay lazy on the child and forward to
+  // the parent's streams on first touch — the same sharing the spread gave,
+  // without the eager side effect.
+  const parentProcess = globalThis.process;
+  const childProcess = {};
+  for (const key of Reflect.ownKeys(parentProcess)) {
+    if (key === "stdout" || key === "stdin" || key === "stderr") continue;
+    const desc = Object.getOwnPropertyDescriptor(parentProcess, key);
+    if (desc.enumerable) Object.defineProperty(childProcess, key, desc);
+  }
+  for (const key of ["stdout", "stdin", "stderr"]) {
+    Object.defineProperty(childProcess, key, {
+      configurable: true,
+      enumerable: true,
+      get: () => parentProcess[key],
+      set: (v) => {
+        parentProcess[key] = v;
+      },
+    });
+  }
+  Object.assign(childProcess, {
     argv: ["node", modulePath, ...args],
     execPath,
     execArgv,
@@ -2382,8 +2405,8 @@ export function fork(modulePath, args, options) {
       child.emit("disconnect");
     },
     // A forked child's process.exit() ends ONLY the fork — it must never
-    // terminate the host realm (the spread above would otherwise inherit
-    // the parent's exit). Pending child->parent IPC is flushed first: Node
+    // terminate the host realm (the descriptor copy above would otherwise
+    // inherit the parent's exit). Pending child->parent IPC is flushed first: Node
     // drains the IPC channel before reaping, so send() immediately followed
     // by exit() still arrives. The parent then sees 'disconnect', 'exit'
     // and 'close' with the code, in that order (Node parity).
@@ -2399,7 +2422,7 @@ export function fork(modulePath, args, options) {
       });
     },
     connected: true,
-  };
+  });
   const forkEntry = { id: ++forkSeq, child, childProcess };
 
   // Parent-side: child.send(message) -> child's process 'message' event

@@ -69,7 +69,10 @@ describe("convertCjsToEsm", () => {
   test("converts module.exports = literal to default export", () => {
     const code = `module.exports = 42;`;
     const esm = convertCjsToEsm(code);
-    expect(esm).toBe("export default 42;");
+    expect(esm).toContain("export default 42;");
+    // CJS interop marker (6aff42b5): lets the loader resolve named ESM
+    // imports against module.exports; stripped from the visible namespace.
+    expect(esm).toContain("export const __bvm_cjs__ = true;");
   });
 
   test("converts module.exports = named function to default export", () => {

@@ -21,7 +21,7 @@
 // This is a platform bug, not a library-specific workaround (AGENTS.md rule 6):
 // any absolute VFS path import was broken, not just terser's.
 
-import { describe, expect, test } from "vitest";
+// jest globals (describe/expect/test) — converted from vitest 2026-10-01
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,17 +72,17 @@ describe("_dynamic_import absolute VFS path handling", () => {
   test("handler distinguishes absolute paths from bare specifiers", () => {
     // The _dynamic_import interop handler (registered via registerInterop)
     // must not send '/node_modules/...' down the bare-specifier
-    // (resolveNodeModule) branch. Look for the isAbsolute definition in
-    // the handler's scope: it follows the "2. Determine the importer's
-    // VFS path" comment and precedes the "3a. Package-internal" comment.
-    const handlerSection = RUNTIME_SRC.match(
-      /\/\/ 2\. Determine the importer's VFS path[\s\S]{0,500}?const isRelative = path\.startsWith\("\.\/"\) \|\| path\.startsWith\("\.\.\/"\);([\s\S]{0,200}?)\/\/ 3a\./,
+    // (resolveNodeModule) branch. The platform invariant is that the
+    // handler defines isAbsolute immediately after isRelative.
+    // (Anchoring on the "// 2. Determine the importer's VFS path" comment
+    // proved brittle: a demo handler shares that comment text, and the
+    // serve() WASM-inlining added distance to the "// 3a." comment. The
+    // adjacent-definition check below targets the production handler
+    // directly — the demo handler has no isAbsolute at all.)
+    const def = RUNTIME_SRC.match(
+      /const isRelative = path\.startsWith\("\.\/"\) \|\| path\.startsWith\("\.\.\/"\);\s*const isAbsolute = path\.startsWith\("\/"\);/,
     );
-    expect(handlerSection).not.toBeNull();
-    // The isAbsolute check must exist between isRelative and the # handling
-    expect(handlerSection[1]).toMatch(
-      /const isAbsolute = path\.startsWith\("\/"\)/,
-    );
+    expect(def).not.toBeNull();
   });
 
   test("absolute paths bypass the bare-specifier branch", () => {

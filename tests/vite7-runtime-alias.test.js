@@ -16,7 +16,7 @@
 //
 // The alias is per-realm (each sandbox gets its own iframe/globalThis),
 // so it does not break isolation.
-import { describe, expect, test } from "vitest";
+// jest globals (describe/expect/test) — converted from vitest 2026-10-01
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

@@ -132,6 +132,8 @@ globalThis.EventSource = function (url, options) {
     throw new Error(`Blocked EventSource to ${url}`);
   return new OrigEventSource(url, options);
 };
+// eslint-disable-next-line no-undef -- defined cross-fragment by 71-xhr.js
+maskFunction(globalThis.EventSource, OrigEventSource);
 
 const OrigWS = window.WebSocket;
 
@@ -140,6 +142,8 @@ globalThis.WebSocket = function (url, protocols) {
     throw new Error(`Blocked WebSocket to ${url}`);
   return new OrigWS(url, protocols);
 };
+// eslint-disable-next-line no-undef -- defined cross-fragment by 71-xhr.js
+maskFunction(globalThis.WebSocket, OrigWS);
 
 const origBeacon = navigator.sendBeacon.bind(navigator);
 
@@ -147,3 +151,5 @@ globalThis.navigator.sendBeacon = (url, data) => {
   if (url.includes("blocked.com")) return false;
   return origBeacon(url, data);
 };
+// eslint-disable-next-line no-undef -- defined cross-fragment by 71-xhr.js
+maskFunction(globalThis.navigator.sendBeacon, origBeacon);

@@ -141,7 +141,10 @@ try {
   phase("sandbox-constructed");
 
   setTimeout(() => {
-    if (!window.__done__) report({ ok: false, phase: "watchdog", lastPhase: window.__phase || null });
+    if (!window.__done__) {
+      document.title = "E2E-FAIL: watchdog timeout at phase " + (window.__phase || "unknown");
+      report({ ok: false, phase: "watchdog", lastPhase: window.__phase || null });
+    }
   }, 175000);
 
   let result;
