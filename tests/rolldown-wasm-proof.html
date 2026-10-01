@@ -71,7 +71,9 @@ try {
   const execResult = await sandbox.execute(userCode);
   phase("executed");
 
-  const logs = (execResult && execResult.logs ? execResult.logs.join("\n") : "");
+  const logs = ((execResult && execResult.logs) || [])
+    .map((l) => (typeof l === "string" ? l : JSON.stringify(l)))
+    .join("\n");
   log("LOGS tail:\n" + logs.slice(-2000));
   const m = logs.match(/__ROLLDOWN_PROOF__(\{.*\})/);
   check("proof marker in logs", !!m, logs.slice(-500));
