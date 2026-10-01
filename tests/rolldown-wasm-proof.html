@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Rolldown WASM proof</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// WASM epic proof: @rolldown/browser's 11MB WASM instantiates in-browser.
+//
+// Uses ONLY the real public surface:
+//   - CodeSandbox from the REAL /local-repo/runtime.js
+//   - VFS seeded from /local-repo/tests/rolldown-seed.json (59 files:
+//     @rolldown/browser dist + @napi-rs/wasm-runtime + @emnapi/runtime,
+//     WASM as {encoding:"base64"} envelope)
+//   - `import { rolldown } from "rolldown"` resolves through the REAL
+//     interception table (src/browser-builds.js) to @rolldown/browser;
+//     the binding's `new URL('./x.wasm', import.meta.url)` is rewritten by
+//     the REAL inlineWasmDataUrls to a data: URL; fetch(data:) +
+//     arrayBuffer() + instantiateNapiModule runs the WASM.
+//
+// PASS = the import succeeds (WASM fetched, instantiated, napi module
+// initialized) and `rolldown` is a function. Any failure in the chain
+// (missing seed, bad rewrite, fetch failure, WASI instantiation failure)
+// surfaces as E2E-FAIL with the error.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+try {
+  phase("loading-runtime");
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+
+  phase("loading-seed");
+  const seedResp = await fetch("/local-repo/tests/rolldown-seed.json");
+  check("seed JSON fetch ok", seedResp.ok, seedResp.status);
+  const seed = await seedResp.json();
+  const fileCount = Object.keys(seed).length;
+  check("seed has files", fileCount > 50, fileCount);
+  const wasmNode = seed["/node_modules/@rolldown/browser/dist/rolldown-binding.wasm32-wasi.wasm"];
+  check("seed has WASM as base64 envelope",
+    wasmNode && wasmNode.encoding === "base64" && typeof wasmNode.data === "string",
+    typeof wasmNode);
+  phase("seed-loaded");
+
+  // Entry: import rolldown through the interception table. The import
+  // succeeding PROVES the WASM chain (fetch data: URL -> arrayBuffer ->
+  // instantiate -> napi init). A failure anywhere throws here.
+  const userCode = [
+    'import { rolldown, VERSION } from "rolldown";',
+    "const __results = {",
+    '  hasRolldown: typeof rolldown === "function",',
+    "  version: VERSION,",
+    "};",
+    'console.log("__ROLLDOWN_PROOF__" + JSON.stringify(__results));',
+  ].join("\n");
+
+  phase("executing");
+  const sandbox = new CodeSandbox({ fs: seed });
+  const execResult = await sandbox.execute(userCode);
+  phase("executed");
+
+  const logs = ((execResult && execResult.logs) || [])
+    .map((l) => (typeof l === "string" ? l : JSON.stringify(l)))
+    .join("\n");
+  log("LOGS tail:\n" + logs.slice(-2000));
+  const m = logs.match(/__ROLLDOWN_PROOF__(\{.*\})/);
+  check("proof marker in logs", !!m, logs.slice(-500));
+  let proof = null;
+  if (m) {
+    try { proof = JSON.parse(m[1]); } catch (e) { /* fall through */ }
+  }
+  check("proof JSON parses", !!proof);
+  if (proof) {
+    check("rolldown is a function (binding instantiated)", proof.hasRolldown === true, JSON.stringify(proof));
+    log("VERSION=" + proof.version);
+  }
+
+  const failed = results.filter((r) => r.startsWith("FAIL"));
+  const verdict = { ok: failed.length === 0, results, proof };
+  report(verdict);
+  document.title = failed.length === 0 ? "E2E-PASS" : "E2E-FAIL: " + failed[0];
+} catch (e) {
+  const msg = "E2E-FAIL: exception " + (e && e.message ? e.message : String(e));
+  log(msg + "\n" + (e && e.stack ? e.stack.slice(0, 2000) : ""));
+  report({ ok: false, error: msg, results });
+  document.title = msg.slice(0, 120);
+}
+</script>
+</body>
+</html>
