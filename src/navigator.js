@@ -565,13 +565,10 @@ for (const key of [
 ]) {
   Object.defineProperty(Navigator.prototype, key, { enumerable: true });
 }
-// Browser reality: Object.prototype.toString.call(navigator) is
-// '[object Navigator]' (Symbol.toStringTag = 'Navigator' on the prototype).
-Object.defineProperty(Navigator.prototype, Symbol.toStringTag, {
-  value: "Navigator",
-  enumerable: false,
-  configurable: true,
-});
+// Node reality (Node v24.20.0): the navigator has no Symbol.toStringTag;
+// Object.prototype.toString.call(navigator) is '[object Object]'. The shim
+// only ever becomes the global via install(), which is non-clobbering, so
+// in a real browser the native navigator (with its own tag) is untouched.
 
 // ---------------------------------------------------------------------------
 // Lane selection + exports.

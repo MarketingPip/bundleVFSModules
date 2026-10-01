@@ -168,9 +168,9 @@ describe("Symbol.toStringTag", () => {
   test("process keeps the [object process] tag", () => {
     expect(Object.prototype.toString.call(process2)).toBe("[object process]");
   });
-  test("navigator prototype carries the Navigator tag (browser reality)", () => {
+  test("navigator prototype carries no tag, like real Node", () => {
     const nav = Object.create(Navigator.prototype);
-    expect(Object.prototype.toString.call(nav)).toBe("[object Navigator]");
+    expect(Object.prototype.toString.call(nav)).toBe("[object Object]");
   });
   test("os carries no tag, like real Node", () => {
     expect(Object.prototype.toString.call(os)).toBe("[object Object]");
