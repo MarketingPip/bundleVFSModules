@@ -44,6 +44,27 @@ const ROLLUP_BROWSER_DIR = "/node_modules/@rollup/browser";
 const ROLLUP_PARSEAST_MODULE = "/node_modules/.bvm/rollup-parseast.mjs";
 const ESBUILD_SHIM = "/node_modules/.bvm/esbuild-shim.cjs";
 
+// Vite 8 replaces Rollup with Rolldown (Rust-based bundler). The browser
+// runtime substitutes the vendor's @rolldown/browser build (WASI-based,
+// like @rollup/browser) when user code requires 'rolldown'.
+const ROLLDOWN_BROWSER_MAIN =
+  "/node_modules/@rolldown/browser/dist/index.browser.mjs";
+const ROLLDOWN_BROWSER_DIR = "/node_modules/@rolldown/browser";
+const ROLLDOWN_EXPERIMENTAL =
+  "/node_modules/@rolldown/browser/dist/experimental-index.browser.mjs";
+const ROLLDOWN_PLUGINS =
+  "/node_modules/@rolldown/browser/dist/plugins-index.browser.mjs";
+// Subpaths without a browser condition map to their dist files directly.
+const ROLLDOWN_UTILS = "/node_modules/@rolldown/browser/dist/utils-index.mjs";
+const ROLLDOWN_FILTER = "/node_modules/@rolldown/browser/dist/filter-index.mjs";
+const ROLLDOWN_PARSEAST =
+  "/node_modules/@rolldown/browser/dist/parse-ast-index.mjs";
+// @rolldown/browser's WASI binding imports these bare specifiers. They are
+// the vendor's real dependencies, resolved through the VFS.
+const NAPI_WASM_RUNTIME = "/node_modules/@napi-rs/wasm-runtime/runtime.js";
+const NAPI_WASM_RUNTIME_FS = "/node_modules/@napi-rs/wasm-runtime/dist/fs.js";
+const EMNAPI_RUNTIME = "/node_modules/@emnapi/runtime/dist/emnapi.mjs";
+
 function hasRuntimeVFS() {
   return (
     typeof globalThis !== "undefined" &&
@@ -83,6 +104,22 @@ function interceptAbsolutePath(request) {
     request.endsWith("/node_modules/rollup")
   ) {
     return ROLLUP_BROWSER_MAIN;
+  }
+  // rolldown absolute paths -> @rolldown/browser
+  const rolldownSeg = "/node_modules/rolldown/";
+  const ridx = request.indexOf(rolldownSeg);
+  if (ridx !== -1) {
+    return (
+      request.slice(0, ridx) +
+      "/node_modules/@rolldown/browser/" +
+      request.slice(ridx + rolldownSeg.length)
+    );
+  }
+  if (
+    request === "/node_modules/rolldown" ||
+    request.endsWith("/node_modules/rolldown")
+  ) {
+    return ROLLDOWN_BROWSER_MAIN;
   }
   const esbuildSeg = "/node_modules/esbuild/";
   const eidx = request.indexOf(esbuildSeg);
@@ -159,6 +196,24 @@ export function lookupNativeInterception(request) {
     return ESBUILD_SHIM;
   }
 
+  // rolldown -> @rolldown/browser (official browser build, Vite 8).
+  // Exact matches first for the browser-conditioned subpaths.
+  if (request === "rolldown") return ROLLDOWN_BROWSER_MAIN;
+  if (request === "rolldown/experimental") return ROLLDOWN_EXPERIMENTAL;
+  if (request === "rolldown/plugins") return ROLLDOWN_PLUGINS;
+  if (request === "rolldown/utils") return ROLLDOWN_UTILS;
+  if (request === "rolldown/filter") return ROLLDOWN_FILTER;
+  if (request === "rolldown/parseAst") return ROLLDOWN_PARSEAST;
+  if (request.startsWith("rolldown/")) {
+    return ROLLDOWN_BROWSER_DIR + request.slice("rolldown".length);
+  }
+
+  // @rolldown/browser's WASI runtime dependencies (bare specifiers in
+  // rolldown-binding.wasi-browser.js). These are the vendor's real files.
+  if (request === "@napi-rs/wasm-runtime") return NAPI_WASM_RUNTIME;
+  if (request === "@napi-rs/wasm-runtime/fs") return NAPI_WASM_RUNTIME_FS;
+  if (request === "@emnapi/runtime") return EMNAPI_RUNTIME;
+
   return null;
 }
 
@@ -169,4 +224,14 @@ export const BROWSER_BUILD_TARGETS = Object.freeze({
   ROLLUP_BROWSER_DIR,
   ROLLUP_PARSEAST_MODULE,
   ESBUILD_SHIM,
+  ROLLDOWN_BROWSER_MAIN,
+  ROLLDOWN_BROWSER_DIR,
+  ROLLDOWN_EXPERIMENTAL,
+  ROLLDOWN_PLUGINS,
+  ROLLDOWN_UTILS,
+  ROLLDOWN_FILTER,
+  ROLLDOWN_PARSEAST,
+  NAPI_WASM_RUNTIME,
+  NAPI_WASM_RUNTIME_FS,
+  EMNAPI_RUNTIME,
 });
