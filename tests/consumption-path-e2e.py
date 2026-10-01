@@ -1,42 +1,93 @@
 #!/usr/bin/env python3
-"""Headed-Firefox E2E for the VFS-aware sync resolver.
+"""Genuine consumption-path E2E driver.
 
-Serves the repo over localhost HTTP, loads tests/consumption-path-e2e.html in
-headed Firefox under Xvfb, waits for the E2E to report via document.title,
-and exits 0 on E2E-PASS, 1 otherwise.
+Serves the worktree at /local-repo (runtime.js with ONLY _builtinBaseUrl
+rewritten to the local worktree dist/ — the repo file is untouched), loads
+tests/consumption-path-e2e.html in headed Firefox under Xvfb, waits for the
+E2E verdict via document.title AND POST /report (crash-proof), exits 0 on
+E2E-PASS, 1 otherwise.
 
-Usage: xvfb-run -a python3 tests/consumption-path-e2e.py
-Requires: ~/workspace/local/firefox/firefox/firefox,
-          ~/workspace/local/bin/geckodriver,
-          ~/workspace/venvs/ffauto (selenium).
+Usage: xvfb-run -a /home/hatch/workspace/venvs/ffauto/bin/python tests/consumption-path-e2e.py [port]
 """
-import functools
-import http.server
-import os
-import socketserver
+import subprocess
 import sys
-import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from urllib.parse import unquote
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FF = os.path.expanduser("~/workspace/local/firefox/firefox/firefox")
-GECKO = os.path.expanduser("~/workspace/local/bin/geckodriver")
-VENV_PY = os.path.expanduser("~/workspace/venvs/ffauto/bin/python")
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8932
+REPO = Path("/home/hatch/workspace/bundleVFSModules-vite7")
+CDN_BASE = "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/"
+MIME = {".js": "text/javascript", ".html": "text/html", ".json": "application/json"}
+
+FF = "/home/hatch/workspace/local/firefox/firefox/firefox"
+GD = "/home/hatch/workspace/local/bin/geckodriver"
+VENV_PY = "/home/hatch/workspace/venvs/ffauto/bin/python"
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, data: bytes, mime: str):
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _404(self):
+        self.send_response(404)
+        self.end_headers()
+        self.wfile.write(b"not found")
+
+    def do_POST(self):
+        p = unquote(self.path.split("?", 1)[0])
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(n) if n > 0 else b""
+            if p == "/report":
+                with open("/tmp/consumption-e2e-verdict.jsonl", "a") as f:
+                    f.write(body.decode("utf-8", "replace") + "\n")
+                return self._send(b"ok", "text/plain")
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def do_GET(self):
+        p = unquote(self.path.split("?", 1)[0])
+        try:
+            if p == "/local-repo/runtime.js":
+                src = (REPO / "runtime.js").read_text()
+                assert CDN_BASE in src, "CDN base string moved in runtime.js"
+                local = f"http://127.0.0.1:{PORT}/local-repo/dist/"
+                src = src.replace(CDN_BASE, local)
+                return self._send(src.encode(), MIME[".js"])
+            if p.startswith("/local-repo/"):
+                rel = p[len("/local-repo/"):]
+                f = REPO / rel
+                if ".." in rel or not f.is_file():
+                    return self._404()
+                ext = f.suffix
+                return self._send(f.read_bytes(), MIME.get(ext, "application/octet-stream"))
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        return self._404()
 
 
 def main():
-    # Serve the repo root so /runtime.js and /tests/consumption-path-e2e.html resolve.
-    handler = functools.partial(
-        http.server.SimpleHTTPRequestHandler, directory=REPO
-    )
-    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
-    port = httpd.server_address[1]
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    url = "http://127.0.0.1:%d/tests/consumption-path-e2e.html" % port
-    print("serving %s -> %s" % (REPO, url), flush=True)
+    httpd = HTTPServer(("127.0.0.1", PORT), H)
+    import threading
 
-    # Drive headed Firefox via the ffauto venv's selenium.
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{PORT}/local-repo/tests/consumption-path-e2e.html"
+    print("serving worktree ->", url, flush=True)
+
     driver_script = (
-        "import sys, time\n"
+        "import sys, time, json\n"
         "from selenium import webdriver\n"
         "from selenium.webdriver.firefox.options import Options\n"
         "from selenium.webdriver.firefox.service import Service\n"
@@ -44,35 +95,40 @@ def main():
         "opts.binary_location = %r\n"
         "svc = Service(executable_path=%r)\n"
         "d = webdriver.Firefox(options=opts, service=svc)\n"
+        "d.set_page_load_timeout(120)\n"
         "d.get(%r)\n"
         "title = ''\n"
-        "for _ in range(120):\n"
-        "    title = d.title\n"
-        "    if title.startswith('E2E-'):\n"
+        "deadline = time.time() + 240\n"
+        "while time.time() < deadline:\n"
+        "    try:\n"
+        "        title = d.title\n"
+        "    except Exception:\n"
         "        break\n"
-        "    time.sleep(0.5)\n"
+        "    if title.startswith('E2E-PASS') or title.startswith('E2E-FAIL'):\n"
+        "        break\n"
+        "    time.sleep(2)\n"
         "print('TITLE=' + title, flush=True)\n"
         "try:\n"
         "    body = d.find_element('id', 'out').text\n"
-        "    print('BODY:\\n' + body, flush=True)\n"
+        "    print('BODY:\\n' + body[-4000:], flush=True)\n"
         "except Exception as e:\n"
         "    print('no #out: %%s' %% e, flush=True)\n"
         "d.quit()\n"
-        "sys.exit(0 if title == 'E2E-PASS' else 1)\n"
-    ) % (FF, GECKO, url)
+        "sys.exit(0 if title.startswith('E2E-PASS') else 1)\n"
+    ) % (FF, GD, url)
 
-    import subprocess
     proc = subprocess.run(
-        [VENV_PY, "-c", driver_script],
-        capture_output=True,
-        text=True,
-        timeout=180,
+        [VENV_PY, "-c", driver_script], capture_output=True, text=True, timeout=300
     )
-    print(proc.stdout, flush=True)
-    print(proc.stderr, file=sys.stderr, flush=True)
+    print(proc.stdout[-6000:])
+    print(proc.stderr[-2000:], file=sys.stderr)
+    vf = Path("/tmp/consumption-e2e-verdict.jsonl")
+    if vf.exists():
+        print("--- verdict.jsonl (crash-proof channel) ---")
+        print(vf.read_text()[-3000:])
     httpd.shutdown()
-    return proc.returncode
+    sys.exit(proc.returncode)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

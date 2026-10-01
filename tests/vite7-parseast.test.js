@@ -114,3 +114,84 @@ describe("M3a: acorn-backed parseAst really parses (node lane)", () => {
     expect(() => parseAst(42)).toThrow(TypeError);
   });
 });
+
+// The seven-case differential probe (2026-09-30) compared the acorn-backed
+// vendor module against REAL rollup/parseAst and matched 7/7 — committed
+// here so the evidence is reproducible instead of living only in a handoff.
+// Honest accounting: the 7/7 match is SEMANTIC, not byte-identical. Real
+// rollup wraps acorn nodes in its internal `Node` class (invisible to any
+// property-traversing consumer like vite) and adds `decorators: []` to
+// class elements. The tests below prove those are the ONLY deltas.
+const DIFFERENTIAL_CASES = [
+  "const x = 1;",
+  'import { a, b as c } from "mod"; export const y = 2;',
+  "class Foo extends Bar { #priv = 1; async method() { await x(); } }",
+  "export default function() { return `tpl ${1 + 2}`; }",
+  "for (const [k, v] of Object.entries(o)) { if (k) break; }",
+  "a?.b?.(c) ?? d;",
+  'export * from "./x.js"; const m = await import("./y.js");',
+];
+
+// Recursive differ over plain-object ASTs. Reports "path: a !== b" lines.
+function diffPaths(a, b, path, out) {
+  out = out || [];
+  path = path || "";
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length)
+      out.push(path + ": length " + a.length + " !== " + b.length);
+    else
+      for (let i = 0; i < a.length; i++)
+        diffPaths(a[i], b[i], path + "/" + i, out);
+  } else if (a && b && typeof a === "object" && typeof b === "object") {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const k of keys) diffPaths(a[k], b[k], path + "/" + k, out);
+  } else if (!Object.is(a, b)) {
+    out.push(path + ": " + JSON.stringify(a) + " !== " + JSON.stringify(b));
+  }
+  return out;
+}
+
+// JSON round-trip neutralizes rollup's internal Node class instances; the
+// only permitted remaining delta is real rollup's `decorators: []` on class
+// elements (a rollup-internal affordance our acorn output omits).
+function onlyDecoratorsDelta(mine, real) {
+  const mineN = JSON.parse(JSON.stringify(mine));
+  const realN = JSON.parse(JSON.stringify(real));
+  const diffs = diffPaths(mineN, realN);
+  return diffs.filter((d) => {
+    const m = d.match(/^(.*): (.*) !== (.*)$/);
+    return !(
+      m &&
+      /\/decorators$/.test(m[1]) &&
+      m[2] === "undefined" &&
+      m[3] === "[]"
+    );
+  });
+}
+
+describe("M3: differential parseAst — acorn-backed vs real rollup/parseAst", () => {
+  test("7/7 varied inputs: identical ASTs modulo the known decorators delta", async () => {
+    const mine = await import("../src/vendor/rollup-parseast.mjs");
+    const real = await import("rollup/parseAst");
+    expect(DIFFERENTIAL_CASES).toHaveLength(7);
+    for (const src of DIFFERENTIAL_CASES) {
+      const unexplained = onlyDecoratorsDelta(
+        mine.parseAst(src),
+        real.parseAst(src),
+      );
+      expect({ src, unexplained }).toEqual({ src, unexplained: [] });
+    }
+  });
+
+  test("parseAstAsync matches real rollup/parseAstAsync modulo the same delta", async () => {
+    const mine = await import("../src/vendor/rollup-parseast.mjs");
+    const real = await import("rollup/parseAst");
+    for (const src of DIFFERENTIAL_CASES) {
+      const unexplained = onlyDecoratorsDelta(
+        await mine.parseAstAsync(src),
+        await real.parseAstAsync(src),
+      );
+      expect({ src, unexplained }).toEqual({ src, unexplained: [] });
+    }
+  });
+});

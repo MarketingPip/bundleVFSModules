@@ -4441,6 +4441,15 @@ const _builtinCache = new Map();
 // (createSyncRequire, process.getBuiltinModule): what a synchronous
 // require() of a builtin returns. Mirrors the unwrap in 21-sync-require.
 function _builtinRequireValue(mod) {
+  // Every builtin port declares its CJS module.exports equivalent via
+  // export default (events.js: export default EventEmitter). Sync require()
+  // must return that value, not the ESM namespace, or
+  // const E = require("events"); new E() dies with "not a constructor".
+  // Unwrap only when the default is callable (a class like EventEmitter):
+  // for object defaults the namespace must be preserved, because loadModule
+  // returns an interop Proxy whose lazy getters (CJS named-export fallback,
+  // star re-exports) live on the proxy, not on the plain target object.
+  if (mod && typeof mod.default === 'function') return mod.default;
   return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
     ? mod.default
     : mod;
@@ -4859,7 +4868,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
             // __USER_FILES__ map first (keys may carry a leading slash).
             const vfsForRequire = unflattenUserFiles(globalThis._RUNTIME${config.uuid}_.__USER_FILES__ || {});
             globalThis.__syncRequire__ = createSyncRequire(buildFileName, vfsForRequire);
-            source = wrapCommonJS(source, modulePath, vfsForRequire);
+            source = wrapCommonJS(source, buildFileName, vfsForRequire);
           }
  
          function makeIdentitySourceMap(source, filename) {
@@ -5301,6 +5310,28 @@ function vfsPackageImportNotDefined(specifier, packageJsonPath) {
   return err;
 }
 
+// Node's message when no package.json scope exists above the importer:
+// "Package import specifier \"#x\" is not defined imported from <path>".
+function vfsPackageImportNotDefinedNoScope(specifier, importerPath) {
+  var err = new Error(
+    '[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier "' + specifier +
+    '" is not defined imported from ' + importerPath
+  );
+  err.code = 'ERR_PACKAGE_IMPORT_NOT_DEFINED';
+  return err;
+}
+
+// Node LOOKUP_PACKAGE_SCOPE: nearest ancestor dir (of a module FILE's dir)
+// containing a package.json, or null when none exists.
+function vfsLookupPackageScope(dir, vfs) {
+  var d = dir || "/";
+  while (true) {
+    if (vfsReadPackageJson(d, vfs) !== null) return d;
+    if (d === "/") return null;
+    d = vfsDirname(d);
+  }
+}
+
 function vfsIsRelativeRequest(request) {
   return (
     request === '.' ||
@@ -5532,7 +5563,12 @@ function resolveSyncRequest(request, parentPath, vfs) {
   if (request.charAt(0) === '#') {
     var viaImports = vfsResolvePackageImportsSync(request, parentPath, vfs);
     if (viaImports) return viaImports;
-    throw vfsPackageImportNotDefined(request, parentPath + "/package.json");
+    // Node PACKAGE_IMPORTS_RESOLVE names the NEAREST parent package.json
+    // scope in the error — never the importer FILE + "/package.json".
+    var scopeDir = vfsLookupPackageScope(vfsDirname(parentPath || '/'), vfs);
+    throw scopeDir
+      ? vfsPackageImportNotDefined(request, scopeDir + "/package.json")
+      : vfsPackageImportNotDefinedNoScope(request, parentPath);
   }
   var basePath;
   if (vfsIsRelativeRequest(request)) {
@@ -5594,9 +5630,7 @@ function createSyncRequire(parentPath, vfs, cache) {
     if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
       const key = _builtinManifest[builtinKey] ? builtinKey : request;
       if (_builtinCache.has(key)) {
-        const mod = _builtinCache.get(key);
-        // Return default export or namespace
-        return mod.default !== undefined && Object.keys(mod).length === 1 ? mod.default : mod;
+        return _builtinRequireValue(_builtinCache.get(key));
       }
       throw new Error('[ERR_REQUIRE_ASYNC]: Built-in "' + request + '" not yet loaded. ' +
         'Call await loadBuiltin("' + request + '") first, or use dynamic import().');
@@ -5690,7 +5724,11 @@ function wrapCommonJS(source, parentPath, vfs) {
   // - 'this' at module top-level === 'module.exports' (via .call)
   // - '__filename' and '__dirname' are available
   const filename = parentPath;
-  const dirname = parentPath.split('/').slice(0, -1).join('/') || '.';
+  // Node path.dirname semantics: "/x.js" -> "/", "a/b.js" -> "a", "x.js" -> "."
+  const _parts = parentPath.split('/');
+  _parts.pop();
+  const _dir = _parts.join('/');
+  const dirname = _dir === '' ? (parentPath.charAt(0) === '/' ? '/' : '.') : _dir;
   return \`
 const exports = {};
 const module = { exports };
@@ -9076,6 +9114,14 @@ function _parseKey(s) {
       // edition. Condition order mirrors Node's ESM-import defaults — the
       // runtime emulates Node in the browser, so 'node' wins over 'browser'.
       const PACKAGE_CONDITIONS = ["node", "import", "default"];
+      // Node parity: require()/require.resolve() resolve 'exports' with the
+      // require condition set; import uses the import set. The _dynamic_import
+      // interop receives type ("import" | "require") from the sandbox loader.
+      function packageConditionsFor(type) {
+        return type === "require"
+          ? ["node", "require", "default"]
+          : PACKAGE_CONDITIONS;
+      }
 
       function splitPackageSpecifier(importPath) {
         // '@scope/pkg/sub/deep' -> { packageName: '@scope/pkg', subpath: './sub/deep' }
@@ -9116,7 +9162,8 @@ function _parseKey(s) {
         return null;
       }
 
-      function resolvePackageExports(pkgJson, subpath) {
+      function resolvePackageExports(pkgJson, subpath, conditions) {
+        conditions = conditions || PACKAGE_CONDITIONS;
         const exportsField = pkgJson.exports;
         if (exportsField === null || exportsField === undefined) return null;
         let target;
@@ -9156,7 +9203,7 @@ function _parseKey(s) {
             const star = subpath.slice(best.length - 1);
             const patternTarget = resolvePackageTarget(
               exportsField[best],
-              PACKAGE_CONDITIONS,
+              conditions,
             );
             if (typeof patternTarget !== "string") return null;
             return patternTarget.replace(/\*/g, star);
@@ -9164,11 +9211,17 @@ function _parseKey(s) {
         } else {
           return null;
         }
-        const resolved = resolvePackageTarget(target, PACKAGE_CONDITIONS);
+        const resolved = resolvePackageTarget(target, conditions);
         return typeof resolved === "string" ? resolved : null;
       }
 
-      function resolvePackageImports(importPath, importerPath, vfs) {
+      function resolvePackageImports(
+        importPath,
+        importerPath,
+        vfs,
+        conditions,
+      ) {
+        conditions = conditions || PACKAGE_CONDITIONS;
         // Nearest parent package.json scope wins; a scope without an
         // 'imports' field means the specifier is unresolvable (Node parity).
         const segments = importerPath ? importerPath.split("/") : [];
@@ -9205,12 +9258,12 @@ function _parseKey(s) {
                 const star = importPath.slice(best.length - 1);
                 const patternTarget = resolvePackageTarget(
                   pkg.imports[best],
-                  PACKAGE_CONDITIONS,
+                  conditions,
                 );
                 if (typeof patternTarget !== "string") return null;
                 target = patternTarget.replace(/\*/g, star);
               }
-              const resolved = resolvePackageTarget(target, PACKAGE_CONDITIONS);
+              const resolved = resolvePackageTarget(target, conditions);
               if (typeof resolved !== "string" || !resolved.startsWith("./"))
                 return null;
               const dir = segments.join("/");
@@ -9416,6 +9469,7 @@ function _parseKey(s) {
               path,
               importerVFSPath,
               vfs,
+              packageConditionsFor(type),
             );
             if (resolvedImport) {
               return serve(resolvedImport);
@@ -9446,6 +9500,7 @@ function _parseKey(s) {
               path,
               importerVFSPath,
               vfs,
+              type,
             );
             if (resolvedPackage) {
               console.log(`Resolved from node_modules: ${path}`);
@@ -9483,7 +9538,10 @@ function _parseKey(s) {
         },
       );
 
-      function resolveNodeModule(importPath, importerPath, vfs) {
+      function resolveNodeModule(importPath, importerPath, vfs, type) {
+        // The sandbox loader passes type ("import" | "require"); require()
+        // resolves 'exports' with the require condition set (Node parity).
+        const conditions = packageConditionsFor(type);
         // Split off any subpath so package.json 'exports' can resolve it (gap #2).
         const { packageName, subpath } = splitPackageSpecifier(importPath);
 
@@ -9501,7 +9559,12 @@ function _parseKey(s) {
           ].join("/");
 
           // Attempt resolution at this level using your existing VFS resolver
-          const resolved = tryResolveFileOrPackage(candidatePath, subpath, vfs);
+          const resolved = tryResolveFileOrPackage(
+            candidatePath,
+            subpath,
+            vfs,
+            conditions,
+          );
           if (resolved) return resolved;
 
           // Stop if we've reached the root
@@ -9514,6 +9577,7 @@ function _parseKey(s) {
           `node_modules/${packageName}`,
           subpath,
           vfs,
+          conditions,
         );
       }
 
@@ -9521,7 +9585,7 @@ function _parseKey(s) {
       // present (gap #2 — the only legal route per Node); otherwise legacy
       // file/main/index.js probing. (Legacy order also corrected to Node parity:
       // package.json 'main' now beats a sibling index.js.)
-      function tryResolveFileOrPackage(packageRoot, subpath, vfs) {
+      function tryResolveFileOrPackage(packageRoot, subpath, vfs, conditions) {
         const pkgJsonCheck = resolveVFS(`${packageRoot}/package.json`, "", vfs);
         let pkg = null;
         if (pkgJsonCheck && pkgJsonCheck.source) {
@@ -9534,7 +9598,7 @@ function _parseKey(s) {
 
         // 1. Package 'exports' field (gap #2).
         if (pkg && pkg.exports) {
-          const target = resolvePackageExports(pkg, subpath);
+          const target = resolvePackageExports(pkg, subpath, conditions);
           if (typeof target === "string" && target.startsWith("./")) {
             return resolveVFS(`${packageRoot}/${target.slice(2)}`, "", vfs);
           }

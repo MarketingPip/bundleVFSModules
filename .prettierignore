@@ -1,0 +1,4 @@
+# Generated files: must stay byte-identical to their builder output.
+# (pre-commit-format's prettier --write and check:sandbox conflict on these —
+# prettier reflows the template string, breaking the byte-identity gate.)
+src/sandbox-template.js
