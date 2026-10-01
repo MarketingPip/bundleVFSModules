@@ -9084,6 +9084,12 @@ function _parseKey(s) {
        * using the bytes resolved from the VFS relative to the module's own
        * path. Platform-general (any package), not rollup-specific. A
        * missing/unresolvable wasm file is left untouched (honest miss).
+       *
+       * Worker scripts: WASI browser builds (e.g. @rolldown/browser) spawn
+       * workers via `new URL('./wasi-worker-browser.mjs', import.meta.url)`,
+       * which throws the same TypeError from a data: URL base. `.mjs`/`.js`
+       * references are inlined as `data:text/javascript;base64,...` — the
+       * 1.5KB worker file inlines cleanly; `new Worker(dataUrl)` works.
        */
       function inlineWasmDataUrls(source, moduleVfsPath, vfs) {
         if (typeof source !== "string" || !source.includes("import.meta.url"))
@@ -9100,23 +9106,49 @@ function _parseKey(s) {
           }
           return node;
         };
+        const mimeFor = (rel) => {
+          if (rel.endsWith(".wasm")) return "application/wasm";
+          if (rel.endsWith(".mjs") || rel.endsWith(".js"))
+            return "text/javascript";
+          return null;
+        };
         return source.replace(
-          /new URL\(\s*(['"])([^'"]*?\.wasm)\1\s*,\s*import\.meta\.url\s*\)/g,
+          /new URL\(\s*(['"])([^'"]*?\.(?:wasm|mjs|js))\1\s*,\s*import\.meta\.url\s*\)/g,
           (m, _q, rel) => {
+            const mime = mimeFor(rel);
+            if (!mime) return m;
             const parts = [...dir];
             for (const seg of rel.split("/")) {
               if (seg === "..") parts.pop();
               else if (seg !== "." && seg !== "") parts.push(seg);
             }
             const node = lookupNode("/" + parts.join("/"));
+            let b64;
             if (
-              !node ||
-              typeof node !== "object" ||
-              node.encoding !== "base64" ||
-              typeof node.data !== "string"
-            )
+              node &&
+              typeof node === "object" &&
+              node.encoding === "base64" &&
+              typeof node.data === "string"
+            ) {
+              b64 = node.data;
+            } else if (typeof node === "string") {
+              // Plain UTF-8 string content (e.g. .mjs worker files in the
+              // seed are not base64-enveloped). Encode at rewrite time.
+              // btoa handles the ASCII-safe worker script; for general
+              // UTF-8 use the TextEncoder path.
+              try {
+                b64 = btoa(node);
+              } catch {
+                const bytes = new TextEncoder().encode(node);
+                let bin = "";
+                for (let i = 0; i < bytes.length; i++)
+                  bin += String.fromCharCode(bytes[i]);
+                b64 = btoa(bin);
+              }
+            } else {
               return m; // honest miss: leave the reference alone
-            return JSON.stringify(`data:application/wasm;base64,${node.data}`);
+            }
+            return JSON.stringify(`data:${mime};base64,${b64}`);
           },
         );
       }
