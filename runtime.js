@@ -4472,6 +4472,9 @@ window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
     }
     return origDefineProperty.call(this, obj, prop, descriptor);
   };
+  // Cloak the patch: it wraps a host builtin, so it must read as native.
+  // (maskFunction is declared later in this template but hoists.)
+  maskFunction(Object.defineProperty, origDefineProperty);
 })();
 
 // 2. process.exit semantics: in sync context throw to halt execution (like
@@ -4496,6 +4499,9 @@ window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
       err.exitCode = code;
       throw err;
     };
+    // Cloak the patch: it replaces a host builtin, so it must read as native.
+    Object.defineProperty(rt.process.exit, 'name', { value: 'exit' });
+    rt.process.exit.toString = () => "function exit() { [native code] }";
   }
 })();
 
@@ -4508,6 +4514,10 @@ if (!Array.prototype.toSorted) {
     return copy;
   };
 }
+// Cloak the polyfill so it reads as native (matches the native toString
+// shape on engines that already have toSorted).
+// prettier-ignore
+Array.prototype.toSorted.toString = () => "function toSorted() { [native code] }";
 
 // A recursive Proxy that intercepts *any* missing property access and returns safe stubs
     function createSafeProxy(target = {}) {
@@ -7193,6 +7203,7 @@ globalThis.EventSource = function (url, options) {
   if (url.includes('blocked.com')) throw new Error(\`Blocked EventSource to \${url}\`);
   return new OrigEventSource(url, options);
 };
+maskFunction(globalThis.EventSource, OrigEventSource);
 
 
 
@@ -7202,6 +7213,7 @@ globalThis.WebSocket = function (url, protocols) {
   if (url.includes('blocked.com')) throw new Error(\`Blocked WebSocket to \${url}\`);
   return new OrigWS(url, protocols);
 };
+maskFunction(globalThis.WebSocket, OrigWS);
 
 
 const origBeacon = navigator.sendBeacon.bind(navigator);
@@ -7210,6 +7222,7 @@ globalThis.navigator.sendBeacon = (url, data) => {
   if (url.includes('blocked.com')) return false;
   return origBeacon(url, data);
 };
+maskFunction(globalThis.navigator.sendBeacon, origBeacon);
 
 
 // Enhanced fetch tracking with timeout and abort support

@@ -39,6 +39,10 @@ Object.defineProperty(globalThis, _BVM_RT_KEY_, {
     }
     return origDefineProperty.call(this, obj, prop, descriptor);
   };
+  // Cloak the patch: it wraps a host builtin, so it must read as native.
+  // (maskFunction is declared later in the template but hoists.)
+  // eslint-disable-next-line no-undef -- defined cross-fragment by 71-xhr.js
+  maskFunction(Object.defineProperty, origDefineProperty);
 })();
 
 // 2. process.exit semantics: in sync context throw to halt execution (like
@@ -65,6 +69,9 @@ Object.defineProperty(globalThis, _BVM_RT_KEY_, {
       err.exitCode = code;
       throw err;
     };
+    // Cloak the patch: it replaces a host builtin, so it must read as native.
+    Object.defineProperty(rt.process.exit, "name", { value: "exit" });
+    rt.process.exit.toString = () => "function exit() { [native code] }";
   }
 })();
 
@@ -76,3 +83,8 @@ if (!Array.prototype.toSorted) {
     return copy;
   };
 }
+// Cloak the polyfill so it reads as native (matches the native toString
+// shape on engines that already have toSorted).
+// cloak.test.js asserts this exact single-line snippet; keep it unwrapped.
+// prettier-ignore
+Array.prototype.toSorted.toString = () => "function toSorted() { [native code] }";
