@@ -4464,6 +4464,16 @@ window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
 // 1. Force configurable:true on global defineProperty. All forks share one
 //    globalThis, and vitest sets globals (like __vitest_index__) non-configurably
 //    which crashes every re-run (watch mode). Neuter at the lowest level.
+//
+// maskFunction must be defined BEFORE its first use in source order: the
+// template is injected as type="module-shim" and executed by es-module-shims,
+// which does not hoist function declarations from later in the script to
+// earlier call sites (2026-10-01: early call threw "ReferenceError:
+// maskFunction is not defined", killing iframe bootstrap).
+function maskFunction(patchedFn, originalFn) {
+  Object.defineProperty(patchedFn, 'name', { value: originalFn.name });
+  patchedFn.toString = () => originalFn.toString();
+}
 (function() {
   const origDefineProperty = Object.defineProperty;
   Object.defineProperty = function(obj, prop, descriptor) {
@@ -4473,7 +4483,6 @@ window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
     return origDefineProperty.call(this, obj, prop, descriptor);
   };
   // Cloak the patch: it wraps a host builtin, so it must read as native.
-  // (maskFunction is declared later in this template but hoists.)
   maskFunction(Object.defineProperty, origDefineProperty);
 })();
 
@@ -7539,10 +7548,7 @@ function PatchedXHR() {
   
 }
 
-function maskFunction(patchedFn, originalFn) {
-  Object.defineProperty(patchedFn, 'name', { value: originalFn.name });
-  patchedFn.toString = () => originalFn.toString();
-}
+// maskFunction is defined near the top of this template (must precede all uses).
 maskFunction(PatchedXHR, originalXHR)
 maskFunction(setTimeout, originalSetTimeout)
 maskFunction(clearTimeout, originalClearTimeout)

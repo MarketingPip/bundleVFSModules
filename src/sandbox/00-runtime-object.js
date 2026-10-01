@@ -31,6 +31,16 @@ Object.defineProperty(globalThis, _BVM_RT_KEY_, {
 // 1. Force configurable:true on global defineProperty. All forks share one
 //    globalThis, and vitest sets globals (like __vitest_index__) non-configurably
 //    which crashes every re-run (watch mode). Neuter at the lowest level.
+//
+// maskFunction must be defined BEFORE its first use in source order: the
+// concatenated template is injected as type="module-shim" and executed by
+// es-module-shims, which does not hoist function declarations from later
+// fragments to earlier call sites (2026-10-01: early call threw
+// "ReferenceError: maskFunction is not defined", killing iframe bootstrap).
+function maskFunction(patchedFn, originalFn) {
+  Object.defineProperty(patchedFn, "name", { value: originalFn.name });
+  patchedFn.toString = () => originalFn.toString();
+}
 (function () {
   const origDefineProperty = Object.defineProperty;
   Object.defineProperty = function (obj, prop, descriptor) {
@@ -40,8 +50,6 @@ Object.defineProperty(globalThis, _BVM_RT_KEY_, {
     return origDefineProperty.call(this, obj, prop, descriptor);
   };
   // Cloak the patch: it wraps a host builtin, so it must read as native.
-  // (maskFunction is declared later in the template but hoists.)
-  // eslint-disable-next-line no-undef -- defined cross-fragment by 71-xhr.js
   maskFunction(Object.defineProperty, origDefineProperty);
 })();
 
