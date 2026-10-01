@@ -165,7 +165,7 @@ describe("resolvePackageImports (# specifiers)", () => {
     const { resolvePackageImports } = helpers();
     const hit = resolvePackageImports("#alias", "app/index.js", vfs);
     expect(hit).not.toBeNull();
-    expect(hit.resolvedPath).toBe("app/src/alias.js");
+    expect(hit.resolvedPath).toBe("/app/src/alias.js");
     expect(hit.source).toBe("export const x = 1;");
   });
   test("unlisted # specifier misses", () => {

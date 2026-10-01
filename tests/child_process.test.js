@@ -465,6 +465,58 @@ describe("fork() (browser noop)", () => {
     c.kill("SIGKILL");
   });
 
+  test("fork() does not eagerly read the parent's lazy stdio accessors", async () => {
+    // The old {...globalThis.process} spread evaluated the parent's lazy
+    // stdout/stdin/stderr getters at fork() time, materializing host
+    // PIPEWRAP handles that outlived the tests and hung jest without
+    // --forceExit. The child must inherit stdio lazily instead.
+    const realProcess = globalThis.process;
+    const touched = [];
+    const fakeParent = {};
+    for (const key of Object.keys(realProcess)) {
+      if (key === "stdout" || key === "stdin" || key === "stderr") continue;
+      Object.defineProperty(
+        fakeParent,
+        key,
+        Object.getOwnPropertyDescriptor(realProcess, key),
+      );
+    }
+    for (const key of ["stdout", "stdin", "stderr"]) {
+      Object.defineProperty(fakeParent, key, {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          touched.push(key);
+          return { write: () => {} };
+        },
+      });
+    }
+    globalThis.process = fakeParent;
+    try {
+      const c = cp.fork("worker.js");
+      c.on("error", () => {});
+      // The child process object is built synchronously inside fork().
+      expect(touched).toEqual([]);
+      // The fork installs the child as globalThis.process in a queued
+      // microtask; flush microtasks (not macrotasks) to observe it before
+      // the doomed module load finalizes the fork.
+      await null;
+      await null;
+      const childProc = globalThis.process;
+      expect(childProc).not.toBe(fakeParent);
+      // ...but stdio still forwards to the parent's streams on first touch.
+      const stdoutDesc = Object.getOwnPropertyDescriptor(childProc, "stdout");
+      expect(typeof stdoutDesc.get).toBe("function");
+      expect(childProc.stdout).toEqual({ write: expect.any(Function) });
+      expect(touched).toEqual(["stdout"]);
+      c.kill("SIGKILL");
+      await tick();
+      await tick();
+    } finally {
+      globalThis.process = realProcess;
+    }
+  });
+
   test("fork validates null bytes like Node", () => {
     expect(() => cp.fork("a\0b")).toThrow(
       expect.objectContaining({

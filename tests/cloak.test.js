@@ -162,15 +162,34 @@ describe("sandbox monkey-patches are masked in the template", () => {
   ])("%s patch is masked", (_label, snippet) => {
     expect(SANDBOX_TEMPLATE).toContain(snippet);
   });
+
+  // Regression (2026-10-01): the re-cloak called maskFunction() in
+  // 00-runtime-object.js but defined it in 71-xhr.js, assuming function
+  // declarations hoist across the concatenated template. Under es-module-shims
+  // (type="module-shim" injection) the early call throws
+  // "ReferenceError: maskFunction is not defined", killing bootstrap before
+  // the iframe posts back — browser E2E times out at execute-start.
+  // The definition must precede ALL calls in source order.
+  test("maskFunction is defined before its first call", () => {
+    const defIdx = SANDBOX_TEMPLATE.indexOf("function maskFunction(patchedFn");
+    expect(defIdx).toBeGreaterThan(-1);
+    const callPattern = /maskFunction\(/g;
+    let m;
+    while ((m = callPattern.exec(SANDBOX_TEMPLATE)) !== null) {
+      // skip the definition itself
+      if (m.index === defIdx) continue;
+      expect(m.index).toBeGreaterThan(defIdx);
+    }
+  });
 });
 
 describe("Symbol.toStringTag", () => {
   test("process keeps the [object process] tag", () => {
     expect(Object.prototype.toString.call(process2)).toBe("[object process]");
   });
-  test("navigator prototype carries the Navigator tag (browser reality)", () => {
+  test("navigator prototype carries no tag, like real Node", () => {
     const nav = Object.create(Navigator.prototype);
-    expect(Object.prototype.toString.call(nav)).toBe("[object Navigator]");
+    expect(Object.prototype.toString.call(nav)).toBe("[object Object]");
   });
   test("os carries no tag, like real Node", () => {
     expect(Object.prototype.toString.call(os)).toBe("[object Object]");

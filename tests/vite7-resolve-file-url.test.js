@@ -18,7 +18,7 @@
 // same _dynamic_import + _build_file interop as builtins. Any file:// import
 // was broken, not just Vite's terser path.
 
-import { describe, expect, test } from "vitest";
+// jest globals (describe/expect/test) — converted from vitest 2026-10-01
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

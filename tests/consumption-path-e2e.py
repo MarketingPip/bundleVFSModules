@@ -123,11 +123,26 @@ def main():
     print(proc.stdout[-6000:])
     print(proc.stderr[-2000:], file=sys.stderr)
     vf = Path("/tmp/consumption-e2e-verdict.jsonl")
+    verdict_ok = None
     if vf.exists():
         print("--- verdict.jsonl (crash-proof channel) ---")
         print(vf.read_text()[-3000:])
+        # Crash-proof verdict: the last line is authoritative. The driver
+        # title check can miss failures (e.g. watchdog report() doesn't set
+        # document.title), so a non-ok verdict forces a non-zero exit.
+        try:
+            import json as _json
+            last = vf.read_text().strip().splitlines()[-1]
+            verdict_ok = _json.loads(last).get("ok") is True
+        except Exception:
+            verdict_ok = False
     httpd.shutdown()
-    sys.exit(proc.returncode)
+    # Exit 0 only if BOTH the title check passed AND the crash-proof verdict
+    # (if any) is ok. A missing verdict file is not a failure by itself.
+    rc = proc.returncode
+    if verdict_ok is False:
+        rc = 1
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

@@ -16,13 +16,13 @@
  * This test pins the dist bundle to the alias: importing it must install
  * `global` as an alias of globalThis when missing.
  */
-import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
+import { jest } from "@jest/globals"; // ESM: jest object is not a global here
 
 describe("dist/RUNTIME_NODE_GLOBALS.js installs the `global` alias", () => {
   let saved;
   beforeEach(() => {
     saved = globalThis.global;
-    vi.resetModules();
+    jest.resetModules();
   });
   afterEach(() => {
     if (saved === undefined) delete globalThis.global;

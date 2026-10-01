@@ -4464,6 +4464,16 @@ window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
 // 1. Force configurable:true on global defineProperty. All forks share one
 //    globalThis, and vitest sets globals (like __vitest_index__) non-configurably
 //    which crashes every re-run (watch mode). Neuter at the lowest level.
+//
+// maskFunction must be defined BEFORE its first use in source order: the
+// template is injected as type="module-shim" and executed by es-module-shims,
+// which does not hoist function declarations from later in the script to
+// earlier call sites (2026-10-01: early call threw "ReferenceError:
+// maskFunction is not defined", killing iframe bootstrap).
+function maskFunction(patchedFn, originalFn) {
+  Object.defineProperty(patchedFn, 'name', { value: originalFn.name });
+  patchedFn.toString = () => originalFn.toString();
+}
 (function() {
   const origDefineProperty = Object.defineProperty;
   Object.defineProperty = function(obj, prop, descriptor) {
@@ -4472,6 +4482,8 @@ window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
     }
     return origDefineProperty.call(this, obj, prop, descriptor);
   };
+  // Cloak the patch: it wraps a host builtin, so it must read as native.
+  maskFunction(Object.defineProperty, origDefineProperty);
 })();
 
 // 2. process.exit semantics: in sync context throw to halt execution (like
@@ -4496,6 +4508,9 @@ window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
       err.exitCode = code;
       throw err;
     };
+    // Cloak the patch: it replaces a host builtin, so it must read as native.
+    Object.defineProperty(rt.process.exit, 'name', { value: 'exit' });
+    rt.process.exit.toString = () => "function exit() { [native code] }";
   }
 })();
 
@@ -4508,6 +4523,10 @@ if (!Array.prototype.toSorted) {
     return copy;
   };
 }
+// Cloak the polyfill so it reads as native (matches the native toString
+// shape on engines that already have toSorted).
+// prettier-ignore
+Array.prototype.toSorted.toString = () => "function toSorted() { [native code] }";
 
 // A recursive Proxy that intercepts *any* missing property access and returns safe stubs
     function createSafeProxy(target = {}) {
@@ -7193,6 +7212,7 @@ globalThis.EventSource = function (url, options) {
   if (url.includes('blocked.com')) throw new Error(\`Blocked EventSource to \${url}\`);
   return new OrigEventSource(url, options);
 };
+maskFunction(globalThis.EventSource, OrigEventSource);
 
 
 
@@ -7202,6 +7222,7 @@ globalThis.WebSocket = function (url, protocols) {
   if (url.includes('blocked.com')) throw new Error(\`Blocked WebSocket to \${url}\`);
   return new OrigWS(url, protocols);
 };
+maskFunction(globalThis.WebSocket, OrigWS);
 
 
 const origBeacon = navigator.sendBeacon.bind(navigator);
@@ -7210,6 +7231,7 @@ globalThis.navigator.sendBeacon = (url, data) => {
   if (url.includes('blocked.com')) return false;
   return origBeacon(url, data);
 };
+maskFunction(globalThis.navigator.sendBeacon, origBeacon);
 
 
 // Enhanced fetch tracking with timeout and abort support
@@ -7526,10 +7548,7 @@ function PatchedXHR() {
   
 }
 
-function maskFunction(patchedFn, originalFn) {
-  Object.defineProperty(patchedFn, 'name', { value: originalFn.name });
-  patchedFn.toString = () => originalFn.toString();
-}
+// maskFunction is defined near the top of this template (must precede all uses).
 maskFunction(PatchedXHR, originalXHR)
 maskFunction(setTimeout, originalSetTimeout)
 maskFunction(clearTimeout, originalClearTimeout)

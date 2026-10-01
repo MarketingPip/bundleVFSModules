@@ -54,10 +54,7 @@ function PatchedXHR() {
   return xhr;
 }
 
-function maskFunction(patchedFn, originalFn) {
-  Object.defineProperty(patchedFn, "name", { value: originalFn.name });
-  patchedFn.toString = () => originalFn.toString();
-}
+// maskFunction is defined in 00-runtime-object.js (must precede all uses).
 maskFunction(PatchedXHR, originalXHR);
 maskFunction(setTimeout, originalSetTimeout);
 maskFunction(clearTimeout, originalClearTimeout);
