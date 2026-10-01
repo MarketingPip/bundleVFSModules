@@ -19,6 +19,9 @@ import { describe, test, expect } from "@jest/globals";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+// The interception table is pure specifier->VFS-path (no browser deps), so
+// the real one is injected into the extracted ImportResolver below.
+import { lookupNativeInterception } from "../src/browser-builds.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME_SRC = fs.readFileSync(
@@ -68,9 +71,10 @@ function loadImportResolver() {
   );
   const factory = new Function(
     "builtinModules",
+    "lookupNativeInterception",
     normalizeSrc + "\n" + clsSrc + "\nreturn ImportResolver;",
   );
-  return factory(NODE_BUILTINS);
+  return factory(NODE_BUILTINS, lookupNativeInterception);
 }
 
 function makeResolver() {
@@ -138,5 +142,51 @@ describe("ImportResolver bare-builtin routing (gap #5)", () => {
     expect(r._transformSource("https://esm.sh/react", "import")).toBe(
       "https://esm.sh/react",
     );
+  });
+});
+
+describe("ImportResolver native-package interception (platform, rule 6)", () => {
+  // 2026-10-01: entry `import { rolldown } from "rolldown"` was rewritten
+  // to https://esm.sh/rolldown by the CDN fallback BEFORE the interception
+  // table was consulted. The browser fetched esm.sh's build of the NATIVE
+  // package, whose esm.sh-style `/node/process.mjs` builtin imports died
+  // as absolute VFS paths in the esms resolve hook:
+  // `[bvm:resolve] _dynamic_import failed for file URL "/node/process.mjs"`.
+  // The interception table must win over the CDN fallback at the entry
+  // layer too (nested imports already go through it via _dynamic_import).
+  test("entry import 'rolldown' resolves to the VFS browser build", () => {
+    const r = makeResolver();
+    expect(r._transformSource("rolldown", "import")).toBe(
+      "/node_modules/@rolldown/browser/dist/index.browser.mjs",
+    );
+    expect(r._transformSource("rolldown", "dynamic-import")).toBe(
+      "/node_modules/@rolldown/browser/dist/index.browser.mjs",
+    );
+  });
+
+  test("entry import 'rolldown/experimental' resolves to its dist file", () => {
+    const r = makeResolver();
+    expect(r._transformSource("rolldown/experimental", "import")).toBe(
+      "/node_modules/@rolldown/browser/dist/experimental-index.browser.mjs",
+    );
+  });
+
+  test("entry import 'rollup' resolves to the VFS browser build", () => {
+    const r = makeResolver();
+    expect(r._transformSource("rollup", "import")).toBe(
+      "/node_modules/@rollup/browser/dist/es/rollup.browser.js",
+    );
+  });
+
+  test("entry import 'esbuild' resolves to the esbuild-wasm shim", () => {
+    const r = makeResolver();
+    expect(r._transformSource("esbuild", "import")).toBe(
+      "/node_modules/.bvm/esbuild-shim.cjs",
+    );
+  });
+
+  test("non-intercepted bare specifiers still fall back to the CDN", () => {
+    const r = makeResolver();
+    expect(r._transformSource("vite", "import")).toBe("https://esm.sh/vite");
   });
 });

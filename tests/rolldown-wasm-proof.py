@@ -85,6 +85,15 @@ class H(BaseHTTPRequestHandler):
 def main():
     if VERDICT.exists():
         VERDICT.unlink()
+    # The seed is a regenerated artifact (18MB, untracked) — rebuild it if a
+    # cleanup sweep removed it, so the proof never 404s on a missing seed.
+    seed = REPO / "tests" / "rolldown-seed.json"
+    if not seed.is_file():
+        print("seed missing — rebuilding via scripts/build-rolldown-seed.mjs", flush=True)
+        subprocess.run(
+            ["node", str(REPO / "scripts" / "build-rolldown-seed.mjs")],
+            check=True,
+        )
     httpd = HTTPServer(("127.0.0.1", PORT), H)
     import threading
 

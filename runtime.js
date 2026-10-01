@@ -3090,6 +3090,21 @@ export class ImportResolver {
       }
     }
 
+    // Platform interception (AGENTS.md rule 6): native-only packages
+    // (rollup, esbuild, rolldown, ...) substitute the vendor's browser/WASM
+    // build from the VFS. This MUST run before the CDN fallback — otherwise
+    // entry `import "rolldown"` becomes https://esm.sh/rolldown, the browser
+    // fetches esm.sh's build of the NATIVE package, and its esm.sh-style
+    // `/node/*.mjs` builtin imports die as absolute VFS paths in the esms
+    // resolve hook (2026-10-01: `[bvm:resolve] _dynamic_import failed for
+    // file URL "/node/process.mjs"`). Nested imports already go through
+    // this table via _dynamic_import; the entry path was the gap.
+    const intercepted = lookupNativeInterception(transformed);
+    if (intercepted) {
+      this.cache.set(cacheKey, intercepted);
+      return intercepted;
+    }
+
     if (!this.fallbackCDN) {
       this.cache.set(cacheKey, transformed);
       return transformed;
