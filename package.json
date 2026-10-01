@@ -9,7 +9,8 @@
     "build": "./src/build-vfs.mjs",
     "build_fixture": "node -e \"const m = require('module').builtinModules; console.log(JSON.stringify([...m, ...m.filter(x => !x.startsWith('node:')).map(x => 'node:'+x)]))\" > ./lib/builtin-modules.json",
     "build:sandbox": "node src/build-sandbox.mjs",
-    "check:sandbox": "node src/build-sandbox.mjs --check"
+    "check:sandbox": "node src/build-sandbox.mjs --check",
+    "check:seed": "node scripts/check-seed-targets.mjs"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "^0.4.2",
