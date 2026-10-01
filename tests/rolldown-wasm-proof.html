@@ -67,7 +67,10 @@ try {
   ].join("\n");
 
   phase("executing");
-  const sandbox = new CodeSandbox({ fs: seed });
+  // The sandbox execute() default timeout is 30s; the WASM instantiate
+  // path (10.5MB base64 decode + emnapi init) needs headroom in this
+  // slow CI environment. Product default stays 30s — this is test-only.
+  const sandbox = new CodeSandbox({ fs: seed, timeout: 240000 });
   const execResult = await sandbox.execute(userCode);
   phase("executed");
 
@@ -77,6 +80,12 @@ try {
   log("LOGS tail:\n" + logs.slice(-2000));
   const m = logs.match(/__ROLLDOWN_PROOF__(\{.*\})/);
   check("proof marker in logs", !!m, logs.slice(-500));
+  // 2026-10-01 regression: entry `import "rolldown"` fell through to the
+  // esm.sh CDN fallback (ImportResolver rewrote it before the interception
+  // table was consulted); esm.sh's native-package build then imported
+  // `/node/process.mjs`, which died in the esms resolve hook. Any esm.sh
+  // URL in the sandbox logs means the interception gap is back.
+  check("no esm.sh CDN fallback in sandbox logs", logs.indexOf("esm.sh") === -1, logs.slice(-500));
   let proof = null;
   if (m) {
     try { proof = JSON.parse(m[1]); } catch (e) { /* fall through */ }
