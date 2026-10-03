@@ -18,6 +18,11 @@ unimplementable-in-browser APIs stay honest noop stubs, never throws.
 
 ## Recently completed
 
+- **ui.html playground wired to v1** (2026-10-03, PR #165): managed
+  CodeSandbox wiring (Run, console, status/elapsed, argv, stdin, clear).
+  Adds `__BVM_DISABLE_PLAYGROUND` opt-out to the runtime's demo-playground
+  auto-init guard so host pages can supply their own wiring. Headed-Firefox
+  e2e 3/3 (basic output, error rendering, argv). Jest 2365/2365 green.
 - **Verify loop green** (2026-10-03, PR #161): full jest suite 191/191
   suites, 2359/2359 tests green; the 600s zero-output `bin/verify` timeout
   root-caused twice — (a) a module-scope `BroadcastChannel` in `src/ws.js`
