@@ -29,10 +29,20 @@
 
 const plugins = [];
 
-export function registerPlugin(plugin) {
+/**
+ * Validate a plugin object's shape. Used by registerPlugin and by the
+ * CodeSandbox constructor for per-sandbox plugin lists.
+ * @returns {true} when valid; throws otherwise.
+ */
+export function validatePlugin(plugin) {
   if (!plugin || typeof plugin.name !== "string") {
     throw new TypeError("Plugin must have a string 'name'");
   }
+  return true;
+}
+
+export function registerPlugin(plugin) {
+  validatePlugin(plugin);
   if (plugins.some((p) => p.name === plugin.name)) {
     throw new Error(`Plugin '${plugin.name}' is already registered`);
   }
@@ -61,11 +71,15 @@ export function clearPlugins() {
  * Run all plugin transform hooks in registration order.
  * @param {string} code - source code
  * @param {string} id - module identifier (path/URL)
+ * @param {Array} [pluginList] - explicit plugin list for per-sandbox
+ *   scoping (docs/PLUGINS.md Part B §5). When omitted the global
+ *   registry is used; when provided (even empty) the global registry
+ *   is shadowed for this call.
  * @returns {string} transformed code
  */
-export async function applyTransformPlugins(code, id) {
+export async function applyTransformPlugins(code, id, pluginList) {
   let result = code;
-  for (const plugin of plugins) {
+  for (const plugin of orderedPlugins(pluginList)) {
     if (typeof plugin.transform === "function") {
       const transformed = await plugin.transform(result, id);
       if (typeof transformed === "string") {
@@ -120,11 +134,15 @@ export function toPluginError(pluginName, err, file) {
  * Plugins in match order: user plugins in registration order, then
  * built-in plugins (builtIn:true) last — built-ins are the fallback,
  * so a user plugin registered later still wins for the same filter.
+ * @param {Array} [pluginList] - explicit list for per-sandbox scoping;
+ *   defaults to the global registry. Shadow semantics: a provided list
+ *   (even empty) replaces the globals for the call.
  */
-function orderedPlugins() {
+function orderedPlugins(pluginList) {
+  const source = Array.isArray(pluginList) ? pluginList : plugins;
   const user = [];
   const builtin = [];
-  for (const p of plugins) (p.builtIn ? builtin : user).push(p);
+  for (const p of source) (p.builtIn ? builtin : user).push(p);
   return user.concat(builtin);
 }
 
@@ -132,11 +150,12 @@ function orderedPlugins() {
  * Run onResolve entries in order; first match wins (esbuild semantics).
  * @param {string} path - the specifier as written by the importer
  * @param {string} importer - the importing module's resolved path
+ * @param {Array} [pluginList] - per-sandbox list (shadows globals)
  * @returns {Promise<{path, namespace, plugin}|undefined>} undefined when
  *   no plugin claims the specifier (default resolution proceeds).
  */
-export async function applyResolvePlugins(path, importer) {
-  for (const plugin of orderedPlugins()) {
+export async function applyResolvePlugins(path, importer, pluginList) {
+  for (const plugin of orderedPlugins(pluginList)) {
     const entries = plugin.onResolve;
     if (!Array.isArray(entries)) continue;
     for (const entry of entries) {
@@ -163,12 +182,13 @@ export async function applyResolvePlugins(path, importer) {
  * @param {string} path - resolved path
  * @param {string} namespace - resolved namespace (from onResolve)
  * @param {*} source - fallback source (already-loaded text, may be null)
+ * @param {Array} [pluginList] - per-sandbox list (shadows globals)
  * @returns {Promise<{contents, loader, plugin}>} — default when no plugin
  *   matches: {contents: source, loader: "js", plugin: null}.
  */
-export async function applyLoadPlugins(path, namespace, source) {
+export async function applyLoadPlugins(path, namespace, source, pluginList) {
   const ns = namespace || DEFAULT_NAMESPACE;
-  for (const plugin of orderedPlugins()) {
+  for (const plugin of orderedPlugins(pluginList)) {
     const entries = plugin.onLoad;
     if (!Array.isArray(entries)) continue;
     for (const entry of entries) {

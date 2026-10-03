@@ -21,6 +21,7 @@ import {
   applyLoadPlugins,
   dispatchLoader,
   registerPlugin,
+  validatePlugin,
 } from "./src/plugins.js";
 import { typescriptPlugin } from "./src/plugins/typescript.js";
 import { jsonPlugin } from "./src/plugins/json.js";
@@ -8429,6 +8430,30 @@ export class CodeSandbox extends EventEmitter {
       seaAssets: options?.seaAssets || {},
     };
 
+    // Per-sandbox plugin list (docs/PLUGINS.md Part B §5): when provided,
+    // this sandbox uses ONLY these plugins — the global registry is
+    // shadowed for it. Null (default) means "use the global registry".
+    // Validated and snapshotted here; the _build_file/_dynamic_import
+    // interop handlers below read this.plugins at call time.
+    if (options?.plugins != null) {
+      if (!Array.isArray(options.plugins)) {
+        throw new TypeError("CodeSandbox option 'plugins' must be an array");
+      }
+      const names = new Set();
+      for (const p of options.plugins) {
+        validatePlugin(p);
+        if (names.has(p.name)) {
+          throw new Error(
+            `Duplicate plugin name '${p.name}' in 'plugins' option`,
+          );
+        }
+        names.add(p.name);
+      }
+      this.plugins = [...options.plugins];
+    } else {
+      this.plugins = null;
+    }
+
     if (this.iframeElement) {
       const value = this.iframeElement;
 
@@ -8763,12 +8788,17 @@ export class CodeSandbox extends EventEmitter {
           // but filters match the resolved path in the spec's examples.
           // PluginError propagates via the interop error channel → the
           // iframe converts it to function_error ({success:false,...}).
-          const __pr = await applyResolvePlugins(fileName, entryPoint);
+          const __pr = await applyResolvePlugins(
+            fileName,
+            entryPoint,
+            this.plugins,
+          );
           const __ns = (__pr && __pr.namespace) || "file";
           const __lr = await applyLoadPlugins(
             (__pr && __pr.path) || fileName,
             __ns,
             source,
+            this.plugins,
           );
           const __dispatched = dispatchLoader(
             __lr.contents,
@@ -8786,7 +8816,7 @@ export class CodeSandbox extends EventEmitter {
           // (docs/PLUGINS.md Part B; src/plugins.js documents the hook.)
           // Note: only the "js" loader reaches here — json/text/wasm
           // returned above as final ESM.
-          source = await applyTransformPlugins(source, fileName);
+          source = await applyTransformPlugins(source, fileName, this.plugins);
 
           const sourceModuleType = detectModuleSystem(source);
           const originalSource = source;
@@ -9755,7 +9785,11 @@ function _parseKey(s) {
           // rewrite the specifier (default loading uses the new path) and/or
           // tag a namespace (re-derived in _build_file for onLoad matching).
           // PluginError propagates via the interop error channel.
-          const __pr = await applyResolvePlugins(path, importerVFSPath);
+          const __pr = await applyResolvePlugins(
+            path,
+            importerVFSPath,
+            this.plugins,
+          );
           if (__pr && typeof __pr.path === "string" && __pr.path !== path) {
             path = __pr.path;
           }

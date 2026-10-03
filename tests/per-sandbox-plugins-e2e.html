@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Per-Sandbox Plugins E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Per-sandbox plugin scoping browser proof (docs/PLUGINS.md Part B §5).
+//
+// Proves the `plugins` constructor option shadows the global registry:
+//   - Sandbox A gets plugins:[txtPlugin] → .txt imports work, .json FAILS
+//     (the global json built-in is shadowed away).
+//   - Sandbox B gets no `plugins` option → global registry (typescript +
+//     json built-ins, auto-registered by runtime.js) → .json works,
+//     .txt FAILS.
+// Uses ONLY the real public surface: CodeSandbox from
+// /local-repo/runtime.js (worktree file). Reports via document.title
+// ("E2E-PASS" / "E2E-FAIL"), #out, POST /report.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { window.__phase = p; document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const logText = (r) => (r.logs || []).map((l) => (l && l.args) || String(l)).join("\n");
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+try {
+  const { CodeSandbox } = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof CodeSandbox === "function");
+  phase("runtime-loaded");
+
+  // Per-sandbox plugin: .txt -> text loader. Passed directly in the
+  // `plugins` option — never registered globally.
+  const txtPlugin = {
+    name: "e2e-txt",
+    onResolve: [
+      { filter: /\.txt$/, namespace: "e2e-txt", resolve: (args) => ({ path: args.path, namespace: "e2e-txt" }) },
+    ],
+    onLoad: [
+      { filter: /\.txt$/, namespace: "e2e-txt", load: (args) => ({ contents: args.source, loader: "text" }) },
+    ],
+  };
+
+  const seed = {
+    "/note.txt": "hello-txt",
+    "/data.json": '{"answer":42}',
+  };
+
+  // ---- Sandbox A: per-sandbox list shadows globals ----
+  const sbA = new CodeSandbox({ fs: seed, plugins: [txtPlugin], timeout: 180000 });
+  phase("sandbox-a-constructed");
+
+  const rA1 = await sbA.execute('import txt from "./note.txt"; console.log("TXT:" + txt);');
+  check("A: .txt import works with per-sandbox plugin",
+    rA1.success === true && logText(rA1).includes("TXT:hello-txt"),
+    JSON.stringify({ success: rA1.success, logs: rA1.logs }));
+  phase("sandbox-a-txt-done");
+
+  const rA2 = await sbA.execute('import j from "./data.json"; console.log("JSON:" + j.answer);');
+  check("A: .json import FAILS (global json built-in shadowed)",
+    rA2.success === false,
+    JSON.stringify({ success: rA2.success }));
+  phase("sandbox-a-json-done");
+
+  // ---- Sandbox B: no option → global registry ----
+  const sbB = new CodeSandbox({ fs: seed, timeout: 180000 });
+  phase("sandbox-b-constructed");
+
+  const rB1 = await sbB.execute('import j from "./data.json"; console.log("JSON:" + j.answer);');
+  check("B: .json import works via global registry",
+    rB1.success === true && logText(rB1).includes("JSON:42"),
+    JSON.stringify({ success: rB1.success, logs: rB1.logs }));
+  phase("sandbox-b-json-done");
+
+  const rB2 = await sbB.execute('import txt from "./note.txt"; console.log("TXT:" + txt);');
+  check("B: .txt import FAILS (txt plugin not in globals)",
+    rB2.success === false,
+    JSON.stringify({ success: rB2.success }));
+  phase("sandbox-b-txt-done");
+
+  const failed = results.filter((r) => r.startsWith("FAIL"));
+  document.title = failed.length === 0 ? "E2E-PASS" : "E2E-FAIL";
+  log("RESULT: " + (results.length - failed.length) + "/" + results.length + " cases passed");
+  for (const r of results) log(r);
+  report({ ok: failed.length === 0, results });
+} catch (e) {
+  document.title = "E2E-FAIL";
+  log("HARNESS ERROR: " + (e && e.stack || e));
+  report({ ok: false, error: String(e && e.stack || e) });
+}
+</script>
+</body>
+</html>
