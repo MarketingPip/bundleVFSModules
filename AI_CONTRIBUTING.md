@@ -34,12 +34,11 @@ Active development is happening here. PRs touching these will be closed:
 
 ### Build / plugins
 
-- [ ] **TypeScript plugin via real transpiler**
-  Replace the regex-based TS stripping with a real compiler/transpiler.
-  New files only: `src/plugins/typescript.js`, `tests/typescript-plugin.test.js`.
-  Done when: a `.ts` file with types/interfaces executes correctly through the
-  browser runtime and the test proves it. Do not modify the plugin loader —
-  only add the new plugin module.
+- [x] **TypeScript plugin via real transpiler** — DONE by the runtime arc
+  (2026-10-03, branch `feat/typescript-plugin-real`, v1 gate #3).
+  `src/plugins/typescript.js` now uses the real `typescript@5.9.2` compiler
+  (`ts.transpileModule`, lazy-loaded; npm package under Node, esm.sh in the
+  browser host page). Do not duplicate this work.
 
 - [ ] **Clang hello-world WASI spike**
   Prove a real Clang-produced WASI module through the browser runtime

@@ -21,7 +21,8 @@
     "magic-string": "^1.4.1",
     "memfs": "^3.4.0",
     "pako": "^3.0.2",
-    "set-cookie-parser": "^3.1.2"
+    "set-cookie-parser": "^3.1.2",
+    "typescript": "^5.9.2"
   },
   "devDependencies": {
     "@jest/globals": "^30.5.2",

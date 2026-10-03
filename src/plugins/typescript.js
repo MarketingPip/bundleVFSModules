@@ -1,46 +1,61 @@
 /**
  * TypeScript plugin for bundleVFSModules.
  *
- * First plugin for the plugin API — transpiles TypeScript to JavaScript
- * by stripping type annotations. This is a minimal spike implementation;
- * a production version would bundle the full TypeScript compiler.
+ * Transpiles TypeScript to JavaScript with the REAL TypeScript compiler
+ * (`ts.transpileModule` — transpile-only, no type checking, the same
+ * contract as esbuild/sucrase and Node's own type-stripping).
  *
- * Handles:
- * - Function parameter and return type annotations
- * - Variable type annotations
- * - Interface declarations (removed)
- * - Type alias declarations (removed)
+ * The compiler is lazy-loaded on first `.ts`/`.tsx` transform so the ~8MB
+ * payload is never fetched for pure-JS workloads:
+ * - Under Node (tests, direct import): the npm `typescript` package
+ *   (declared in package.json `dependencies`).
+ * - In the browser host page: `https://esm.sh/typescript@<version>`
+ *   (same pinned version; follows runtime.js's esm.sh convention).
+ *
+ * Module syntax is preserved as ESM (`module: ESNext`): the plugin runs at
+ * the top of the parent-side `_build_file` pipeline, which handles
+ * CJS→ESM detection and import rewriting downstream.
  */
+
+const TS_VERSION = "5.9.2";
+
+let compilerPromise = null;
+
+/** Load the TypeScript compiler for this lane (Node vs browser). */
+function loadCompiler() {
+  if (!compilerPromise) {
+    compilerPromise = (async () => {
+      const isNode =
+        typeof process !== "undefined" &&
+        process.versions &&
+        typeof process.versions.node === "string";
+      if (isNode) {
+        return await import("typescript");
+      }
+      return await import(`https://esm.sh/typescript@${TS_VERSION}`);
+    })();
+  }
+  return compilerPromise;
+}
 
 export const typescriptPlugin = {
   name: "typescript",
 
-  transform(code, id) {
+  async transform(code, id) {
     if (!id.endsWith(".ts") && !id.endsWith(".tsx")) {
       return undefined; // passthrough for non-TS files
     }
 
-    let result = code;
+    const ts = await loadCompiler();
+    const result = ts.transpileModule(code, {
+      compilerOptions: {
+        module: ts.ModuleKind.ESNext,
+        target: ts.ScriptTarget.ES2020,
+        experimentalDecorators: true,
+      },
+      fileName: id,
+    });
 
-    // Remove interface declarations (multiline)
-    result = result.replace(/interface\s+\w+\s*\{[^}]*\}/g, "");
-
-    // Remove type alias declarations
-    result = result.replace(/type\s+\w+\s*=\s*[^;]+;/g, "");
-
-    // Remove function return type annotations: ): string {
-    result = result.replace(/\)\s*:\s*[\w<>\[\]|,\s]+\s*\{/g, ") {");
-
-    // Remove parameter type annotations: (name: string,
-    // This is simplified — handles basic cases
-    result = result.replace(/(\w+)\s*:\s*[\w<>\[\]|,\s?]+(?=[,)])/g, "$1");
-
-    // Remove variable type annotations: const x: number =
-    result = result.replace(
-      /(const|let|var)\s+(\w+)\s*:\s*[\w<>\[\]|,\s?]+\s*=/g,
-      "$1 $2 =",
-    );
-
-    return result;
+    return result.outputText;
   },
 };
