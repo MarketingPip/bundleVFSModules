@@ -33,6 +33,14 @@ const MessageEventPolyfill =
 let messageChannel = null;
 try {
   messageChannel = new BroadcastChannel("vite-ws-channel");
+  // A BroadcastChannel holds a MessagePort open, which pins the host
+  // event loop — merely importing this module must never prevent process
+  // exit (it hung the jest run: "Jest did not exit..."). unref() where the
+  // host supports it (Node; browsers have no unref and don't need it —
+  // a page's lifetime isn't governed by the loop draining).
+  if (typeof messageChannel.unref === "function") {
+    messageChannel.unref();
+  }
 } catch {
   // BroadcastChannel not available in some environments
 }

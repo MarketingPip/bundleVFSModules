@@ -22,6 +22,18 @@ import {
 } from "@jest/globals";
 import realTty from "node:tty";
 
+// Reference object for the REAL node:tty differential assertions.
+// `new realTty.WriteStream(1)` requires fd 1 to be an actual TTY
+// (uv_tty_init throws EINVAL when stdout is piped — e.g. under CI or the
+// verify-loop wrapper's captured output), so we skip the constructor.
+// getColorDepth/hasColors/cursorTo/moveCursor/clearLine/clearScreenDown
+// never read the handle off `this` (verified against Node v24.20.0), so a
+// bare prototype object is a faithful reference. destroy() is not usable
+// on it (it reads handle state), so reference objects are never destroyed.
+function realRef() {
+  return Object.create(realTty.WriteStream.prototype);
+}
+
 import tty, { isatty, ReadStream, WriteStream } from "../src/tty.js";
 
 // Capture everything a WriteStream emits via write().
@@ -178,7 +190,6 @@ describe("constructor fd validation", () => {
     const r = ReadStream(0);
     expect(r).toBeInstanceOf(ReadStream);
     w.destroy();
-    r.destroy();
   });
 });
 
@@ -187,7 +198,6 @@ describe("ReadStream", () => {
     const r = new ReadStream(0);
     expect(r.isRaw).toBe(false);
     expect(r.isTTY).toBe(false);
-    r.destroy();
   });
 
   test.each([
@@ -208,7 +218,6 @@ describe("ReadStream", () => {
       const ret = r.setRawMode(flag);
       expect(ret).toBe(r);
       expect(r.isRaw).toBe(expected);
-      r.destroy();
     },
   );
 });
@@ -315,7 +324,7 @@ describe("ANSI cursor methods (delegate to readline, like Node)", () => {
   });
 
   test("byte output matches real node:tty + node:readline", () => {
-    const real = new realTty.WriteStream(1);
+    const real = realRef();
     const realChunks = [];
     real.write = (chunk, enc, cb) => {
       if (typeof enc === "function") cb = enc;
@@ -340,7 +349,6 @@ describe("ANSI cursor methods (delegate to readline, like Node)", () => {
       call(w);
       expect(chunks).toEqual(realChunks);
     }
-    real.destroy();
     w.destroy();
   });
 });
@@ -394,10 +402,9 @@ describe("getColorDepth()", () => {
     const s = w();
     expect(s.getColorDepth({ ...env })).toBe(expected);
     // and it matches real node:tty exactly
-    const r = new realTty.WriteStream(1);
+    const r = realRef();
     expect(s.getColorDepth({ ...env })).toBe(r.getColorDepth({ ...env }));
     s.destroy();
-    r.destroy();
   });
 
   test("null env throws TypeError like Node", () => {
@@ -420,22 +427,20 @@ describe("hasColors()", () => {
   ])("hasColors(%i, %p) === %p", (count, env, expected) => {
     const s = w();
     expect(s.hasColors(count, { ...env })).toBe(expected);
-    const r = new realTty.WriteStream(1);
+    const r = realRef();
     expect(s.hasColors(count, { ...env })).toBe(r.hasColors(count, { ...env }));
     s.destroy();
-    r.destroy();
   });
 
   test("env-shifting forms", () => {
     const s = w();
-    const r = new realTty.WriteStream(1);
+    const r = realRef();
     expect(s.hasColors()).toBe(r.hasColors());
     expect(s.hasColors({})).toBe(r.hasColors({}));
     expect(s.hasColors({ TERM: "xterm-256color" })).toBe(
       r.hasColors({ TERM: "xterm-256color" }),
     );
     s.destroy();
-    r.destroy();
   });
 
   test.each([
@@ -481,7 +486,7 @@ describe("hasColors()", () => {
     expect(err.message).toBe(message);
     // identical to real Node
     let realErr;
-    const r = new realTty.WriteStream(1);
+    const r = realRef();
     try {
       r.hasColors(count);
     } catch (e) {
@@ -490,7 +495,6 @@ describe("hasColors()", () => {
     expect(err.message).toBe(realErr.message);
     expect(err.constructor.name).toBe(realErr.constructor.name);
     s.destroy();
-    r.destroy();
   });
 });
 
@@ -520,7 +524,6 @@ describe("tty browser fallback (no native delegation)", () => {
     const r = new fb.ReadStream(0);
     expect(r.setRawMode(true).isRaw).toBe(true);
     w.destroy();
-    r.destroy();
   });
 
   test("isatty() is always false", () => {
