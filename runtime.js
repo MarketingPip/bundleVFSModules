@@ -15,10 +15,21 @@ import { lookupNativeInterception } from "./src/browser-builds.js";
 // unregisterPlugin("typescript") or register their own. Plugin transforms
 // run at the TOP of _build_file, before detectModuleSystem, so TS->JS
 // output flows through the existing CJS/ESM detection unchanged.
-import { applyTransformPlugins, registerPlugin } from "./src/plugins.js";
+import {
+  applyTransformPlugins,
+  applyResolvePlugins,
+  applyLoadPlugins,
+  dispatchLoader,
+  registerPlugin,
+} from "./src/plugins.js";
 import { typescriptPlugin } from "./src/plugins/typescript.js";
+import { jsonPlugin } from "./src/plugins/json.js";
 
 registerPlugin(typescriptPlugin);
+// The JSON plugin is built-in (builtIn:true → lowest priority): it proves
+// the Part B hooks cover what used to be hardcoded, and any user plugin
+// registered later for /\.json$/ wins over it.
+registerPlugin(jsonPlugin);
 /**
  * Inlined IIFE bundle of src/cookieJar.js (RFC 6265 virtual cookie jar).
  * The sandbox cannot fetch dist files at runtime without a network round
@@ -4884,7 +4895,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
 
   let sourceResolvedError = false;
   
-   const isJSModule = !['json', 'css'].includes(extension);
+   const isJSModule = !['css'].includes(extension); // json is ESM via _build_file (Part B)
     // ─── Relative / interop-channel path ────────────────────────────────────
     if (isRelative || isNodeBuiltIn || isAbsolute || !isRelative && !isNodeBuiltIn && !isAbsolute && !modulePath.includes("https://")) {
       relativeName = modulePath;
@@ -4981,7 +4992,9 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
           // Save original source for fallback if transform breaks the module
           const originalSourceForFallback = source;
           
-          if (extension != 'json' && extension != 'css') {
+          // Part B: .json flows through _build_file (built-in json plugin
+          // handles it via loader dispatch); css still bypasses.
+          if (extension != 'css') {
         source = await interopChannel.callParent(
           '_build_file',
           source,
@@ -4996,11 +5009,7 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
 
         let resolved; 
 
-        if (extension === 'json') {
-          // if typescript (need to add types)
-          resolved = JSON.parse(source);
-          return resolved;
-        } else if (extension === 'css') {
+        if (extension === 'css') {
           const sheet = new CSSStyleSheet();
           await sheet.replace(source);
           resolved = sheet;
@@ -8737,10 +8746,36 @@ export class CodeSandbox extends EventEmitter {
           parentEntryPoint,
           isNodeBuiltIn,
         ) => {
+          // Part B plugin hooks: onResolve tags the namespace, onLoad decides
+          // how the path loads, and the loader dispatch produces the module.
+          // The namespace is re-derived here from fileName (no interop
+          // signature change): _dynamic_import may rewrite the specifier,
+          // but filters match the resolved path in the spec's examples.
+          // PluginError propagates via the interop error channel → the
+          // iframe converts it to function_error ({success:false,...}).
+          const __pr = await applyResolvePlugins(fileName, entryPoint);
+          const __ns = (__pr && __pr.namespace) || "file";
+          const __lr = await applyLoadPlugins(
+            (__pr && __pr.path) || fileName,
+            __ns,
+            source,
+          );
+          const __dispatched = dispatchLoader(
+            __lr.contents,
+            __lr.loader,
+            fileName,
+          );
+          if (__dispatched.kind === "module") {
+            return __dispatched.source; // json/text/wasm: final ESM, skip transform
+          }
+          source = __dispatched.source; // js: continue through the pipeline
+
           // Plugin transforms run FIRST, before detectModuleSystem: a .ts
           // source's type annotations are not parseable JS, so the plugin
           // must produce valid JS before the acorn-based pipeline runs.
-          // (PLUGIN_API_DESIGN.md §4; src/plugins.js documents the hook.)
+          // (docs/PLUGINS.md Part B; src/plugins.js documents the hook.)
+          // Note: only the "js" loader reaches here — json/text/wasm
+          // returned above as final ESM.
           source = await applyTransformPlugins(source, fileName);
 
           const sourceModuleType = detectModuleSystem(source);
@@ -9705,6 +9740,15 @@ function _parseKey(s) {
           const importerVFSPath = entryPoint
             ? toVFSPath(entryPoint, parentEntryPoint)
             : (parentEntryPoint ?? "");
+
+          // Part B plugin hook: onResolve — first match wins. A plugin may
+          // rewrite the specifier (default loading uses the new path) and/or
+          // tag a namespace (re-derived in _build_file for onLoad matching).
+          // PluginError propagates via the interop error channel.
+          const __pr = await applyResolvePlugins(path, importerVFSPath);
+          if (__pr && typeof __pr.path === "string" && __pr.path !== path) {
+            path = __pr.path;
+          }
 
           const isRelative = path.startsWith("./") || path.startsWith("../");
           const isAbsolute = path.startsWith("/");
