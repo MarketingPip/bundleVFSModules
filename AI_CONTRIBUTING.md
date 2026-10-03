@@ -40,12 +40,17 @@ Active development is happening here. PRs touching these will be closed:
   (`ts.transpileModule`, lazy-loaded; npm package under Node, esm.sh in the
   browser host page). Do not duplicate this work.
 
-- [ ] **Clang hello-world WASI spike**
-  Prove a real Clang-produced WASI module through the browser runtime
-  (the current 184-byte test module is hand-assembled, not Clang output).
-  New files only: `scripts/clang-wasi-spike.mjs`, `tests/clang-wasi-spike.test.js`.
-  Done when: C source compiled with a real Clang/WASI toolchain runs in the
-  browser runtime and the test asserts its stdout.
+- [x] **Clang hello-world WASI spike** — DONE by the runtime arc
+  (2026-10-03, branch `feat/clang-wasi-spike`, commit `dcc1d079`, v1 gate #4).
+  `tests/fixtures/hello-wasi.wasm` is now real Clang output
+  (wasi-sdk 25.0 / Clang 19.1.5, `--target=wasm32-wasi`, 149568 bytes;
+  imports `wasi_snapshot_preview1`, exports `memory` + `_start`).
+  Source: `tests/fixtures/hello.c`; reproducible rebuild:
+  `scripts/build-clang-wasi.sh` (byte-deterministic). Browser proof:
+  `tests/clang-wasi-e2e.html` + `tests/clang-wasi-e2e.py`
+  (headed-Firefox, 10/10 checks: exitCode 0 and the program's stdout —
+  `clang-wasi-hello`, `argc=3`, `argv[0..2]`, `fib(20)=6765` —
+  arriving via `result.logs`). Do not duplicate this work.
 
 - [ ] **Real Rolldown build proof**
   Invoke `rolldown()` on a small input and assert actual emitted output.
