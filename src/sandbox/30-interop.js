@@ -11,7 +11,7 @@ const interopChannel = {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("Interop call timeout"));
-      }, 10000);
+      }, 60000);
 
       const handler = (event) => {
         if (

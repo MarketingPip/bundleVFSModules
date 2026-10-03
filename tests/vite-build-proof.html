@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Vite build proof</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Vite 8.3.1 browser proof: real `vite.build()` output in the sandbox.
+//
+// Uses ONLY the real public surface:
+//   - CodeSandbox from the REAL /local-repo/runtime.js
+//   - VFS seeded from /local-repo/tests/vite-seed.json (vite 8.3.1 dist +
+//     picomatch + tinyglobby + fdir; no WASM)
+//   - `import { build, VERSION } from "vite"` resolves through the REAL
+//     package.json exports; `rolldown/*` subpaths resolve through the REAL
+//     interception table (src/browser-builds.js) to @rolldown/browser.
+//
+// PASS = `build()` completes on a minimal inline project and the emitted
+// output bytes contain the expected content. Any failure (missing seed,
+// bad rewrite, import failure, build error) surfaces as E2E-FAIL.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+try {
+  phase("loading-runtime");
+  // Cache-buster: runtime.js changes frequently during proof iteration.
+  // The ?v= forces the browser to fetch the current worktree version.
+  const rt = await import(`/local-repo/runtime.js?v=${Date.now()}`);
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+
+  phase("loading-seed");
+  const seedResp = await fetch("/local-repo/tests/vite-seed.json");
+  check("seed JSON fetch ok", seedResp.ok, seedResp.status);
+  const seed = await seedResp.json();
+  const fileCount = Object.keys(seed).length;
+  check("seed has files", fileCount >= 20, fileCount);
+  const pkg = JSON.parse(seed["/node_modules/vite/package.json"]);
+  check("seed is vite 8.3.1", pkg.version === "8.3.1", pkg.version);
+  phase("seed-loaded");
+
+  // Minimal inline project: build() with an explicit input so no
+  // vite.config.js or index.html lookup is needed.
+  // NOTE: the entry must be side-effectful. A pure `export const` gets
+  // tree-shaken to an empty chunk by rolldown (verified 2026-10-02:
+  // parse-error probe proved the load-hook return reaches the parser,
+  // but valid export-only code rendered 0 bytes with exports: []).
+  const userCode = [
+    'import { build, version as VERSION } from "vite";',
+    "const __results = { version: VERSION };",
+    "try {",
+    "  const out = await build({",
+    "    logLevel: 'silent',",
+    "    build: {",
+    "      write: false,",
+    "      minify: false,",
+    "      rollupOptions: { input: '/virtual-entry.js' },",
+    "    },",
+    "    plugins: [{",
+    "      name: 'virtual-entry',",
+    "      resolveId(id) { if (id === '/virtual-entry.js') return id; },",
+    "      load(id) { if (id === '/virtual-entry.js') return 'globalThis.__VITE_PROOF__ = 42;'; },",
+    "    }],",
+    "  });",
+    "  const chunks = Array.isArray(out) ? out.flatMap(o => o.output) : out.output;",
+    "  const code = chunks.map(c => c.code || '').join('\\n');",
+    "  __results.chunkCount = chunks.length;",
+    "  __results.codeBytes = code.length;",
+    "  __results.hasMarker = code.includes('__VITE_PROOF__');",
+    "} catch (e) {",
+    "  __results.buildError = String((e && e.message) || e).slice(0, 500);",
+    "}",
+    'console.log("__VITE_PROOF__" + JSON.stringify(__results));',
+  ].join("\n");
+
+  phase("executing");
+  const sandbox = new CodeSandbox({ fs: seed, timeout: 240000, fallbackCDN: false });
+  const execResult = await sandbox.execute(userCode);
+  phase("executed");
+
+  const logs = ((execResult && execResult.logs) || [])
+    .map((l) => (typeof l === "string" ? l : JSON.stringify(l)))
+    .join("\n");
+  log("LOGS tail:\n" + logs.slice(-2000));
+  log("execResult.success=" + (execResult && execResult.success));
+  if (execResult && !execResult.success) {
+    log("execResult.error=" + JSON.stringify(execResult.error).slice(0, 3000));
+  }
+  // Extract __VITE_PROOF__ from the RAW log entry args, not from the
+  // re-stringified joined logs: JSON.stringify escapes the inner quotes, so
+  // the old /__VITE_PROOF__(\{.*\})/ capture contained literal backslash-
+  // quote sequences and JSON.parse threw ("proof JSON parses" FAIL).
+  const PROOF_PREFIX = "__VITE_PROOF__";
+  let proofText = null;
+  for (const l of (execResult && execResult.logs) || []) {
+    const a = typeof l === "string" ? l : (l && l.args);
+    const s = typeof a === "string" ? a : (a != null ? JSON.stringify(a) : "");
+    const i = s.indexOf(PROOF_PREFIX);
+    if (i !== -1) { proofText = s.slice(i + PROOF_PREFIX.length); break; }
+  }
+  check("proof marker in logs", proofText !== null, logs.slice(-500));
+  check("no esm.sh CDN fallback in sandbox logs", logs.indexOf("esm.sh") === -1, logs.slice(-500));
+  let proof = null;
+  if (proofText !== null) {
+    try { proof = JSON.parse(proofText); } catch (e) { /* fall through */ }
+  }
+  check("proof JSON parses", !!proof, proofText ? proofText.slice(0, 200) : "(no proof text)");
+  if (proof) {
+    log("VERSION=" + proof.version);
+    check("no build error", !proof.buildError, proof.buildError);
+    check("emitted chunks", (proof.chunkCount || 0) > 0, JSON.stringify(proof));
+    check("emitted code bytes", (proof.codeBytes || 0) > 0, JSON.stringify(proof));
+    check("marker in emitted output", proof.hasMarker === true, JSON.stringify(proof));
+  }
+
+  const failed = results.filter((r) => r.startsWith("FAIL"));
+  const verdict = { ok: failed.length === 0, results, proof };
+  report(verdict);
+  document.title = failed.length === 0 ? "E2E-PASS" : "E2E-FAIL: " + failed[0];
+} catch (e) {
+  const msg = "E2E-FAIL: exception " + (e && e.message ? e.message : String(e));
+  log(msg + "\n" + (e && e.stack ? e.stack.slice(0, 2000) : ""));
+  report({ ok: false, error: msg, results });
+  document.title = msg.slice(0, 120);
+}
+</script>
+</body>
+</html>

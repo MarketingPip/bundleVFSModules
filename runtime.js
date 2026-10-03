@@ -99,6 +99,19 @@ async function fetchBuiltinSource(specifier) {
   if (!file && key.startsWith("RUNTIME_")) file = `${key}.js`;
   if (!file) return `export default {}`;
   if (_builtinSourceCache.has(file)) return _builtinSourceCache.get(file);
+  // Try local /local-repo/dist first (proof serves worktree locally),
+  // fall back to CDN. This avoids CDN dependency when the worktree is served.
+  const localUrl = `/local-repo/dist/${file}`;
+  try {
+    const localRes = await fetch(localUrl);
+    if (localRes.ok) {
+      const text = await localRes.text();
+      _builtinSourceCache.set(file, text);
+      return text;
+    }
+  } catch (e) {
+    // Local fetch failed, fall through to CDN
+  }
   const url = _builtinBaseUrl + file;
   const res = await fetch(url);
   if (!res.ok)
@@ -134,8 +147,16 @@ function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
       ? specifier.slice(5)
       : specifier;
   var listed = false;
+  // Also match the underscore-normalized bundle-key form: some
+  // bundlers/transforms emit 'fs_promises' for builtin 'fs/promises'.
+  // Both spellings must resolve as builtins (platform fix).
+  var slashForm = typeof bare === "string" ? bare.split("_").join("/") : bare;
   for (var i = 0; i < nodeBuiltins.length; i++) {
-    if (nodeBuiltins[i] === specifier || nodeBuiltins[i] === bare)
+    if (
+      nodeBuiltins[i] === specifier ||
+      nodeBuiltins[i] === bare ||
+      nodeBuiltins[i] === slashForm
+    )
       listed = true;
   }
   // 'listed' covers the old 'isStrippable' cases too: the legacy
@@ -729,7 +750,7 @@ export function convertEsmToCjs(code, options = {}) {
   const outCode = s.toString();
   const map = s.generateMap({
     source: filename,
-    hires: true,
+    hires: false, // line-level maps: hires VLQ explodes on MB-size inputs (74MB mappings for 16MB source), blocking the main thread; line-level suffices for stack traces,
     includeContent: true,
   });
   return { code: outCode, map };
@@ -976,7 +997,7 @@ export function convertCjsToEsm(code, options = {}) {
   const outCode = s.toString();
   const map = s.generateMap({
     source: filename,
-    hires: true,
+    hires: false, // line-level maps: hires VLQ explodes on MB-size inputs (74MB mappings for 16MB source), blocking the main thread; line-level suffices for stack traces,
     includeContent: true,
   });
   // Mark CJS-converted modules so the sandbox's ESM interop (buildModuleProxy)
@@ -1414,7 +1435,7 @@ export function replaceGlobalThisVar(code, variableName, opts = {}) {
   const outCode = s.toString();
   const map = s.generateMap({
     source: filename,
-    hires: true,
+    hires: false, // line-level maps: hires VLQ explodes on MB-size inputs (74MB mappings for 16MB source), blocking the main thread; line-level suffices for stack traces,
     includeContent: true,
   });
   return { code: outCode, map };
@@ -1721,7 +1742,7 @@ export function transformImportsToLoadModule(
   const outCode = s.toString();
   const map = s.generateMap({
     source: entryPoint || "input.js",
-    hires: true,
+    hires: false, // line-level maps: hires VLQ explodes on MB-size inputs (74MB mappings for 16MB source), blocking the main thread; line-level suffices for stack traces,
     includeContent: true,
   });
   return { code: outCode, map };
@@ -4769,6 +4790,43 @@ globalThis._RUNTIME${config.uuid}_.taskTracker = GlobalTracker;
 const moduleRegistry = new Map();
 
 /**
+ * Safely augment a caught load error with module context.
+ *
+ * loadModule's catch block used to assign error.message directly to add
+ * " in <path> at <entry>" context. If the caught error has a getter-only
+ * message property (DOMException, exotic WASM binding errors, frozen
+ * error-likes), that assignment throws 'setting getter-only property
+ * "message"', masking the real failure. Seen in headed Firefox as
+ * success=false with the getter-only error instead of the root cause.
+ *
+ * This helper never throws: it tries in-place augmentation, and falls back
+ * to wrapping the original (as cause) when message is not writable.
+ * Returns the error to throw.
+ *
+ * No template literals here: runtime.js is itself a template file, and
+ * this function is also extracted verbatim by tests via new Function().
+ */
+function augmentLoadError(error, displayPath, entryPoint) {
+  var baseMessage;
+  try {
+    baseMessage = String(error && error.message);
+  } catch (_) {
+    baseMessage = String(error);
+  }
+  var augmented = baseMessage + " in " + displayPath + " at " + entryPoint;
+  try {
+    error.message = augmented;
+    return error;
+  } catch (_) {
+    var wrapped = new Error(augmented);
+    try {
+      wrapped.cause = error;
+    } catch (_) {}
+    return wrapped;
+  }
+}
+
+/**
  * @param {string} modulePath     - The import path as written (e.g. './foo', '../bar', or a URL)
  * @param {string} moduleType     - 'import' | 'require'
  * @param {string} [entryPoint]   - The original top-level entry file; passed through to interop
@@ -4823,7 +4881,9 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
 
       // Use a stable key for the registry (entry + requested path disambiguates
       // the same filename required from different entry points).
-      const registryKey = \`\${entryPoint}::\${modulePath}\`;
+      // Provisional: keyed by raw specifier until _dynamic_import resolves it.
+      // canonicalizeRegistryEntry migrates to the resolved-path key below.
+      let registryKey = \`\${entryPoint}::\${modulePath}\`;
       // ── Circular reference guard ─────────────────────────────────────────
       if (moduleRegistry.has(registryKey) && isJSModule) {
         const record = moduleRegistry.get(registryKey);
@@ -4872,6 +4932,10 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
           undefined   
         );
         
+        // Handle both object {source, resolvedPath} and raw string (legacy handlers)
+        if (typeof importResult === 'string') {
+          importResult = { source: importResult, resolvedPath: null };
+        }
           
         if(!importResult || !importResult.source){
         throw new Error(\`[ERR_MODULE_NOT_FOUND]: Cannot find module \${modulePath}\`)
@@ -4885,6 +4949,24 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
         // into nested imports. Passing the raw request string lost the VFS
         // prefix at import depth >=2 (nested relative imports 404'd).
         const buildFileName = importResult.resolvedPath || modulePath;
+        // Dedup by resolved path: an aliased specifier resolving to an
+        // already-loading/done file reuses that record instead of evaluating
+        // the module a second time (see canonicalRegistryKey).
+        const canonicalKey = canonicalRegistryKey(
+          entryPoint,
+          modulePath,
+          importResult.resolvedPath,
+        );
+        const dedup = canonicalizeRegistryEntry(
+          moduleRegistry,
+          registryKey,
+          canonicalKey,
+          record,
+        );
+        if (dedup.reused) {
+          return dedup.reused.exports;
+        }
+        registryKey = canonicalKey;
         
           // Save original source for fallback if transform breaks the module
           const originalSourceForFallback = source;
@@ -4948,8 +5030,10 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
   }\`;
 }
  
-         source  = source + \`\\n //# sourceURL=\${modulePath}\`
-             const sourceMapComment = makeIdentitySourceMap(source, modulePath);
+         // Stamp sourceURL with the RESOLVED path: identical files yield
+         // identical data: URLs, so the browser module map dedupes as
+         // a second line of defense against double evaluation.
+         source  = source + \`\\n //# sourceURL=\${buildFileName}\`
 
            const url = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(source)}\`;
           
@@ -5082,8 +5166,7 @@ err.stack = \`Error: Something broke
   
   // First time catching - add context
    if(entryPoint){
-   error.message = \`\${error.message} in \${displayPath} at \${entryPoint}\`
-  throw error;
+   throw augmentLoadError(error, displayPath, entryPoint);
   }
 
   
@@ -5109,6 +5192,43 @@ globalThis._RUNTIME${config.uuid}_.loadModule = loadModule;
 
   
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// Registry dedup by resolved path (platform fix, AGENTS.md rule 6).
+// loadModule keyed moduleRegistry by the RAW import specifier, so the same
+// file imported via different specifiers ("../binding.wasi.cjs" vs
+// "@rolldown/browser") evaluated once PER SPECIFIER - observed 7x, each
+// committing 1GB of WebAssembly.Memory, killing the browser process.
+// Key by the RESOLVED VFS path instead; an aliased import reuses the
+// in-flight/done record.
+//
+// 2026-10-02: the entryPoint prefix had to go entirely. Each vite chunk
+// stamps its own resolved path as entryPoint, so "entry::resolved" still
+// split one file into N evaluations (9x observed, browser died at +112s).
+// Node evaluates once per resolved path per realm; the registry now does
+// too. Resolved paths already disambiguate (/a/utils.js vs /b/utils.js).
+function canonicalRegistryKey(entryPoint, modulePath, resolvedPath) {
+  return resolvedPath || modulePath;
+}
+
+// Migrate-or-reuse decision for a just-resolved module. provisionalKey is the
+// raw-specifier key created before _dynamic_import; canonicalKey is the
+// resolved-path key. Returns { reused } - non-null when another specifier
+// already resolved to this file (return reused.exports; a "loading" record's
+// partial exports mirror Node's circular-import semantics).
+function canonicalizeRegistryEntry(
+  moduleRegistry,
+  provisionalKey,
+  canonicalKey,
+  record,
+) {
+  if (canonicalKey === provisionalKey) return { reused: null };
+  var existing = moduleRegistry.get(canonicalKey);
+  moduleRegistry.delete(provisionalKey);
+  if (existing) return { reused: existing };
+  moduleRegistry.set(canonicalKey, record);
+  return { reused: null };
+}
+
 
 /** Wraps a CommonJS source string in an ESM-compatible IIFE. */
 /**
@@ -5160,6 +5280,12 @@ function vfsLookup(path, vfs) {
     }
     return typeof node === 'string' ? node : undefined;
   };
+  // Platform fix (AGENTS.md rule 6): in the browser, prefer -browser.js
+  // variants over .cjs files (see nested vfsLookup in _dynamic_import).
+  if (path.endsWith('.cjs')) {
+    const hit = tryPath(path.replace(/\.cjs$/, '-browser.js'));
+    if (hit !== undefined) return hit;
+  }
   const withJs = path.endsWith('.js') ? path : path + '.js';
   const hit = tryPath(path);
   return hit !== undefined ? hit : tryPath(withJs);
@@ -5926,7 +6052,7 @@ const interopChannel = {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Interop call timeout'));
-      }, 10000);
+      }, 60000);
       
       const handler = (event) => {
      
@@ -9080,6 +9206,11 @@ function _parseKey(s) {
       /**
        * Walk a nested VFS object using a normalised path string.
        * Tries the path as-is, then with .js appended.
+       * Platform fix (AGENTS.md rule 6): in the browser, prefer
+       * `-browser.js` variants over `.cjs` files. Vendors ship both
+       * (e.g. rolldown-binding.wasi.cjs for Node, .wasi-browser.js for
+       * browsers); the CJS build requires Node builtins that don't exist
+       * here. This is platform-general, not library-specific.
        */
       function vfsLookup(path, vfs) {
         const tryPath = (p) => {
@@ -9091,6 +9222,13 @@ function _parseKey(s) {
           }
           return typeof node === "string" ? node : undefined;
         };
+
+        // Prefer browser variant for .cjs requests.
+        if (path.endsWith(".cjs")) {
+          const browserVariant = path.replace(/\.cjs$/, "-browser.js");
+          const hit = tryPath(browserVariant);
+          if (hit !== undefined) return hit;
+        }
 
         return (
           tryPath(path) ??
@@ -9117,7 +9255,8 @@ function _parseKey(s) {
        */
       function inlineWasmDataUrls(source, moduleVfsPath, vfs) {
         if (typeof source !== "string" || !source.includes("import.meta.url"))
-          return source;
+          if (typeof source !== "string" || !source.includes("import.meta.url"))
+            return source;
         const dir = String(moduleVfsPath || "")
           .split("/")
           .slice(0, -1);
@@ -9172,7 +9311,10 @@ function _parseKey(s) {
             } else {
               return m; // honest miss: leave the reference alone
             }
-            return JSON.stringify(`data:${mime};base64,${b64}`);
+            // Wrap in new URL(...) so that `.href` (or other URL accessors)
+            // on the original `new URL(rel, import.meta.url)` expression
+            // keep working — a bare string literal has no `.href`.
+            return `new URL(${JSON.stringify(`data:${mime};base64,${b64}`)})`;
           },
         );
       }
@@ -9412,7 +9554,14 @@ function _parseKey(s) {
 
           // 1. For Node built-ins, hand off to your shim resolver as before
           if (isNodeBuiltIn) {
-            return await fetchBuiltinSource(path);
+            // For builtins, try local dist first, then CDN, then generic stub.
+            try {
+              const src = await fetchBuiltinSource(path);
+              return { source: src, resolvedPath: null };
+            } catch (e) {
+              // Fallback: generic stub for missing builtins
+              return { source: `export default {};`, resolvedPath: null };
+            }
           }
 
           // 2. Determine the importer's VFS path
@@ -9527,8 +9676,13 @@ function _parseKey(s) {
           // resolvedPath is null: builtins aren't VFS files, so the sandbox keeps
           // using the request path as the build fileName (unchanged behavior).
           if (isNodeBuiltIn) {
-            const builtinSource = await fetchBuiltinSource(path);
-            return { source: builtinSource, resolvedPath: null };
+            try {
+              const builtinSource = await fetchBuiltinSource(path);
+              return { source: builtinSource, resolvedPath: null };
+            } catch (e) {
+              // Shim missing or unfetchable: honest generic stub, never throw.
+              return { source: `export default {};`, resolvedPath: null };
+            }
           }
 
           // 2. Determine the importer's VFS path

@@ -121,8 +121,10 @@ describe("inlineWasmDataUrls — real @rolldown/browser binding", () => {
     const out = inlineWasmDataUrls(src, BINDING_VFS_PATH, makeVfs(true));
     // fetch(data:application/wasm;base64,...) must yield a Response whose
     // arrayBuffer() is the WASM bytes — the binding's exact consumption path.
-    expect(out).toMatch(/^const __wasmUrl = "data:application\/wasm;base64,/);
-    expect(out).not.toContain("new URL("); // URL ctor gone, .href stays
+    // ae81372a: new URL() wrapper kept so the trailing .href resolves.
+    expect(out).toMatch(
+      /^const __wasmUrl = new URL\("data:application\/wasm;base64,/,
+    );
     expect(out.endsWith(".href;")).toBe(true);
     const b64 = out.match(/base64,([A-Za-z0-9+/=]+)"/)[1];
     expect(Buffer.from(b64, "base64").toString()).toBe(

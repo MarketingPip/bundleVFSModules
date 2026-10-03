@@ -84,8 +84,9 @@ describe("inlineWasmDataUrls: worker .mjs inlining", () => {
     const src =
       "const w = new Worker(new URL('./wasi-worker-browser.mjs', import.meta.url), {type:'module'});";
     const out = inlineWasmDataUrls(src, MOD, VFS);
+    // ae81372a: new URL() wrapper kept so .href still resolves on the result.
     expect(out).toBe(
-      `const w = new Worker("data:text/javascript;base64,${WORKER_B64}", {type:'module'});`,
+      `const w = new Worker(new URL("data:text/javascript;base64,${WORKER_B64}"), {type:'module'});`,
     );
   });
 
@@ -110,7 +111,9 @@ describe("inlineWasmDataUrls: worker .mjs inlining", () => {
     const expectedB64 = Buffer.from("console.log('worker');").toString(
       "base64",
     );
-    expect(out).toBe(`const w = "data:text/javascript;base64,${expectedB64}";`);
+    expect(out).toBe(
+      `const w = new URL("data:text/javascript;base64,${expectedB64}");`,
+    );
   });
 
   test("leaves worker reference alone when the .mjs file is missing (honest miss)", () => {
@@ -127,6 +130,8 @@ describe("inlineWasmDataUrls: worker .mjs inlining", () => {
       },
     };
     const out = inlineWasmDataUrls(vfs.dist["x.js"], "/dist/x.js", vfs);
-    expect(out).toBe(`const u = "data:application/wasm;base64,${wasmB64}";`);
+    expect(out).toBe(
+      `const u = new URL("data:application/wasm;base64,${wasmB64}");`,
+    );
   });
 });

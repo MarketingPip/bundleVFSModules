@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Rolldown WASM proof driver.
+"""Vite 8.3.1 build proof driver.
 
-Serves the worktree at /local-repo, loads tests/rolldown-wasm-proof.html in
+Serves the worktree at /local-repo, loads tests/vite-build-proof.html in
 headed Firefox under Xvfb, waits for the verdict via document.title AND
 POST /report (crash-proof), exits 0 on E2E-PASS, 1 otherwise.
 
-Usage: xvfb-run -a /home/hatch/workspace/venvs/ffauto/bin/python tests/rolldown-wasm-proof.py [port]
+Usage: xvfb-run -a /home/hatch/workspace/venvs/ffauto/bin/python tests/vite-build-proof.py [port]
 """
 import subprocess
 import sys
@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8933
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8934
 REPO = Path("/home/hatch/workspace/bundleVFSModules-vite7")
 CDN_BASE = "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/"
 MIME = {
@@ -23,7 +23,7 @@ MIME = {
     ".json": "application/json",
     ".mjs": "text/javascript",
 }
-VERDICT = Path("/tmp/rolldown-wasm-verdict.jsonl")
+VERDICT = Path("/tmp/vite-build-verdict.jsonl")
 
 FF = "/home/hatch/workspace/local/firefox/firefox/firefox"
 GD = "/home/hatch/workspace/local/bin/geckodriver"
@@ -88,20 +88,20 @@ class H(BaseHTTPRequestHandler):
 def main():
     if VERDICT.exists():
         VERDICT.unlink()
-    # The seed is a regenerated artifact (18MB, untracked) — rebuild it if a
+    # The seed is a regenerated artifact (untracked) — rebuild it if a
     # cleanup sweep removed it, so the proof never 404s on a missing seed.
-    seed = REPO / "tests" / "rolldown-seed.json"
+    seed = REPO / "tests" / "vite-seed.json"
     if not seed.is_file():
-        print("seed missing — rebuilding via scripts/build-rolldown-seed.mjs", flush=True)
+        print("seed missing — rebuilding via scripts/build-vite-seed.mjs", flush=True)
         subprocess.run(
-            ["node", str(REPO / "scripts" / "build-rolldown-seed.mjs")],
+            ["node", str(REPO / "scripts" / "build-vite-seed.mjs")],
             check=True,
         )
     httpd = HTTPServer(("127.0.0.1", PORT), H)
     import threading
 
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{PORT}/local-repo/tests/rolldown-wasm-proof.html"
+    url = f"http://127.0.0.1:{PORT}/local-repo/tests/vite-build-proof.html"
     print("serving worktree ->", url, flush=True)
 
     driver_script = (
@@ -111,6 +111,15 @@ def main():
         "from selenium.webdriver.firefox.service import Service\n"
         "opts = Options()\n"
         "opts.binary_location = %r\n"
+        # Proxy relay for external HTTPS (CDN fetches for builtin shims).
+        # See TOOLS.md: Firefox needs proxy prefs set.
+        "opts.set_preference('network.proxy.type', 1)\n"
+        "opts.set_preference('network.proxy.http', '127.0.0.1')\n"
+        "opts.set_preference('network.proxy.http_port', 18080)\n"
+        "opts.set_preference('network.proxy.ssl', '127.0.0.1')\n"
+        "opts.set_preference('network.proxy.ssl_port', 18080)\n"
+        "opts.set_preference('network.proxy.share_proxy_settings', True)\n"
+        "opts.set_preference('network.proxy.no_proxies_on', '')\n"
         "svc = Service(executable_path=%r)\n"
         "d = webdriver.Firefox(options=opts, service=svc)\n"
         "d.set_page_load_timeout(180)\n"
