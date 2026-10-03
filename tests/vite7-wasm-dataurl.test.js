@@ -87,7 +87,9 @@ describe("inlineWasmDataUrls (runtime package-loading path)", () => {
   test("rewrites new URL(<wasm>, import.meta.url) to a data: URL", () => {
     const src = 'const u = new URL("bindings_wasm_bg.wasm",import.meta.url);';
     const out = inlineWasmDataUrls(src, MOD, VFS);
-    expect(out).toBe(`const u = "data:application/wasm;base64,${WASM_B64}";`);
+    expect(out).toBe(
+      `const u = new URL("data:application/wasm;base64,${WASM_B64}");`,
+    );
   });
 
   test("handles single quotes and whitespace variants", () => {
@@ -95,7 +97,7 @@ describe("inlineWasmDataUrls (runtime package-loading path)", () => {
       "const u = new URL( 'bindings_wasm_bg.wasm' , import.meta.url );";
     const out = inlineWasmDataUrls(src, MOD, VFS);
     expect(out).toContain(`"data:application/wasm;base64,${WASM_B64}"`);
-    expect(out).not.toContain("new URL(");
+    expect(out).not.toContain("import.meta.url");
   });
 
   test("leaves non-wasm new URL(..., import.meta.url) alone", () => {

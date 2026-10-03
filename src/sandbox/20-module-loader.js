@@ -19,8 +19,16 @@ function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
       ? specifier.slice(5)
       : specifier;
   var listed = false;
+  // Also match the underscore-normalized bundle-key form: some
+  // bundlers/transforms emit 'fs_promises' for builtin 'fs/promises'.
+  // Both spellings must resolve as builtins (platform fix).
+  var slashForm = typeof bare === "string" ? bare.split("_").join("/") : bare;
   for (var i = 0; i < nodeBuiltins.length; i++) {
-    if (nodeBuiltins[i] === specifier || nodeBuiltins[i] === bare)
+    if (
+      nodeBuiltins[i] === specifier ||
+      nodeBuiltins[i] === bare ||
+      nodeBuiltins[i] === slashForm
+    )
       listed = true;
   }
   var isNodeBuiltIn = listed;
@@ -91,7 +99,9 @@ async function loadModule(
 
       // Use a stable key for the registry (entry + requested path disambiguates
       // the same filename required from different entry points).
-      const registryKey = `${entryPoint}::${modulePath}`;
+      // Provisional: keyed by raw specifier until _dynamic_import resolves it.
+      // canonicalizeRegistryEntry migrates to the resolved-path key below.
+      let registryKey = `${entryPoint}::${modulePath}`;
       // ── Circular reference guard ─────────────────────────────────────────
       if (moduleRegistry.has(registryKey) && isJSModule) {
         const record = moduleRegistry.get(registryKey);
@@ -159,6 +169,25 @@ async function loadModule(
         // prefix at import depth ≥2 (nested relative imports 404'd).
         const buildFileName = importResult.resolvedPath || modulePath;
 
+        // Dedup by resolved path: an aliased specifier resolving to an
+        // already-loading/done file reuses that record instead of evaluating
+        // the module a second time (see canonicalRegistryKey).
+        const canonicalKey = canonicalRegistryKey(
+          entryPoint,
+          modulePath,
+          importResult.resolvedPath,
+        );
+        const dedup = canonicalizeRegistryEntry(
+          moduleRegistry,
+          registryKey,
+          canonicalKey,
+          record,
+        );
+        if (dedup.reused) {
+          return dedup.reused.exports;
+        }
+        registryKey = canonicalKey;
+
         if (extension != "json" && extension != "css") {
           source = await interopChannel.callParent(
             "_build_file",
@@ -223,8 +252,10 @@ async function loadModule(
             )}`;
           }
 
-          source = source + `\n //# sourceURL=${modulePath}`;
-          const sourceMapComment = makeIdentitySourceMap(source, modulePath);
+          // Stamp sourceURL with the RESOLVED path: identical files yield
+          // identical data: URLs, so the browser module map dedupes as
+          // a second line of defense against double evaluation.
+          source = source + `\n //# sourceURL=${buildFileName}`;
 
           const url = `data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`;
 
@@ -362,3 +393,40 @@ async function loadModule(
 globalThis[_BVM_RT_KEY_].loadModule = loadModule;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// Registry dedup by resolved path (platform fix, AGENTS.md rule 6).
+// loadModule keyed moduleRegistry by the RAW import specifier, so the same
+// file imported via different specifiers ("../binding.wasi.cjs" vs
+// "@rolldown/browser") evaluated once PER SPECIFIER — observed 7x, each
+// committing 1GB of WebAssembly.Memory, killing the browser process.
+// Key by the RESOLVED VFS path instead; an aliased import reuses the
+// in-flight/done record. Backtick-free: this source is inlined into
+// generated scripts via toString() elsewhere.
+//
+// 2026-10-02: the entryPoint prefix had to go entirely. Each vite chunk
+// stamps its own resolved path as entryPoint, so "entry::resolved" still
+// split one file into N evaluations (9x observed, browser died at +112s).
+// Node evaluates once per resolved path per realm; the registry now does
+// too. Resolved paths already disambiguate (/a/utils.js vs /b/utils.js).
+function canonicalRegistryKey(entryPoint, modulePath, resolvedPath) {
+  return resolvedPath || modulePath;
+}
+
+// Migrate-or-reuse decision for a just-resolved module. provisionalKey is the
+// raw-specifier key created before _dynamic_import; canonicalKey is the
+// resolved-path key. Returns { reused } — non-null when another specifier
+// already resolved to this file (return reused.exports; a "loading" record's
+// partial exports mirror Node's circular-import semantics).
+function canonicalizeRegistryEntry(
+  moduleRegistry,
+  provisionalKey,
+  canonicalKey,
+  record,
+) {
+  if (canonicalKey === provisionalKey) return { reused: null };
+  var existing = moduleRegistry.get(canonicalKey);
+  moduleRegistry.delete(provisionalKey);
+  if (existing) return { reused: existing };
+  moduleRegistry.set(canonicalKey, record);
+  return { reused: null };
+}

@@ -78,8 +78,24 @@ try {
     .map((l) => (typeof l === "string" ? l : JSON.stringify(l)))
     .join("\n");
   log("LOGS tail:\n" + logs.slice(-2000));
-  const m = logs.match(/__ROLLDOWN_PROOF__(\{.*\})/);
-  check("proof marker in logs", !!m, logs.slice(-500));
+  // Surface execute() outcome: it resolves (never rejects) with
+  // {success:false, error, logs} on entry failure.
+  log("execResult.success=" + (execResult && execResult.success));
+  if (execResult && !execResult.success) {
+    log("execResult.error=" + JSON.stringify(execResult.error).slice(0, 3000));
+  }
+  // Extract __ROLLDOWN_PROOF__ from the RAW log entry args, not from the
+  // re-stringified joined logs (see tests/vite-build-proof.html: the entry
+  // wrapper's escaped quotes break the old regex capture).
+  const PROOF_PREFIX = "__ROLLDOWN_PROOF__";
+  let proofText = null;
+  for (const l of (execResult && execResult.logs) || []) {
+    const a = typeof l === "string" ? l : (l && l.args);
+    const s = typeof a === "string" ? a : (a != null ? JSON.stringify(a) : "");
+    const i = s.indexOf(PROOF_PREFIX);
+    if (i !== -1) { proofText = s.slice(i + PROOF_PREFIX.length); break; }
+  }
+  check("proof marker in logs", proofText !== null, logs.slice(-500));
   // 2026-10-01 regression: entry `import "rolldown"` fell through to the
   // esm.sh CDN fallback (ImportResolver rewrote it before the interception
   // table was consulted); esm.sh's native-package build then imported
@@ -87,10 +103,10 @@ try {
   // URL in the sandbox logs means the interception gap is back.
   check("no esm.sh CDN fallback in sandbox logs", logs.indexOf("esm.sh") === -1, logs.slice(-500));
   let proof = null;
-  if (m) {
-    try { proof = JSON.parse(m[1]); } catch (e) { /* fall through */ }
+  if (proofText !== null) {
+    try { proof = JSON.parse(proofText); } catch (e) { /* fall through */ }
   }
-  check("proof JSON parses", !!proof);
+  check("proof JSON parses", !!proof, proofText ? proofText.slice(0, 200) : "(no proof text)");
   if (proof) {
     check("rolldown is a function (binding instantiated)", proof.hasRolldown === true, JSON.stringify(proof));
     log("VERSION=" + proof.version);
