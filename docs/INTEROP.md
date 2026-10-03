@@ -45,7 +45,7 @@ The parent side lives in `runtime.js`: `registerInterop(name, handler)` /
 
 ---
 
-## Parent → sandbox: methods the sandbox calls
+## Sandbox → parent: methods the sandbox calls
 
 The sandbox calls these with `interopChannel.callParent(name, ...args)`.
 
@@ -55,6 +55,15 @@ Returns the sandbox bootstrap template (a string of JS) that the sandbox
 `import()`s from a `data:` URL at startup (`src/sandbox/80-errors.js`). This
 is how the iframe gets its runtime object, module loader, console shims,
 process shim, timers, fetch/XHR wrappers, and error handling.
+
+**Source of truth (2026-10-03):** the live template is the inline template
+literal returned by `_getState` in `runtime.js` (~`registerInterop("_getState",
+…)`). A parallel authored pipeline exists — `src/sandbox/*.js` fragments
+built by `src/build-sandbox.mjs` into `src/sandbox-template.js` (header:
+"Source of truth: src/sandbox/*.js") — but the runtime does not consume it
+yet; only `tests/cloak.test.js` imports it. Do not edit one assuming the
+other follows. Migrating the runtime to the fragment pipeline is a separate
+project.
 
 ### `_dynamic_import(path, type, entryPoint, parentEntryPoint, isNodeBuiltIn, cwd, vfs)`
 
@@ -104,7 +113,7 @@ of the real module pipeline; do not build on it.
 
 ---
 
-## Sandbox → parent: methods the host calls
+## Parent → sandbox: methods the host calls
 
 The host calls these with `sandbox.invoke(name, ...args)`.
 
@@ -167,7 +176,7 @@ re-emits it as `execution:server`:
 sandbox.on('execution:server', async ({ type, port }) => {
   if (type === 'open') {
     console.log('server up on', port);
-    const res = await sandbox.invoke('__serverRequest__', 3000, 'GET', '/api/users/1', {});
+    const res = await sandbox.invoke('__serverRequest__', 3000, '/api/users/1', 'GET', {});
     console.log(res.statusCode, res.body.toString());
   }
   if (type === 'closed') {
