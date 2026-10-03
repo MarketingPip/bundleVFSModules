@@ -46,9 +46,10 @@ try {
   phase("runtime-loaded");
 
   // ---- 1. VFS seed: a TypeScript module ----
-  // The .ts source uses type annotations, interfaces, and type aliases.
-  // Without the plugin wiring in _build_file, acorn cannot parse this
-  // (transformImportsToLoadModule throws) and the import fails.
+  // The .ts source uses type annotations, interfaces, type aliases — plus
+  // constructs the old regex-strip implementation could NOT handle
+  // (enums, generics, `as` casts): their output was not valid JavaScript.
+  // This E2E proves the REAL compiler is doing the transpiling.
   const seed = {
     "/greet.ts": [
       "export function greet(name: string): string {",
@@ -59,19 +60,27 @@ try {
       "type ID = string | number;",
       "export const config: Config = { debug: true };",
       "export const id: ID = \"abc\";",
+      "enum Color { Red, Green, Blue }",
+      "export const fav: Color = Color.Blue;",
+      "export function identity<T>(x: T): T { return x; }",
+      "export const identSeven = identity<number>(7);",
+      'export const casted = "typed" as string;',
       "",
     ].join("\n"),
   };
 
   // ---- 2. Entry: import the .ts module through the real pipeline ----
   const userCode = [
-    'import { greet, answer, config, id } from "./greet.ts";',
+    'import { greet, answer, config, id, fav, identSeven, casted } from "./greet.ts";',
     "const __hold = setTimeout(() => {}, 170000);",
     "const __results = {",
     '  greet: greet("world"),',
     "  answer: answer,",
     "  debug: config.debug,",
     "  id: id,",
+    "  fav: fav,",
+    "  ident: identSeven,",
+    "  casted: casted,",
     "};",
     "clearTimeout(__hold);",
     'console.log("__PLUGIN_E2E__" + JSON.stringify(__results));',
@@ -139,6 +148,11 @@ try {
   check("TS plugin: answer === 42 (type annotation stripped)", r.answer === 42, JSON.stringify(r.answer));
   check("TS plugin: config.debug === true (interface stripped)", r.debug === true, JSON.stringify(r.debug));
   check("TS plugin: id === 'abc' (type alias stripped)", r.id === "abc", JSON.stringify(r.id));
+  // Real-compiler-only constructs (the regex implementation emitted
+  // syntactically invalid JS for all three):
+  check("TS real compiler: fav === 2 (enum transpiled)", r.fav === 2, JSON.stringify(r.fav));
+  check("TS real compiler: identity(7) === 7 (generics transpiled)", r.ident === 7, JSON.stringify(r.ident));
+  check("TS real compiler: casted === 'typed' (as-cast transpiled)", r.casted === "typed", JSON.stringify(r.casted));
 
   const failures = results.filter((x) => x.startsWith("FAIL"));
   log(results.join("\n"));
