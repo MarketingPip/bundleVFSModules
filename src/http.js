@@ -1523,7 +1523,7 @@ export class ClientRequest extends OutgoingMessage {
       hostname === "[::1]" ||
       hostname === "";
     if (!local || !Number.isInteger(port)) return null;
-    return serverRegistry.get(port) || null;
+    return _httpShared().registry.get(port) || null;
   }
 
   /**
@@ -1960,40 +1960,73 @@ function _createWsFrame(opcode, payload, masked) {
 //     in the in-process registry; the host runtime delivers emulated inbound
 //     requests via __httpServerRunTime.handleRequest.
 // ---------------------------------------------------------------------------
-const serverRegistry = new Map();
-
-let _waitForServersPromise = null;
-let _waitForServersResolve = null;
+// Shared server state across duplicate module copies.
+//
+// The dist bundles are self-contained (esbuild `external: []`), so every
+// builtin bundle that transitively includes this module (http, https,
+// node:_http_*) carries its OWN copy of this module's top-level state --
+// including its own server registry -- and its own `RT.__httpServerRunTime`
+// publication (last write wins). The bootstrap also preloads every
+// builtin, so by the time user code runs, the published handleRequest may
+// belong to a different copy than the Server class user code instantiates.
+// Result: "No active HTTP server found" for servers that ARE listening
+// (the host's documented __serverRequest__ flow).
+//
+// The registry (and the wait-for-servers coordination) MUST therefore live
+// on the per-sandbox RT object so all copies share one registry per realm.
+// Under real Node / direct import (no RT) fall back to module-local state,
+// preserving existing behavior.
+const _localHttpShared = {
+  registry: new Map(),
+  waitPromise: null,
+  waitResolve: null,
+};
+function _httpShared() {
+  if (RT) {
+    if (!RT.__httpSharedState) {
+      RT.__httpSharedState = {
+        registry: new Map(),
+        waitPromise: null,
+        waitResolve: null,
+      };
+    }
+    return RT.__httpSharedState;
+  }
+  return _localHttpShared;
+}
 
 function _resolveWaitForServers() {
-  if (_waitForServersResolve) {
-    const resolve = _waitForServersResolve;
-    _waitForServersPromise = null;
-    _waitForServersResolve = null;
+  const s = _httpShared();
+  if (s.waitResolve) {
+    const resolve = s.waitResolve;
+    s.waitPromise = null;
+    s.waitResolve = null;
     resolve();
   }
 }
 
 /** Resolves when every virtual server has closed (runtime completion hook). */
 function _waitForAllServers() {
-  if (serverRegistry.size === 0) {
+  const s = _httpShared();
+  if (s.registry.size === 0) {
     return Promise.resolve();
   }
-  if (!_waitForServersPromise) {
-    _waitForServersPromise = new Promise((resolve) => {
-      _waitForServersResolve = resolve;
+  if (!s.waitPromise) {
+    s.waitPromise = new Promise((resolve) => {
+      s.waitResolve = resolve;
     });
   }
-  return _waitForServersPromise;
+  return s.waitPromise;
 }
 
 function _registerServer(port, server) {
-  serverRegistry.set(port, server);
+  _httpShared().registry.set(port, server);
 }
 
 function _unregisterServer(port) {
-  serverRegistry.delete(port);
-  if (serverRegistry.size === 0) {
+  const s = _httpShared();
+  s.registry.delete(port);
+  if (s.registry.size === 0) {
     _resolveWaitForServers();
   }
 }
@@ -2005,7 +2038,7 @@ function _unregisterServer(port) {
 // delivered to 'error' listeners only) followed by 'close', and the port is
 // unregistered. Returns true if a server was closed, false otherwise.
 function closeServer(port) {
-  const server = serverRegistry.get(port);
+  const server = _httpShared().registry.get(port);
   if (!server) return false;
   const err = makeError(
     "EADDRINUSE",
@@ -2022,11 +2055,11 @@ function closeServer(port) {
 }
 
 function getServer(port) {
-  return serverRegistry.get(port);
+  return _httpShared().registry.get(port);
 }
 
 function getAllServers() {
-  return new Map(serverRegistry);
+  return new Map(_httpShared().registry);
 }
 
 // ---------------------------------------------------------------------------
@@ -2240,10 +2273,10 @@ class ServerBase extends EventEmitter {
       // Ephemeral port, like Node's listen(0).
       do {
         port = 1024 + Math.floor(Math.random() * (65535 - 1024));
-      } while (serverRegistry.has(port));
+      } while (_httpShared().registry.has(port));
     }
 
-    if (serverRegistry.has(port)) {
+    if (_httpShared().registry.has(port)) {
       const err = makeError(
         "EADDRINUSE",
         `listen EADDRINUSE: address already in use :::${port}`,
@@ -2758,9 +2791,10 @@ async function handleRequest(
     body = headersOrBody;
   }
 
-  let server = serverRegistry.get(port);
-  if (!server && serverRegistry.size > 0) {
-    server = serverRegistry.values().next().value;
+  const _reg = _httpShared().registry;
+  let server = _reg.get(port);
+  if (!server && _reg.size > 0) {
+    server = _reg.values().next().value;
   }
   if (!server) {
     throw makeError(

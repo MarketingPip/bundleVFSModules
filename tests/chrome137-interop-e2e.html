@@ -11,7 +11,9 @@
 //   2. postMessage round-trip — result.logs arrive via the channel
 //   3. sandbox.invoke('__stdin__', …) — parent→sandbox while execute pending
 //   4. custom exposed method — sandbox exposes via interop.expose, parent invokes
-//   5. cookie jar — virtual HTTP server set-cookie → jar stores → resent
+//   5. cookie jar — VirtualCookieJar IIFE read/write round-trip
+//   6. virtual HTTP server — host __serverRequest__ reaches sandbox server;
+//      Set-Cookie stored in jar, Cookie re-injected on the next request
 //
 // Uses ONLY the real public surface: CodeSandbox from /local-repo/runtime.js.
 // Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out, POST /report.
@@ -209,6 +211,62 @@ try {
         JSON.stringify(cj));
     }
     phase("cookie-done");
+  }
+
+  // ---- 6. virtual HTTP server + cookie jar through the __serverRequest__ wrapper ----
+  // The documented host flow (docs/INTEROP.md "How a server request is made"):
+  // sandbox listens on a virtual port, the host invokes __serverRequest__,
+  // the wrapper injects cookies from the RFC 6265 jar and stores Set-Cookie.
+  // Regression: the http/net registries were per-module-copy (self-contained
+  // dist bundles), so the published handleRequest couldn't see servers
+  // created through another copy's Server class ("No active HTTP server").
+  {
+    const sb = new CodeSandbox({ fileName: "httpsrv.mjs", timeout: 180000, fallbackCDN: false });
+    const code = [
+      "import http from 'node:http';",
+      "let lastCookie = 'none-seen';",
+      "const server = http.createServer((req, res) => {",
+      "  lastCookie = req.headers.cookie || req.headers.Cookie || 'none';",
+      "  res.writeHead(200, { 'content-type': 'text/plain', 'set-cookie': 'session137=abc123; Path=/' });",
+      "  res.end('hello-probe');",
+      "});",
+      "globalThis.interop.expose('getLastCookie137', () => lastCookie);",
+      "globalThis.interop.expose('closeServer137', () => new Promise((resolve) => server.close(() => resolve('closed'))));",
+      "server.listen(3457, () => console.log('__SRV__listening'));",
+    ].join("\n");
+    phase("srv-execute-start");
+    const execP = sb.execute(code);
+    let sawListening = false;
+    const hh = (d) => {
+      const sd = typeof d === "string" ? d : JSON.stringify(d);
+      if (sd.includes("__SRV__listening")) sawListening = true;
+    };
+    if (typeof sb.on === "function") sb.on("execution:stdout", hh);
+    check("httpsrv: server listening on virtual port 3457", await waitFor(() => sawListening, 60000));
+    const decodeBody = (b) => (typeof b === "string" ? b : String.fromCharCode.apply(null, Object.values(b || {})));
+    let r1 = null, e1 = "";
+    try { r1 = await sb.invoke("__serverRequest__", 3457, "/", "GET", {}, {}); }
+    catch (e) { e1 = String((e && e.message) || e).slice(0, 200); }
+    check("httpsrv: __serverRequest__ resolved (server found)", !!r1, e1);
+    check("httpsrv: status 200 + body hello-probe",
+      r1 && r1.statusCode === 200 && decodeBody(r1.body) === "hello-probe",
+      String(JSON.stringify(r1 && { s: r1.statusCode })).slice(0, 200));
+    const sc = r1 && r1.headers && r1.headers["set-cookie"];
+    check("httpsrv: set-cookie echoed", !!sc && String(sc).includes("session137=abc123"), JSON.stringify(sc));
+    let r2 = null;
+    try { r2 = await sb.invoke("__serverRequest__", 3457, "/", "GET", {}, {}); } catch (e) {}
+    check("httpsrv: second __serverRequest__ resolved", !!r2);
+    let lastCookie = null;
+    try { lastCookie = await sb.invoke("getLastCookie137"); } catch (e) {}
+    check("httpsrv: jar re-injected Cookie on 2nd request (server saw session137=abc123)",
+      lastCookie === "session137=abc123", JSON.stringify(lastCookie));
+    let closed = null;
+    try { closed = await sb.invoke("closeServer137"); } catch (e) {}
+    check("httpsrv: server closed", closed === "closed", JSON.stringify(closed));
+    const rr = await execP;
+    check("httpsrv: execute resolved success", rr && rr.success === true,
+      JSON.stringify({ success: rr && rr.success }).slice(0, 200));
+    phase("srv-done");
   }
 
   const failures = results.filter((x) => x.startsWith("FAIL"));

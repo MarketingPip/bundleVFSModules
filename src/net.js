@@ -703,8 +703,40 @@ function setDefaultAutoSelectFamilyAttemptTimeout(value) {
 // works within a sandbox the way Node loopback works on a machine.
 // ---------------------------------------------------------------------------
 
-const tcpServers = new Map(); // "<host>:<port>" -> Server
-const pipeServers = new Map(); // path -> Server
+// Shared network registries across duplicate module copies.
+//
+// Same issue as src/http.js: the dist bundles are self-contained
+// (esbuild `external: []`), so every builtin bundle that transitively
+// includes this module carries its OWN tcpServers/pipeServers maps. An
+// http server's listen() binds its in-memory socket server in one copy's
+// registry while another copy's netConnect() looks it up -> ECONNREFUSED.
+// Keep the registries on the per-sandbox RT object so all copies share
+// one virtual network per realm. Under real Node / direct import (no RT)
+// fall back to module-local maps, preserving existing behavior.
+const _localNetShared = {
+  tcpServers: new Map(), // "<host>:<port>" -> Server
+  pipeServers: new Map(), // path -> Server
+};
+function _netShared() {
+  if (RT) {
+    if (!RT.__netSharedState) {
+      RT.__netSharedState = {
+        tcpServers: new Map(),
+        pipeServers: new Map(),
+      };
+    }
+    return RT.__netSharedState;
+  }
+  return _localNetShared;
+}
+// Accessors: every use site goes through these so all duplicate module
+// copies hit the realm-shared maps.
+function _tcpServers() {
+  return _netShared().tcpServers;
+}
+function _pipeServers() {
+  return _netShared().pipeServers;
+}
 
 function serverKey(host, port) {
   return `${host}:${port}`;
@@ -1269,7 +1301,7 @@ Socket.prototype._doConnect = function _doConnect(options, pipe) {
 
   let server = null;
   if (pipe) {
-    server = pipeServers.get(options.path);
+    server = _pipeServers().get(options.path);
     if (!server) {
       defer(() => this._connectFailed(errConnRefusedPipe(options.path)));
       return;
@@ -1283,7 +1315,7 @@ Socket.prototype._doConnect = function _doConnect(options, pipe) {
     keys.push(serverKey("::", port));
     keys.push(serverKey("0.0.0.0", port));
     for (const key of keys) {
-      server = tcpServers.get(key);
+      server = _tcpServers().get(key);
       if (server) break;
     }
     if (!server) {
@@ -1666,13 +1698,13 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
 
   const actualPort = port === 0 ? allocPort() : port;
   const key = serverKey(bindHost, actualPort);
-  if (tcpServers.has(key)) {
+  if (_tcpServers().has(key)) {
     this._bindPending = false;
     nextTick(() => this.emit("error", errAddrInUse(bindHost, actualPort)));
     return;
   }
 
-  tcpServers.set(key, this);
+  _tcpServers().set(key, this);
   this._bindPending = false;
   this._listening = true;
   this._backlog = backlog;
@@ -1683,7 +1715,7 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
 
 Server.prototype._doListenPipe = function _doListenPipe(path, backlog) {
   if (!this._bindPending) return;
-  if (pipeServers.has(path)) {
+  if (_pipeServers().has(path)) {
     this._bindPending = false;
     nextTick(() =>
       this.emit(
@@ -1698,7 +1730,7 @@ Server.prototype._doListenPipe = function _doListenPipe(path, backlog) {
     );
     return;
   }
-  pipeServers.set(path, this);
+  _pipeServers().set(path, this);
   this._bindPending = false;
   this._listening = true;
   this._backlog = backlog;
@@ -1831,9 +1863,9 @@ Server.prototype.close = function close(cb) {
 
   if (this._listening || this._bindPending) {
     if (this._bindAddress) {
-      if (this._pipeName) pipeServers.delete(this._pipeName);
+      if (this._pipeName) _pipeServers().delete(this._pipeName);
       else
-        tcpServers.delete(
+        _tcpServers().delete(
           serverKey(this._bindAddress.address, this._bindAddress.port),
         );
     }
