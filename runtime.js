@@ -8807,7 +8807,24 @@ export class CodeSandbox extends EventEmitter {
             fileName,
           );
           if (__dispatched.kind === "module") {
-            return __dispatched.source; // json/text/wasm: final ESM, skip transform
+            // json/text/wasm: final ESM, skip transform — BUT respect the
+            // require() caller's contract. The sandbox-side loadModule wraps
+            // require() targets with wrapCommonJS(); feeding it a top-level
+            // `export` is a SyntaxError ("export declarations may only appear
+            // at top level"). For the statically-analyzable json/text
+            // loaders, emit CJS instead; wasm keeps ESM (top-level await
+            // can't become CJS — the ERR_REQUIRE_ESM path below handles it).
+            if (moduleType === "require" && __lr.loader !== "wasm") {
+              const m = __dispatched.source.match(
+                /^export default ([\s\S]*?);?\s*$/,
+              );
+              if (m) {
+                return `module.exports = ${m[1]};`;
+              }
+              // Fallthrough: unparseable ESM → ERR_REQUIRE_ESM below.
+            } else {
+              return __dispatched.source;
+            }
           }
           source = __dispatched.source; // js: continue through the pipeline
 
