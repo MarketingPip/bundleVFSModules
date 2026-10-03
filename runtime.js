@@ -9,6 +9,16 @@ import { Terminal } from "https://esm.sh/xterm@5.3.0";
 // exactly like CJS require('rollup') (src/module.js). Ungated lookup: the
 // handler only runs when serving the browser runtime's VFS.
 import { lookupNativeInterception } from "./src/browser-builds.js";
+// Plugin API (src/plugins.js): transform hooks wired into the parent-side
+// _build_file interop handler below. The TypeScript plugin ships registered
+// by default so .ts/.tsx modules work out of the box; hosts can
+// unregisterPlugin("typescript") or register their own. Plugin transforms
+// run at the TOP of _build_file, before detectModuleSystem, so TS->JS
+// output flows through the existing CJS/ESM detection unchanged.
+import { applyTransformPlugins, registerPlugin } from "./src/plugins.js";
+import { typescriptPlugin } from "./src/plugins/typescript.js";
+
+registerPlugin(typescriptPlugin);
 /**
  * Inlined IIFE bundle of src/cookieJar.js (RFC 6265 virtual cookie jar).
  * The sandbox cannot fetch dist files at runtime without a network round
@@ -8727,6 +8737,12 @@ export class CodeSandbox extends EventEmitter {
           parentEntryPoint,
           isNodeBuiltIn,
         ) => {
+          // Plugin transforms run FIRST, before detectModuleSystem: a .ts
+          // source's type annotations are not parseable JS, so the plugin
+          // must produce valid JS before the acorn-based pipeline runs.
+          // (PLUGIN_API_DESIGN.md §4; src/plugins.js documents the hook.)
+          source = await applyTransformPlugins(source, fileName);
+
           const sourceModuleType = detectModuleSystem(source);
           const originalSource = source;
 
