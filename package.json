@@ -33,6 +33,7 @@
     "esbuild-wasm": "^0.28.2",
     "jest": "^30.5.2",
     "node-fetch": "^3.3.2",
+    "rollup": "^4.64.0",
     "terser": "^5.51.2",
     "vite": "^7.3.6",
     "vitest": "^5.0.2"
