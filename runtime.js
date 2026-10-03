@@ -4059,6 +4059,16 @@ child.on('error', (err) => {
           type: data.method,
           args: data.message,
         });
+        // Derived alias (docs/PLUGINS.md decision "execution:stderr"):
+        // Node routes console.error AND console.warn to fd 2, so hosts
+        // that render stderr separately get a dedicated event. Backwards
+        // compatible — execution:stdout keeps firing for every console.* call.
+        if (data.method === "error" || data.method === "warn") {
+          this.sandbox.emit("execution:stderr", {
+            type: data.method,
+            args: data.message,
+          });
+        }
       } else if (data.type === "resource_timing") {
         const r = JSON.parse(data.message);
         this.sandbox.emit("execution:resource_timing", r);

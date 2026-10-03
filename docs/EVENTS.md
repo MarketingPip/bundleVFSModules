@@ -151,10 +151,27 @@ sandbox.on('execution:stdout', ({ type, args }) => {
 ```
 
 Payload: `{ type, args }`. `type` is the console method name, `args` the
-joined, serialized arguments string. Note there is **no separate stderr
-event**: `console.error` arrives here with `type: 'error'`. The demo
-wiring in `runtime.js` writes `args` straight into xterm.js, which
-interprets ANSI escape sequences natively.
+joined, serialized arguments string. The demo wiring in `runtime.js`
+writes `args` straight into xterm.js, which interprets ANSI escape
+sequences natively.
+
+### `execution:stderr`
+
+Derived alias of `execution:stdout` — fired in addition to (not instead
+of) `execution:stdout` for `console.error` and `console.warn` calls,
+matching Node's fd 2 semantics (`console.warn` goes to stderr in Node
+too). Backward compatible: every existing `execution:stdout` listener
+keeps working unchanged; hosts that render stderr separately can listen
+for this event instead of branching on `type`.
+
+```js
+sandbox.on('execution:stderr', ({ type, args }) => {
+  // type: 'error' | 'warn'
+  term.write('\x1b[31m' + String(args ?? '') + '\x1b[0m');
+});
+```
+
+Payload: `{ type, args }` — same shape as `execution:stdout`.
 
 ### `execution:key_event`
 
@@ -334,6 +351,7 @@ deterministic.
 
 - `execution:start`'s `code` field is always `false` today; either carry
   the code or drop the field so hosts don't depend on it.
-- `console.error` arrives via `execution:stdout` with `type: 'error'`.
-  That works, but a documented `execution:stderr` alias would make the
-  split explicit for hosts that render stderr separately.
+- `console.error` arrives via `execution:stdout` with `type: 'error'`,
+  and also via the derived `execution:stderr` alias (fires for
+  `console.error`/`console.warn` only — Node fd 2 semantics). Resolved:
+  the alias was added per the `docs/PLUGINS.md` decision.

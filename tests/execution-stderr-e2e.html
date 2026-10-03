@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>stderr-alias-e2e</title></head>
+<body>
+<div id="result">pending</div>
+<script type="module">
+import { CodeSandbox } from '/runtime.js';
+
+const seen = { stdout: [], stderr: [] };
+const sb = new CodeSandbox({ fileName: 'e2e.mjs', timeout: 60000 });
+sb.on('execution:stdout', (p) => seen.stdout.push(p));
+sb.on('execution:stderr', (p) => seen.stderr.push(p));
+
+try {
+  await sb.execute([
+    "console.log('LOG-MARKER');",
+    "console.error('ERROR-MARKER');",
+    "console.warn('WARN-MARKER');",
+    "console.info('INFO-MARKER');",
+    "console.debug('DEBUG-MARKER');",
+  ].join('\n'));
+} catch (e) {
+  seen.executeError = String(e && e.message || e);
+}
+// Settle: console events arrive over a separate postMessage channel and can
+// lag execute()'s resolution, so poll until all 5 markers land (or 20s).
+const deadline = Date.now() + 20000;
+const markers = ['LOG-MARKER','ERROR-MARKER','WARN-MARKER','INFO-MARKER','DEBUG-MARKER'];
+while (Date.now() < deadline) {
+  const got = new Set(seen.stdout.map((e) => e.args));
+  if (markers.every((m) => [...got].some((a) => String(a).includes(m)))) break;
+  await new Promise((r) => setTimeout(r, 250));
+}
+document.getElementById('result').textContent = JSON.stringify(seen);
+document.title = 'E2E-DONE';
+</script>
+</body>
+</html>
