@@ -18,6 +18,31 @@ unimplementable-in-browser APIs stay honest noop stubs, never throws.
 
 ## Recently completed
 
+- **Verify loop green** (2026-10-03, PR #161): full jest suite 191/191
+  suites, 2359/2359 tests green; the 600s zero-output `bin/verify` timeout
+  root-caused twice — (a) a module-scope `BroadcastChannel` in `src/ws.js`
+  pinned the event loop on import (fixed with guarded `unref()` +
+  regression test), (b) the wrapper buffered all step output (now streams
+  live, kills the process group on timeout). `src/build-vfs.mjs` gained a
+  shebang + executable bit; `rollup@4.64.0` added as a devDependency so the
+  real `rollup/parseAst` differential runs.
+- **Plugin API wired into `_build_file`** (2026-10-03, PR #162): transform
+  hooks run at the top of the real `_build_file` pipeline before module
+  detection (per `PLUGIN_API_DESIGN.md` §4). Headed-Firefox proof 7/7 — a
+  `.ts` module seeded in the VFS is transformed by the registered plugin and
+  executed with correct values; it fails pre-wiring, proving the hook
+  position matters.
+- **Real TypeScript transpiler plugin** (2026-10-03, PR #163): the regex
+  type-stripping spike replaced with the real TypeScript 5.9.2 compiler
+  (`ts.transpileModule`, lazy-loaded — npm package in Node, pinned esm.sh
+  in the browser host page). 6 red-first tests (enum, generics, namespace,
+  casts, non-null assertions). Headed-Firefox E2E 10/10.
+- **Clang WASI hello-world spike** (2026-10-03, PR #164): the 184-byte
+  hand-assembled fixture replaced with a real Clang 19.1.5 / wasi-sdk 25.0
+  binary (149,568 bytes — libc startup, malloc/free, snprintf, argc/argv),
+  reproducibly built by `scripts/build-clang-wasi.sh`. Browser proof: real
+  `runtime.js` → `sandbox.execute()` → `node:wasi` `WASI.start()`, stdout
+  via `result.logs` — 10/10 in headed Firefox.
 - **Vite 7 browser E2E — M3** (2026-09-29, `feat/vite7-browser`): real
   Vite 7.3.6 `vite.build()` executes in headed Firefox through the browser
   runtime — 5060 ms, emits 1 chunk, verdict `ok:true`. Rollup runs via
@@ -101,7 +126,10 @@ bytes" and "run wasm bytes on my VFS".
   probing done for the sync-require path; `exports`/`imports` still open.
 - WASI execution path (Nodepod's `wasi.ts` + `napi-wasm-worker.ts`) with
   wa-sqlite as the standing WASM-of-the-real-thing example (AGENTS.md
-  rule 8).
+  rule 8). **Update 2026-10-03 (PR #164):** a Clang-produced WASI binary is
+  proven through the browser runtime via `node:wasi`
+  (`tests/clang-wasi-e2e.py` 10/10); the first-class `runtime.runWasi()`
+  API is still open.
 - A Sharp-style Node-API→WASM port writeup as the template: "not supported"
   becomes a porting guide, never a dead end.
 - Evaluate `reclaimprotocol/tls` as the `tls.js` dependency instead of

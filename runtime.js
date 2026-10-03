@@ -11451,6 +11451,7 @@ document.getElementById("sendInput").addEventListener("click", async () => {
 // playground init is skipped entirely — the import stays side-effect free.
 const __bvmPlaygroundPresent =
   typeof document !== "undefined" &&
+  !globalThis.__BVM_DISABLE_PLAYGROUND &&
   !!document.getElementById("codeInput") &&
   !!document.getElementById("output");
 if (__bvmPlaygroundPresent) {
