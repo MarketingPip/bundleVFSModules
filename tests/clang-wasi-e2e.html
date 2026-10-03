@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Clang WASI E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Clang WASI browser proof (v1 gate #4).
+//
+// Proves a REAL Clang-produced WASI preview1 binary
+// (tests/fixtures/hello-wasi.wasm, compiled from tests/fixtures/hello.c
+// with wasi-sdk 25.0 / Clang 19.1.5) executes inside the browser sandbox
+// through the real node:wasi shim and its stdout reaches result.logs.
+//
+// Uses ONLY the real public surface:
+//   - `CodeSandbox` imported from the REAL /local-repo/runtime.js
+//     (worktree file; the driver serves it with ONLY _builtinBaseUrl
+//     rewritten to the local worktree dist/)
+//   - `sandbox.execute(userCode)` runs the REAL pipeline:
+//     ImportResolver -> transformImportsToLoadModule -> SandboxRuntime.generate
+//     -> iframe bootstrap -> _dynamic_import/_build_file interop (parent side)
+//     -> node:wasi loadModule -> data: URL import -> postMessage -> result.logs
+//
+// The user code fetches the real 149KB Clang binary over HTTP from the
+// driver's /local-repo route, compiles + instantiates it, calls
+// wasi.start(), and logs the exit code. The WASM program's own stdout
+// (libc printf -> fd_write -> shim -> console.log) arrives in result.logs.
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text, and
+// POST /report (crash-proof). No screenshots.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { window.__phase = p; document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+try {
+  // ---- 0. Real public host runtime ----
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+  phase("runtime-loaded");
+
+  // ---- 1. User code: fetch the REAL Clang binary, run it via node:wasi ----
+  const userCode = [
+    'import { WASI } from "node:wasi";',
+    "(async () => {",
+    "  const __hold = setTimeout(() => {}, 170000);",
+    '  const resp = await fetch("/local-repo/tests/fixtures/hello-wasi.wasm");',
+    '  if (!resp.ok) throw new Error("wasm fetch failed: " + resp.status);',
+    "  const bytes = new Uint8Array(await resp.arrayBuffer());",
+    '  console.log("__CLANG_WASI_BIN__ bytes=" + bytes.length +',
+    '    " magic=" + bytes[0] + "," + bytes[1] + "," + bytes[2] + "," + bytes[3]);',
+    '  const wasi = new WASI({ version: "preview1", args: ["hello.wasm", "foo", "bar"], env: {}, returnOnExit: true });',
+    "  const mod = await WebAssembly.compile(bytes);",
+    "  const inst = await WebAssembly.instantiate(mod, wasi.getImportObject());",
+    "  const exitCode = wasi.start(inst);",
+    "  clearTimeout(__hold);",
+    '  console.log("__CLANG_WASI_E2E__" + JSON.stringify({ exitCode }));',
+    "})();",
+  ].join("\n");
+
+  const sandbox = new CodeSandbox({
+    fs: {},
+    fileName: "clang-wasi-consumer.mjs",
+    timeout: 180000,
+    process: { env: {} },
+    fallbackCDN: false,
+  });
+  phase("sandbox-constructed");
+
+  setTimeout(() => {
+    if (!window.__done__) {
+      document.title = "E2E-FAIL: watchdog timeout at phase " + (window.__phase || "unknown");
+      report({ ok: false, phase: "watchdog", lastPhase: window.__phase || null });
+    }
+  }, 175000);
+
+  let result;
+  try {
+    phase("execute-start");
+    result = await sandbox.execute(userCode);
+    phase("execute-resolved");
+  } catch (e) {
+    report({ ok: false, phase: "execute", error: String((e && e.message) || e).slice(0, 2000) });
+    document.title = "E2E-FAIL: execute threw: " + String((e && e.message) || e).slice(0, 120);
+    log("execute REJECTED: " + String((e && e.message) || e).slice(0, 500));
+    throw e;
+  }
+
+  // ---- 2. The verdict came back through the REAL postMessage channel ----
+  check("generate: execute() resolved via postMessage channel (result.success===true)",
+    result && result.success === true, JSON.stringify(result && { success: result.success, errors: result.errors }).slice(0, 300));
+
+  const logEntries = (result.logs || []).map((l) => (typeof l === "string" ? l : JSON.stringify(l)));
+  const allLogs = logEntries.join("\n");
+  let r = null;
+  for (const entry of logEntries) {
+    let raw = entry;
+    try {
+      const parsed = JSON.parse(entry);
+      if (parsed && typeof parsed.args === "string") raw = parsed.args;
+    } catch (e) {}
+    const j = raw.indexOf("__CLANG_WASI_E2E__");
+    if (j !== -1) {
+      try { r = JSON.parse(raw.slice(j + "__CLANG_WASI_E2E__".length)); break; }
+      catch (e) { r = { __parseError: raw.slice(j, j + 300) }; break; }
+    }
+  }
+  check("postMessage: __CLANG_WASI_E2E__ marker arrived via result.logs", !!r && !r.__parseError,
+    "logs=" + logEntries.length +
+    " success=" + (result && result.success) +
+    " firstLogs=" + logEntries.slice(0, 3).join(" | ").slice(0, 900) +
+    " errors=" + String(JSON.stringify(result && (result.errors || result.error)) || "").slice(0, 600));
+  phase("marker-parsed");
+  log("INTERIM:\n" + results.join("\n"));
+  if (!r || r.__parseError) throw new Error("no E2E marker in logs");
+
+  // ---- 3. The Clang program's own stdout, through the real WASI shim ----
+  // These lines were produced by libc printf inside the Clang binary ->
+  // fd_write(1) -> src/wasi.js stdout shim -> console.log -> result.logs.
+  // A hand-assembled module cannot print these (no libc, no malloc,
+  // no snprintf, no argc/argv handling).
+  check("Clang WASI: exitCode === 0", r.exitCode === 0, JSON.stringify(r.exitCode));
+  check("Clang WASI: stdout has 'clang-wasi-hello'", allLogs.includes("clang-wasi-hello"), allLogs.slice(0, 500));
+  check("Clang WASI: stdout has 'argc=3'", allLogs.includes("argc=3"), allLogs.slice(0, 500));
+  check("Clang WASI: stdout has 'argv[0]=hello.wasm'", allLogs.includes("argv[0]=hello.wasm"), allLogs.slice(0, 500));
+  check("Clang WASI: stdout has 'argv[1]=foo'", allLogs.includes("argv[1]=foo"), allLogs.slice(0, 500));
+  check("Clang WASI: stdout has 'argv[2]=bar'", allLogs.includes("argv[2]=bar"), allLogs.slice(0, 500));
+  check("Clang WASI: stdout has 'fib(20)=6765' (libc malloc+snprintf)", allLogs.includes("fib(20)=6765"), allLogs.slice(0, 500));
+
+  const failures = results.filter((x) => x.startsWith("FAIL"));
+  log(results.join("\n"));
+  if (failures.length > 0) {
+    document.title = "E2E-FAIL: " + failures[0].slice(5, 125);
+    report({ ok: false, phase: "verdict", failures, results });
+  } else {
+    document.title = "E2E-PASS";
+    report({ ok: true, results });
+  }
+} catch (e) {
+  if (!window.__done__) {
+    document.title = "E2E-FAIL: " + String((e && e.message) || e).slice(0, 120);
+    report({ ok: false, phase: "top", error: String((e && e.message) || e).slice(0, 2000) });
+  }
+  log("TOP-LEVEL: " + String((e && e.stack) || e).slice(0, 1000));
+}
+</script>
+</body>
+</html>
