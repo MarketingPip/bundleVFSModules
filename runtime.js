@@ -10083,6 +10083,46 @@ function _parseKey(s) {
   }
 
   /**
+   * Run a wasm32-wasi (preview1) module against the sandbox's VFS.
+   *
+   * First-class host API (roadmap §1): instantiates the binary with the
+   * sandbox's `config.fs` seeded at the guest preopen dir (default
+   * `/sandbox`), captures stdout/stderr, and writes the post-run file
+   * snapshot back into `config.fs`.
+   *
+   * @param {Uint8Array|ArrayBuffer} bytes — the .wasm binary
+   * @param {object} [options]
+   * @param {string[]} [options.args] — argv (argv[0] = program name)
+   * @param {Record<string,string>} [options.env] — environment variables
+   * @param {string} [options.preopenDir] — guest mount point (default "/sandbox")
+   * @returns {Promise<{exitCode:number, stdout:string[], stderr:string[],
+   *   files:Record<string,Uint8Array>}>}
+   *
+   * @example
+   * const { exitCode, stdout } = await sandbox.runWasi(wasmBytes, {
+   *   args: ["prog.wasm", "foo"], env: { HOME: "/sandbox" },
+   * });
+   */
+  async runWasi(bytes, options = {}) {
+    // Lazy: the WASI engine (~100KB bundled) loads only when runWasi is
+    // used. The module is browser-safe (no bare specifiers — it selects
+    // ../wasi.js under Node, ../../dist/wasi.js in a browser host).
+    const { runWasi } = await import("./src/runtime/runwasi.js");
+    const { preopenDir = "/sandbox", ...rest } = options;
+    const result = await runWasi(bytes, {
+      ...rest,
+      preopenDir,
+      files: this.config.fs || {},
+    });
+    // Write the guest's file changes back into the sandbox VFS seed so
+    // subsequent execute()/runWasi() calls observe them.
+    for (const [p, data] of Object.entries(result.files)) {
+      this.config.fs[p] = data;
+    }
+    return result;
+  }
+
+  /**
    * Get sandbox statistics
    */
   getStats() {

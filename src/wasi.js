@@ -59,6 +59,7 @@
 import {
   WASI as ShimWASI,
   File as ShimFile,
+  Directory as ShimDirectory,
   OpenFile as ShimOpenFile,
   ConsoleStdout as ShimConsoleStdout,
   PreopenDirectory as ShimPreopenDirectory,
@@ -332,6 +333,71 @@ const kInstance = Symbol("kInstance");
 const kMemory = Symbol("kMemory");
 const kBindingName = Symbol("kBindingName");
 const kShim = Symbol("kShim");
+const kPreopenDirs = Symbol("kPreopenDirs");
+const kStdioFlushers = Symbol("kStdioFlushers");
+
+/**
+ * Build a nested Map tree from a flat { "a/b.txt": contents } map,
+ * then convert to shim Directory/File inodes. Rejects ".." segments.
+ */
+function buildPreopenEntries(files) {
+  const root = new Map();
+  for (const [rel, content] of Object.entries(files)) {
+    const parts = String(rel).split("/");
+    const clean = [];
+    for (const p of parts) {
+      if (p === "" || p === ".") continue;
+      if (p === "..")
+        throw errInvalidArgValue(
+          "options.preopenFiles",
+          rel,
+          '".." segments are not allowed in preopen file paths',
+        );
+      clean.push(p);
+    }
+    if (clean.length === 0) continue;
+    let dir = root;
+    for (let i = 0; i < clean.length - 1; i++) {
+      let sub = dir.get(clean[i]);
+      if (sub === undefined) {
+        sub = new Map();
+        dir.set(clean[i], sub);
+      } else if (!(sub instanceof Map)) {
+        throw errInvalidArgValue(
+          "options.preopenFiles",
+          rel,
+          "path conflicts with an existing file",
+        );
+      }
+      dir = sub;
+    }
+    const name = clean[clean.length - 1];
+    if (dir.has(name))
+      throw errInvalidArgValue("options.preopenFiles", rel, "duplicate path");
+    const data =
+      typeof content === "string"
+        ? new TextEncoder().encode(content)
+        : content instanceof Uint8Array
+          ? content
+          : new Uint8Array(content);
+    dir.set(name, new ShimFile(data));
+  }
+  const toDir = (map) =>
+    new ShimDirectory(
+      [...map.entries()].map(([k, v]) => [k, v instanceof Map ? toDir(v) : v]),
+    );
+  return toDir(root);
+}
+
+/** Walk a shim Directory, returning flat { relPath: File } for files. */
+function collectFiles(dir, prefix, out) {
+  for (const [name, inode] of dir.contents) {
+    const rel = prefix ? `${prefix}/${name}` : name;
+    if (inode instanceof ShimDirectory) collectFiles(inode, rel, out);
+    else if (inode instanceof ShimFile) out[rel] = inode;
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // WASI class
@@ -362,11 +428,20 @@ export class WASI {
    *   args?:         string[];
    *   env?:          Record<string, string | undefined>;
    *   preopens?:     Record<string, string>;
+   *   preopenFiles?: Record<string, Record<string, string | Uint8Array>>;
+   *   onStdout?:     (line: string) => void;
+   *   onStderr?:     (line: string) => void;
    *   returnOnExit?: boolean;
    *   stdin?:        number;
    *   stdout?:       number;
    *   stderr?:       number;
    * }} [options]
+   *
+   * `preopenFiles` seeds preopened directories: `{ guestPath:
+   * { "rel/path.txt": contents } }` (nested paths create directories).
+   * `onStdout`/`onStderr` capture complete output lines instead of writing
+   * to the console; a trailing partial line is flushed when the instance
+   * finishes. `readPreopenFiles()` snapshots preopen contents afterwards.
    */
   constructor(options = {}) {
     validateObject(options, "options");
@@ -426,20 +501,83 @@ export class WASI {
     }
     this[kReturnOnExit] = returnOnExit;
 
+    // ── stdio capture (optional) ──────────────────────────────────────────
+    // When onStdout/onStderr are provided, complete lines are routed to
+    // them instead of console.log/console.error, and any trailing partial
+    // line is flushed when the instance finishes (see flushStdio, called
+    // from start()/initialize()). Without them, behaviour is unchanged:
+    // line-buffered console output.
+    let onStdout;
+    let onStderr;
+    if (options.onStdout !== undefined) {
+      validateFunction(options.onStdout, "options.onStdout");
+      onStdout = options.onStdout;
+    }
+    if (options.onStderr !== undefined) {
+      validateFunction(options.onStderr, "options.onStderr");
+      onStderr = options.onStderr;
+    }
+
+    // ── preopenFiles (optional) ───────────────────────────────────────────
+    // { guestPath: { "rel/path.txt": string|Uint8Array } } — seeds each
+    // preopened directory so the guest can read host-provided files.
+    let preopenFiles;
+    if (options.preopenFiles !== undefined) {
+      validateObject(options.preopenFiles, "options.preopenFiles");
+      preopenFiles = options.preopenFiles;
+    }
+
     // ── Engine: stdio + preopens wired into the shim's fd table ───────────
     // The shim indexes fds by guest fd number. stdin is an empty readable
     // file (reads → EOF); stdout/stderr stream complete lines to the
-    // console; each preopen becomes a real virtual PreopenDirectory.
+    // console (or to the capture callbacks); each preopen becomes a real
+    // virtual PreopenDirectory, optionally seeded with files.
     const self = this;
     const fds = [];
     const [stdinFd, stdoutFd, stderrFd] = this[kStdio];
     fds[stdinFd] = new ShimOpenFile(new ShimFile([]));
-    fds[stdoutFd] = ShimConsoleStdout.lineBuffered((msg) => console.log(msg));
-    fds[stderrFd] = ShimConsoleStdout.lineBuffered((msg) => console.error(msg));
+    const flushers = [];
+    const makeWriter = (isErr) => {
+      const onLine = isErr ? onStderr : onStdout;
+      if (!onLine)
+        return ShimConsoleStdout.lineBuffered((msg) =>
+          isErr ? console.error(msg) : console.log(msg),
+        );
+      // Capture mode: raw chunks, manual line buffering, flushable tail.
+      const decoder = new TextDecoder();
+      let buf = "";
+      const w = new ShimConsoleStdout((chunk) => {
+        buf += decoder.decode(chunk, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n")) !== -1) {
+          onLine(buf.slice(0, idx));
+          buf = buf.slice(idx + 1);
+        }
+      });
+      flushers.push(() => {
+        buf += decoder.decode();
+        if (buf) {
+          onLine(buf);
+          buf = "";
+        }
+      });
+      return w;
+    };
+    fds[stdoutFd] = makeWriter(false);
+    fds[stderrFd] = makeWriter(true);
+    this[kStdioFlushers] = flushers;
     let nextFd = 3;
+    this[kPreopenDirs] = [];
     for (const [guestPath] of this[kPreopens]) {
       while (fds[nextFd] !== undefined) nextFd++;
-      fds[nextFd] = new ShimPreopenDirectory(guestPath, []);
+      const seed = preopenFiles?.[guestPath];
+      const entries =
+        seed !== undefined
+          ? [...buildPreopenEntries(seed).contents.entries()]
+          : [];
+      const preopen = new ShimPreopenDirectory(guestPath, entries);
+      fds[nextFd] = preopen;
+      this[kPreopenDirs].push({ guestPath, preopen });
       nextFd++;
     }
 
@@ -555,7 +693,12 @@ export class WASI {
 
     // The shim invokes _start and converts the guest's WASIProcExit into
     // the exit code. Our proc_exit wrapper already honoured returnOnExit.
-    return this[kShim].start(instance);
+    // Flush capture-mode stdio tails on the way out.
+    try {
+      return this[kShim].start(instance);
+    } finally {
+      this.flushStdio();
+    }
   }
 
   /**
@@ -573,7 +716,11 @@ export class WASI {
     if (_initialize !== undefined) {
       validateFunction(_initialize, "instance.exports._initialize");
     }
-    this[kShim].initialize(instance);
+    try {
+      this[kShim].initialize(instance);
+    } finally {
+      this.flushStdio();
+    }
   }
 
   /**
@@ -586,6 +733,38 @@ export class WASI {
    */
   getImportObject() {
     return { [this[kBindingName]]: this.wasiImport };
+  }
+
+  /**
+   * Flush any buffered partial stdio lines to the onStdout/onStderr
+   * callbacks. Called automatically by start()/initialize(); exposed for
+   * hosts that drive the instance manually via finalizeBindings().
+   */
+  flushStdio() {
+    for (const flush of this[kStdioFlushers]) flush();
+  }
+
+  /**
+   * Snapshot the current contents of every preopened directory as
+   * `{ guestPath: { relPath: Uint8Array } }`. Files the guest created or
+   * modified are reflected; entries are copies, safe to retain.
+   *
+   * @returns {Record<string, Record<string, Uint8Array>>}
+   */
+  readPreopenFiles() {
+    const out = {};
+    for (const { guestPath, preopen } of this[kPreopenDirs]) {
+      const dir = preopen.dir;
+      const files = {};
+      if (dir && dir.contents instanceof Map) {
+        const found = collectFiles(dir, "", {});
+        for (const [rel, file] of Object.entries(found)) {
+          files[rel] = file.data.slice();
+        }
+      }
+      out[guestPath] = files;
+    }
+    return out;
   }
 }
 
