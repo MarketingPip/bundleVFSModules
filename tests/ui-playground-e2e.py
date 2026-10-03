@@ -10,6 +10,10 @@ Cases:
   1. basic console.log output renders, status -> Done
   2. thrown error renders, status -> Error
   3. argv input is parsed and visible as process.argv.slice(2)
+  4. example buttons load snippets into #codeInput (all 20)
+  5. stdin: cli example + Send button delivers input, status -> Done
+  6. repeated runs: run twice back-to-back, both reach Done (no realm leak)
+  7. fs example writes + reads back a file in the virtual FS
 
 Usage: xvfb-run -a /home/hatch/workspace/venvs/ffauto/bin/python tests/ui-playground-e2e.py [port]
 Exit 0 on E2E-PASS, 1 otherwise.
@@ -97,16 +101,12 @@ CASES = [
      ['"--name"', '"John"', '"--age"', '"22"']),
 ]
 
-opts = Options()
-opts.binary_location = FF
-svc = Service(executable_path=GD)
-d = webdriver.Firefox(options=opts, service=svc)
-d.set_page_load_timeout(120)
-d.get(URL)
-time.sleep(3)  # let the module script import runtime.js and wire buttons
+EXAMPLE_KEYS = ["basic", "async", "sleep", "imports", "require", "process_kill",
+    "interop", "top_level", "typescript", "relative", "tests", "cli",
+    "cli_menu", "inquirer", "repl", "repl2", "fs", "child_process",
+    "http", "express"]
 
-results = []
-for name, code, argv, want_status, want_in_output in CASES:
+def run_code(d, code, argv=""):
     d.execute_script("document.getElementById('codeInput').value = arguments[0];", code)
     d.execute_script("document.getElementById('argvInput').value = arguments[0];", argv)
     d.find_element("id", "runBtn").click()
@@ -118,12 +118,102 @@ for name, code, argv, want_status, want_in_output in CASES:
             break
         time.sleep(1)
     output = d.find_element("id", "output").text
+    return status, output
+
+opts = Options()
+opts.binary_location = FF
+svc = Service(executable_path=GD)
+d = webdriver.Firefox(options=opts, service=svc)
+d.set_page_load_timeout(120)
+d.get(URL)
+# The module script (runtime.js import + EXAMPLES dict) needs time to
+# parse/evaluate before the first execute() is reliable. 5s was flaky
+# with the wired examples; 15s is solid.
+time.sleep(15)
+
+results = []
+for name, code, argv, want_status, want_in_output in CASES:
+    status, output = run_code(d, code, argv)
     ok = (status == want_status) and all(s in output for s in want_in_output)
     results.append({"name": name, "ok": ok, "status": status,
                     "output": output[-800:]})
     print("CASE %s: %s (status=%r)" % (name, "PASS" if ok else "FAIL", status), flush=True)
     if not ok:
         print("  output tail: " + output[-800:], flush=True)
+
+# Case 4: every example button loads its snippet into #codeInput
+n_examples_ok = 0
+for key in EXAMPLE_KEYS:
+    btns = d.find_elements("css selector", '.example-btn[data-example="%s"]' % key)
+    if not btns:
+        print("CASE example-%s: FAIL (button missing)" % key, flush=True)
+        results.append({"name": "example-" + key, "ok": False})
+        continue
+    d.execute_script("document.getElementById('codeInput').value = '';")
+    btns[0].click()
+    time.sleep(0.3)
+    val = d.execute_script("return document.getElementById('codeInput').value;")
+    ok = len(val) > 50  # a real snippet landed, not empty/placeholder
+    if ok:
+        n_examples_ok += 1
+    else:
+        print("CASE example-%s: FAIL (codeInput len=%d)" % (key, len(val)), flush=True)
+    results.append({"name": "example-" + key, "ok": ok})
+print("CASE examples: %d/%d buttons load snippets" % (n_examples_ok, len(EXAMPLE_KEYS)), flush=True)
+
+# Case 5: stdin — load the cli example, run it, Send input, expect echo + Done
+d.execute_script("document.getElementById('codeInput').value = '';")
+d.find_element("css selector", '.example-btn[data-example="cli"]').click()
+time.sleep(0.3)
+d.execute_script("document.getElementById('argvInput').value = '';")
+d.find_element("id", "runBtn").click()
+# Wait until the sandbox is actually listening (prompt in output),
+# not a fixed sleep — boot time varies.
+prompt_seen = False
+deadline = time.time() + 60
+while time.time() < deadline:
+    output = d.find_element("id", "output").text
+    if "Waiting for your input" in output:
+        prompt_seen = True
+        break
+    status = d.execute_script("return document.getElementById('status').textContent;")
+    if status in ("Done", "Error"):
+        break
+    time.sleep(1)
+if prompt_seen:
+    d.execute_script("document.getElementById('stdinInput').value = 'hello-stdin';")
+    d.find_element("id", "sendInput").click()
+status = ""
+deadline = time.time() + 60
+while time.time() < deadline:
+    status = d.execute_script("return document.getElementById('status').textContent;")
+    if status in ("Done", "Error"):
+        break
+    time.sleep(1)
+output = d.find_element("id", "output").text
+ok = (status == "Done") and ("hello-stdin" in output) and ("HELLO-STDIN" in output)
+results.append({"name": "stdin", "ok": ok, "status": status})
+print("CASE stdin: %s (status=%r, prompt_seen=%r)" % ("PASS" if ok else "FAIL", status, prompt_seen), flush=True)
+if not ok:
+    print("  output tail: " + output[-800:], flush=True)
+
+# Case 6: repeated runs — same code twice, both must reach Done
+r1_status, _ = run_code(d, "console.log('run-one');", "")
+r2_status, r2_output = run_code(d, "console.log('run-two');", "")
+ok = (r1_status == "Done") and (r2_status == "Done") and ("run-two" in r2_output)
+results.append({"name": "repeated-runs", "ok": ok})
+print("CASE repeated-runs: %s (%r, %r)" % ("PASS" if ok else "FAIL", r1_status, r2_status), flush=True)
+
+# Case 7: fs example — write + read back in the virtual FS
+d.execute_script("document.getElementById('codeInput').value = '';")
+d.find_element("css selector", '.example-btn[data-example="fs"]').click()
+time.sleep(0.3)
+status, output = run_code(d, d.execute_script("return document.getElementById('codeInput').value;"), "")
+ok = (status == "Done") and ("Hello, virtual FS!" in output) and ("Read back:" in output)
+results.append({"name": "fs-example", "ok": ok, "status": status})
+print("CASE fs-example: %s (status=%r)" % ("PASS" if ok else "FAIL", status), flush=True)
+if not ok:
+    print("  output tail: " + output[-800:], flush=True)
 
 d.quit()
 n_fail = sum(1 for r in results if not r["ok"])

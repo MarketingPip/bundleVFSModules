@@ -23,6 +23,17 @@ unimplementable-in-browser APIs stay honest noop stubs, never throws.
   Adds `__BVM_DISABLE_PLAYGROUND` opt-out to the runtime's demo-playground
   auto-init guard so host pages can supply their own wiring. Headed-Firefox
   e2e 3/3 (basic output, error rendering, argv). Jest 2365/2365 green.
+- **ui.html playground: example buttons + stdin streaming** (2026-10-03):
+  the 20 example-snippet buttons (dead since ui.html's creation) now load
+  working snippets. Two real playground bugs fixed during proof: (1) logs
+  were buffered until `execute()` resolved, so interactive stdin programs
+  never showed prompts — now streams via the runtime's `execution:stdout`
+  events with dedupe against buffered logs; (2) the Send button raced
+  sandbox boot (`invoke` threw "Sandbox is not running" before
+  `execution:start`) — now waits up to 10s for `context.running`. The fs
+  example needed `mkdirSync({recursive:true})` for `/tmp`. Headed-Firefox
+  e2e 26/26 on final main (basic/error/argv, 20/20 example buttons, stdin
+  round-trip, repeated runs, fs write/read); verify-loop green.
 - **Verify loop green** (2026-10-03, PR #161): full jest suite 191/191
   suites, 2359/2359 tests green; the 600s zero-output `bin/verify` timeout
   root-caused twice — (a) a module-scope `BroadcastChannel` in `src/ws.js`
