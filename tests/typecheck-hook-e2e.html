@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Typecheck Hook E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Typecheck-hook browser proof (docs/PLUGINS.md Part B §4).
+//
+// Proves, in a real browser through the real CodeSandbox public surface:
+//   1. execute() runs mistyped TypeScript successfully (fast path —
+//      transpile-only transform, type errors never block execution).
+//   2. sandbox.typecheck() reports the real type error (slow path —
+//      full ts.createProgram over the VFS snapshot).
+//   3. A second typecheck() call returns identical diagnostics (cache).
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text,
+// and POST /report (crash-proof). No screenshots.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+try {
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+  phase("runtime-loaded");
+
+  // VFS seed: a.ts is clean, b.ts has a genuine type error (TS2322).
+  const seed = {
+    "/a.ts": "export function add(a: number, b: number): number { return a + b; }",
+    "/b.ts": 'import { add } from "./a.ts";\nconst s: string = add(1, 2);\nconsole.log("__TYPECHECK_E2E__" + JSON.stringify({ s }));',
+  };
+  const sandbox = new CodeSandbox({
+    fs: seed,
+    fileName: "entry.mjs",
+    timeout: 120000,
+    process: { env: {} },
+    fallbackCDN: false,
+  });
+  phase("sandbox-constructed");
+
+  // 1. Fast path: execute() must SUCCEED despite the type error.
+  // The entry imports the MISTYPED b.ts: its type error must not block
+  // execution (transpile-only fast path).
+  const userCode = [
+    'import "./b.ts";',
+    "const __hold = setTimeout(() => {}, 170000);",
+    "clearTimeout(__hold);",
+  ].join("\n");
+  phase("execute-start");
+  const result = await sandbox.execute(userCode);
+  phase("execute-resolved");
+  check("execute() succeeds with mistyped TS (fast path)", result && result.success === true,
+    "success=" + (result && result.success) +
+    " errors=" + JSON.stringify(result && (result.errors || result.error)).slice(0, 800));
+  const logEntries = (result.logs || []).map((l) => (typeof l === "string" ? l : JSON.stringify(l)));
+  let marker = null;
+  for (const entry of logEntries) {
+    let raw = entry;
+    try {
+      const parsed = JSON.parse(entry);
+      if (parsed && typeof parsed.args === "string") raw = parsed.args;
+    } catch (e) {}
+    const j = raw.indexOf("__TYPECHECK_E2E__");
+    if (j !== -1) {
+      try { marker = JSON.parse(raw.slice(j + "__TYPECHECK_E2E__".length)); break; }
+      catch (e) { marker = { __parseError: raw.slice(j, j + 300) }; break; }
+    }
+  }
+  check("execute() ran the code (marker in logs)", !!marker && !marker.__parseError && marker.s === 3,
+    "marker=" + JSON.stringify(marker).slice(0, 200));
+
+  // 2. Slow path: typecheck() must report the TS2322 error.
+  // libBase points at the driver's /tslib/ route (local typescript/lib).
+  phase("typecheck-start");
+  const libBase = location.origin + "/tslib";
+  const diags = await sandbox.typecheck({ libBase });
+  phase("typecheck-resolved");
+  check("typecheck() returns an array", Array.isArray(diags), typeof diags);
+  const err2322 = diags.find((d) => d.code === 2322);
+  check("typecheck() finds TS2322", !!err2322, JSON.stringify(diags).slice(0, 500));
+  check("TS2322 is on /b.ts line 2", !!err2322 && err2322.file === "/b.ts" && err2322.line === 2,
+    err2322 ? err2322.file + ":" + err2322.line : "none");
+  check("diagnostic has message", !!err2322 && typeof err2322.message === "string" && /not assignable/.test(err2322.message),
+    err2322 ? err2322.message : "none");
+
+  // 3. Cache: second call returns identical diagnostics.
+  const diags2 = await sandbox.typecheck({ libBase });
+  check("second typecheck() returns identical diagnostics",
+    JSON.stringify(diags2) === JSON.stringify(diags));
+
+  const failures = results.filter((x) => x.startsWith("FAIL"));
+  log("RESULTS:\n" + results.join("\n"));
+  if (failures.length > 0) {
+    document.title = "E2E-FAIL: " + failures[0].slice(5, 125);
+    report({ ok: false, phase: "verdict", failures, results });
+  } else {
+    document.title = "E2E-PASS";
+    report({ ok: true, results });
+  }
+} catch (e) {
+  document.title = "E2E-FAIL: " + String((e && e.message) || e).slice(0, 120);
+  report({ ok: false, phase: "top", error: String((e && e.stack) || e).slice(0, 2000) });
+  log("TOP-LEVEL: " + String((e && e.stack) || e).slice(0, 1000));
+}
+</script>
+</body>
+</html>
