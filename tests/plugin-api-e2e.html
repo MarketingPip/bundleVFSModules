@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Plugin API E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Plugin-API browser proof (v1 gate #2).
+//
+// Proves the plugin transform hooks are wired into the REAL _build_file
+// pipeline: a .ts module seeded in the VFS is imported by user code,
+// transformed by the registered TypeScript plugin (type stripping),
+// and executed in the sandbox with the correct value.
+//
+// Uses ONLY the real public surface:
+//   - `CodeSandbox` imported from the REAL /local-repo/runtime.js
+//     (worktree file; the driver serves it with ONLY _builtinBaseUrl
+//     rewritten to the local worktree dist/)
+//   - `sandbox.execute(userCode)` runs the REAL pipeline:
+//     ImportResolver -> transformImportsToLoadModule -> SandboxRuntime.generate
+//     -> iframe bootstrap -> _dynamic_import/_build_file interop (parent side)
+//     -> plugin transform -> data: URL import -> postMessage -> result.logs
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text, and
+// POST /report (crash-proof). No screenshots.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { window.__phase = p; document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+try {
+  // ---- 0. Real public host runtime ----
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+  phase("runtime-loaded");
+
+  // ---- 1. VFS seed: a TypeScript module ----
+  // The .ts source uses type annotations, interfaces, and type aliases.
+  // Without the plugin wiring in _build_file, acorn cannot parse this
+  // (transformImportsToLoadModule throws) and the import fails.
+  const seed = {
+    "/greet.ts": [
+      "export function greet(name: string): string {",
+      '  return "hello " + name;',
+      "}",
+      "export const answer: number = 42;",
+      "interface Config { debug: boolean; }",
+      "type ID = string | number;",
+      "export const config: Config = { debug: true };",
+      "export const id: ID = \"abc\";",
+      "",
+    ].join("\n"),
+  };
+
+  // ---- 2. Entry: import the .ts module through the real pipeline ----
+  const userCode = [
+    'import { greet, answer, config, id } from "./greet.ts";',
+    "const __hold = setTimeout(() => {}, 170000);",
+    "const __results = {",
+    '  greet: greet("world"),',
+    "  answer: answer,",
+    "  debug: config.debug,",
+    "  id: id,",
+    "};",
+    "clearTimeout(__hold);",
+    'console.log("__PLUGIN_E2E__" + JSON.stringify(__results));',
+  ].join("\n");
+
+  const sandbox = new CodeSandbox({
+    fs: seed,
+    fileName: "consumer.mjs",
+    timeout: 180000,
+    process: { env: {} },
+    fallbackCDN: false,
+  });
+  phase("sandbox-constructed");
+
+  setTimeout(() => {
+    if (!window.__done__) {
+      document.title = "E2E-FAIL: watchdog timeout at phase " + (window.__phase || "unknown");
+      report({ ok: false, phase: "watchdog", lastPhase: window.__phase || null });
+    }
+  }, 175000);
+
+  let result;
+  try {
+    phase("execute-start");
+    result = await sandbox.execute(userCode);
+    phase("execute-resolved");
+  } catch (e) {
+    report({ ok: false, phase: "execute", error: String((e && e.message) || e).slice(0, 2000) });
+    document.title = "E2E-FAIL: execute threw: " + String((e && e.message) || e).slice(0, 120);
+    log("execute REJECTED: " + String((e && e.message) || e).slice(0, 500));
+    throw e;
+  }
+
+  // ---- 3. The verdict came back through the REAL postMessage channel ----
+  check("generate: execute() resolved via postMessage channel (result.success===true)",
+    result && result.success === true, JSON.stringify(result && { success: result.success, errors: result.errors }).slice(0, 300));
+
+  const logEntries = (result.logs || []).map((l) => (typeof l === "string" ? l : JSON.stringify(l)));
+  let r = null;
+  for (const entry of logEntries) {
+    let raw = entry;
+    try {
+      const parsed = JSON.parse(entry);
+      if (parsed && typeof parsed.args === "string") raw = parsed.args;
+    } catch (e) {}
+    const j = raw.indexOf("__PLUGIN_E2E__");
+    if (j !== -1) {
+      try { r = JSON.parse(raw.slice(j + "__PLUGIN_E2E__".length)); break; }
+      catch (e) { r = { __parseError: raw.slice(j, j + 300) }; break; }
+    }
+  }
+  check("postMessage: __PLUGIN_E2E__ marker arrived via result.logs", !!r && !r.__parseError,
+    "logs=" + logEntries.length +
+    " success=" + (result && result.success) +
+    " firstLogs=" + logEntries.slice(0, 3).join(" | ").slice(0, 900) +
+    " errors=" + String(JSON.stringify(result && (result.errors || result.error)) || "").slice(0, 600));
+  phase("marker-parsed");
+  log("INTERIM:\n" + results.join("\n"));
+  if (!r || r.__parseError) throw new Error("no E2E marker in logs");
+
+  // ---- 4. Plugin-pipeline assertions ----
+  // These prove the .ts source was transformed (types stripped) and the
+  // resulting JS executed in the sandbox with correct semantics.
+  check("TS plugin: greet('world') === 'hello world'", r.greet === "hello world", JSON.stringify(r.greet));
+  check("TS plugin: answer === 42 (type annotation stripped)", r.answer === 42, JSON.stringify(r.answer));
+  check("TS plugin: config.debug === true (interface stripped)", r.debug === true, JSON.stringify(r.debug));
+  check("TS plugin: id === 'abc' (type alias stripped)", r.id === "abc", JSON.stringify(r.id));
+
+  const failures = results.filter((x) => x.startsWith("FAIL"));
+  log(results.join("\n"));
+  if (failures.length > 0) {
+    document.title = "E2E-FAIL: " + failures[0].slice(5, 125);
+    report({ ok: false, phase: "verdict", failures, results });
+  } else {
+    document.title = "E2E-PASS";
+    report({ ok: true, results });
+  }
+} catch (e) {
+  if (!window.__done__) {
+    document.title = "E2E-FAIL: " + String((e && e.message) || e).slice(0, 120);
+    report({ ok: false, phase: "top", error: String((e && e.message) || e).slice(0, 2000) });
+  }
+  log("TOP-LEVEL: " + String((e && e.stack) || e).slice(0, 1000));
+}
+</script>
+</body>
+</html>
