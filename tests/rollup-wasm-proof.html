@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Rollup WASM proof</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// WASM proof: @rollup/browser's WASM instantiates in-browser via the
+// canonical runtime package-loading path.
+//
+// Uses ONLY the real public surface:
+//   - CodeSandbox from the REAL /local-repo/runtime.js
+//   - VFS seeded from /local-repo/tests/rollup-seed.json (@rollup/browser
+//     ESM dist + WASM as {encoding:"base64"} envelope)
+//   - `import { rollup, VERSION } from "rollup"` resolves through the REAL
+//     interception table (src/browser-builds.js) to @rollup/browser's ESM
+//     build (dist/es/rollup.browser.js — NOT the CJS build, which lacks
+//     ESM named exports); the binding's
+//     `new URL("bindings_wasm_bg.wasm", import.meta.url)` is rewritten by
+//     the REAL inlineWasmDataUrls (runtime.js serve() path) to a data: URL;
+//     fetch(data:) + WebAssembly.instantiate runs the WASM.
+//
+// PASS = the ESM interception target resolves, named exports (rollup,
+// VERSION, defineConfig) are present, and the WASM binding initializes.
+// Any failure (wrong target, missing named exports, WASM fetch/instantiate
+// failure) surfaces as E2E-FAIL with the error.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+try {
+  phase("loading-runtime");
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+
+  phase("loading-seed");
+  const seedResp = await fetch("/local-repo/tests/rollup-seed.json");
+  check("seed JSON fetch ok", seedResp.ok, seedResp.status);
+  const seed = await seedResp.json();
+  const fileCount = Object.keys(seed).length;
+  check("seed has files", fileCount >= 3, fileCount);
+  const wasmNode = seed["/node_modules/@rollup/browser/dist/es/bindings_wasm_bg.wasm"];
+  check("seed has WASM as base64 envelope",
+    wasmNode && wasmNode.encoding === "base64" && typeof wasmNode.data === "string",
+    typeof wasmNode);
+  phase("seed-loaded");
+
+  // Entry: import named exports from "rollup" through the interception
+  // table. The import succeeding PROVES: (1) the interception targets the
+  // ESM build (CJS build has no ESM named exports), (2) the WASM chain
+  // (data: URL rewrite -> fetch -> instantiate) works through the
+  // canonical serve() path.
+  const userCode = [
+    'import { rollup, VERSION, defineConfig } from "rollup";',
+    "const __results = {",
+    '  hasRollup: typeof rollup === "function",',
+    "  version: VERSION,",
+    '  hasDefineConfig: typeof defineConfig === "function",',
+    "};",
+    'console.log("__ROLLUP_PROOF__" + JSON.stringify(__results));',
+  ].join("\n");
+
+  phase("executing");
+  const sandbox = new CodeSandbox({ fs: seed, timeout: 120000 });
+  const execResult = await sandbox.execute(userCode);
+  phase("executed");
+
+  const logs = ((execResult && execResult.logs) || [])
+    .map((l) => (typeof l === "string" ? l : JSON.stringify(l)))
+    .join("\n");
+  log("LOGS tail:\n" + logs.slice(-2000));
+  log("execResult.success=" + (execResult && execResult.success));
+  if (execResult && !execResult.success) {
+    log("execResult.error=" + JSON.stringify(execResult.error).slice(0, 3000));
+  }
+  const PROOF_PREFIX = "__ROLLUP_PROOF__";
+  let proofText = null;
+  for (const l of (execResult && execResult.logs) || []) {
+    const a = typeof l === "string" ? l : (l && l.args);
+    const s = typeof a === "string" ? a : (a != null ? JSON.stringify(a) : "");
+    const i = s.indexOf(PROOF_PREFIX);
+    if (i !== -1) { proofText = s.slice(i + PROOF_PREFIX.length); break; }
+  }
+  check("proof marker in logs", proofText !== null, logs.slice(-500));
+  check("no esm.sh CDN fallback in sandbox logs", logs.indexOf("esm.sh") === -1, logs.slice(-500));
+  let proof = null;
+  if (proofText !== null) {
+    try { proof = JSON.parse(proofText); } catch (e) { /* fall through */ }
+  }
+  check("proof JSON parses", !!proof, proofText ? proofText.slice(0, 200) : "(no proof text)");
+  if (proof) {
+    check("rollup is a function (WASM binding instantiated)", proof.hasRollup === true, JSON.stringify(proof));
+    check("VERSION is rollup 4.x", typeof proof.version === "string" && proof.version.startsWith("4."), proof.version);
+    check("defineConfig is a function (named exports work)", proof.hasDefineConfig === true, JSON.stringify(proof));
+    log("VERSION=" + proof.version);
+  }
+
+  const failed = results.filter((r) => r.startsWith("FAIL"));
+  const verdict = { ok: failed.length === 0, results, proof };
+  report(verdict);
+  document.title = failed.length === 0 ? "E2E-PASS" : "E2E-FAIL: " + failed[0];
+} catch (e) {
+  const msg = "E2E-FAIL: exception " + (e && e.message ? e.message : String(e));
+  log(msg + "\n" + (e && e.stack ? e.stack.slice(0, 2000) : ""));
+  report({ ok: false, error: msg, results });
+  document.title = msg.slice(0, 120);
+}
+</script>
+</body>
+</html>
