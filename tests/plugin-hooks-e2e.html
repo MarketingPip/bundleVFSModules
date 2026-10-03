@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Plugin Hooks E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Plugin-hooks browser proof (Part B).
+//
+// Proves the onResolve/onLoad hooks + loader dispatch are wired into the
+// REAL pipeline: a custom .txt extension (text loader) and .json (built-in
+// json plugin) are imported by user code through _dynamic_import/_build_file
+// interop and execute in the sandbox with correct values.
+//
+// Uses ONLY the real public surface:
+//   - `CodeSandbox` from /local-repo/runtime.js (worktree file)
+//   - `registerPlugin` from /local-repo/src/plugins.js
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL"), #out, POST /report.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { window.__phase = p; document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+try {
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+  const { registerPlugin } = await import("/local-repo/src/plugins.js");
+  phase("runtime-loaded");
+
+  // Custom extension plugin: .txt -> text loader.
+  registerPlugin({
+    name: "e2e-txt",
+    onResolve: [
+      { filter: /\.txt$/, namespace: "e2e-txt", resolve: (args) => ({ path: args.path, namespace: "e2e-txt" }) },
+    ],
+    onLoad: [
+      { filter: /\.txt$/, namespace: "e2e-txt", load: (args) => ({ contents: args.source, loader: "text" }) },
+    ],
+  });
+  phase("plugin-registered");
+
+  const seed = {
+    "/note.txt": "hello from txt loader\nsecond line",
+    "/data.json": '{"answer":42,"nested":{"ok":true}}',
+  };
+
+  const userCode = [
+    'import txt from "./note.txt";',
+    'import j from "./data.json";',
+    "const __hold = setTimeout(() => {}, 170000);",
+    'console.log("__HOOKS_E2E__" + JSON.stringify({ txt, dataType: typeof j, answer: j && j.answer, nestedOk: j && j.nested && j.nested.ok }));',
+    "clearTimeout(__hold);",
+  ].join("\n");
+
+  const sandbox = new CodeSandbox({
+    fs: seed,
+    fileName: "consumer.mjs",
+    timeout: 180000,
+    process: { env: {} },
+    fallbackCDN: false,
+  });
+  phase("sandbox-constructed");
+
+  setTimeout(() => {
+    if (!window.__done__) {
+      document.title = "E2E-FAIL: watchdog timeout at phase " + (window.__phase || "unknown");
+      report({ ok: false, phase: "watchdog", lastPhase: window.__phase || null });
+    }
+  }, 175000);
+
+  let result;
+  try {
+    phase("execute-start");
+    result = await sandbox.execute(userCode);
+    phase("execute-resolved");
+  } catch (e) {
+    report({ ok: false, phase: "execute", error: String((e && e.message) || e).slice(0, 2000) });
+    document.title = "E2E-FAIL: execute threw: " + String((e && e.message) || e).slice(0, 120);
+    throw e;
+  }
+
+  check("execute() resolved (result.success===true)",
+    result && result.success === true, JSON.stringify(result && { success: result.success }).slice(0, 300));
+
+  const logEntries = (result.logs || []).map((l) => (typeof l === "string" ? l : JSON.stringify(l)));
+  let r = null;
+  for (const entry of logEntries) {
+    let raw = entry;
+    try {
+      const parsed = JSON.parse(entry);
+      if (parsed && typeof parsed.args === "string") raw = parsed.args;
+    } catch (e) {}
+    const j = raw.indexOf("__HOOKS_E2E__");
+    if (j !== -1) {
+      try { r = JSON.parse(raw.slice(j + "__HOOKS_E2E__".length)); break; }
+      catch (e) { r = { __parseError: raw.slice(j, j + 300) }; break; }
+    }
+  }
+  check("marker arrived via result.logs", !!r && !r.__parseError, "logs=" + logEntries.length);
+  phase("marker-parsed");
+  if (!r || r.__parseError) throw new Error("no E2E marker in logs");
+
+  check("txt loader: default export is the file text", r.txt === "hello from txt loader\nsecond line", JSON.stringify(r.txt));
+  check("json plugin: data is an object", r.dataType === "object", "dataType=" + r.dataType);
+  check("json plugin: data.answer === 42", r.answer === 42, JSON.stringify(r.answer));
+  check("json plugin: data.nested.ok === true", r.nestedOk === true, JSON.stringify(r.nestedOk));
+
+  const failures = results.filter((x) => x.startsWith("FAIL"));
+  log(results.join("\n"));
+  if (failures.length > 0) {
+    document.title = "E2E-FAIL: " + failures[0].slice(5, 125);
+    report({ ok: false, phase: "verdict", failures, results });
+  } else {
+    document.title = "E2E-PASS";
+    report({ ok: true, results });
+  }
+} catch (e) {
+  if (!window.__done__) {
+    document.title = "E2E-FAIL: " + String((e && e.message) || e).slice(0, 120);
+    report({ ok: false, phase: "top", error: String((e && e.message) || e).slice(0, 2000) });
+  }
+  log("TOP-LEVEL: " + String((e && e.stack) || e).slice(0, 1000));
+}
+</script>
+</body>
+</html>

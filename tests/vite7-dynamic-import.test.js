@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lookupNativeInterception } from "../src/browser-builds.js";
+import { applyResolvePlugins } from "../src/plugins.js";
 
 /**
  * M1 honesty gap — the dynamic `import` path.
@@ -148,6 +149,7 @@ function loadHandler(deps) {
     "resolveVFS",
     "lookupNativeInterception",
     "inlineWasmDataUrls",
+    "applyResolvePlugins",
     `${resolveVFSSrc}\n${vfsLookupSrc}\n${toVFSPathSrc}\n${pickVfsSrc}\n${unflattenSrc}\nreturn (${handlerSrc});`,
   );
   return factory.call(
@@ -159,6 +161,7 @@ function loadHandler(deps) {
     deps.resolveVFS,
     lookupNativeInterception,
     new Function(`${inlineWasmSrc}\nreturn inlineWasmDataUrls;`)(),
+    applyResolvePlugins,
   );
 }
 
