@@ -22,6 +22,7 @@ import {
   dispatchLoader,
   registerPlugin,
   validatePlugin,
+  getPlugins,
 } from "./src/plugins.js";
 import { typescriptPlugin } from "./src/plugins/typescript.js";
 import { jsonPlugin } from "./src/plugins/json.js";
@@ -10208,6 +10209,36 @@ function _parseKey(s) {
       this.config.fs[p] = data;
     }
     return result;
+  }
+
+  /**
+   * Opt-in true type-checking over the sandbox's TypeScript VFS files.
+   *
+   * Runs a full `ts.createProgram` via the registered plugin's
+   * `typecheck(files)` hook (docs/PLUGINS.md Part B §4) and returns
+   * diagnostics. This is the slow path: it NEVER runs as part of
+   * execute() — the transpile-only transform stays the default, so type
+   * errors never block execution unless the host asks.
+   *
+   * @param {{libs?: string[], libBase?: string}} [options] forwarded to
+   *   the plugin hook (lib entry points; browser-lane CDN base override).
+   * @returns {Promise<Array<{file, line, column, message, code}>>}
+   *   line/column are 1-based; null for global diagnostics. [] when no
+   *   plugin with a typecheck hook is registered.
+   */
+  async typecheck(options = {}) {
+    const plugin = getPlugins().find((p) => typeof p.typecheck === "function");
+    if (!plugin) return [];
+    const flat = flattenFileTree(this.config.fs || {});
+    const files = [];
+    for (const [key, value] of Object.entries(flat)) {
+      if (typeof value !== "string") continue; // skip binary/envelope leaves
+      files.push({
+        path: key.startsWith("/") ? key : "/" + key,
+        contents: value,
+      });
+    }
+    return plugin.typecheck(files, options);
   }
 
   /**
