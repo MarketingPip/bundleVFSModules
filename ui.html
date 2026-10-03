@@ -706,8 +706,157 @@ sandbox.on('execution:timeout', ({ id }) => {
         </div>
     </footer>
 
+    <script>
+      // Disable the runtime's built-in demo playground: this page provides
+      // its own managed CodeSandbox wiring below. Must run before the
+      // module script imports runtime.js (static imports are hoisted, but
+      // classic scripts execute first).
+      globalThis.__BVM_DISABLE_PLAYGROUND = true;
+    </script>
     <script type="module">
-       
+import { CodeSandbox } from './runtime.js';
+
+const $ = (id) => document.getElementById(id);
+const codeInput = $('codeInput');
+const runBtn = $('runBtn');
+const argvInput = $('argvInput');
+const stdinInput = $('stdinInput');
+const sendBtn = $('sendInput');
+const clearBtn = $('clearBtn');
+const outputEl = $('output');
+const statusEl = $('status');
+const execTimeEl = $('execTime');
+
+const PLACEHOLDER_HTML =
+  '<div class="text-gray-500 italic">Click "Run Code" to see output here...</div>';
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function print(text, cls) {
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  // Preserve newlines from multi-line log messages.
+  div.innerHTML = esc(text).replace(/\n/g, '<br>');
+  outputEl.appendChild(div);
+  outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className = cls || 'text-purple-400';
+}
+
+// Minimal shell-like split: respects single/double quotes.
+function parseArgv(text) {
+  const args = [];
+  let cur = '', quote = null;
+  for (const ch of (text || '').trim()) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      if (cur) { args.push(cur); cur = ''; }
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) args.push(cur);
+  return ['node', 'playground.mjs', ...args];
+}
+
+// Log entries arrive as {type, args} objects (or JSON strings of them,
+// after the postMessage hop). Normalize to {text, type}.
+function logEntry(entry) {
+  let obj = entry;
+  if (typeof obj === 'string') {
+    try { obj = JSON.parse(obj); }
+    catch { return { text: obj, type: 'log' }; }
+  }
+  if (obj && typeof obj === 'object') {
+    if (typeof obj.args === 'string') return { text: obj.args, type: obj.type || 'log' };
+    return { text: JSON.stringify(obj), type: 'log' };
+  }
+  return { text: String(obj), type: 'log' };
+}
+
+// One sandbox for the page; execute() tears down its iframe per run
+// (context.cleanup()), so repeated runs don't leak realms.
+const sandbox = new CodeSandbox({
+  fileName: 'playground.mjs',
+  timeout: 30000,
+});
+
+let running = false;
+
+runBtn.addEventListener('click', async () => {
+  if (running) return;
+  running = true;
+  runBtn.disabled = true;
+  runBtn.classList.add('opacity-50', 'cursor-not-allowed');
+  outputEl.innerHTML = '';
+  setStatus('Running…', 'text-yellow-400');
+  execTimeEl.textContent = '';
+  sendBtn.disabled = false;
+
+  // Applied per-run: SandboxRuntime.generate() serializes config.process
+  // fresh on every execute().
+  sandbox.config.process.argv = parseArgv(argvInput.value);
+
+  const t0 = performance.now();
+  try {
+    const result = await sandbox.execute(codeInput.value);
+    const logs = result.logs || [];
+    if (!logs.length && result.success) print('(no output)', 'text-gray-500 italic');
+    for (const entry of logs) {
+      const { text, type } = logEntry(entry);
+      print(text, type === 'error' ? 'text-red-400' : 'text-gray-100');
+    }
+    if (!result.success) {
+      const errs = result.errors || result.error;
+      if (errs) print(Array.isArray(errs) ? errs.join('\n') : String(errs), 'text-red-400');
+      setStatus('Error', 'text-red-400');
+    } else {
+      setStatus('Done', 'text-green-400');
+    }
+  } catch (err) {
+    print('Error: ' + (err && err.message ? err.message : String(err)), 'text-red-400');
+    setStatus('Error', 'text-red-400');
+  } finally {
+    execTimeEl.textContent = ((performance.now() - t0) / 1000).toFixed(2) + 's';
+    running = false;
+    runBtn.disabled = false;
+    runBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    sendBtn.disabled = true;
+  }
+});
+
+sendBtn.addEventListener('click', async () => {
+  const text = stdinInput.value;
+  if (!text) return;
+  try {
+    await sandbox.invoke('__stdin__', text + '\n');
+    print('> ' + text, 'text-purple-300');
+  } catch (err) {
+    print('stdin: ' + (err && err.message ? err.message : String(err)), 'text-red-400');
+  }
+  stdinInput.value = '';
+});
+stdinInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendBtn.click();
+});
+
+clearBtn.addEventListener('click', () => {
+  outputEl.innerHTML = PLACEHOLDER_HTML;
+});
+
+sendBtn.disabled = true;
+setStatus('Ready', 'text-purple-400');
     </script>
 </body>
 </html>
