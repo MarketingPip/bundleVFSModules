@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>runWasi E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// runWasi() browser proof — first-class host WASI API (roadmap §1).
+//
+// Proves via the REAL public surface:
+//   - `CodeSandbox` from the REAL /local-repo/runtime.js
+//   - `sandbox.runWasi(bytes, {args, env})` (host-side, no iframe):
+//     lazy-loads ./src/runtime/runwasi.js -> ../../dist/wasi.js
+// Case 1: REAL Clang binary (tests/fixtures/hello-wasi.wasm) — exit code,
+//   argv, stdout through the real preview1 engine.
+// Case 2: hand-assembled file-reader module (base64 below) — guest reads a
+//   VFS-seeded file (/sandbox/input.txt), env reaches the guest, guest
+//   writes /sandbox/output.txt and the write-back lands in config.fs,
+//   stderr captured separately.
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text,
+// and POST /report (crash-proof). No screenshots.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { window.__phase = p; document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+// Hand-assembled WASI file-reader (see tests/runwasi.test.js
+// buildFileReaderWasm): reads /sandbox/input.txt -> stdout, writes
+// /sandbox/output.txt, dumps environ -> stdout, writes stderr marker.
+const READER_B64 = "AGFzbQEAAAABHwRgCX9/f39/fn5/fwF/YAR/f39/AX9gAABgAn9/AX8CtwEFFndhc2lfc25hcHNob3RfcHJldmlldzEJcGF0aF9vcGVuAAAWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQdmZF9yZWFkAAEWd2FzaV9zbmFwc2hvdF9wcmV2aWV3MQhmZF93cml0ZQABFndhc2lfc25hcHNob3RfcHJldmlldzERZW52aXJvbl9zaXplc19nZXQAAxZ3YXNpX3NuYXBzaG90X3ByZXZpZXcxC2Vudmlyb25fZ2V0AAMDAgECBQMBAAIHEwIGbWVtb3J5AgAGX3N0YXJ0AAUKvgEBuwEAQQNBAEHAAEEJQQBCf0J/QQBBEBAAGkEgQYACNgIAQSRBgAE2AgBBECgCAEEgQQFBGBABGkEBQSBBAUEcEAIaQQNBAEHQAEEKQQlCf0J/QQBBFBAAGkEwQeAANgIAQTRBCTYCAEEUKAIAQTBBAUEcEAIaQShBLBADGkGABEGACBAEGkEgQYAINgIAQSRBLCgCADYCAEEBQSBBAUEcEAIaQSBB8AA2AgBBJEEMNgIAQQJBIEEBQRwQAhoLC0EEAEHAAAsJaW5wdXQudHh0AEHQAAsKb3V0cHV0LnR4dABB4AALCXdyb3RlLWl0CgBB8AALDHN0ZGVyci1tYXJrCg==";
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+try {
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  check("CodeSandbox.prototype.runWasi exists", typeof rt.CodeSandbox.prototype.runWasi === "function");
+  const { CodeSandbox } = rt;
+  phase("runtime-loaded");
+
+  setTimeout(() => {
+    if (!window.__done__) {
+      document.title = "E2E-FAIL: watchdog timeout at phase " + (window.__phase || "unknown");
+      report({ ok: false, phase: "watchdog", lastPhase: window.__phase || null });
+    }
+  }, 175000);
+
+  // ---- Case 1: real Clang binary ----
+  phase("case1-fetch");
+  const resp = await fetch("/local-repo/tests/fixtures/hello-wasi.wasm");
+  check("wasm fixture fetched", resp.ok, "status=" + resp.status);
+  const clangBytes = new Uint8Array(await resp.arrayBuffer());
+  check("fixture is real wasm", clangBytes[0] === 0 && clangBytes[1] === 0x61, "len=" + clangBytes.length);
+
+  const sb1 = new CodeSandbox({ fs: {}, fileName: "runwasi.mjs", timeout: 60000 });
+  phase("case1-run");
+  const r1 = await sb1.runWasi(clangBytes, {
+    args: ["hello.wasm", "foo", "bar"],
+    env: { E2E_TEST: "1" },
+  });
+  const out1 = r1.stdout.join("\n");
+  check("case1: exitCode === 0", r1.exitCode === 0, "got " + r1.exitCode);
+  check("case1: stdout has clang-wasi-hello", out1.includes("clang-wasi-hello"));
+  check("case1: argc=3", out1.includes("argc=3"));
+  check("case1: argv[2]=bar", out1.includes("argv[2]=bar"));
+  check("case1: fib(20)=6765", out1.includes("fib(20)=6765"));
+  phase("case1-done");
+
+  // ---- Case 2: VFS read/write + env + stderr via file-reader ----
+  phase("case2-run");
+  const sb2 = new CodeSandbox({
+    fs: { "/input.txt": "vfs-e2e-hello\n" },
+    fileName: "runwasi.mjs",
+    timeout: 60000,
+  });
+  const readerBytes = b64ToBytes(READER_B64);
+  check("file-reader module valid", WebAssembly.validate(readerBytes));
+  const r2 = await sb2.runWasi(readerBytes, { env: { E2E_VAR: "e2e-value" } });
+  const out2 = r2.stdout.join("\n");
+  check("case2: exitCode === 0", r2.exitCode === 0, "got " + r2.exitCode);
+  check("case2: guest read VFS file", out2.includes("vfs-e2e-hello"), out2.slice(0, 300));
+  check("case2: env reached guest", out2.includes("E2E_VAR=e2e-value"), out2.slice(0, 300));
+  check("case2: stderr captured separately", r2.stderr.join("\n").includes("stderr-mark"));
+  check("case2: stderr not in stdout", !out2.includes("stderr-mark"));
+  const written = r2.files["/output.txt"];
+  check("case2: guest write in files snapshot", !!written);
+  if (written) {
+    check("case2: written content correct",
+      new TextDecoder().decode(written) === "wrote-it\n");
+  }
+  const backInFs = sb2.config.fs["/output.txt"];
+  check("case2: write-back landed in sandbox config.fs", !!backInFs,
+    "keys=" + Object.keys(sb2.config.fs).join(","));
+  phase("case2-done");
+
+  log("RESULTS:\n" + results.join("\n"));
+  const failures = results.filter((x) => x.startsWith("FAIL"));
+  if (failures.length > 0) {
+    document.title = "E2E-FAIL: " + failures[0].slice(5, 125);
+    report({ ok: false, phase: "verdict", failures, results });
+  } else {
+    document.title = "E2E-PASS";
+    report({ ok: true, results });
+  }
+} catch (e) {
+  if (!window.__done__) {
+    document.title = "E2E-FAIL: " + String((e && e.message) || e).slice(0, 120);
+    report({ ok: false, phase: "top", error: String((e && e.message) || e).slice(0, 2000) });
+  }
+  log("TOP-LEVEL: " + String((e && e.stack) || e).slice(0, 1000));
+}
+</script>
+</body>
+</html>
