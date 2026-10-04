@@ -3869,48 +3869,16 @@ ${code}
       }
 
       if (data.type === "PARENT_EXEC_REQUEST") {
-        const bashInstance = async (
-          _command,
-          options = {},
-          sandboxHost,
-          _args = null,
-        ) => {
-          const command = _command.split(" ")[0];
-          const args =
-            _args?.join("\n") || _command.split(" ").slice(1).join("\n");
-
-          if (command === "echo") {
-            return {
-              stdout: _command.split(" ").slice(1).join(" "),
-              stderr: null,
-              exitCode: 0,
-            };
-          }
-          if (command === "execute") {
-            // TODO: pass current VFS to new instance.
-            let _stdout = await executeCode(args);
-
-            const stdout = _stdout.logs.map((l) => l.args).join("\n");
-            return {
-              stdout: stdout,
-              stderr: _stdout.error || null,
-              exitCode: 0,
-            };
-          }
-          if (command === "ls") {
-            return { stdout: "cool", stderr: null, exitCode: 0 };
-          }
-          // Simulate async work
-          //   await new Promise(r => setTimeout(r, 800));
-
-          throw new Error("cool");
-          return {
-            stdout: `${command}: command not found`,
-            stderr: "",
-            exitCode: 127,
-            signal: null,
-          };
-        };
+        // BYO shell (Jared 2026-10-03): developers provide their own shell
+        // function via `new CodeSandbox({ shell })`. If provided, route the
+        // request to it. If not, throw a loud configuration error.
+        const shellFn = this.config.shell;
+        if (typeof shellFn !== "function") {
+          throw new Error(
+            "CodeSandbox: no shell configured. " +
+              "Pass a `shell` function in CodeSandbox options to enable child_process.",
+          );
+        }
 
         try {
           /*
@@ -3961,15 +3929,10 @@ child.on('error', (err) => {
 }); 
 */
 
-          if (typeof bashInstance !== "function") {
-            throw new Error("shell is not implemented in this sandbox."); // todo - this gets hung for some reason but above throw new Error("cool") doesn't?
-          }
-
-          const result = await bashInstance(
+          const result = await shellFn(
             data.payload.command,
-            data.payload.options,
-            this,
-            data.payload.args,
+            data.payload.args || [],
+            data.payload.options || {},
           );
 
           // Send result back to the specific iframe that requested it
@@ -4512,10 +4475,17 @@ export function __parseStackLocation(frame) {
 
 class SandboxRuntime {
   static generate(code, config = {}) {
+    // Serialize the BYO shell function (if provided) into the sandbox.
+    // .toString() captures source, not closures — the function must be
+    // self-contained.
+    const shellField =
+      typeof config.shell === "function"
+        ? `__SHELL__: (${config.shell.toString()}),`
+        : "";
     return `
 
 
-globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}, __SEA_ASSETS__:${JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined)}};
+globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}, __SEA_ASSETS__:${JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined)}, ${shellField}};
 // Stable alias for platform shims: they write globalThis._RUNTIME_ expecting the
 // sandbox-scoped object, but the AST rewrite only applies to Node builtins, not
 // VFS-loaded CJS. Per-realm (each sandbox has its own globalThis), so isolation
@@ -8429,7 +8399,18 @@ export class CodeSandbox extends EventEmitter {
       // { [key]: string | Uint8Array | ArrayBuffer | { encoding: 'utf8'|'base64', data: string } }
       // Normalized by normalizeSeaAssets() and published as __SEA_ASSETS__.
       seaAssets: options?.seaAssets || {},
+      // BYO shell (Jared 2026-10-03): developers bring their own shell
+      // function (real bash via bridge, hand-rolled fake, etc.). If provided,
+      // child_process calls route to it. If not provided, shell calls throw.
+      // The function is serialized via .toString() into the sandbox — it must
+      // be self-contained (no closure references).
+      shell: options?.shell ?? null,
     };
+
+    // Validate the shell option early: must be a function or null/undefined.
+    if (this.config.shell != null && typeof this.config.shell !== "function") {
+      throw new TypeError("CodeSandbox option 'shell' must be a function");
+    }
 
     // Per-sandbox plugin list (docs/PLUGINS.md Part B §5): when provided,
     // this sandbox uses ONLY these plugins — the global registry is
@@ -10100,6 +10081,7 @@ function _parseKey(s) {
           uuid: this.uuid,
           fs: flattenFileTree(this.config.fs),
           seaAssets: normalizeSeaAssets(this.config.seaAssets),
+          shell: this.config.shell,
         });
 
         // Setup timeout
