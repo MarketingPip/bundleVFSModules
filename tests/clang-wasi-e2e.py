@@ -13,6 +13,7 @@ arrives via result.logs. Real browser, no mocks.
 
 Usage: xvfb-run -a /home/hatch/workspace/venvs/ffauto/bin/python tests/clang-wasi-e2e.py [port]
 """
+import os
 import subprocess
 import sys
 import time
@@ -21,7 +22,10 @@ from pathlib import Path
 from urllib.parse import unquote
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8934
-REPO = Path("/home/hatch/workspace/bundleVFSModules-vite7")
+# REPO defaults to the enclosing repo so the driver tests the tree it's run
+# from — not a hardcoded checkout that may be on a different branch.
+# Override with REPO=/path/to/repo to test another tree explicitly.
+REPO = Path(os.environ.get("REPO", Path(__file__).resolve().parent.parent))
 CDN_BASE = "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/"
 MIME = {".js": "text/javascript", ".html": "text/html", ".json": "application/json",
         ".wasm": "application/wasm"}
