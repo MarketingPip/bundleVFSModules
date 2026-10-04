@@ -6,6 +6,8 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { registerPlugin, clearPlugins } from "../src/plugins.js";
+import { viteBrowserPlugin } from "../src/plugins/vite-browser.js";
 
 /**
  * M3a — `rollup/parseAst` subpath: @rollup/browser does NOT ship it (its ESM

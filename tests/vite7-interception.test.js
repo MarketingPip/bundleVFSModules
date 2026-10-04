@@ -4,6 +4,8 @@ import { interceptNativeSpecifier } from "../src/browser-builds.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { registerPlugin, clearPlugins } from "../src/plugins.js";
+import { viteBrowserPlugin } from "../src/plugins/vite-browser.js";
 
 /**
  * M1 — require-interception: native-only package specifiers are redirected
@@ -100,6 +102,7 @@ let savedGetBuiltin;
 let savedRT;
 
 beforeAll(() => {
+  registerPlugin(viteBrowserPlugin);
   savedGetBuiltin = process.getBuiltinModule;
   process.getBuiltinModule = () => {
     throw new Error("native delegation disabled for browser lane");
@@ -114,6 +117,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  clearPlugins();
   process.getBuiltinModule = savedGetBuiltin;
   if (savedRT === undefined) delete globalThis._RUNTIME_;
   else globalThis._RUNTIME_ = savedRT;

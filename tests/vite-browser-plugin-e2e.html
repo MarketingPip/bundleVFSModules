@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Vite browser plugin E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Vite browser plugin browser consumption proof (Jared 2026-10-04).
+//
+// Proves the opt-in contract in a real browser sandbox:
+//   - WITHOUT registerPlugin(viteBrowserPlugin): require('rollup') is NOT
+//     intercepted (resolves with normal semantics → MODULE_NOT_FOUND when
+//     the VFS has no rollup and CDN fallback is off).
+//   - WITH registerPlugin(viteBrowserPlugin): require('rollup') IS
+//     intercepted to the vendor's @rollup/browser VFS path.
+//
+// Uses ONLY the real pipeline:
+//   - `CodeSandbox` imported from the REAL /local-repo/runtime.js
+//   - `registerPlugin` / `viteBrowserPlugin` from the REAL served files
+//   - `sandbox.execute(userCode)` runs the REAL pipeline through the iframe
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text, and
+// POST /report (crash-proof). No screenshots.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { window.__phase = p; document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+async function main() {
+  phase("load");
+  // Import from the served worktree files (driver rewrites _builtinBaseUrl).
+  const { CodeSandbox } = await import("/local-repo/runtime.js");
+  const { registerPlugin, getPlugins } = await import("/local-repo/src/plugins.js");
+  const { viteBrowserPlugin } = await import("/local-repo/src/plugins/vite-browser.js");
+  check("CodeSandbox loads", typeof CodeSandbox === "function");
+  check("viteBrowserPlugin has name", viteBrowserPlugin && viteBrowserPlugin.name === "vite-browser");
+
+  // ── Case 1: WITHOUT the plugin — no interception ──────────────────────
+  phase("no-plugin");
+  {
+    const sandbox = new CodeSandbox({
+      fs: {},
+      fileName: "case1.mjs",
+      timeout: 30000,
+      process: { env: {} },
+      fallbackCDN: false,
+    });
+    const userCode = `
+      const { createRequire } = await import('node:module');
+      const req = createRequire('/vapp/main.js');
+      let outcome;
+      try {
+        const m = req('rollup');
+        outcome = 'resolved:' + typeof m;
+      } catch (e) {
+        outcome = 'threw:' + (e.code || e.message);
+      }
+      console.log('__RESULT__' + JSON.stringify({ outcome }));
+    `;
+    const result = await sandbox.execute(userCode);
+    const marker = (result.logs || []).find((l) => String(l.args).includes("__RESULT__"));
+    const outcome = marker ? JSON.parse(String(marker.args).split("__RESULT__")[1]).outcome : "no-marker";
+    log("no-plugin outcome: " + outcome);
+    // Without the plugin, 'rollup' must NOT resolve to the browser build.
+    // With fallbackCDN:false and no VFS rollup, it throws (ENOENT or
+    // MODULE_NOT_FOUND depending on the resolution path) — the key is it
+    // does NOT resolve to the intercepted VFS path.
+    check("no-plugin: rollup NOT intercepted", outcome.startsWith("threw:"), outcome);
+  }
+
+  // ── Case 2: WITH the plugin — interception active ─────────────────────
+  phase("with-plugin");
+  {
+    registerPlugin(viteBrowserPlugin);
+    check("plugin registered", getPlugins().some((p) => p.name === "vite-browser"));
+
+    const sandbox = new CodeSandbox({
+      fs: {},
+      fileName: "case2.mjs",
+      timeout: 30000,
+      process: { env: {} },
+      fallbackCDN: false,
+    });
+    // The VFS needs the @rollup/browser files seeded. We check that the
+    // specifier resolves to the VFS path (not that the full WASM loads —
+    // that's the existing vite7-interception E2E's job).
+    const userCode = `
+      const { createRequire } = await import('node:module');
+      const req = createRequire('/vapp/main.js');
+      let outcome;
+      try {
+        const resolved = req.resolve('rollup');
+        outcome = 'resolved:' + resolved;
+      } catch (e) {
+        outcome = 'threw:' + (e.code || e.message);
+      }
+      console.log('__RESULT__' + JSON.stringify({ outcome }));
+    `;
+    const result = await sandbox.execute(userCode);
+    const marker = (result.logs || []).find((l) => String(l.args).includes("__RESULT__"));
+    const outcome = marker ? JSON.parse(String(marker.args).split("__RESULT__")[1]).outcome : "no-marker";
+    log("with-plugin outcome: " + outcome);
+    check(
+      "with-plugin: rollup intercepted to VFS path",
+      outcome === "resolved:/node_modules/@rollup/browser/dist/es/rollup.browser.js",
+      outcome,
+    );
+  }
+
+  // ── Verdict ────────────────────────────────────────────────────────────
+  phase("verdict");
+  const failed = results.filter((r) => r.startsWith("FAIL"));
+  for (const r of results) log(r);
+  if (failed.length === 0) {
+    document.title = "E2E-PASS";
+    report({ ok: true, checks: results.length });
+  } else {
+    document.title = "E2E-FAIL: " + failed.length + " failed";
+    report({ ok: false, failed, checks: results.length });
+  }
+}
+
+main().catch((e) => {
+  document.title = "E2E-FAIL: " + (e.message || e);
+  report({ ok: false, error: String(e && e.stack || e) });
+});
+</script>
+</body>
+</html>

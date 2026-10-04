@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { lookupNativeInterception } from "../src/browser-builds.js";
+import { registerPlugin, clearPlugins } from "../src/plugins.js";
+import { viteBrowserPlugin } from "../src/plugins/vite-browser.js";
 
 /**
  * Red-first proof: the `rollup` → `@rollup/browser` interception MUST target

@@ -40,7 +40,22 @@
 // Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 // undefined under real Node / direct import).
 // ---------------------------------------------------------------------------
-import { interceptNativeSpecifier } from "./browser-builds.js";
+import { interceptNativeSpecifier } from "./plugins/vite-browser.js";
+import { getPlugins } from "./plugins.js";
+
+/**
+ * Sync gate for Vite browser interception (Jared 2026-10-04): the
+ * native→browser/WASM substitution table only applies when the host has
+ * opted in via registerPlugin(viteBrowserPlugin). Must stay sync —
+ * _resolveFilename is sync.
+ */
+function isViteBrowserInterceptionActive() {
+  const plugins = getPlugins();
+  for (const p of plugins) {
+    if (p && p.name === "vite-browser") return true;
+  }
+  return false;
+}
 
 function getRT() {
   return typeof globalThis._RUNTIME_ !== "undefined"
@@ -1254,11 +1269,15 @@ function _resolveFilename(request, parent, isMain, options) {
     return request;
   }
 
-  // Browser-build substitution (src/browser-builds.js): when the browser
-  // runtime VFS is present, native-only packages (rollup, esbuild) resolve
-  // to the vendors' own browser/WASM builds. Returns an absolute VFS path,
-  // so no further lookup is needed. No-op under real Node (parity lane).
-  const intercepted = interceptNativeSpecifier(request);
+  // Browser-build substitution (src/plugins/vite-browser.js): when the
+  // vite-browser plugin is registered AND the browser runtime VFS is
+  // present, native-only packages (rollup, esbuild) resolve to the vendors'
+  // own browser/WASM builds. Returns an absolute VFS path, so no further
+  // lookup is needed. Opt-in only — without the plugin, specifiers resolve
+  // with normal Node semantics (parity lane unaffected).
+  const intercepted = isViteBrowserInterceptionActive()
+    ? interceptNativeSpecifier(request)
+    : null;
   if (intercepted !== null) {
     return intercepted;
   }

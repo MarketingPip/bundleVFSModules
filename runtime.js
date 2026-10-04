@@ -8,7 +8,20 @@ import { Terminal } from "https://esm.sh/xterm@5.3.0";
 // parent '_dynamic_import' handler so ESM 'import 'rollup'' resolves
 // exactly like CJS require('rollup') (src/module.js). Ungated lookup: the
 // handler only runs when serving the browser runtime's VFS.
-import { lookupNativeInterception } from "./src/browser-builds.js";
+import { lookupNativeInterception } from "./src/plugins/vite-browser.js";
+
+/**
+ * Sync gate for Vite browser interception (Jared 2026-10-04): the
+ * native→browser/WASM substitution table only applies when the host has
+ * opted in via registerPlugin(viteBrowserPlugin).
+ */
+function isViteBrowserInterceptionActive() {
+  const plugins = getPlugins();
+  for (const p of plugins) {
+    if (p && p.name === "vite-browser") return true;
+  }
+  return false;
+}
 // Plugin API (src/plugins.js): transform hooks wired into the parent-side
 // _build_file interop handler below. The TypeScript plugin ships registered
 // by default so .ts/.tsx modules work out of the box; hosts can
@@ -3160,14 +3173,18 @@ export class ImportResolver {
 
     // Platform interception (AGENTS.md rule 6): native-only packages
     // (rollup, esbuild, rolldown, ...) substitute the vendor's browser/WASM
-    // build from the VFS. This MUST run before the CDN fallback — otherwise
-    // entry `import "rolldown"` becomes https://esm.sh/rolldown, the browser
-    // fetches esm.sh's build of the NATIVE package, and its esm.sh-style
-    // `/node/*.mjs` builtin imports die as absolute VFS paths in the esms
-    // resolve hook (2026-10-01: `[bvm:resolve] _dynamic_import failed for
-    // file URL "/node/process.mjs"`). Nested imports already go through
-    // this table via _dynamic_import; the entry path was the gap.
-    const intercepted = lookupNativeInterception(transformed);
+    // build from the VFS — but ONLY when the vite-browser plugin is
+    // registered (opt-in, Jared 2026-10-04). This MUST run before the CDN
+    // fallback — otherwise entry `import "rolldown"` becomes
+    // https://esm.sh/rolldown, the browser fetches esm.sh's build of the
+    // NATIVE package, and its esm.sh-style `/node/*.mjs` builtin imports die
+    // as absolute VFS paths in the esms resolve hook (2026-10-01:
+    // `[bvm:resolve] _dynamic_import failed for file URL "/node/process.mjs"`).
+    // Nested imports already go through this table via _dynamic_import; the
+    // entry path was the gap.
+    const intercepted = isViteBrowserInterceptionActive()
+      ? lookupNativeInterception(transformed)
+      : null;
     if (intercepted) {
       this.cache.set(cacheKey, intercepted);
       return intercepted;
@@ -9830,11 +9847,14 @@ function _parseKey(s) {
           if (!isRelative && !isAbsolute) {
             // Vendor browser/WASM builds for native-only packages (real
             // Vite 7: rollup → @rollup/browser, esbuild → esbuild-wasm
-            // shim). Specifier-based, so ESM 'import 'rollup'' resolves
+            // shim). Opt-in via the vite-browser plugin (Jared 2026-10-04).
+            // Specifier-based, so ESM 'import 'rollup'' resolves
             // exactly like CJS require('rollup') (src/module.js). The table
             // is static — no VFS-presence gate needed: this handler only
             // runs when serving the browser runtime's VFS.
-            const intercepted = lookupNativeInterception(path);
+            const intercepted = isViteBrowserInterceptionActive()
+              ? lookupNativeInterception(path)
+              : null;
             if (intercepted) {
               const hit = resolveVFS(intercepted, "", vfs);
               if (hit) {
