@@ -1,9 +1,11 @@
-import { describe, test, expect } from "@jest/globals";
+import { describe, test, expect, beforeAll, afterAll } from "@jest/globals";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lookupNativeInterception } from "../src/browser-builds.js";
 import { applyResolvePlugins } from "../src/plugins.js";
+import { registerPlugin, clearPlugins, getPlugins } from "../src/plugins.js";
+import { viteBrowserPlugin } from "../src/plugins/vite-browser.js";
 
 /**
  * M1 honesty gap — the dynamic `import` path.
@@ -148,10 +150,13 @@ function loadHandler(deps) {
     "resolveNodeModule",
     "resolveVFS",
     "lookupNativeInterception",
+    "isViteBrowserInterceptionActive",
     "inlineWasmDataUrls",
     "applyResolvePlugins",
     `${resolveVFSSrc}\n${vfsLookupSrc}\n${toVFSPathSrc}\n${pickVfsSrc}\n${unflattenSrc}\nreturn (${handlerSrc});`,
   );
+  // Gate: the test registers the plugin, so the eval'd handler sees it active.
+  const gate = () => getPlugins().some((p) => p && p.name === "vite-browser");
   return factory.call(
     { config: { fs: {} } },
     deps.fetchBuiltinSource,
@@ -160,6 +165,7 @@ function loadHandler(deps) {
     deps.resolveNodeModule,
     deps.resolveVFS,
     lookupNativeInterception,
+    gate,
     new Function(`${inlineWasmSrc}\nreturn inlineWasmDataUrls;`)(),
     applyResolvePlugins,
   );
@@ -196,6 +202,14 @@ function makeDeps({ resolveNodeModuleImpl } = {}) {
 }
 
 describe("parent _dynamic_import consults the interception table (M1/M2 ESM path)", () => {
+  beforeAll(() => {
+    registerPlugin(viteBrowserPlugin);
+  });
+
+  afterAll(() => {
+    clearPlugins();
+  });
+
   test("import 'rollup' returns the real @rollup/browser source without touching node_modules lookup", async () => {
     const { handler, calls } = makeDeps();
     const result = await handler("rollup", "import", null, null, false, "/", {

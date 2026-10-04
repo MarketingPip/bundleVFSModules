@@ -43,6 +43,7 @@ describe("ImportResolver VFS-first (no CDN fallback for seeded packages)", () =>
       const builtinModules = [];
       function normalizeBuiltinSpecifier(s) { return { isNodeBuiltIn: false, modulePath: s }; }
       function lookupNativeInterception() { return null; }
+      function isViteBrowserInterceptionActive() { return false; }
     `;
     const factory = new Function(
       `${stubDeps}\n${CLASS_SRC}\nreturn new ImportResolver({ fallbackCDN: false });`,
@@ -60,6 +61,7 @@ describe("ImportResolver VFS-first (no CDN fallback for seeded packages)", () =>
       const builtinModules = [];
       function normalizeBuiltinSpecifier(s) { return { isNodeBuiltIn: false, modulePath: s }; }
       function lookupNativeInterception() { return null; }
+      function isViteBrowserInterceptionActive() { return false; }
     `;
     const factory = new Function(
       `${stubDeps}\n${CLASS_SRC}\nreturn new ImportResolver({ fallbackCDN: true, cdnBase: "https://esm.sh" });`,

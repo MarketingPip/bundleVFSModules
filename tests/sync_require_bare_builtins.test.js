@@ -15,19 +15,29 @@
 // like tests/sync_require.test.js — these tests extract the exact shipped
 // source and evaluate it.
 
-import { describe, test, expect } from "@jest/globals";
+import { describe, test, expect, beforeAll, afterAll } from "@jest/globals";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 // The interception table is pure specifier->VFS-path (no browser deps), so
 // the real one is injected into the extracted ImportResolver below.
 import { lookupNativeInterception } from "../src/browser-builds.js";
+import { registerPlugin, clearPlugins, getPlugins } from "../src/plugins.js";
+import { viteBrowserPlugin } from "../src/plugins/vite-browser.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+
+beforeAll(() => {
+  registerPlugin(viteBrowserPlugin);
+});
+
+afterAll(() => {
+  clearPlugins();
+});
 
 function extractBlock(src, startMarker, endMarker) {
   const start = src.indexOf(startMarker);
@@ -72,9 +82,13 @@ function loadImportResolver() {
   const factory = new Function(
     "builtinModules",
     "lookupNativeInterception",
+    "isViteBrowserInterceptionActive",
     normalizeSrc + "\n" + clsSrc + "\nreturn ImportResolver;",
   );
-  return factory(NODE_BUILTINS, lookupNativeInterception);
+  // The gate checks the plugin registry; the test registers the plugin in
+  // beforeAll, so the eval'd resolver sees it as active.
+  const gate = () => getPlugins().some((p) => p && p.name === "vite-browser");
+  return factory(NODE_BUILTINS, lookupNativeInterception, gate);
 }
 
 function makeResolver() {

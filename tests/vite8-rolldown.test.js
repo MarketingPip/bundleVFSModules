@@ -5,6 +5,8 @@ import {
   lookupNativeInterception,
   BROWSER_BUILD_TARGETS,
 } from "../src/browser-builds.js";
+import { registerPlugin, clearPlugins } from "../src/plugins.js";
+import { viteBrowserPlugin } from "../src/plugins/vite-browser.js";
 
 describe("rolldown browser-build interception (Vite 8)", () => {
   test("rolldown -> @rolldown/browser main", () => {
