@@ -9,6 +9,7 @@ E2E-PASS, 1 otherwise.
 
 Usage: xvfb-run -a /home/hatch/workspace/venvs/ffauto/bin/python tests/consumption-path-e2e.py [port]
 """
+import os
 import subprocess
 import sys
 import time
@@ -17,7 +18,12 @@ from pathlib import Path
 from urllib.parse import unquote
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8932
-REPO = Path("/home/hatch/workspace/bundleVFSModules-vite7")
+# REPO defaults to the enclosing repo (the driver's own checkout) so the
+# driver tests the tree it's run from — not a hardcoded checkout that may
+# be on a different branch. Override with REPO=/path/to/repo to test
+# another tree explicitly. (2026-10-04: the hardcoded path caused a false
+# RED — the checkout was on feat/byo-shell, predating the fix under test.)
+REPO = Path(os.environ.get("REPO", Path(__file__).resolve().parent.parent))
 CDN_BASE = "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/"
 MIME = {".js": "text/javascript", ".html": "text/html", ".json": "application/json"}
 
