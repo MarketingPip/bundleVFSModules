@@ -824,6 +824,83 @@ function resolvePackageExportsField(exportsField, subpath, conditions) {
   return typeof resolved === "string" ? resolved : null;
 }
 
+// Node PACKAGE_IMPORTS_RESOLVE target lookup: `imports` keys are `#`
+// specifiers (exact or `#prefix/*` patterns). Same condition matching as
+// exports via resolveExportsTarget. Returns the target string or null.
+function resolvePackageImportsField(importsField, request, conditions) {
+  if (
+    typeof importsField !== "object" ||
+    importsField === null ||
+    Array.isArray(importsField)
+  ) {
+    return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(importsField, request)) {
+    const r = resolveExportsTarget(importsField[request], conditions);
+    return typeof r === "string" ? r : null;
+  }
+  // Longest `#prefix/*` pattern-key match.
+  let best = null;
+  for (const key of Object.keys(importsField)) {
+    if (
+      key.endsWith("/*") &&
+      request.startsWith(key.slice(0, -1)) &&
+      (best === null || key.length > best.length)
+    ) {
+      best = key;
+    }
+  }
+  if (best === null) return null;
+  const star = request.slice(best.length - 1);
+  const r = resolveExportsTarget(importsField[best], conditions);
+  return typeof r === "string" ? r.replace(/\*/g, star) : null;
+}
+
+// Resolve a `#` specifier against the nearest parent package.json scope.
+// Returns the filename or throws ERR_PACKAGE_IMPORT_NOT_DEFINED (Node parity:
+// the nearest scope wins; a scope without `imports` or without a match is
+// an honest miss, not a fallthrough to outer scopes).
+function resolvePackageImports(request, parentDir, exts, isMain) {
+  let dir = parentDir;
+  while (true) {
+    const pkg = readPackageJson(dir);
+    if (pkg.exists) {
+      let filename = null;
+      if (
+        pkg.data &&
+        pkg.data.imports !== undefined &&
+        pkg.data.imports !== null
+      ) {
+        const target = resolvePackageImportsField(
+          pkg.data.imports,
+          request,
+          EXPORTS_REQUIRE_CONDITIONS,
+        );
+        if (typeof target === "string" && target.startsWith("./")) {
+          const base = posixResolve(dir, target);
+          filename =
+            tryFile(base, isMain) || tryExtensions(base, exts, isMain) || null;
+        }
+      }
+      if (filename) return filename;
+      const err = new Error(
+        `[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier "${request}" is not defined in '${pkg.pjsonPath}'`,
+      );
+      err.code = "ERR_PACKAGE_IMPORT_NOT_DEFINED";
+      err.path = pkg.pjsonPath;
+      throw stampCode(err, false);
+    }
+    const parent = posixDirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const err = new Error(
+    `[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier "${request}" is not defined (no package scope found)`,
+  );
+  err.code = "ERR_PACKAGE_IMPORT_NOT_DEFINED";
+  throw stampCode(err, false);
+}
+
 function tryPackage(requestPath, exts, isMain, originalPath) {
   const pkg = Module._readPackage(requestPath);
   // Node parity (PACKAGE_EXPORTS_RESOLVE): when `exports` is present, `main`
@@ -1039,6 +1116,20 @@ function _findPath(request, paths, isMain) {
   if (cached) return cached;
 
   let exts;
+
+  // Node PACKAGE_IMPORTS_RESOLVE: `#` specifiers resolve via the nearest
+  // parent package.json `imports` field. Handled before the bare-specifier
+  // logic: `#x` is not a bare package name.
+  if (!absoluteRequest && request.charCodeAt(0) === 35 /* # */) {
+    if (exts === undefined) exts = Object.keys(_extensions);
+    // paths[0] is <parentDir>/node_modules; dirname gives the importer dir.
+    const parentDir = paths.length > 0 ? posixDirname(paths[0]) : "/";
+    const filename = resolvePackageImports(request, parentDir, exts, isMain);
+    // resolvePackageImports throws ERR_PACKAGE_IMPORT_NOT_DEFINED on miss —
+    // it never returns falsy.
+    _pathCache[cacheKey] = filename;
+    return filename;
+  }
 
   // Node parity: a package.json `exports` field encapsulates the package.
   // For bare specifiers, when the resolved package has `exports`, the
