@@ -646,6 +646,34 @@ function getRuntime() {
   return globalThis._RUNTIME_ || null;
 }
 
+/**
+ * BYO shell (Jared 2026-10-03): for SYNC calls only. The shell function is
+ * serialized into the sandbox via __SHELL__. Throws if not configured.
+ * Async calls (exec, spawn) use the postToParent host protocol instead.
+ */
+function getShell() {
+  const rt = getRuntime();
+  const shell = rt && rt.__SHELL__;
+  if (typeof shell !== "function") {
+    throw new Error(
+      "CodeSandbox: no shell configured. " +
+        "Pass a `shell` function in CodeSandbox options to enable child_process.",
+    );
+  }
+  return shell;
+}
+
+/**
+ * BYO shell (Jared 2026-10-03): developers provide their own shell function
+ * via `new CodeSandbox({ shell })`. If present, child_process calls route to
+ * it. If absent, shell calls throw — a loud configuration error, not a
+ * silent fake (deliberate exception to the noop-over-throw rule: the library
+ * ships no shell, but provides the seam).
+ *
+ * The shell function signature: `(command, args, options) => result`
+ * where result is `{ stdout, stderr, exitCode }` or a string (stdout).
+ * It may also throw to signal failure.
+ */
 function getTaskTracker() {
   return getRuntime()?.taskTracker || null;
 }
@@ -1283,6 +1311,10 @@ export class ChildProcess extends EventEmitter {
 
     const child = this;
 
+    // BYO shell: route to the developer's shell function. getShell() throws
+    // if none configured (loud config error per Jared 2026-10-03).
+    const shell = getShell();
+
     child.spawnfile = options.file;
     child.spawnargs = options.spawnargs ?? [
       options.file,
@@ -1480,18 +1512,10 @@ export class ChildProcess extends EventEmitter {
       };
     }
 
-    postToParent(
-      "PARENT_SPAWN_REQUEST",
-      requestId,
-      {
-        command: options.file,
-        args: options.args,
-        options: options,
-        ...(vfsBefore ? { vfs: vfsBefore } : null),
-      },
-      0,
-      child._ac.signal,
-    )
+    // BYO shell: invoke the developer's shell function directly.
+    // (Replaces the postToParent host-protocol path.)
+    Promise.resolve()
+      .then(() => shell(options.file, options.args || [], options))
       .then((result = {}) => {
         /*
          * kill() may have won the race, or the stream may have closed
@@ -1931,127 +1955,119 @@ function execCore(command, options, callback) {
   child.spawnfile = "/bin/sh";
   child.spawnargs = ["/bin/sh", "-c", command];
 
-  /*
-   * Node emits 'spawn' asynchronously after the child has been created.
-   */
+  // BYO shell: if the developer provided a shell function, route to it.
+  // Otherwise getShell() throws (loud config error, not a silent fake).
+  let shellFn = null;
+  try {
+    shellFn = getShell();
+  } catch (shellErr) {
+    // No shell configured — fail fast with the config error.
+    queueMicrotask(() => {
+      child.emit("error", shellErr);
+      if (typeof callback === "function") callback(shellErr, "", "");
+    });
+    return child;
+  }
+
+  // Shell is configured: call it and wire the result to the child/callback.
   queueMicrotask(() => {
     if (!child._finalised) {
       child.emit("spawn");
     }
   });
 
-  const requestId = makeRequestId();
-  child._requestId = requestId;
   const encoding = resolveEncoding(options.encoding);
   const maxBuffer = options.maxBuffer ?? MAX_BUFFER;
-  const killSignal = options.killSignal;
+  const timeoutMs = options.timeout ?? DEFAULT_TIMEOUT;
 
-  wireAbortSignal(options.signal, child, killSignal);
-
-  // Seed the child with the sandbox's live filesystem; the host returns
-  // the child's final filesystem as `vfs` and we merge back only what the
-  // child changed (parent-wins on conflict). No runtime FS → no `vfs` key.
+  // VFS: seed the child with the sandbox's live filesystem; the shell
+  // returns the child's final filesystem as `vfs` and we merge back only
+  // what the child changed (parent-wins on conflict).
   const vfsBefore = captureVfsSnapshot();
+  const shellOptions = vfsBefore ? { ...options, vfs: vfsBefore } : options;
 
-  postToParent(
-    "PARENT_EXEC_REQUEST",
-    requestId,
-    {
-      command,
-      options,
-      ...(vfsBefore ? { vfs: vfsBefore } : null),
-    },
-    options.timeout ?? DEFAULT_TIMEOUT,
-    child._ac.signal,
-  )
-    .then((result = {}) => {
-      /*
-       * kill() or timeout may have already finalized the child.
-       */
-      if (child._finalised) {
-        return;
+  let timeoutTid;
+  const clearTimer = () => {
+    if (timeoutTid !== undefined) {
+      clearTimeout(timeoutTid);
+      timeoutTid = undefined;
+    }
+  };
+
+  if (timeoutMs > 0) {
+    timeoutTid = setTimeout(() => {
+      if (child._finalised) return;
+      child.killed = true;
+      child.signalCode = "SIGTERM";
+      const err = Object.assign(new Error("Process timed out"), {
+        code: "ETIMEDOUT",
+        signal: "SIGTERM",
+      });
+      child.emit("error", err);
+      if (typeof callback === "function") callback(err, "", "");
+      child._finalise("", "", null, "SIGTERM");
+    }, Math.max(0, Number(timeoutMs) || 0));
+  }
+
+  Promise.resolve()
+    .then(() => shellFn(command, [], shellOptions))
+    .then((result) => {
+      if (child._finalised) return;
+      clearTimer();
+      let stdout = "";
+      let stderr = "";
+      let exitCode = 0;
+      if (typeof result === "string") {
+        stdout = result;
+      } else if (result && typeof result === "object") {
+        stdout = result.stdout ?? "";
+        stderr = result.stderr ?? "";
+        exitCode = result.exitCode ?? 0;
+        // Merge back the child's filesystem changes, if any.
+        applyVfsDiff(vfsBefore, result.vfs);
       }
-
-      // Merge the child's filesystem changes before finalizing, so the
-      // VFS is current when the callback runs. No `vfs` in the response
-      // (legacy host) → no-op.
-      applyVfsDiff(vfsBefore, result.vfs);
-
-      let stdout = result.stdout ?? "";
-      let stderr = result.stderr ?? "";
       if (typeof stdout !== "string") stdout = String(stdout);
       if (typeof stderr !== "string") stderr = String(stderr);
-      const exitCode = result.exitCode ?? 0;
-      const signal = result.signal ?? null;
 
-      let execError = null;
-      let finalCode = exitCode;
-      let finalSignal = signal;
-
-      // Node truncates output, kills the child, and reports
-      // ERR_CHILD_PROCESS_STDIO_MAXBUFFER when maxBuffer is exceeded.
-      if (stdout.length > maxBuffer) {
-        stdout = stdout.slice(0, maxBuffer);
-        execError = errStdioMaxBuffer("stdout");
+      // maxBuffer: Node kills the child and reports the error.
+      const outLen = Buffer.byteLength(stdout);
+      const errLen = Buffer.byteLength(stderr);
+      if (outLen > maxBuffer || errLen > maxBuffer) {
+        const which = outLen > maxBuffer ? "stdout" : "stderr";
+        const err = errStdioMaxBuffer(which);
         child.killed = true;
-        finalCode = null;
-        finalSignal = signalNameOf(killSignal ?? "SIGTERM");
-      } else if (stderr.length > maxBuffer) {
-        stderr = stderr.slice(0, maxBuffer);
-        execError = errStdioMaxBuffer("stderr");
-        child.killed = true;
-        finalCode = null;
-        finalSignal = signalNameOf(killSignal ?? "SIGTERM");
-      }
-
-      if (!execError && ((exitCode !== null && exitCode !== 0) || signal)) {
-        execError = new Error(`Command failed: ${command}\n${stderr}`);
-
-        execError.code = exitCode ?? undefined;
-        execError.killed = child.killed;
-        execError.signal = signal;
-        execError.cmd = command;
-
-        // NOTE: Node does NOT emit 'error' on the child for a failed
-        // command — the error goes to the callback only.
+        child.signalCode = "SIGTERM";
+        child.emit("error", err);
+        const truncated = which === "stdout"
+          ? stdout.slice(0, maxBuffer)
+          : stderr.slice(0, maxBuffer);
+        if (typeof callback === "function") {
+          callback(
+            err,
+            toOutput(which === "stdout" ? truncated : stdout, encoding),
+            toOutput(which === "stderr" ? truncated : stderr, encoding),
+          );
+        }
+        return;
       }
 
       const out = toOutput(stdout, encoding);
       const errOut = toOutput(stderr, encoding);
-
-      child._finalise(out, errOut, finalCode, finalSignal);
-
-      callback?.(execError, out, errOut);
+      child.exitCode = exitCode;
+      child.emit("exit", exitCode, null);
+      if (typeof callback === "function") {
+        const err =
+          exitCode !== 0 ? new Error(`Command failed: ${command}`) : null;
+        if (err) err.code = exitCode;
+        callback(err, out, errOut);
+      }
+      child._finalise(out, errOut, exitCode, null);
     })
     .catch((err) => {
-      /*
-       * Abort caused by kill() is expected.
-       * kill() has already finalized the child.
-       */
-      if (child._finalised) {
-        return;
-      }
-
-      const wrapped = err instanceof Error ? err : new Error(String(err));
-
-      if (wrapped.code === "ETIMEDOUT") {
-        child.killed = true;
-      }
-
-      child.emit("error", wrapped);
-
-      child._finalise(
-        "",
-        wrapped.message,
-        wrapped.code === "ETIMEDOUT" ? null : 1,
-        wrapped.signal ?? null,
-      );
-
-      callback?.(
-        wrapped,
-        toOutput("", encoding),
-        toOutput(wrapped.message, encoding),
-      );
+      if (child._finalised) return;
+      clearTimer();
+      child.emit("error", err);
+      if (typeof callback === "function") callback(err, "", "");
     });
 
   return child;
@@ -2581,17 +2597,49 @@ export function spawnSync(file, args, options) {
 
   validateAbortSignal(norm.signal, "options.signal");
 
+  return spawnSyncCore(norm.file, norm.args || [], norm);
+}
+
+/**
+ * Shared sync shell invocation. `shellCommand`/`shellArgs` are what the
+ * developer's shell function receives: for spawnSync the file+args, for
+ * execSync the original command string (matching async exec's contract).
+ */
+function spawnSyncCore(shellCommand, shellArgs, norm) {
+  // BYO shell: route to the developer's shell function. Throws if none
+  // configured (loud config error). The shell must return synchronously
+  // for sync calls — a Promise result throws.
+  const shell = getShell();
+  const result = shell(shellCommand, shellArgs, norm);
+  if (result && typeof result.then === "function") {
+    throw new Error(
+      "CodeSandbox: shell function returned a Promise for a sync call. " +
+        "Provide a synchronous shell function for spawnSync/execSync.",
+    );
+  }
+
+  let stdout = "";
+  let stderr = "";
+  let status = 0;
+  if (typeof result === "string") {
+    stdout = result;
+  } else if (result && typeof result === "object") {
+    stdout = result.stdout ?? "";
+    stderr = result.stderr ?? "";
+    status = result.exitCode ?? 0;
+  }
+
   const encoding = resolveEncoding(norm.encoding ?? "buffer");
-  const stdout = toOutput("", encoding);
-  const stderr = toOutput("", encoding);
+  const outBuf = toOutput(stdout, encoding);
+  const errBuf = toOutput(stderr, encoding);
 
   return {
-    status: 0,
+    status,
     signal: null,
-    output: [null, stdout, stderr],
+    output: [null, outBuf, errBuf],
     pid: makeFakePid(),
-    stdout,
-    stderr,
+    stdout: outBuf,
+    stderr: errBuf,
   };
 }
 
@@ -2602,7 +2650,9 @@ export function spawnSync(file, args, options) {
  */
 export function execSync(command, options) {
   const norm = normalizeExecArgs(command, options, null);
-  return spawnSync(norm.file, norm.options).stdout;
+  // Pass the original command string (not "/bin/sh") so the shell
+  // contract matches async exec: shell(command, [], options).
+  return spawnSyncCore(command, [], norm.options).stdout;
 }
 
 /**

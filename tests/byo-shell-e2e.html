@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>BYO shell E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// BYO shell browser consumption proof (Jared 2026-10-03).
+//
+// Proves the real public surface: `new CodeSandbox({ shell })` routes
+// child_process calls to the developer's shell function in a real browser
+// sandbox. Uses ONLY the real pipeline:
+//   - `CodeSandbox` imported from the REAL /local-repo/runtime.js (worktree
+//     file; the driver serves it with ONLY _builtinBaseUrl rewritten to the
+//     local worktree dist/)
+//   - `sandbox.execute(userCode)` runs the REAL pipeline through the iframe
+//     bootstrap, where the shell function is serialized via .toString()
+//     (so it must be self-contained — no closure references).
+//   - Results come back via the REAL postMessage function_results channel.
+//
+// The shell records its calls on globalThis.__shellCalls (reliable: the
+// shell runs inside the iframe) and user code reports via console.log
+// markers parsed from result.logs.
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text, and
+// POST /report (crash-proof). No screenshots.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { window.__phase = p; document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+// Self-contained dispatch shell: serialized via .toString() into the
+// sandbox bootstrap, so NO closure references. Records calls on
+// globalThis.__shellCalls; dispatches on the command string.
+function byoShell(command, args, options) {
+  globalThis.__shellCalls = globalThis.__shellCalls || [];
+  globalThis.__shellCalls.push({
+    command: command,
+    args: args,
+    timeout: options ? options.timeout : undefined,
+    encoding: options ? options.encoding : undefined,
+  });
+  if (command === "throw-me") throw new Error("shell boom");
+  if (command === "reject-me") return Promise.reject(new Error("shell reject"));
+  if (command === "promise-me")
+    return Promise.resolve({ stdout: "async-ok\n", stderr: "", exitCode: 0 });
+  if (command === "fail-me")
+    return { stdout: "out\n", stderr: "boom\n", exitCode: 42 };
+  if (command === "string-me") return "string-stdout\n";
+  return { stdout: "stdout-for:" + command + "\n", stderr: "", exitCode: 0 };
+}
+
+// Run userCode in a fresh sandbox; return the parsed __RESULT__ markers.
+async function runCase(CodeSandbox, name, userCode, shellFn) {
+  const sandbox = new CodeSandbox({
+    fs: {},
+    fileName: "case.mjs",
+    timeout: 60000,
+    process: { env: {} },
+    fallbackCDN: false,
+    ...(shellFn !== undefined ? { shell: shellFn } : {}),
+  });
+  const watchdog = setTimeout(() => {
+    if (!window.__done__) {
+      document.title = "E2E-FAIL: watchdog timeout at phase " + (window.__phase || "unknown") + " case " + name;
+      report({ ok: false, phase: "watchdog", case: name, lastPhase: window.__phase || null });
+    }
+  }, 55000);
+  try {
+    const result = await sandbox.execute(userCode);
+    return { result, markers: parseMarkers(result) };
+  } finally {
+    clearTimeout(watchdog);
+  }
+}
+
+function parseMarkers(result) {
+  const markers = {};
+  for (const entry of (result.logs || [])) {
+    let raw = typeof entry === "string" ? entry : JSON.stringify(entry);
+    // Unwrap the outer log envelope (mirrors consumption-path-e2e.html):
+    // entries may be JSON strings of {args: "..."} objects.
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.args === "string") raw = parsed.args;
+    } catch (e) { /* raw stays as-is */ }
+    for (const key of ["__RESULT__", "__CALLS__", "__ERROR__"]) {
+      const j = raw.indexOf(key);
+      if (j !== -1) {
+        try { markers[key] = JSON.parse(raw.slice(j + key.length)); }
+        catch (e) { markers[key] = { __parseError: raw.slice(j, j + 200) }; }
+      }
+    }
+  }
+  return markers;
+}
+
+try {
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+  phase("runtime-loaded");
+
+  // ---- 1. Supplied shell: exec works, command/args/options forwarded ----
+  {
+    const { markers } = await runCase(CodeSandbox, "exec-basic", [
+      'import { exec } from "node:child_process";',
+      "const r = await new Promise((resolve) => {",
+      '  exec("echo hi", { timeout: 5000 }, (err, stdout, stderr) =>',
+      "    resolve({ err: err ? err.message : null, stdout, stderr }));",
+      "});",
+      'console.log("__RESULT__" + JSON.stringify(r));',
+      'console.log("__CALLS__" + JSON.stringify(globalThis.__shellCalls || []));',
+    ].join("\n"), byoShell);
+    phase("exec-basic-done");
+    const calls = markers.__CALLS__ || [];
+    check("exec: shell was called once", calls.length === 1, JSON.stringify(calls));
+    check("exec: command forwarded", calls[0] && calls[0].command === "echo hi",
+      JSON.stringify(calls[0]));
+    check("exec: args is an array", calls[0] && Array.isArray(calls[0].args),
+      JSON.stringify(calls[0]));
+    check("exec: options.timeout forwarded", calls[0] && calls[0].timeout === 5000,
+      JSON.stringify(calls[0]));
+    const r = markers.__RESULT__ || {};
+    check("exec: no error", r.err === null, JSON.stringify(r));
+    check("exec: stdout from shell", r.stdout === "stdout-for:echo hi\n",
+      JSON.stringify(r));
+    check("exec: stderr empty", r.stderr === "", JSON.stringify(r));
+  }
+
+  // ---- 2. Missing shell: clear configuration error ----
+  {
+    const { markers } = await runCase(CodeSandbox, "no-shell", [
+      'import { exec } from "node:child_process";',
+      "const r = await new Promise((resolve) => {",
+      "  const child = exec(\"echo hi\", (err, stdout, stderr) =>",
+      "    resolve({ err: err ? err.message : null }));",
+      '  child.on("error", (e) => resolve({ err: e.message, via: "error-event" }));',
+      "});",
+      'console.log("__RESULT__" + JSON.stringify(r));',
+    ].join("\n"), undefined); // no shell option
+    phase("no-shell-done");
+    const r = markers.__RESULT__ || {};
+    check("no-shell: error reported", !!r.err, JSON.stringify(r));
+    check("no-shell: message names the CodeSandbox shell option",
+      r.err && r.err.includes("no shell configured") && r.err.includes("shell"),
+      JSON.stringify(r));
+  }
+
+  // ---- 3. Thrown shell error propagates ----
+  {
+    const { markers } = await runCase(CodeSandbox, "throw", [
+      'import { exec } from "node:child_process";',
+      "const r = await new Promise((resolve) => {",
+      "  const child = exec(\"throw-me\", (err) =>",
+      "    resolve({ err: err ? err.message : null, via: \"callback\" }));",
+      '  child.on("error", (e) => resolve({ err: e.message, via: "error-event" }));',
+      "});",
+      'console.log("__RESULT__" + JSON.stringify(r));',
+    ].join("\n"), byoShell);
+    phase("throw-done");
+    const r = markers.__RESULT__ || {};
+    check("throw: error propagates", r.err === "shell boom", JSON.stringify(r));
+  }
+
+  // ---- 4. Rejected shell Promise (async) propagates ----
+  {
+    const { markers } = await runCase(CodeSandbox, "reject", [
+      'import { exec } from "node:child_process";',
+      "const r = await new Promise((resolve) => {",
+      "  const child = exec(\"reject-me\", (err) =>",
+      "    resolve({ err: err ? err.message : null, via: \"callback\" }));",
+      '  child.on("error", (e) => resolve({ err: e.message, via: "error-event" }));',
+      "});",
+      'console.log("__RESULT__" + JSON.stringify(r));',
+    ].join("\n"), byoShell);
+    phase("reject-done");
+    const r = markers.__RESULT__ || {};
+    check("reject: rejection propagates", r.err === "shell reject", JSON.stringify(r));
+  }
+
+  // ---- 5a. Sync API: execSync returns shell stdout ----
+  {
+    const { markers } = await runCase(CodeSandbox, "execSync", [
+      'import { execSync } from "node:child_process";',
+      "let r;",
+      "try {",
+      '  const out = execSync("echo hi");',
+      "  r = { out: String(out) };",
+      "} catch (e) { r = { err: e.message }; }",
+      'console.log("__RESULT__" + JSON.stringify(r));',
+    ].join("\n"), byoShell);
+    phase("execSync-done");
+    const r = markers.__RESULT__ || {};
+    check("execSync: returns shell stdout", r.out === "stdout-for:echo hi\n",
+      JSON.stringify(r));
+  }
+
+  // ---- 5b. Sync API: Promise from shell throws ----
+  {
+    const { markers } = await runCase(CodeSandbox, "execSync-promise", [
+      'import { execSync } from "node:child_process";',
+      "let r;",
+      "try {",
+      '  execSync("promise-me");',
+      "  r = { threw: false };",
+      "} catch (e) { r = { threw: true, err: e.message }; }",
+      'console.log("__RESULT__" + JSON.stringify(r));',
+    ].join("\n"), byoShell);
+    phase("execSync-promise-done");
+    const r = markers.__RESULT__ || {};
+    check("execSync: Promise shell throws", r.threw === true, JSON.stringify(r));
+    check("execSync: error names synchronous requirement",
+      r.err && /[Pp]romise/.test(r.err) && /sync/i.test(r.err),
+      JSON.stringify(r));
+  }
+
+  // ---- 6. Async spawn with Promise shell: exit/close fire ----
+  {
+    const { markers } = await runCase(CodeSandbox, "spawn", [
+      'import { spawn } from "node:child_process";',
+      "const events = [];",
+      'const child = spawn("promise-me", ["a", "b"]);',
+      'child.on("exit", (code, sig) => events.push(["exit", code, sig]));',
+      'child.on("close", (code, sig) => events.push(["close", code, sig]));',
+      'child.on("error", (e) => events.push(["error", e.message]));',
+      "await new Promise((resolve) => {",
+      '  child.on("close", resolve);',
+      "  setTimeout(() => resolve(\"timeout\"), 10000);",
+      "});",
+      'console.log("__RESULT__" + JSON.stringify({ events }));',
+      'console.log("__CALLS__" + JSON.stringify(globalThis.__shellCalls || []));',
+    ].join("\n"), byoShell);
+    phase("spawn-done");
+    const r = markers.__RESULT__ || {};
+    const calls = markers.__CALLS__ || [];
+    check("spawn: shell got file+args",
+      calls.length === 1 && calls[0].command === "promise-me" &&
+      JSON.stringify(calls[0].args) === JSON.stringify(["a", "b"]),
+      JSON.stringify(calls));
+    const kinds = (r.events || []).map((e) => e[0]);
+    check("spawn: exit fired with code 0",
+      kinds.includes("exit") &&
+      (r.events || []).some((e) => e[0] === "exit" && e[1] === 0),
+      JSON.stringify(r));
+    check("spawn: close fired", kinds.includes("close"), JSON.stringify(r));
+    check("spawn: no error event", !kinds.includes("error"), JSON.stringify(r));
+  }
+
+  // ---- 7. String shell result treated as stdout ----
+  {
+    const { markers } = await runCase(CodeSandbox, "string-result", [
+      'import { exec } from "node:child_process";',
+      "const r = await new Promise((resolve) => {",
+      '  exec("string-me", (err, stdout) =>',
+      "    resolve({ err: err ? err.message : null, stdout }));",
+      "});",
+      'console.log("__RESULT__" + JSON.stringify(r));',
+    ].join("\n"), byoShell);
+    phase("string-result-done");
+    const r = markers.__RESULT__ || {};
+    check("string result: stdout", r.stdout === "string-stdout\n" && r.err === null,
+      JSON.stringify(r));
+  }
+
+  const failures = results.filter((x) => x.startsWith("FAIL"));
+  log(results.join("\n"));
+  log("TOTAL: " + results.length + " checks, " + failures.length + " failures");
+  if (failures.length > 0) {
+    document.title = "E2E-FAIL: " + failures[0].slice(5, 125);
+    report({ ok: false, phase: "verdict", failures, results });
+  } else {
+    document.title = "E2E-PASS";
+    report({ ok: true, phase: "verdict", results });
+  }
+} catch (e) {
+  if (!window.__done__) {
+    document.title = "E2E-FAIL: " + String((e && e.message) || e).slice(0, 120);
+    report({ ok: false, phase: "harness-error", error: String((e && e.message) || e).slice(0, 1000) });
+  }
+  document.getElementById("out").textContent += "\nHARNESS ERROR: " + (e && e.stack);
+}
+</script>
+</body>
+</html>
