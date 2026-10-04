@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Real-runtime parity</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Real-runtime parity harness page.
+//
+// Runs a Node.js test file inside a REAL CodeSandbox iframe — the full
+// pipeline (ImportResolver → transformImportsToLoadModule →
+// SandboxRuntime.generate → iframe bootstrap → postMessage results).
+// This catches sandbox-specific bugs the Node-based parity harness
+// (parity/run.mjs) cannot: the _RUNTIME_ → Symbol-keyed rewrite, CSP
+// restrictions, iframe postMessage behavior, etc.
+//
+// The test code (a JSON string (see TEST_CODE_MARKER)) is the Node test file with
+// require("../common") stripped. It executes in the sandbox with a real
+// createRequire: require("assert") and require("<builtin>") resolve through
+// the genuine loadModule pipeline to our shims.
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text, and
+// POST /report (crash-proof). No screenshots.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+// TEST_CODE_MARKER is a JSON string literal (JSON.stringify'd by the harness).
+// BUILTIN_MARKER is the builtin under test, for diagnostics.
+// FILENAME_MARKER is the test file basename (for __filename in CJS tests).
+const TEST_CODE = __TEST_CODE__;
+const BUILTIN = __BUILTIN__;
+const FILENAME = __FILENAME__;
+
+const userCode = [
+  'import { createRequire } from "node:module";',
+  'const require = createRequire(import.meta.url);',
+  // CJS test files expect __filename/__dirname; provide them from the harness.
+  'const __filename = ' + JSON.stringify(FILENAME) + ';',
+  'const __dirname = ".";',
+  'try {',
+  TEST_CODE,
+  '  console.log("__RESULT__" + JSON.stringify({ ok: true }));',
+  '} catch (e) {',
+  '  if (e && e.code === "TEST_SKIP") {',
+  '    console.log("__RESULT__" + JSON.stringify({ ok: true, skipped: true, reason: e.message }));',
+  '  } else {',
+  '    console.log("__RESULT__" + JSON.stringify({ ok: false, error: String((e && e.message) || e), stack: String((e && e.stack) || "") }));',
+  '  }',
+  '}',
+].join("\n");
+
+function parseResult(result) {
+  for (const entry of (result.logs || [])) {
+    let raw = typeof entry === "string" ? entry : JSON.stringify(entry);
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.args === "string") raw = parsed.args;
+    } catch (e) { /* raw stays */ }
+    const j = raw.indexOf("__RESULT__");
+    if (j !== -1) {
+      try { return JSON.parse(raw.slice(j + "__RESULT__".length)); }
+      catch (e) { return { ok: false, error: "result parse error: " + raw.slice(j, j + 200) }; }
+    }
+  }
+  return { ok: false, error: "no __RESULT__ marker in sandbox logs" };
+}
+
+try {
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+
+  const sandbox = new CodeSandbox({
+    fs: {},
+    fileName: "parity-test.mjs",
+    timeout: 60000,
+    process: { env: {} },
+    fallbackCDN: false,
+  });
+
+  const watchdog = setTimeout(() => {
+    if (!window.__done__) {
+      document.title = "E2E-FAIL: watchdog timeout";
+      report({ ok: false, checks: results, error: "watchdog timeout" });
+    }
+  }, 90000);
+
+  let verdict;
+  try {
+    const result = await sandbox.execute(userCode);
+    const r = parseResult(result);
+    check("test executed in sandbox", !r.error || r.ok, r.error);
+    check("test passed in sandbox (builtin: " + BUILTIN + ")", r.ok === true, r.error || r.stack);
+    const failed = results.filter((c) => c.startsWith("FAIL"));
+    verdict = { ok: failed.length === 0, checks: results };
+  } finally {
+    clearTimeout(watchdog);
+  }
+
+  document.title = verdict.ok ? "E2E-PASS" : "E2E-FAIL: " + results.filter((c) => c.startsWith("FAIL")).join("; ").slice(0, 200);
+  log(results.join("\n"));
+  report(verdict);
+} catch (e) {
+  const msg = "E2E-FAIL: harness: " + String((e && e.message) || e);
+  document.title = msg.slice(0, 200);
+  log(msg);
+  report({ ok: false, checks: results, error: String((e && e.stack) || e) });
+}
+</script>
+</body>
+</html>
