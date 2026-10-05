@@ -25,6 +25,8 @@ import {
   transpileTypeScript,
   flattenFileTree,
   builtinModules,
+  formatErrors,
+  customAcorn,
 } from "../../runtime.js";
 
 // ---------------------------------------------------------------------------
@@ -2042,7 +2044,7 @@ export function initPlayground({
     }
 
     // Pre-flight reference check (from the older runtime.js wiring).
-    const allowedGlobals = ["setImmediate", "fs", "interop", "type", "readline", "__dirname", "Buffer"];
+    const allowedGlobals = ["setImmediate", "fs", "interop", "type", "readline", "__dirname", "Buffer", "globalThis"];
     if (sandbox.requireAllowed) allowedGlobals.push("require");
 
     const t0 = performance.now();

@@ -388,7 +388,7 @@ function mergeProcess(user = {}, defaults = {}) {
 
 import _builtinModules from "https://esm.sh/builtin-modules";
 
-const builtinModules = [
+export const builtinModules = [
   ..._builtinModules,
   ...[
     "_http_agent",
@@ -502,7 +502,7 @@ export function transpileTypeScript(tsCode) {
   return result.outputText;
 }
 
-const customAcorn = acorn.Parser.extend(importAssertions);
+export const customAcorn = acorn.Parser.extend(importAssertions);
 
 //
 /**
@@ -9349,7 +9349,7 @@ class FormattedError extends Error {
   }
 }
 
-function formatErrors(code, err) {
+export function formatErrors(code, err) {
   const message = err?.message || "Unknown error";
 
   function _getContext(lines, lineNum, contextSize = 2) {
