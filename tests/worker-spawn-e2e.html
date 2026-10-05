@@ -127,7 +127,7 @@ try {
     const { markers } = await runCase(CodeSandbox, "worker-stderr", [
       'import { exec } from "node:child_process";',
       "const r = await new Promise((resolve) => {",
-      '  exec("node -e \'console.error(\"boom\")\'", (err, stdout, stderr) =>',
+      '  exec("node -e \'console.error(\\"boom\\")\'", (err, stdout, stderr) =>',
       "    resolve({ err: err ? err.message : null, stdout, stderr }));",
       "});",
       'console.log("__RESULT__" + JSON.stringify(r));',
