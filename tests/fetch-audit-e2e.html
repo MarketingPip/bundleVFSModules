@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Fetch Platform Audit</title></head>
+<body>
+<div id="out">Running...</div>
+<script type="module">
+// Fetch platform audit — runs in the browser (or sandbox) and reports
+// per-check results via document.title and POST /report.
+const report = (v) => {
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) {}
+};
+
+const checks = [];
+function check(name, fn) {
+  try {
+    const r = fn();
+    // Support async checks
+    if (r && typeof r.then === "function") {
+      return r.then(
+        () => checks.push({ name, pass: true }),
+        (e) => checks.push({ name, pass: false, error: String((e && e.message) || e) }),
+      );
+    }
+    checks.push({ name, pass: true });
+  } catch (e) {
+    checks.push({ name, pass: false, error: String((e && e.message) || e) });
+  }
+}
+
+function assertEqual(actual, expected, msg) {
+  if (actual !== expected) {
+    throw new Error(`${msg || "assertEqual"}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+function assertTrue(v, msg) {
+  if (!v) throw new Error(msg || `expected truthy, got ${JSON.stringify(v)}`);
+}
+function assertThrows(fn, ctor, msg) {
+  try { fn(); } catch (e) {
+    if (e instanceof ctor) return;
+    throw new Error(`${msg || "assertThrows"}: threw ${e.constructor.name}, expected ${ctor.name}`);
+  }
+  throw new Error(`${msg || "assertThrows"}: did not throw, expected ${ctor.name}`);
+}
+
+async function run() {
+  // ─── Headers ───
+  check("Headers: case-insensitive get", () => {
+    const h = new Headers({ "X-Custom-Header": "value1" });
+    assertEqual(h.get("x-custom-header"), "value1");
+    assertEqual(h.get("X-CUSTOM-HEADER"), "value1");
+  });
+  check("Headers: getSetCookie exists", () => {
+    assertEqual(typeof Headers.prototype.getSetCookie, "function", "getSetCookie type");
+  });
+  check("Headers: getSetCookie returns array", () => {
+    const h = new Headers();
+    h.append("set-cookie", "a=1; Path=/");
+    h.append("set-cookie", "b=2; Path=/");
+    const cookies = h.getSetCookie();
+    assertTrue(Array.isArray(cookies), "must be array");
+    assertEqual(cookies.length, 2, "length");
+    assertEqual(cookies[0], "a=1; Path=/", "first");
+    assertEqual(cookies[1], "b=2; Path=/", "second");
+  });
+  check("Headers: multi-value append joins with ', '", () => {
+    const h = new Headers();
+    h.append("x-multi", "1");
+    h.append("x-multi", "2");
+    assertEqual(h.get("x-multi"), "1, 2");
+  });
+  check("Headers: set() replaces", () => {
+    const h = new Headers({ "x-replace": "old" });
+    h.set("x-replace", "new");
+    assertEqual(h.get("x-replace"), "new");
+  });
+  check("Headers: invalid name throws TypeError", () => {
+    assertThrows(() => new Headers({ " bad name": "1" }), TypeError);
+  });
+  check("Headers: invalid value throws TypeError", () => {
+    assertThrows(() => new Headers({ x: "bad\nvalue" }), TypeError);
+  });
+  check("Headers: iteration is sorted by name", () => {
+    const h = new Headers({ "z-last": "1", "a-first": "2" });
+    const keys = [...h.keys()];
+    assertEqual(JSON.stringify(keys), JSON.stringify(["a-first", "z-last"]));
+  });
+
+  // ─── Response ───
+  check("Response: json() sets content-type", () => {
+    const r = Response.json({ a: 1 });
+    assertEqual(r.headers.get("content-type"), "application/json");
+  });
+  await check("Response: json() body parses", async () => {
+    const r = Response.json({ a: 1 });
+    const body = await r.json();
+    assertEqual(JSON.stringify(body), JSON.stringify({ a: 1 }));
+  });
+  check("Response: invalid status throws RangeError", () => {
+    assertThrows(() => new Response("x", { status: 999 }), RangeError);
+  });
+  check("Response: invalid statusText throws TypeError", () => {
+    assertThrows(() => new Response("x", { statusText: "Bad\nText" }), TypeError);
+  });
+  check("Response: redirect() sets status and location", () => {
+    const r = Response.redirect("https://example.com", 302);
+    assertEqual(r.status, 302);
+    assertEqual(r.headers.get("location"), "https://example.com/");
+  });
+  check("Response: error() has type error", () => {
+    const r = Response.error();
+    assertEqual(r.type, "error");
+    assertEqual(r.status, 0);
+  });
+
+  // ─── Request ───
+  check("Request: GET with body throws TypeError", () => {
+    assertThrows(
+      () => new Request("https://example.com", { method: "GET", body: "hi" }),
+      TypeError,
+    );
+  });
+  check("Request: POST with string body works", () => {
+    const r = new Request("https://example.com", { method: "POST", body: "hi" });
+    assertEqual(r.method, "POST");
+  });
+  check("Request: headers are accessible", () => {
+    const r = new Request("https://example.com", { headers: { "x-test": "1" } });
+    assertEqual(r.headers.get("x-test"), "1");
+  });
+  check("Request: url is normalized", () => {
+    const r = new Request("https://example.com/path");
+    assertEqual(r.url, "https://example.com/path");
+  });
+
+  // Wait for async checks
+  await new Promise((r) => setTimeout(r, 100));
+
+  const failed = checks.filter((c) => !c.pass);
+  const verdict = {
+    ok: failed.length === 0,
+    total: checks.length,
+    passed: checks.length - failed.length,
+    failed: failed.length,
+    checks,
+  };
+  document.getElementById("out").textContent = JSON.stringify(verdict, null, 2);
+  document.title = verdict.ok ? "E2E-PASS" : `E2E-FAIL: ${failed.length} failed`;
+  report(verdict);
+  window.__done__ = true;
+}
+
+run().catch((e) => {
+  document.title = "E2E-FAIL: " + String(e.message).slice(0, 100);
+  report({ ok: false, error: String(e.message), stack: String(e.stack) });
+});
+</script>
+</body>
+</html>
