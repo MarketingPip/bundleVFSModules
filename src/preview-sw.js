@@ -1,136 +1,213 @@
-// src/preview-sw.js — Service Worker for preview routing.
-//
-// Intercepts `/__virtual__/{port}/*` requests and routes them to guest
-// servers running in CodeSandbox iframes. This makes guest servers real
-// navigable URLs (address bar, iframes, new tabs) — patching `fetch` only
-// covers programmatic JS requests.
-//
-// Architecture:
-//   browser navigation → SW fetch handler → postMessage to host page →
-//   host forwards to sandbox via __httpServerRunTime.handleRequest →
-//   response bubbles back through the same channel.
-//
-// The SW is opt-in: the host must call `registerPreviewSW()` explicitly.
-// It never auto-registers (page-wide side effects).
-//
-// Limitations (honest):
-// - Requires HTTPS or localhost (Service Worker spec requirement).
-// - First-load race: the SW takes control on second navigation; the host
-//   should call `clients.claim()` or reload after registration.
-// - Streaming bodies: supported via ReadableStream where the sandbox
-//   returns chunks; falls back to buffered.
+/* src/preview-sw.js — Service Worker transport for preview routing.
+ *
+ * Intercepts `/__virtual__/{port}/*` and routes each request to the guest
+ * HTTP server on that port, via a postMessage round-trip to a host-page
+ * client. The host page (src/plugins/preview-routing.js) is the authority:
+ * it parses the URL, owns the port→handler registry, and answers.
+ *
+ * This file is intentionally a THIN TRANSPORT with no imports (classic SW
+ * script = maximum browser compat). It does not validate ports, own
+ * routing state, or know about sandboxes. All policy lives host-side.
+ *
+ * Message protocol:
+ *   SW → host:  { type: "bvm:preview-request", id, port, method,
+ *                 pathname, search, headers, body }
+ *   host → SW:  { type: "bvm:preview-response", id, ok, result | error }
+ *
+ * Serve this file at (or under) the SW scope, e.g.
+ * `/__virtual__/preview-sw.js` with scope `/__virtual__/`, so no
+ * `Service-Worker-Allowed` header is needed.
+ */
 
-const VIRTUAL_PREFIX = "/__virtual__/";
+"use strict";
 
-// Parse /__virtual__/{port}/path → {port, path} or null.
-function parseVirtualUrl(url) {
-  try {
-    const u = new URL(url);
-    if (!u.pathname.startsWith(VIRTUAL_PREFIX)) return null;
-    const rest = u.pathname.slice(VIRTUAL_PREFIX.length);
-    const slashIdx = rest.indexOf("/");
-    const portStr = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
-    const path = slashIdx === -1 ? "/" : rest.slice(slashIdx);
-    const port = parseInt(portStr, 10);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-    return { port, path: path + u.search, portStr };
-  } catch {
-    return null;
-  }
+var PREVIEW_REQUEST_TIMEOUT_MS = 20000;
+
+// Coarse pre-filter: is this even shaped like a preview URL? The host
+// re-parses authoritatively (parsePreviewUrl); anything invalid there
+// comes back as a 400. Keep this regex in sync with the host's.
+var PREVIEW_RE = /^\/__virtual__\/(\d+)(?=[\/?]|$)/;
+var SELF_NAME = "preview-sw.js";
+
+function isPreviewPath(pathname) {
+  if (pathname.indexOf("/__virtual__/") !== 0) return false;
+  // Never intercept our own script (update checks must reach the server).
+  if (pathname.slice(-SELF_NAME.length) === SELF_NAME) return false;
+  return PREVIEW_RE.test(pathname);
 }
 
-// Ask the host page to route this request to the sandbox.
-// Returns a Promise<Response>.
-function routeToSandbox(port, path, request) {
-  return new Promise((resolve, reject) => {
-    const channel = new MessageChannel();
-    const timeoutId = setTimeout(() => {
-      reject(new Error(`Preview routing timeout for port ${port}`));
-    }, 30000);
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
-    channel.port1.onmessage = (event) => {
-      clearTimeout(timeoutId);
-      const { status, headers, body } = event.data;
-      if (event.data.error) {
-        reject(new Error(event.data.error));
-        return;
-      }
-      resolve(
-        new Response(body, {
-          status: status || 200,
-          headers: headers || {},
-        }),
-      );
-    };
+// Transport-level error page. The canonical builder is
+// buildPreviewErrorHtml in src/plugins/preview-routing.js (unit-tested);
+// this local copy only covers failures where the host never answered, so
+// the two can never meaningfully drift.
+function errorPage(status, message, port) {
+  var hint = port
+    ? "<p>No guest server answered on port " +
+      port +
+      ". Start one in the sandbox, e.g. <code>http.createServer((req, res) =&gt; res.end(\"hi\")).listen(" +
+      port +
+      ")</code>.</p>"
+    : "";
+  return (
+    "<!doctype html><html><head><meta charset=\"utf-8\">" +
+    "<title>Preview error " +
+    status +
+    "</title></head>" +
+    '<body style="font-family:system-ui,sans-serif;max-width:60ch;margin:4rem auto;padding:0 1rem">' +
+    "<h1>Preview error " +
+    status +
+    "</h1><p>" +
+    escapeHtml(message) +
+    "</p>" +
+    hint +
+    "</body></html>"
+  );
+}
 
-    // Collect request body for POST/PUT/PATCH.
-    const sendRequest = (bodyBuffer) => {
-      // Find the host client (the page that registered us).
-      self.clients
-        .matchAll({ type: "window", includeUncontrolled: true })
-        .then((clients) => {
-          if (clients.length === 0) {
-            clearTimeout(timeoutId);
-            reject(new Error("No host page found for preview routing"));
-            return;
-          }
-          // Prefer the focused client, else the first.
-          const client =
-            clients.find((c) => c.focused) || clients[0];
-          client.postMessage(
-            {
-              type: "__BVM_PREVIEW_REQUEST__",
-              port,
-              path,
-              method: request.method,
-              headers: Object.fromEntries(request.headers.entries()),
-              body: bodyBuffer,
-            },
-            [channel.port2],
-          );
-        });
-    };
-
-    if (request.method === "GET" || request.method === "HEAD") {
-      sendRequest(null);
-    } else {
-      request
-        .arrayBuffer()
-        .then((buf) => sendRequest(buf))
-        .catch((err) => {
-          clearTimeout(timeoutId);
-          reject(err);
-        });
-    }
+function errorResponse(status, message, port) {
+  return new Response(errorPage(status, message, port), {
+    status: status,
+    headers: { "content-type": "text/html; charset=utf-8" },
   });
 }
 
-self.addEventListener("fetch", (event) => {
-  const parsed = parseVirtualUrl(event.request.url);
-  if (!parsed) return; // not ours — let it through
-
-  event.respondWith(
-    routeToSandbox(parsed.port, parsed.path, event.request).catch(
-      (err) => {
-        // 502 with a clear message — never hang.
-        return new Response(
-          `Preview routing failed for port ${parsed.port}: ${err.message}`,
-          {
-            status: 502,
-            headers: { "Content-Type": "text/plain" },
-          },
-        );
-      },
-    ),
+function makeId() {
+  return (
+    "pr_" + Math.random().toString(36).slice(2) + Date.now().toString(36)
   );
+}
+
+// Ask every window client; the one with the preview bridge answers.
+// First matching reply wins. Resolves { ok, result|error } — never rejects,
+// so the fetch handler can never hang: worst case is a 504 page.
+function askHost(message, transfer) {
+  return self.clients
+    .matchAll({ type: "window", includeUncontrolled: true })
+    .then(function (clients) {
+      if (!clients.length) {
+        return {
+          ok: false,
+          error: {
+            code: "NO_CLIENT",
+            message: "Preview router has no client page to answer",
+          },
+        };
+      }
+      return new Promise(function (resolve) {
+        var done = false;
+        var timer = setTimeout(function () {
+          if (done) return;
+          done = true;
+          self.removeEventListener("message", onMessage);
+          resolve({
+            ok: false,
+            error: {
+              code: "TIMEOUT",
+              message: "Preview request timed out waiting for the host page",
+            },
+          });
+        }, PREVIEW_REQUEST_TIMEOUT_MS);
+        function onMessage(event) {
+          var d = event.data;
+          if (
+            !d ||
+            d.type !== "bvm:preview-response" ||
+            d.id !== message.id ||
+            done
+          ) {
+            return;
+          }
+          done = true;
+          clearTimeout(timer);
+          self.removeEventListener("message", onMessage);
+          resolve(d);
+        }
+        self.addEventListener("message", onMessage);
+        clients.forEach(function (c) {
+          try {
+            c.postMessage(message, transfer);
+          } catch (e) {
+            /* client went away; others may answer */
+          }
+        });
+      });
+    });
+}
+
+function handlePreview(event) {
+  var url = new URL(event.request.url);
+  var m = PREVIEW_RE.exec(url.pathname);
+  var port = m ? Number(m[1]) : null;
+  var req = event.request;
+
+  var bodyPromise =
+    req.method === "GET" || req.method === "HEAD"
+      ? Promise.resolve(null)
+      : req.arrayBuffer().catch(function () {
+          return null;
+        });
+
+  return bodyPromise.then(function (body) {
+    var headers = {};
+    req.headers.forEach(function (v, k) {
+      headers[k] = v;
+    });
+    var id = makeId();
+    var msg = {
+      type: "bvm:preview-request",
+      id: id,
+      port: port,
+      method: req.method,
+      pathname: url.pathname,
+      search: url.search,
+      headers: headers,
+      body: body,
+    };
+    var transfer = body && body.byteLength ? [body] : [];
+    return askHost(msg, transfer).then(function (reply) {
+      if (!reply.ok) {
+        var err = reply.error || {};
+        var status =
+          err.code === "NO_ROUTE" || err.code === "NO_CLIENT" ? 502 : 500;
+        if (err.code === "TIMEOUT") status = 504;
+        if (err.code === "BAD_URL") status = 400;
+        return errorResponse(status, err.message || "Preview failed", port);
+      }
+      var r = reply.result || {};
+      return new Response(r.body || null, {
+        status: r.statusCode || 200,
+        statusText: r.statusMessage || "",
+        headers: r.headers || {},
+      });
+    });
+  });
+}
+
+self.addEventListener("install", function (event) {
+  // Activate immediately: the test/host page registers us and then opens
+  // preview iframes without reloading.
+  event.waitUntil(self.skipWaiting());
 });
 
-// Take control immediately on install (host should still handle the
-// first-load race by reloading or waiting for controllerchange).
-self.addEventListener("install", (event) => {
-  self.skipWaiting();
-});
-
-self.addEventListener("activate", (event) => {
+self.addEventListener("activate", function (event) {
   event.waitUntil(self.clients.claim());
+});
+
+self.addEventListener("fetch", function (event) {
+  var url;
+  try {
+    url = new URL(event.request.url);
+  } catch (e) {
+    return;
+  }
+  if (!isPreviewPath(url.pathname)) return;
+  event.respondWith(handlePreview(event));
 });
