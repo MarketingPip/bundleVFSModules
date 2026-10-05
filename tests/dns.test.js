@@ -56,6 +56,16 @@ const STUB_ANSWERS = {
     { name: "stub.test", type: "A", ttl: 100, data: "93.184.216.34" },
     { name: "stub.test", type: "A", ttl: 200, data: "93.184.216.35" },
   ],
+  "A|nocache.stub.test": [
+    { name: "nocache.stub.test", type: "A", ttl: 0, data: "93.184.216.36" },
+  ],
+  "A|cache1.stub.test": [
+    { name: "cache1.stub.test", type: "A", ttl: 100, data: "93.184.216.34" },
+    { name: "cache1.stub.test", type: "A", ttl: 200, data: "93.184.216.35" },
+  ],
+  "A|cache2.stub.test": [
+    { name: "cache2.stub.test", type: "A", ttl: 100, data: "93.184.216.37" },
+  ],
   "AAAA|stub.test": [
     {
       name: "stub.test",
@@ -195,6 +205,7 @@ function base64UrlDecode(s) {
 let stubServer;
 let stubBase;
 let lastQueryFlags = 0;
+let stubRequestCount = 0;
 
 function stubResponse(query, spec) {
   const rcode = spec.rcode || "NOERROR";
@@ -214,6 +225,7 @@ function stubResponse(query, spec) {
 function startStub() {
   return new Promise((resolveStart) => {
     stubServer = http.createServer((req, res) => {
+      stubRequestCount++;
       const u = new URL(req.url, "http://x");
       let query;
       try {
@@ -396,6 +408,65 @@ describe("dns (DoH shim)", () => {
       delete arr[0];
       setServers(arr);
       expect(getServers()).toEqual(["1.1.1.1"]);
+    } finally {
+      setServers(prev);
+    }
+  });
+
+  test("cache: second identical query served without network", async () => {
+    const prev = getServers();
+    setServers([stubBase]);
+    try {
+      stubRequestCount = 0;
+      const [first] = await cbPromise(resolve4, "cache1.stub.test");
+      expect(first).toEqual(["93.184.216.34", "93.184.216.35"]);
+      expect(stubRequestCount).toBe(1);
+      const [second] = await cbPromise(resolve4, "cache1.stub.test");
+      expect(second).toEqual(["93.184.216.34", "93.184.216.35"]);
+      expect(stubRequestCount).toBe(1);
+    } finally {
+      setServers(prev);
+    }
+  });
+
+  test("cache: TTL=0 responses never cached", async () => {
+    const prev = getServers();
+    setServers([stubBase]);
+    try {
+      stubRequestCount = 0;
+      await cbPromise(resolve4, "nocache.stub.test");
+      expect(stubRequestCount).toBe(1);
+      await cbPromise(resolve4, "nocache.stub.test");
+      expect(stubRequestCount).toBe(2);
+    } finally {
+      setServers(prev);
+    }
+  });
+
+  test("cache: setServers invalidates cache", async () => {
+    const prev = getServers();
+    setServers([stubBase]);
+    try {
+      stubRequestCount = 0;
+      await cbPromise(resolve4, "cache2.stub.test");
+      expect(stubRequestCount).toBe(1);
+      setServers([stubBase]);
+      await cbPromise(resolve4, "cache2.stub.test");
+      expect(stubRequestCount).toBe(2);
+    } finally {
+      setServers(prev);
+    }
+  });
+
+  test("cache: NXDOMAIN not cached", async () => {
+    const prev = getServers();
+    setServers([stubBase]);
+    try {
+      stubRequestCount = 0;
+      await expect(cbPromise(resolve4, "nonexistent.stub.test")).rejects.toMatchObject({ code: "ENOTFOUND" });
+      expect(stubRequestCount).toBe(1);
+      await expect(cbPromise(resolve4, "nonexistent.stub.test")).rejects.toMatchObject({ code: "ENOTFOUND" });
+      expect(stubRequestCount).toBe(2);
     } finally {
       setServers(prev);
     }
