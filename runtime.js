@@ -180,6 +180,12 @@ function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
     typeof specifier === "string" && specifier.indexOf("node:") === 0
       ? specifier.slice(5)
       : specifier;
+  // esm.sh-style builtin paths: "/node/buffer.mjs" or "/node/buffer.js"
+  // (emitted by esm.sh builds of npm packages). Strip to the bare name.
+  if (typeof bare === "string") {
+    var esmNodeMatch = bare.match(/^\/node\/([^\/]+?)(?:\.mjs|\.js)?$/);
+    if (esmNodeMatch) bare = esmNodeMatch[1];
+  }
   var listed = false;
   // Also match the underscore-normalized bundle-key form: some
   // bundlers/transforms emit 'fs_promises' for builtin 'fs/promises'.
@@ -1921,7 +1927,6 @@ export class SyntaxChecker {
   }
 }
 
-
 // NOTE: The reference-error checker (generateGlobalBuiltInsSet,
 // checkForReferenceErrors, checkForReferenceErrors2, refCheck) lived here.
 // It was playground-only, so it moved to src/ui/playground.js.
@@ -2630,7 +2635,11 @@ ${code}
        // through the parent _dynamic_import + _build_file interop instead — the
        // parent already normalizes file:// → absolute VFS path. Any file://
        // import was broken, not just Vite's terser path.
-       if (specifier.startsWith("file://") || specifier.startsWith("/")) {
+       // Exception: a "/..." specifier whose parentURL is https:// is a
+       // CDN-relative URL (esm.sh emits "/pkg@ver?target=..." imports), not
+       // a VFS path — let defaultResolve handle it against the parent origin.
+       var bvmParentIsHttps = typeof parentURL === "string" && parentURL.indexOf("https://") === 0;
+       if (specifier.startsWith("file://") || (specifier.startsWith("/") && !bvmParentIsHttps)) {
          var bvmFilePath = specifier;
          if (bvmFilePath.startsWith("file://")) {
            bvmFilePath = bvmFilePath.slice("file://".length);
@@ -9312,7 +9321,6 @@ export function createSandbox(options = {}) {
 // handlers, and the `examples` snippet map) lived here. It moved to
 // src/ui/playground.js — runtime.js is a pure library with no demo UI.
 
-
 // NOTE: The playground DOM helpers (getArgv, toggleArgvInput, filesDiv,
 // initPlayground, and the __BVM_DISABLE_PLAYGROUND auto-init guard) lived
 // here. They moved to src/ui/playground.js.
@@ -9439,8 +9447,6 @@ function formatErrors2(code, err) {
   return new FormattedError(err, formattedMessage);
 }
 
-
-
 // 2. Then declare your helper function and main function
 
 // Normalize the 'seaAssets' sandbox option into a JSON-safe map for the
@@ -9560,7 +9566,6 @@ export function flattenFileTree(obj, parentPath = "") {
   }
   return flat;
 }
-
 
 // NOTE: The files-panel UI (activeBlobUrls, detectMimeType, renderFiles,
 // renderFiles2) lived here at the end of the module. It moved to
