@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(__dirname, "..");
 const SEED_SCRIPT = path.join(REPO, "scripts", "build-vite-seed.mjs");
-const OUT = "/tmp/test-vite-seed-worker.json";
+const OUT = `/tmp/test-vite-seed-worker-${process.pid}.json`;
 
 /**
  * The WASI worker (@rolldown/browser/dist/wasi-worker-browser.mjs) is

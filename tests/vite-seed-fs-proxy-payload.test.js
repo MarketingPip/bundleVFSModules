@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(__dirname, "..");
 const SEED_SCRIPT = path.join(REPO, "scripts", "build-vite-seed.mjs");
-const OUT = "/tmp/test-vite-seed-fs-payload.json";
+const OUT = `/tmp/test-vite-seed-fs-payload-${process.pid}.json`;
 
 // Raised from the upstream 10KB: vite.build() inside the WASI binding
 // returns fs responses (readdir listings, file reads) larger than 10KB,

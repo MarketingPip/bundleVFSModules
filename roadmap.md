@@ -187,10 +187,12 @@ bytes" and "run wasm bytes on my VFS".
     fixture needs `vite:esbuild-transpile`.
   - ~~Proper `expect-type` support~~ — **done 2026-09-29** (PR #132):
     general TS CJS interop; M4 re-verified stub-free.
-  - Canonicalize Rollup WASM data-URL loading into the runtime
-    package-loading path (currently harness-only).
-  - Red-first test proving the `@rollup/browser` ESM interception target
-    and named exports.
+  - ~~Canonicalize Rollup WASM data-URL loading into the runtime
+    package-loading path~~ — **done**: `inlineWasmDataUrls` lives in
+    `runtime.js` and is wired into the canonical serve path.
+  - ~~Red-first test proving the `@rollup/browser` ESM interception target
+    and named exports~~ — **done** (`tests/rollup-esm-named-exports.test.js`,
+    3/3).
 
 ### 3. Full-suite open-handle investigation
 
