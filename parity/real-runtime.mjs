@@ -50,6 +50,28 @@ export function parseNodeResult(r) {
 }
 
 /**
+ * Hoist top-level ESM `import` statements out of test code.
+ *
+ * The browser-lane HTML template embeds the test code inside a `try {}`
+ * block, where `import` declarations are a syntax error. Native Node
+ * accepts them, so without hoisting the browser lane crashes on any ESM
+ * test file (e.g. `import assert from "node:assert"`) while the node lane
+ * passes — a harness bug, not a shim bug.
+ *
+ * Returns { hoisted: string[], body: string }. Only static imports on
+ * their own line(s) are hoisted; dynamic import() is left in place.
+ */
+export function hoistEsmImports(testCode) {
+  const importRe = /^[ \t]*import[ \t]+(?:[^'";]+?[ \t]+from[ \t]+)?['"][^'"]+['"][ \t]*;?[ \t]*$/gm;
+  const hoisted = [];
+  const body = testCode.replace(importRe, (m) => {
+    hoisted.push(m.trim());
+    return "";
+  });
+  return { hoisted, body };
+}
+
+/**
  * Transform a Node.js test file for execution in the browser sandbox.
  *
  * - Replaces `require("../common")` (and variants) with a minimal stub:
@@ -134,17 +156,27 @@ export function runNodeNative(testFile) {
  */
 export function generateHtml(testCode, { builtin, filename, outDir } = {}) {
   const template = fs.readFileSync(templatePath, "utf8");
-  for (const marker of ["__TEST_CODE__", "__BUILTIN__", "__FILENAME__"]) {
+  for (const marker of ["__TEST_CODE__", "__BUILTIN__", "__FILENAME__", "__HOISTED_IMPORTS__"]) {
     if (!template.includes(marker)) {
       throw new Error(`real-runtime.html template missing ${marker} marker`);
     }
   }
+  // Hoist ESM imports out of the test body (they can't live inside try {}).
+  const { hoisted, body } = hoistEsmImports(testCode);
   // Escape for embedding in a <script> block: break out of </script> and
   // template-literal hazards. The test code is embedded as a JS string
   // literal via JSON.stringify, so only </script> needs neutralizing.
-  const safe = JSON.stringify(testCode).replace(/<\/script/gi, "<\\/script");
+  const safe = JSON.stringify(body).replace(/<\/script/gi, "<\\/script");
+  // Hoisted imports become string elements of the userCode array in the
+  // template (they're joined with "\n" before execution).
+  const hoistedSrc = hoisted.length
+    ? hoisted
+        .map((line) => JSON.stringify(line).replace(/<\/script/gi, "<\\/script"))
+        .join(",\n  ") + ","
+    : "";
   const html = template
     .replaceAll("__TEST_CODE__", () => safe)
+    .replaceAll("__HOISTED_IMPORTS__", () => hoistedSrc)
     .replaceAll("__BUILTIN__", () => JSON.stringify(builtin || ""))
     .replaceAll("__FILENAME__", () => JSON.stringify(filename || "test.js"));
   const dir = outDir || fs.mkdtempSync(path.join(os.tmpdir(), "real-runtime-"));

@@ -44,6 +44,9 @@ const FILENAME = __FILENAME__;
 const userCode = [
   'import { createRequire } from "node:module";',
   'const require = createRequire(import.meta.url);',
+  // Hoisted ESM imports (extracted server-side by hoistEsmImports — `import`
+  // declarations are only valid at module top level, not inside the try {}).
+  __HOISTED_IMPORTS__
   // CJS test files expect __filename/__dirname; provide them from the harness.
   'const __filename = ' + JSON.stringify(FILENAME) + ';',
   'const __dirname = ".";',
