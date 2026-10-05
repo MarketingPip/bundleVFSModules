@@ -148,20 +148,31 @@ bytes" and "run wasm bytes on my VFS".
   API is still open.
 - A Sharp-style Node-API→WASM port writeup as the template: "not supported"
   becomes a porting guide, never a dead end.
-- Evaluate `reclaimprotocol/tls` as the `tls.js` dependency instead of
-  hand-rolled crypto — custom license, check terms before vendoring; needs
-  a byte transport (WS→TCP bridge or the future Node.js-hosted lane).
+- ~~Evaluate `reclaimprotocol/tls` as the `tls.js` dependency instead of
+  hand-rolled crypto~~ — **verdict 2026-10-05: do not vendor.** License is
+  MIT text (CreatorOS Inc., non-standard location — the "custom" flag was
+  about placement, not terms), and the API is transport-agnostic
+  (`write`/`onRead` callbacks, no hard `net.Socket` dep). But no byte
+  transport exists in the browser runtime (no raw TCP; WS→TCP bridge and
+  Node.js-hosted lane are both future) — a real TLS client with nothing to
+  connect to is worse than the current honest stub. Revisit when a byte
+  transport exists.
 - **OUT**: esbuild-wasm anywhere — way too heavy for this project; our
   `_build_file` transform stays the CJS→ESM path.
 
 ### 2. Interop audit leftovers
 
-- Fix possibly reversed direction headings in interop docs.
-- Update the main `__serverRequest__` example from the legacy argument
-  order.
+- ~~Fix possibly reversed direction headings in interop docs.~~ — **done
+  2026-10-03 (PR #173)**
+- ~~Update the main `__serverRequest__` example from the legacy argument
+  order.~~ — **done 2026-10-03 (PR #173)**
 - Complete Chrome 137 verification: iframe / postMessage /
   `sandbox.invoke()` and the cookie wrapper.
-- Resolve the runtime-template source of truth.
+- ~~Resolve the runtime-template source of truth.~~ — **done 2026-10-03
+  (PR #173)**: documented in `docs/INTEROP.md` — live template is the
+  inline literal returned by `_getState` in `runtime.js`;
+  `src/sandbox/*.js` + `src/build-sandbox.mjs` pipeline is built but
+  unwired (migrating is a separate project).
 - **Framework integrations (must):** Vite/Next copy-based setup + plugins
   so host apps serve runtime assets and previews (Nodepod's
   `src/integrations/vite.ts`, `next.ts` pattern) — zero manual wiring for
