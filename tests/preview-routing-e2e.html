@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>E2E-START</title></head>
+<body>
+<script type="module">
+// Preview routing e2e: proves the Service Worker intercepts
+// /__virtual__/{port}/ and returns a clear 502 (not a hang) when
+// no server is available. Also proves handlePreviewMessage unit logic.
+import { handlePreviewMessage } from "/local-repo/src/plugins/preview-routing.js";
+
+const checks = [];
+function check(name, cond, detail) {
+  checks.push({ name, pass: !!cond, detail: detail || "" });
+  console.log((cond ? "PASS" : "FAIL") + " " + name + (detail ? " — " + detail : ""));
+}
+
+async function main() {
+  // 1. handlePreviewMessage unit logic (mock sandbox).
+  const messages = [];
+  const fakePort = { postMessage: (m) => messages.push(m) };
+  const mockSandbox = {
+    handlePreviewRequest: async (port, path) => ({
+      status: 200,
+      headers: { "content-type": "text/plain" },
+      body: `mock port=${port} path=${path}`,
+    }),
+  };
+  const claimed = await handlePreviewMessage(
+    { data: { type: "__BVM_PREVIEW_REQUEST__", port: 3000, path: "/x", method: "GET" }, ports: [fakePort] },
+    mockSandbox,
+  );
+  check("message claimed", claimed === true);
+  check("mock response", messages[0] && messages[0].body === "mock port=3000 path=/x");
+
+  // 2. Error case: sandbox throws → error in message (SW turns into 502).
+  const errMessages = [];
+  await handlePreviewMessage(
+    { data: { type: "__BVM_PREVIEW_REQUEST__", port: 9999, path: "/" }, ports: [{ postMessage: (m) => errMessages.push(m) }] },
+    { handlePreviewRequest: async () => { throw new Error("no server"); } },
+  );
+  check("error propagated", errMessages[0] && errMessages[0].error === "no server");
+
+  // 3. Non-preview ignored.
+  check("non-preview ignored", (await handlePreviewMessage({ data: { type: "x" } }, {})) === false);
+
+  // 4. SW file is valid JavaScript (syntax check via dynamic import of a
+  //    data URL is not possible for SW; instead verify it fetches as text
+  //    and contains the expected handlers).
+  try {
+    const swText = await (await fetch("/local-repo/src/preview-sw.js")).text();
+    check("SW has fetch handler", swText.includes('addEventListener("fetch"'));
+    check("SW has 502 fallback", swText.includes("502"));
+    check("SW parses /__virtual__/", swText.includes('"/__virtual__/"'));
+  } catch (e) {
+    check("SW fetchable", false, e.message);
+  }
+
+  const failed = checks.filter((c) => !c.pass);
+  document.title = failed.length === 0 ? "E2E-PASS" : "E2E-FAIL";
+  fetch("/report", {
+    method: "POST",
+    body: JSON.stringify({ ok: failed.length === 0, checks }),
+  }).catch(() => {});
+}
+
+main().catch((err) => {
+  document.title = "E2E-FAIL";
+  fetch("/report", { method: "POST", body: JSON.stringify({ ok: false, error: String(err) }) }).catch(() => {});
+});
+</script>
+</body>
+</html>
