@@ -9,6 +9,7 @@ import {
   parseNodeResult,
   transformForBrowser,
   computeVerdict,
+  hoistEsmImports,
 } from "../parity/real-runtime.mjs";
 
 describe("parseNodeResult", () => {
@@ -140,5 +141,46 @@ describe("computeVerdict", () => {
 
   test("error → exit 2 (harness issue, not a parity failure)", () => {
     expect(computeVerdict({ verdict: "error", detail: "x" }).exitCode).toBe(2);
+  });
+});
+
+describe("hoistEsmImports", () => {
+  test("hoists a default import", () => {
+    const { hoisted, body } = hoistEsmImports(
+      'import assert from "node:assert";\nassert.ok(true);\n'
+    );
+    expect(hoisted).toEqual(['import assert from "node:assert";']);
+    expect(body).not.toContain("import assert");
+    expect(body).toContain("assert.ok(true);");
+  });
+
+  test("hoists named and side-effect imports", () => {
+    const { hoisted, body } = hoistEsmImports(
+      'import { strict } from "node:assert";\nimport "node:path";\nstrict.ok(true);\n'
+    );
+    expect(hoisted).toHaveLength(2);
+    expect(hoisted[0]).toContain('from "node:assert"');
+    expect(hoisted[1]).toBe('import "node:path";');
+    expect(body).not.toContain("import");
+  });
+
+  test("leaves CJS require() untouched", () => {
+    const code = 'const assert = require("node:assert");\nassert.ok(true);\n';
+    const { hoisted, body } = hoistEsmImports(code);
+    expect(hoisted).toEqual([]);
+    expect(body).toBe(code);
+  });
+
+  test("leaves dynamic import() in place", () => {
+    const code = 'const m = await import("node:path");\n';
+    const { hoisted, body } = hoistEsmImports(code);
+    expect(hoisted).toEqual([]);
+    expect(body).toContain('import("node:path")');
+  });
+
+  test("does not hoist the word import inside strings", () => {
+    const code = 'console.log("import assert from x");\n';
+    const { hoisted } = hoistEsmImports(code);
+    expect(hoisted).toEqual([]);
   });
 });
