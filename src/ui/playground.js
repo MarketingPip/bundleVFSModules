@@ -1372,7 +1372,7 @@ function detectMimeType(uint8) {
 // Keep track of active blob URLs globally or in closure scope so we can clean them up
 let activeBlobUrls = [];
 
-function renderFiles(filesObj) {
+export function renderFiles(filesObj) {
   const filesDiv = getFilesDiv();
   if (!filesDiv) return; // no files panel (minimal host page) — nothing to render
   if (!filesObj) filesObj = {};
@@ -1503,7 +1503,7 @@ function renderFiles(filesObj) {
   });
 }
 
-function renderFiles2(filesObj) {
+export function renderFiles2(filesObj) {
   if (!filesObj) filesObj = {};
   const filesDiv = getFilesDiv();
   if (!filesDiv) return;
