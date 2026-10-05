@@ -453,6 +453,55 @@ function base64UrlEncode(bytes) {
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+// ---------------------------------------------------------------------------
+// Response cache (module-level, per-module-instance per SINGLETONS.md).
+// Key: `${type}|${lowercasedName}`. Value: {body, expiresAt}.
+// TTL: minimum answer TTL, capped at 5 minutes. Only NOERROR responses with
+// answers are cached; NXDOMAIN and errors are never cached (no negative
+// caching — matches Node's c-ares behavior).
+// ---------------------------------------------------------------------------
+
+const MAX_CACHE_TTL_MS = 5 * 60 * 1000;
+const responseCache = new Map();
+
+function cacheKey(name, type) {
+  return `${type}|${String(name).toLowerCase()}`;
+}
+
+function getCachedResponse(name, type) {
+  const key = cacheKey(name, type);
+  const entry = responseCache.get(key);
+  if (!entry) return null;
+  if (Date.now() >= entry.expiresAt) {
+    responseCache.delete(key);
+    return null;
+  }
+  return entry.body;
+}
+
+function setCachedResponse(name, type, body) {
+  if (!body || body.rcode !== "NOERROR") return;
+  let minTtl = Infinity;
+  let hasAnswers = false;
+  for (const a of body.answers || []) {
+    if (typeof a.ttl === "number" && a.ttl >= 0) {
+      hasAnswers = true;
+      if (a.ttl < minTtl) minTtl = a.ttl;
+    }
+  }
+  if (!hasAnswers || !isFinite(minTtl)) return;
+  const ttlMs = Math.min(minTtl * 1000, MAX_CACHE_TTL_MS);
+  if (ttlMs <= 0) return;
+  responseCache.set(cacheKey(name, type), {
+    body,
+    expiresAt: Date.now() + ttlMs,
+  });
+}
+
+function clearResponseCache() {
+  responseCache.clear();
+}
+
 async function dohFetchOne(base, name, type, signal) {
   // RFC 8484 §4.1 GET: ?dns=<base64url(wire)>, Accept: application/dns-message.
   // The DNS ID is 0 per the RFC's cache-friendliness guidance; dns-packet
@@ -501,6 +550,10 @@ async function dohQuery(servers, name, type, { signal, timeoutMs } = {}) {
   if (typeof globalThis.fetch !== "function") {
     throw dnsError("query", "EAI_AGAIN", name);
   }
+  if (!signal || !signal.aborted) {
+    const cached = getCachedResponse(name, type);
+    if (cached) return cached;
+  }
   let timer;
   let timedOut = false;
   let ctrl = null;
@@ -525,7 +578,10 @@ async function dohQuery(servers, name, type, { signal, timeoutMs } = {}) {
     for (const base of usableDohServers(servers)) {
       try {
         const body = await dohFetchOne(base, name, type, effSignal);
-        if (body.rcode === "NOERROR" || body.rcode === "NXDOMAIN") return body; // terminal
+        if (body.rcode === "NOERROR" || body.rcode === "NXDOMAIN") {
+          setCachedResponse(name, type, body);
+          return body;
+        } // terminal
         lastErr = dnsError(
           SYSCALL_FOR_TYPE[type] || "query",
           rcodeToCode(body.rcode),
@@ -750,6 +806,7 @@ export function setServers(servers) {
   // Real node:dns's module-level setServers() never throws for pending
   // queries (only Resolver instances do); mirror that.
   defaultServers = validateServerList(servers);
+  clearResponseCache();
 }
 
 export function getDefaultResultOrder() {
