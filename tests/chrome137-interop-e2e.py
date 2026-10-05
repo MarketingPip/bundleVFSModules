@@ -12,6 +12,7 @@ virtual cookie jar through the HTTP server wrapper.
 
 Usage: xvfb-run -a /home/hatch/workspace/venvs/ffauto/bin/python tests/chrome137-interop-e2e.py [port]
 """
+import os
 import subprocess
 import sys
 import time
@@ -20,7 +21,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8933
-REPO = Path("/home/hatch/workspace/worktrees/bvm-chrome137")
+REPO = Path(os.environ.get("REPO", Path(__file__).resolve().parent.parent))
 CDN_BASE = "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/"
 MIME = {
     ".js": "text/javascript",
