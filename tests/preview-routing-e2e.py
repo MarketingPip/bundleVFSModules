@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BYO shell browser consumption-proof driver.
+"""Preview routing browser proof driver.
 
 Serves the worktree at /local-repo (runtime.js with ONLY _builtinBaseUrl
 rewritten to the local worktree dist/ — the repo file is untouched), loads
@@ -7,11 +7,11 @@ tests/preview-routing-e2e.html in headed Firefox under Xvfb, waits for the
 E2E verdict via document.title AND POST /report (crash-proof), exits 0 on
 E2E-PASS, 1 otherwise.
 
-Proves the real public surface: `new CodeSandbox({ shell })` routes
-child_process calls to the developer's shell function in a real browser
-sandbox (supplied shell, missing-shell error, thrown/rejected shell
-errors, command/args/options forwarding, sync APIs, async exec/spawn,
-Promise rejected by sync APIs).
+Proves preview routing: a Service Worker intercepts `/__virtual__/{port}/*`
+and routes real navigation requests to the guest http server via the host
+page bridge (SW -> postMessage -> sandbox.invoke("__serverRequest__")).
+Covers iframe navigation to a live guest server, the 502 page for an
+unclaimed port, and a POST echo round-trip.
 
 Usage: xvfb-run -a /home/hatch/workspace/venvs/ffauto/bin/python tests/preview-routing-e2e.py [port]
 """
@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8933
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8934
 # REPO defaults to the enclosing repo (the driver's own checkout) so the
 # driver tests the tree it's run from — not a hardcoded checkout that may
 # be on a different branch. Override with REPO=/path/to/repo to test
@@ -72,6 +72,10 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         p = unquote(self.path.split("?", 1)[0])
         try:
+            if p == "/__virtual__/preview-sw.js":
+                # Service Worker script, served under its own scope so no
+                # Service-Worker-Allowed header is needed.
+                return self._send((REPO / "src/preview-sw.js").read_bytes(), "text/javascript")
             if p == "/local-repo/runtime.js":
                 src = (REPO / "runtime.js").read_text()
                 assert CDN_BASE in src, "CDN base string moved in runtime.js"
