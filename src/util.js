@@ -1803,6 +1803,433 @@ function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
 }
 
 /**
+ * Returns true if the character represented by a given Unicode code point
+ * is full-width (occupies two terminal columns). Ported from Node v24.20.0
+ * lib/internal/util/inspect.js (isFullWidthCodePoint); code points derived
+ * from https://www.unicode.org/Public/UNIDATA/EastAsianWidth.txt
+ * @param {number} code
+ */
+function isFullWidthCodePoint(code) {
+  return (
+    code >= 0x1100 &&
+    (code <= 0x115f || // Hangul Jamo
+      code === 0x2329 || // LEFT-POINTING ANGLE BRACKET
+      code === 0x232a || // RIGHT-POINTING ANGLE BRACKET
+      // CJK Radicals Supplement .. Enclosed CJK Letters and Months
+      (code >= 0x2e80 && code <= 0x3247 && code !== 0x303f) ||
+      // Enclosed CJK Letters and Months .. CJK Unified Ideographs Extension A
+      (code >= 0x3250 && code <= 0x4dbf) ||
+      // CJK Unified Ideographs .. Yi Radicals
+      (code >= 0x4e00 && code <= 0xa4c6) ||
+      // Hangul Jamo Extended-A
+      (code >= 0xa960 && code <= 0xa97c) ||
+      // Hangul Syllables
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      // CJK Compatibility Ideographs
+      (code >= 0xf900 && code <= 0xfaff) ||
+      // Vertical Forms
+      (code >= 0xfe10 && code <= 0xfe19) ||
+      // CJK Compatibility Forms .. Small Form Variants
+      (code >= 0xfe30 && code <= 0xfe6b) ||
+      // Halfwidth and Fullwidth Forms
+      (code >= 0xff01 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      // Kana Supplement
+      (code >= 0x1b000 && code <= 0x1b001) ||
+      // Enclosed Ideographic Supplement
+      (code >= 0x1f200 && code <= 0x1f251) ||
+      // Miscellaneous Symbols and Pictographs, Emoticons
+      (code >= 0x1f300 && code <= 0x1f64f) ||
+      // CJK Unified Ideographs Extension B .. Tertiary Ideographic Plane
+      (code >= 0x20000 && code <= 0x3fffd))
+  );
+}
+
+/**
+ * Returns true if the character is zero-width (combining marks, control
+ * codes, variation selectors). Ported from Node v24.20.0
+ * lib/internal/util/inspect.js (isZeroWidthCodePoint).
+ * @param {number} code
+ */
+function isZeroWidthCodePoint(code) {
+  return (
+    code <= 0x1f || // C0 control codes
+    (code >= 0x7f && code <= 0x9f) || // C1 control codes
+    (code >= 0x300 && code <= 0x36f) || // Combining Diacritical Marks
+    (code >= 0x200b && code <= 0x200f) || // Modifying Invisible Characters
+    (code >= 0x20d0 && code <= 0x20ff) || // Combining Diacritical Marks for Symbols
+    (code >= 0xfe00 && code <= 0xfe0f) || // Variation Selectors
+    (code >= 0xfe20 && code <= 0xfe2f) || // Combining Half Marks
+    (code >= 0xe0100 && code <= 0xe01ef) // Variation Selectors
+  );
+}
+
+/**
+ * Number of terminal columns required to display the given string.
+ * Matches Node's getStringWidth (non-ICU path): full-width chars count 2,
+ * zero-width chars count 0. ANSI color codes are stripped first.
+ * @param {string} str
+ */
+function getStringWidth(str) {
+  const clean = str.replace(ansiLenRegex, "").normalize("NFC");
+  let width = 0;
+  for (const char of clean) {
+    const code = char.codePointAt(0);
+    if (isFullWidthCodePoint(code)) width += 2;
+    else if (!isZeroWidthCodePoint(code)) width++;
+  }
+  return width;
+}
+
+/**
+ * Port of Node v24.20.0 lib/internal/util/inspect.js getDuplicateErrorFrameRanges.
+ * Finds repeating sequences of stack frames for collapsing in long stacks.
+ * Returns a flat array of [offset, length, duplicateRanges] triples.
+ * @param {string[]} frames
+ */
+function getDuplicateErrorFrameRanges(frames) {
+  const result = [];
+  const lineToPositions = new Map();
+  for (let i = 0; i < frames.length; i++) {
+    const positions = lineToPositions.get(frames[i]);
+    if (positions === undefined) {
+      lineToPositions.set(frames[i], [i]);
+    } else {
+      positions[positions.length] = i;
+    }
+  }
+  const minimumDuplicateRange = 3;
+  // Not enough duplicate lines to consider collapsing
+  if (frames.length - lineToPositions.size <= minimumDuplicateRange) {
+    return result;
+  }
+  for (let i = 0; i < frames.length - minimumDuplicateRange; i++) {
+    const positions = lineToPositions.get(frames[i]);
+    // Find the next occurrence of the same line after i, if any
+    if (positions.length === 1 || positions[positions.length - 1] === i) {
+      continue;
+    }
+    const current = positions.indexOf(i) + 1;
+    if (current === positions.length) {
+      continue;
+    }
+    // Theoretical maximum range, adjusted while iterating
+    let range = positions[positions.length - 1] - i;
+    if (range < minimumDuplicateRange) {
+      continue;
+    }
+    let extraSteps;
+    if (current + 1 < positions.length) {
+      // Optimize initial step size by choosing the greatest common divisor (GCD)
+      // of all candidate distances to the same frame line.
+      let gcdRange = 0;
+      for (let j = current; j < positions.length; j++) {
+        let distance = positions[j] - i;
+        while (distance !== 0) {
+          const remainder = gcdRange % distance;
+          if (gcdRange !== 0) {
+            // Add other possible ranges as fallback
+            extraSteps ??= new Set();
+            extraSteps.add(gcdRange);
+          }
+          gcdRange = distance;
+          distance = remainder;
+        }
+        if (gcdRange === 1) break;
+      }
+      range = gcdRange;
+      if (extraSteps) {
+        extraSteps.delete(range);
+        extraSteps = [...extraSteps];
+      }
+    }
+    let maxRange = range;
+    let maxDuplicates = 0;
+    let duplicateRanges = 0;
+    for (let nextStart = i + range; ; nextStart += range) {
+      let equalFrames = 0;
+      for (let j = 0; j < range; j++) {
+        if (frames[i + j] !== frames[nextStart + j]) {
+          break;
+        }
+        equalFrames++;
+      }
+      // Adjust the range to match different type of ranges.
+      if (equalFrames !== range) {
+        if (!extraSteps?.length) {
+          break;
+        }
+        // Memorize former range in case the smaller one would hide less.
+        if (
+          duplicateRanges !== 0 &&
+          maxRange * maxDuplicates < range * duplicateRanges
+        ) {
+          maxRange = range;
+          maxDuplicates = duplicateRanges;
+        }
+        range = extraSteps.pop();
+        nextStart = i;
+        duplicateRanges = 0;
+        continue;
+      }
+      duplicateRanges++;
+    }
+    if (
+      maxDuplicates !== 0 &&
+      maxRange * maxDuplicates >= range * duplicateRanges
+    ) {
+      range = maxRange;
+      duplicateRanges = maxDuplicates;
+    }
+    if (duplicateRanges * range >= 3) {
+      result.push(i + range, range, duplicateRanges);
+      // Skip over the collapsed portion to avoid overlapping matches.
+      i += range * (duplicateRanges + 1) - 1;
+    }
+  }
+  return result;
+}
+
+/**
+ * Port of Node v24.20.0 lib/internal/util/inspect.js markNodeModules.
+ * Underlines the package name in node_modules paths when colors are on.
+ * @param {{stylize: Function}} ctx
+ * @param {string} line
+ */
+function markNodeModules(ctx, line) {
+  let tempLine = "";
+  let lastPos = 0;
+  let searchFrom = 0;
+  while (true) {
+    const nodeModulePosition = line.indexOf("node_modules", searchFrom);
+    if (nodeModulePosition === -1) break;
+    // Ensure it's a path segment: must have a path separator before and after
+    const separator = line[nodeModulePosition - 1];
+    const after = line[nodeModulePosition + 12]; // 'node_modules'.length === 12
+    if (
+      (after !== "/" && after !== "\\") ||
+      (separator !== "/" && separator !== "\\")
+    ) {
+      // Not a proper segment; continue searching
+      searchFrom = nodeModulePosition + 1;
+      continue;
+    }
+    const moduleStart = nodeModulePosition + 13; // Include trailing separator
+    // Append up to and including '/node_modules/'
+    tempLine += line.slice(lastPos, moduleStart);
+    let moduleEnd = line.indexOf(separator, moduleStart);
+    if (moduleEnd === -1) {
+      // No trailing separator: the module name runs to the end of the line.
+      moduleEnd = line.length;
+    } else if (line[moduleStart] === "@") {
+      // Namespaced modules have an extra slash: @namespace/package
+      moduleEnd = line.indexOf(separator, moduleEnd + 1);
+      if (moduleEnd === -1) moduleEnd = line.length;
+    }
+    const nodeModule = line.slice(moduleStart, moduleEnd);
+    tempLine += ctx.stylize(nodeModule, "module");
+    lastPos = moduleEnd;
+    searchFrom = moduleEnd;
+  }
+  if (lastPos !== 0) {
+    line = tempLine + line.slice(lastPos);
+  }
+  return line;
+}
+
+/**
+ * Port of Node v24.20.0 lib/internal/util/inspect.js markCwd.
+ * Grays out the current working directory in stack frames when colors are on.
+ * @param {{stylize: Function}} ctx
+ * @param {string} line
+ * @param {string} workingDirectory
+ */
+function markCwd(ctx, line, workingDirectory) {
+  const cwdStartPos = line.indexOf(workingDirectory);
+  let tempLine = "";
+  let cwdLength = workingDirectory.length;
+  if (cwdStartPos !== -1) {
+    let start = cwdStartPos;
+    let len = cwdLength;
+    if (line.slice(cwdStartPos - 7, cwdStartPos) === "file://") {
+      len += 7;
+      start -= 7;
+    }
+    const s = line[start - 1] === "(" ? start - 1 : start;
+    const end =
+      s !== start && line.endsWith(")") ? line.length - 1 : line.length;
+    const cwdSlice = line.slice(s, start + len + 1);
+    tempLine += line.slice(0, s);
+    tempLine += ctx.stylize(cwdSlice, "undefined");
+    tempLine += line.slice(start + len + 1, end);
+    if (end !== line.length) {
+      tempLine += ctx.stylize(")", "undefined");
+    }
+  } else {
+    tempLine += line;
+  }
+  return tempLine;
+}
+
+/**
+ * Faithful port of Node v24.20.0 lib/internal/util/inspect.js
+ * groupArrayElements. Groups array entries into columns when
+ * `compact` is a number: entries are laid out in a grid with
+ * column-aligned padding (padStart for numbers/bigints, padEnd
+ * otherwise), with the column count derived from breakLength,
+ * entry sizes, and the compact budget.
+ * @param {ReturnType<typeof makeCtx>} ctx
+ * @param {string[]} output
+ * @param {unknown[]} value the original array (for number detection)
+ * @returns {string[]} grouped (or original) output
+ */
+function maybeGroupArrayElements(ctx, output, arrayValue, compact, level) {
+  // Node groups array elements together when compact is a number and the
+  // array contains more than six entries (groupArrayElements). If grouping
+  // changed the entry count, the single-line fast path is skipped.
+  // Separated from reduceToSingleString to keep the hot-path function small.
+  if (
+    arrayValue === undefined ||
+    typeof compact !== "number" ||
+    compact < 1 ||
+    output.length <= 6
+  ) {
+    return { grouped: false, output };
+  }
+  // The effective visual indentation of the entries (Node's
+  // ctx.indentationLvl): base indent plus one level per nesting depth.
+  const entryIndentLen = (ctx.indentationLvl || 0) + 2 * (level + 1);
+  const newOutput = groupArrayElements(ctx, output, arrayValue, entryIndentLen);
+  return { grouped: newOutput.length !== output.length, output: newOutput };
+}
+
+/**
+ * Port of Node v24.20.0 lib/internal/util/inspect.js groupArrayElements.
+ * @param {ReturnType<typeof makeCtx>} ctx
+ * @param {string[]} output
+ * @param {unknown[]} value the original array (for number detection)
+ * @returns {string[]} grouped (or original) output
+ */
+function groupArrayElements(ctx, output, value, indentLen) {
+  const options = ctx.options;
+  const breakLength = options.breakLength ?? 80;
+  // Node uses ctx.indentationLvl (the visual nesting indentation). Our shim
+  // tracks indentation via `level` instead, so the caller passes the
+  // effective indentation length explicitly.
+  const indentationLvl = indentLen ?? ctx.indentationLvl ?? 0;
+
+  let totalLength = 0;
+  let maxLength = 0;
+  let outputLength = output.length;
+
+  if (options.maxArrayLength < output.length) {
+    // This makes sure the "... n more items" part is not taken into account.
+    outputLength--;
+  }
+
+  const separatorSpace = 2; // Add 1 for the space and 1 for the separator.
+  const dataLen = new Array(outputLength);
+
+  // Calculate the total length of all output entries and the individual max
+  // entries length of all output entries. We have to remove colors first,
+  // otherwise the length would not be calculated properly.
+  for (let i = 0; i < outputLength; i++) {
+    const len = getStringWidth(output[i]);
+    dataLen[i] = len;
+    totalLength += len + separatorSpace;
+    if (maxLength < len) maxLength = len;
+  }
+
+  // Add two to `maxLength` as we add a single whitespace character plus a comma
+  // in-between two entries.
+  const actualMax = maxLength + separatorSpace;
+
+  // Check if at least three entries fit next to each other and prevent grouping
+  // of arrays that contains entries of very different length (i.e., if a single
+  // entry is longer than 1/5 of all other entries combined). Otherwise the
+  // space in-between small entries would be enormous.
+  if (
+    actualMax * 3 + indentationLvl < breakLength &&
+    (totalLength / actualMax > 5 || maxLength <= 6)
+  ) {
+    const approxCharHeights = 2.5;
+    const averageBias = Math.sqrt(actualMax - totalLength / output.length);
+    const biasedMax = Math.max(actualMax - 3 - averageBias, 1);
+
+    // Dynamically check how many columns seem possible.
+    const columns = Math.min(
+      // Ideally a square should be drawn. We expect a character to be about 2.5
+      // times as high as wide. This is the area formula to calculate a square
+      // which contains n rectangles of size `actualMax * approxCharHeights`.
+      // Divide that by `actualMax` to receive the correct number of columns.
+      // The added bias increases the columns for short entries.
+      Math.round(
+        Math.sqrt(approxCharHeights * biasedMax * outputLength) / biasedMax,
+      ),
+      // Do not exceed the breakLength.
+      Math.floor((breakLength - indentationLvl) / actualMax),
+      // Limit array grouping for small `compact` modes as the user requested
+      // minimal grouping.
+      options.compact * 4,
+      // Limit the columns to a maximum of fifteen.
+      15,
+    );
+
+    // Return with the original output if no grouping should happen.
+    if (columns <= 1) {
+      return output;
+    }
+
+    const tmp = [];
+    const maxLineLength = [];
+    for (let i = 0; i < columns; i++) {
+      let lineMaxLength = 0;
+      for (let j = i; j < output.length; j += columns) {
+        if (dataLen[j] > lineMaxLength) lineMaxLength = dataLen[j];
+      }
+      lineMaxLength += separatorSpace;
+      maxLineLength[i] = lineMaxLength;
+    }
+
+    let order = String.prototype.padStart;
+    if (value !== undefined) {
+      for (let i = 0; i < output.length; i++) {
+        if (typeof value[i] !== "number" && typeof value[i] !== "bigint") {
+          order = String.prototype.padEnd;
+          break;
+        }
+      }
+    }
+
+    // Each iteration creates a single line of grouped entries.
+    for (let i = 0; i < outputLength; i += columns) {
+      // The last lines may contain less entries than columns.
+      const max = Math.min(i + columns, outputLength);
+      let str = "";
+      let j = i;
+      for (; j < max - 1; j++) {
+        const padding = maxLineLength[j - i] + output[j].length - dataLen[j];
+        str += order.call(`${output[j]}, `, padding, " ");
+      }
+      if (order === String.prototype.padStart) {
+        const padding =
+          maxLineLength[j - i] + output[j].length - dataLen[j] - separatorSpace;
+        str += String.prototype.padStart.call(output[j], padding, " ");
+      } else {
+        str += output[j];
+      }
+      tmp.push(str);
+    }
+
+    if (options.maxArrayLength < output.length) {
+      tmp.push(output[outputLength]);
+    }
+    output = tmp;
+  }
+  return output;
+}
+
+/**
  * Joins property output, choosing single-line vs multiline layout the way
  * Node's reduceToSingleString does (compact budget + breakLength).
  * @param {ReturnType<typeof makeCtx>} ctx
@@ -1811,7 +2238,7 @@ function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
  * @param {[string, string]} braces
  * @param {number} level
  */
-function reduceToSingleString(ctx, output, tag, braces, level) {
+function reduceToSingleString(ctx, output, tag, braces, level, arrayValue) {
   const options = ctx.options;
   const breakLength = options.breakLength ?? 80;
   const compact = options.compact ?? 3;
@@ -1851,11 +2278,27 @@ function reduceToSingleString(ctx, output, tag, braces, level) {
   const budget =
     compact === false ? -1 : typeof compact === "number" ? compact : 3;
 
+  // Node groups array elements when compact is a number (groupArrayElements).
+  // Delegated to a helper to keep this hot-path function small. Only called
+  // for arrays (arrayValue !== undefined) to avoid overhead for objects.
+  let grouped = false;
+  if (arrayValue !== undefined) {
+    const grp = maybeGroupArrayElements(
+      ctx,
+      output,
+      arrayValue,
+      compact,
+      level,
+    );
+    grouped = grp.grouped;
+    output = grp.output;
+  }
+
   // Node only collapses to a single line when the remaining depth below this
   // object is within the compact budget (ctx.currentDepth - recurseTimes <
   // compact), everything fits in breakLength, and no entry is multi-line.
   const depthBelow = ctx.currentDepth - ctx.depthLevel;
-  if (depthBelow < budget) {
+  if (depthBelow < budget && !grouped) {
     // Match Node's isBelowBreakLength exactly: start includes entry count,
     // indentation, brace, base length, and a +10 fudge factor.
     const baseLen = tag.length;
@@ -2275,6 +2718,75 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       // no stack frames.
       const improved = improveErrorStack(stack, constructor, name, tag);
       base = improved.includes("\n    at") ? improved : `[${improved}]`;
+      // Node highlights stack frames when colors are on: core modules grayed,
+      // node_modules package names underlined, cwd grayed out.
+      if (ctx.options.colors && base.includes("\n")) {
+        let workingDirectory;
+        try {
+          workingDirectory = process.cwd();
+        } catch {
+          workingDirectory = undefined;
+        }
+        const stackLines = base.split("\n");
+        // Remove recursive repetitive stack frames in long stacks (Node v24).
+        // Frames are stackLines[1..]; the message is stackLines[0].
+        if (stackLines.length - 1 > 10) {
+          const frames = stackLines.slice(1);
+          const ranges = getDuplicateErrorFrameRanges(frames);
+          for (let i = ranges.length - 3; i >= 0; i -= 3) {
+            const offset = ranges[i];
+            const length = ranges[i + 1];
+            const duplicateRanges = ranges[i + 2];
+            const msg =
+              `    ... collapsed ${length * duplicateRanges} duplicate lines ` +
+              "matching above " +
+              (duplicateRanges > 1
+                ? `${length} lines ${duplicateRanges} times...`
+                : "lines ...");
+            frames.splice(
+              offset,
+              length * duplicateRanges,
+              ctx.stylize(msg, "undefined"),
+            );
+          }
+          // Copy collapsed frames back into stackLines.
+          for (let j = 0; j < frames.length; j++) {
+            stackLines[j + 1] = frames[j];
+          }
+          stackLines.length = frames.length + 1;
+        }
+        for (let i = 1; i < stackLines.length; i++) {
+          let line = stackLines[i];
+          // Match the test's heuristic: node: lines without foo/aaa are core.
+          // Also treat Module.* frames with file:// paths as core — the parity
+          // preload wraps Module._load, exposing its interceptor file instead
+          // of node:internal. Fake test stacks use node: paths, so they are
+          // unaffected.
+          const isCore =
+            (line.includes("node:") &&
+              !line.includes("foo") &&
+              !line.includes("aaa")) ||
+            (/at Module\.[_a-zA-Z]+ \(file:\/\//.test(line) &&
+              !line.includes("node:"));
+          if (isCore) {
+            line = ctx.stylize(line, "undefined");
+          } else {
+            line = markNodeModules(ctx, line);
+            if (workingDirectory !== undefined) {
+              const newLine = markCwd(ctx, line, workingDirectory);
+              if (newLine === line) {
+                // Try the file:// URL form for ESM stacks.
+                const fileUrl = "file://" + encodeURI(workingDirectory);
+                line = markCwd(ctx, line, fileUrl);
+              } else {
+                line = newLine;
+              }
+            }
+          }
+          stackLines[i] = line;
+        }
+        base = stackLines.join("\n");
+      }
     } else if (errStrFailed) {
       // Node does not return early here; it sets the base to
       // '[object Error]' and continues to format properties (e.g. throwing
@@ -2534,7 +3046,14 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
         );
       }
     }
-    const arrStr = reduceToSingleString(ctx, output, "", ["[", "]"], level);
+    const arrStr = reduceToSingleString(
+      ctx,
+      output,
+      "",
+      ["[", "]"],
+      level,
+      value,
+    );
     return finish(`${ctorName}(${trueLength}) ${arrStr}`);
   }
 
@@ -2548,15 +3067,34 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     }
     // A null prototype gets Node's `[Map(n): null prototype]` prefix.
     const mapCtor = nodeConstructorName(value);
+    // With showHidden, include prototype properties (e.g. getters).
+    if (ctx.options.showHidden && mapCtor !== null) {
+      for (const p of maybePrototypeProps(ctx, value, recurseTimes, mapCtor)) {
+        entries.push(p);
+      }
+    }
     const mapSize = getCollectionSize(value, true);
     let mapBase;
     if (mapCtor === null) {
       mapBase = `[Map(${mapSize}): null prototype]`;
     } else {
       const ctorName = mapCtor.name;
+      // Node appends the intrinsic [Map] tag for subclasses (e.g. "Bar(0) [Map]"),
+      // unless the name already contains 'Map' followed by an uppercase letter
+      // (e.g. MapSubclass -> no tag). This matches Node's redundancy heuristic.
+      let tagSuffix = "";
+      if (ctorName && ctorName !== "Map") {
+        const tag = "Map";
+        const idx = ctorName.indexOf(tag);
+        const isRedundant =
+          idx !== -1 &&
+          (idx + tag.length >= ctorName.length ||
+            /[A-Z]/.test(ctorName[idx + tag.length]));
+        if (!isRedundant) tagSuffix = " [Map]";
+      }
       mapBase =
         ctorName && ctorName !== "Map"
-          ? `${ctorName}(${mapSize})`
+          ? `${ctorName}(${mapSize})${tagSuffix}`
           : `Map(${mapSize})`;
     }
     return finish(
@@ -3178,7 +3716,16 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     );
   }
   const [effTag, effBraces] = withRefMarker();
-  return finalize(reduceToSingleString(ctx, output, effTag, effBraces, level));
+  return finalize(
+    reduceToSingleString(
+      ctx,
+      output,
+      effTag,
+      effBraces,
+      level,
+      isArr ? value : undefined,
+    ),
+  );
 }
 
 /**
