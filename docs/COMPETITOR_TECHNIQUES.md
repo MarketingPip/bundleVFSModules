@@ -12,7 +12,10 @@ Study clones (read-only reference, do not import code):
 code are fine. **Nodepod is MIT + Commons Clause — techniques only, never
 code** (the sale restriction is viral; nothing from it enters a commercial
 bundleVFSModules). WebContainers is closed-source — docs claims only.
-reclaimprotocol/tls is a **custom license** — evaluate, don't vendor blindly.
+reclaimprotocol/tls license is MIT text (CreatorOS Inc.) at
+`reclaimprotocol/.github` — the "custom" flag was about the non-standard
+location, not the terms. Eval 2026-10-05: do not vendor — no byte transport
+exists in the browser runtime; revisit when one does (see roadmap §1).
 
 ## Jared's verdicts (2026-09-28)
 
