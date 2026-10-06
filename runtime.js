@@ -8284,8 +8284,6 @@ function _parseKey(s) {
   return { name: 'unknown', ctrl: false, meta: false, shift: false, sequence: s };
 }
 
-
-  globalThis.EventEmitter = EventEmitter;
 })();
          `;
       });
