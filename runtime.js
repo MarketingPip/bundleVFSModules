@@ -6395,18 +6395,21 @@ globalThis.${config.interopVariable}.expose('__closeServer__', async (port) => {
 // Per-key try/catch: one unfetchable builtin must not abort the rest or
 // sandbox init. Async import() of builtins keeps working independently of
 // this cache (separate moduleRegistry path).
-// Sequential (not concurrent): the interop channel times out under 51
-// concurrent loadModule calls. Slower but reliable.
+// Batched (not fully sequential, not fully concurrent): the interop channel
+// times out under 51 concurrent loadModule calls, but sequential is too slow
+// (15-23s for 49 modules). Batches of 10 are fast and reliable.
+// ponytail: batch size 10, increase if interop channel proves stable
 try {
-  var _preloadKeys = Object.keys(_builtinManifest);
-  for (var _pi = 0; _pi < _preloadKeys.length; _pi++) {
-    var _pkey = _preloadKeys[_pi];
-    if (_pkey.indexOf('RUNTIME') === 0) continue;
-    try {
-      _builtinCache.set(_pkey, await globalThis._RUNTIME${config.uuid}_.loadModule(_pkey, 'import'));
-    } catch (e) {
-      console.warn('[bvm] sync-builtin preload skipped ' + _pkey + ': ' + String((e && e.message) || e));
-    }
+  var _preloadKeys = Object.keys(_builtinManifest).filter(function(k) { return k.indexOf('RUNTIME') !== 0; });
+  var _batchSize = 10;
+  for (var _bi = 0; _bi < _preloadKeys.length; _bi += _batchSize) {
+    var _batch = _preloadKeys.slice(_bi, _bi + _batchSize);
+    await Promise.all(_batch.map(function(_pkey) {
+      return globalThis._RUNTIME${config.uuid}_.loadModule(_pkey, 'import').then(
+        function(mod) { _builtinCache.set(_pkey, mod); },
+        function(e) { console.warn('[bvm] sync-builtin preload skipped ' + _pkey + ': ' + String((e && e.message) || e)); }
+      );
+    }));
   }
 } catch (e) {
   console.warn('[bvm] sync-builtin preload failed: ' + String((e && e.message) || e));
