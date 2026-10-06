@@ -3486,7 +3486,7 @@ export function __parseStackLocationFn(frame) {
   return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
 }
 
-class SandboxRuntime {
+export class SandboxRuntime {
   static generate(code, config = {}) {
     // Serialize the BYO shell function (if provided) into the sandbox.
     // .toString() captures source, not closures — the function must be
@@ -8105,15 +8105,14 @@ pushData2(chunk) {
       return;
     }
 
-    if (chunk === '\x7f' || chunk === '\b') {
+    if (chunk === '\\x7f' || chunk === '\\b') {
       this._lineBuffer = this._lineBuffer.slice(0, -1);
       return;
     }
 
     this._lineBuffer += chunk;
 
-    // Correct regex to match actual newline or carriage return characters
-    const nl = this._lineBuffer.search(/[\n\r]/);
+    const nl = this._lineBuffer.search(/[\\n\\r]/);
     if (nl !== -1) {
       const line = this._lineBuffer.slice(0, nl);
       // Keep everything after the newline in the buffer
@@ -8134,14 +8133,14 @@ pushData(chunk) {
 
   // Non-raw (line-buffered) mode: interpret control chars instead of
   // blindly concatenating them into the line buffer.
-  if (chunk === '\x7f' || chunk === '\b') {
+  if (chunk === '\\x7f' || chunk === '\\b') {
     this._lineBuffer = this._lineBuffer.slice(0, -1);
     return;
   }
 
   this._lineBuffer += chunk;
 
-  const nl = this._lineBuffer.search(/[\n\r]/);
+  const nl = this._lineBuffer.search(/[\\n\\r]/);
   if (nl !== -1) {
     // Dispatch only up to (not including) the newline, and keep
     // anything typed after it (rare, but avoids losing/duplicating
