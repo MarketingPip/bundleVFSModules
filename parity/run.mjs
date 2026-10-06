@@ -121,6 +121,33 @@ if (newFailures.length === 0 && fixed.length === 0) {
   console.log("No new failures. Parity steady. ✔");
 }
 
+// Deno-style structured failure report
+// Categories: fixable (A), inherent (B), wontfix (C)
+const byCategory = { fixable: 0, inherent: 0, wontfix: 0, unknown: 0 };
+const missingReason = [];
+for (const [file, entry] of Object.entries(expected)) {
+  if (typeof entry === "string") {
+    // Legacy format: treat as inherent with the string as reason
+    byCategory.inherent++;
+  } else if (entry && typeof entry === "object") {
+    if (!entry.reason) missingReason.push(file);
+    const cat = entry.category || "unknown";
+    byCategory[cat] = (byCategory[cat] || 0) + 1;
+  }
+}
+if (missingReason.length > 0) {
+  console.log(
+    `\nWARNING: ${missingReason.length} entries missing 'reason' (Deno requires it):`,
+  );
+  for (const f of missingReason.slice(0, 5)) console.log(`  ${f}`);
+}
+const totalExpected = Object.keys(expected).length;
+if (totalExpected > 0) {
+  console.log(
+    `\nExpected failures: ${totalExpected} (fixable: ${byCategory.fixable}, inherent: ${byCategory.inherent}, wontfix: ${byCategory.wontfix})`,
+  );
+}
+
 fs.writeFileSync(
   reportPath,
   JSON.stringify({ target, lane, results }, null, 2),
