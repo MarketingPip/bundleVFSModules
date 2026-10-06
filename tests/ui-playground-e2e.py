@@ -219,6 +219,137 @@ print("CASE fs-example: %s (status=%r)" % ("PASS" if ok else "FAIL", status), fl
 if not ok:
     print("  output tail: " + output[-800:], flush=True)
 
+# Case 8: cli_menu — pick option 2, expect "You picked: green"
+d.execute_script("document.getElementById('codeInput').value = '';")
+d.find_element("css selector", '.example-btn[data-example="cli_menu"]').click()
+time.sleep(0.3)
+d.execute_script("document.getElementById('argvInput').value = '';")
+d.find_element("id", "runBtn").click()
+prompt_seen = False
+deadline = time.time() + 60
+while time.time() < deadline:
+    output = d.find_element("id", "output").text
+    if "Choice (1-3)" in output:
+        prompt_seen = True
+        break
+    status = d.execute_script("return document.getElementById('status').textContent;")
+    if status in ("Done", "Error"):
+        break
+    time.sleep(1)
+if prompt_seen:
+    d.execute_script("document.getElementById('stdinInput').value = '2';")
+    d.find_element("id", "sendInput").click()
+status = ""
+deadline = time.time() + 60
+while time.time() < deadline:
+    status = d.execute_script("return document.getElementById('status').textContent;")
+    if status in ("Done", "Error"):
+        break
+    time.sleep(1)
+output = d.find_element("id", "output").text
+ok = (status == "Done") and ("You picked:" in output) and ("green" in output)
+results.append({"name": "cli-menu", "ok": ok, "status": status})
+print("CASE cli-menu: %s (status=%r)" % ("PASS" if ok else "FAIL", status), flush=True)
+if not ok:
+    print("  output tail: " + output[-800:], flush=True)
+
+# Case 9: inquirer — answer two prompts, expect greeting + language echo
+d.execute_script("document.getElementById('codeInput').value = '';")
+d.find_element("css selector", '.example-btn[data-example="inquirer"]').click()
+time.sleep(0.3)
+d.execute_script("document.getElementById('argvInput').value = '';")
+d.find_element("id", "runBtn").click()
+# First prompt: name
+deadline = time.time() + 60
+while time.time() < deadline:
+    output = d.find_element("id", "output").text
+    if "What is your name?" in output:
+        break
+    time.sleep(1)
+d.execute_script("document.getElementById('stdinInput').value = 'Jared';")
+d.find_element("id", "sendInput").click()
+# Second prompt: language
+deadline = time.time() + 60
+while time.time() < deadline:
+    output = d.find_element("id", "output").text
+    if "Favorite language?" in output:
+        break
+    time.sleep(1)
+d.execute_script("document.getElementById('stdinInput').value = 'Python';")
+d.find_element("id", "sendInput").click()
+status = ""
+deadline = time.time() + 60
+while time.time() < deadline:
+    status = d.execute_script("return document.getElementById('status').textContent;")
+    if status in ("Done", "Error"):
+        break
+    time.sleep(1)
+output = d.find_element("id", "output").text
+ok = (status == "Done") and ("Hello, Jared!" in output) and ("Python is a great choice." in output)
+results.append({"name": "inquirer", "ok": ok, "status": status})
+print("CASE inquirer: %s (status=%r)" % ("PASS" if ok else "FAIL", status), flush=True)
+if not ok:
+    print("  output tail: " + output[-800:], flush=True)
+
+# Case 10: repl — evaluate 2+2, then exit
+d.execute_script("document.getElementById('codeInput').value = '';")
+d.find_element("css selector", '.example-btn[data-example="repl"]').click()
+time.sleep(0.3)
+d.execute_script("document.getElementById('argvInput').value = '';")
+d.find_element("id", "runBtn").click()
+time.sleep(3)  # let REPL boot
+d.execute_script("document.getElementById('stdinInput').value = '2+2';")
+d.find_element("id", "sendInput").click()
+time.sleep(2)
+output = d.find_element("id", "output").text
+repl_ok = "=> 4" in output
+d.execute_script("document.getElementById('stdinInput').value = 'exit';")
+d.find_element("id", "sendInput").click()
+status = ""
+deadline = time.time() + 60
+while time.time() < deadline:
+    status = d.execute_script("return document.getElementById('status').textContent;")
+    if status in ("Done", "Error"):
+        break
+    time.sleep(1)
+output = d.find_element("id", "output").text
+ok = repl_ok and (status == "Done") and ("Bye!" in output)
+results.append({"name": "repl", "ok": ok, "status": status})
+print("CASE repl: %s (status=%r)" % ("PASS" if ok else "FAIL", status), flush=True)
+if not ok:
+    print("  output tail: " + output[-800:], flush=True)
+
+# Case 11: repl2 — persistent scope: x=5, x*2, exit
+d.execute_script("document.getElementById('codeInput').value = '';")
+d.find_element("css selector", '.example-btn[data-example="repl2"]').click()
+time.sleep(0.3)
+d.execute_script("document.getElementById('argvInput').value = '';")
+d.find_element("id", "runBtn").click()
+time.sleep(3)  # let REPL boot
+d.execute_script("document.getElementById('stdinInput').value = 'x = 5';")
+d.find_element("id", "sendInput").click()
+time.sleep(2)
+d.execute_script("document.getElementById('stdinInput').value = 'x * 2';")
+d.find_element("id", "sendInput").click()
+time.sleep(2)
+output = d.find_element("id", "output").text
+repl2_ok = ("=> 5" in output) and ("=> 10" in output)
+d.execute_script("document.getElementById('stdinInput').value = 'exit';")
+d.find_element("id", "sendInput").click()
+status = ""
+deadline = time.time() + 60
+while time.time() < deadline:
+    status = d.execute_script("return document.getElementById('status').textContent;")
+    if status in ("Done", "Error"):
+        break
+    time.sleep(1)
+output = d.find_element("id", "output").text
+ok = repl2_ok and (status == "Done") and ("Bye!" in output)
+results.append({"name": "repl2", "ok": ok, "status": status})
+print("CASE repl2: %s (status=%r)" % ("PASS" if ok else "FAIL", status), flush=True)
+if not ok:
+    print("  output tail: " + output[-800:], flush=True)
+
 d.quit()
 n_fail = sum(1 for r in results if not r["ok"])
 print("RESULT: %d/%d cases passed" % (len(results) - n_fail, len(results)), flush=True)
