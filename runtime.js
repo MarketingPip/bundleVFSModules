@@ -2564,12 +2564,12 @@ ${code}
   // Gap #6: "node:"-prefix normalization lives in the host-scope
   // normalizeBuiltinSpecifier; its source is inlined so the generated
   // script stays self-contained.
-  ${normalizeBuiltinSpecifier.toString()}
+  const __normalizeBuiltinSpecifier = (${normalizeBuiltinSpecifier.toString()});
 
 
   let modulePath = specifier;
 
-  const __builtinNorm = normalizeBuiltinSpecifier(specifier, node_builtin);
+  const __builtinNorm = __normalizeBuiltinSpecifier(specifier, node_builtin);
   const isNodeBuiltIn = __builtinNorm.isNodeBuiltIn;
   modulePath = __builtinNorm.modulePath;
 
@@ -3206,16 +3206,8 @@ child.on('error', (err) => {
    * Use arrow function syntax to ensure 'this' always refers to the ExecutionContext instance.
    */
   invoke = async (method, ...args) => {
-    // Ensure the iframe is actually loaded before sending messages.
-    // __stdin__ is allowed through when the iframe exists even if the
-    // running flag hasn't been set yet (sandbox_ready can lag); the
-    // iframe-side __stdin__ handler validates listeners itself.
-    const isStdin = method === "__stdin__";
-    if (
-      !this.iframe ||
-      !this.iframe.contentWindow ||
-      (!isStdin && this.running === false)
-    ) {
+    // Ensure the iframe is actually loaded before sending messages
+    if (!this.iframe || !this.iframe.contentWindow || this.running === false) {
       throw new Error("Sandbox is not running.");
     }
     const callId = Math.random().toString(36).substr(2, 9);
@@ -3864,9 +3856,9 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
   // Gap #6: "node:"-prefix normalization lives in the host-scope
   // normalizeBuiltinSpecifier; its source is inlined so the generated
   // script stays self-contained.
-  ${normalizeBuiltinSpecifier.toString()}
+  const __normalizeBuiltinSpecifier = (${normalizeBuiltinSpecifier.toString()});
 
-  const __builtinNorm = normalizeBuiltinSpecifier(modulePath, node_builtin);
+  const __builtinNorm = __normalizeBuiltinSpecifier(modulePath, node_builtin);
   const isNodeBuiltIn = __builtinNorm.isNodeBuiltIn;
   modulePath = __builtinNorm.modulePath;
 
@@ -6246,145 +6238,6 @@ if (globalThis.__bvm_process_final__ && globalThis.process !== globalThis.__bvm_
   globalThis.process = globalThis.__bvm_process_final__;
 }
       
-// Interop exposes hoisted before the sync builtin preload: the preload
-// does ~49 sequential loadModule interop calls and can exceed the
-// execution timeout; these handlers must be available immediately.
-globalThis.${config.interopVariable}.expose('__stdin__', (args) => {
-    const s = process?.stdin;
-  const hasListeners = s && (s.listenerCount('data') > 0 || s.listenerCount('keypress') > 0); 
- 
-  if (s && hasListeners && (typeof s.isPaused !== 'function' || !s.isPaused())) {
-    return s.pushData(args);
-  }
-  
-  
-  // process.stdin.pushData(args)
-   if(process && process.stdin && process.stdin.listenerCount('data') != 0 && (typeof process.stdin.isPaused !== 'function' || process.stdin.isPaused() == false)){
-    return process.stdin.pushData(args);
-   }
-  
-  // --- Key Decoder Function ---
-  function decodeKeyPress(str) {
-    if (!str) return null;
-
-    // ANSI Escape sequences for arrow keys
-    if (str === '\\x1b[A' || str === '\\x1bOA') return { name: 'up', sequence: str };
-    if (str === '\\x1b[B' || str === '\\x1bOB') return { name: 'down', sequence: str };
-    if (str === '\\x1b[C' || str === '\\x1bOC') return { name: 'right', sequence: str };
-    if (str === '\\x1b[D' || str === '\\x1bOD') return { name: 'left', sequence: str };
-
-    // Enter / Return keys
-    if (str === '\\r' || str === '\\n') return { name: 'return', sequence: str };
-
-    // Backspace
-    if (str === '\\x7f' || str === '\\b') return { name: 'backspace', sequence: str };
-
-    // Handle single characters & Ctrl combinations
-    if (str.length === 1) {
-      const code = str.charCodeAt(0);
-      // Check for Ctrl+A through Ctrl+Z (ASCII codes 1 to 26)
-      if (code >= 1 && code <= 26) {
-        return {
-          name: String.fromCharCode(code + 96),
-          ctrl: true,
-          sequence: str
-        };
-      }
-      return { name: str, sequence: str };
-    }
-
-    // Fallback for complex/unrecognized sequences
-    return { name: 'unknown', sequence: str };
-  }
-  
-  function stripKeySequencesPreserveWhitespace(str) {
-  if (!str) return "";
-
-  return str
-    // Remove ANSI escape sequences (arrow keys, function keys, CSI sequences)
-    .replace(/\\x1b\\[[0-9;?]*[A-Za-z]/g, '')
-    .replace(/\\x1b[\\(\\)][0-9A-Za-z]/g, '')
-    // Remove control characters except \\n (\\x0A) and \\t (\\x09)
-    .replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
-}
-  // TODO: handle if buffered pass or possible remove if emulating node?
-    try {   
-              const cleanedCode = stripKeySequencesPreserveWhitespace(args);
-              
-               const keyEvent = decodeKeyPress(args);
-              if (keyEvent) {
-                // emitMe("key_event", null, keyEvent)
-                return;  
-              }
-              
-               if(!cleanedCode){
-                return; 
-               }
-                const E = window.eval(cleanedCode);
-                console.log(E)
-            } catch (E) {
-                return void console.error(E.message)
-            }
-});
-
- 
-
-// Runtime method (not reported via execution:interop_registered).
-// Updates the sandbox TTY dimensions and emits Node's 'resize' event on
-// stdout/stderr so readline and guest 'resize' listeners react.
-globalThis.${config.interopVariable}.expose('__terminal_resize__', (args) => {
-  const cols = Math.floor(Number(args && args.cols));
-  const rows = Math.floor(Number(args && args.rows));
-  if (!Number.isFinite(cols) || cols <= 0 || !Number.isFinite(rows) || rows <= 0) {
-    throw new Error('__terminal_resize__ requires positive integer cols and rows');
-  }
-  for (const s of [process.stdout, process.stderr]) {
-    if (!s) continue;
-    s.columns = cols;
-    s.rows = rows;
-    if (typeof s.emit === 'function') s.emit('resize');
-  }
-  return { cols, rows };
-});
-
-globalThis.${config.interopVariable}.expose('__serverRequest__', async (port=8080, URL = "/", type = "GET", body= {}, headers = {}) => {
-    const __RT = globalThis._RUNTIME${config.uuid}_;
-    const __h = { ...(headers || {}) };
-    let __jarCtx = null;
-    // Inject cookies from the virtual jar (RFC 6265). The jar must never
-    // break a request, so every jar interaction is guarded.
-    if (__RT.__cookieJar) {
-      try {
-        const __host = __h.host || __h.Host || "localhost";
-        __jarCtx = { host: __host, path: URL, method: type };
-        const __jarCookie = __RT.__cookieJar.cookieHeader("${config.uuid}", port, __jarCtx);
-        const __merged = __RT.__mergeCookieHeaders(__h.cookie ?? __h.Cookie, __jarCookie);
-        delete __h.Cookie;
-        if (__merged) __h.cookie = __merged; else delete __h.cookie;
-      } catch (__jarErr) { /* jar must not break requests */ }
-    }
-    const __res = await __RT.__httpServerRunTime.handleRequest(port, URL, type, body, __h);
-    // Store any Set-Cookie response headers back into the jar.
-    if (__RT.__cookieJar && __res && __res.headers) {
-      try {
-        __RT.__cookieJar.store("${config.uuid}", port, __res.headers["set-cookie"],
-          __jarCtx || { host: (__h.host || __h.Host || "localhost"), path: URL });
-      } catch (__jarErr) { /* jar must not break requests */ }
-    }
-    return __res;
-});
-
-// Host fetch bridge: revoke a lost port claim. The host calls this when
-// another sandbox already owns the port, so the loser's listen() fails
-// loudly with EADDRINUSE instead of silently shadowing the winner.
-globalThis.${config.interopVariable}.expose('__closeServer__', async (port) => {
-    const __RT = globalThis._RUNTIME${config.uuid}_;
-    if (__RT && __RT.__httpServerRunTime && typeof __RT.__httpServerRunTime.closeServer === 'function') {
-      return __RT.__httpServerRunTime.closeServer(port);
-    }
-    return false;
-});
-
 // --- begin sync builtin preload (gap #3) ---
 // Populate the SYNC builtin cache before user code runs. dist/module.js's
 // loadBuiltinModule() can only use the sandbox RT.loadModule() when it
@@ -6977,6 +6830,141 @@ await import(__initSandboxState);
 }
 
 
+globalThis.${config.interopVariable}.expose('__stdin__', (args) => {
+    const s = process?.stdin;
+  const hasListeners = s && (s.listenerCount('data') > 0 || s.listenerCount('keypress') > 0); 
+ 
+  if (s && hasListeners && (typeof s.isPaused !== 'function' || !s.isPaused())) {
+    return s.pushData(args);
+  }
+  
+  
+  // process.stdin.pushData(args)
+   if(process && process.stdin && process.stdin.listenerCount('data') != 0 && (typeof process.stdin.isPaused !== 'function' || process.stdin.isPaused() == false)){
+    return process.stdin.pushData(args);
+   }
+  
+  // --- Key Decoder Function ---
+  function decodeKeyPress(str) {
+    if (!str) return null;
+
+    // ANSI Escape sequences for arrow keys
+    if (str === '\\x1b[A' || str === '\\x1bOA') return { name: 'up', sequence: str };
+    if (str === '\\x1b[B' || str === '\\x1bOB') return { name: 'down', sequence: str };
+    if (str === '\\x1b[C' || str === '\\x1bOC') return { name: 'right', sequence: str };
+    if (str === '\\x1b[D' || str === '\\x1bOD') return { name: 'left', sequence: str };
+
+    // Enter / Return keys
+    if (str === '\\r' || str === '\\n') return { name: 'return', sequence: str };
+
+    // Backspace
+    if (str === '\\x7f' || str === '\\b') return { name: 'backspace', sequence: str };
+
+    // Handle single characters & Ctrl combinations
+    if (str.length === 1) {
+      const code = str.charCodeAt(0);
+      // Check for Ctrl+A through Ctrl+Z (ASCII codes 1 to 26)
+      if (code >= 1 && code <= 26) {
+        return {
+          name: String.fromCharCode(code + 96),
+          ctrl: true,
+          sequence: str
+        };
+      }
+      return { name: str, sequence: str };
+    }
+
+    // Fallback for complex/unrecognized sequences
+    return { name: 'unknown', sequence: str };
+  }
+  
+  function stripKeySequencesPreserveWhitespace(str) {
+  if (!str) return "";
+
+  return str
+    // Remove ANSI escape sequences (arrow keys, function keys, CSI sequences)
+    .replace(/\\x1b\\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\\x1b[\\(\\)][0-9A-Za-z]/g, '')
+    // Remove control characters except \\n (\\x0A) and \\t (\\x09)
+    .replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
+}
+  // TODO: handle if buffered pass or possible remove if emulating node?
+    try {   
+              const cleanedCode = stripKeySequencesPreserveWhitespace(args);
+              
+               const keyEvent = decodeKeyPress(args);
+              if (keyEvent) {
+                // emitMe("key_event", null, keyEvent)
+                return;  
+              }
+              
+               if(!cleanedCode){
+                return; 
+               }
+                const E = window.eval(cleanedCode);
+                console.log(E)
+            } catch (E) {
+                return void console.error(E.message)
+            }
+});
+
+ 
+
+// Runtime method (not reported via execution:interop_registered).
+// Updates the sandbox TTY dimensions and emits Node's 'resize' event on
+// stdout/stderr so readline and guest 'resize' listeners react.
+globalThis.${config.interopVariable}.expose('__terminal_resize__', (args) => {
+  const cols = Math.floor(Number(args && args.cols));
+  const rows = Math.floor(Number(args && args.rows));
+  if (!Number.isFinite(cols) || cols <= 0 || !Number.isFinite(rows) || rows <= 0) {
+    throw new Error('__terminal_resize__ requires positive integer cols and rows');
+  }
+  for (const s of [process.stdout, process.stderr]) {
+    if (!s) continue;
+    s.columns = cols;
+    s.rows = rows;
+    if (typeof s.emit === 'function') s.emit('resize');
+  }
+  return { cols, rows };
+});
+
+globalThis.${config.interopVariable}.expose('__serverRequest__', async (port=8080, URL = "/", type = "GET", body= {}, headers = {}) => {
+    const __RT = globalThis._RUNTIME${config.uuid}_;
+    const __h = { ...(headers || {}) };
+    let __jarCtx = null;
+    // Inject cookies from the virtual jar (RFC 6265). The jar must never
+    // break a request, so every jar interaction is guarded.
+    if (__RT.__cookieJar) {
+      try {
+        const __host = __h.host || __h.Host || "localhost";
+        __jarCtx = { host: __host, path: URL, method: type };
+        const __jarCookie = __RT.__cookieJar.cookieHeader("${config.uuid}", port, __jarCtx);
+        const __merged = __RT.__mergeCookieHeaders(__h.cookie ?? __h.Cookie, __jarCookie);
+        delete __h.Cookie;
+        if (__merged) __h.cookie = __merged; else delete __h.cookie;
+      } catch (__jarErr) { /* jar must not break requests */ }
+    }
+    const __res = await __RT.__httpServerRunTime.handleRequest(port, URL, type, body, __h);
+    // Store any Set-Cookie response headers back into the jar.
+    if (__RT.__cookieJar && __res && __res.headers) {
+      try {
+        __RT.__cookieJar.store("${config.uuid}", port, __res.headers["set-cookie"],
+          __jarCtx || { host: (__h.host || __h.Host || "localhost"), path: URL });
+      } catch (__jarErr) { /* jar must not break requests */ }
+    }
+    return __res;
+});
+
+// Host fetch bridge: revoke a lost port claim. The host calls this when
+// another sandbox already owns the port, so the loser's listen() fails
+// loudly with EADDRINUSE instead of silently shadowing the winner.
+globalThis.${config.interopVariable}.expose('__closeServer__', async (port) => {
+    const __RT = globalThis._RUNTIME${config.uuid}_;
+    if (__RT && __RT.__httpServerRunTime && typeof __RT.__httpServerRunTime.closeServer === 'function') {
+      return __RT.__httpServerRunTime.closeServer(port);
+    }
+    return false;
+});
  
 
 
