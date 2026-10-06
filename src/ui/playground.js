@@ -1331,7 +1331,6 @@ function getFilesDiv() {
     : document.getElementById("files");
 }
 
-
 // Shell-like argv split for the argv input box. `split` (shellwords) respects
 // single/double quotes, unlike a naive whitespace split.
 export function splitArgv(text) {
@@ -1628,7 +1627,8 @@ async function upgateProgressArgv(sandbox) {
 }
 
 export function createDemoSandbox(CodeSandbox, options = {}) {
-  if (!CodeSandbox) throw new Error("createDemoSandbox requires { CodeSandbox }");
+  if (!CodeSandbox)
+    throw new Error("createDemoSandbox requires { CodeSandbox }");
   const sandbox = new CodeSandbox({
     timeout: 50000,
     logNetworkRequests: true,
@@ -1802,7 +1802,13 @@ export function wireDemoHandlers(sandbox, { terminal } = {}) {
       );
       await delay(2000);
       console.log(
-        await sandbox.invoke("__serverRequest__", 3000, "GET", "/api/users/1", {}),
+        await sandbox.invoke(
+          "__serverRequest__",
+          3000,
+          "GET",
+          "/api/users/1",
+          {},
+        ),
       );
     }
 
@@ -1883,13 +1889,17 @@ const PLACEHOLDER_HTML =
   '<div class="text-gray-500 italic">Click "Run Code" to see output here...</div>';
 
 function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[c]));
+  return String(s).replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c],
+  );
 }
 
 // Log entries arrive as {type, args} objects (or JSON strings of them, after
@@ -1991,8 +2001,7 @@ export function initPlayground({
   // Wire the example buttons: click loads the snippet into the editor.
   document.querySelectorAll(".example-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const key =
-        btn.getAttribute("data-example") || btn.dataset.example;
+      const key = btn.getAttribute("data-example") || btn.dataset.example;
       if (key && examples[key]) {
         codeInput.value = examples[key];
         sandbox.requireAllowed = false;
@@ -2034,7 +2043,10 @@ export function initPlayground({
       if (seen.has(key)) return;
       seen.add(key);
       const { text, type } = logEntry(evt);
-      print(text, type === "error" ? "text-red-400" : term ? "" : "text-gray-100");
+      print(
+        text,
+        type === "error" ? "text-red-400" : term ? "" : "text-gray-100",
+      );
     };
     sandbox.on("execution:stdout", streamHandler);
 
@@ -2044,7 +2056,16 @@ export function initPlayground({
     }
 
     // Pre-flight reference check (from the older runtime.js wiring).
-    const allowedGlobals = ["setImmediate", "fs", "interop", "type", "readline", "__dirname", "Buffer", "globalThis"];
+    const allowedGlobals = [
+      "setImmediate",
+      "fs",
+      "interop",
+      "type",
+      "readline",
+      "__dirname",
+      "Buffer",
+      "globalThis",
+    ];
     if (sandbox.requireAllowed) allowedGlobals.push("require");
 
     const t0 = performance.now();
@@ -2059,7 +2080,10 @@ export function initPlayground({
         const { text, type } = logEntry(entry);
         const key = type + ":" + text.slice(0, 200);
         if (seen.has(key)) continue;
-        print(text, type === "error" ? "text-red-400" : term ? "" : "text-gray-100");
+        print(
+          text,
+          type === "error" ? "text-red-400" : term ? "" : "text-gray-100",
+        );
       }
       if (!logs.length && !seen.size && result.success && !term) {
         print("(no output)", "text-gray-500 italic");
@@ -2112,12 +2136,12 @@ export function initPlayground({
       const text = stdinInput.value;
       if (!text) return;
       try {
-        // The sandbox signals running=true via the execution:start message,
-        // which can lag the Run click. Wait briefly for it before invoking.
+        // Wait for the iframe to exist before invoking. Don't require the
+        // running flag — sandbox_ready can lag behind actual execution.
         const deadline = performance.now() + 10000;
         while (performance.now() < deadline) {
           const ctx = sandbox._context;
-          if (ctx && ctx.running && ctx.iframe && ctx.iframe.contentWindow) break;
+          if (ctx && ctx.iframe && ctx.iframe.contentWindow) break;
           await new Promise((r) => setTimeout(r, 100));
         }
         await sandbox.invoke("__stdin__", text + "\n");

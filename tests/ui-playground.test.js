@@ -114,10 +114,26 @@ describe("src/ui/playground.js framework", () => {
 
   test("EXAMPLES has the 20 canonical snippets", () => {
     const keys = [
-      "basic", "async", "sleep", "imports", "require", "process_kill",
-      "interop", "top_level", "typescript", "relative", "tests", "cli",
-      "cli_menu", "inquirer", "repl", "repl2", "fs", "child_process",
-      "http", "express",
+      "basic",
+      "async",
+      "sleep",
+      "imports",
+      "require",
+      "process_kill",
+      "interop",
+      "top_level",
+      "typescript",
+      "relative",
+      "tests",
+      "cli",
+      "cli_menu",
+      "inquirer",
+      "repl",
+      "repl2",
+      "fs",
+      "child_process",
+      "http",
+      "express",
     ];
     for (const k of keys) {
       expect(PLAYGROUND_SRC).toContain(`  ${k}: \``);
@@ -134,7 +150,9 @@ describe("src/ui/playground.js framework", () => {
     // The real initPlayground needs DOM + CDN imports; here we only check
     // the guard clause shape via source.
     expect(src).toContain("if (!CodeSandbox)");
-    expect(src).toContain('throw new Error("initPlayground requires { CodeSandbox }")');
+    expect(src).toContain(
+      'throw new Error("initPlayground requires { CodeSandbox }")',
+    );
     expect(src).toContain("new CodeSandbox({");
   });
 
@@ -146,8 +164,17 @@ describe("src/ui/playground.js framework", () => {
       console,
     };
     vm.createContext(ctx);
-    vm.runInContext(src + "\nthis.result = splitArgv('--name \"foo bar\"');", ctx);
-    expect(ctx.result).toEqual(["node", "playground.mjs", "--name", '"foo', 'bar"']);
+    vm.runInContext(
+      src + "\nthis.result = splitArgv('--name \"foo bar\"');",
+      ctx,
+    );
+    expect(ctx.result).toEqual([
+      "node",
+      "playground.mjs",
+      "--name",
+      '"foo',
+      'bar"',
+    ]);
     // The real shellwords split handles quotes properly; the shape is what
     // matters here: ['node', 'playground.mjs', ...args].
     expect(ctx.result[0]).toBe("node");
@@ -182,11 +209,61 @@ describe("ui.html is thin", () => {
 
   test("keeps the demo DOM ids the framework expects", () => {
     for (const id of [
-      "codeInput", "runBtn", "argvInput", "stdinInput", "sendInput",
-      "clearBtn", "output", "status", "execTime", "files",
+      "codeInput",
+      "runBtn",
+      "argvInput",
+      "stdinInput",
+      "sendInput",
+      "clearBtn",
+      "output",
+      "status",
+      "execTime",
+      "files",
     ]) {
       expect(UI_SRC).toContain(`id="${id}"`);
     }
     expect(UI_SRC).toContain("example-btn");
+  });
+});
+
+describe("iframe interop exposes precede the sync builtin preload", () => {
+  // Regression test: the __stdin__ (and sibling) expose() calls in the
+  // SandboxRuntime.generate() template MUST appear before the sync builtin
+  // preload loop. The preload does ~49 sequential interop loadModule calls
+  // and can exceed the execution timeout; if the exposes come after it,
+  // invoke('__stdin__') fails with "Method '__stdin__' not found" and
+  // interactive samples (cli, cli_menu, inquirer, repl, repl2) can't
+  // receive stdin.
+  const PRELOAD_MARKER = "begin sync builtin preload";
+
+  test("all four exposes are registered before the preload loop", () => {
+    const preloadIdx = RUNTIME_SRC.indexOf(PRELOAD_MARKER);
+    expect(preloadIdx).toBeGreaterThan(0);
+    for (const name of [
+      "__stdin__",
+      "__terminal_resize__",
+      "__serverRequest__",
+      "__closeServer__",
+    ]) {
+      const idx = RUNTIME_SRC.indexOf(`expose('${name}'`);
+      expect(idx).toBeGreaterThan(0);
+      expect(idx).toBeLessThan(preloadIdx);
+    }
+  });
+
+  test("ExecutionContext.invoke allows __stdin__ without the running flag", () => {
+    // The sandbox_ready message (which sets running=true) is posted after
+    // the preload loop; the UI must be able to send stdin as soon as the
+    // iframe exists.
+    expect(RUNTIME_SRC).toContain('const isStdin = method === "__stdin__"');
+  });
+
+  test("playground send handler waits for iframe, not the running flag", () => {
+    expect(PLAYGROUND_SRC).toContain(
+      "if (ctx && ctx.iframe && ctx.iframe.contentWindow) break;",
+    );
+    expect(PLAYGROUND_SRC).not.toContain(
+      "if (ctx && ctx.running && ctx.iframe && ctx.iframe.contentWindow) break;",
+    );
   });
 });
