@@ -3230,8 +3230,9 @@ child.on('error', (err) => {
             reject(
               new Error(`Interop method failed (sandbox is closed): ${method}`),
             );
+          } else {
+            reject(new Error(`Interop invoke timeout: ${method}`));
           }
-          reject(new Error(`Interop invoke timeout: ${method}`));
         }
       }, 10000);
 
@@ -3465,9 +3466,9 @@ child.on('error', (err) => {
 // "at https://host/app.js:10:15". Anchored at the end so URL schemes
 // (https://...) are never mistaken for the line/column separators.
 // Defined once at module scope and exported for unit tests; the sandbox
-// template below inlines it via ${__parseStackLocation.toString()} so the
+// template below inlines it via const __parseStackLocationFn = (${__parseStackLocationFn.toString()}); so the
 // iframe gets the identical implementation (single source of truth).
-export function __parseStackLocation(frame) {
+export function __parseStackLocationFn(frame) {
   let s = String(frame || "")
     .trim()
     .replace(/^at\s+(async\s+)?/, "");
@@ -6903,7 +6904,7 @@ function waitForAllXhrs() {
 
 // __parseStackLocation is defined once at module scope (exported for
 // unit tests) and inlined here so the iframe runs the identical code.
-${__parseStackLocation.toString()}
+const __parseStackLocationFn = (${__parseStackLocationFn.toString()});
 
 // Enhanced error handling with stack traces
 window.onerror = function(message, source, lineno, colno, error) {
@@ -6914,7 +6915,7 @@ window.onerror = function(message, source, lineno, colno, error) {
   const frames = [];
   if (error?.stack) {
     for (const line of String(error.stack).split('\\n')) {
-      const loc = __parseStackLocation(line);
+      const loc = __parseStackLocationFn(line);
       if (loc) frames.push(loc);
     }
   }
@@ -6952,7 +6953,7 @@ window.onunhandledrejection = function (event) {
   const frames = [];
   const stackLines = stack.split('\\n');
   for (let i = 1; i < stackLines.length; i++) {
-    const parsed = __parseStackLocation(stackLines[i]);
+    const parsed = __parseStackLocationFn(stackLines[i]);
     if (parsed) {
       frames.push(parsed);
       if (!loc) loc = parsed;
@@ -7227,7 +7228,7 @@ ${code}\n})();
   const stackLines = err.stack.split('\\n');
 
   for (let i = 1; i < stackLines.length; i++) {
-    const parsed = __parseStackLocation(stackLines[i]);
+    const parsed = __parseStackLocationFn(stackLines[i]);
     if (parsed) {
       frames.push(parsed);
       if (!loc) {
@@ -8104,7 +8105,7 @@ pushData2(chunk) {
       return;
     }
 
-    if (chunk === '\\x7f' || chunk === '\\b') {
+    if (chunk === '\x7f' || chunk === '\b') {
       this._lineBuffer = this._lineBuffer.slice(0, -1);
       return;
     }
@@ -8112,7 +8113,7 @@ pushData2(chunk) {
     this._lineBuffer += chunk;
 
     // Correct regex to match actual newline or carriage return characters
-    const nl = this._lineBuffer.search(/[\\n\\r]/);
+    const nl = this._lineBuffer.search(/[\n\r]/);
     if (nl !== -1) {
       const line = this._lineBuffer.slice(0, nl);
       // Keep everything after the newline in the buffer
@@ -8133,14 +8134,14 @@ pushData(chunk) {
 
   // Non-raw (line-buffered) mode: interpret control chars instead of
   // blindly concatenating them into the line buffer.
-  if (chunk === '\\x7f' || chunk === '\\b') {
+  if (chunk === '\x7f' || chunk === '\b') {
     this._lineBuffer = this._lineBuffer.slice(0, -1);
     return;
   }
 
   this._lineBuffer += chunk;
 
-  const nl = this._lineBuffer.search(/[\\n\\r]/);
+  const nl = this._lineBuffer.search(/[\n\r]/);
   if (nl !== -1) {
     // Dispatch only up to (not including) the newline, and keep
     // anything typed after it (rare, but avoids losing/duplicating
@@ -8283,6 +8284,8 @@ function _parseKey(s) {
   return { name: 'unknown', ctrl: false, meta: false, shift: false, sequence: s };
 }
 
+
+  globalThis.EventEmitter = EventEmitter;
 })();
          `;
       });
