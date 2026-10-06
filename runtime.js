@@ -5474,6 +5474,14 @@ window.parent.postMessage({
 
 }
 
+if(fn === "console"){
+window.parent.postMessage({
+    type: 'stdout',
+    method: method,
+    message: sanitized.join(' ')
+  }, '*');
+}
+
  if(fn === "fs"){
   window.parent.postMessage({
     type: 'fs',
