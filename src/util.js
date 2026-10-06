@@ -6358,6 +6358,7 @@ export default {
   getCallSites,
   convertProcessSignalToExitCode,
   _exceptionWithHostPort,
+  _errnoException,
   isArray,
   isBoolean,
   isBuffer,

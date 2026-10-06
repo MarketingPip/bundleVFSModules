@@ -389,6 +389,7 @@ const pseudoRandomBytes = native ? native.pseudoRandomBytes : _randomBytes;
 const rng = native ? native.rng : _randomBytes;
 
 const defaultExport = {
+  fips: 0,
   Certificate,
   Cipheriv,
   Decipheriv,

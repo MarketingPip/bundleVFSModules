@@ -3376,6 +3376,7 @@ function buildApi(vol) {
   // FileHandle stays internal: never published on fs or fs.promises.
 
   fs.promises = promises;
+  fs.Utf8Stream = Utf8Stream;
   return fs;
 }
 
