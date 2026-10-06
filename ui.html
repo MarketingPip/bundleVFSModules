@@ -714,7 +714,7 @@ import { initPlayground } from './src/ui/playground.js';
 // runtime.js is a pure library with no demo UI. One init call wires
 // the page: example buttons, run/clear/stdin/argv, streaming output,
 // the files panel, and the CodeSandbox instance.
-initPlayground({ CodeSandbox });
+initPlayground({ CodeSandbox, useXterm: true });
     </script>
 </body>
 </html>

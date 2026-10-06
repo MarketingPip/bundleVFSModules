@@ -15,11 +15,12 @@
 //   import { initPlayground, EXAMPLES } from './src/ui/playground.js';
 //   initPlayground({ CodeSandbox }); // wires the page's demo DOM
 //
-// The demo-only CDN imports (xterm, shellwords) live here, not in the
-// library. Public library helpers used here (transpileTypeScript,
+// The demo-only CDN import (shellwords) lives here, not in the library;
+// xterm.js is dynamically imported inside initPlayground() so a CDN outage
+// falls back to DOM mode instead of breaking the playground module.
+// Public library helpers used here (transpileTypeScript,
 // flattenFileTree, builtinModules) are imported from runtime.js.
 
-import { Terminal } from "https://esm.sh/xterm@5.3.0";
 import { split } from "https://esm.sh/shellwords?target=node";
 import {
   transpileTypeScript,
@@ -1958,22 +1959,41 @@ export function initPlayground({
 
   // Optional xterm.js terminal output (the older runtime.js wiring).
   // xterm handles ANSI escape codes natively (colors, cursor movement).
+  //
+  // Terminal is dynamically imported so the esm.sh CDN stays demo-only:
+  // if the CDN is down (or init throws), we log a warning and fall back
+  // to DOM mode instead of breaking the whole playground.
   let term = null;
   if (useXterm) {
-    term = new Terminal({
-      cols: 80,
-      rows: 24,
-      cursorBlink: true,
-      theme: { background: "#1a1b26", foreground: "#c0caf5" },
-    });
-    term.open(outputEl);
-    // Wire user input to sandbox stdin. onData fires for every keypress
-    // including special keys (arrows, backspace, etc.).
-    term.onData((data) => {
-      sandbox.invoke("__stdin__", data).catch((err) => {
-        console.error("[stdin] send failed:", err);
+    initXtermTerminal();
+  }
+
+  // Async helper (initPlayground itself stays sync): resolves `term` once
+  // the xterm.js CDN module loads, or leaves DOM mode in place on failure.
+  async function initXtermTerminal() {
+    try {
+      const { Terminal } = await import("https://esm.sh/xterm@5.3.0");
+      term = new Terminal({
+        cols: 80,
+        rows: 24,
+        cursorBlink: true,
+        theme: { background: "#1a1b26", foreground: "#c0caf5" },
       });
-    });
+      term.open(outputEl);
+      // Wire user input to sandbox stdin. onData fires for every keypress
+      // including special keys (arrows, backspace, etc.).
+      term.onData((data) => {
+        sandbox.invoke("__stdin__", data).catch((err) => {
+          console.error("[stdin] send failed:", err);
+        });
+      });
+    } catch (e) {
+      term = null;
+      console.warn(
+        "[playground] xterm init failed, falling back to DOM mode:",
+        e,
+      );
+    }
   }
 
   function print(text, cls) {
