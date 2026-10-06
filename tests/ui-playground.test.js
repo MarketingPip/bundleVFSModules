@@ -200,7 +200,7 @@ describe("ui.html is thin", () => {
 
   test("delegates to initPlayground", () => {
     expect(UI_SRC).toContain("from './src/ui/playground.js'");
-    expect(UI_SRC).toContain("initPlayground({ CodeSandbox, useXterm: true })");
+    expect(UI_SRC).toContain("initPlayground({ CodeSandbox, useXterm })");
   });
 
   test("no inline EXAMPLES duplication", () => {
