@@ -1196,7 +1196,6 @@ process.stdin.on('data', (chunk) => {
   repl: `// REPL: interactive evaluation loop
 console.log('Mini REPL — type JS expressions, Send to evaluate, "exit" to quit.');
 process.stdin.on('data', (chunk) => {
-  console.log('[DEBUG] data handler called with:', JSON.stringify(chunk.toString()));
   const line = chunk.toString().trim();
   if (line === 'exit' || line === '.exit') {
     console.log('Bye!');

@@ -6310,6 +6310,14 @@ globalThis.${config.interopVariable}.expose('__stdin__', (args) => {
     .replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
 }
   // TODO: handle if buffered pass or possible remove if emulating node?
+    // Buffer early input instead of silently dropping it: if the sandbox
+    // hasn't attached a stdin listener yet (race between __stdin__ and
+    // user code), queue the input and flush on first 'data' listener.
+    if (s && !hasListeners) {
+      s._pendingStdin = s._pendingStdin || [];
+      s._pendingStdin.push(args);
+      return;
+    }
     try {   
               const cleanedCode = stripKeySequencesPreserveWhitespace(args);
               
@@ -8146,6 +8154,17 @@ pushData(chunk) {
   });
 
   stdin.on('removeListener', () => stdin._checkResolve());
+
+  // Flush buffered early stdin input when the first 'data' listener attaches.
+  // The 'newListener' event fires after the handler is registered, so it's
+  // safe to pushData immediately.
+  stdin.on('newListener', (ev) => {
+    if (ev === 'data' && stdin._pendingStdin && stdin._pendingStdin.length) {
+      const pending = stdin._pendingStdin;
+      stdin._pendingStdin = [];
+      pending.forEach((chunk) => stdin.pushData(chunk));
+    }
+  });
 
  //const { Writable } = require('stream');
 
