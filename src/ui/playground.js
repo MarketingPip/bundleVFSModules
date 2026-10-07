@@ -1195,12 +1195,10 @@ process.stdin.on('data', (chunk) => {
 
   repl: `// REPL: interactive evaluation loop
 console.log('Mini REPL — type JS expressions, Send to evaluate, "exit" to quit.');
-const keepAlive = setInterval(() => {}, 60000); // keep runtime alive for multi-input
 process.stdin.on('data', (chunk) => {
   const line = chunk.toString().trim();
   if (line === 'exit' || line === '.exit') {
     console.log('Bye!');
-    clearInterval(keepAlive);
     process.exit(0);
   }
   try {
@@ -1213,12 +1211,10 @@ process.stdin.on('data', (chunk) => {
   repl2: `// REPL v2: persistent scope across lines
 console.log('REPL v2 — variables persist. Try: x = 5, then x * 2, then exit');
 const scope = {};
-const keepAlive = setInterval(() => {}, 60000); // keep runtime alive for multi-input
 process.stdin.on('data', (chunk) => {
   const line = chunk.toString().trim();
   if (line === 'exit') {
     console.log('Bye!');
-    clearInterval(keepAlive);
     process.exit(0);
   }
   try {
