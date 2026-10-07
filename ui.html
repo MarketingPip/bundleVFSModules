@@ -365,6 +365,9 @@ console.log('✅ Execution complete!');</textarea>
                         <button id="clearBtn" class="px-4 py-2 bg-gray-700 rounded-lg hover:bg-gray-600 transition-colors text-sm">
                             Clear
                         </button>
+                        <button id="xtermToggle" class="px-4 py-2 bg-gray-700 rounded-lg hover:bg-gray-600 transition-colors text-sm" title="Toggle xterm.js terminal mode">
+                            Terminal: DOM
+                        </button>
                     </div>
                     <div id="output" class="h-96 bg-black bg-opacity-50 p-4 rounded-lg overflow-y-auto code-editor text-sm break-all">
                         <div class="text-gray-500 italic ">
@@ -715,7 +718,17 @@ import { initPlayground } from './src/ui/playground.js';
 // the page: example buttons, run/clear/stdin/argv, streaming output,
 // the files panel, and the CodeSandbox instance.
 // xterm is opt-in via ?xterm=1 (defaults to DOM mode for E2E compatibility).
+// Toggle button switches modes by reloading with the query param.
 const useXterm = new URLSearchParams(location.search).get('xterm') === '1';
+const xtermBtn = document.getElementById('xtermToggle');
+if (xtermBtn) {
+  xtermBtn.textContent = useXterm ? 'Terminal: xterm' : 'Terminal: DOM';
+  xtermBtn.addEventListener('click', () => {
+    const url = new URL(location.href);
+    url.searchParams.set('xterm', useXterm ? '0' : '1');
+    location.href = url.toString();
+  });
+}
 initPlayground({ CodeSandbox, useXterm });
     </script>
 </body>

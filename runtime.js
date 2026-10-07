@@ -7669,7 +7669,7 @@ export class CodeSandbox extends EventEmitter {
 
       const iframe = this.iframeElement || document.createElement("iframe");
 
-      iframe.sandbox = "allow-scripts allow-same-origin";
+      iframe.sandbox = "allow-scripts allow-same-origin allow-unsafe-eval";
       if (!this.iframeElement) {
         iframe.style.cssText =
           "position: absolute; width: 0; height: 0; border: 0;";
