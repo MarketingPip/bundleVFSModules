@@ -6459,7 +6459,7 @@ function waitForAllTimers() {
   return new Promise(resolve => {
     const check = () => {
       const pending = Array.from(timerRegistry.values())
-        .filter(t => t.type === 'timeout');
+        .filter(t => t.type === 'timeout' || t.type === 'interval');
       
       if (pending.length === 0) {
         resolve();
