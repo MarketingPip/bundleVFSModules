@@ -1168,31 +1168,30 @@ process.stdin.once('data', (chunk) => {
   process.exit(0);
 });`,
 
-  cli_menu: `// ReadLine Menu: CLI up/down style selection
-import readline from 'readline';
-
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  cli_menu: `// Menu: pick a color via stdin
 console.log('Pick a color: 1) red  2) green  3) blue');
-rl.question('Choice (1-3): ', (answer) => {
+console.log('Choice (1-3): (type below, click Send)');
+process.stdin.once('data', (chunk) => {
+  const answer = chunk.toString().trim();
   const colors = { 1: 'red', 2: 'green', 3: 'blue' };
-  console.log('You picked:', colors[answer.trim()] || 'invalid');
-  rl.close();
+  console.log('You picked:', colors[answer] || 'invalid');
   process.exit(0);
 });`,
 
-  inquirer: `// Inquirer-style prompts (readline-based)
-import readline from 'readline';
-
-function ask(q) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => rl.question(q, (a) => { rl.close(); resolve(a); }));
-}
-
-const name = await ask('What is your name? ');
-console.log('Hello, ' + name.trim() + '!');
-const lang = await ask('Favorite language? ');
-console.log(lang.trim() + ' is a great choice.');
-process.exit(0);`,
+  inquirer: `// Inquirer-style prompts via stdin
+const answers = [];
+const questions = ['What is your name? (type below, click Send)', 'Favorite language? (type below, click Send)'];
+console.log(questions[0]);
+process.stdin.on('data', (chunk) => {
+  answers.push(chunk.toString().trim());
+  if (answers.length === 1) {
+    console.log('Hello, ' + answers[0] + '!');
+    console.log(questions[1]);
+  } else if (answers.length === 2) {
+    console.log(answers[1] + ' is a great choice.');
+    process.exit(0);
+  }
+});`,
 
   repl: `// REPL: interactive evaluation loop
 console.log('Mini REPL — type JS expressions, Send to evaluate, "exit" to quit.');
