@@ -7173,21 +7173,10 @@ ${code}\n})();
           if (typeof process?.stdin?.waitUntilNoListeners !== "function") {
             return Promise.resolve();
           }
-          const relevant = ['data','end','close','error','keypress'];
-          const hasListeners = () => relevant.reduce(
-            (n, ev) => n + process.stdin.listenerCount(ev), 0
-          ) > 0;
-          // Give async module loading a bounded window to wire up stdin.
-          const maxAttempts = 40; // 40 * 50ms = 2s
-          const sleep = (ms) => new Promise(res =>
-            (typeof originalSetTimeout !== 'undefined'
-              ? originalSetTimeout
-              : setTimeout)(res, ms)
-          );
-          for (let i = 0; i < maxAttempts; i++) {
-            if (hasListeners()) break;
-            await sleep(50);
-          }
+          // Directly wait for stdin listeners to be removed. The 2s poll
+          // for async module loading was buggy (process identity issues)
+          // and is unnecessary: if no listeners are attached, this resolves
+          // immediately; if they are, it waits until removed.
           return process.stdin.waitUntilNoListeners() ?? Promise.resolve();
         })(),
            typeof _RUNTIME${config.uuid}_.__httpServerRunTime !== "undefined"
