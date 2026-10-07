@@ -7159,26 +7159,6 @@ ${code}\n})();
         waitForAllFetches(),
         waitForAllXhrs(),
         waitForAllTimers(),
-        // Poll for stdin listeners to allow async code (like inquirer via
-        // esm.sh CDN) time to finish module loading and attach its listeners.
-        // A single tick isn't enough: inquirer's dependency graph resolves
-        // through interopChannel dynamic imports (network fetches), taking
-        // many ticks. Poll every 50ms (like waitForAllTimers) for up to 2s;
-        // if listeners appear, waitUntilNoListeners() takes over and waits
-        // for them to be removed (i.e. prompt resolved/dismissed).
-        // NOTE: Use originalSetTimeout (not the patched setTimeout) so the
-        // polling delays aren't tracked by waitForAllTimers() — otherwise
-        // the two would deadlock (each waiting for the other's timers).
-        (async () => {
-          if (typeof process?.stdin?.waitUntilNoListeners !== "function") {
-            return Promise.resolve();
-          }
-          // Directly wait for stdin listeners to be removed. The 2s poll
-          // for async module loading was buggy (process identity issues)
-          // and is unnecessary: if no listeners are attached, this resolves
-          // immediately; if they are, it waits until removed.
-          return process.stdin.waitUntilNoListeners() ?? Promise.resolve();
-        })(),
            typeof _RUNTIME${config.uuid}_.__httpServerRunTime !== "undefined"
   ? _RUNTIME${config.uuid}_.__httpServerRunTime.waitForAllServers?.() ?? Promise.resolve()
   : Promise.resolve()
@@ -7186,6 +7166,14 @@ ${code}\n})();
        
    
     ])
+
+    // Sequential stdin wait (NOT in Promise.all): runs after main execution
+    // completes, so async module loading has finished attaching listeners.
+    // Event-driven via waitUntilNoListeners — no polling. If no listeners,
+    // resolves immediately.
+    if (typeof process?.stdin?.waitUntilNoListeners === "function") {
+      await (process.stdin.waitUntilNoListeners() ?? Promise.resolve());
+    }
     
     revertTrueOriginals();
     
