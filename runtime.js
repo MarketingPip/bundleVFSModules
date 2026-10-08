@@ -4084,6 +4084,29 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
 
         record.status = 'done';
         record.exports = resolved; // replace reference for future callers
+        // Unified sync/async builtin cache (fix/ondemand-require, Worker A):
+        // an async import() of a builtin now populates the sync _builtinCache,
+        // so a later sync require() returns the SAME instance with no preload.
+        // modulePath is underscore-normalized here (fs/promises -> fs_promises),
+        // so convert back to the slash-form manifest key; skip RUNTIME:*
+        // pseudo-builtins; only write keys the manifest actually lists
+        // (this also guards underscore-named builtins: child_process ->
+        // child/process misses, so fall back to the raw modulePath form).
+        // Best-effort: a cache failure must never break the load path.
+        try {
+          if (isNodeBuiltIn && resolved && typeof resolved === 'object') {
+            let manifestKey = String(modulePath).split('_').join('/');
+            if (manifestKey.indexOf('RUNTIME') !== 0) {
+              if (!Object.prototype.hasOwnProperty.call(_builtinManifest, manifestKey)) {
+                manifestKey = String(modulePath);
+              }
+              if (Object.prototype.hasOwnProperty.call(_builtinManifest, manifestKey) &&
+                  !_builtinCache.has(manifestKey)) {
+                _builtinCache.set(manifestKey, resolved);
+              }
+            }
+          }
+        } catch (cacheErr) { /* sync-cache write is best-effort only */ }
         return resolved;
 
       } catch (err) {
@@ -5975,7 +5998,34 @@ hrtime.bigint = () => {
         return undefined;
       }
       if (!_builtinCache.has(bare)) {
-        // Manifest-listed but not preloaded (preload failed or was
+        // Unified cache fallback (fix/ondemand-require, Worker A): the async
+        // loader populates _builtinCache on completion (see the hook in
+        // loadModule), but a builtin loaded through another path may live
+        // only in moduleRegistry. Scan for a completed record of the same
+        // builtin and return the same instance instead of throwing.
+        // _builtinCache stays the O(1) fast path; this O(n) scan is the
+        // safety net (kept deliberately after the fast path, not before).
+        // Registry keys store the underscore-normalized modulePath
+        // (entryPoint::fs_promises), so match both the slash-form bare and
+        // its underscore form, each with and without the node: prefix.
+        const bareUnderscored = bare.split('/').join('_');
+        let registryHit = null;
+        try {
+          for (const entry of moduleRegistry) {
+            const regKey = entry[0];
+            const rec = entry[1];
+            if (typeof regKey !== 'string' || !rec || rec.status !== 'done') continue;
+            if (regKey.endsWith('::node:' + bare) || regKey.endsWith('::' + bare) ||
+                regKey.endsWith('::node:' + bareUnderscored) || regKey.endsWith('::' + bareUnderscored)) {
+              registryHit = rec;
+              break;
+            }
+          }
+        } catch (scanErr) { /* fall through to the explicit error below */ }
+        if (registryHit) {
+          return _builtinRequireValue(registryHit.exports);
+        }
+        // Manifest-listed but in neither cache (preload failed or was
         // skipped): a sync require() can never wait for the async loader,
         // so say so explicitly instead of the old silent undefined
         // that surfaced far away as MODULE_NOT_FOUND.
