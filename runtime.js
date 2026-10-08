@@ -108,7 +108,6 @@ const _builtinManifest = {
   "stream/promises": "stream.js",
   "stream/web": "stream.js",
   string_decoder: "string_decoder.js",
-  test: "test.js",
   timers: "timers.js",
   "timers/promises": "timers_promises.js",
   tls: "tls.js",
@@ -6396,6 +6395,8 @@ globalThis.${config.interopVariable}.expose('__closeServer__', async (port) => {
 });
 
 // --- begin sync builtin preload (gap #3) ---
+// DISABLED 2026-10-08: Preload causes random shim execution and 30s timeouts. Shims must load on-demand.
+if (false) {
 // Populate the SYNC builtin cache before user code runs. dist/module.js's
 // loadBuiltinModule() can only use the sandbox RT.loadModule() when it
 // returns synchronously — it never does — so sync require('fs') via
@@ -6424,6 +6425,7 @@ try {
 } catch (e) {
   console.warn('[bvm] sync-builtin preload failed: ' + String((e && e.message) || e));
 }
+} // end if(false) - DISABLED preload
 // --- end sync builtin preload (gap #3) ---
 
    
