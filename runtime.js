@@ -1706,10 +1706,30 @@ export function transformImportsToLoadModule(
         // wrapper -> SyntaxError: Unexpected reserved word.
         if (preserveRequireCalls) return;
         const modulePath = node.arguments[0].value;
+        // On-demand require (Worker B): top-level builtin requires keep the
+        // existing hoist; builtin requires nested in a function rewrite to
+        // __bvmRequireSync() so nothing loads until the function is called.
+        // Nested non-builtin (relative/bare) requires keep the existing lift —
+        // they have no sync path in ESM scope.
+        const bareModulePath =
+          typeof modulePath === "string" && modulePath.indexOf("node:") === 0
+            ? modulePath.slice(5)
+            : modulePath;
+        const isBuiltin =
+          typeof bareModulePath === "string" &&
+          Object.prototype.hasOwnProperty.call(_builtinManifest, bareModulePath);
+        const enclosingFunc = findEnclosingFunction(node);
+        if (isBuiltin && enclosingFunc !== null) {
+          s.overwrite(
+            node.start,
+            node.end,
+            "__bvmRequireSync(" + JSON.stringify(modulePath) + ")",
+          );
+          return;
+        }
         const v = getLiftedVar(modulePath);
         setImportType(modulePath, "require");
 
-        const enclosingFunc = findEnclosingFunction(node);
         if (enclosingFunc && !enclosingFunc.async)
           functionsToMakeAsync.add(enclosingFunc);
 
@@ -3528,6 +3548,26 @@ function _builtinRequireValue(mod) {
   return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
     ? mod.default
     : mod;
+}
+// On-demand sync builtin require (transform-time hoisting companion):
+// nested require() of a builtin that is already cached returns it
+// synchronously; otherwise throws ERR_REQUIRE_ASYNC_MODULE directing the
+// user to await import() first. String-concat only inside this block:
+// it lives inside the outer sandbox template literal, so backticks and
+// template placeholders are forbidden here.
+function __bvmRequireSync(request) {
+  var bare = (typeof request === 'string' && request.indexOf('node:') === 0) ? request.slice(5) : request;
+  var key = Object.prototype.hasOwnProperty.call(_builtinManifest, bare) ? bare
+    : Object.prototype.hasOwnProperty.call(_builtinManifest, request) ? request : null;
+  if (key !== null && typeof _builtinCache !== 'undefined' && _builtinCache.has(key)) {
+    return _builtinRequireValue(_builtinCache.get(key));
+  }
+  var reason = key !== null
+    ? "it was not loaded yet. Use await import('" + request + "') first, then require() returns the cached instance"
+    : "unknown module";
+  var err = new Error("[ERR_REQUIRE_ASYNC_MODULE] Cannot require '" + request + "' synchronously: " + reason);
+  err.code = 'ERR_REQUIRE_ASYNC_MODULE';
+  throw err;
 }
 // --- end sync builtin require interop (gap #3) ---
 
