@@ -89,7 +89,11 @@ const walk = {
 };
 
 function loadTransform() {
+  // The transform reads _builtinManifest for every require() call (on-demand
+  // require: nested builtin requires rewrite to __bvmRequireSync). Provide
+  // the module-scope binding the extracted function expects.
   const code =
+    "const _builtinManifest = { fs: 'fs.js', 'fs/promises': 'fs_promises.js' };\n" +
     extractFunction(
       RUNTIME_SRC,
       "function generateImportBinding(node, liftedVar)",
