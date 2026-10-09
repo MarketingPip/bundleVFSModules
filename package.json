@@ -24,6 +24,9 @@
     "set-cookie-parser": "^3.1.2",
     "typescript": "^5.9.2"
   },
+  "overrides": {
+    "esbuild": "0.22.0"
+  },
   "devDependencies": {
     "@jest/globals": "^30.5.2",
     "@rolldown/browser": "^1.2.12",
