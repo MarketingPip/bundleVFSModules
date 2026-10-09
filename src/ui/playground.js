@@ -1149,6 +1149,8 @@ console.log('Resolve ./lib/util.js from /app:', path.resolve('/app', './lib/util
 console.log('Relative from /app/src to /app/lib:', path.relative('/app/src', '/app/lib'));`,
 
   tests: `// Node.js Tests: emulate node:test
+// Clicking this example fills the argv box with --test (like \`node --test\`).
+// Without --test the tests only register — they do not run.
 import test from 'node:test';
 
 test('addition works', () => {
@@ -1157,7 +1159,7 @@ test('addition works', () => {
 test('strings concatenate', () => {
   if ('a' + 'b' !== 'ab') throw new Error('strings broke');
 });
-console.log('Tests registered — runner executes them automatically.');`,
+console.log('Tests registered — pass --test in argv to execute them.');`,
 
   cli: `// CLI: use STDIN — type in the stdin box below and click Send
 console.log('Waiting for your input... (type below, click Send)');
@@ -2026,6 +2028,11 @@ export function initPlayground({
         sandbox.requireAllowed = false;
         if (key === "require") {
           sandbox.requireAllowed = true;
+        }
+        // The tests example only auto-runs with --test in argv (node:test
+        // shim contract) — fill the argv box so one click runs end to end.
+        if (key === "tests" && argvInput) {
+          argvInput.value = "--test";
         }
         currentExample = key;
         codeInput.scrollIntoView({ behavior: "smooth", block: "center" });

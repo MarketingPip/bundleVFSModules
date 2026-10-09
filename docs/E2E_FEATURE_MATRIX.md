@@ -32,7 +32,7 @@ output substrings below.
 | top_level | — | `Top-level await result: 42`, `Delayed value: later` |
 | typescript | — | `hello typed world`, `answer = 42`, `add(2, 3) = 5` (transpiled by the playground's TS step) |
 | relative | — | `Resolve ./lib/util.js from /app: /app/lib/util.js`, `Relative from /app/src to /app/lib: ../lib` |
-| tests | — | `Tests registered — runner executes them automatically.` **only** — see gap note below |
+| tests | `--test` in argv (auto-filled by the example button) | `Tests registered — pass --test in argv to execute them.` + real spec output: `✔ addition works`, `✔ strings concatenate`, `ℹ tests 2`, `ℹ pass 2`, `ℹ fail 0` |
 | cli | send `hello-stdin` at `Waiting for your input` | `You typed: hello-stdin`, `Uppercase: HELLO-STDIN` |
 | cli_menu | send `2` at `Choice (1-3)` | `You picked: green` |
 | inquirer | send `Jared` at `What is your name?`, `Python` at `Favorite language?` | `Hello, Jared!`, `Python is a great choice.` |
@@ -43,25 +43,37 @@ output substrings below.
 | http | — | `Server listening on port 3000`, `Response: Hello from virtual server! Path: /hello`, `Server closed.` (loopback fetch bridged to the virtual server by the host) |
 | express | — | `App on :3001`, `/hello -> 200 Hello!`, `/json -> 200 {"ok":true}`, `/missing -> 404 not found` |
 
-### Known gap: `tests` example never executes the tests (runtime bug)
+### `tests` auto-run now lives in the shim (fixed 2026-10-09)
 
-The snippet prints `Tests registered — runner executes them automatically.`
-but in the playground path the tests only **register** — no runner output
-ever appears. Evidence:
+The old gap — tests only *registered*, never executed, in the playground
+path — is fixed. The mechanism was never an unwired `isTest` flag: the
+sandbox template keyed its `--test` interception off `config.process.argv`
+(`runtime.js` template:
+``${config?.process?.argv.includes("--test") ? …test bootstrap… : …normal…}``),
+which diverted user code through `_TEST_RUNNER_.execute()` instead of the
+normal path. That interception is deleted; the trigger moved into
+`src/test.js` `_maybeAutoRun()`:
 
-- `src/test.js` `_maybeAutoRun()` bails in the host-driven lane:
-  `if (typeof globalThis._RUNTIME_ !== "undefined") return;`
-- `CodeSandbox.execute()` computes `isTest: containsNodeTest(cleanedImports)`
-  (runtime.js:9194) and passes it to `SandboxRuntime.generate()`, but
-  neither `generate()` nor the sandbox template ever reads `config.isTest`
-  (zero occurrences in `src/sandbox-template.js` / `src/sandbox/`).
-- Live probe 2026-10-09: output was exactly the registration line, status
-  `Done`, no TAP/spec lines.
+- **Host lane** (playground, `_RUNTIME_` installed): auto-runs registered
+  tests only when `--test` appears in `process.argv` (Node parity with
+  `node --test`). Clicking the `tests` example button fills the argv box
+  with `--test`. The shim runs the tests once, formats the collected events
+  through each `--test-reporter` (default `spec`), and `console.log`s each
+  output. Output text is real spec lines (`✔ addition works (0.123ms)`,
+  `ℹ tests 2` / `ℹ pass 2` / `ℹ fail 0`). The sandbox completion gate is
+  held (`taskTracker.start/stop`) until printing finishes.
+- **`globalThis.__VITEST_SHIM_MANUAL__ = true`** opts out of auto-run even
+  with `--test` (the run is then driven externally).
+- **Real-Node lane** (including the parity harness's
+  `{ parityForceShim: true }` `_RUNTIME_` marker) keeps unconditional
+  auto-run — `parity/run.mjs` spawns children with no `--test` flag and
+  official test files rely on it. Scheduling stays debounced: every
+  `test()`/`suite()` call re-arms a `setImmediate`, so registrations across
+  top-level awaits are picked up.
 
-Minimal repro: open ui.html, click the `tests` example button, Run — output
-is only the registration line. The E2E test asserts this honest behavior
-(status `Done` + registration line) until the runtime wires `isTest` to an
-actual runner invocation.
+The E2E asserts all three host-lane behaviors: `--test` → real spec
+output; no `--test` → registration line only, no test output; manual
+opt-out with `--test` → registration line only, no test output.
 
 ### Test-harness notes
 

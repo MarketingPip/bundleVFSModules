@@ -45,7 +45,8 @@ function blockEnd(src, braceIndex) {
 
 function extractFunction(src, marker) {
   const start = src.indexOf(marker);
-  if (start === -1) throw new Error("marker not found in runtime.js: " + marker);
+  if (start === -1)
+    throw new Error("marker not found in runtime.js: " + marker);
   // Skip past the balanced parameter list first: the first "{" after "("
   // may belong to a default parameter (e.g. `opts = {}`), not the body.
   let p = src.indexOf("(", start);
@@ -64,7 +65,8 @@ function extractFunction(src, marker) {
 function extractConstBlock(src, marker) {
   // marker like "const _builtinManifest ="; extracts through the matching "};"
   const start = src.indexOf(marker);
-  if (start === -1) throw new Error("marker not found in runtime.js: " + marker);
+  if (start === -1)
+    throw new Error("marker not found in runtime.js: " + marker);
   const brace = src.indexOf("{", start);
   return src.slice(start, blockEnd(src, brace)) + ";";
 }
@@ -96,7 +98,10 @@ function loadTransform() {
   const code =
     extractConstBlock(RUNTIME_SRC, "const _builtinManifest =") +
     "\n" +
-    extractFunction(RUNTIME_SRC, "function generateImportBinding(node, liftedVar)") +
+    extractFunction(
+      RUNTIME_SRC,
+      "function generateImportBinding(node, liftedVar)",
+    ) +
     "\n" +
     extractFunction(RUNTIME_SRC, "function transformImportsToLoadModule(");
   const factory = new Function(
@@ -207,13 +212,12 @@ describe("transform: on-demand require hoisting", () => {
       "function t(){ return require('fs'); }",
     );
     const calls = [];
-    const t = new Function(
-      "__bvmRequireSync",
-      out.code + "\nreturn t;",
-    )((req) => {
-      calls.push(req);
-      return { fake: true };
-    });
+    const t = new Function("__bvmRequireSync", out.code + "\nreturn t;")(
+      (req) => {
+        calls.push(req);
+        return { fake: true };
+      },
+    );
     expect(calls).toEqual([]); // definition alone: zero loader interaction
     const ret = t(); // now call it
     expect(calls).toEqual(["fs"]);
@@ -222,7 +226,10 @@ describe("transform: on-demand require hoisting", () => {
 
   test("top-level builtin require still hoists to await loadModule", () => {
     const { transformImportsToLoadModule } = loadTransform();
-    const out = transformImportsToLoadModule("uuid", "const fs = require('fs');");
+    const out = transformImportsToLoadModule(
+      "uuid",
+      "const fs = require('fs');",
+    );
     expect(out.code).toContain("await");
     expect(out.code).toContain('loadModule("fs"');
     expect(out.code).not.toContain("__bvmRequireSync");
@@ -269,7 +276,10 @@ describe("transform: on-demand require hoisting", () => {
 
   test("top-level dynamic require(moduleName) also defers to __bvmRequireSync", () => {
     const { transformImportsToLoadModule } = loadTransform();
-    const out = transformImportsToLoadModule("uuid", "const x = require(name);");
+    const out = transformImportsToLoadModule(
+      "uuid",
+      "const x = require(name);",
+    );
     expect(out.code).toContain("__bvmRequireSync(name)");
     expect(out.code).not.toContain("loadModule");
   });
@@ -292,9 +302,15 @@ describe("transform: on-demand require hoisting", () => {
 
   test("preserveRequireCalls still leaves dynamic require() intact (CJS build)", () => {
     const { transformImportsToLoadModule } = loadTransform();
-    const out = transformImportsToLoadModule("uuid", "function t(){ return require(name); }", null, null, {
-      preserveRequireCalls: true,
-    });
+    const out = transformImportsToLoadModule(
+      "uuid",
+      "function t(){ return require(name); }",
+      null,
+      null,
+      {
+        preserveRequireCalls: true,
+      },
+    );
     expect(out.code).toContain("require(name)");
     expect(out.code).not.toContain("__bvmRequireSync");
   });
@@ -333,8 +349,7 @@ describe("__bvmRequireSync", () => {
     const f = make(
       MANIFEST,
       new Map(),
-      (mod) =>
-        mod && typeof mod.default === "function" ? mod.default : mod,
+      (mod) => (mod && typeof mod.default === "function" ? mod.default : mod),
       () => Promise.resolve(ns),
     );
     expect(await f("fs")).toBe(FakeEmitter);
@@ -346,7 +361,9 @@ describe("__bvmRequireSync", () => {
     let calls = 0;
     const fakeLoadModule = () => {
       calls++;
-      return new Promise((resolve) => setTimeout(() => resolve(fakeModule), 10));
+      return new Promise((resolve) =>
+        setTimeout(() => resolve(fakeModule), 10),
+      );
     };
     const f = make(MANIFEST, new Map(), (m) => m, fakeLoadModule);
     const p1 = f("fs");
@@ -474,21 +491,19 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     if (files.length === 0) return; // on main post-merge: nothing to guard
-    // The branch footprint is the union of the committed work on it:
-    // - 5505fb7e: feature-matrix plan doc
-    // - 130f64dd: inlineWasmDataUrls guard dedupe (runtime.js)
-    // - 9df7bd01: stale-claim fixes in the runtime contract docs
-    // - this change: require/loadModule region of runtime.js + RUNTIME.md
-    //   require() semantics. Sibling workers' untracked e2e files and
-    //   working-tree edits to the plan doc are theirs, not strays.
+    // The branch footprint is the union of the committed work on it
+    // (feat/test-autorun-and-modularization, Item 1: --test auto-run moves
+    // into the node:test shim): src/test.js owns the trigger, runtime.js
+    // drops the template interception, playground.js updates the tests
+    // example, docs record the contract. tests/ is excluded above.
     expect(files.sort()).toEqual(
       [
         "docs/E2E_FEATURE_MATRIX.md",
         "docs/RUNTIME.md",
-        "docs/SHIM_AUTHORING.md",
-        "docs/SINGLETONS.md",
         "runtime.js",
-      ].sort()
+        "src/test.js",
+        "src/ui/playground.js",
+      ].sort(),
     );
   });
 
@@ -502,9 +517,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       cwd: REPO_ROOT,
       encoding: "utf8",
     });
-    const addedFns = out
-      .split("\n")
-      .filter((l) => l.startsWith("+function "));
+    const addedFns = out.split("\n").filter((l) => l.startsWith("+function "));
     expect(addedFns).toEqual([]);
   });
 

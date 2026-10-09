@@ -185,6 +185,37 @@ Our `src/process.js` is **not** that object — it only serves explicit
 `import "node:process"`. It must mirror the same values (read them from
 `globalThis._RUNTIME_.process`, with guards for standalone use).
 
+## `node:test` auto-run contract (`--test`)
+
+The `--test` auto-run trigger lives in the shim (`src/test.js`
+`_maybeAutoRun`), not in the runtime template. The template no longer
+intercepts `--test` — imports are always injected and user code always runs
+the normal `await (async () => { code })()` path.
+
+- **Host lane** (sandbox, `globalThis._RUNTIME_` installed by the host):
+  registered tests auto-run **only when `--test` appears in
+  `process.argv`** (Node parity with `node --test`; the playground's argv
+  box feeds `config.process.argv`). Without it, tests register but do not
+  run. `globalThis.__VITEST_SHIM_MANUAL__ = true` opts out even with
+  `--test`. Gates are re-checked when the debounced `setImmediate` fires,
+  since flags may change between scheduling and firing.
+- **Real-Node lane** (no host): auto-runs unconditionally. The parity
+  harness's `{ parityForceShim: true }` `_RUNTIME_` marker is explicitly
+  excluded from the host lane, so `parity/run.mjs` (which spawns children
+  with no `--test` flag) keeps working.
+- **Reporting**: the shim parses `--test-reporter <v>` /
+  `--test-reporter=<v>` from `process.argv` (comma-separated, default
+  `['spec']`; unknown names warn and fall back to `spec` via the existing
+  `_resolveReporter`). Tests run once; the collected events are formatted
+  through each reporter (shared `_formatEvents` helper, also used by
+  `execute()`) and each output is `console.log`ed. The sandbox completion
+  gate is held (`_RUNTIME_.taskTracker.start()` before the run,
+  `.stop()` in a `finally` after printing — guarded, the tracker may be
+  null), and `process.exitCode = 1` when any test fails.
+- `_TEST_RUNNER_` stays installed by the shim (guarded on
+  `globalThis._RUNTIME_`) as the host integration point; `execute()`
+  remains a public API that disables auto-run for the instance.
+
 ## Console, timers, network, terminal
 
 - **Console**: `emitMe` → `sendConsoleMessage` → `window.parent.postMessage({ type: "console", … })`.
