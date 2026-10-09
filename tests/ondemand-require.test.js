@@ -483,12 +483,22 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
   // to guard.
   const diffBase = "origin/main...HEAD";
 
-  test("dist/ is untouched by the branch", () => {
-    const out = execSync(`git diff --stat ${diffBase} -- dist/`, {
+  test("dist/ changes are exactly the rebuilt artifacts", () => {
+    const out = execSync(`git diff --name-only ${diffBase} -- dist/`, {
       cwd: REPO_ROOT,
       encoding: "utf8",
     });
-    expect(out.trim()).toBe("");
+    const files = out
+      .trim()
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    // src/test.js changed (Item 1: --test auto-run moved into the node:test
+    // shim), so its build output dist/test.js must be rebuilt — the committed
+    // dist was stale (built from the pre-autorun src). dist/vfs.js bundles
+    // the updated shim and is rebuilt by the same ./src/build-vfs.mjs run.
+    // Any other dist/ change is a stray.
+    expect(files.sort()).toEqual(["dist/test.js", "dist/vfs.js"].sort());
   });
 
   test("branch footprint outside tests/ is exactly the allowlist (catches strays)", () => {
@@ -512,6 +522,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     expect(files.sort()).toEqual(
       [
         ".github/workflows/run.yaml",
+        "dist/test.js",
+        "dist/vfs.js",
         "docs/E2E_FEATURE_MATRIX.md",
         "docs/RUNTIME.md",
         "runtime.js",
