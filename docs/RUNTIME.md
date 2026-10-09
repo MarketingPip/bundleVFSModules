@@ -110,6 +110,68 @@ with their lifecycle rules in `docs/SINGLETONS.md`.
 | `.__RUNTIME_RESOLVE__HANDLE` | our `src/runtime/importMetaResolver.js` | backs `import.meta.resolve`. |
 | `.coverage` | runtime (optional) | lcov-style coverage hooks. |
 
+## `require()` semantics
+
+`transformImportsToLoadModule` (in `runtime.js`) rewrites every `require()`
+call site; there is no global `require` in the sandbox. The rules, verified
+by `tests/ondemand-require.test.js` (transform + extracted runtime unit
+tests) and `tests/ondemand-require-e2e.py` (headed-Firefox browser matrix):
+
+- **Top-level `require("builtin")`** (including inside a top-level block,
+  even a dead one like `if (false) { … }`) is hoisted: the preamble gets
+  `const __lm_x = await loadModule("builtin", "require", …)` and the call
+  site becomes `(__lm_x && __lm_x.default !== undefined ? __lm_x.default
+  : __lm_x)`. It is **eager** — the module loads at init whether or not the
+  code path runs.
+- **Builtin `require()` nested in a function** rewrites to
+  `__bvmRequireSync("builtin")` — nothing loads until the function is
+  called (Worker B on-demand design).
+- **`__bvmRequireSync` contract: sync-when-warm, promise-when-cold.** A
+  cache hit in `_builtinCache` returns the module synchronously (same
+  `_builtinRequireValue` unwrap the sync builtin consumers use). A cold
+  builtin **triggers `loadModule()` and returns its promise** — the caller
+  awaits it. True lazy-on-call with a synchronous return is impossible: JS
+  has no primitive that blocks the event loop on a promise, so a sync
+  `require()` can never wait for the async loader. Once the load completes,
+  `loadModule`'s `_builtinCache` hook makes every later `require()` of that
+  builtin synchronous, so the warm contract is unchanged. Concurrent cold
+  requires share one in-flight promise (`_bvmRequirePending`, keyed by
+  manifest key) and resolve to the same instance; a failed load deletes its
+  pending entry so the next call retries instead of caching a rejection.
+  The cold path calls `loadModule` via `globalThis._RUNTIME_.loadModule`,
+  not the bare identifier: the bare top-level `loadModule` binding is not
+  reliably resolvable from `__bvmRequireSync`'s scope in the
+  es-module-shims-executed sandbox module (verified live 2026-10-09:
+  `typeof loadModule === "undefined"` while
+  `globalThis._RUNTIME_.loadModule === "function"`). The runtime-object
+  property path is the same one the transform emits for imports.
+- **Dynamic `require(name)`** (non-literal specifier, including template
+  literals) rewrites the callee to `__bvmRequireSync(name)` and resolves at
+  runtime as above. A specifier that is not a manifest builtin throws
+  `ERR_REQUIRE_ASYNC_MODULE` — dynamic require of non-builtins has no sync
+  path; use `import()`.
+- **Identity across paths.** `await import("x")` populates `_builtinCache`
+  via the `loadModule` hook, so a later `require("x")` returns the **same
+  instance** (`import * as ns` / `require("x")` are `===`, including named
+  exports). Builtins canonicalize to the modulePath registry key
+  (`resolvedPath` is null), so a `require()` racing an `import()` dedupes to
+  a single evaluation; `diagnostics_channel`'s registry is a singleton
+  across both paths (each module is evaluated exactly once).
+- **Live bindings are NOT supported.** Named imports destructure at import
+  time (`const { x } = __lm`), and the interop proxy snapshots export values
+  at load (`Object.assign({}, data)`), so `export let` reassignment *inside*
+  a shim is invisible to importers (verified: `node:domain`'s `active` stays
+  `null` through the proxy after `enter()`). Same-object mutation through a
+  shared namespace *is* visible — that is identity, not live bindings.
+- **Sandbox identity caveat.** Every `dist/` entry is bundled independently
+  (esbuild `bundle: true, external: []` per entry in `src/build-vfs.mjs`),
+  so each bundle inlines its own dependency copies:
+  `require("buffer").Buffer !== globalThis.Buffer` (the latter is
+  `RUNTIME:NODE_GLOBALS`' inlined copy; the bundle's class is even minified
+  to `je`). Both are sandbox-scoped and fully functional — neither is the
+  host's (the browser host has no `Buffer`) — but cross-bundle class
+  identity does not hold.
+
 ## The process shim
 
 The runtime installs its **own** `globalThis.process` (and non-configurable

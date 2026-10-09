@@ -1697,9 +1697,7 @@ export function transformImportsToLoadModule(
       if (
         node.callee.type === "Identifier" &&
         node.callee.name === "require" &&
-        node.arguments.length === 1 &&
-        node.arguments[0].type === "Literal" &&
-        typeof node.arguments[0].value === "string"
+        node.arguments.length === 1
       ) {
         // When building a CommonJS module for require(), leave require()
         // calls intact: the runtime executes them synchronously via
@@ -1707,7 +1705,20 @@ export function transformImportsToLoadModule(
         // loadModule() calls here would place 'await' inside the sync IIFE
         // wrapper -> SyntaxError: Unexpected reserved word.
         if (preserveRequireCalls) return;
-        const modulePath = node.arguments[0].value;
+        const arg = node.arguments[0];
+        if (arg.type !== "Literal" || typeof arg.value !== "string") {
+          // Dynamic require(moduleName): the specifier is not statically
+          // known, so neither the top-level hoist nor the nested-builtin
+          // fast path applies. Rewrite the callee to __bvmRequireSync and
+          // let the runtime resolve it: a manifest builtin returns the
+          // cached instance synchronously when warm, otherwise triggers the
+          // async load and returns its promise; anything else throws
+          // ERR_REQUIRE_ASYNC_MODULE (dynamic require of a non-builtin has
+          // no sync path - use import()).
+          s.overwrite(node.callee.start, node.callee.end, "__bvmRequireSync");
+          return;
+        }
+        const modulePath = arg.value;
         // On-demand require (Worker B): top-level builtin requires keep the
         // existing hoist; builtin requires nested in a function rewrite to
         // __bvmRequireSync() so nothing loads until the function is called.
@@ -3535,6 +3546,13 @@ globalThis._RUNTIME_ = globalThis._RUNTIME${config.uuid}_;
 // sync require() of a builtin throws ERR_REQUIRE_ASYNC (load it async first).
 const _builtinManifest = ${JSON.stringify(_builtinManifest)};
 const _builtinCache = new Map();
+// In-flight cold-require promises, keyed by manifest key. A synchronous
+// require() cannot block on the async loader, so a cold builtin require()
+// triggers loadModule() and returns its promise; this map lets concurrent
+// cold requires for the same builtin share one load and resolve to the same
+// instance. Entries are deleted on settle (success and failure), so a failed
+// load is retried on the next call instead of caching a rejection.
+var _bvmRequirePending = new Map();
 
 // --- begin sync builtin require interop (gap #3) ---
 // Single-default interop shared by the sync builtin consumers
@@ -3567,10 +3585,34 @@ function __bvmRequireSync(request) {
   if (key !== null && typeof _builtinCache !== 'undefined' && _builtinCache.has(key)) {
     return _builtinRequireValue(_builtinCache.get(key));
   }
-  var reason = key !== null
-    ? "it was not loaded yet. Use await import('" + request + "') first, then require() returns the cached instance"
-    : "unknown module";
-  var err = new Error("[ERR_REQUIRE_ASYNC_MODULE] Cannot require '" + request + "' synchronously: " + reason);
+  if (key !== null) {
+    // Cold builtin: true lazy-on-call with a synchronous return is impossible
+    // - JS has no primitive that blocks the event loop on a promise - so the
+    // call triggers the async load now and returns its promise. The promise is
+    // cached in _bvmRequirePending so concurrent cold requires share one
+    // loadModule() call and resolve to the same instance. loadModule's own
+    // _builtinCache hook makes every later require() of this builtin
+    // synchronous, so the warm contract is unchanged; only the cold path
+    // changes (previously it threw ERR_REQUIRE_ASYNC_MODULE telling the user
+    // to await import() first - still valid, just no longer required).
+    // NOTE: call loadModule via the runtime object, NOT the bare identifier.
+    // The bare top-level loadModule binding is not reliably resolvable from
+    // this scope in the executed sandbox module (es-module-shims execution
+    // quirk: only some top-level function declarations survive as bindings -
+    // verified live 2026-10-09: typeof loadModule === 'undefined' while
+    // globalThis._RUNTIME_.loadModule === 'function'). The runtime-object
+    // property path is the same one the transform emits for imports, and it
+    // always works. globalThis._RUNTIME_ is the stable per-sandbox alias set
+    // at the top of this template.
+    if (!_bvmRequirePending.has(key)) {
+      _bvmRequirePending.set(key, globalThis._RUNTIME_.loadModule(request).then(
+        function (mod) { _bvmRequirePending.delete(key); return _builtinRequireValue(mod); },
+        function (loadErr) { _bvmRequirePending.delete(key); throw loadErr; }
+      ));
+    }
+    return _bvmRequirePending.get(key);
+  }
+  var err = new Error("[ERR_REQUIRE_ASYNC_MODULE] Cannot require '" + request + "' synchronously: unknown module '" + request + "' is not a Node builtin; dynamic require() of a non-builtin has no sync path, use import()");
   err.code = 'ERR_REQUIRE_ASYNC_MODULE';
   throw err;
 }
