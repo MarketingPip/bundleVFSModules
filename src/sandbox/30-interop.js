@@ -21,8 +21,20 @@ const interopChannel = {
           clearTimeout(timeout);
           window.removeEventListener("message", handler);
           if (event.data.error) {
-            // thinking we need to throw back to sandbox then reject?
-            reject(new Error(event.data.error));
+            // Parent sends structured { message, code, name } (or a legacy string).
+            // Reconstruct the error so err.code / err.name survive the boundary.
+            var errInfo = event.data.error;
+            var errMessage =
+              errInfo && typeof errInfo === "object"
+                ? errInfo.message
+                : errInfo;
+            var bvmErr = new Error(errMessage);
+            if (errInfo && typeof errInfo === "object") {
+              if (errInfo.code) bvmErr.code = errInfo.code;
+              if (errInfo.name && errInfo.name !== "Error")
+                bvmErr.name = errInfo.name;
+            }
+            reject(bvmErr);
           } else {
             resolve(event.data.result);
           }
@@ -50,6 +62,7 @@ const interopChannel = {
     const RUNTIME_METHODS = [
       "__check_exists__",
       "__stdin__",
+      "__terminal_resize__",
       "__serverRequest__",
     ];
     if (!RUNTIME_METHODS.includes(name)) {
@@ -125,12 +138,5 @@ interopChannel.expose("__check_exists__", (methodName) => {
   return typeof interopChannel.exports[methodName] === "function";
 });
 
-// Make available globally under a Symbol key: invisible to Object.keys /
-// for-in / `in` on globalThis (same rationale as _BVM_RT_KEY_ in
-// 00-runtime-object.js). Non-enumerable so symbol-aware copies skip it too.
-Object.defineProperty(globalThis, _BVM_INTEROP_KEY_, {
-  value: interopChannel,
-  writable: true,
-  enumerable: false,
-  configurable: true,
-});
+// Make available globally
+globalThis[Symbol.for("bvm.interop")] = interopChannel;

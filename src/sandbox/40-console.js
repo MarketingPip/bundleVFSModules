@@ -135,6 +135,7 @@ window.parent.postMessage({
 
 }
 
+
  if(fn === "fs"){
   window.parent.postMessage({
     type: 'fs',
@@ -165,7 +166,7 @@ function sanitizeArg(arg) {
 }
 globalThis.emitMe = emitMe;
 
-globalThis[_BVM_RT_KEY_].emit = emitMe;
+globalThis._RUNTIME__UUID___.emit = emitMe;
 
 function sendConsoleMessage(method, args) {
 
@@ -223,4 +224,3 @@ EventEmitter.prototype.removeListener = EventEmitter.prototype.off;
   let _intervalId = null;
     const listeners = Object.create(null);
   let traceWarningHelperShown = false;
-  

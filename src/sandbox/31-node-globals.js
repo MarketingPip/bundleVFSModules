@@ -27,12 +27,12 @@ const setImmediate = globalThis.setImmediate || ((fn, ...args) => {
  
 // all interop.expose() will be hoisted here when code is running. 
  
-window.__INTEROP_VAR__ =  globalThis[_BVM_INTEROP_KEY_];  // this sets marker & exposes.
+window.__INTEROP_VAR__ =  globalThis[Symbol.for("bvm.interop")];  // this sets marker & exposes.
 
 
 
-//await _RUNTIME_SANDBOX_UUID_.loadModule("fs");
-//await _RUNTIME_SANDBOX_UUID_.__FS__.promises.writeFile("/data.json", JSON.stringify({ hello: "worlds" }), "utf8", );
+//await _RUNTIME__UUID___.loadModule("fs");
+//await _RUNTIME__UUID___.__FS__.promises.writeFile("/data.json", JSON.stringify({ hello: "worlds" }), "utf8", );
  /**
  * Runtime-compliant shim for import.meta.resolve
  * @param {string} specifier - The path to resolve (e.g., './utils.js')
@@ -42,8 +42,8 @@ window.__INTEROP_VAR__ =  globalThis[_BVM_INTEROP_KEY_];  // this sets marker & 
  function __RUNTIME_RESOLVE__HANDLE(specifier, parent = 'file:') {
   try {
   
-  if(globalThis[_BVM_RT_KEY_]?.__FS__){
-  const fs = globalThis[_BVM_RT_KEY_].__FS__;
+  if(globalThis?._RUNTIME__UUID___?.__FS__){
+  const fs = globalThis._RUNTIME__UUID___.__FS__;
   const parentDir = "./"
    if(process){
   parent = process.cwd();
@@ -132,6 +132,3 @@ observer.observe({ type: "resource", buffered: true });
 
 
 // Add to SandboxRuntime.generate() before user code execution:
-
-
- 
