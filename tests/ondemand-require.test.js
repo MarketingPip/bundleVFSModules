@@ -112,17 +112,34 @@ function loadTransform() {
 let cachedBvmSrc = null;
 function loadBvmRequireSync() {
   if (!cachedBvmSrc)
-    cachedBvmSrc = extractFunction(RUNTIME_SRC, "function __bvmRequireSync(request)");
+    cachedBvmSrc =
+      // _bvmRequirePending is a template-scope var in the real generated
+      // script (declared next to _builtinCache); the extracted function
+      // references it, so the harness provides it. The cold path calls
+      // globalThis._RUNTIME_.loadModule (the bare loadModule binding is not
+      // reliably resolvable in the es-module-shims-executed sandbox); the
+      // harness shadows globalThis with a fake carrying the injected loader.
+      "var _bvmRequirePending = new Map();\n" +
+      extractFunction(RUNTIME_SRC, "function __bvmRequireSync(request)");
   const src = cachedBvmSrc;
   return {
     src,
-    make: (manifest, cache, requireValue) =>
-      new Function(
+    make: (manifest, cache, requireValue, loadModule) => {
+      const fakeGlobal = {
+        _RUNTIME_: {
+          loadModule:
+            loadModule ||
+            (() => Promise.reject(new Error("loadModule unexpectedly called"))),
+        },
+      };
+      return new Function(
+        "globalThis",
         "_builtinManifest",
         "_builtinCache",
         "_builtinRequireValue",
         src + "\nreturn __bvmRequireSync;",
-      )(manifest, cache, requireValue),
+      )(fakeGlobal, manifest, cache, requireValue);
+    },
   };
 }
 
@@ -239,6 +256,48 @@ describe("transform: on-demand require hoisting", () => {
     );
     expect(out.code).not.toContain("require('./x')");
   });
+
+  test("dynamic require(moduleName) rewrites the callee to __bvmRequireSync", () => {
+    const { transformImportsToLoadModule } = loadTransform();
+    const out = transformImportsToLoadModule(
+      "uuid",
+      "function t(){ return require(name); }",
+    );
+    expect(out.code).toContain("__bvmRequireSync(name)");
+    expect(out.code).not.toContain("loadModule");
+  });
+
+  test("top-level dynamic require(moduleName) also defers to __bvmRequireSync", () => {
+    const { transformImportsToLoadModule } = loadTransform();
+    const out = transformImportsToLoadModule("uuid", "const x = require(name);");
+    expect(out.code).toContain("__bvmRequireSync(name)");
+    expect(out.code).not.toContain("loadModule");
+  });
+
+  test("dynamic require with a template literal defers too", () => {
+    const { transformImportsToLoadModule } = loadTransform();
+    const out = transformImportsToLoadModule(
+      "uuid",
+      "function t(){ return require(`fs`); }",
+    );
+    expect(out.code).toContain("__bvmRequireSync(`fs`)");
+  });
+
+  test("bare require() with no arguments is left alone", () => {
+    const { transformImportsToLoadModule } = loadTransform();
+    const out = transformImportsToLoadModule("uuid", "require();");
+    expect(out.code).toContain("require()");
+    expect(out.code).not.toContain("__bvmRequireSync");
+  });
+
+  test("preserveRequireCalls still leaves dynamic require() intact (CJS build)", () => {
+    const { transformImportsToLoadModule } = loadTransform();
+    const out = transformImportsToLoadModule("uuid", "function t(){ return require(name); }", null, null, {
+      preserveRequireCalls: true,
+    });
+    expect(out.code).toContain("require(name)");
+    expect(out.code).not.toContain("__bvmRequireSync");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -247,13 +306,89 @@ describe("transform: on-demand require hoisting", () => {
 describe("__bvmRequireSync", () => {
   const MANIFEST = { fs: "fs.js", "fs/promises": "fs_promises.js" };
 
-  test("throws ERR_REQUIRE_ASYNC_MODULE on cache miss", () => {
+  test("cold builtin returns a promise for the module instead of throwing", async () => {
+    // Lazy-on-call: a synchronous require() cannot block the event loop on
+    // the async loader, so the cold call triggers loadModule() and returns
+    // its promise. The caller awaits it; the loadModule _builtinCache hook
+    // makes later calls synchronous.
     const { make } = loadBvmRequireSync();
-    const f = make(MANIFEST, new Map(), (m) => m);
-    const err = throwCode(() => f("fs"));
-    expect(err.code).toBe("ERR_REQUIRE_ASYNC_MODULE");
-    expect(err.message).toContain("[ERR_REQUIRE_ASYNC_MODULE]");
-    expect(err.message).toContain("await import('fs')");
+    const fakeModule = { parse() {}, tag: "fake-qs-v1" };
+    const seen = [];
+    const fakeLoadModule = (req) => {
+      seen.push(req);
+      return Promise.resolve(fakeModule);
+    };
+    const f = make(MANIFEST, new Map(), (m) => m, fakeLoadModule);
+    const ret = f("fs");
+    expect(ret && typeof ret.then).toBe("function"); // a promise, not a throw
+    expect(seen).toEqual(["fs"]); // the load was triggered by the call
+    expect(await ret).toEqual(fakeModule);
+  });
+
+  test("cold require applies the same _builtinRequireValue unwrap as the warm path", async () => {
+    const { make } = loadBvmRequireSync();
+    // class default (like events.js): sync require returns the class itself
+    class FakeEmitter {}
+    const ns = { default: FakeEmitter, extra: 1 };
+    const f = make(
+      MANIFEST,
+      new Map(),
+      (mod) =>
+        mod && typeof mod.default === "function" ? mod.default : mod,
+      () => Promise.resolve(ns),
+    );
+    expect(await f("fs")).toBe(FakeEmitter);
+  });
+
+  test("concurrent cold requires share one loadModule call and one instance", async () => {
+    const { make } = loadBvmRequireSync();
+    const fakeModule = { tag: "shared" };
+    let calls = 0;
+    const fakeLoadModule = () => {
+      calls++;
+      return new Promise((resolve) => setTimeout(() => resolve(fakeModule), 10));
+    };
+    const f = make(MANIFEST, new Map(), (m) => m, fakeLoadModule);
+    const p1 = f("fs");
+    const p2 = f("fs");
+    expect(p2).toBe(p1); // same cached promise, not a second load
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(calls).toBe(1);
+    expect(r1).toBe(r2);
+    expect(r1).toEqual(fakeModule);
+  });
+
+  test("failed cold load clears the pending entry: the next call retries", async () => {
+    const { make } = loadBvmRequireSync();
+    const fakeModule = { tag: "retry-ok" };
+    let calls = 0;
+    const fakeLoadModule = () => {
+      calls++;
+      return calls === 1
+        ? Promise.reject(new Error("boom"))
+        : Promise.resolve(fakeModule);
+    };
+    const f = make(MANIFEST, new Map(), (m) => m, fakeLoadModule);
+    await expect(f("fs")).rejects.toThrow("boom");
+    expect(calls).toBe(1);
+    await expect(f("fs")).resolves.toEqual(fakeModule); // retried, not a cached rejection
+    expect(calls).toBe(2);
+  });
+
+  test("node:-prefixed cold require loads under the same pending key", async () => {
+    const { make } = loadBvmRequireSync();
+    const fakeModule = { tag: "node-prefixed" };
+    const seen = [];
+    const fakeLoadModule = (req) => {
+      seen.push(req);
+      return Promise.resolve(fakeModule);
+    };
+    const f = make(MANIFEST, new Map(), (m) => m, fakeLoadModule);
+    const p1 = f("node:fs");
+    const p2 = f("fs");
+    expect(p2).toBe(p1); // bare and node:-prefixed share the manifest key
+    expect(await p1).toEqual(fakeModule);
+    expect(seen).toEqual(["node:fs"]);
   });
 
   test("returns the cached instance on hit — no duplication", () => {
@@ -290,6 +425,15 @@ describe("__bvmRequireSync", () => {
     const err = throwCode(() => f("definitely-not-a-module"));
     expect(err.code).toBe("ERR_REQUIRE_ASYNC_MODULE");
     expect(err.message).toContain("unknown module");
+  });
+
+  test("non-string request throws ERR_REQUIRE_ASYNC_MODULE without crashing", () => {
+    const { make } = loadBvmRequireSync();
+    const f = make(MANIFEST, new Map(), (m) => m);
+    for (const bad of [123, null, undefined]) {
+      const err = throwCode(() => f(bad));
+      expect(err.code).toBe("ERR_REQUIRE_ASYNC_MODULE");
+    }
   });
 
   test("shipped source uses string-concat only (no backticks — template-literal constraint)", () => {
@@ -330,25 +474,30 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     if (files.length === 0) return; // on main post-merge: nothing to guard
+    // The branch footprint is the union of the committed work on it:
+    // - 5505fb7e: feature-matrix plan doc
+    // - 130f64dd: inlineWasmDataUrls guard dedupe (runtime.js)
+    // - 9df7bd01: stale-claim fixes in the runtime contract docs
+    // - this change: require/loadModule region of runtime.js + RUNTIME.md
+    //   require() semantics. Sibling workers' untracked e2e files and
+    //   working-tree edits to the plan doc are theirs, not strays.
     expect(files.sort()).toEqual(
       [
-        ".gitignore",
-        "docs/PARITY_TESTING.md",
-        "package.json",
-        "parity/expected-failures.shim.json",
-        "parity/run.mjs",
+        "docs/E2E_FEATURE_MATRIX.md",
+        "docs/RUNTIME.md",
+        "docs/SHIM_AUTHORING.md",
+        "docs/SINGLETONS.md",
         "runtime.js",
-        "scripts/generate-scoreboard.mjs",
-        "src/crypto.js",
-        "src/fs.js",
-        "src/ui/playground.js",
-        "src/util.js",
-        "ui.html",
       ].sort()
     );
   });
 
-  test("the only new function declaration in the diff is __bvmRequireSync", () => {
+  test("no new function declarations added by the branch diff", () => {
+    // Post-merge of PR #199, __bvmRequireSync pre-exists on the base, so the
+    // old expectation (exactly one added `+function __bvmRequireSync`) is
+    // stale. This change modifies __bvmRequireSync and the require()
+    // CallExpression handler but declares no new functions; neither does the
+    // sibling inlineWasmDataUrls dedupe.
     const out = execSync(`git diff ${diffBase} -- runtime.js`, {
       cwd: REPO_ROOT,
       encoding: "utf8",
@@ -356,7 +505,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const addedFns = out
       .split("\n")
       .filter((l) => l.startsWith("+function "));
-    expect(addedFns).toEqual(["+function __bvmRequireSync(request) {"]);
+    expect(addedFns).toEqual([]);
   });
 
   test("no new import statements added to runtime.js", () => {

@@ -11,7 +11,7 @@ verified against the sources it cites.
 "Singleton" here always means **singleton within a scope**. There are two:
 
 1. **Per-sandbox** — one instance per iframe sandbox, living on the
-   Symbol-keyed runtime object `globalThis[Symbol.for('bvm.runtime.<uuid>')]`
+   uuid-mangled runtime key `globalThis._RUNTIME<uuid>_`
    (authored in shim source as `globalThis._RUNTIME_.*`, rewritten at load
    time; see `docs/RUNTIME.md`). Two sandboxes on one page each get their
    own. These are the cross-shim shared services.
@@ -27,9 +27,9 @@ never create a second instance of anything in the registry below.
 
 | Singleton | Source | Scope | Created by | Lifecycle |
 |---|---|---|---|---|
-| `RT.__FS__` — the virtual filesystem | `src/fs.js` `getFs()` | per-sandbox | `fs.js`, lazily on first use: `if (!rt.__FS__) { … rt.__FS__ = buildApi(vol); }` | lives for the sandbox lifetime; seeded once from `RT.__USER_FILES__` |
+| `RT.__FS__` — the virtual filesystem | `src/fs.js` `buildSingleton()` | per-sandbox | `buildSingleton()`: reuse `rt.__FS__` if present, else `buildApi(createVolume())` (seeded from `rt.__USER_FILES__` via `seedVolume`, best-effort), published as `rt.__FS__` | lives for the sandbox lifetime; seeded once from `RT.__USER_FILES__` |
 | `RT.__httpServerRunTime` — the server bridge | `src/http.js` (bottom) | per-sandbox | `http.js`, **only** `if (RT)` — never a placeholder outside the sandbox | `{ handleRequest, waitForAllServers, closeServer }`; the host calls `handleRequest` for emulated inbound requests |
-| `serverRegistry` — port → server map | `src/http.js` (`const serverRegistry = new Map()`) | per-module-instance | `_registerServer` / `_unregisterServer` | exact-port matching only (see below); released on close |
+| `serverRegistry` — port → server map | `src/http.js` (`_httpShared().registry`) | per-sandbox (`RT.__httpSharedState`; module-local fallback under real Node) | `_registerServer` / `_unregisterServer` | exact-port matching only (see below); released on close |
 | `process` | `src/process.js` (single `process2` export) | per-sandbox | mirrors `RT.process` config values | never re-created; `import "node:process"` returns this object |
 | `Module._cache` / `require.cache` | `src/module.js` (`const _cache = Object.create(null)`) | per-module-instance | module loader | Node-style partial exports for circular imports |
 | `http.globalAgent` | `src/http.js` (`export const globalAgent = new Agent({ keepAlive: true, … })`) | per-module-instance | module init | the default agent; see "must not" for user agents |
@@ -75,24 +75,18 @@ module top-level (eager creation runs before seeds/config exist):
 
 ```js
 // src/fs.js — the pattern to copy
-function getFs() {
+function buildSingleton() {
   const rt = (typeof globalThis._RUNTIME_ !== 'undefined' && globalThis._RUNTIME_ !== null)
     ? globalThis._RUNTIME_
-    : undefined;
-  if (rt) {
-    if (!rt.__FS__) {
-      const vol = new Volume();
-      const seeds = rt.__USER_FILES__;
-      if (seeds && typeof seeds === 'object') {
-        try { vol.fromJSON(seeds); } catch { /* bad seed data must not break boot */ }
-      }
-      rt.__FS__ = buildApi(vol);
-    }
-    return rt.__FS__;
-  }
-  // standalone (parity tests, direct import): own instance, clearly marked
-  …
+    : undefined; // standalone (parity tests, direct import): own instance, clearly marked
+  if (rt && rt.__FS__) return rt.__FS__;
+  const vol = createVolume(); // seeds from rt.__USER_FILES__ via seedVolume (best-effort)
+  const fs = buildApi(vol);
+  fs._vol = vol;
+  if (rt) rt.__FS__ = fs;
+  return fs;
 }
+const fs = buildSingleton(); // module-level, but guarded: no RT → unseeded standalone instance
 ```
 
 ### 3. Never fabricate a sandbox singleton outside the sandbox
@@ -136,9 +130,9 @@ A singleton that holds resources must know how to let go:
 ### 6. Keep singletons inside their sandbox
 Module-level singletons are safe because the bundle loads once per
 sandbox. `RT.*` singletons are safe because the `_RUNTIME_` rewrite
-scopes them to the Symbol-keyed per-sandbox object
-(`globalThis[Symbol.for('bvm.runtime.<uuid>')]`), which is non-enumerable
-— invisible to `Object.keys`/`for…in`/`JSON.stringify`. What breaks
+scopes them to the uuid-mangled per-sandbox key
+(`globalThis._RUNTIME<uuid>_`), installed in each sandbox's own realm.
+What breaks
 isolation: stashing per-sandbox state in a place shared across sandboxes
 (e.g. a module-level `Map` keyed by nothing, or string-keyed `globalThis`
 properties outside the runtime object). If two sandboxes can see it and

@@ -1,6 +1,6 @@
 # Runtime integration — how `runtime.js` loads and runs our shims
 
-`runtime.js` (repo root, ~8.7k lines) is Jared's host: a `CodeSandbox` class that
+`runtime.js` (repo root, ~9.7k lines) is Jared's host: a `CodeSandbox` class that
 executes user JavaScript inside a sandboxed **iframe** and makes Node builtins
 available by loading **this repo's** bundled shims. Our code is the guest; the
 runtime is the landlord. This document is the contract between them, verified
@@ -13,14 +13,14 @@ against the actual `runtime.js` source.
    (`src/sandbox-template.js` — built from the authored fragments in
    `src/sandbox/*.js`, see "Sandbox template build" below), replaces its
    `%%TOKEN%%` placeholders with per-sandbox values, and builds the iframe
-   HTML. The bootstrap installs the runtime object under the Symbol key
-   `Symbol.for('bvm.runtime.<uuid>')` (non-enumerable — see "Symbol-backed
-   runtime globals"), the module system (`loadModule`,
+   HTML. The bootstrap installs the runtime object under the uuid-mangled
+   string key `globalThis._RUNTIME<uuid>_` (see "Runtime-object and interop
+   keys"), the module system (`loadModule`,
    `transformImportsToLoadModule`, `_build_file` / `_dynamic_import`
    interop handlers), the process shim, the terminal, and network
    wrappers — then runs the user code.
 3. Any `import … from "node:fs"` (or `"fs"`) in user code is rewritten to
-   `await globalThis[Symbol.for("bvm.runtime.<uuid>")].loadModule("fs")`.
+   `await globalThis._RUNTIME<uuid>_.loadModule("fs")`.
 4. `loadModule` asks the parent frame (`_dynamic_import` interop) for the
    module source. For builtins the parent returns `sandboxModules["fs"]` —
    our `dist/vfs.js` bundle, fetched from jsDelivr and pinned to a commit.
@@ -59,39 +59,40 @@ removed: it would clobber authored fragments with stale output.)
 
 ## The `_RUNTIME_` rewrite (the one rule that matters)
 
-`replaceGlobalThisVar(source, "_RUNTIME_", { replacement: 'globalThis[Symbol.for("bvm.runtime.<uuid>")]' })`
+`replaceGlobalThisVar(source, "_RUNTIME_", { replacement: 'globalThis._RUNTIME<uuid>_' })`
 walks the AST and replaces **only** `MemberExpression`s of the exact shape
 `globalThis._RUNTIME_`. Consequences:
 
 - Write `globalThis._RUNTIME_.__FS__` in shims — it becomes
-  `globalThis[Symbol.for("bvm.runtime.<uuid>")].__FS__` per sandbox. ✅
+  `globalThis._RUNTIME<uuid>_.__FS__` per sandbox. ✅
 - Write bare `_RUNTIME_` — it is **not** rewritten and throws at runtime. ❌
 - Guards like `typeof globalThis._RUNTIME_ !== "undefined"` are rewritten too,
   so they keep working inside the sandbox and protect us outside it (parity
   tests under real Node, direct imports).
 
-## Symbol-backed runtime globals
+## Runtime-object and interop keys
 
-The per-sandbox runtime object and the interop channel live under Symbol
-keys, not string keys:
+The per-sandbox runtime object lives under a uuid-mangled **string** key;
+only the interop channel is Symbol-backed:
 
-- `Symbol.for('bvm.runtime.<uuid>')` — the runtime object (`process`,
-  `__FS__`, `loadModule`, …). Installed via `Object.defineProperty` as
-  **writable, configurable, non-enumerable**.
+- `globalThis._RUNTIME<uuid>_` — the runtime object (`process`,
+  `__FS__`, `loadModule`, …). Plain per-sandbox assignment (enumerable),
+  installed in each sandbox's own realm. The template also installs the
+  stable alias `globalThis._RUNTIME_` for platform shims whose
+  `globalThis._RUNTIME_` references are not AST-rewritten (e.g.
+  VFS-loaded CJS).
 - `Symbol.for('bvm.interop')` — the `_dynamic_import` interop channel.
 
-The point is **string-key enumeration hiding, not secrecy**: `Object.keys`,
-`for…in`, `JSON.stringify`, and the `in` operator never surface these keys,
-so casual inspection of `globalThis` doesn't reveal runtime internals. The
-UUID is visible in the generated script source, so devtools can always
-reconstruct the key — `Object.getOwnPropertySymbols` / `Reflect.ownKeys`
-are deliberately *not* patched. Non-enumerable also keeps the keys out of
-`Object.assign` / spread copies.
+The Symbol key exists for **string-key enumeration hiding, not secrecy**:
+`Object.keys`, `for…in`, `JSON.stringify`, and the `in` operator never
+surface `bvm.interop`, so casual inspection of `globalThis` doesn't reveal
+the interop channel. `Object.getOwnPropertySymbols` / `Reflect.ownKeys`
+are deliberately *not* patched.
 
 ## Special runtime variables
 
-These live on the Symbol-keyed runtime object
-(`globalThis[Symbol.for('bvm.runtime.<uuid>')]`). The per-sandbox
+These live on the per-sandbox runtime object
+(`globalThis._RUNTIME<uuid>_`). The per-sandbox
 singletons among them (`__FS__`, `__httpServerRunTime`) are documented
 with their lifecycle rules in `docs/SINGLETONS.md`.
 
@@ -108,6 +109,68 @@ with their lifecycle rules in `docs/SINGLETONS.md`.
 | `._TEST_RUNNER_` | runtime | `node:test` runner instance, loaded on demand. |
 | `.__RUNTIME_RESOLVE__HANDLE` | our `src/runtime/importMetaResolver.js` | backs `import.meta.resolve`. |
 | `.coverage` | runtime (optional) | lcov-style coverage hooks. |
+
+## `require()` semantics
+
+`transformImportsToLoadModule` (in `runtime.js`) rewrites every `require()`
+call site; there is no global `require` in the sandbox. The rules, verified
+by `tests/ondemand-require.test.js` (transform + extracted runtime unit
+tests) and `tests/ondemand-require-e2e.py` (headed-Firefox browser matrix):
+
+- **Top-level `require("builtin")`** (including inside a top-level block,
+  even a dead one like `if (false) { … }`) is hoisted: the preamble gets
+  `const __lm_x = await loadModule("builtin", "require", …)` and the call
+  site becomes `(__lm_x && __lm_x.default !== undefined ? __lm_x.default
+  : __lm_x)`. It is **eager** — the module loads at init whether or not the
+  code path runs.
+- **Builtin `require()` nested in a function** rewrites to
+  `__bvmRequireSync("builtin")` — nothing loads until the function is
+  called (Worker B on-demand design).
+- **`__bvmRequireSync` contract: sync-when-warm, promise-when-cold.** A
+  cache hit in `_builtinCache` returns the module synchronously (same
+  `_builtinRequireValue` unwrap the sync builtin consumers use). A cold
+  builtin **triggers `loadModule()` and returns its promise** — the caller
+  awaits it. True lazy-on-call with a synchronous return is impossible: JS
+  has no primitive that blocks the event loop on a promise, so a sync
+  `require()` can never wait for the async loader. Once the load completes,
+  `loadModule`'s `_builtinCache` hook makes every later `require()` of that
+  builtin synchronous, so the warm contract is unchanged. Concurrent cold
+  requires share one in-flight promise (`_bvmRequirePending`, keyed by
+  manifest key) and resolve to the same instance; a failed load deletes its
+  pending entry so the next call retries instead of caching a rejection.
+  The cold path calls `loadModule` via `globalThis._RUNTIME_.loadModule`,
+  not the bare identifier: the bare top-level `loadModule` binding is not
+  reliably resolvable from `__bvmRequireSync`'s scope in the
+  es-module-shims-executed sandbox module (verified live 2026-10-09:
+  `typeof loadModule === "undefined"` while
+  `globalThis._RUNTIME_.loadModule === "function"`). The runtime-object
+  property path is the same one the transform emits for imports.
+- **Dynamic `require(name)`** (non-literal specifier, including template
+  literals) rewrites the callee to `__bvmRequireSync(name)` and resolves at
+  runtime as above. A specifier that is not a manifest builtin throws
+  `ERR_REQUIRE_ASYNC_MODULE` — dynamic require of non-builtins has no sync
+  path; use `import()`.
+- **Identity across paths.** `await import("x")` populates `_builtinCache`
+  via the `loadModule` hook, so a later `require("x")` returns the **same
+  instance** (`import * as ns` / `require("x")` are `===`, including named
+  exports). Builtins canonicalize to the modulePath registry key
+  (`resolvedPath` is null), so a `require()` racing an `import()` dedupes to
+  a single evaluation; `diagnostics_channel`'s registry is a singleton
+  across both paths (each module is evaluated exactly once).
+- **Live bindings are NOT supported.** Named imports destructure at import
+  time (`const { x } = __lm`), and the interop proxy snapshots export values
+  at load (`Object.assign({}, data)`), so `export let` reassignment *inside*
+  a shim is invisible to importers (verified: `node:domain`'s `active` stays
+  `null` through the proxy after `enter()`). Same-object mutation through a
+  shared namespace *is* visible — that is identity, not live bindings.
+- **Sandbox identity caveat.** Every `dist/` entry is bundled independently
+  (esbuild `bundle: true, external: []` per entry in `src/build-vfs.mjs`),
+  so each bundle inlines its own dependency copies:
+  `require("buffer").Buffer !== globalThis.Buffer` (the latter is
+  `RUNTIME:NODE_GLOBALS`' inlined copy; the bundle's class is even minified
+  to `je`). Both are sandbox-scoped and fully functional — neither is the
+  host's (the browser host has no `Buffer`) — but cross-bundle class
+  identity does not hold.
 
 ## The process shim
 
@@ -132,8 +195,45 @@ Our `src/process.js` is **not** that object — it only serves explicit
   `navigator.sendBeacon` are wrapped (`wrapNetwork`) so the host can observe/
   block; `connect-src *` in the CSP permits real outbound requests.
 - **Terminal**: a DOM REPL with `toNodeKeypress` (DOM key events → Node-style
-  keypress objects with ANSI sequences), `getStdin`/`makeOutputShim` streams.
+  keypress objects with ANSI sequences), `process.stdin`/`makeOutputShim` streams.
   `src/readline.js` should integrate with these stdin/stdout shims.
+
+### Completion model — what sets the playground status to "Done"
+
+After user code finishes, the sandbox does **not** resolve immediately. The
+drain sequence lives in the `_build_file` execution wrapper in `runtime.js`:
+
+1. **Micro/macrotask drain** — one `await Promise.resolve()` plus one 100 ms
+   `setTimeout`, so cascading async work gets a chance to start.
+2. **Parallel gates** (`Promise.all`):
+   - `taskTracker.waitForAll()` — the `GlobalTracker`'s wrapped async work.
+   - `waitForAllFetches()` — the patched `fetch` registers every call in
+     `pendingFetches` at **call time**, so an *unawaited* `fetch()` still
+     holds completion until it settles. `Promise.allSettled` semantics:
+     a failed fetch does not block completion.
+   - `waitForAllXhrs()` — same tracking for `XMLHttpRequest`.
+   - `waitForAllTimers()` — polls `timerRegistry` every 50 ms until no
+     timeout/interval entries remain. A live `setInterval` holds completion
+     until `clearInterval`.
+   - `__httpServerRunTime.waitForAllServers?.()` — resolves when the
+     server registry empties; a listening `http.createServer` holds
+     completion until `server.close()` (see `docs/SINGLETONS.md` rule 5).
+3. **Sequential stdin gate** — `process.stdin.waitUntilNoListeners()`, run
+   *after* the parallel gates so late-attaching listeners are seen.
+   Event-driven, no polling: with no `data`/`end`/`close`/`error`/`keypress`
+   listeners it resolves immediately; otherwise it waits for the stdin
+   `removeListener` event (`_checkResolve`). Release paths:
+   `process.stdin.end()`/`destroy()` (sets `_ended`), or all listeners
+   removed. A program blocked on readline/stdin input therefore stays out
+   of "Done" until input arrives **and** the stdin hold is released.
+4. `function_results` is posted → the host resolves `{success: true}` →
+   the playground shows **Done**.
+
+**`process.exit(code)`** bypasses the gates: both the bare `process` global
+and `import "node:process"` post the `kill` interop, the host resolves
+`{success: true, logs: [...logs, "Process Exited"]}`, and the playground
+shows **Done**. Asymmetry to remember: a *thrown* error posts
+`function_error` → `{success: false}` → the playground shows **Error**.
 
 ## Content Security Policy
 
