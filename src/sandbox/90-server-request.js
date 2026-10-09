@@ -2,6 +2,7 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
+
 globalThis.__INTEROP_VAR__.expose('__serverRequest__', async (port=8080, URL = "/", type = "GET", body= {}, headers = {}) => {
     const __RT = globalThis._RUNTIME__UUID___;
     const __h = { ...(headers || {}) };
@@ -39,6 +40,7 @@ globalThis.__INTEROP_VAR__.expose('__closeServer__', async (port) => {
     }
     return false;
 });
+
 // --- begin sync builtin preload (gap #3) ---
 // DISABLED 2026-10-08: Preload causes random shim execution and 30s timeouts. Shims must load on-demand.
 if (false) {
@@ -72,23 +74,3 @@ try {
 }
 } // end if(false) - DISABLED preload
 // --- end sync builtin preload (gap #3) ---
-  try {
-  await initSandboxState();
-
-
-  await globalThis._RUNTIME__UUID___.loadModule("fs");
-
-  // Virtual cookie jar (RFC 6265) for emulated HTTP servers. The IIFE bundle
-  // is inlined (see COOKIE_JAR_IIFE) so no network fetch is needed. The jar
-  // is keyed per sandbox instance + server port.
-  try {
-    "__COOKIE_JAR_IIFE__"
-    globalThis._RUNTIME__UUID___.__cookieJar =
-      new globalThis.__cookieJarLib.VirtualCookieJar();
-    globalThis._RUNTIME__UUID___.__mergeCookieHeaders =
-      globalThis.__cookieJarLib.mergeCookieHeaders;
-  } catch (__jarInitErr) {
-    console.warn("[cookieJar] init failed:", __jarInitErr && __jarInitErr.message);
-  }
-  
- window.parent.postMessage({ type: 'sandbox_ready' }, '*');

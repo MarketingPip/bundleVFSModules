@@ -2,7 +2,8 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
-// Wraps any function (sync or async)
+
+  // Wraps any function (sync or async)
   track(fn) {
     const self = this;
     return async function(...args) {

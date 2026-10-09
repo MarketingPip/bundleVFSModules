@@ -25,7 +25,10 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const sandboxDir = join(root, "src", "sandbox");
 
-// Manifest: section files in execution order.
+// Manifest: section files in execution order. NOTE: the numeric prefixes are
+// NOT in order — the sequence below matches the inline template in
+// runtime.js (85/90 come before 60/70/71/80 there). Do not "fix" the order
+// without re-verifying byte-identical output via the generate() differential.
 const MANIFEST = [
   "00-runtime-object.js",
   "05-vitest-mocks.js",
@@ -38,12 +41,12 @@ const MANIFEST = [
   "40-console.js",
   "41-events-warnings.js",
   "50-process.js",
+  "85-keydecoder.js",
+  "90-server-request.js",
   "60-timers.js",
   "70-fetch.js",
   "71-xhr.js",
   "80-errors.js",
-  "85-keydecoder.js",
-  "90-server-request.js",
   "95-init.js",
   "96-user-code.js",
   "97-finalize.js",
@@ -67,6 +70,9 @@ const TOKEN_MAP = [
   ["__IMPORTS__", "%%IMPORTS%%"],
   ["__USER_CODE__", "%%USER_CODE%%"],
   ["__UUID__", "%%UUID%%"],
+  ["__SHELL_FIELD__", "%%SHELL_FIELD%%"],
+  ["__NORMALIZE_BUILTIN_SPECIFIER_FN__", "%%NORMALIZE_BUILTIN_SPECIFIER_FN%%"],
+  ['"__BUILTIN_MODULES_ARRAY_JSON__"', "%%BUILTIN_MODULES_ARRAY_JSON%%"],
 ];
 
 // __LOG_<SUFFIX>__ tokens come from the generated log-tokens table.
@@ -94,8 +100,10 @@ function readSection(name) {
   if (!lines[0].startsWith("// SANDBOX SECTION")) {
     throw new Error(`${name}: missing SANDBOX SECTION header`);
   }
-  // Strip the 4-line header comment.
-  return lines.slice(4).join("\n").replace(/\s+$/, "");
+  // Strip the 4-line header comment. Strip only trailing newlines, not other
+  // whitespace: the template has trailing spaces on some section-final lines
+  // and the build must reproduce them byte-identically.
+  return lines.slice(4).join("\n").replace(/\n+$/, "");
 }
 
 // Post-substitution validation: substitute inert dummies for every %%TOKEN%%
@@ -109,9 +117,13 @@ function validateFinalTemplate(template) {
     ["%%USER_FILES_JSON%%", "{}"],
     ["%%SEA_ASSETS_JSON%%", "{}"],
     ["%%BUILTIN_MODULES_JSON%%", "{}"],
+    ["%%BUILTIN_MODULES_ARRAY_JSON%%", "[]"],
     // Replaced with function sources (bare expression positions).
     ["%%PARSE_STACK_LOCATION_FN%%", "()=>{}"],
     ["%%STRIP_ANSI_FN%%", "()=>{}"],
+    ["%%NORMALIZE_BUILTIN_SPECIFIER_FN%%", "()=>{}"],
+    // Replaced with a field snippet (`__SHELL__: (fn),`) or ''.
+    ["%%SHELL_FIELD%%", "x"],
     // Replaced with an identifier name.
     ["%%INTEROP_VAR%%", "x"],
     // Replaced with plain strings (string-literal or comment positions).
@@ -184,7 +196,7 @@ function buildTemplate() {
   // No authored token may survive. (Runtime property names like __FS__,
   // __USER_FILES__, __RUNTIME_RESOLVE__HANDLE are literal and fine.)
   const authoredTokens =
-    /__PROCESS_JSON__|__USER_FILES_JSON__|__SEA_ASSETS_JSON__|__BUILTIN_MODULES_JSON__|__INTEROP_VAR__|__STRIP_ANSI_FN__|__PARSE_STACK_LOCATION_FN__|__FILENAME__|__TEST_IMPORTS__|__ARGV_HAS_TEST__|__IMPORTS__|__USER_CODE__|__COOKIE_JAR_IIFE__|__LOG_[A-Z_]+__|__UUID__(?!_)/g;
+    /__PROCESS_JSON__|__USER_FILES_JSON__|__SEA_ASSETS_JSON__|__BUILTIN_MODULES_JSON__|__BUILTIN_MODULES_ARRAY_JSON__|__INTEROP_VAR__|__STRIP_ANSI_FN__|__PARSE_STACK_LOCATION_FN__|__NORMALIZE_BUILTIN_SPECIFIER_FN__|__SHELL_FIELD__|__FILENAME__|__TEST_IMPORTS__|__ARGV_HAS_TEST__|__IMPORTS__|__USER_CODE__|__COOKIE_JAR_IIFE__|__LOG_[A-Z_]+__|__UUID__(?!_)/g;
   const leftover = template.match(authoredTokens);
   if (leftover)
     throw new Error(`unreplaced tokens: ${[...new Set(leftover)].join(", ")}`);

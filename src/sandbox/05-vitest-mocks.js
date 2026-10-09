@@ -2,6 +2,7 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
+
 // A recursive Proxy that intercepts *any* missing property access and returns safe stubs
     function createSafeProxy(target = {}) {
       return new Proxy(target, {

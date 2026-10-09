@@ -2,6 +2,8 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
+
+
 /** Wraps a CommonJS source string in an ESM-compatible IIFE. */
 /**
  * Synchronous require() for CJS modules (vitest support).
@@ -15,22 +17,18 @@
 // require-able), matching Node semantics. Template-safe: no backticks or
 // dollar-brace sequences in this code.
 function readModuleSourceLiveFirst(resolved, vfs) {
-  const cands = resolved.endsWith(".js")
-    ? [resolved]
-    : [resolved, resolved + ".js"];
+  const cands = resolved.endsWith('.js') ? [resolved] : [resolved, resolved + '.js'];
   const rt = globalThis._RUNTIME__UUID___;
   const liveFs = rt && rt.__FS__;
-  if (liveFs && typeof liveFs.readFileSync === "function") {
+  if (liveFs && typeof liveFs.readFileSync === 'function') {
     for (let i = 0; i < cands.length; i++) {
       const c = cands[i];
-      const forms = c.charAt(0) === "/" ? [c] : [c, "/" + c];
+      const forms = c.charAt(0) === '/' ? [c] : [c, '/' + c];
       for (let j = 0; j < forms.length; j++) {
         try {
-          const data = liveFs.readFileSync(forms[j], "utf8");
-          if (typeof data === "string") return data;
-        } catch (e) {
-          /* try next form */
-        }
+          const data = liveFs.readFileSync(forms[j], 'utf8');
+          if (typeof data === 'string') return data;
+        } catch (e) { /* try next form */ }
       }
     }
     return undefined;
@@ -48,21 +46,21 @@ function readModuleSourceLiveFirst(resolved, vfs) {
 // would interpolate and backslash-slash would collapse.)
 function vfsLookup(path, vfs) {
   const tryPath = (p) => {
-    const segments = p.split("/").filter(Boolean);
+    const segments = p.split('/').filter(Boolean);
     let node = vfs;
     for (const seg of segments) {
-      if (node == null || typeof node !== "object") return undefined;
+      if (node == null || typeof node !== 'object') return undefined;
       node = node[seg];
     }
-    return typeof node === "string" ? node : undefined;
+    return typeof node === 'string' ? node : undefined;
   };
   // Platform fix (AGENTS.md rule 6): in the browser, prefer -browser.js
   // variants over .cjs files (see nested vfsLookup in _dynamic_import).
-  if (path.endsWith(".cjs")) {
-    const hit = tryPath(path.replace(/\.cjs$/, "-browser.js"));
+  if (path.endsWith('.cjs')) {
+    const hit = tryPath(path.replace(/.cjs$/, '-browser.js'));
     if (hit !== undefined) return hit;
   }
-  const withJs = path.endsWith(".js") ? path : path + ".js";
+  const withJs = path.endsWith('.js') ? path : path + '.js';
   const hit = tryPath(path);
   return hit !== undefined ? hit : tryPath(withJs);
 }
@@ -73,7 +71,7 @@ function vfsLookup(path, vfs) {
 // unflattenFileSystem in _dynamic_import).
 function unflattenUserFiles(flatObj) {
   const result = {};
-  if (!flatObj || typeof flatObj !== "object") return result;
+  if (!flatObj || typeof flatObj !== 'object') return result;
   for (const rawPath of Object.keys(flatObj)) {
     // NOTE: this code lives inside the generate() template literal, so every
     // backslash here is template-cooked: \/ becomes /, \" becomes " (which
@@ -81,11 +79,11 @@ function unflattenUserFiles(flatObj) {
     // becomes /*/ (an unterminated comment — use /[*]/ instead). If the
     // generated wrapper must contain a backslash, write two (\). Pinned by
     // tests/vite7-wrapper-vfs-syntax.test.js (2026-09-30: the 883:26 SyntaxError).
-    const parts = String(rawPath).replace(/^[/]+/, "").split("/");
+    const parts = String(rawPath).replace(/^[/]+/, '').split('/');
     let current = result;
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i];
-      if (!current[part] || typeof current[part] !== "object") {
+      if (!current[part] || typeof current[part] !== 'object') {
         current[part] = {};
       }
       current = current[part];
@@ -108,10 +106,10 @@ function unflattenUserFiles(flatObj) {
 // Walk the nested snapshot vfs tree ({dir: {file: 'source'}}). Returns the
 // node at path, or undefined. Directories are objects, files are strings.
 function vfsNodeAt(path, vfs) {
-  var segments = String(path).split("/").filter(Boolean);
+  var segments = String(path).split('/').filter(Boolean);
   var node = vfs;
   for (var i = 0; i < segments.length; i++) {
-    if (node == null || typeof node !== "object") return undefined;
+    if (node == null || typeof node !== 'object') return undefined;
     node = node[segments[i]];
   }
   return node;
@@ -126,63 +124,57 @@ function vfsLiveFs() {
 
 function vfsIsFile(path, vfs) {
   var live = vfsLiveFs();
-  if (live && typeof live.statSync === "function") {
+  if (live && typeof live.statSync === 'function') {
     try {
       if (live.statSync(path).isFile()) return true;
-    } catch (e) {
-      /* fall through to snapshot */
-    }
+    } catch (e) { /* fall through to snapshot */ }
   }
-  return typeof vfsNodeAt(path, vfs) === "string";
+  return typeof vfsNodeAt(path, vfs) === 'string';
 }
 
 function vfsIsDir(path, vfs) {
   var live = vfsLiveFs();
-  if (live && typeof live.statSync === "function") {
+  if (live && typeof live.statSync === 'function') {
     try {
       if (live.statSync(path).isDirectory()) return true;
-    } catch (e) {
-      /* fall through to snapshot */
-    }
+    } catch (e) { /* fall through to snapshot */ }
   }
   var node = vfsNodeAt(path, vfs);
-  return node != null && typeof node === "object";
+  return node != null && typeof node === 'object';
 }
 
 function vfsReadText(path, vfs) {
   var live = vfsLiveFs();
-  if (live && typeof live.readFileSync === "function") {
+  if (live && typeof live.readFileSync === 'function') {
     try {
-      var data = live.readFileSync(path, "utf8");
-      if (typeof data === "string") return data;
-    } catch (e) {
-      /* fall through to snapshot */
-    }
+      var data = live.readFileSync(path, 'utf8');
+      if (typeof data === 'string') return data;
+    } catch (e) { /* fall through to snapshot */ }
   }
   var node = vfsNodeAt(path, vfs);
-  return typeof node === "string" ? node : undefined;
+  return typeof node === 'string' ? node : undefined;
 }
 
 // POSIX normalize: collapse . and .. segments, preserve leading slash.
 // Never escapes root (leading .. segments are dropped).
 function vfsNormalizePath(path) {
-  var isAbs = path.charAt(0) === "/";
-  var parts = String(path).split("/");
+  var isAbs = path.charAt(0) === '/';
+  var parts = String(path).split('/');
   var out = [];
   for (var i = 0; i < parts.length; i++) {
     var p = parts[i];
-    if (p === "..") {
+    if (p === '..') {
       if (out.length > 0) out.pop();
-    } else if (p !== "." && p !== "") {
+    } else if (p !== '.' && p !== '') {
       out.push(p);
     }
   }
-  return (isAbs ? "/" : "") + out.join("/");
+  return (isAbs ? '/' : '') + out.join('/');
 }
 
 function vfsDirname(path) {
-  var idx = String(path).lastIndexOf("/");
-  if (idx <= 0) return "/";
+  var idx = String(path).lastIndexOf('/');
+  if (idx <= 0) return '/';
   return path.slice(0, idx);
 }
 
@@ -192,8 +184,8 @@ function vfsNodeModulePaths(from) {
   var cur = vfsNormalizePath(from);
   var paths = [];
   while (true) {
-    paths.push(cur === "/" ? "/node_modules" : cur + "/node_modules");
-    if (cur === "/") break;
+    paths.push(cur === '/' ? '/node_modules' : cur + '/node_modules');
+    if (cur === '/') break;
     var parent = vfsDirname(cur);
     if (parent === cur) break;
     cur = parent;
@@ -204,7 +196,7 @@ function vfsNodeModulePaths(from) {
 // Node LOAD_AS_FILE: X, then X.js, X.json (extension probing order).
 function vfsLoadAsFile(basePath, vfs) {
   if (vfsIsFile(basePath, vfs)) return basePath;
-  var exts = [".js", ".json"];
+  var exts = ['.js', '.json'];
   for (var i = 0; i < exts.length; i++) {
     var p = basePath + exts[i];
     if (vfsIsFile(p, vfs)) return p;
@@ -253,32 +245,26 @@ function vfsLoadAsFileOrDirectory(basePath, vfs) {
 }
 
 function vfsModuleNotFound(request) {
-  var err = new Error(
-    "[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'",
-  );
-  err.code = "ERR_MODULE_NOT_FOUND";
+  var err = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
+  err.code = 'ERR_MODULE_NOT_FOUND';
   return err;
 }
 
 function vfsPackagePathNotExported(packageName, subpath, packageJsonPath) {
   var err = new Error(
-    "[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '" +
-      subpath +
-      '\' is not defined by "exports" in ' +
-      packageJsonPath,
+    "[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '" + subpath +
+    "' is not defined by \"exports\" in " + packageJsonPath
   );
-  err.code = "ERR_PACKAGE_PATH_NOT_EXPORTED";
+  err.code = 'ERR_PACKAGE_PATH_NOT_EXPORTED';
   return err;
 }
 
 function vfsPackageImportNotDefined(specifier, packageJsonPath) {
   var err = new Error(
-    '[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier "' +
-      specifier +
-      '" is not defined in package ' +
-      packageJsonPath,
+    "[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier \"" + specifier +
+    "\" is not defined in package " + packageJsonPath
   );
-  err.code = "ERR_PACKAGE_IMPORT_NOT_DEFINED";
+  err.code = 'ERR_PACKAGE_IMPORT_NOT_DEFINED';
   return err;
 }
 
@@ -286,12 +272,10 @@ function vfsPackageImportNotDefined(specifier, packageJsonPath) {
 // "Package import specifier "#x" is not defined imported from <path>".
 function vfsPackageImportNotDefinedNoScope(specifier, importerPath) {
   var err = new Error(
-    '[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier "' +
-      specifier +
-      '" is not defined imported from ' +
-      importerPath,
+    '[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier "' + specifier +
+    '" is not defined imported from ' + importerPath
   );
-  err.code = "ERR_PACKAGE_IMPORT_NOT_DEFINED";
+  err.code = 'ERR_PACKAGE_IMPORT_NOT_DEFINED';
   return err;
 }
 
@@ -308,13 +292,13 @@ function vfsLookupPackageScope(dir, vfs) {
 
 function vfsIsRelativeRequest(request) {
   return (
-    request === "." ||
-    request === ".." ||
-    request.charAt(0) === "/" ||
-    (request.charAt(0) === "." &&
-      (request.charAt(1) === "/" ||
-        (request.charAt(1) === "." &&
-          (request.length === 2 || request.charAt(2) === "/"))))
+    request === '.' ||
+    request === '..' ||
+    request.charAt(0) === '/' ||
+    (request.charAt(0) === '.' &&
+      (request.charAt(1) === '/' ||
+        (request.charAt(1) === '.' &&
+          (request.length === 2 || request.charAt(2) === '/'))))
   );
 }
 
@@ -379,7 +363,10 @@ function vfsResolvePackageExportsSync(pkg, subpath) {
   if (typeof exportsField === "string") {
     if (subpath !== ".") return null;
     target = exportsField;
-  } else if (typeof exportsField === "object" && !Array.isArray(exportsField)) {
+  } else if (
+    typeof exportsField === "object" &&
+    !Array.isArray(exportsField)
+  ) {
     var keys = Object.keys(exportsField);
     var isSugar =
       keys.length > 0 &&
@@ -419,10 +406,7 @@ function vfsResolvePackageExportsSync(pkg, subpath) {
   } else {
     return null;
   }
-  var resolved = vfsResolvePackageTargetSync(
-    target,
-    VFS_SYNC_EXPORT_CONDITIONS,
-  );
+  var resolved = vfsResolvePackageTargetSync(target, VFS_SYNC_EXPORT_CONDITIONS);
   return typeof resolved === "string" ? resolved : null;
 }
 
@@ -530,16 +514,16 @@ function vfsResolvePackageImportsSync(importPath, importerPath, vfs) {
  *   ERR_MODULE_NOT_FOUND.
  */
 function resolveSyncRequest(request, parentPath, vfs) {
-  var parentDir = vfsDirname(parentPath || "/");
+  var parentDir = vfsDirname(parentPath || '/');
   // #-imports resolve against the nearest parent package.json scope
   // (Node PACKAGE_IMPORTS_RESOLVE). Handled before the relative check:
   // '#x' is not a relative request.
-  if (request.charAt(0) === "#") {
+  if (request.charAt(0) === '#') {
     var viaImports = vfsResolvePackageImportsSync(request, parentPath, vfs);
     if (viaImports) return viaImports;
     // Node PACKAGE_IMPORTS_RESOLVE names the NEAREST parent package.json
     // scope in the error — never the importer FILE + "/package.json".
-    var scopeDir = vfsLookupPackageScope(vfsDirname(parentPath || "/"), vfs);
+    var scopeDir = vfsLookupPackageScope(vfsDirname(parentPath || '/'), vfs);
     throw scopeDir
       ? vfsPackageImportNotDefined(request, scopeDir + "/package.json")
       : vfsPackageImportNotDefinedNoScope(request, parentPath);
@@ -547,9 +531,9 @@ function resolveSyncRequest(request, parentPath, vfs) {
   var basePath;
   if (vfsIsRelativeRequest(request)) {
     basePath =
-      request.charAt(0) === "/"
+      request.charAt(0) === '/'
         ? vfsNormalizePath(request)
-        : vfsNormalizePath(parentDir + "/" + request);
+        : vfsNormalizePath(parentDir + '/' + request);
     var resolved = vfsLoadAsFileOrDirectory(basePath, vfs);
     if (resolved) return resolved;
     throw vfsModuleNotFound(request);
@@ -561,7 +545,7 @@ function resolveSyncRequest(request, parentPath, vfs) {
   var nmPaths = vfsNodeModulePaths(parentDir);
   for (var i = 0; i < nmPaths.length; i++) {
     var dir = nmPaths[i];
-    var packageRoot = vfsNormalizePath(dir + "/" + spec.packageName);
+    var packageRoot = vfsNormalizePath(dir + '/' + spec.packageName);
     var isPkgDir = vfsIsDir(packageRoot, vfs);
     // When 'exports' is present it is the ONLY legal route (Node
     // PACKAGE_EXPORTS_RESOLVE): a subpath absent from the map is an honest
@@ -574,13 +558,13 @@ function resolveSyncRequest(request, parentPath, vfs) {
       throw vfsPackagePathNotExported(
         spec.packageName,
         spec.subpath,
-        packageRoot + "/package.json",
+        packageRoot + "/package.json"
       );
     }
     // Legacy: LOAD_AS_FILE(DIR/X) first (preserves require('foo') resolving
     // to /node_modules/foo.js, and file-wins-over-dir like Node), then
     // package-aware directory probing ('main'/index when no 'exports').
-    var direct = vfsLoadAsFile(vfsNormalizePath(dir + "/" + request), vfs);
+    var direct = vfsLoadAsFile(vfsNormalizePath(dir + '/' + request), vfs);
     if (direct) return direct;
     if (isPkgDir) {
       var hit = vfsLoadPackageRoot(packageRoot, spec.subpath, vfs);
@@ -596,26 +580,20 @@ function createSyncRequire(parentPath, vfs, cache) {
   // circular requires into infinite recursion instead of Node-style partial
   // exports.
   cache = cache || new Map(); // resolvedPath -> module record (for cycles)
-
+  
   function syncRequire(request) {
     // 1. Built-in modules: return from cache if loaded, else throw
     // (async loadBuiltin must have been called first)
-    let builtinKey = request.startsWith("node:") ? request.slice(5) : request;
+    let builtinKey = request.startsWith('node:') ? request.slice(5) : request;
     if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
       const key = _builtinManifest[builtinKey] ? builtinKey : request;
       if (_builtinCache.has(key)) {
         return _builtinRequireValue(_builtinCache.get(key));
       }
-      throw new Error(
-        '[ERR_REQUIRE_ASYNC]: Built-in "' +
-          request +
-          '" not yet loaded. ' +
-          'Call await loadBuiltin("' +
-          request +
-          '") first, or use dynamic import().',
-      );
+      throw new Error('[ERR_REQUIRE_ASYNC]: Built-in "' + request + '" not yet loaded. ' +
+        'Call await loadBuiltin("' + request + '") first, or use dynamic import().');
     }
-
+    
     // 2. Resolve path (relative/absolute)
     // Uses resolveSyncRequest for Node.js-compatible path resolution.
     // Bare specifiers (node_modules) throw ERR_MODULE_NOT_FOUND (TODO: full
@@ -624,40 +602,27 @@ function createSyncRequire(parentPath, vfs, cache) {
     try {
       resolved = resolveSyncRequest(request, parentPath, vfs);
     } catch (err) {
-      throw new Error(
-        "[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'",
-      );
+      throw new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
     }
-
+    
     // 3. Check cache (cycle tolerance: return partial exports)
     if (cache.has(resolved)) {
       return cache.get(resolved).exports;
     }
-
+    
     // 4. Load source synchronously: live memfs first, snapshot VFS fallback
     const source = readModuleSourceLiveFirst(resolved, vfs);
     if (source == null) {
-      throw new Error(
-        "[ERR_MODULE_NOT_FOUND]: Cannot find module '" +
-          request +
-          "' (resolved: " +
-          resolved +
-          ")",
-      );
+      throw new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "' (resolved: " + resolved + ")");
     }
-
+    
     // 5. Create module object, cache BEFORE executing (for cycles)
-    const module = {
-      exports: {},
-      id: resolved,
-      filename: resolved,
-      loaded: false,
-    };
+    const module = { exports: {}, id: resolved, filename: resolved, loaded: false };
     cache.set(resolved, module);
-
+    
     // 5b. JSON modules: parse the source as JSON (Node semantics)
     // instead of executing it as JavaScript.
-    if (resolved.endsWith(".json")) {
+    if (resolved.endsWith('.json')) {
       try {
         module.exports = JSON.parse(source);
       } catch (err) {
@@ -667,22 +632,16 @@ function createSyncRequire(parentPath, vfs, cache) {
       module.loaded = true;
       return module.exports;
     }
-
+    
     // 6. Wrap and execute
     // Node.js CJS semantics: 'this' at module top-level === 'module.exports'.
     // Invoke via .call(module.exports, ...) so 'this' is correct. A plain
     // wrapper(...) call would make 'this' undefined (strict) or globalThis
     // (sloppy), breaking 'this.foo = bar' (should set module.exports.foo,
     // not a global).
-    const wrapper = new Function(
-      "require",
-      "module",
-      "exports",
-      "__filename",
-      "__dirname",
-      source + String.fromCharCode(10) + "//# sourceURL=" + resolved,
-    );
-    const dirname = resolved.split("/").slice(0, -1).join("/") || ".";
+    const wrapper = new Function('require', 'module', 'exports', '__filename', '__dirname',
+      source + String.fromCharCode(10) + '//# sourceURL=' + resolved);
+    const dirname = resolved.split('/').slice(0, -1).join('/') || '.';
     try {
       wrapper.call(
         module.exports, // 'this' === module.exports (Node CJS parity)
@@ -690,7 +649,7 @@ function createSyncRequire(parentPath, vfs, cache) {
         module,
         module.exports,
         resolved,
-        dirname,
+        dirname
       );
     } catch (err) {
       cache.delete(resolved); // remove failed module from cache
@@ -699,13 +658,13 @@ function createSyncRequire(parentPath, vfs, cache) {
     module.loaded = true;
     return module.exports;
   }
-
+  
   syncRequire.cache = cache;
   // Node.js parity: require.resolve() locates the module entry point on
   // the VFS without loading it. Uses the same resolution logic as require().
   syncRequire.resolve = (request) => {
     // Builtins resolve to their specifier (Node returns the builtin name).
-    let builtinKey = request.startsWith("node:") ? request.slice(5) : request;
+    let builtinKey = request.startsWith('node:') ? request.slice(5) : request;
     if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
       return request;
     }
@@ -724,11 +683,10 @@ function wrapCommonJS(source, parentPath, vfs) {
   // - '__filename' and '__dirname' are available
   const filename = parentPath;
   // Node path.dirname semantics: "/x.js" -> "/", "a/b.js" -> "a", "x.js" -> "."
-  const _parts = parentPath.split("/");
+  const _parts = parentPath.split('/');
   _parts.pop();
-  const _dir = _parts.join("/");
-  const dirname =
-    _dir === "" ? (parentPath.charAt(0) === "/" ? "/" : ".") : _dir;
+  const _dir = _parts.join('/');
+  const dirname = _dir === '' ? (parentPath.charAt(0) === '/' ? '/' : '.') : _dir;
   return `
 const exports = {};
 const module = { exports };
@@ -746,7 +704,7 @@ const require = typeof __syncRequire__ !== 'undefined'
 export default module.exports;
 `;
 }
-
+ 
 /** Dynamically imports a data-URL and returns a proxied module object. */
 async function importAndProxy(url, modulePath, relativeName, moduleType) {
   const data = await import(url);
@@ -762,7 +720,7 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
   const moduleObject = Object.assign({}, data);
 
   Object.defineProperty(moduleObject, Symbol.toStringTag, {
-    value: "Module",
+    value: 'Module',
     enumerable: false,
   });
 
@@ -778,11 +736,11 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
   // hidden from the visible namespace like __bvm_cjs__.
   const starSources = [];
   for (const key of Object.keys(moduleObject)) {
-    if (key.startsWith("__bvm_star_")) {
+    if (key.startsWith('__bvm_star_')) {
       const starMod = moduleObject[key];
       if (
         starMod &&
-        (typeof starMod === "object" || typeof starMod === "function")
+        (typeof starMod === 'object' || typeof starMod === 'function')
       ) {
         starSources.push(starMod);
       }
@@ -790,13 +748,14 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
     }
   }
 
-  if (moduleType === "require") {
+  if (moduleType === 'require') {
     return moduleObject.default ?? moduleObject;
   }
 
-  const hasDefault = Object.prototype.hasOwnProperty.call(data, "default");
-
-  // Keep .default enumerable and accessible when the module exported one.
+  const hasDefault = Object.prototype.hasOwnProperty.call(data, 'default');
+  
+  
+   // Keep .default enumerable and accessible when the module exported one.
   // If there's no default export, define it as undefined (non-enumerable)
   // so 'import { default as x }' still resolves without a throw, but
   // Object.keys() / for..in won't surface a spurious 'default' key.
@@ -806,23 +765,23 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
       enumerable: false,
       configurable: true,
     });
-  }*/
-
+  }*/ 
+  
   //if (!hasDefault) delete moduleObject.default;
 
   return new Proxy(moduleObject, {
     get(target, prop) {
-      if (typeof prop === "symbol" || prop === "then") return target[prop];
+      if (typeof prop === 'symbol' || prop === 'then') return target[prop];
 
-      if (prop === "default") return target?.default || target; // TODO: if sourceType is CJS - force default.
-      if (prop === "__esModule") return true;
+      if (prop === 'default') return  target?.default || target; // TODO: if sourceType is CJS - force default.
+      if (prop === '__esModule') return true;
 
       if (!(prop in target)) {
         // Star re-export fallback (ESM 'export *' semantics): check each
         // star source, skipping 'default'. Star modules are proxied and
         // throw SyntaxError for missing exports; try the next source.
         for (const starMod of starSources) {
-          if (prop === "default") break;
+          if (prop === 'default') break;
           try {
             return starMod[prop];
           } catch (e) {
@@ -837,8 +796,8 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
           const cjsExports = target.default;
           if (
             cjsExports !== null &&
-            (typeof cjsExports === "object" ||
-              typeof cjsExports === "function") &&
+            (typeof cjsExports === 'object' ||
+              typeof cjsExports === 'function') &&
             prop in cjsExports
           ) {
             return cjsExports[prop];
@@ -846,11 +805,11 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
         }
         const displayPath = relativeName ?? modulePath;
         throw new SyntaxError(
-          `The requested module '${displayPath}' does not provide an export named '${String(prop)}'`,
+          `The requested module '${displayPath}' does not provide an export named '${String(prop)}'`
         );
       }
 
       return target[prop];
     },
   });
-}
+}  

@@ -2,14 +2,9 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
-globalThis._RUNTIME__UUID___ = {
-  globals: new Set(),
-  process: "__PROCESS_JSON__",
-  taskTracker: null,
-  __USER_FILES__: "__USER_FILES_JSON__",
-  __SEA_ASSETS__: "__SEA_ASSETS_JSON__",
-  __SHELL_FIELD__,
-};
+
+
+globalThis._RUNTIME__UUID___ = {globals: new Set(), process:"__PROCESS_JSON__", taskTracker:null, __USER_FILES__:"__USER_FILES_JSON__", __SEA_ASSETS__:"__SEA_ASSETS_JSON__", __SHELL_FIELD__};
 // Stable alias for platform shims: they write globalThis._RUNTIME_ expecting the
 // sandbox-scoped object, but the AST rewrite only applies to Node builtins, not
 // VFS-loaded CJS. Per-realm (each sandbox has its own globalThis), so isolation
@@ -43,8 +38,8 @@ function _builtinRequireValue(mod) {
   // for object defaults the namespace must be preserved, because loadModule
   // returns an interop Proxy whose lazy getters (CJS named-export fallback,
   // star re-exports) live on the proxy, not on the plain target object.
-  if (mod && typeof mod.default === "function") return mod.default;
-  return mod && mod.default !== undefined && Object.keys(mod).length === 1
+  if (mod && typeof mod.default === 'function') return mod.default;
+  return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
     ? mod.default
     : mod;
 }
@@ -55,20 +50,10 @@ function _builtinRequireValue(mod) {
 // it lives inside the outer sandbox template literal, so backticks and
 // template placeholders are forbidden here.
 function __bvmRequireSync(request) {
-  var bare =
-    typeof request === "string" && request.indexOf("node:") === 0
-      ? request.slice(5)
-      : request;
-  var key = Object.prototype.hasOwnProperty.call(_builtinManifest, bare)
-    ? bare
-    : Object.prototype.hasOwnProperty.call(_builtinManifest, request)
-      ? request
-      : null;
-  if (
-    key !== null &&
-    typeof _builtinCache !== "undefined" &&
-    _builtinCache.has(key)
-  ) {
+  var bare = (typeof request === 'string' && request.indexOf('node:') === 0) ? request.slice(5) : request;
+  var key = Object.prototype.hasOwnProperty.call(_builtinManifest, bare) ? bare
+    : Object.prototype.hasOwnProperty.call(_builtinManifest, request) ? request : null;
+  if (key !== null && typeof _builtinCache !== 'undefined' && _builtinCache.has(key)) {
     return _builtinRequireValue(_builtinCache.get(key));
   }
   if (key !== null) {
@@ -91,35 +76,22 @@ function __bvmRequireSync(request) {
     // always works. globalThis._RUNTIME_ is the stable per-sandbox alias set
     // at the top of this template.
     if (!_bvmRequirePending.has(key)) {
-      _bvmRequirePending.set(
-        key,
-        globalThis._RUNTIME_.loadModule(request).then(
-          function (mod) {
-            _bvmRequirePending.delete(key);
-            return _builtinRequireValue(mod);
-          },
-          function (loadErr) {
-            _bvmRequirePending.delete(key);
-            throw loadErr;
-          },
-        ),
-      );
+      _bvmRequirePending.set(key, globalThis._RUNTIME_.loadModule(request).then(
+        function (mod) { _bvmRequirePending.delete(key); return _builtinRequireValue(mod); },
+        function (loadErr) { _bvmRequirePending.delete(key); throw loadErr; }
+      ));
     }
     return _bvmRequirePending.get(key);
   }
-  var err = new Error(
-    "[ERR_REQUIRE_ASYNC_MODULE] Cannot require '" +
-      request +
-      "' synchronously: unknown module '" +
-      request +
-      "' is not a Node builtin; dynamic require() of a non-builtin has no sync path, use import()",
-  );
-  err.code = "ERR_REQUIRE_ASYNC_MODULE";
+  var err = new Error("[ERR_REQUIRE_ASYNC_MODULE] Cannot require '" + request + "' synchronously: unknown module '" + request + "' is not a Node builtin; dynamic require() of a non-builtin has no sync path, use import()");
+  err.code = 'ERR_REQUIRE_ASYNC_MODULE';
   throw err;
 }
 // --- end sync builtin require interop (gap #3) ---
 
 window._RUNTIME__UUID___ = globalThis._RUNTIME__UUID___;
+
+
 
 // ─── Vitest/fork support patches ───
 // 1. Force configurable:true on global defineProperty. All forks share one
@@ -132,13 +104,13 @@ window._RUNTIME__UUID___ = globalThis._RUNTIME__UUID___;
 // earlier call sites (2026-10-01: early call threw "ReferenceError:
 // maskFunction is not defined", killing iframe bootstrap).
 function maskFunction(patchedFn, originalFn) {
-  Object.defineProperty(patchedFn, "name", { value: originalFn.name });
+  Object.defineProperty(patchedFn, 'name', { value: originalFn.name });
   patchedFn.toString = () => originalFn.toString();
 }
-(function () {
+(function() {
   const origDefineProperty = Object.defineProperty;
-  Object.defineProperty = function (obj, prop, descriptor) {
-    if (obj === globalThis && descriptor && typeof descriptor === "object") {
+  Object.defineProperty = function(obj, prop, descriptor) {
+    if (obj === globalThis && descriptor && typeof descriptor === 'object') {
       descriptor = { ...descriptor, configurable: true };
     }
     return origDefineProperty.call(this, obj, prop, descriptor);
@@ -150,35 +122,34 @@ function maskFunction(patchedFn, originalFn) {
 // 2. process.exit semantics: in sync context throw to halt execution (like
 //    real Node), in async context resolve silently. This lets forked workers
 //    terminate cleanly without killing the parent realm.
-(function () {
+(function() {
   const rt = globalThis._RUNTIME__UUID___;
   if (rt && rt.process) {
     const origExit = rt.process.exit;
-    rt.process.exit = function (code) {
+    rt.process.exit = function(code) {
       code = code || 0;
       // Emit 'exit' event if listeners exist
-      if (typeof rt.process.emit === "function") {
-        try {
-          rt.process.emit("exit", code);
-        } catch {}
+      if (typeof rt.process.emit === 'function') {
+        try { rt.process.emit('exit', code); } catch {}
       }
       // In async context (we're in a promise), resolve silently.
       // In sync context, throw to halt like real Node.
       // Heuristic: if we're inside a microtask, we're async.
       // For now, throw a special error that the runtime catches.
-      const err = new Error("process.exit(" + code + ")");
-      err.code = "PROCESS_EXIT";
+      const err = new Error('process.exit(' + code + ')');
+      err.code = 'PROCESS_EXIT';
       err.exitCode = code;
       throw err;
     };
     // Cloak the patch: it replaces a host builtin, so it must read as native.
-    Object.defineProperty(rt.process.exit, "name", { value: "exit" });
+    Object.defineProperty(rt.process.exit, 'name', { value: 'exit' });
     rt.process.exit.toString = () => "function exit() { [native code] }";
   }
 })();
 
+
 if (!Array.prototype.toSorted) {
-  Array.prototype.toSorted = function (compareFn) {
+  Array.prototype.toSorted = function(compareFn) {
     // Create a shallow copy of the array and sort it in place
     const copy = [...this];
     copy.sort(compareFn);

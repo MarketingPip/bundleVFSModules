@@ -2,6 +2,9 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
+
+
+
 // Save the original console methods
 const originalConsole = { ...console };
 
