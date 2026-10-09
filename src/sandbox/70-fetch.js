@@ -159,7 +159,7 @@ const patchedFetch2 = async function (input, init = {}) {
 
   const blockedUrls = [
     "https://example.com/bad",
-    //https:////malware.site///
+    //https:\//\//malware\.site\///
   ];
   const url = input;
 

@@ -54,7 +54,7 @@ function PatchedXHR() {
   return xhr;
 }
 
-// maskFunction is defined in 00-runtime-object.js (must precede all uses).
+// maskFunction is defined near the top of this template (must precede all uses).
 maskFunction(PatchedXHR, originalXHR);
 maskFunction(setTimeout, originalSetTimeout);
 maskFunction(clearTimeout, originalClearTimeout);
@@ -84,4 +84,4 @@ function waitForAllXhrs() {
 
 // __parseStackLocation is defined once at module scope (exported for
 // unit tests) and inlined here so the iframe runs the identical code.
-("__PARSE_STACK_LOCATION_FN__");
+const __parseStackLocationFn = "__PARSE_STACK_LOCATION_FN__";

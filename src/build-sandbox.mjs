@@ -60,8 +60,10 @@ const TOKEN_MAP = [
   ["__STRIP_ANSI_FN__", "%%STRIP_ANSI_FN%%"],
   ['"__PARSE_STACK_LOCATION_FN__"', "%%PARSE_STACK_LOCATION_FN%%"],
   ["__FILENAME__", "%%FILENAME%%"],
-  ['"__TEST_IMPORTS__";', "%%TEST_IMPORTS%%;"],
-  ['("__ARGV_HAS_TEST__")', "(%%ARGV_HAS_TEST%%)"],
+  // NOTE (2026-10-09, Item 1): the --test interception was removed from the
+  // inline template; __TEST_IMPORTS__/__ARGV_HAS_TEST__ are dead tokens and
+  // no fragment carries them anymore. They were dropped from TOKEN_MAP and
+  // the validation dummies below.
   ["__IMPORTS__", "%%IMPORTS%%"],
   ["__USER_CODE__", "%%USER_CODE%%"],
   ["__UUID__", "%%UUID%%"],
@@ -115,10 +117,9 @@ function validateFinalTemplate(template) {
     // Replaced with plain strings (string-literal or comment positions).
     ["%%UUID%%", "x"],
     ["%%FILENAME%%", "x"],
-    // Replaced with a boolean literal.
-    ["%%ARGV_HAS_TEST%%", "true"],
+    // (%%ARGV_HAS_TEST%% / %%TEST_IMPORTS%% dummies removed with the dead
+    // --test tokens, 2026-10-09.)
     // Replaced with code snippets or '' (statement positions).
-    ["%%TEST_IMPORTS%%", ""],
     ["%%IMPORTS%%", ""],
     ["%%USER_CODE%%", ""],
   ];
