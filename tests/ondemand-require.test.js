@@ -518,14 +518,21 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // over to SANDBOX_TEMPLATE): src/test.js owns the trigger, runtime.js
     // drops the template interception and the inline template, playground.js
     // updates the tests example, docs record the contract, CI gates the
-    // template freshness. tests/ is excluded above.
+    // template freshness. Items 3+4: live bindings in the transform +
+    // buildModuleProxy, prettier-mangled parity fixtures restored with
+    // parity/node-test/ added to .prettierignore. tests/ is excluded above.
     expect(files.sort()).toEqual(
       [
         ".github/workflows/run.yaml",
+        ".prettierignore",
         "dist/test.js",
         "dist/vfs.js",
         "docs/E2E_FEATURE_MATRIX.md",
         "docs/RUNTIME.md",
+        "parity/node-test/fixtures/assert-first-line.js",
+        "parity/node-test/fixtures/assert-long-line.js",
+        "parity/node-test/parallel/test-assert-first-line.js",
+        "parity/node-test/parallel/test-assert.js",
         "runtime.js",
         "src/build-sandbox.mjs",
         "src/sandbox-template.js",
