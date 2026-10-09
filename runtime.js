@@ -1719,7 +1719,10 @@ export function transformImportsToLoadModule(
             : modulePath;
         const isBuiltin =
           typeof bareModulePath === "string" &&
-          Object.prototype.hasOwnProperty.call(_builtinManifest, bareModulePath);
+          Object.prototype.hasOwnProperty.call(
+            _builtinManifest,
+            bareModulePath,
+          );
         const enclosingFunc = findEnclosingFunction(node);
         if (isBuiltin && enclosingFunc !== null) {
           s.overwrite(
@@ -8458,8 +8461,7 @@ function _parseKey(s) {
        */
       function inlineWasmDataUrls(source, moduleVfsPath, vfs) {
         if (typeof source !== "string" || !source.includes("import.meta.url"))
-          if (typeof source !== "string" || !source.includes("import.meta.url"))
-            return source;
+          return source;
         const dir = String(moduleVfsPath || "")
           .split("/")
           .slice(0, -1);
