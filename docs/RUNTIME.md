@@ -166,12 +166,41 @@ tests) and `tests/ondemand-require-e2e.py` (headed-Firefox browser matrix):
   (`resolvedPath` is null), so a `require()` racing an `import()` dedupes to
   a single evaluation; `diagnostics_channel`'s registry is a singleton
   across both paths (each module is evaluated exactly once).
-- **Live bindings are NOT supported.** Named imports destructure at import
-  time (`const { x } = __lm`), and the interop proxy snapshots export values
-  at load (`Object.assign({}, data)`), so `export let` reassignment *inside*
-  a shim is invisible to importers (verified: `node:domain`'s `active` stays
-  `null` through the proxy after `enter()`). Same-object mutation through a
-  shared namespace *is* visible — that is identity, not live bindings.
+- **Live bindings ARE supported** (2026-10-09; previously not). Named and
+  default imports compile to live member access on the interop proxy — the
+  esbuild/rollup pattern: `import { x } from './m'` emits no preamble
+  binding; every reference to `x` is rewritten to `__lm_N.x`, and the proxy's
+  `get` reads from the real (frozen, live) ESM namespace returned by
+  `await import()`, never from its load-time `Object.assign({}, data)` copy
+  (that copy is kept only for bookkeeping: markers, `Symbol.toStringTag`).
+  So `export let` reassignment *inside* a module is visible to importers
+  (verified: `node:domain`'s `active` tracks `enter()`/`exit()` through the
+  proxy). Namespace imports keep `const ns = __lm` (live via the proxy).
+  Re-export chains are live too: `export { x } from './m'` and
+  `export { x }` (where `x` is an imported binding) emit a
+  `__bvm_reexp_N` marker export that the proxy resolves through the source
+  namespace on every read.
+- **Live-binding details and deliberate deviations.**
+  - Direct calls of imported functions compile to the indirect form
+    `(0, __lm_N.x)()` so `this` stays `undefined`, matching ESM call
+    semantics (a plain `__lm_N.x()` would bind `this` to the interop proxy).
+  - Shadowing is scope-aware: a nearer `let`/`const`/`var`/parameter/function
+    name is never rewritten. Non-reference positions (member-expression
+    property keys, non-computed property keys, labels, `import.meta`) are
+    never rewritten.
+  - Assignment to an imported binding (`x = 1`, `x++`) is invalid ESM; the
+    target is left as a bare identifier (a `ReferenceError` — no binding
+    exists) rather than silently writing the proxy's snapshot copy. It still
+    throws, like the old `const`-assignment `TypeError` did.
+  - **Falsy-`default` quirk (preserved intentionally):** the proxy returns
+    the whole namespace when a module's `default` export is falsy
+    (`0`, `''`, `null`, `undefined`) — `data.default || target`. Do not
+    "fix" this; several shims depend on the namespace fallback.
+  - **Remaining gap — `require()` of an ESM module:** `require()` unwraps to
+    `moduleObject.default ?? moduleObject`, a plain (snapshot) copy for named
+    reads, not the live proxy. Use `import` for live bindings; `require()`
+    of CJS-shaped modules is unaffected (it returns `module.exports`, live
+    by reference).
 - **Sandbox identity caveat.** Every `dist/` entry is bundled independently
   (esbuild `bundle: true, external: []` per entry in `src/build-vfs.mjs`),
   so each bundle inlines its own dependency copies:

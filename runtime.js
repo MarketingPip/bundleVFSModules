@@ -1520,9 +1520,37 @@ export function transformImportsToLoadModule(
   // --- Utilities ---
   const liftedModules = new Map();
   let starSeq = 0;
+  let reexpSeq = 0;
   const importBindings = [];
   const functionsToMakeAsync = new Set();
   const moduleImportType = new Map();
+  // Live-binding table: imported local name -> { liftedVar, importedName }.
+  // Named/default imports no longer emit `const { x } = __lm` (a snapshot);
+  // instead every live reference to the local is rewritten to
+  // `liftedVar.importedName` (the esbuild/rollup pattern). Namespace imports
+  // keep `const ns = __lm` and are NOT in this map.
+  const importBindingMap = new Map();
+
+  // Track every range the transform overwrites/removes so the later
+  // reference-rewrite pass never touches already-rewritten code (overlapping
+  // MagicString edits throw).
+  const editedRanges = [];
+  const _overwrite = s.overwrite.bind(s);
+  s.overwrite = (start, end, content, ...rest) => {
+    editedRanges.push([start, end]);
+    return _overwrite(start, end, content, ...rest);
+  };
+  const _remove = s.remove.bind(s);
+  s.remove = (start, end) => {
+    editedRanges.push([start, end]);
+    return _remove(start, end);
+  };
+  const rangeIsEdited = (start, end) => {
+    for (const [rs, re] of editedRanges) {
+      if (start < re && end > rs) return true;
+    }
+    return false;
+  };
 
   function getLiftedVar(modulePath) {
     if (!liftedModules.has(modulePath)) {
@@ -1530,6 +1558,31 @@ export function transformImportsToLoadModule(
       liftedModules.set(modulePath, safeName);
     }
     return liftedModules.get(modulePath);
+  }
+
+  function registerImportBindings(node) {
+    // Record local -> { liftedVar, importedName } for the live-reference
+    // rewrite. First import wins (a duplicate local name is invalid ESM).
+    const v = getLiftedVar(node.source.value);
+    for (const sp of node.specifiers) {
+      if (sp.type === "ImportSpecifier") {
+        if (!importBindingMap.has(sp.local.name)) {
+          importBindingMap.set(sp.local.name, {
+            liftedVar: v,
+            importedName: sp.imported.name,
+          });
+        }
+      } else if (sp.type === "ImportDefaultSpecifier") {
+        if (!importBindingMap.has(sp.local.name)) {
+          importBindingMap.set(sp.local.name, {
+            liftedVar: v,
+            importedName: "default",
+          });
+        }
+      }
+      // ImportNamespaceSpecifier keeps `const ns = __lm` (live via the
+      // fixed proxy) — never rewritten, never registered here.
+    }
   }
 
   function setImportType(modulePath, type) {
@@ -1559,6 +1612,15 @@ export function transformImportsToLoadModule(
     return null;
   }
 
+  // --- Phase 0: pre-register import bindings ---
+  // An `export { x }` (no source) may textually precede the import it
+  // re-exports — `export { x }; import { x } from './m'` is legal ESM
+  // because imports hoist — so the live-binding table must be complete
+  // before the main walk reaches the export declarations.
+  for (const node of ast.body) {
+    if (node.type === "ImportDeclaration") registerImportBindings(node);
+  }
+
   // --- AST walk ---
   walk.simple(ast, {
     // Static ESM imports
@@ -1566,6 +1628,7 @@ export function transformImportsToLoadModule(
       const modulePath = node.source.value;
       const v = getLiftedVar(modulePath);
       importBindings.push({ node, liftedVar: v });
+      registerImportBindings(node);
       setImportType(modulePath, "import");
       s.remove(node.start, node.end);
     },
@@ -1769,26 +1832,344 @@ export function transformImportsToLoadModule(
 
     // export { a, b as c } from "./x" — re-export with source.
     // Like ExportAllDeclaration, the source must be lifted via loadModule
-    // because relative resolution fails from data: URLs. Destructure the
-    // lifted namespace and re-export the bindings.
+    // because relative resolution fails from data: URLs. The re-export is
+    // LIVE: instead of destructuring (a snapshot), emit a marker export
+    // `__bvm_reexp_N`; buildModuleProxy collects these markers and resolves
+    // each name through the (live) source namespace on every read.
     ExportNamedDeclaration(node) {
-      if (!node.source) return; // export { x } without source: leave as-is
+      if (!node.source) {
+        // export { x } / export { x as y } without source: any specifier
+        // whose local is an imported binding becomes a live re-export
+        // marker; the remaining (truly local) specifiers keep a real
+        // export declaration. Untouched when nothing is imported.
+        const liveParts = [];
+        const kept = [];
+        for (const sp of node.specifiers) {
+          const b = importBindingMap.get(sp.local.name);
+          if (b) liveParts.push([sp.exported.name, b]);
+          else kept.push(code.slice(sp.start, sp.end));
+        }
+        if (liveParts.length === 0) return; // leave as-is
+        const marker =
+          `export const __bvm_reexp_${reexpSeq++} = { ` +
+          liveParts
+            .map(
+              ([exported, b]) =>
+                `${JSON.stringify(exported)}: [${b.liftedVar}, ${JSON.stringify(b.importedName)}]`,
+            )
+            .join(", ") +
+          ` };`;
+        s.overwrite(
+          node.start,
+          node.end,
+          kept.length === 0 ? marker : `export { ${kept.join(", ")} };\n${marker}`,
+        );
+        return;
+      }
       const modulePath = node.source.value;
       const v = getLiftedVar(modulePath);
       setImportType(modulePath, "import");
-      const named = node.specifiers.map((s) => {
-        // s.exported is the exported name, s.local is the imported name
+      const entries = node.specifiers.map((sp) => {
+        // sp.exported is the exported name, sp.local is the imported name
         // For `export { foo } from`, exported=foo, local=foo
         // For `export { bar as baz } from`, exported=baz, local=bar
-        const imported = s.local.name;
-        const exported = s.exported.name;
-        return imported === exported ? exported : `${imported}: ${exported}`;
+        return `${JSON.stringify(sp.exported.name)}: [${v}, ${JSON.stringify(sp.local.name)}]`;
       });
       s.overwrite(
         node.start,
         node.end,
-        `export const { ${named.join(", ")} } = ${v};`,
+        `export const __bvm_reexp_${reexpSeq++} = { ${entries.join(", ")} };`,
       );
+    },
+  });
+
+  // --- Phase 2: rewrite references to imported bindings as live member
+  // access (the esbuild/rollup pattern). Named/default imports no longer
+  // destructure in the preamble, so every live reference `x` becomes
+  // `__lm_N.importedName`.
+  const scopeDecls = new Map(); // scope-introducing AST node -> Set(names)
+  const scopeSet = (n) => {
+    let st = scopeDecls.get(n);
+    if (!st) {
+      st = new Set();
+      scopeDecls.set(n, st);
+    }
+    return st;
+  };
+  const namesOfPattern = (pat, out) => {
+    if (!pat) return out;
+    if (pat.type === "Identifier") {
+      out.push(pat.name);
+      return out;
+    }
+    if (pat.type === "ObjectPattern") {
+      for (const pr of pat.properties) {
+        if (pr.type === "Property") namesOfPattern(pr.value, out);
+        else namesOfPattern(pr.argument, out); // RestElement
+      }
+      return out;
+    }
+    if (pat.type === "ArrayPattern") {
+      for (const el of pat.elements) if (el) namesOfPattern(el, out);
+      return out;
+    }
+    if (pat.type === "RestElement") {
+      namesOfPattern(pat.argument, out);
+      return out;
+    }
+    if (pat.type === "AssignmentPattern") {
+      namesOfPattern(pat.left, out);
+      return out;
+    }
+    return out;
+  };
+  // Single recursive pass: for every scope node record the names it binds.
+  // `var` declarations hoist to the nearest function/program scope; every
+  // other binding form lives in its own lexical scope.
+  const buildScopes = (node, lexScope, varScope) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const c of node) buildScopes(c, lexScope, varScope);
+      return;
+    }
+    if (!node.type) return;
+    const t = node.type;
+    let newLex = lexScope;
+    let newVar = varScope;
+    if (
+      t === "Program" ||
+      t === "BlockStatement" ||
+      t === "StaticBlock" ||
+      t === "SwitchStatement"
+    ) {
+      newLex = node;
+      scopeSet(node);
+    } else if (
+      t === "FunctionDeclaration" ||
+      t === "FunctionExpression" ||
+      t === "ArrowFunctionExpression"
+    ) {
+      newLex = node;
+      newVar = node;
+      scopeSet(node);
+      if (t === "FunctionExpression" && node.id)
+        scopeSet(node).add(node.id.name);
+      for (const p of node.params)
+        for (const nm of namesOfPattern(p, [])) scopeSet(node).add(nm);
+      // A function declaration binds its name in the ENCLOSING scope.
+      if (t === "FunctionDeclaration" && node.id)
+        scopeSet(lexScope).add(node.id.name);
+    } else if (t === "ClassDeclaration" || t === "ClassExpression") {
+      newLex = node;
+      scopeSet(node);
+      if (node.id) {
+        scopeSet(node).add(node.id.name);
+        if (t === "ClassDeclaration") scopeSet(lexScope).add(node.id.name);
+      }
+    } else if (t === "CatchClause") {
+      newLex = node;
+      scopeSet(node);
+      if (node.param)
+        for (const nm of namesOfPattern(node.param, []))
+          scopeSet(node).add(nm);
+    } else if (
+      t === "ForStatement" ||
+      t === "ForInStatement" ||
+      t === "ForOfStatement"
+    ) {
+      const decl = t === "ForStatement" ? node.init : node.left;
+      if (
+        decl &&
+        decl.type === "VariableDeclaration" &&
+        (decl.kind === "let" || decl.kind === "const")
+      ) {
+        newLex = node;
+        scopeSet(node);
+        for (const d of decl.declarations)
+          for (const nm of namesOfPattern(d.id, [])) scopeSet(node).add(nm);
+      }
+    }
+    if (t === "VariableDeclaration") {
+      const target = node.kind === "var" ? newVar : newLex;
+      for (const d of node.declarations)
+        for (const nm of namesOfPattern(d.id, [])) scopeSet(target).add(nm);
+    }
+    for (const k of Object.keys(node)) {
+      if (k === "parent") continue;
+      const v = node[k];
+      if (Array.isArray(v)) {
+        for (const c of v) buildScopes(c, newLex, newVar);
+      } else if (v && typeof v === "object" && v.type) {
+        buildScopes(v, newLex, newVar);
+      }
+    }
+  };
+  buildScopes(ast, null, null);
+
+  // Is `name` shadowed by a nearer lexical binding at this reference?
+  // Import bindings live at Program (module) scope; any declaration of the
+  // name in a scope between the reference and Program shadows the import.
+  const isShadowed = (name, node) => {
+    let n = node.parent;
+    while (n && n !== ast) {
+      const st = scopeDecls.get(n);
+      if (st && st.has(name)) return true;
+      n = n.parent;
+    }
+    return false;
+  };
+
+  // True when this Identifier is a binding position rather than a value
+  // reference (declaration id, function param, catch param, import/export
+  // specifier, ...). Climbs through binding patterns to the declaration.
+  const isBindingIdentifier = (node) => {
+    let n = node;
+    let p = node.parent;
+    while (p) {
+      if (
+        (p.type === "VariableDeclarator" && p.id === n) ||
+        ((p.type === "FunctionDeclaration" ||
+          p.type === "FunctionExpression" ||
+          p.type === "ArrowFunctionExpression") &&
+          (p.id === n || p.params.indexOf(n) !== -1)) ||
+        ((p.type === "ClassDeclaration" || p.type === "ClassExpression") &&
+          p.id === n) ||
+        (p.type === "CatchClause" && p.param === n) ||
+        p.type === "ImportSpecifier" ||
+        p.type === "ImportDefaultSpecifier" ||
+        p.type === "ImportNamespaceSpecifier" ||
+        p.type === "ExportSpecifier"
+      )
+        return true;
+      if (p.type === "Property" && p.value === n) {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      if (p.type === "ObjectPattern" || p.type === "ArrayPattern") {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      if (
+        (p.type === "RestElement" && p.argument === n) ||
+        (p.type === "AssignmentPattern" && p.left === n)
+      ) {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      return false;
+    }
+    return false;
+  };
+
+  // True when the identifier is a non-computed property key, a label, or
+  // part of `import.meta` — positions that never read the binding.
+  const isNonReferencePosition = (node) => {
+    const p = node.parent;
+    if (!p) return true;
+    if (
+      p.type === "MetaProperty" ||
+      p.type === "LabeledStatement" ||
+      ((p.type === "BreakStatement" || p.type === "ContinueStatement") &&
+        p.label === node)
+    )
+      return true;
+    if (
+      (p.type === "Property" || p.type === "MethodDefinition") &&
+      p.key === node &&
+      !p.computed &&
+      !p.shorthand
+    )
+      return true;
+    if (
+      p.type === "PropertyDefinition" &&
+      p.key === node &&
+      !p.computed
+    )
+      return true;
+    if (
+      (p.type === "MemberExpression" ||
+        p.type === "OptionalMemberExpression") &&
+      p.property === node &&
+      !p.computed
+    )
+      return true;
+    return false;
+  };
+
+  // True when the reference WRITES the binding (`x = 1`, `x++`,
+  // `for (x of ...)`). Assignment to an import binding is invalid ESM;
+  // leaving the bare identifier (a ReferenceError — no binding exists)
+  // preserves the "it throws" behavior instead of silently writing the
+  // proxy's snapshot copy.
+  const isWriteTarget = (node) => {
+    let n = node;
+    let p = node.parent;
+    while (p) {
+      if (p.type === "AssignmentExpression" && p.left === n) return true;
+      if (
+        p.type === "UpdateExpression" ||
+        ((p.type === "ForInStatement" || p.type === "ForOfStatement") &&
+          p.left === n)
+      )
+        return true;
+      if (p.type === "Property" && p.value === n) {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      if (p.type === "ObjectPattern" || p.type === "ArrayPattern") {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      if (
+        (p.type === "RestElement" && p.argument === n) ||
+        (p.type === "AssignmentPattern" && p.left === n)
+      ) {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      return false;
+    }
+    return false;
+  };
+
+  walk.simple(ast, {
+    Identifier(node) {
+      const b = importBindingMap.get(node.name);
+      if (!b) return;
+      if (rangeIsEdited(node.start, node.end)) return;
+      if (isBindingIdentifier(node)) return;
+      if (isNonReferencePosition(node)) return;
+      if (isShadowed(node.name, node)) return;
+      if (isWriteTarget(node)) return;
+      const p = node.parent;
+      let replacement = `${b.liftedVar}.${b.importedName}`;
+      if (p && p.type === "Property" && p.shorthand) {
+        // `{ x }` -> `{ x: __lm_N.x }` (overwriting the shared key/value
+        // identifier with a member expression alone would be a syntax
+        // error). Acorn models the shorthand key and value as two distinct
+        // nodes over the same range: rewrite on the key (visited first by
+        // the naive walker; acorn-walk visits only the value) and let the
+        // range guard skip the twin.
+        replacement = `${node.name}: ${replacement}`;
+      } else if (
+        p &&
+        ((p.type === "CallExpression" && p.callee === node) ||
+          (p.type === "OptionalCallExpression" && p.callee === node) ||
+          (p.type === "TaggedTemplateExpression" && p.tag === node))
+      ) {
+        // `x()` -> `(0, __lm_N.x)()`: the indirect call keeps `this`
+        // undefined, matching ESM call semantics (a plain `__lm_N.x()`
+        // would bind `this` to the interop proxy).
+        replacement = `(0, ${replacement})`;
+      }
+      s.overwrite(node.start, node.end, replacement);
+      editedRanges.push([node.start, node.end]);
     },
   });
 
@@ -1798,22 +2179,38 @@ export function transformImportsToLoadModule(
   }
 
   // --- Build the preamble for lifted modules ---
-  let preambleParts = [];
+  // Split by lift kind: `import`-type lifts (entry static imports) are
+  // hoisted by execute() to %%IMPORTS%% (init scope, as the old `custom`
+  // preloads were); `require`-type lifts stay atop the user code, exactly
+  // where the old preamble put them (they must load after init's timer
+  // patching, not before). Namespace-import consts
+  // (`const ns = __lm`) ride with the import lifts. In `code` the import
+  // lifts come first — matching ESM evaluation order (imports before the
+  // module body, requires included).
+  const importPreambleParts = [];
+  const bodyPreambleParts = [];
   for (const [modulePath, v] of liftedModules.entries()) {
     const type = moduleImportType.get(modulePath) || "import";
-    preambleParts.push(
+    const line =
       `const ${v} = await globalThis._RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
         modulePath,
-      )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`,
-    );
+      )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`;
+    if (type === "import") importPreambleParts.push(line);
+    else bodyPreambleParts.push(line);
   }
 
   for (const { node, liftedVar } of importBindings) {
-    preambleParts.push(generateImportBinding(node, liftedVar));
+    const binding = generateImportBinding(node, liftedVar);
+    if (binding) importPreambleParts.push(binding);
   }
 
-  if (preambleParts.length > 0) {
-    s.prepend(preambleParts.join("\n") + "\n\n");
+  const importPreamble = importPreambleParts.join("\n");
+  const bodyPreamble =
+    bodyPreambleParts.length > 0 ? bodyPreambleParts.join("\n") + "\n\n" : "";
+  // `body`: require lifts + user code (what execute() runs as user code).
+  const bodySrc = bodyPreamble + s.toString();
+  if (importPreamble || bodyPreamble) {
+    s.prepend((importPreamble ? importPreamble + "\n\n" : "") + bodyPreamble);
   }
   //console.log(preambleParts.join("\n") + "\n\n")
   const outCode = s.toString();
@@ -1822,7 +2219,19 @@ export function transformImportsToLoadModule(
     hires: false, // line-level maps: hires VLQ explodes on MB-size inputs (74MB mappings for 16MB source), blocking the main thread; line-level suffices for stack traces,
     includeContent: true,
   });
-  return { code: outCode, map };
+  // preamble/body split: execute() hoists the *import* preamble (the
+  // `await loadModule(...)` lifts for static imports, plus namespace consts)
+  // to the sandbox init scope (%%IMPORTS%%) and runs `body` (require lifts +
+  // user code) as the user code. Both share the sandbox IIFE scope, so the
+  // live member access (`__lm_N.x`) in the body resolves to the preamble's
+  // lifted vars. `code` (full preamble + body) is unchanged for all
+  // existing consumers.
+  return {
+    code: outCode,
+    map,
+    preamble: importPreamble,
+    body: bodySrc,
+  };
 }
 
 function generateImportBinding(node, liftedVar) {
@@ -1830,26 +2239,17 @@ function generateImportBinding(node, liftedVar) {
 
   if (!specifiers.length) return "";
 
-  let d = null,
-    ns = null,
-    named = [];
+  // Namespace imports keep a live alias: `const ns = __lm` (the proxy read
+  // is live once buildModuleProxy reads from the real namespace).
+  // Named/default imports emit NO binding: every reference was rewritten to
+  // `liftedVar.importedName` (live member access, the esbuild/rollup
+  // pattern). The old `const { x } = __lm` destructured once at import time
+  // — a snapshot that killed live bindings.
   for (const s of specifiers) {
-    if (s.type === "ImportDefaultSpecifier") d = s.local.name;
-    else if (s.type === "ImportNamespaceSpecifier") ns = s.local.name;
-    else
-      named.push(
-        s.imported.name === s.local.name
-          ? s.local.name
-          : `${s.imported.name}: ${s.local.name}`,
-      );
+    if (s.type === "ImportNamespaceSpecifier")
+      return `const ${s.local.name} = ${liftedVar};`;
   }
-
-  if (ns) return `const ${ns} = ${liftedVar};`;
-  if (d && named.length)
-    return `const { default: ${d}, ${named.join(", ")} } = ${liftedVar};`;
-  if (d) return `const ${d} = ${liftedVar}.default;`;
-
-  return `const { ${named.join(", ")} } = ${liftedVar};`;
+  return "";
 }
 
 /*
@@ -2170,6 +2570,16 @@ export class ImportResolver {
     }
 
     if (transformed.startsWith("./") || transformed.startsWith("../")) {
+      return transformed;
+    }
+
+    // Absolute VFS paths ("/...") are resolved by the sandbox loader's
+    // _dynamic_import (absolute-VFS branch) — same as the parent
+    // es-module-shims resolve hook — not by the CDN. (Previously they fell
+    // through to `${cdnBase}//...` and 400'd, so no entry could statically
+    // or dynamically import a VFS file by absolute path.)
+    if (transformed.startsWith("/")) {
+      this.cache.set(cacheKey, transformed);
       return transformed;
     }
 
@@ -5367,11 +5777,24 @@ function _parseKey(s) {
           this.config.codeTransformers
         );*/
         //  let transformedCode = code;
-        // Generate runtime code
 
-        const custom = imports.map(
-          (i) => transformImportsToLoadModule(this.uuid, i).code,
-        );
+        // Live bindings (2026-10-09): the entry's static imports are
+        // transformed TOGETHER WITH the entry body in a single
+        // transformImportsToLoadModule call, so references to imported
+        // bindings compile to live member access (`__lm_N.x`) on the same
+        // lifted vars whose `await loadModule(...)` preamble is hoisted to
+        // %%IMPORTS%% (init scope). The old shape — transforming each
+        // import statement separately into a preload — emitted
+        // `const { x } = __lm` snapshots; with live bindings the preload
+        // emits no binding at all, which would leave the body's references
+        // dangling (ReferenceError). Both scopes share the sandbox IIFE,
+        // so the body's `__lm_N.x` resolves to the preamble's lifted vars.
+        const combinedCode =
+          imports.length > 0
+            ? imports.join("\n") + "\n" + cleanedCode
+            : cleanedCode;
+
+        // Generate runtime code
 
         //  transformedCode =  transformedCode.replaceAll("await import", "await loadModule")
 
@@ -5394,22 +5817,24 @@ function _parseKey(s) {
         }
 
         // Transform the main entry code and capture its source map for error mapping.
+        // (combinedCode: the entry's static imports + body, transformed
+        // together for live bindings — see above.)
         const mainTransform = transformImportsToLoadModule(
           this.uuid,
-          cleanedCode,
+          combinedCode,
           this.config.fileName,
         );
         if (mainTransform.map) {
           const sourceURL = `sandbox://${this.uuid}/${this.config.fileName}`;
           this._sourceMapRegistry.set(sourceURL, {
             map: mainTransform.map,
-            originalSource: cleanedCode,
+            originalSource: combinedCode,
             filename: this.config.fileName,
           });
         }
 
-        runtimeCode = SandboxRuntime.generate(mainTransform.code, {
-          imports: custom,
+        runtimeCode = SandboxRuntime.generate(mainTransform.body, {
+          imports: mainTransform.preamble ? [mainTransform.preamble] : [],
           logNetworkRequests: this.config.logNetworkRequests,
           interopVariable: this.config.interopVariable,
           process: this.config.process,

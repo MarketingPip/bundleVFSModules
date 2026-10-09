@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Live bindings browser E2E</title></head>
+<body>
+<div id="output"></div>
+<div id="status">pending</div>
+<script type="module">
+// Live-bindings E2E harness (2026-10-09).
+//
+// Drives the REAL consumption path: CodeSandbox from ./runtime.js (served
+// with the CDN dist base rewritten to the local dist/ by the driver),
+// VFS modules seeded via config.fs, entry executed with a static
+// `import { count } from '/lb-counter.js'`.
+//
+// Named/default imports compile to live member access on the interop
+// proxy (`__lm_N.count`); the proxy reads the real ESM namespace. The old
+// snapshot behavior (`const { count } = __lm` + proxy copy reads) would
+// print 0 for every LB_STATIC_* needle below.
+import { CodeSandbox } from '/runtime.js';
+
+const out = document.getElementById('output');
+const statusEl = document.getElementById('status');
+const log = (t) => { out.textContent += t + '\n'; };
+
+const FILES = {
+  '/lb-counter.js': `export let count = 0; export function bump() { count++; }\n`,
+  '/lb-reader.js':
+    `import { count } from '/lb-counter.js';\nexport function readCount() { return count; }\n`,
+  '/lb-def.js':
+    `let v = 10;\nexport { v as default };\nexport function setV(x) { v = x; }\n`,
+  '/lb-re.js': `export { count } from '/lb-counter.js';\n`,
+};
+
+const ENTRY = [
+  `import { count, bump } from '/lb-counter.js';`,
+  `import * as ns from '/lb-counter.js';`,
+  `import { readCount } from '/lb-reader.js';`,
+  `import d, { setV } from '/lb-def.js';`,
+  `import { count as rc } from '/lb-re.js';`,
+  `bump();`,
+  `console.log('LB_STATIC_1=' + count);`,    // live: 1 (snapshot would be 0)
+  `bump();`,
+  `console.log('LB_STATIC_2=' + count);`,    // live: 2
+  `console.log('LB_NS=' + ns.count);`,       // namespace import, live: 2
+  `console.log('LB_READER=' + readCount());`,// cross-module liveness: 2
+  `console.log('LB_REEXPORT=' + rc);`,        // re-export chain liveness: 2
+  `setV(42);`,
+  `console.log('LB_DEFAULT=' + d);`,         // live default: 42
+  `await new Promise((r) => setTimeout(r, 50));`,
+  `bump();`,
+  `console.log('LB_STATIC_TICK=' + count);`, // later-tick mutation: 3
+].join('\n');
+
+(async () => {
+  try {
+    const sandbox = new CodeSandbox({
+      fileName: 'lb-entry.mjs',
+      timeout: 60000,
+      fs: FILES,
+    });
+    const result = await sandbox.execute(ENTRY);
+    for (let entry of result.logs || []) {
+      // Mirror the playground's logEntry(): entries are JSON strings or
+      // { type, args } objects; args may be a pre-joined string.
+      if (typeof entry === "string") {
+        try { entry = JSON.parse(entry); } catch { /* keep raw string */ }
+      }
+      let text;
+      if (entry && typeof entry === "object" && typeof entry.args === "string") {
+        text = entry.args;
+      } else if (entry && typeof entry === "object" && Array.isArray(entry.args)) {
+        text = entry.args.map((a) => String(a)).join(" ");
+      } else if (typeof entry === "object") {
+        text = JSON.stringify(entry);
+      } else {
+        text = String(entry);
+      }
+      log(text);
+    }
+    if (!result.success) {
+      log('ENTRY_ERROR=' + JSON.stringify(result.errors || result.error || 'unknown'));
+    }
+    statusEl.textContent = result.success ? 'Done' : 'Error';
+  } catch (e) {
+    log('HARNESS_THROW=' + (e && e.message ? e.message : String(e)));
+    statusEl.textContent = 'Error';
+  }
+})();
+</script>
+</body>
+</html>

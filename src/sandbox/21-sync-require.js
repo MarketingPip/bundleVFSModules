@@ -748,7 +748,41 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
     }
   }
 
+  // Live named re-exports (see transformImportsToLoadModule
+  // ExportNamedDeclaration): __bvm_reexp_* hold
+  // { <exportedName>: [<liftedVar>, <importedName>] } descriptors where the
+  // lifted var is the (proxied, live) source namespace. Collected into a
+  // Map and hidden from the visible namespace like __bvm_star_*.
+  const reexports = new Map();
+  for (const key of Object.keys(moduleObject)) {
+    if (key.startsWith('__bvm_reexp_')) {
+      const desc = moduleObject[key];
+      if (desc && typeof desc === 'object') {
+        for (const exported of Object.keys(desc)) {
+          const entry = desc[exported];
+          if (Array.isArray(entry) && entry.length === 2) {
+            reexports.set(exported, { ns: entry[0], name: entry[1] });
+          }
+        }
+      }
+      delete moduleObject[key];
+    }
+  }
+
   if (moduleType === 'require') {
+    // Materialize live re-export aliases as getters so require() of a
+    // module with `export { x } from` also observes current values.
+    for (const [exported, entry] of reexports) {
+      if (!(exported in moduleObject)) {
+        Object.defineProperty(moduleObject, exported, {
+          enumerable: true,
+          configurable: true,
+          get: function () {
+            return entry.ns[entry.name];
+          },
+        });
+      }
+    }
     return moduleObject.default ?? moduleObject;
   }
 
@@ -773,13 +807,29 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
     get(target, prop) {
       if (typeof prop === 'symbol' || prop === 'then') return target[prop];
 
-      if (prop === 'default') return  target?.default || target; // TODO: if sourceType is CJS - force default.
       if (prop === '__esModule') return true;
 
+      // Live named re-export alias (export { x } from './m', or
+      // export { x } where x is an imported binding): read through the
+      // live source namespace on every access.
+      const reexp = reexports.get(prop);
+      if (reexp !== undefined) return reexp.ns[reexp.name];
+
+      // PRESERVED QUIRK (intentional, do not "fix" here): a falsy .default
+      // (0, '', null, undefined, ...) falls back to the whole namespace,
+      // so `import d from './m'` observes the namespace rather than the
+      // falsy default. The read itself is live: data.default tracks the
+      // module's current default binding per the ESM spec (the old code
+      // read target.default — the load-time snapshot — which would keep
+      // default imports snapshotted). Named re-exports of 'default' are
+      // handled by the reexports branch above and never reach this quirk.
+      if (prop === 'default') return data.default || target; // TODO: if sourceType is CJS - force default.
       if (!(prop in target)) {
         // Star re-export fallback (ESM 'export *' semantics): check each
         // star source, skipping 'default'. Star modules are proxied and
-        // throw SyntaxError for missing exports; try the next source.
+        // throw SyntaxError for missing exports; try the next source. Reads
+        // are live: star sources are interop proxies over the real
+        // namespaces.
         for (const starMod of starSources) {
           if (prop === 'default') break;
           try {
@@ -791,9 +841,11 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
         }
         // CJS interop (Node parity): a named import from a CJS module
         // resolves against module.exports, including keys it inherited
-        // via spread (which static analysis cannot see).
+        // via spread (which static analysis cannot see). data.default IS
+        // module.exports (live by reference) — read it live, not the
+        // load-time copy on target.
         if (isCjs) {
-          const cjsExports = target.default;
+          const cjsExports = data.default;
           if (
             cjsExports !== null &&
             (typeof cjsExports === 'object' ||
@@ -809,7 +861,16 @@ function buildModuleProxy(data, modulePath, relativeName, moduleType) {
         );
       }
 
-      return target[prop];
+      // LIVE read: data is the real (frozen) ESM namespace from
+      // await import(), whose bindings track the module's current values
+      // per the ESM spec. target is only a load-time copy kept for
+      // bookkeeping (markers, toStringTag) — never read export values
+      // from it, or `export let` reassignment inside the module stays
+      // invisible to importers (the old snapshot behavior).
+      // Prototype-chain lookups (toString, valueOf, ...) are not ESM
+      // exports and don't exist on the namespace: fall back to the copy
+      // for those so String(proxy)/template interpolation keep working.
+      return prop in data ? data[prop] : target[prop];
     },
   });
 }  

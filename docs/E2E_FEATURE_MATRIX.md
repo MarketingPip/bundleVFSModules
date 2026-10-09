@@ -100,6 +100,12 @@ opt-out with `--test` → registration line only, no test output.
   conditional/block imports, import→require and require→import identity,
   live bindings, side-effect count, CJS default/named export shape,
   sandbox identity.
+- `tests/live-bindings-e2e.py` — ESM live-bindings browser matrix
+  (2026-10-09): static `import { count }` sees `export let` reassignment
+  (1, then 2, then 3 after a later-tick mutation), namespace import live,
+  cross-module liveness via a reader module, `export { count } from`
+  re-export chain live, live default binding. The old snapshot behavior
+  would print 0 for every needle.
 - `tests/terminal-gating-e2e.py` — DOM terminal vs `?xterm=1`; completion
   gating: unawaited fetch tracking, active stdin/events hold completion
   without polling, listener removal / process exit releases the gate.
