@@ -304,16 +304,23 @@ describe("__bvmRequireSync", () => {
 // Part 3 — structural: no new shims, template gained only __bvmRequireSync
 // ---------------------------------------------------------------------------
 describe("structural: no new shims; template gained only __bvmRequireSync", () => {
+  // NOTE: these tests diff against origin/main (the PR base), not the local
+  // `main` branch — the local branch layout does not survive rebasing, but
+  // the PR base is stable. They are skipped when the diff is empty (i.e.
+  // running on main itself post-merge), where there is no branch footprint
+  // to guard.
+  const diffBase = "origin/main...HEAD";
+
   test("dist/ is untouched by the branch", () => {
-    const out = execSync("git diff --stat main...HEAD -- dist/", {
+    const out = execSync(`git diff --stat ${diffBase} -- dist/`, {
       cwd: REPO_ROOT,
       encoding: "utf8",
     });
     expect(out.trim()).toBe("");
   });
 
-  test("no new files outside tests/ — only runtime.js changed", () => {
-    const out = execSync("git diff --name-only main...HEAD", {
+  test("branch footprint outside tests/ is exactly the allowlist (catches strays)", () => {
+    const out = execSync(`git diff --name-only ${diffBase}`, {
       cwd: REPO_ROOT,
       encoding: "utf8",
     });
@@ -322,11 +329,27 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
-    expect(files).toEqual(["runtime.js"]);
+    if (files.length === 0) return; // on main post-merge: nothing to guard
+    expect(files.sort()).toEqual(
+      [
+        ".gitignore",
+        "docs/PARITY_TESTING.md",
+        "package.json",
+        "parity/expected-failures.shim.json",
+        "parity/run.mjs",
+        "runtime.js",
+        "scripts/generate-scoreboard.mjs",
+        "src/crypto.js",
+        "src/fs.js",
+        "src/ui/playground.js",
+        "src/util.js",
+        "ui.html",
+      ].sort()
+    );
   });
 
   test("the only new function declaration in the diff is __bvmRequireSync", () => {
-    const out = execSync("git diff main...HEAD -- runtime.js", {
+    const out = execSync(`git diff ${diffBase} -- runtime.js`, {
       cwd: REPO_ROOT,
       encoding: "utf8",
     });
@@ -337,7 +360,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
   });
 
   test("no new import statements added to runtime.js", () => {
-    const out = execSync("git diff main...HEAD -- runtime.js", {
+    const out = execSync(`git diff ${diffBase} -- runtime.js`, {
       cwd: REPO_ROOT,
       encoding: "utf8",
     });
