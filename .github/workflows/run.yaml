@@ -15,8 +15,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           # The structural guard tests diff against origin/main; the default
-          # checkout only fetches the PR branch.
+          # checkout only fetches the PR branch. The "Commit generated file"
+          # step pushes back to the PR branch, so for PRs we need the branch
+          # ref (not the detached merge commit).
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
