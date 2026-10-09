@@ -7162,11 +7162,7 @@ await import(__initSandboxState);
 // let location = undefined; 
  
     
-  ${
-    config?.process?.argv.includes("--test")
-      ? "" // if --test is present, include nothing
-      : config.imports?.join("\n") || "" // otherwise include imports
-  }
+  ${config.imports?.join("\n") || ""}
   
   
  // globalThis.window =  _window;
@@ -7194,94 +7190,12 @@ await import(__initSandboxState);
  
    
       // const tracker = new AsyncOperationTracker();
-    /* TODO: add flags for --test-reporter=spec mytest.js (json, dot, spec - exists) or if in env.NODE_TEST_REPORTER
-     node --test file.js 
-    node --test (run all test files in VFS)
-    */ 
- ${
-   config?.process?.argv.includes("--test")
-     ? `
-    
-     let _testRunner;
-     
-      try{ 
-      
-      if(!globalThis._RUNTIME${config.uuid}_._TEST_RUNNER_){
-       await globalThis._RUNTIME${config.uuid}_.loadModule("node:test")
-       }
-      // globalThis._RUNTIME_TEST_RUNNER_.REPORTER_TYPE = 'tap';
-       // console.log(globalThis._RUNTIME_TEST_RUNNER_._activeReporter)
-     
-       // const reporter = process.argv.find(arg => arg.startsWith('--test-reporter='))?.split('=')[1];
-       
-       function getTestReporters(argv) {
-  const reporters = [];
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-
-    if (arg === '--test-reporter') {
-      const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
-        reporters.push(...next.split(','));
-        i++;
-      }
-    } else if (arg.startsWith('--test-reporter=')) {
-      const value = arg.split('=').slice(1).join('=');
-      reporters.push(...value.split(','));
-    }
-  }
-
-  if(reporters.filter(Boolean).length === 0){
-    return ['spec'];
-  }
-
-  return reporters.filter(Boolean);
-}
-
- 
-
-   
- 
-       const _REPORTERS = getTestReporters(process.argv)
-       for (const REPORTER in _REPORTERS){
-
-       if(_REPORTERS[REPORTER] === "lcov"){
-         // TODO: inject a coverage event into events somehow.
-         throw new Error("lcov is not implemented")
-       };
-       const testRunner = await globalThis._RUNTIME${config.uuid}_._TEST_RUNNER_.execute(\`
-       
-       
-       ${config.imports?.join("\n") || ""}
-       //__$PROVIDED_RUNTIME_CODE__/
-       
-       ${code.replace(/`/g, "\\\`").replace(/\$\{/g, "\\\\\${")}
-       
-       
-       
-       \`, {reporter:_REPORTERS[REPORTER]});
-       
-       console.log(testRunner.output)
-       
-       }
-       
-       
-       
-       
-         
-      // console.log(globalThis._RUNTIME_TEST_RUNNER_.tap(testRunner));
-       }catch(err){
-         err.stack = err.message;
-         throw err
-       }
-       `
-     : `
+    // --test auto-run lives in the node:test shim (src/test.js _maybeAutoRun):
+    // with --test in config.process.argv the shim runs registered tests and
+    // console.logs reporter output itself. No template interception here.
 await (async () => {
 //__$PROVIDED_RUNTIME_CODE__/
 ${code}\n})();
-`
- }
   
      
    

@@ -73,6 +73,64 @@ function _resolveReporter(r) {
   return _spec;
 }
 
+// Parse --test-reporter <v> / --test-reporter=<v> from process.argv
+// (comma-separated supported), defaulting to ["spec"]. Moved here from the
+// host runtime template: the shim owns the --test contract end to end.
+function _parseTestReporters() {
+  const argv =
+    typeof process !== "undefined" && Array.isArray(process.argv)
+      ? process.argv
+      : [];
+  const reporters = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--test-reporter") {
+      const next = argv[i + 1];
+      if (next && !next.startsWith("--")) {
+        reporters.push(...next.split(","));
+        i++;
+      }
+    } else if (arg.startsWith("--test-reporter=")) {
+      reporters.push(...arg.split("=").slice(1).join("=").split(","));
+    }
+  }
+  const clean = reporters.filter(Boolean);
+  return clean.length ? clean : ["spec"];
+}
+
+// Shared event→output formatting: feeds collected events through a reporter
+// (async-generator stream or the legacy reporter({ root, events }) → string
+// interface) and returns the output string. Used by execute() and by the
+// host-lane auto-run so both format identically.
+async function _formatEvents({ root, events }, reporter) {
+  async function* _eventSource() {
+    for (const e of events) yield e;
+  }
+  let output = "";
+  try {
+    const result = reporter(_eventSource());
+    if (result && typeof result[Symbol.asyncIterator] === "function") {
+      for await (const chunk of result) output += chunk;
+    } else if (result && typeof result[Symbol.iterator] === "function") {
+      for (const chunk of result) output += chunk;
+    } else if (typeof result === "string") {
+      output = result;
+    } else {
+      // Old interface: reporter({ root, events }) -> string
+      const legacy = reporter({ root, events });
+      if (typeof legacy === "string") output = legacy;
+      else if (legacy && typeof legacy.then === "function")
+        output = String(await legacy);
+      else output = String(legacy ?? "");
+    }
+  } catch (e) {
+    throw Object.assign(e, {
+      message: `[reporter:${reporter?.name ?? "?"}] ${e.message}`,
+    });
+  }
+  return output;
+}
+
 // ─── Stack trace cleaner (internal) ──────────────────────────────────────────
 function _cleanStack(err) {
   if (!err || typeof err.stack !== "string") return err;
@@ -1210,6 +1268,7 @@ export function suite(name, opts, fn) {
   const node = new TestNode(n, f, o, parent);
   node._isSuite = true;
   parent.children.push(node);
+  _maybeAutoRun();
   if (f) {
     const prev = _current;
     _current = node;
@@ -1680,29 +1739,76 @@ async function _runOneFile(file, emitLocal, loaderURL, fileTestId) {
   });
 }
 
-// ─── Auto-run (real-Node lane only) ──────────────────────────────────────────
+// ─── Auto-run ─────────────────────────────────────────────────────────────────
 // Real node:test executes scheduled tests automatically when the file runs
-// (`node file.js`). Our browser lane is host-driven (_RUNTIME_ present) and
-// must NOT auto-run; the parity lane (real Node, no host) needs it so
-// official test files that just call test()/describe() at top level actually
-// execute. Scheduling is debounced: every test() call re-arms a setImmediate,
-// so tests scheduled across top-level awaits are still picked up. An explicit
-// run()/execute() disables auto-run permanently for the instance.
+// (`node file.js`). Two lanes:
+//
+// - Real-Node lane (no host runtime, or the parity harness's
+//   `{ parityForceShim: true }` marker): auto-run unconditionally —
+//   official test files that just call test()/describe() at top level must
+//   execute (`parity/run.mjs` spawns children with no --test flag).
+// - Host lane (browser playground, globalThis._RUNTIME_ installed by the
+//   sandbox): auto-run only when the user asked via --test in process.argv
+//   (Node parity with `node --test`). Without it, tests register but do not
+//   run. `globalThis.__VITEST_SHIM_MANUAL__ = true` opts out even with
+//   --test (the run is then driven externally).
+//
+// Scheduling is debounced: every test()/suite() call re-arms a
+// setImmediate, so registrations across top-level awaits are still picked
+// up. An explicit run()/execute() disables auto-run permanently.
 let _userInvokedRun = false;
 let _autoScheduled = false;
 let _runInFlight = false;
 
+// Host-lane detection. CRITICAL: the parity harness defines
+// globalThis._RUNTIME_ = { parityForceShim: true } (non-enumerable) under
+// real Node — that lane must follow the real-Node branch (unconditional
+// auto-run), not the host gate, or parity runs would silently never execute.
+function _hostLaneRuntime() {
+  return typeof globalThis._RUNTIME_ !== "undefined"
+    ? globalThis._RUNTIME_
+    : undefined;
+}
+function _inHostLane(RT) {
+  return !!RT && !RT.parityForceShim;
+}
+
 function _maybeAutoRun() {
   if (_autoScheduled || _userInvokedRun || _runInFlight) return;
-  if (typeof globalThis._RUNTIME_ !== "undefined") return; // host-driven lane
-  if (typeof process === "undefined" || typeof setImmediate === "undefined")
-    return;
+  const inHostLane = _inHostLane(_hostLaneRuntime());
+  if (inHostLane) {
+    // Host-driven lane (browser playground): auto-run only when the user
+    // asked via --test in process.argv (Node parity with `node --test`).
+    // Without it, tests register but do not run.
+    if (
+      typeof process === "undefined" ||
+      !process.argv ||
+      !process.argv.includes("--test")
+    )
+      return;
+    if (globalThis.__VITEST_SHIM_MANUAL__) return;
+  } else {
+    if (typeof process === "undefined" || typeof setImmediate === "undefined")
+      return;
+  }
   if (process.env.JEST_WORKER_ID) return; // under a test runner, running is its job
   _autoScheduled = true;
   setImmediate(() => {
     _autoScheduled = false;
     if (_userInvokedRun || _runInFlight) return;
-    if (typeof globalThis._RUNTIME_ !== "undefined") return;
+    // Re-check the host-lane gates at fire time: flags may have changed
+    // between scheduling and firing.
+    const RT = _hostLaneRuntime();
+    const inHost = _inHostLane(RT);
+    if (inHost) {
+      if (
+        typeof process === "undefined" ||
+        !process.argv ||
+        !process.argv.includes("--test")
+      )
+        return;
+      if (globalThis.__VITEST_SHIM_MANUAL__) return;
+    }
     // Child-test-process mode (spawned by run({ files })): forward every
     // event to the parent over stdout as marker-prefixed JSON lines.
     const forwarding =
@@ -1712,11 +1818,21 @@ function _maybeAutoRun() {
       return;
     }
     _runInFlight = true;
+    // Host lane: hold the sandbox completion gate for the whole run, so the
+    // playground doesn't report Done before the test output is printed.
+    // Started synchronously before awaiting the run; stopped in the finally
+    // after printing. The tracker may be null — guard with ?.
+    const _tracker = inHost ? RT?.taskTracker : null;
+    try {
+      _tracker?.start();
+    } catch (_) {}
     const stream = _runImpl();
     (async () => {
       let failed = 0;
+      const events = [];
       try {
         for await (const evt of stream) {
+          events.push(evt);
           if (evt.type === "test:fail") failed++;
           if (forwarding) _forwardEvent(evt);
         }
@@ -1725,7 +1841,27 @@ function _maybeAutoRun() {
       }
       _runInFlight = false;
       if (forwarding) _forwardEvent({ type: "test:child:done", data: {} });
-      if (failed > 0 && typeof process !== "undefined") process.exitCode = 1;
+      try {
+        if (inHost) {
+          // Report: run the tests once, format the collected events through
+          // each requested reporter (--test-reporter, default spec), and
+          // console.log each output. This replaces the old runtime-template
+          // --test interception.
+          for (const name of _parseTestReporters()) {
+            console.log(
+              await _formatEvents(
+                { root: _getRoot(), events },
+                _resolveReporter(name),
+              ),
+            );
+          }
+        }
+        if (failed > 0 && typeof process !== "undefined") process.exitCode = 1;
+      } finally {
+        try {
+          _tracker?.stop();
+        } catch (_) {}
+      }
     })();
   });
 }
@@ -1900,34 +2036,7 @@ async function execute(userCode, opts = {}) {
   await new Promise((r) => setTimeout(r, 0));
   const { root, events } = await run({ testOnly: opts.testOnly }).drain();
   const reporter = _resolveActiveReporter();
-  // Reporters are async generators that transform the event stream.
-  // Backward-compat: the pre-10311ec interface was reporter({ root, events })
-  // returning a string. Support both.
-  async function* _eventSource() {
-    for (const e of events) yield e;
-  }
-  let output = "";
-  try {
-    const result = reporter(_eventSource());
-    if (result && typeof result[Symbol.asyncIterator] === "function") {
-      for await (const chunk of result) output += chunk;
-    } else if (result && typeof result[Symbol.iterator] === "function") {
-      for (const chunk of result) output += chunk;
-    } else if (typeof result === "string") {
-      output = result;
-    } else {
-      // Old interface: reporter({ root, events }) -> string
-      const legacy = reporter({ root, events });
-      if (typeof legacy === "string") output = legacy;
-      else if (legacy && typeof legacy.then === "function")
-        output = String(await legacy);
-      else output = String(legacy ?? "");
-    }
-  } catch (e) {
-    throw Object.assign(e, {
-      message: `[reporter:${reporter?.name ?? "?"}] ${e.message}`,
-    });
-  }
+  const output = await _formatEvents({ root, events }, reporter);
   return { root, events, output, reporter };
 }
 
