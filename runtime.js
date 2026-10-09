@@ -109,10 +109,11 @@ const _builtinManifest = {
   "stream/web": "stream.js",
   string_decoder: "string_decoder.js",
   test: "test.js",
+  "test/reporters": "test_reporters.js",
   timers: "timers.js",
   "timers/promises": "timers_promises.js",
   tls: "tls.js",
-  trace_events: "trace_events.js",
+  trace_events: "trace.js",
   tty: "tty.js",
   url: "url.js",
   util: "util.js",
@@ -1707,10 +1708,30 @@ export function transformImportsToLoadModule(
         // wrapper -> SyntaxError: Unexpected reserved word.
         if (preserveRequireCalls) return;
         const modulePath = node.arguments[0].value;
+        // On-demand require (Worker B): top-level builtin requires keep the
+        // existing hoist; builtin requires nested in a function rewrite to
+        // __bvmRequireSync() so nothing loads until the function is called.
+        // Nested non-builtin (relative/bare) requires keep the existing lift —
+        // they have no sync path in ESM scope.
+        const bareModulePath =
+          typeof modulePath === "string" && modulePath.indexOf("node:") === 0
+            ? modulePath.slice(5)
+            : modulePath;
+        const isBuiltin =
+          typeof bareModulePath === "string" &&
+          Object.prototype.hasOwnProperty.call(_builtinManifest, bareModulePath);
+        const enclosingFunc = findEnclosingFunction(node);
+        if (isBuiltin && enclosingFunc !== null) {
+          s.overwrite(
+            node.start,
+            node.end,
+            "__bvmRequireSync(" + JSON.stringify(modulePath) + ")",
+          );
+          return;
+        }
         const v = getLiftedVar(modulePath);
         setImportType(modulePath, "require");
 
-        const enclosingFunc = findEnclosingFunction(node);
         if (enclosingFunc && !enclosingFunc.async)
           functionsToMakeAsync.add(enclosingFunc);
 
@@ -3486,7 +3507,7 @@ export function __parseStackLocationFn(frame) {
   return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
 }
 
-class SandboxRuntime {
+export class SandboxRuntime {
   static generate(code, config = {}) {
     // Serialize the BYO shell function (if provided) into the sandbox.
     // .toString() captures source, not closures — the function must be
@@ -3529,6 +3550,26 @@ function _builtinRequireValue(mod) {
   return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
     ? mod.default
     : mod;
+}
+// On-demand sync builtin require (transform-time hoisting companion):
+// nested require() of a builtin that is already cached returns it
+// synchronously; otherwise throws ERR_REQUIRE_ASYNC_MODULE directing the
+// user to await import() first. String-concat only inside this block:
+// it lives inside the outer sandbox template literal, so backticks and
+// template placeholders are forbidden here.
+function __bvmRequireSync(request) {
+  var bare = (typeof request === 'string' && request.indexOf('node:') === 0) ? request.slice(5) : request;
+  var key = Object.prototype.hasOwnProperty.call(_builtinManifest, bare) ? bare
+    : Object.prototype.hasOwnProperty.call(_builtinManifest, request) ? request : null;
+  if (key !== null && typeof _builtinCache !== 'undefined' && _builtinCache.has(key)) {
+    return _builtinRequireValue(_builtinCache.get(key));
+  }
+  var reason = key !== null
+    ? "it was not loaded yet. Use await import('" + request + "') first, then require() returns the cached instance"
+    : "unknown module";
+  var err = new Error("[ERR_REQUIRE_ASYNC_MODULE] Cannot require '" + request + "' synchronously: " + reason);
+  err.code = 'ERR_REQUIRE_ASYNC_MODULE';
+  throw err;
 }
 // --- end sync builtin require interop (gap #3) ---
 
@@ -4085,6 +4126,29 @@ async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) 
 
         record.status = 'done';
         record.exports = resolved; // replace reference for future callers
+        // Unified sync/async builtin cache (fix/ondemand-require, Worker A):
+        // an async import() of a builtin now populates the sync _builtinCache,
+        // so a later sync require() returns the SAME instance with no preload.
+        // modulePath is underscore-normalized here (fs/promises -> fs_promises),
+        // so convert back to the slash-form manifest key; skip RUNTIME:*
+        // pseudo-builtins; only write keys the manifest actually lists
+        // (this also guards underscore-named builtins: child_process ->
+        // child/process misses, so fall back to the raw modulePath form).
+        // Best-effort: a cache failure must never break the load path.
+        try {
+          if (isNodeBuiltIn && resolved && typeof resolved === 'object') {
+            let manifestKey = String(modulePath).split('_').join('/');
+            if (manifestKey.indexOf('RUNTIME') !== 0) {
+              if (!Object.prototype.hasOwnProperty.call(_builtinManifest, manifestKey)) {
+                manifestKey = String(modulePath);
+              }
+              if (Object.prototype.hasOwnProperty.call(_builtinManifest, manifestKey) &&
+                  !_builtinCache.has(manifestKey)) {
+                _builtinCache.set(manifestKey, resolved);
+              }
+            }
+          }
+        } catch (cacheErr) { /* sync-cache write is best-effort only */ }
         return resolved;
 
       } catch (err) {
@@ -5475,13 +5539,6 @@ window.parent.postMessage({
 
 }
 
-if(fn === "console"){
-window.parent.postMessage({
-    type: 'stdout',
-    method: method,
-    message: sanitized.join(' ')
-  }, '*');
-}
 
  if(fn === "fs"){
   window.parent.postMessage({
@@ -5983,7 +6040,34 @@ hrtime.bigint = () => {
         return undefined;
       }
       if (!_builtinCache.has(bare)) {
-        // Manifest-listed but not preloaded (preload failed or was
+        // Unified cache fallback (fix/ondemand-require, Worker A): the async
+        // loader populates _builtinCache on completion (see the hook in
+        // loadModule), but a builtin loaded through another path may live
+        // only in moduleRegistry. Scan for a completed record of the same
+        // builtin and return the same instance instead of throwing.
+        // _builtinCache stays the O(1) fast path; this O(n) scan is the
+        // safety net (kept deliberately after the fast path, not before).
+        // Registry keys store the underscore-normalized modulePath
+        // (entryPoint::fs_promises), so match both the slash-form bare and
+        // its underscore form, each with and without the node: prefix.
+        const bareUnderscored = bare.split('/').join('_');
+        let registryHit = null;
+        try {
+          for (const entry of moduleRegistry) {
+            const regKey = entry[0];
+            const rec = entry[1];
+            if (typeof regKey !== 'string' || !rec || rec.status !== 'done') continue;
+            if (regKey.endsWith('::node:' + bare) || regKey.endsWith('::' + bare) ||
+                regKey.endsWith('::node:' + bareUnderscored) || regKey.endsWith('::' + bareUnderscored)) {
+              registryHit = rec;
+              break;
+            }
+          }
+        } catch (scanErr) { /* fall through to the explicit error below */ }
+        if (registryHit) {
+          return _builtinRequireValue(registryHit.exports);
+        }
+        // Manifest-listed but in neither cache (preload failed or was
         // skipped): a sync require() can never wait for the async loader,
         // so say so explicitly instead of the old silent undefined
         // that surfaced far away as MODULE_NOT_FOUND.
@@ -6317,6 +6401,14 @@ globalThis.${config.interopVariable}.expose('__stdin__', (args) => {
     .replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
 }
   // TODO: handle if buffered pass or possible remove if emulating node?
+    // Buffer early input instead of silently dropping it: if the sandbox
+    // hasn't attached a stdin listener yet (race between __stdin__ and
+    // user code), queue the input and flush on first 'data' listener.
+    if (s && !hasListeners) {
+      s._pendingStdin = s._pendingStdin || [];
+      s._pendingStdin.push(args);
+      return;
+    }
     try {   
               const cleanedCode = stripKeySequencesPreserveWhitespace(args);
               
@@ -6395,6 +6487,8 @@ globalThis.${config.interopVariable}.expose('__closeServer__', async (port) => {
 });
 
 // --- begin sync builtin preload (gap #3) ---
+// DISABLED 2026-10-08: Preload causes random shim execution and 30s timeouts. Shims must load on-demand.
+if (false) {
 // Populate the SYNC builtin cache before user code runs. dist/module.js's
 // loadBuiltinModule() can only use the sandbox RT.loadModule() when it
 // returns synchronously — it never does — so sync require('fs') via
@@ -6423,6 +6517,7 @@ try {
 } catch (e) {
   console.warn('[bvm] sync-builtin preload failed: ' + String((e && e.message) || e));
 }
+} // end if(false) - DISABLED preload
 // --- end sync builtin preload (gap #3) ---
 
    
@@ -6466,7 +6561,7 @@ function waitForAllTimers() {
   return new Promise(resolve => {
     const check = () => {
       const pending = Array.from(timerRegistry.values())
-        .filter(t => t.type === 'timeout');
+        .filter(t => t.type === 'timeout' || t.type === 'interval');
       
       if (pending.length === 0) {
         resolve();
@@ -7166,37 +7261,6 @@ ${code}\n})();
         waitForAllFetches(),
         waitForAllXhrs(),
         waitForAllTimers(),
-        // Poll for stdin listeners to allow async code (like inquirer via
-        // esm.sh CDN) time to finish module loading and attach its listeners.
-        // A single tick isn't enough: inquirer's dependency graph resolves
-        // through interopChannel dynamic imports (network fetches), taking
-        // many ticks. Poll every 50ms (like waitForAllTimers) for up to 2s;
-        // if listeners appear, waitUntilNoListeners() takes over and waits
-        // for them to be removed (i.e. prompt resolved/dismissed).
-        // NOTE: Use originalSetTimeout (not the patched setTimeout) so the
-        // polling delays aren't tracked by waitForAllTimers() — otherwise
-        // the two would deadlock (each waiting for the other's timers).
-        (async () => {
-          if (typeof process?.stdin?.waitUntilNoListeners !== "function") {
-            return Promise.resolve();
-          }
-          const relevant = ['data','end','close','error','keypress'];
-          const hasListeners = () => relevant.reduce(
-            (n, ev) => n + process.stdin.listenerCount(ev), 0
-          ) > 0;
-          // Give async module loading a bounded window to wire up stdin.
-          const maxAttempts = 40; // 40 * 50ms = 2s
-          const sleep = (ms) => new Promise(res =>
-            (typeof originalSetTimeout !== 'undefined'
-              ? originalSetTimeout
-              : setTimeout)(res, ms)
-          );
-          for (let i = 0; i < maxAttempts; i++) {
-            if (hasListeners()) break;
-            await sleep(50);
-          }
-          return process.stdin.waitUntilNoListeners() ?? Promise.resolve();
-        })(),
            typeof _RUNTIME${config.uuid}_.__httpServerRunTime !== "undefined"
   ? _RUNTIME${config.uuid}_.__httpServerRunTime.waitForAllServers?.() ?? Promise.resolve()
   : Promise.resolve()
@@ -7204,6 +7268,14 @@ ${code}\n})();
        
    
     ])
+
+    // Sequential stdin wait (NOT in Promise.all): runs after main execution
+    // completes, so async module loading has finished attaching listeners.
+    // Event-driven via waitUntilNoListeners — no polling. If no listeners,
+    // resolves immediately.
+    if (typeof process?.stdin?.waitUntilNoListeners === "function") {
+      await (process.stdin.waitUntilNoListeners() ?? Promise.resolve());
+    }
     
     revertTrueOriginals();
     
@@ -7699,7 +7771,7 @@ export class CodeSandbox extends EventEmitter {
 
       const iframe = this.iframeElement || document.createElement("iframe");
 
-      iframe.sandbox = "allow-scripts allow-same-origin";
+      iframe.sandbox = "allow-scripts allow-same-origin allow-unsafe-eval";
       if (!this.iframeElement) {
         iframe.style.cssText =
           "position: absolute; width: 0; height: 0; border: 0;";
@@ -8105,15 +8177,14 @@ pushData2(chunk) {
       return;
     }
 
-    if (chunk === '\x7f' || chunk === '\b') {
+    if (chunk === '\\x7f' || chunk === '\\b') {
       this._lineBuffer = this._lineBuffer.slice(0, -1);
       return;
     }
 
     this._lineBuffer += chunk;
 
-    // Correct regex to match actual newline or carriage return characters
-    const nl = this._lineBuffer.search(/[\n\r]/);
+    const nl = this._lineBuffer.search(/[\\n\\r]/);
     if (nl !== -1) {
       const line = this._lineBuffer.slice(0, nl);
       // Keep everything after the newline in the buffer
@@ -8134,14 +8205,14 @@ pushData(chunk) {
 
   // Non-raw (line-buffered) mode: interpret control chars instead of
   // blindly concatenating them into the line buffer.
-  if (chunk === '\x7f' || chunk === '\b') {
+  if (chunk === '\\x7f' || chunk === '\\b') {
     this._lineBuffer = this._lineBuffer.slice(0, -1);
     return;
   }
 
   this._lineBuffer += chunk;
 
-  const nl = this._lineBuffer.search(/[\n\r]/);
+  const nl = this._lineBuffer.search(/[\\n\\r]/);
   if (nl !== -1) {
     // Dispatch only up to (not including) the newline, and keep
     // anything typed after it (rare, but avoids losing/duplicating
@@ -8177,6 +8248,20 @@ pushData(chunk) {
   });
 
   stdin.on('removeListener', () => stdin._checkResolve());
+
+  // Flush buffered early stdin input when the first 'data' listener attaches.
+  // Deferred via queueMicrotask to avoid reentrancy: 'newListener' fires
+  // synchronously from within on(), so pushData must not run until on()
+  // has returned and the handler is fully registered.
+  stdin.on('newListener', (ev) => {
+    if (ev === 'data' && stdin._pendingStdin && stdin._pendingStdin.length) {
+      const pending = stdin._pendingStdin;
+      stdin._pendingStdin = [];
+      queueMicrotask(() => {
+        pending.forEach((chunk) => stdin.pushData(chunk));
+      });
+    }
+  });
 
  //const { Writable } = require('stream');
 

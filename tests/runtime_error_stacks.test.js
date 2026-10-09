@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 // Tests for the runtime.js error-stack pipeline.
 //
 // __parseStackLocation lives at module scope in runtime.js (exported) and is
-// inlined into the sandbox iframe template via ${__parseStackLocation.toString()}
+// inlined into the sandbox iframe template via ${__parseStackLocationFn.toString()}
 // — a single source of truth. runtime.js itself cannot be imported under Node
 // (it wires a demo DOM and constructs a CodeSandbox at module scope), so the
 // tests below extract the exact shipped function source and evaluate it.
@@ -18,7 +18,7 @@ const RUNTIME_SRC = fs.readFileSync(
 );
 
 function loadParser() {
-  const marker = "export function __parseStackLocation(frame)";
+  const marker = "export function __parseStackLocationFn(frame)";
   const start = RUNTIME_SRC.indexOf(marker);
   if (start === -1)
     throw new Error("__parseStackLocation not found in runtime.js");
@@ -34,7 +34,7 @@ function loadParser() {
   if (depth !== 0)
     throw new Error("unbalanced braces extracting __parseStackLocation");
   const fnSrc = RUNTIME_SRC.slice(start, i + 1).replace(/^export\s+/, "");
-  return new Function(`${fnSrc}; return __parseStackLocation;`)();
+  return new Function(`${fnSrc}; return __parseStackLocationFn;`)();
 }
 
 const parse = loadParser();
@@ -119,7 +119,7 @@ describe("__parseStackLocation (URL-safe V8 frame parser)", () => {
   test("inlined template copy stays in sync (single source of truth)", () => {
     // The sandbox template must inline the module-scope function, not carry
     // a second hand-written copy that can drift.
-    expect(RUNTIME_SRC).toContain("${__parseStackLocation.toString()}");
+    expect(RUNTIME_SRC).toContain("${__parseStackLocationFn.toString()}");
     const fnSrc = parse.toString();
     expect(fnSrc).not.toContain("`");
     expect(fnSrc).not.toContain("${");

@@ -38,17 +38,35 @@ function extractFn(src, name) {
   throw new Error(`${name} not found`);
 }
 
+function extractConst(src, name) {
+  const marker = `const ${name} =`;
+  const start = src.indexOf(marker);
+  if (start === -1) throw new Error("const not found: " + name);
+  const eq = src.indexOf("=", start);
+  let depth = 0;
+  for (let i = eq + 1; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === "{" || ch === "[" || ch === "(") depth++;
+    else if (ch === "}" || ch === "]" || ch === ")") depth--;
+    else if (ch === ";" && depth === 0) return src.slice(start, i + 1);
+  }
+  throw new Error("unterminated const " + name);
+}
+
 function buildTransform() {
   const genBindSrc = extractFn(RUNTIME_SRC, "generateImportBinding");
   const transformSrc = extractFn(
     RUNTIME_SRC,
     "transformImportsToLoadModule",
   ).replace(/^export\s+/, "");
+  // transformImportsToLoadModule references the module-level _builtinManifest
+  // (on-demand sync-require check, 2026-10-08); provide it in the eval scope.
+  const manifestSrc = extractConst(RUNTIME_SRC, "_builtinManifest");
   const factory = new Function(
     "acorn",
     "MagicString",
     "walk",
-    `${genBindSrc}\n${transformSrc}\nreturn transformImportsToLoadModule;`,
+    `${manifestSrc}\n${genBindSrc}\n${transformSrc}\nreturn transformImportsToLoadModule;`,
   );
   return factory(acorn, MagicString, walk);
 }

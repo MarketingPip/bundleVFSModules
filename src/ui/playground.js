@@ -15,11 +15,12 @@
 //   import { initPlayground, EXAMPLES } from './src/ui/playground.js';
 //   initPlayground({ CodeSandbox }); // wires the page's demo DOM
 //
-// The demo-only CDN imports (xterm, shellwords) live here, not in the
-// library. Public library helpers used here (transpileTypeScript,
+// The demo-only CDN import (shellwords) lives here, not in the library;
+// xterm.js is dynamically imported inside initPlayground() so a CDN outage
+// falls back to DOM mode instead of breaking the playground module.
+// Public library helpers used here (transpileTypeScript,
 // flattenFileTree, builtinModules) are imported from runtime.js.
 
-import { Terminal } from "https://esm.sh/xterm@5.3.0";
 import { split } from "https://esm.sh/shellwords?target=node";
 import {
   transpileTypeScript,
@@ -1167,31 +1168,30 @@ process.stdin.once('data', (chunk) => {
   process.exit(0);
 });`,
 
-  cli_menu: `// ReadLine Menu: CLI up/down style selection
-import readline from 'readline';
-
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  cli_menu: `// Menu: pick a color via stdin
 console.log('Pick a color: 1) red  2) green  3) blue');
-rl.question('Choice (1-3): ', (answer) => {
+console.log('Choice (1-3): (type below, click Send)');
+process.stdin.once('data', (chunk) => {
+  const answer = chunk.toString().trim();
   const colors = { 1: 'red', 2: 'green', 3: 'blue' };
-  console.log('You picked:', colors[answer.trim()] || 'invalid');
-  rl.close();
+  console.log('You picked:', colors[answer] || 'invalid');
   process.exit(0);
 });`,
 
-  inquirer: `// Inquirer-style prompts (readline-based)
-import readline from 'readline';
-
-function ask(q) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => rl.question(q, (a) => { rl.close(); resolve(a); }));
-}
-
-const name = await ask('What is your name? ');
-console.log('Hello, ' + name.trim() + '!');
-const lang = await ask('Favorite language? ');
-console.log(lang.trim() + ' is a great choice.');
-process.exit(0);`,
+  inquirer: `// Inquirer-style prompts via stdin
+const answers = [];
+const questions = ['What is your name? (type below, click Send)', 'Favorite language? (type below, click Send)'];
+console.log(questions[0]);
+process.stdin.on('data', (chunk) => {
+  answers.push(chunk.toString().trim());
+  if (answers.length === 1) {
+    console.log('Hello, ' + answers[0] + '!');
+    console.log(questions[1]);
+  } else if (answers.length === 2) {
+    console.log(answers[1] + ' is a great choice.');
+    process.exit(0);
+  }
+});`,
 
   repl: `// REPL: interactive evaluation loop
 console.log('Mini REPL — type JS expressions, Send to evaluate, "exit" to quit.');
@@ -1958,22 +1958,41 @@ export function initPlayground({
 
   // Optional xterm.js terminal output (the older runtime.js wiring).
   // xterm handles ANSI escape codes natively (colors, cursor movement).
+  //
+  // Terminal is dynamically imported so the esm.sh CDN stays demo-only:
+  // if the CDN is down (or init throws), we log a warning and fall back
+  // to DOM mode instead of breaking the whole playground.
   let term = null;
   if (useXterm) {
-    term = new Terminal({
-      cols: 80,
-      rows: 24,
-      cursorBlink: true,
-      theme: { background: "#1a1b26", foreground: "#c0caf5" },
-    });
-    term.open(outputEl);
-    // Wire user input to sandbox stdin. onData fires for every keypress
-    // including special keys (arrows, backspace, etc.).
-    term.onData((data) => {
-      sandbox.invoke("__stdin__", data).catch((err) => {
-        console.error("[stdin] send failed:", err);
+    initXtermTerminal();
+  }
+
+  // Async helper (initPlayground itself stays sync): resolves `term` once
+  // the xterm.js CDN module loads, or leaves DOM mode in place on failure.
+  async function initXtermTerminal() {
+    try {
+      const { Terminal } = await import("https://esm.sh/xterm@5.3.0");
+      term = new Terminal({
+        cols: 80,
+        rows: 24,
+        cursorBlink: true,
+        theme: { background: "#1a1b26", foreground: "#c0caf5" },
       });
-    });
+      term.open(outputEl);
+      // Wire user input to sandbox stdin. onData fires for every keypress
+      // including special keys (arrows, backspace, etc.).
+      term.onData((data) => {
+        sandbox.invoke("__stdin__", data).catch((err) => {
+          console.error("[stdin] send failed:", err);
+        });
+      });
+    } catch (e) {
+      term = null;
+      console.warn(
+        "[playground] xterm init failed, falling back to DOM mode:",
+        e,
+      );
+    }
   }
 
   function print(text, cls) {

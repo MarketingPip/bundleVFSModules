@@ -33,9 +33,11 @@
     "esbuild-plugins-node-modules-polyfill": "^1.8.1",
     "esbuild-wasm": "^0.28.2",
     "jest": "^30.5.2",
+    "lodash": "^4.18.1",
     "node-fetch": "^3.3.2",
     "rollup": "^4.64.0",
     "terser": "^5.51.2",
+    "uuid": "^14.0.2",
     "vite": "^7.3.6",
     "vitest": "^5.0.2"
   }

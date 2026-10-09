@@ -1,112 +1,450 @@
 {
-  "test-child-process-advanced-serialization-host-objects.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-advanced-serialization-largebuffer.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-advanced-serialization-splitted-length-field.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-bad-stdio.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-can-write-to-stdout.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-cwd.js": "noop assigns a fake pid even when Node would leave pid undefined (failed spawn)",
-  "test-child-process-default-options.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-detached.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-dgram-reuseport.js": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process",
-  "test-child-process-disconnect.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-double-pipe.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-env.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-abortcontroller-promisified.js": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)",
-  "test-child-process-exec-cwd.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-encoding.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-env.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-error.js": "noop assigns a fake pid even when Node would leave pid undefined (failed spawn)",
-  "test-child-process-exec-kill-throws.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-maxbuf.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-std-encoding.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-stdout-stderr-data-string.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-timeout-expire.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-timeout-kill.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-exec-timeout-not-expired.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-execFile-promisified-abortController.js": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)",
-  "test-child-process-execfile-maxbuf.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-execfile.js": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)",
-  "test-child-process-execfilesync-maxbuf.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-execsync-maxbuf.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-exit-code.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-flush-stdio.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-fork-abort-signal.js": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)",
-  "test-child-process-fork-advanced-header-serialization.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-fork-and-spawn.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-fork-args.js": "fork fixture modules are not vendored under parity/node-test/fixtures",
-  "test-child-process-fork-close.js": "fork fixture modules are not vendored under parity/node-test/fixtures",
-  "test-child-process-fork-detached.js": "fork fixture modules are not vendored under parity/node-test/fixtures",
-  "test-child-process-fork-dgram.js": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process",
-  "test-child-process-fork-exec-argv.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-fork-exec-path.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-fork-getconnections.js": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process",
-  "test-child-process-fork-net-server.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-fork-net-socket.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-fork-net.js": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process",
-  "test-child-process-fork-no-shell.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-fork-ref.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-fork-ref2.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-fork-stdio-string-variant.js": "fork fixture modules are not vendored under parity/node-test/fixtures",
-  "test-child-process-fork-stdio.js": "fork() is a deliberate in-realm noop: no OS process, no real IPC channel (send -> ERR_IPC_CHANNEL_CLOSED family)",
-  "test-child-process-fork-url.mjs": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-fork3.js": "fork fixture modules are not vendored under parity/node-test/fixtures",
-  "test-child-process-http-socket-leak.js": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process",
-  "test-child-process-internal.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-ipc-next-tick.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-ipc.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-kill.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-net-reuseport.js": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process",
-  "test-child-process-no-deprecation.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-pipe-dataflow.js": "no real OS pipes in a browser; stdio stubs cannot match Node stream internals or carry data",
-  "test-child-process-promisified.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-prototype-tampering.mjs": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-recv-handle.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-reject-null-bytes.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-send-after-close.js": "fork fixture modules are not vendored under parity/node-test/fixtures",
-  "test-child-process-send-cb.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-send-keep-open.js": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process",
-  "test-child-process-send-utf8.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-server-close.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-set-blocking.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-silent.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-spawn-args.mjs": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-spawn-argv0.js": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)",
-  "test-child-process-spawn-controller.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-spawn-error.js": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)",
-  "test-child-process-spawn-event.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-spawn-shell.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-spawn-typeerror.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-spawn-windows-batch-file.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-spawnsync-args.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-spawnsync-env.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-spawnsync-input.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-spawnsync-kill-signal.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-spawnsync-maxbuf.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-spawnsync-non-string-args.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-spawnsync-shell.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-spawnsync-timeout.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-spawnsync-validation-errors.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-spawnsync.js": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell",
-  "test-child-process-stdin-ipc.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-stdin.js": "no real OS pipes in a browser; stdio stubs cannot match Node stream internals or carry data",
-  "test-child-process-stdio-big-write-end.js": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process",
-  "test-child-process-stdio-inherit.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-stdio-merge-stdouts-into-cat.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-stdio-reuse-readable-stdio.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-stdio.js": "no real OS pipes in a browser; stdio stubs cannot match Node stream internals or carry data",
-  "test-child-process-stdout-flush-exit.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-stdout-flush.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-stdout-ipc.js": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol",
-  "test-child-process-uid-gid.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-child-process-windows-hide.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-os-process-priority.js": "browser cannot read process niceness; getPriority() returns 0 by design",
-  "test-os.js": "browser cannot read loadavg/uptime/freemem; fallbacks return 0 by design",
-  "test-events-add-abort-listener.mjs": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-events-getmaxlisteners.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-events-list.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-events-listener-count-with-listener.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-events-on-async-iterator.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-events-once.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-events-static-geteventlisteners.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals",
-  "test-events-uncaught-exception-stack.js": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  "test-buffer-inspect.js": {
+    "category": "inherent",
+    "reason": "Test sets shim buffer.INSPECT_MAX_BYTES but uses global Buffer (Node native) for the value. In the browser sandbox, global Buffer IS the shim, so this works. Harness limitation: cannot replace Node global Buffer."
+  },
+  "test-buffer-slow.js": {
+    "category": "inherent",
+    "reason": "Test checks sb instanceof Buffer where Buffer is Node native global, but SlowBuffer creates shim Buffer instance. In the browser sandbox, they are the same. Harness limitation."
+  },
+  "test-child-process-advanced-serialization-host-objects.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-advanced-serialization-largebuffer.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-advanced-serialization-splitted-length-field.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-bad-stdio.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-can-write-to-stdout.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-cwd.js": {
+    "category": "inherent",
+    "reason": "noop assigns a fake pid even when Node would leave pid undefined (failed spawn)"
+  },
+  "test-child-process-default-options.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-detached.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-dgram-reuseport.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process"
+  },
+  "test-child-process-disconnect.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-double-pipe.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-env.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-abortcontroller-promisified.js": {
+    "category": "inherent",
+    "reason": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)"
+  },
+  "test-child-process-exec-cwd.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-encoding.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-env.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-error.js": {
+    "category": "inherent",
+    "reason": "noop assigns a fake pid even when Node would leave pid undefined (failed spawn)"
+  },
+  "test-child-process-exec-kill-throws.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-maxbuf.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-std-encoding.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-stdout-stderr-data-string.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-timeout-expire.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-timeout-kill.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-exec-timeout-not-expired.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-execFile-promisified-abortController.js": {
+    "category": "inherent",
+    "reason": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)"
+  },
+  "test-child-process-execfile-maxbuf.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-execfile.js": {
+    "category": "inherent",
+    "reason": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)"
+  },
+  "test-child-process-execfilesync-maxbuf.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-execsync-maxbuf.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-exit-code.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-flush-stdio.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-fork-abort-signal.js": {
+    "category": "inherent",
+    "reason": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)"
+  },
+  "test-child-process-fork-advanced-header-serialization.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-fork-and-spawn.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-fork-args.js": {
+    "category": "inherent",
+    "reason": "fork fixture modules are not vendored under parity/node-test/fixtures"
+  },
+  "test-child-process-fork-close.js": {
+    "category": "inherent",
+    "reason": "fork fixture modules are not vendored under parity/node-test/fixtures"
+  },
+  "test-child-process-fork-detached.js": {
+    "category": "inherent",
+    "reason": "fork fixture modules are not vendored under parity/node-test/fixtures"
+  },
+  "test-child-process-fork-dgram.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process"
+  },
+  "test-child-process-fork-exec-argv.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-fork-exec-path.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-fork-getconnections.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process"
+  },
+  "test-child-process-fork-net-server.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-fork-net-socket.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-fork-net.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process"
+  },
+  "test-child-process-fork-no-shell.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-fork-ref.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-fork-ref2.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-fork-stdio-string-variant.js": {
+    "category": "inherent",
+    "reason": "fork fixture modules are not vendored under parity/node-test/fixtures"
+  },
+  "test-child-process-fork-stdio.js": {
+    "category": "inherent",
+    "reason": "fork() is a deliberate in-realm noop: no OS process, no real IPC channel (send -> ERR_IPC_CHANNEL_CLOSED family)"
+  },
+  "test-child-process-fork-url.mjs": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-fork3.js": {
+    "category": "inherent",
+    "reason": "fork fixture modules are not vendored under parity/node-test/fixtures"
+  },
+  "test-child-process-http-socket-leak.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process"
+  },
+  "test-child-process-internal.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-ipc-next-tick.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-ipc.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-kill.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-net-reuseport.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process"
+  },
+  "test-child-process-no-deprecation.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-pipe-dataflow.js": {
+    "category": "inherent",
+    "reason": "no real OS pipes in a browser; stdio stubs cannot match Node stream internals or carry data"
+  },
+  "test-child-process-promisified.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-prototype-tampering.mjs": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-recv-handle.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-reject-null-bytes.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-send-after-close.js": {
+    "category": "inherent",
+    "reason": "fork fixture modules are not vendored under parity/node-test/fixtures"
+  },
+  "test-child-process-send-cb.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-send-keep-open.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process"
+  },
+  "test-child-process-send-utf8.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-server-close.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-set-blocking.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-silent.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-spawn-args.mjs": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-spawn-argv0.js": {
+    "category": "inherent",
+    "reason": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)"
+  },
+  "test-child-process-spawn-controller.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-spawn-error.js": {
+    "category": "inherent",
+    "reason": "needs a real OS child (argv0 propagation, error events, exit codes, stdin writes, abort killing a live process)"
+  },
+  "test-child-process-spawn-event.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-spawn-shell.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-spawn-typeerror.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-spawn-windows-batch-file.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-spawnsync-args.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-spawnsync-env.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-spawnsync-input.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-spawnsync-kill-signal.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-spawnsync-maxbuf.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-spawnsync-non-string-args.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-spawnsync-shell.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-spawnsync-timeout.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-spawnsync-validation-errors.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-spawnsync.js": {
+    "category": "inherent",
+    "reason": "spawnSync/execSync/execFileSync are honest noops: validate args, return empty output with status 0. No ENOENT, no real stdout, no maxBuffer overflow, no shell"
+  },
+  "test-child-process-stdin-ipc.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-stdin.js": {
+    "category": "inherent",
+    "reason": "no real OS pipes in a browser; stdio stubs cannot match Node stream internals or carry data"
+  },
+  "test-child-process-stdio-big-write-end.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process"
+  },
+  "test-child-process-stdio-inherit.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-stdio-merge-stdouts-into-cat.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-stdio-reuse-readable-stdio.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-stdio.js": {
+    "category": "inherent",
+    "reason": "no real OS pipes in a browser; stdio stubs cannot match Node stream internals or carry data"
+  },
+  "test-child-process-stdout-flush-exit.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-stdout-flush.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-stdout-ipc.js": {
+    "category": "inherent",
+    "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
+  },
+  "test-child-process-uid-gid.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-child-process-windows-hide.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-events-add-abort-listener.mjs": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-events-getmaxlisteners.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-events-list.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-events-listener-count-with-listener.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-events-on-async-iterator.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-events-once.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-events-static-geteventlisteners.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-events-uncaught-exception-stack.js": {
+    "category": "inherent",
+    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
+  },
+  "test-os-process-priority.js": {
+    "category": "inherent",
+    "reason": "browser cannot read process niceness; getPriority() returns 0 by design"
+  },
+  "test-os.js": {
+    "category": "inherent",
+    "reason": "browser cannot read loadavg/uptime/freemem; fallbacks return 0 by design"
+  }
 }
