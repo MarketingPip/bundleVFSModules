@@ -529,6 +529,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
         "dist/vfs.js",
         "docs/E2E_FEATURE_MATRIX.md",
         "docs/RUNTIME.md",
+        "package.json",
         "parity/node-test/fixtures/assert-first-line.js",
         "parity/node-test/fixtures/assert-long-line.js",
         "parity/node-test/parallel/test-assert-first-line.js",
