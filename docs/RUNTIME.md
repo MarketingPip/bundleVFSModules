@@ -136,6 +136,43 @@ Our `src/process.js` is **not** that object — it only serves explicit
   keypress objects with ANSI sequences), `process.stdin`/`makeOutputShim` streams.
   `src/readline.js` should integrate with these stdin/stdout shims.
 
+### Completion model — what sets the playground status to "Done"
+
+After user code finishes, the sandbox does **not** resolve immediately. The
+drain sequence lives in the `_build_file` execution wrapper in `runtime.js`:
+
+1. **Micro/macrotask drain** — one `await Promise.resolve()` plus one 100 ms
+   `setTimeout`, so cascading async work gets a chance to start.
+2. **Parallel gates** (`Promise.all`):
+   - `taskTracker.waitForAll()` — the `GlobalTracker`'s wrapped async work.
+   - `waitForAllFetches()` — the patched `fetch` registers every call in
+     `pendingFetches` at **call time**, so an *unawaited* `fetch()` still
+     holds completion until it settles. `Promise.allSettled` semantics:
+     a failed fetch does not block completion.
+   - `waitForAllXhrs()` — same tracking for `XMLHttpRequest`.
+   - `waitForAllTimers()` — polls `timerRegistry` every 50 ms until no
+     timeout/interval entries remain. A live `setInterval` holds completion
+     until `clearInterval`.
+   - `__httpServerRunTime.waitForAllServers?.()` — resolves when the
+     server registry empties; a listening `http.createServer` holds
+     completion until `server.close()` (see `docs/SINGLETONS.md` rule 5).
+3. **Sequential stdin gate** — `process.stdin.waitUntilNoListeners()`, run
+   *after* the parallel gates so late-attaching listeners are seen.
+   Event-driven, no polling: with no `data`/`end`/`close`/`error`/`keypress`
+   listeners it resolves immediately; otherwise it waits for the stdin
+   `removeListener` event (`_checkResolve`). Release paths:
+   `process.stdin.end()`/`destroy()` (sets `_ended`), or all listeners
+   removed. A program blocked on readline/stdin input therefore stays out
+   of "Done" until input arrives **and** the stdin hold is released.
+4. `function_results` is posted → the host resolves `{success: true}` →
+   the playground shows **Done**.
+
+**`process.exit(code)`** bypasses the gates: both the bare `process` global
+and `import "node:process"` post the `kill` interop, the host resolves
+`{success: true, logs: [...logs, "Process Exited"]}`, and the playground
+shows **Done**. Asymmetry to remember: a *thrown* error posts
+`function_error` → `{success: false}` → the playground shows **Error**.
+
 ## Content Security Policy
 
 The iframe runs under a CSP equivalent to:
