@@ -232,6 +232,32 @@ function main() {
     if (current !== output) {
       console.error(`CHECK FAILED: ${outPath} differs from a fresh build.`);
       console.error("Run `npm run build:sandbox` and commit the result.");
+      // Diagnostic: show the first difference for CI debugging.
+      const minLen = Math.min(current.length, output.length);
+      let diffAt = -1;
+      for (let i = 0; i < minLen; i++) {
+        if (current[i] !== output[i]) {
+          diffAt = i;
+          break;
+        }
+      }
+      if (diffAt >= 0) {
+        console.error(
+          `First diff at char ${diffAt} (len ${current.length} vs ${output.length}):`,
+        );
+        console.error(
+          `  committed: ...${JSON.stringify(current.slice(Math.max(0, diffAt - 40), diffAt + 80))}...`,
+        );
+        console.error(
+          `  fresh:     ...${JSON.stringify(output.slice(Math.max(0, diffAt - 40), diffAt + 80))}...`,
+        );
+      } else {
+        console.error(`Length differs: ${current.length} vs ${output.length}`);
+      }
+      // Also log esbuild version for debugging.
+      import("esbuild").then((m) =>
+        console.error(`esbuild version: ${m.version}`),
+      );
       process.exit(1);
     }
     console.log(
