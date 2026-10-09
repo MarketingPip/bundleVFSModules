@@ -57,6 +57,15 @@ The fragments are the source of truth — edit them, rebuild, commit the
 template. (The old reverse-extraction script `src/extract-sandbox.py` was
 removed: it would clobber authored fragments with stale output.)
 
+**Cutover complete (2026-10-09):** `SandboxRuntime.generate()` no longer
+contains an inline template literal. It imports `SANDBOX_TEMPLATE` from
+`src/sandbox-template.js` and does single-pass `%%TOKEN%%` substitution
+with replacement functions (never string replacements — `$` in user code
+is safe). The inline template has been deleted; the built template is the
+only bootstrap source. The previously hardcoded (and stale) cookie-jar IIFE
+is now freshly built from `src/sandbox/cookie-entry.js` on every
+`build:sandbox` run.
+
 ## The `_RUNTIME_` rewrite (the one rule that matters)
 
 `replaceGlobalThisVar(source, "_RUNTIME_", { replacement: 'globalThis._RUNTIME<uuid>_' })`

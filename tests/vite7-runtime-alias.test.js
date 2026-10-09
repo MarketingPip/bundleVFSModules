@@ -23,30 +23,36 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-describe("runtime.js sandbox template exposes stable `globalThis._RUNTIME_` alias", () => {
-  const src = fs.readFileSync(path.join(__dirname, "..", "runtime.js"), "utf8");
+describe("sandbox template exposes stable `globalThis._RUNTIME_` alias", () => {
+  // The template now lives in src/sandbox-template.js (built from
+  // src/sandbox/*.js); SandboxRuntime.generate() substitutes %%UUID%%.
+  const src = fs.readFileSync(
+    path.join(__dirname, "..", "src", "sandbox-template.js"),
+    "utf8",
+  );
 
   test("template assigns _RUNTIME_ alias after the UUID-specific object", () => {
-    // The template creates: globalThis._RUNTIME${config.uuid}_ = {...}
-    // It must also create: globalThis._RUNTIME_ = globalThis._RUNTIME${config.uuid}_;
-    // (${config.uuid} is interpolated at sandbox generation time)
+    // The template creates: globalThis._RUNTIME%%UUID%%_ = {...}
+    // It must also create: globalThis._RUNTIME_ = globalThis._RUNTIME%%UUID%%_;
+    // (%%UUID%% is substituted at sandbox generation time)
     expect(src).toMatch(
-      /globalThis\._RUNTIME_ = globalThis\._RUNTIME\$\{config\.uuid\}_;/,
+      /globalThis\._RUNTIME_ = globalThis\._RUNTIME%%UUID%%_;/,
     );
   });
 
   test("alias is assigned in the SandboxRuntime.generate() template", () => {
-    // The alias must be part of the generated sandbox boot code, not just
-    // anywhere in runtime.js. Find the SandboxRuntime class and verify the
-    // alias is in its generate() template.
-    const classIdx = src.indexOf("class SandboxRuntime");
-    expect(classIdx).toBeGreaterThan(-1);
-    const generateIdx = src.indexOf("static generate(", classIdx);
-    expect(generateIdx).toBeGreaterThan(-1);
-    // The template is a template literal; find the alias after generate()
-    const afterGenerate = src.slice(generateIdx, generateIdx + 5000);
-    expect(afterGenerate).toMatch(
-      /globalThis\._RUNTIME_ = globalThis\._RUNTIME\$\{config\.uuid\}_;/,
+    // The alias must be part of the generated sandbox boot code. The template
+    // is consumed by SandboxRuntime.generate() in runtime.js — verify the
+    // import wiring plus the alias in the template.
+    const runtimeSrc = fs.readFileSync(
+      path.join(__dirname, "..", "runtime.js"),
+      "utf8",
+    );
+    expect(runtimeSrc).toMatch(
+      /import \{ SANDBOX_TEMPLATE \} from "\.\/src\/sandbox-template\.js"/,
+    );
+    expect(src).toMatch(
+      /globalThis\._RUNTIME_ = globalThis\._RUNTIME%%UUID%%_;/,
     );
   });
 });

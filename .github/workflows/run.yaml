@@ -35,6 +35,12 @@ jobs:
       - name: Build VFS
         run: node src/build-vfs.mjs
 
+      - name: Check sandbox template is fresh
+        # The sandbox template (src/sandbox-template.js) is built from
+        # src/sandbox/*.js via src/build-sandbox.mjs. If the fragments change
+        # without rebuilding, the runtime would use a stale template.
+        run: node src/build-sandbox.mjs --check
+
       - name: Commit generated file
         run: |
           git config user.name "github-actions[bot]"

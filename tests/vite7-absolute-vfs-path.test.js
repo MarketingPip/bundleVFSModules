@@ -31,6 +31,17 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). RUNTIME_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 describe("loadModule absolute VFS path classification", () => {
   test("isAbsolute checks for leading '/' (not './')", () => {
@@ -38,7 +49,7 @@ describe("loadModule absolute VFS path classification", () => {
     // correct '/'-check in the sync-require path (line ~5081); we target
     // the loadModule one which had the './' bug.
     const matches = [
-      ...RUNTIME_SRC.matchAll(
+      ...TEMPLATE_SRC.matchAll(
         /const isAbsolute = modulePath\.startsWith\(([^)]+)\)/g,
       ),
     ];
@@ -54,8 +65,8 @@ describe("loadModule absolute VFS path classification", () => {
     // produces `file:///node_modules/...`. The sandbox must strip the scheme
     // and treat it as an absolute VFS path (not a network URL).
     const hasFileHandling =
-      RUNTIME_SRC.includes('startsWith("file://")') ||
-      RUNTIME_SRC.includes("startsWith('file://')");
+      TEMPLATE_SRC.includes('startsWith("file://")') ||
+      TEMPLATE_SRC.includes("startsWith('file://')");
     expect(hasFileHandling).toBe(true);
   });
 
@@ -64,7 +75,7 @@ describe("loadModule absolute VFS path classification", () => {
     // through the VFS lookup instead of resolveNodeModule.
     const condPattern =
       /if\s*\(\s*isRelative\s*\|\|\s*isNodeBuiltIn\s*\|\|\s*isAbsolute/;
-    expect(RUNTIME_SRC).toMatch(condPattern);
+    expect(TEMPLATE_SRC).toMatch(condPattern);
   });
 });
 

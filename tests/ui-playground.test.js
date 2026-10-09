@@ -11,6 +11,12 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js); tests that assert on template content read it here.
+const TEMPLATE_SRC = fs.readFileSync(
+  path.join(__dirname, "..", "src", "sandbox-template.js"),
+  "utf8",
+);
 const PLAYGROUND_SRC = fs.readFileSync(
   path.join(__dirname, "..", "src", "ui", "playground.js"),
   "utf8",
@@ -237,7 +243,7 @@ describe("iframe interop exposes precede the sync builtin preload", () => {
   const PRELOAD_MARKER = "begin sync builtin preload";
 
   test("all four exposes are registered before the preload loop", () => {
-    const preloadIdx = RUNTIME_SRC.indexOf(PRELOAD_MARKER);
+    const preloadIdx = TEMPLATE_SRC.indexOf(PRELOAD_MARKER);
     expect(preloadIdx).toBeGreaterThan(0);
     for (const name of [
       "__stdin__",
@@ -245,7 +251,7 @@ describe("iframe interop exposes precede the sync builtin preload", () => {
       "__serverRequest__",
       "__closeServer__",
     ]) {
-      const idx = RUNTIME_SRC.indexOf(`expose('${name}'`);
+      const idx = TEMPLATE_SRC.indexOf(`expose('${name}'`);
       expect(idx).toBeGreaterThan(0);
       expect(idx).toBeLessThan(preloadIdx);
     }

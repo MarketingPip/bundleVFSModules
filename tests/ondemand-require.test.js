@@ -25,6 +25,15 @@ import * as acorn from "acorn";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
 const RUNTIME_SRC = fs.readFileSync(path.join(REPO_ROOT, "runtime.js"), "utf8");
+// The sandbox template now lives in src/sandbox-template.js; extract the
+// template VALUE (JSON-decode the exported string) for template extractions.
+const TEMPLATE_FILE = fs.readFileSync(
+  path.join(REPO_ROOT, "src", "sandbox-template.js"),
+  "utf8",
+);
+const TEMPLATE_SRC = JSON.parse(
+  TEMPLATE_FILE.match(/export const SANDBOX_TEMPLATE = ("(?:[^"\\]|\\.)*");/s)[1],
+);
 
 // --- Verbatim extraction helpers -------------------------------------------
 
@@ -125,7 +134,7 @@ function loadBvmRequireSync() {
       // reliably resolvable in the es-module-shims-executed sandbox); the
       // harness shadows globalThis with a fake carrying the injected loader.
       "var _bvmRequirePending = new Map();\n" +
-      extractFunction(RUNTIME_SRC, "function __bvmRequireSync(request)");
+      extractFunction(TEMPLATE_SRC, "function __bvmRequireSync(request)");
   const src = cachedBvmSrc;
   return {
     src,
@@ -501,6 +510,28 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
         "docs/E2E_FEATURE_MATRIX.md",
         "docs/RUNTIME.md",
         "runtime.js",
+        "src/build-sandbox.mjs",
+        "src/sandbox-template.js",
+        "src/sandbox/00-runtime-object.js",
+        "src/sandbox/05-vitest-mocks.js",
+        "src/sandbox/10-task-tracker.js",
+        "src/sandbox/20-module-loader.js",
+        "src/sandbox/21-sync-require.js",
+        "src/sandbox/30-interop.js",
+        "src/sandbox/31-node-globals.js",
+        "src/sandbox/32-path-resolve.js",
+        "src/sandbox/40-console.js",
+        "src/sandbox/41-events-warnings.js",
+        "src/sandbox/50-process.js",
+        "src/sandbox/60-timers.js",
+        "src/sandbox/70-fetch.js",
+        "src/sandbox/71-xhr.js",
+        "src/sandbox/80-errors.js",
+        "src/sandbox/85-keydecoder.js",
+        "src/sandbox/90-server-request.js",
+        "src/sandbox/95-init.js",
+        "src/sandbox/96-user-code.js",
+        "src/sandbox/97-finalize.js",
         "src/test.js",
         "src/ui/playground.js",
       ].sort(),

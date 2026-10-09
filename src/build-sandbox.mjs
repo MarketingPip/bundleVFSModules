@@ -158,7 +158,9 @@ function validateFinalTemplate(template) {
 }
 
 function buildTemplate() {
-  const concatenated = MANIFEST.map(readSection).join("\n");
+  // The inline template literal in runtime.js ended with a newline before the
+  // closing backtick; the built template must too for byte-identical output.
+  const concatenated = MANIFEST.map(readSection).join("\n") + "\n";
 
   // The concatenated sections (with __TOKEN__s, all valid JS) must parse.
   // esbuild validates; throws on error.

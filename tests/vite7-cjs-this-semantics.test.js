@@ -25,6 +25,17 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 describe("CJS `this` semantics (Node parity)", () => {
   test("sync require path invokes wrapper with this === module.exports", () => {
@@ -33,7 +44,7 @@ describe("CJS `this` semantics (Node parity)", () => {
     // Not: wrapper(...)
     const wrapperCallWithThis = /wrapper\.call\s*\(\s*module\.exports/;
 
-    const hasCallWithThis = wrapperCallWithThis.test(RUNTIME_SRC);
+    const hasCallWithThis = wrapperCallWithThis.test(TEMPLATE_SRC);
 
     // The wrapper must be invoked with .call(module.exports, ...) so that
     // `this === module.exports` inside the module.
@@ -47,7 +58,7 @@ describe("CJS `this` semantics (Node parity)", () => {
     // The wrapCommonJS template should use .call(module.exports, ...)
     // for the IIFE, not a plain invocation.
     const wrapCallPattern = /\.call\s*\(\s*module\.exports/;
-    expect(wrapCallPattern.test(RUNTIME_SRC)).toBe(true);
+    expect(wrapCallPattern.test(TEMPLATE_SRC)).toBe(true);
   });
 });
 
@@ -56,14 +67,14 @@ describe("CJS __filename and __dirname", () => {
     // The sync require wrapper should receive __filename and __dirname.
     const wrapperDef =
       /new Function\(\s*['"]require['"]\s*,\s*['"]module['"]\s*,\s*['"]exports['"]\s*,\s*['"]__filename['"]\s*,\s*['"]__dirname['"]/;
-    expect(wrapperDef.test(RUNTIME_SRC)).toBe(true);
+    expect(wrapperDef.test(TEMPLATE_SRC)).toBe(true);
   });
 
   test("wrapCommonJS provides __filename and __dirname", () => {
     // Extract the wrapCommonJS function and check it defines __filename/__dirname.
-    const wrapStart = RUNTIME_SRC.indexOf("function wrapCommonJS(");
-    const wrapEnd = RUNTIME_SRC.indexOf("function importAndProxy(");
-    const wrapSrc = RUNTIME_SRC.slice(wrapStart, wrapEnd);
+    const wrapStart = TEMPLATE_SRC.indexOf("function wrapCommonJS(");
+    const wrapEnd = TEMPLATE_SRC.indexOf("function importAndProxy(");
+    const wrapSrc = TEMPLATE_SRC.slice(wrapStart, wrapEnd);
 
     // Should contain __filename and __dirname definitions.
     expect(wrapSrc).toContain("__filename");

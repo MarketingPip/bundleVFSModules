@@ -4,6 +4,7 @@
 // not standalone modules — see the build script header.
 
 
+
 globalThis._RUNTIME__UUID___ = {globals: new Set(), process:"__PROCESS_JSON__", taskTracker:null, __USER_FILES__:"__USER_FILES_JSON__", __SEA_ASSETS__:"__SEA_ASSETS_JSON__", __SHELL_FIELD__};
 // Stable alias for platform shims: they write globalThis._RUNTIME_ expecting the
 // sandbox-scoped object, but the AST rewrite only applies to Node builtins, not

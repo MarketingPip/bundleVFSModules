@@ -28,6 +28,17 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 function extractFunction(src, marker) {
   const start = src.indexOf(marker);
@@ -88,12 +99,12 @@ function loadHelpers() {
     "function unflattenUserFiles(flatObj)",
     "function createSyncRequire(parentPath, vfs",
   ];
-  const templateStart = RUNTIME_SRC.indexOf(
+  const templateStart = TEMPLATE_SRC.indexOf(
     "// Read a CJS module's source for the sync require path",
   );
   if (templateStart === -1)
     throw new Error("sync-require template block not found");
-  const templateSrc = RUNTIME_SRC.slice(templateStart);
+  const templateSrc = TEMPLATE_SRC.slice(templateStart);
   let code = "const _builtinManifest = {};\nconst _builtinCache = new Map();\n";
   // var-declared shared constants (condition lists) the helpers close over.
   const constMarkers = ["var VFS_SYNC_EXPORT_CONDITIONS"];
@@ -105,7 +116,7 @@ function loadHelpers() {
     const e = templateSrc.indexOf(";", s);
     code += templateSrc.slice(s, e + 1) + "\n";
   }
-  code = code.replace(/\$\{config\.uuid\}/g, TEST_UUID);
+  code = code.replace(/%%UUID%%/g, TEST_UUID);
   const factory = new Function(
     code +
       "\nreturn { resolveSyncRequest, vfsLookup, readModuleSourceLiveFirst, unflattenUserFiles, createSyncRequire, vfsResolvePackageExportsSync, vfsSplitPackageSpecifier };",

@@ -22,6 +22,17 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 function extractBalanced(src, openIdx, openCh, closeCh) {
   let depth = 0;
@@ -46,7 +57,7 @@ function extractFunction(src, marker) {
 }
 
 // The helper to be extracted from loadModule's catch block.
-const HELPER_SRC = extractFunction(RUNTIME_SRC, "function augmentLoadError(");
+const HELPER_SRC = extractFunction(TEMPLATE_SRC, "function augmentLoadError(");
 
 function makeGetterOnlyError(msg) {
   const e = {};

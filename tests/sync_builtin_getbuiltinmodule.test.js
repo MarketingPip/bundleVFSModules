@@ -35,6 +35,17 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 function extractBlock(src, startMarker, endMarker) {
   const start = src.indexOf(startMarker);
@@ -56,8 +67,8 @@ const UNWRAP_END = "// --- end sync builtin require interop (gap #3) ---";
 // the sandbox-scope free variables (_builtinManifest, _builtinCache,
 // _builtinRequireValue) injected as parameters.
 function loadSandboxGetBuiltinModule(manifest, cache) {
-  const unwrapSrc = extractBlock(RUNTIME_SRC, UNWRAP_START, UNWRAP_END);
-  const methodSrc = extractBlock(RUNTIME_SRC, GBM_START, GBM_END)
+  const unwrapSrc = extractBlock(TEMPLATE_SRC, UNWRAP_START, UNWRAP_END);
+  const methodSrc = extractBlock(TEMPLATE_SRC, GBM_START, GBM_END)
     .replace(GBM_START, "")
     .replace(GBM_END, "");
   const factory = new Function(
