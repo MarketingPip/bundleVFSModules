@@ -51,8 +51,8 @@ export default { myFunc, notPossibleInBrowser };
    package.json, not from a second undocumented list.
 2. **`globalThis._RUNTIME_`, never bare `_RUNTIME_`, never `window`.**
    The runtime AST-rewrites exactly the `globalThis._RUNTIME_` member
-   expression to `globalThis[Symbol.for("bvm.runtime.<uuid>")]` (the
-   Symbol-keyed, non-enumerable runtime object — see `docs/RUNTIME.md`).
+   expression to `globalThis._RUNTIME<uuid>_` (the uuid-mangled per-sandbox
+   runtime key — see `docs/RUNTIME.md`).
    `window`/`document` at module scope breaks future worker support —
    use `globalThis` and feature-detect.
 3. **Reuse the singletons.** `RT.__FS__` (filesystem), `RT.__httpServerRunTime`

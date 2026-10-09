@@ -1,6 +1,6 @@
 # Runtime integration — how `runtime.js` loads and runs our shims
 
-`runtime.js` (repo root, ~8.7k lines) is Jared's host: a `CodeSandbox` class that
+`runtime.js` (repo root, ~9.7k lines) is Jared's host: a `CodeSandbox` class that
 executes user JavaScript inside a sandboxed **iframe** and makes Node builtins
 available by loading **this repo's** bundled shims. Our code is the guest; the
 runtime is the landlord. This document is the contract between them, verified
@@ -13,14 +13,14 @@ against the actual `runtime.js` source.
    (`src/sandbox-template.js` — built from the authored fragments in
    `src/sandbox/*.js`, see "Sandbox template build" below), replaces its
    `%%TOKEN%%` placeholders with per-sandbox values, and builds the iframe
-   HTML. The bootstrap installs the runtime object under the Symbol key
-   `Symbol.for('bvm.runtime.<uuid>')` (non-enumerable — see "Symbol-backed
-   runtime globals"), the module system (`loadModule`,
+   HTML. The bootstrap installs the runtime object under the uuid-mangled
+   string key `globalThis._RUNTIME<uuid>_` (see "Runtime-object and interop
+   keys"), the module system (`loadModule`,
    `transformImportsToLoadModule`, `_build_file` / `_dynamic_import`
    interop handlers), the process shim, the terminal, and network
    wrappers — then runs the user code.
 3. Any `import … from "node:fs"` (or `"fs"`) in user code is rewritten to
-   `await globalThis[Symbol.for("bvm.runtime.<uuid>")].loadModule("fs")`.
+   `await globalThis._RUNTIME<uuid>_.loadModule("fs")`.
 4. `loadModule` asks the parent frame (`_dynamic_import` interop) for the
    module source. For builtins the parent returns `sandboxModules["fs"]` —
    our `dist/vfs.js` bundle, fetched from jsDelivr and pinned to a commit.
@@ -59,39 +59,40 @@ removed: it would clobber authored fragments with stale output.)
 
 ## The `_RUNTIME_` rewrite (the one rule that matters)
 
-`replaceGlobalThisVar(source, "_RUNTIME_", { replacement: 'globalThis[Symbol.for("bvm.runtime.<uuid>")]' })`
+`replaceGlobalThisVar(source, "_RUNTIME_", { replacement: 'globalThis._RUNTIME<uuid>_' })`
 walks the AST and replaces **only** `MemberExpression`s of the exact shape
 `globalThis._RUNTIME_`. Consequences:
 
 - Write `globalThis._RUNTIME_.__FS__` in shims — it becomes
-  `globalThis[Symbol.for("bvm.runtime.<uuid>")].__FS__` per sandbox. ✅
+  `globalThis._RUNTIME<uuid>_.__FS__` per sandbox. ✅
 - Write bare `_RUNTIME_` — it is **not** rewritten and throws at runtime. ❌
 - Guards like `typeof globalThis._RUNTIME_ !== "undefined"` are rewritten too,
   so they keep working inside the sandbox and protect us outside it (parity
   tests under real Node, direct imports).
 
-## Symbol-backed runtime globals
+## Runtime-object and interop keys
 
-The per-sandbox runtime object and the interop channel live under Symbol
-keys, not string keys:
+The per-sandbox runtime object lives under a uuid-mangled **string** key;
+only the interop channel is Symbol-backed:
 
-- `Symbol.for('bvm.runtime.<uuid>')` — the runtime object (`process`,
-  `__FS__`, `loadModule`, …). Installed via `Object.defineProperty` as
-  **writable, configurable, non-enumerable**.
+- `globalThis._RUNTIME<uuid>_` — the runtime object (`process`,
+  `__FS__`, `loadModule`, …). Plain per-sandbox assignment (enumerable),
+  installed in each sandbox's own realm. The template also installs the
+  stable alias `globalThis._RUNTIME_` for platform shims whose
+  `globalThis._RUNTIME_` references are not AST-rewritten (e.g.
+  VFS-loaded CJS).
 - `Symbol.for('bvm.interop')` — the `_dynamic_import` interop channel.
 
-The point is **string-key enumeration hiding, not secrecy**: `Object.keys`,
-`for…in`, `JSON.stringify`, and the `in` operator never surface these keys,
-so casual inspection of `globalThis` doesn't reveal runtime internals. The
-UUID is visible in the generated script source, so devtools can always
-reconstruct the key — `Object.getOwnPropertySymbols` / `Reflect.ownKeys`
-are deliberately *not* patched. Non-enumerable also keeps the keys out of
-`Object.assign` / spread copies.
+The Symbol key exists for **string-key enumeration hiding, not secrecy**:
+`Object.keys`, `for…in`, `JSON.stringify`, and the `in` operator never
+surface `bvm.interop`, so casual inspection of `globalThis` doesn't reveal
+the interop channel. `Object.getOwnPropertySymbols` / `Reflect.ownKeys`
+are deliberately *not* patched.
 
 ## Special runtime variables
 
-These live on the Symbol-keyed runtime object
-(`globalThis[Symbol.for('bvm.runtime.<uuid>')]`). The per-sandbox
+These live on the per-sandbox runtime object
+(`globalThis._RUNTIME<uuid>_`). The per-sandbox
 singletons among them (`__FS__`, `__httpServerRunTime`) are documented
 with their lifecycle rules in `docs/SINGLETONS.md`.
 
@@ -132,7 +133,7 @@ Our `src/process.js` is **not** that object — it only serves explicit
   `navigator.sendBeacon` are wrapped (`wrapNetwork`) so the host can observe/
   block; `connect-src *` in the CSP permits real outbound requests.
 - **Terminal**: a DOM REPL with `toNodeKeypress` (DOM key events → Node-style
-  keypress objects with ANSI sequences), `getStdin`/`makeOutputShim` streams.
+  keypress objects with ANSI sequences), `process.stdin`/`makeOutputShim` streams.
   `src/readline.js` should integrate with these stdin/stdout shims.
 
 ## Content Security Policy
