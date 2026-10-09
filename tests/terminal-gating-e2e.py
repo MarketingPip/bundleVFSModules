@@ -253,6 +253,50 @@ case("stdin-release", release_ok,
 if not (hold_ok and release_ok):
     print("  output tail: " + out[-600:], flush=True)
 
+# Case 3b: listener-removal release (regression for the _checkResolve bug
+# fixed 2026-10-09): readline close() WITHOUT process.stdin.end() must
+# release the stdin gate. Previously the gate never released via listener
+# removal because _checkResolve counted the runtime's own internal
+# newListener/removeListener bookkeeping listeners.
+d.execute_script("document.getElementById('codeInput').value = arguments[0];",
+    "import readline from 'node:readline';\n"
+    "const rl = readline.createInterface({ input: process.stdin, output: process.stdout });\n"
+    "console.log('ASK-NOEND');\n"
+    "const ans = await new Promise((res) => rl.question('Name? ', res));\n"
+    "rl.close();\n"
+    "console.log('CLOSED:' + ans);")
+d.execute_script("document.getElementById('argvInput').value = '';")
+d.find_element("id", "runBtn").click()
+prompt_ok = wait_output_contains(d, "ASK-NOEND", timeout=60)
+send_stdin(d, "NoEnd")
+s = wait_status(d, timeout=30)
+out = output_text(d)
+case("stdin-close-releases",
+     prompt_ok and s == "Done" and "CLOSED:NoEnd" in out,
+     "(status=%r)" % s)
+if s != "Done":
+    print("  output tail: " + out[-600:], flush=True)
+
+# Case 3c: once-listener auto-drop release (regression for the emit()
+# silent-drop bug): a one-shot 'data' listener must not hold completion
+# after it fires. Previously emit() dropped once-listeners without firing
+# 'removeListener', so the gate stayed stuck until stdin.end().
+d.execute_script("document.getElementById('codeInput').value = arguments[0];",
+    "console.log('ONCE-ARMED');\n"
+    "await new Promise((res) => process.stdin.once('data', () => { console.log('ONCE-GOT'); res(); }));\n"
+    "console.log('ONCE-DONE');")
+d.execute_script("document.getElementById('argvInput').value = '';")
+d.find_element("id", "runBtn").click()
+armed_ok = wait_output_contains(d, "ONCE-ARMED", timeout=60)
+send_stdin(d, "ping")
+s = wait_status(d, timeout=30)
+out = output_text(d)
+case("stdin-once-releases",
+     armed_ok and s == "Done" and "ONCE-GOT" in out and "ONCE-DONE" in out,
+     "(status=%r)" % s)
+if s != "Done":
+    print("  output tail: " + out[-600:], flush=True)
+
 # Case 4: exit-releases -- a live stdin listener + process.exit(0) must
 # still finish promptly via the 'kill' interop path (bypasses the gates).
 s, out, elapsed = run_code(d,

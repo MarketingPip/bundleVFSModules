@@ -8096,6 +8096,9 @@ export class CodeSandbox extends EventEmitter {
   EventEmitter.prototype.removeAllListeners = function (ev) {
     if (ev) { delete this._events[ev]; }
     else     { this._events = Object.create(null); }
+    // Removal without an explicit 'removeListener' event must still let the
+    // completion gate re-check (stdin hooks _checkResolve on removeListener).
+    if (typeof this._checkResolve === 'function') this._checkResolve();
     return this;
   };
 
@@ -8103,7 +8106,14 @@ export class CodeSandbox extends EventEmitter {
     const list = this._events[ev];
     if (!list || list.length === 0) return false;
     const snapshot = [...list];
+    const dropped = list.filter(e => e.once);
     this._events[ev] = list.filter(e => !e.once);
+    // Node semantics: a once-listener removed by firing emits
+    // 'removeListener'. This releases the stdin completion gate: a one-shot
+    // 'data' listener must not hold completion forever after it fires.
+    for (const e of dropped) {
+      if (ev !== 'removeListener') this.emit('removeListener', ev, e.fn);
+    }
     for (const e of snapshot) e.fn(...args);
     return true;
   };
@@ -8205,8 +8215,15 @@ export class CodeSandbox extends EventEmitter {
     },
 
     _checkResolve() {
-      const totalListeners = Object.values(this._events)
-        .reduce((n, arr) => n + (arr ? arr.length : 0), 0);
+      // Count only the events that hold the completion gate (same list as
+      // waitUntilNoListeners). The runtime's own internal 'newListener' /
+      // 'removeListener' bookkeeping listeners are attached for the whole
+      // sandbox lifetime and must not hold completion — counting them made
+      // the total unreachable, so listener removal could never release the
+      // gate (only stdin.end()/destroy() did).
+      const relevant = ['data', 'end', 'close', 'error', 'keypress'];
+      const totalListeners = relevant.reduce(
+        (n, ev) => n + ((this._events[ev] || []).length), 0);
       if ((this._ended || totalListeners === 0) && this._waitResolve) {
         this._waitResolve();
         this._waitResolve = null;
