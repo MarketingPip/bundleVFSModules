@@ -126,6 +126,18 @@ def run_code(d, code, argv=""):
 
 opts = Options()
 opts.binary_location = FF
+# Firefox honors proxy env vars; the sandbox's hatch-egress-proxy is
+# unreachable from here (proxyConnectFailure on esm.sh), which wedges the
+# module script (it imports esm.sh deps) and no CASE ever runs. Route
+# explicitly through the local relay (TOOLS.md: Firefox honors proxy prefs;
+# Chromium ignores them). Localhost stays direct for the test server.
+opts.set_preference("network.proxy.type", 1)
+opts.set_preference("network.proxy.http", "127.0.0.1")
+opts.set_preference("network.proxy.http_port", 18080)
+opts.set_preference("network.proxy.ssl", "127.0.0.1")
+opts.set_preference("network.proxy.ssl_port", 18080)
+opts.set_preference("network.proxy.share_proxy_settings", True)
+opts.set_preference("network.proxy.no_proxies_on", "localhost,127.0.0.1")
 svc = Service(executable_path=GD)
 d = webdriver.Firefox(options=opts, service=svc)
 d.set_page_load_timeout(120)
