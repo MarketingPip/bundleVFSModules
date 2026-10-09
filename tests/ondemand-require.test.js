@@ -32,7 +32,9 @@ const TEMPLATE_FILE = fs.readFileSync(
   "utf8",
 );
 const TEMPLATE_SRC = JSON.parse(
-  TEMPLATE_FILE.match(/export const SANDBOX_TEMPLATE = ("(?:[^"\\]|\\.)*");/s)[1],
+  TEMPLATE_FILE.match(
+    /export const SANDBOX_TEMPLATE = ("(?:[^"\\]|\\.)*");/s,
+  )[1],
 );
 
 // --- Verbatim extraction helpers -------------------------------------------
@@ -501,12 +503,15 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .filter((l) => l && !l.startsWith("tests/"));
     if (files.length === 0) return; // on main post-merge: nothing to guard
     // The branch footprint is the union of the committed work on it
-    // (feat/test-autorun-and-modularization, Item 1: --test auto-run moves
-    // into the node:test shim): src/test.js owns the trigger, runtime.js
-    // drops the template interception, playground.js updates the tests
-    // example, docs record the contract. tests/ is excluded above.
+    // (feat/test-autorun-and-modularization, Items 1+2: --test auto-run moves
+    // into the node:test shim; sandbox fragments re-synced and generate() cut
+    // over to SANDBOX_TEMPLATE): src/test.js owns the trigger, runtime.js
+    // drops the template interception and the inline template, playground.js
+    // updates the tests example, docs record the contract, CI gates the
+    // template freshness. tests/ is excluded above.
     expect(files.sort()).toEqual(
       [
+        ".github/workflows/run.yaml",
         "docs/E2E_FEATURE_MATRIX.md",
         "docs/RUNTIME.md",
         "runtime.js",
@@ -560,6 +565,13 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const addedImports = out
       .split("\n")
       .filter((l) => l.startsWith("+import "));
-    expect(addedImports).toEqual([]);
+    // Item 2 cutover: generate() imports the built sandbox template and the
+    // log-token table. These two are the only expected additions.
+    expect(addedImports.sort()).toEqual(
+      [
+        '+import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";',
+        '+import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";',
+      ].sort(),
+    );
   });
 });
