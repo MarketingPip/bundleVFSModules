@@ -1,15 +1,24 @@
 // src/runtime/import-resolver.js — extracted verbatim from runtime.js
-// (lines 2434-2641), branch modular/resolution. Cross-module deps (kept as
-// bare references, exactly as in the original module scope; the wiring step
-// will turn them into imports):
-//   - customAcorn            (runtime.js:514 — acorn.Parser extended with import assertions)
-//   - normalizeBuiltinSpecifier (runtime.js:180)
-//   - builtinModules         (runtime.js:400, `export const`)
-//   - isViteBrowserInterceptionActive (runtime.js:18)
-//   - lookupNativeInterception        (src/plugins/vite-browser.js)
+// (lines 2434-2641), branch modular/resolution. Cross-module deps (wired as
+// real ESM imports by the integration step; previously bare references to
+// the original runtime.js module scope):
+//   - customAcorn                   <- ./transpile.js  (acorn.Parser extended
+//                                          with import assertions; Node lane
+//                                          degrades to plain acorn.Parser)
+//   - normalizeBuiltinSpecifier     <- ./builtins.js   (byte-identical to
+//                                          runtime.js:180)
+//   - builtinModules                <- ./builtin-modules.js
+//   - isViteBrowserInterceptionActive <- ./bootstrap.js
+//   - lookupNativeInterception      <- ../plugins/vite-browser.js
 // ============================================================================
 // IMPORT RESOLVER MODULE
 // ============================================================================
+
+import { customAcorn } from "./transpile.js";
+import { normalizeBuiltinSpecifier } from "./builtins.js";
+import { builtinModules } from "./builtin-modules.js";
+import { isViteBrowserInterceptionActive } from "./bootstrap.js";
+import { lookupNativeInterception } from "../plugins/vite-browser.js";
 
 export class ImportResolver {
   constructor(options = {}) {

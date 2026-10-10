@@ -28,32 +28,42 @@ import {
 } from "../plugins.js";
 import { lookupNativeInterception } from "../plugins/vite-browser.js";
 //
-// Host-provided bare references (still module scope in runtime.js; kept as-is
-// like the original — the integration step will turn them into imports).
-// Per the task brief, EventEmitter is NOT imported from Worker C's branch;
-// it is documented here instead:
-//   - EventEmitter              (runtime.js:2374; Worker C — CodeSandbox extends it;
-//                                verbatim extraction already on main as src/runtime/events.js)
-//   - ExecutionContext          (runtime.js:2810)
-//   - ImportResolver            (runtime.js:2438, exported)
-//   - SyntaxChecker             (runtime.js:2340, exported)
-//   - mergeProcess              (runtime.js:371)
-//   - convertEsmToCjs           (runtime.js:688, exported)
-//   - convertCjsToEsm           (runtime.js:802, exported)
-//   - detectModuleSystem        (runtime.js:1240)
-//   - replaceGlobalThisVar      (runtime.js:1443, exported)
-//   - transformImportsToLoadModule (runtime.js:1491, exported)
-//   - flattenFileTree           (runtime.js:6300, exported)
-//   - normalizeSeaAssets        (runtime.js:6215)
-//   - formatErrors              (runtime.js:6115, exported)
-//   - loadBuiltin               (runtime.js:216)
-//   - fetchBuiltinSource        (runtime.js:130)
-//   - isViteBrowserInterceptionActive (runtime.js:18)
+// Cross-module dependencies — wired as real ESM imports by the integration
+// step (previously bare references to the original runtime.js module scope).
+// EventEmitter comes from Worker C's verbatim extraction (src/runtime/events.js).
+import { EventEmitter } from "./events.js";
+import { ExecutionContext } from "./execution-context.js";
+import { ImportResolver } from "./import-resolver.js";
+import { SyntaxChecker } from "./syntax.js";
+import { convertEsmToCjs } from "./transforms-esm.js";
+import { convertCjsToEsm, detectModuleSystem } from "./transforms-cjs.js";
+import {
+  replaceGlobalThisVar,
+  transformImportsToLoadModule,
+} from "./transforms-imports.js";
+import {
+  flattenFileTree,
+  normalizeSeaAssets,
+  formatErrors,
+} from "./host-utils.js";
+import { mergeProcess } from "./terminal.js";
+import { loadBuiltin, fetchBuiltinSource } from "./builtins.js";
+import { isViteBrowserInterceptionActive } from "./bootstrap.js";
+import { bundle } from "../quick_bundle.js";
+// NOTE: normalizeBuiltinSpecifier / stripAnsi / _builtinManifest /
+// builtinModules appeared in the wiring brief for this module but have zero
+// references in its body (the %%BUILTIN_MODULES_JSON%% / %%STRIP_ANSI_FN%%
+// substitutions live in sandbox-runtime.js's section) — intentionally not
+// imported.
 // Browser globals used (method scope only, never module scope): document,
 // HTMLIFrameElement.
-// PRE-EXISTING ISSUE (copied exactly, not introduced here): the "_bundler_"
-// interop handler calls `bundle(url).url`, but `bundle` is not defined
-// anywhere in runtime.js — that path throws ReferenceError if executed.
+// _bundler_ interop: `bundle` is now imported from ../quick_bundle.js — it
+// exists in-repo but was never in runtime.js's module scope, so the handler
+// threw ReferenceError when reached. Its only caller
+// (src/sandbox/20-module-loader.js) is commented out, and the handler still
+// reads `bundle(url).url` while quick_bundle's bundle() returns a data: URL
+// string — the full body fix (`return await bundle(toBundleUrl(url));`)
+// is deferred to keep this module byte-identical with runtime.js.
 
 // ============================================================================
 // MAIN SANDBOX CLASS

@@ -1,24 +1,20 @@
 // Unit tests for src/runtime/execution-context.js (extracted from
 // runtime.js lines 2810-3802 — the ExecutionContext class).
 //
-// The module intentionally carries NO imports: in runtime.js it lived in the
-// same module scope as `acorn`, `walk` (acorn-walk), `builtinModules`,
-// `normalizeBuiltinSpecifier` and the `_vfs*` fetch-bridge helpers. Until the
-// final modularization wires those as real imports, the harness injects the
-// ones the tested methods need onto globalThis (free identifiers in an ES
-// module resolve through the global environment record).
+// The module's cross-module dependencies are wired as real ESM imports
+// (acorn / acorn-walk via bare npm specifiers, normalizeBuiltinSpecifier
+// from ./builtins.js, builtinModules from ./builtin-modules.js, and the
+// _vfs* fetch-bridge helpers from ./vfs-server.js). The harness therefore
+// exercises the real vfs-server.js route registry: tests claim ports with
+// _vfsRegisterServerRoute and assert release by re-claiming the port after
+// forceKill()/cleanup(). Only `window` is still stubbed on globalThis
+// (listen() wires the host-side message bus).
 
-import * as acorn from "acorn";
-import * as walk from "acorn-walk";
+import {
+  _vfsRegisterServerRoute,
+  _vfsUnregisterServerRoute,
+} from "../src/runtime/vfs-server.js";
 
-globalThis.acorn = acorn;
-globalThis.walk = walk;
-globalThis._vfsExtractServerPort = () => null;
-globalThis._vfsRegisterServerRoute = () => true;
-const unregisteredRoutes = [];
-globalThis._vfsUnregisterServerRoute = (port, owner) => {
-  unregisteredRoutes.push([port, owner]);
-};
 // listen() wires the host-side message bus; stub just enough of window.
 globalThis.window = {
   addEventListener: () => {},
@@ -151,7 +147,8 @@ describe("ExecutionContext", () => {
       const iframe = {};
       const ctx = new ExecutionContext(iframe, sandbox);
       ctx._vfsPorts.add(8080);
-      unregisteredRoutes.length = 0;
+      // Claim the route for real so cleanup() has something to release.
+      expect(_vfsRegisterServerRoute(8080, ctx)).toBe(true);
 
       let result;
       ctx.listen(
@@ -171,8 +168,11 @@ describe("ExecutionContext", () => {
       expect(typeof result.executionTime).toBe("number");
       // persistent (non-destroyIframe) iframe is navigated away
       expect(iframe.src).toBe("about:blank");
-      // VFS fetch-bridge routes released via cleanup()
-      expect(unregisteredRoutes).toEqual([[8080, ctx]]);
+      // VFS fetch-bridge routes released via cleanup(): the port is
+      // claimable again (first claim wins while a route is held).
+      const probe = {};
+      expect(_vfsRegisterServerRoute(8080, probe)).toBe(true);
+      _vfsUnregisterServerRoute(8080, probe);
       expect(ctx._vfsPorts.size).toBe(0);
       // host notified
       expect(emitted[0][0]).toBe("execution:kill");
@@ -206,7 +206,8 @@ describe("ExecutionContext", () => {
       ctx._serverRunning = true;
       ctx._serverPort = 3000;
       ctx._vfsPorts.add(3000);
-      unregisteredRoutes.length = 0;
+      // Claim the route for real so cleanup() has something to release.
+      expect(_vfsRegisterServerRoute(3000, ctx)).toBe(true);
 
       expect(() => ctx.cleanup()).not.toThrow();
 
@@ -215,7 +216,10 @@ describe("ExecutionContext", () => {
       expect(ctx.running).toBe(false);
       expect(ctx._serverRunning).toBe(false);
       expect(ctx._serverPort).toBeNull();
-      expect(unregisteredRoutes).toEqual([[3000, ctx]]);
+      // VFS fetch-bridge route released: the port is claimable again.
+      const probe = {};
+      expect(_vfsRegisterServerRoute(3000, probe)).toBe(true);
+      _vfsUnregisterServerRoute(3000, probe);
       expect(emitted).toContainEqual([
         "execution:server",
         { type: "closed", port: 3000 },
