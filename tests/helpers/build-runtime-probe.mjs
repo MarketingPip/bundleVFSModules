@@ -2,10 +2,19 @@
 // the build-runtime differential test.
 //
 // Why a child process: the built runtime.js targets the browser (its static
-// imports use https://esm.sh/… specifiers), and Node can only import those
+// imports use https://esm.sh/… specifiers), and Node can only resolve those
 // via module.register() customization hooks — which Jest explicitly forbids
-// inside its sandboxed loader. So the Jest test spawns plain `node` (where
-// the hooks work fine) to import the bundle and run the behavioral battery.
+// inside its sandboxed loader. So the Jest test spawns plain `node`, where
+// this probe evaluates the bundle itself.
+//
+// How the bundle is loaded: the bundle is NOT imported as a module. Instead
+// it is evaluated exactly once via AsyncFunction (it has top-level await),
+// with its static imports injected as parameters and its import/export
+// syntax blanked out by AST ranges. This yields EVERY top-level binding —
+// including bundle-internals the monolith-faithful 22-name export surface no
+// longer exports — so the differential keeps testing the real shared scope,
+// not the export list. Exactly-once evaluation matters: registerPlugin
+// throws on duplicate registration.
 //
 // Usage: node tests/helpers/build-runtime-probe.mjs <built-runtime.js>
 // Prints JSON: { checks: [{ name, pass, detail? }] }. Exit 0 iff all pass.
@@ -13,6 +22,7 @@
 import { register } from "node:module";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import path from "node:path";
+import fs from "node:fs";
 import { parse } from "acorn";
 
 const builtFile = process.argv[2];
@@ -24,9 +34,108 @@ if (!builtFile) {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..");
 
+// Still needed: transitive relative imports of the bundle (e.g.
+// src/quick_bundle.js) use https://esm.sh/… specifiers, which Node can only
+// resolve via this hook.
 register(pathToFileURL(path.join(here, "esm-sh-resolve-hook.mjs")).href);
 
-const built = await import(pathToFileURL(builtFile).href);
+// esm.sh specifier -> the identical npm package in this repo's node_modules
+// (same mapping as tests/helpers/esm-sh-resolve-hook.mjs).
+const ESM_SH_TO_NPM = {
+  "https://esm.sh/acorn": "acorn",
+  "https://esm.sh/acorn-walk": "acorn-walk",
+  "https://esm.sh/magic-string": "magic-string",
+  "https://esm.sh/estree-walker": "estree-walker",
+  "https://esm.sh/uuid": "uuid",
+  "https://esm.sh/@jridgewell/trace-mapping": "@jridgewell/trace-mapping",
+  "https://esm.sh/@ampproject/remapping": "@jridgewell/remapping",
+};
+
+async function evaluateBundle(builtFile) {
+  const src = fs.readFileSync(builtFile, "utf8");
+  const ast = parse(src, { ecmaVersion: "latest", sourceType: "module" });
+  const cuts = []; // [start, end] ranges to blank out (import/export syntax)
+  const importParams = []; // { local, source, kind, imported }
+  for (const n of ast.body) {
+    if (n.type === "ImportDeclaration") {
+      cuts.push([n.start, n.end]);
+      for (const s of n.specifiers) {
+        importParams.push({
+          local: s.local.name,
+          source: n.source.value,
+          kind:
+            s.type === "ImportDefaultSpecifier"
+              ? "default"
+              : s.type === "ImportNamespaceSpecifier"
+                ? "namespace"
+                : "named",
+          imported: s.type === "ImportSpecifier" ? s.imported.name : null,
+        });
+      }
+      continue;
+    }
+    if (n.type === "ExportNamedDeclaration") {
+      // Strip only the `export ` prefix off declarations; drop bare
+      // `export {}` lists / re-exports entirely.
+      cuts.push(
+        n.declaration ? [n.start, n.declaration.start] : [n.start, n.end],
+      );
+      continue;
+    }
+    if (
+      n.type === "ExportAllDeclaration" ||
+      n.type === "ExportDefaultDeclaration"
+    ) {
+      cuts.push([n.start, n.end]);
+    }
+  }
+  let body = src;
+  for (const [s, e] of cuts.sort((a, b) => b[0] - a[0])) {
+    body = body.slice(0, s) + " ".repeat(e - s) + body.slice(e);
+  }
+  // Resolve every static import the way the Node lane would.
+  const values = [];
+  for (const p of importParams) {
+    let mod;
+    if (p.source.startsWith("https://esm.sh/")) {
+      const npmName = ESM_SH_TO_NPM[p.source];
+      if (!npmName) throw new Error(`unmapped esm.sh import: ${p.source}`);
+      mod = await import(npmName);
+    } else {
+      mod = await import(
+        pathToFileURL(path.resolve(path.dirname(builtFile), p.source)).href
+      );
+    }
+    values.push(
+      p.kind === "namespace"
+        ? mod
+        : p.kind === "default"
+          ? mod.default
+          : mod[p.imported],
+    );
+  }
+  // Every top-level binding becomes reachable on the result object.
+  const exposed = [];
+  for (const n of ast.body) {
+    const d = n.type === "ExportNamedDeclaration" ? n.declaration : n;
+    if (!d) continue;
+    if (
+      (d.type === "FunctionDeclaration" || d.type === "ClassDeclaration") &&
+      d.id
+    )
+      exposed.push(d.id.name);
+    else if (d.type === "VariableDeclaration")
+      d.declarations.forEach((x) => exposed.push(x.id.name));
+  }
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const factory = new AsyncFunction(
+    ...importParams.map((p) => p.local),
+    `"use strict";\n${body}\n;return { ${exposed.join(", ")} };`,
+  );
+  return factory(...values);
+}
+
+const built = await evaluateBundle(builtFile);
 const load = (m) =>
   import(pathToFileURL(path.join(repoRoot, "src", "runtime", m)).href);
 const mod = {
@@ -251,8 +360,10 @@ check("COOKIE_JAR_IIFE inlined", () => {
       built.COOKIE_JAR_IIFE.includes("__cookieJarLib"),
   );
 });
-check("memfsFs export alias works", () => {
-  assert(built.memfsFs !== undefined, "memfsFs undefined");
+check("memfsFs alias not exported (matches monolith surface)", () => {
+  // vfs-serialize.js's `export { fs as memfsFs }` is a bundle-internal alias
+  // (the original monolith never exported it); the build drops it.
+  assert(built.memfsFs === undefined, "memfsFs leaked");
 });
 check("no test-only setBuiltinManifest export", () => {
   assert(built.setBuiltinManifest === undefined, "setBuiltinManifest leaked");

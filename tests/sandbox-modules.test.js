@@ -19,10 +19,9 @@ import {
 // step will later turn into imports).
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const RUNTIME_SRC = fs.readFileSync(
-  path.join(__dirname, "..", "runtime.js"),
-  "utf8",
-).split("\n");
+const RUNTIME_SRC = fs
+  .readFileSync(path.join(__dirname, "..", "runtime.js"), "utf8")
+  .split("\n");
 const BANNER = "// " + "=".repeat(76);
 
 // ---------------------------------------------------------------------------
@@ -135,6 +134,11 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 // Byte-exactness: extracted bodies must match runtime.js verbatim
 // (modulo the added `export` keywords).
+//
+// runtime.js is GENERATED (src/build-runtime.mjs) — hardcoded monolith line
+// ranges cannot match it. Each module's section is located by its build
+// banner (`// ── src/runtime/<name> ──`) instead, and runs to the next
+// section banner (or EOF).
 // ---------------------------------------------------------------------------
 
 function moduleBody(relPath, firstLine) {
@@ -147,29 +151,48 @@ function moduleBody(relPath, firstLine) {
     .replace(/\n+$/, "");
 }
 
-function runtimeLines(a, b) {
-  return RUNTIME_SRC.slice(a - 1, b)
-    .join("\n")
+function runtimeSection(moduleName, firstLine) {
+  const banner = `// ── src/runtime/${moduleName} ──`;
+  const startIdx = RUNTIME_SRC.findIndex((l) => l.startsWith(banner));
+  if (startIdx === -1)
+    throw new Error(`section banner not found in runtime.js: ${banner}`);
+  let endIdx = RUNTIME_SRC.findIndex(
+    (l, i) => i > startIdx && l.startsWith("// ── src/runtime/"),
+  );
+  if (endIdx === -1) endIdx = RUNTIME_SRC.length;
+  const section = RUNTIME_SRC.slice(startIdx, endIdx).join("\n");
+  const idx = section.indexOf(firstLine);
+  if (idx === -1)
+    throw new Error(
+      `body start not found in runtime.js section: ${moduleName}`,
+    );
+  return section
+    .slice(idx)
     .replace(/^export /gm, "")
     .replace(/\n+$/, "");
 }
 
 describe("extraction fidelity (byte-exact vs runtime.js)", () => {
-  test("code-transformer.js matches runtime.js:3992-4030", () => {
+  test("code-transformer.js matches its runtime.js section", () => {
     expect(moduleBody("src/runtime/code-transformer.js", BANNER)).toBe(
-      runtimeLines(3992, 4030),
+      runtimeSection("code-transformer.js", BANNER),
     );
   });
-  test("sandbox-runtime.js matches runtime.js:3911-3990", () => {
+  test("sandbox-runtime.js matches its runtime.js section", () => {
     expect(
-      moduleBody("src/runtime/sandbox-runtime.js", "// Parse one V8 stack-frame line"),
-    ).toBe(runtimeLines(3911, 3990));
+      moduleBody(
+        "src/runtime/sandbox-runtime.js",
+        "// Parse one V8 stack-frame line",
+      ),
+    ).toBe(
+      runtimeSection("sandbox-runtime.js", "// Parse one V8 stack-frame line"),
+    );
   });
-  test("code-sandbox.js matches runtime.js:4032-6053", () => {
-    // NOTE: executeCode / createSandbox (runtime.js:6062-6073) are extracted
-    // by Worker F into src/runtime/entry.js — intentionally not duplicated.
+  test("code-sandbox.js matches its runtime.js section", () => {
+    // NOTE: executeCode / createSandbox live in src/runtime/entry.js
+    // (Worker F's section) — intentionally not duplicated in code-sandbox.js.
     expect(moduleBody("src/runtime/code-sandbox.js", BANNER)).toBe(
-      runtimeLines(4032, 6053),
+      runtimeSection("code-sandbox.js", BANNER),
     );
   });
 });
@@ -231,7 +254,9 @@ describe("__parseStackLocationFn (module copy)", () => {
     // Realistic V8 form: the :line:column trailer sits inside the parens,
     // appended to the data: URL (inner colons are %-encoded per the impl).
     expect(
-      __parseStackLocationFn("    at foo (data:text/javascript;base64,QUJD:3:7)"),
+      __parseStackLocationFn(
+        "    at foo (data:text/javascript;base64,QUJD:3:7)",
+      ),
     ).toEqual({
       file: "data:text/javascript;base64,QUJD",
       line: 3,

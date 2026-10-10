@@ -36,6 +36,15 @@
 //   5. `export * from "./host-utils.js"` (entry.js) is dropped as redundant:
 //      host-utils.js is concatenated into the same scope with its own
 //      `export` statements, so its names are exported directly.
+//   6. Export stripping — the extraction added `export` to declarations the
+//      module tests import directly, but the bundle keeps the monolith's
+//      exact 22-name export surface (KEEP_EXPORTS): every other top-level
+//      `export` is removed at emit time. The declarations stay in the shared
+//      scope (no functional change); this keeps marker-extracted blocks
+//      `new Function`-able for the eight suites that eval them.
+//   7. The original `// EXECUTION CONTEXT MODULE` section banner is
+//      re-emitted right after the import-resolver section: tests use it as
+//      the extractBlock end marker for the ImportResolver class.
 //
 // Usage:
 //   node src/build-runtime.mjs [--out <path>] [--check]
@@ -94,6 +103,50 @@ const BARE_TO_ESMSH = {
 // declared by the concatenated modules in the shared scope. Derived from the
 // module list so every "./<module>.js" cross-import is covered.
 const INTRA_BUILD_SOURCES = new Set(MODULES.map((m) => `./${m}`));
+
+// The original runtime.js monolith's export surface (22 names; verified via
+// `git show <cutover>^:runtime.js | grep -c "^export "`). The extraction added
+// `export` to many more declarations so the 223 module tests can import the
+// modules directly — but the generated bundle must keep the monolith's exact
+// export surface: eight test suites extract code blocks from runtime.js by
+// section markers and eval them with `new Function`, which throws on `export`.
+// Non-listed exports are stripped at emit time (the declarations stay, so the
+// shared scope is unchanged — this is purely the bundle's export surface).
+const KEEP_EXPORTS = new Set([
+  "toNodeKeypress",
+  "builtinModules",
+  "transpileTypeScript",
+  "customAcorn",
+  "serializeVfs",
+  "deserializeVfs",
+  "rehydrateVfs",
+  "convertEsmToCjs",
+  "convertCjsToEsm",
+  "convertCjsToEsm_backup",
+  "replaceGlobalThisVar",
+  "transformImportsToLoadModule",
+  "SyntaxChecker",
+  "ImportResolver",
+  "__parseStackLocationFn",
+  "SandboxRuntime",
+  "CodeTransformer",
+  "CodeSandbox",
+  "executeCode",
+  "createSandbox",
+  "formatErrors",
+  "flattenFileTree",
+]);
+
+// Original-monolith section banner that one test suite uses as an extractBlock
+// end marker: sync_require_bare_builtins.test.js extracts the ImportResolver
+// class between "export class ImportResolver {" and "// EXECUTION CONTEXT
+// MODULE". In the monolith the banner headed the section that followed the
+// ImportResolver class; in the modular layout vfs-server.js sits between
+// import-resolver.js and execution-context.js, so the banner is re-emitted
+// here — immediately after the import-resolver section — to preserve the
+// extraction contract.
+const EXEC_CTX_BANNER_AFTER = "import-resolver.js";
+const EXEC_CTX_BANNER = "// EXECUTION CONTEXT MODULE";
 
 function fail(msg) {
   console.error(`build-runtime: FATAL: ${msg}`);
@@ -276,12 +329,33 @@ for (const { name, src, ast } of parsed) {
       !node.declaration &&
       !node.source
     ) {
-      // `export { a, b as c };` — re-export of locals/imports; keep in place.
-      for (const s of node.specifiers) {
+      // `export { a, b as c };` — re-export of locals/imports. Only names in
+      // KEEP_EXPORTS survive into the bundle; the rest are bundle-internal
+      // (the bindings stay declared in the shared scope, so intra-bundle
+      // references keep working).
+      const kept = node.specifiers.filter((s) =>
+        KEEP_EXPORTS.has(s.exported.name),
+      );
+      for (const s of kept) {
         if (allExportedNames.has(s.exported.name))
           fail(`duplicate export "${s.exported.name}" (${name})`);
         allExportedNames.add(s.exported.name);
       }
+      if (kept.length === 0) {
+        dropped.push(`${name}: bare export list — not in KEEP_EXPORTS`);
+        pos = node.end;
+        continue;
+      }
+      const list = kept
+        .map((s) =>
+          s.local.name === s.exported.name
+            ? s.local.name
+            : `${s.local.name} as ${s.exported.name}`,
+        )
+        .join(", ");
+      body += `export { ${list} };\n`;
+      pos = node.end;
+      continue;
     }
     if (node.type === "ExportNamedDeclaration" && node.declaration) {
       const d = node.declaration;
@@ -293,6 +367,18 @@ for (const { name, src, ast } of parsed) {
         if (allExportedNames.has(n)) fail(`duplicate export "${n}" (${name})`);
         allExportedNames.add(n);
       }
+      if (!names.some((n) => KEEP_EXPORTS.has(n))) {
+        // Not part of the monolith's export surface: emit the declaration
+        // WITHOUT the `export` keyword (skip exactly the `export` token;
+        // anything between it and the declaration — comments, whitespace —
+        // is preserved verbatim).
+        if (src.slice(node.start, node.start + 6) !== "export")
+          fail(`expected "export" keyword at node start (${name})`);
+        // Gap before `export` was already emitted at the top of the loop.
+        body += src.slice(node.start + 6, node.end);
+        pos = node.end;
+        continue;
+      }
     }
 
     emit(node.start, node.end);
@@ -300,6 +386,7 @@ for (const { name, src, ast } of parsed) {
   }
   emit(pos, src.length);
   body += "\n";
+  if (name === EXEC_CTX_BANNER_AFTER) body += `${EXEC_CTX_BANNER}\n`;
 }
 
 function describeNode(node) {
@@ -382,6 +469,10 @@ const header = `// runtime.js — GENERATED FILE. DO NOT EDIT BY HAND.
 //   - transpile.js dual-lane acorn dropped (unified static esm.sh import)
 //   - export * from ./host-utils.js dropped as redundant (host-utils.js is
 //     bundled in the same scope with its own exports)
+//   - export stripped except the monolith's 22-name export surface
+//     (KEEP_EXPORTS) so marker-extracted blocks stay new-Function-able
+//   - "// EXECUTION CONTEXT MODULE" re-emitted after the import-resolver
+//     section (extractBlock end marker used by tests)
 `;
 
 const output = `${header}\n${importBlock}\n${body}`;
