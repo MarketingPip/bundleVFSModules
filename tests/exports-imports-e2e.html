@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>exports/imports resolution E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Browser E2E for the VFS module resolver's package.json `exports`/`imports`
+// fields (Worker 2 seam: src/module.js, shipped to the sandbox as
+// dist/module.js).
+//
+// Real CodeSandbox consumption path in headed Firefox: seeds a VFS with an
+// `imports`-scoped app and an `exports`-encapsulated package, then require()s
+// from inside the sandbox:
+//   - require('#utils')            -> resolves via the nearest `imports` scope
+//   - require('locked-pkg')        -> resolves via `exports` "." main entry
+//   - require('locked-pkg/secret') -> MUST throw ERR_PACKAGE_PATH_NOT_EXPORTED
+//     even though secret.js exists on disk (encapsulation).
+// Verdict via document.title ("E2E-PASS" / "E2E-FAIL") and POST /report.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+const report = (v) => {
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+try {
+  const { CodeSandbox } = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof CodeSandbox === "function");
+
+  const seed = {
+    "/package.json": JSON.stringify({
+      name: "e2e-app",
+      imports: { "#utils": "./src/utils.js" },
+    }),
+    "/src/utils.js": "module.exports = 'utils-ok';",
+    "/node_modules/locked-pkg/package.json": JSON.stringify({
+      name: "locked-pkg",
+      exports: { ".": "./index.js" },
+    }),
+    "/node_modules/locked-pkg/index.js": "module.exports = 'locked-ok';",
+    "/node_modules/locked-pkg/secret.js": "module.exports = 'secret-must-not-leak';",
+  };
+
+  const sb = new CodeSandbox({ fs: seed, fileName: "entry.js", timeout: 120000 });
+  // Note: bare require() of a non-builtin VFS file has no sync path in the
+  // sandbox (ERR_REQUIRE_ASYNC_MODULE by design) — the sync VFS resolver
+  // (src/module.js, this seam) is exercised via require.resolve(), which
+  // runs Module._resolveFilename synchronously in the sandbox.
+  const r = await sb.execute([
+    "const { createRequire } = require('node:module');",
+    "const rq = createRequire('/entry.js');",
+    "const out = {};",
+    "out.hashImport = rq.resolve('#utils');",
+    "out.exportsMain = rq.resolve('locked-pkg');",
+    "try { rq.resolve('locked-pkg/secret.js'); out.encapCode = 'NO_THROW'; }",
+    "catch (e) { out.encapCode = e && e.code; }",
+    "console.log('E2E_JSON:' + JSON.stringify(out));",
+  ].join("\n"));
+
+  const logs = (r.logs || [])
+    .map((l) => {
+      const a = l && l.args;
+      if (Array.isArray(a)) return a.map(String).join(" ");
+      if (a !== undefined) return String(a);
+      return String(l);
+    })
+    .join("\n");
+  log("success=" + r.success);
+  log("logs:\n" + logs);
+  log("error=" + JSON.stringify(r.error || null).slice(0, 1500));
+  log("stack=" + String(r.stack || "").slice(0, 2000));
+  const m = logs.match(/E2E_JSON:(\{.*\})/);
+  check("sandbox executed and logged E2E_JSON", r.success === true && !!m, JSON.stringify({ success: r.success }));
+  if (m) {
+    const o = JSON.parse(m[1]);
+    check("#-import resolves via nearest imports scope", o.hashImport === "/src/utils.js", JSON.stringify(o));
+    check("exports main entry resolves", o.exportsMain === "/node_modules/locked-pkg/index.js", JSON.stringify(o));
+    check(
+      "unexported subpath is encapsulated (ERR_PACKAGE_PATH_NOT_EXPORTED)",
+      o.encapCode === "ERR_PACKAGE_PATH_NOT_EXPORTED",
+      JSON.stringify(o),
+    );
+  }
+
+  const failed = results.filter((x) => x.startsWith("FAIL"));
+  document.title = failed.length === 0 ? "E2E-PASS" : "E2E-FAIL";
+  for (const x of results) log(x);
+  log("RESULT: " + (results.length - failed.length) + "/" + results.length + " passed");
+  report({ ok: failed.length === 0, results });
+} catch (e) {
+  document.title = "E2E-FAIL";
+  log("HARNESS ERROR name=" + (e && e.name) + " message=" + (e && e.message));
+  log("HARNESS STACK: " + (e && e.stack || e));
+  report({ ok: false, error: String((e && e.stack) || e) });
+}
+</script>
+</body>
+</html>

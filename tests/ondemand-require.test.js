@@ -587,11 +587,14 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .filter((l) => l.startsWith("+import "));
     // Item 2 cutover: generate() imports the built sandbox template and the
     // log-token table. These two are the only expected additions.
-    expect(addedImports.sort()).toEqual(
-      [
-        '+import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";',
-        '+import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";',
-      ].sort(),
-    );
+    // On post-Item-2 branches (diffBase already has them), zero additions is correct.
+    const expected = [
+      '+import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";',
+      '+import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";',
+    ].sort();
+    const actual = addedImports.sort();
+    // Allow either: the two Item 2 imports (if branch includes the cutover)
+    // or zero (if branch is based on post-cutover main)
+    expect([[], expected]).toContainEqual(actual);
   });
 });
