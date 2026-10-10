@@ -350,10 +350,9 @@ export const SYSROOT_MOUNT_PREFIX = "/.sysroot";
  * Normalize a toolchain's sysroot to a flat file map
  * `{ "/usr/include/stdio.h": contents }`.
  *
- * File-map sysroots are supported now. A string (VFS path) sysroot needs
- * the read-only lazy mount seam (roadmap follow-up — see docs/TOOLCHAIN.md
- * § "Sysroot mounting" for the interface it must satisfy) and throws a
- * clear ToolchainError until that seam lands. No silent partial mounts.
+ * File-map sysroots only. A string (VFS path) sysroot has no file map —
+ * use mountSysroot(name) for a read-only lazy mount instead (docs/TOOLCHAIN.md
+ * §4). No silent partial mounts.
  */
 export function resolveSysrootFileMap(tc) {
   validateToolchain(tc);
@@ -362,9 +361,8 @@ export function resolveSysrootFileMap(tc) {
   if (typeof sysroot === "string") {
     throw new ToolchainError(
       tc.name,
-      `string sysroot '${sysroot}' requires the read-only lazy mount seam ` +
-        `(roadmap follow-up); provide sysroot as a file map ` +
-        `{ "/path": contents } for now`,
+      `string sysroot '${sysroot}' has no file map; use mountSysroot('${tc.name}') ` +
+        `for a read-only lazy mount (docs/TOOLCHAIN.md §4)`,
     );
   }
   const out = {};
@@ -378,11 +376,11 @@ export function resolveSysrootFileMap(tc) {
 const mountedSysroots = new WeakMap();
 
 /**
- * Merge a toolchain's sysroot file map into a VFS seed object (e.g.
+ * Merge a toolchain's sysroot into a VFS seed object (e.g.
  * `sandbox.config.fs`) under `/.sysroot/<name>/...`. Idempotent per
- * (seed, toolchain) pair. The mount is READ-ONLY BY CONVENTION: hosts
- * must not write under the prefix, and the lazy-mount follow-up seam
- * will enforce it. Returns the mount prefix.
+ * (seed, toolchain) pair. File-map sysroots are copied; string sysroots
+ * register a read-only lazy mount instead (mountSysroot(name) serves files
+ * on demand — nothing is copied). Returns the mount prefix.
  */
 export function mountSysrootIntoSeed(tc, seed) {
   validateToolchain(tc);
@@ -396,9 +394,16 @@ export function mountSysrootIntoSeed(tc, seed) {
     mountedSysroots.set(seed, mounted);
   }
   if (mounted.has(tc.name)) return prefix;
-  const files = resolveSysrootFileMap(tc);
-  for (const [p, contents] of Object.entries(files)) {
-    seed[`${prefix}${p}`] = contents;
+  if (typeof tc.sysroot === "string") {
+    // Lazy mount: nothing is copied into the seed. The toolchain (or host)
+    // reads sysroot files on demand via mountSysroot(name) — read-only, no
+    // full copy. The prefix is still returned so compile() gets a stable
+    // sysrootMount path.
+  } else {
+    const files = resolveSysrootFileMap(tc);
+    for (const [p, contents] of Object.entries(files)) {
+      seed[`${prefix}${p}`] = contents;
+    }
   }
   mounted.add(tc.name);
   return prefix;
@@ -408,6 +413,139 @@ export function mountSysrootIntoSeed(tc, seed) {
 export function isSysrootMounted(name, seed) {
   const mounted = mountedSysroots.get(seed);
   return !!mounted && mounted.has(name);
+}
+
+// ---------------------------------------------------------------------------
+// Read-only lazy mounts (docs/TOOLCHAIN.md §4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a sysroot-absolute path to its segments. Returns null when the
+ * path would escape the sysroot root (".." above "/") — callers treat that
+ * as a miss, so a malicious or buggy path can never reach the host FS.
+ */
+function sysrootSegments(absPath) {
+  const parts = [];
+  for (const seg of String(absPath).split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (parts.length === 0) return null;
+      parts.pop();
+    } else {
+      parts.push(seg);
+    }
+  }
+  return parts;
+}
+
+/** string|Uint8Array -> Uint8Array; null/undefined/other -> null. */
+function bytesOf(value) {
+  if (value == null) return null;
+  if (value instanceof Uint8Array) return value;
+  if (typeof value === "string") return new TextEncoder().encode(value);
+  return null;
+}
+
+/**
+ * Build a read-only lazy mount for a registered toolchain's sysroot
+ * (docs/TOOLCHAIN.md §4).
+ *
+ * ```js
+ * const mount = await mountSysroot("wasi-clang");
+ * mount.readonly; // true, enforced via Object.freeze
+ * await mount.readFile("/usr/include/stdio.h"); // Uint8Array | null
+ * ```
+ *
+ * `readFile(absPath)` takes a sysroot-absolute path ("/usr/include/stdio.h")
+ * and resolves it lazily — nothing is pre-copied:
+ * - file-map sysroot: served from the normalized map;
+ * - string sysroot: served via the toolchain's `readFile(absPath)` accessor
+ *   with the sysroot path prefixed (requires the accessor — otherwise a
+ *   clear ToolchainError, never a silent empty mount);
+ * - absent sysroot: every read misses (null).
+ *
+ * `stat`/`listDir` are provided only when the file set is enumerable
+ * (file-map sysroots). A string sysroot's host cannot be enumerated, so the
+ * mount omits them rather than faking answers (AGENTS.md rule 7).
+ *
+ * Read-only is enforced, not documented: the mount exposes no write path
+ * and is frozen so hosts cannot attach one.
+ *
+ * @param {string} name — registered toolchain name
+ * @returns {Promise<SysrootMount>} `{ readonly: true, readFile, stat?, listDir? }`
+ */
+export async function mountSysroot(name) {
+  const tc = requireToolchain(name);
+  const sysroot = tc.sysroot;
+
+  let readFile;
+  let stat;
+  let listDir;
+
+  if (sysroot == null) {
+    readFile = async () => null;
+  } else if (typeof sysroot === "string") {
+    if (typeof tc.readFile !== "function") {
+      throw new ToolchainError(
+        tc.name,
+        `string sysroot '${sysroot}' needs a 'readFile(absPath)' accessor on ` +
+          `the toolchain to serve lazy reads (or provide sysroot as a file map)`,
+      );
+    }
+    const hostRoot = sysroot.replace(/\/+$/, "") || "/";
+    readFile = async (absPath) => {
+      const segs = sysrootSegments(absPath);
+      if (segs === null) return null;
+      let data;
+      try {
+        data = await tc.readFile(`${hostRoot}/${segs.join("/")}`);
+      } catch {
+        return null; // accessor failure is a miss, not a mount failure
+      }
+      return bytesOf(data);
+    };
+    // stat/listDir omitted: the host side cannot be enumerated honestly.
+  } else {
+    const map = resolveSysrootFileMap(tc);
+    const keyOf = (segs) => `/${segs.join("/")}`;
+    readFile = async (absPath) => {
+      const segs = sysrootSegments(absPath);
+      if (segs === null) return null;
+      return bytesOf(map[keyOf(segs)]);
+    };
+    stat = async (absPath) => {
+      const segs = sysrootSegments(absPath);
+      if (segs === null) return null;
+      const key = keyOf(segs);
+      if (map[key] != null) {
+        return { size: bytesOf(map[key]).length, isDirectory: false };
+      }
+      if (segs.length === 0) return { size: 0, isDirectory: true };
+      const prefix = `${key}/`;
+      const isDir = Object.keys(map).some((k) => k.startsWith(prefix));
+      return isDir ? { size: 0, isDirectory: true } : null;
+    };
+    listDir = async (absPath) => {
+      const segs = sysrootSegments(absPath);
+      if (segs === null) return null;
+      const key = keyOf(segs);
+      const prefix = key === "/" ? "/" : `${key}/`;
+      const names = new Set();
+      for (const k of Object.keys(map)) {
+        if (k.startsWith(prefix)) {
+          const rest = k.slice(prefix.length).split("/")[0];
+          if (rest) names.add(rest);
+        }
+      }
+      if (names.size === 0 && segs.length > 0) return null;
+      return [...names].sort();
+    };
+  }
+
+  const mount = { readonly: true, readFile };
+  if (stat) mount.stat = stat;
+  if (listDir) mount.listDir = listDir;
+  return Object.freeze(mount);
 }
 
 // ---------------------------------------------------------------------------

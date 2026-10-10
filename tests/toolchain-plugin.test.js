@@ -264,10 +264,10 @@ describe("sysroot", () => {
     expect(resolveSysrootFileMap(good())).toEqual({});
   });
 
-  test("string sysroot throws a clear follow-up-seam error", () => {
+  test("string sysroot has no file map: resolveSysrootFileMap points at mountSysroot", () => {
     const tc = { ...good(), sysroot: "/opt/sysroot" };
     expect(() => resolveSysrootFileMap(tc)).toThrow(
-      /requires the read-only lazy mount seam/,
+      /has no file map; use mountSysroot\('t'\)/,
     );
   });
 
