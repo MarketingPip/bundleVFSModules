@@ -1862,7 +1862,9 @@ export function transformImportsToLoadModule(
         s.overwrite(
           node.start,
           node.end,
-          kept.length === 0 ? marker : `export { ${kept.join(", ")} };\n${marker}`,
+          kept.length === 0
+            ? marker
+            : `export { ${kept.join(", ")} };\n${marker}`,
         );
         return;
       }
@@ -1970,8 +1972,7 @@ export function transformImportsToLoadModule(
       newLex = node;
       scopeSet(node);
       if (node.param)
-        for (const nm of namesOfPattern(node.param, []))
-          scopeSet(node).add(nm);
+        for (const nm of namesOfPattern(node.param, [])) scopeSet(node).add(nm);
     } else if (
       t === "ForStatement" ||
       t === "ForInStatement" ||
@@ -2083,11 +2084,7 @@ export function transformImportsToLoadModule(
       !p.shorthand
     )
       return true;
-    if (
-      p.type === "PropertyDefinition" &&
-      p.key === node &&
-      !p.computed
-    )
+    if (p.type === "PropertyDefinition" && p.key === node && !p.computed)
       return true;
     if (
       (p.type === "MemberExpression" ||
@@ -2191,10 +2188,9 @@ export function transformImportsToLoadModule(
   const bodyPreambleParts = [];
   for (const [modulePath, v] of liftedModules.entries()) {
     const type = moduleImportType.get(modulePath) || "import";
-    const line =
-      `const ${v} = await globalThis._RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
-        modulePath,
-      )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`;
+    const line = `const ${v} = await globalThis._RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
+      modulePath,
+    )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`;
     if (type === "import") importPreambleParts.push(line);
     else bodyPreambleParts.push(line);
   }
@@ -3974,10 +3970,7 @@ export class SandboxRuntime {
       normalizeBuiltinSpecifier.toString(),
     );
     for (const [suffix, stmt] of Object.entries(LOG_TOKENS)) {
-      sub(
-        `%%LOG_${suffix}%%`,
-        config.logNetworkRequests ? stmt : "",
-      );
+      sub(`%%LOG_${suffix}%%`, config.logNetworkRequests ? stmt : "");
     }
     sub("%%IMPORTS%%", config.imports?.join("\n") || "");
     // USER_CODE last: its value could theoretically contain %%TOKEN%%-like text.
@@ -5970,6 +5963,68 @@ function _parseKey(s) {
       this.config.fs[p] = data;
     }
     return result;
+  }
+
+  /**
+   * Mount a registered toolchain's sysroot into the sandbox VFS seed.
+   *
+   * Merges the sysroot file map under `/.sysroot/<name>/...` (idempotent).
+   * Read-only by convention — hosts must not write under the prefix; the
+   * read-only lazy mount follow-up seam will enforce it. String (VFS path)
+   * sysroots throw until that seam lands (see src/toolchain.js).
+   *
+   * @param {string} name — toolchain name
+   * @returns {Promise<string>} the mount prefix
+   */
+  async mountToolchainSysroot(name) {
+    const { requireToolchain, mountSysrootIntoSeed } =
+      await import("./src/toolchain.js");
+    const tc = requireToolchain(name);
+    this.config.fs = this.config.fs || {};
+    return mountSysrootIntoSeed(tc, this.config.fs);
+  }
+
+  /**
+   * Compile sources with a registered toolchain plugin (roadmap §1).
+   *
+   * Mounts the toolchain's sysroot into the sandbox VFS, then calls the
+   * toolchain's `compile(files, opts)` per the docs/TOOLCHAIN.md contract.
+   * The host page owns the toolchain — core never ships one.
+   *
+   * @param {string} name — toolchain name (see registerToolchain)
+   * @param {Record<string,string|Uint8Array>} files — `{ "main.c": "..." }`
+   * @param {object} [opts] — compile opts (cflags, ldflags, target, entry…)
+   * @returns {Promise<{bytes:Uint8Array, warnings:Array, errors:Array,
+   *   stdout:string, stderr:string, elapsedMs:number|undefined}>}
+   *
+   * @example
+   * const { bytes } = await sandbox.compileToolchain("wasi-clang",
+   *   { "add.c": "int add(int a,int b){return a+b;}" }, { cflags: ["-O2"] });
+   * await sandbox.runWasi(bytes, { args: ["add.wasm"] });
+   */
+  async compileToolchain(name, files, opts = {}) {
+    const { requireToolchain, compileWithToolchain, mountSysrootIntoSeed } =
+      await import("./src/toolchain.js");
+    const tc = requireToolchain(name);
+    this.config.fs = this.config.fs || {};
+    const sysrootMount = mountSysrootIntoSeed(tc, this.config.fs);
+    return compileWithToolchain(tc, files, { ...opts, sysrootMount });
+  }
+
+  /**
+   * Compile with a registered toolchain and immediately run the result
+   * through runWasi (roadmap §1: compile sources → wasm bytes → run).
+   *
+   * `opts.args` / `opts.env` / `opts.preopenDir` go to runWasi; every other
+   * opt goes to the toolchain's compile().
+   *
+   * @returns {Promise<{exitCode:number, stdout:string[], stderr:string[],
+   *   files:Record<string,Uint8Array>}>} — the runWasi result
+   */
+  async runToolchain(name, files, opts = {}) {
+    const { args, env, preopenDir, ...compileOpts } = opts;
+    const { bytes } = await this.compileToolchain(name, files, compileOpts);
+    return this.runWasi(bytes, { args, env, preopenDir });
   }
 
   /**
