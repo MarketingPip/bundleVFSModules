@@ -250,6 +250,47 @@ function buildFileReaderWasm() {
   return new Uint8Array(bytes);
 }
 
+/**
+ * Minimal WASI module whose _start calls proc_exit(code) immediately.
+ * Proves returnOnExit semantics: the exit code flows back through
+ * start() instead of throwing.
+ */
+function buildExitWasm(code) {
+  const bytes = [];
+  const push = (...xs) => bytes.push(...xs);
+  push(0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00); // magic+version
+  // types: 0 = (i32)->(), 1 = ()->()
+  const t0 = [0x60, ...uleb(1), 0x7f, ...uleb(0)];
+  const t1 = [0x60, ...uleb(0), ...uleb(0)];
+  push(0x01, ...uleb(vec([t0, t1]).length), ...vec([t0, t1]));
+  // import section: proc_exit : type 0
+  const imp = [
+    ...str("wasi_snapshot_preview1"),
+    ...str("proc_exit"),
+    0x00,
+    ...uleb(0),
+  ];
+  const imports = vec([imp]);
+  push(0x02, ...uleb(imports.length), ...imports);
+  // function section: func 1 (=_start) : type 1
+  push(0x03, ...uleb(2), ...vec([[0x01]]));
+  // memory section: min 1 page (harmless; keeps engines happy)
+  push(0x05, ...uleb(3), ...vec([[...uleb(0), ...uleb(1)]]));
+  // export section: memory -> mem 0, _start -> func 1
+  const exps = vec([
+    [...str("memory"), 0x02, ...uleb(0)],
+    [...str("_start"), 0x00, ...uleb(1)],
+  ]);
+  push(0x07, ...uleb(exps.length), ...exps);
+  // code section: _start = { i32.const code; call proc_exit }
+  const body = [...i32c(code), ...call(0), 0x0b];
+  const funcBody = [...uleb(0), ...body];
+  const func = [...uleb(funcBody.length), ...funcBody];
+  const codeSec = vec([func]);
+  push(0x0a, ...uleb(codeSec.length), ...codeSec);
+  return new Uint8Array(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -319,5 +360,26 @@ describe("runWasi — first-class WASI host API", () => {
     const r = await runWasi(bytes);
     expect(r.exitCode).toBe(0);
     expect(r.stdout.join("\n")).toContain("clang-wasi-hello");
+  }, 30000);
+
+  test("non-zero exit code flows back via returnOnExit", async () => {
+    const mod = buildExitWasm(42);
+    expect(WebAssembly.validate(mod)).toBe(true);
+    const r = await runWasi(mod);
+    expect(r.exitCode).toBe(42);
+    expect(r.stdout).toEqual([]);
+    expect(r.stderr).toEqual([]);
+  }, 30000);
+
+  test("opts validation rejects bad args/env/preopenDir", async () => {
+    const bytes = new Uint8Array(fs.readFileSync(FIXTURE));
+    await expect(runWasi(bytes, { args: "nope" })).rejects.toThrow(/args/);
+    await expect(runWasi(bytes, { args: [1] })).rejects.toThrow(/args/);
+    await expect(runWasi(bytes, { env: "nope" })).rejects.toThrow(/env/);
+    await expect(runWasi(bytes, { env: null })).rejects.toThrow(/env/);
+    await expect(runWasi(bytes, { files: "nope" })).rejects.toThrow(/files/);
+    await expect(runWasi(bytes, { preopenDir: "relative" })).rejects.toThrow(
+      /preopenDir/,
+    );
   }, 30000);
 });
