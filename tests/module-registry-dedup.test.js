@@ -31,6 +31,17 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 function extractBalanced(src, openIdx, openCh, closeCh) {
   let depth = 0;
@@ -56,9 +67,9 @@ function extractFunction(src, marker) {
 
 // NOTE: runtime.js embeds the sandbox template with escaped backticks (\`).
 // The helpers below use no backticks, so they extract verbatim.
-const KEY_SRC = extractFunction(RUNTIME_SRC, "function canonicalRegistryKey(");
+const KEY_SRC = extractFunction(TEMPLATE_SRC, "function canonicalRegistryKey(");
 const DEDUP_SRC = extractFunction(
-  RUNTIME_SRC,
+  TEMPLATE_SRC,
   "function canonicalizeRegistryEntry(",
 );
 
@@ -224,9 +235,9 @@ describe("loadModule stamps sourceURL with the resolved path", () => {
   test("sourceURL uses buildFileName (resolved), not the raw specifier", () => {
     // The data: URL must be identical for identical files so the browser
     // module map dedupes as a second line of defense.
-    const idx = RUNTIME_SRC.indexOf("//# sourceURL=");
+    const idx = TEMPLATE_SRC.indexOf("//# sourceURL=");
     expect(idx).not.toBe(-1);
-    const line = RUNTIME_SRC.slice(idx, RUNTIME_SRC.indexOf("\n", idx));
+    const line = TEMPLATE_SRC.slice(idx, TEMPLATE_SRC.indexOf("\n", idx));
     expect(line).toContain("buildFileName");
     expect(line).not.toContain("${modulePath}");
   });

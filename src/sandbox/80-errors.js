@@ -2,6 +2,7 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
+
 // Enhanced error handling with stack traces
 window.onerror = function(message, source, lineno, colno, error) {
   const errorMsg = error ? (error.stack || error.message || message) : message;
@@ -11,7 +12,7 @@ window.onerror = function(message, source, lineno, colno, error) {
   const frames = [];
   if (error?.stack) {
     for (const line of String(error.stack).split('\n')) {
-      const loc = __parseStackLocation(line);
+      const loc = __parseStackLocationFn(line);
       if (loc) frames.push(loc);
     }
   }
@@ -49,7 +50,7 @@ window.onunhandledrejection = function (event) {
   const frames = [];
   const stackLines = stack.split('\n');
   for (let i = 1; i < stackLines.length; i++) {
-    const parsed = __parseStackLocation(stackLines[i]);
+    const parsed = __parseStackLocationFn(stackLines[i]);
     if (parsed) {
       frames.push(parsed);
       if (!loc) loc = parsed;
@@ -85,18 +86,29 @@ await import(__initSandboxState);
 }
 
 
-globalThis.__INTEROP_VAR__.expose('__stdin__', (args) => {
-    const s = process?.stdin;
-  const hasListeners = s && (s.listenerCount('data') > 0 || s.listenerCount('keypress') > 0); 
  
-  if (s && hasListeners && !s.isPaused()) {
-    return s.pushData(args);
+
+
+ 
+
+
+  try {
+  await initSandboxState();
+
+
+  await globalThis._RUNTIME__UUID___.loadModule("fs");
+
+  // Virtual cookie jar (RFC 6265) for emulated HTTP servers. The IIFE bundle
+  // is inlined (see COOKIE_JAR_IIFE) so no network fetch is needed. The jar
+  // is keyed per sandbox instance + server port.
+  try {
+    "__COOKIE_JAR_IIFE__"
+    globalThis._RUNTIME__UUID___.__cookieJar =
+      new globalThis.__cookieJarLib.VirtualCookieJar();
+    globalThis._RUNTIME__UUID___.__mergeCookieHeaders =
+      globalThis.__cookieJarLib.mergeCookieHeaders;
+  } catch (__jarInitErr) {
+    console.warn("[cookieJar] init failed:", __jarInitErr && __jarInitErr.message);
   }
   
-  
-  // process.stdin.pushData(args)
-   if(process && process.stdin && process.stdin.listenerCount('data') != 0 && process.stdin.isPaused() == false){
-    return process.stdin.pushData(args);
-   }
-  
-  
+ window.parent.postMessage({ type: 'sandbox_ready' }, '*'); 

@@ -7,22 +7,24 @@ import * as acorn from "acorn";
 // Regression: `SyntaxError: RUNTIME ERROR: Unexpected token (883:26)` broke
 // EVERY sandbox execute() on main after 18f71c4b.
 //
-// Root cause: vfsPackagePathNotExported / vfsPackageImportNotDefined live
-// INSIDE SandboxRuntime.generate()'s template literal in runtime.js, so their
-// source text is template-cooked before it becomes the sandbox wrapper. A
-// single `\"` in the template cooks to a bare `"` in the generated wrapper,
-// terminating the double-quoted error-message string early -> the wrapper
-// itself fails to parse (883:26), and execute() rejects with the
-// "RUNTIME ERROR"-prefixed SyntaxError.
+// Root cause (historical): vfsPackagePathNotExported / vfsPackageImportNotDefined
+// lived INSIDE SandboxRuntime.generate()'s template literal in runtime.js, so
+// their source text was template-cooked. A single `\"` cooked to a bare `"`,
+// terminating the string early -> the wrapper failed to parse.
 //
-// This test cooks the exact shipped template text the same way generate()
-// does and acorn-parses the result, pinning the defect class (template-escape
-// loss in the wrapper) without needing a browser.
+// The template now lives in src/sandbox-template.js (JSON-encoded, built from
+// src/sandbox/*.js). This test acorn-parses the shipped template regions,
+// pinning the defect class (escape loss in the wrapper) without needing a browser.
 
-const RUNTIME_PATH = path.join(
+const TEMPLATE_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
-  "runtime.js",
+  "src",
+  "sandbox-template.js",
+);
+// The decoded template value (actual JS, no cooking needed).
+const TEMPLATE_SRC = JSON.parse(
+  fs.readFileSync(TEMPLATE_PATH, "utf8").match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
 );
 const START_MARKER =
   "function vfsPackagePathNotExported(packageName, subpath, packageJsonPath) {";
@@ -37,22 +39,21 @@ const END_MARKER_2 = "function resolveSyncRequest(request, parentPath, vfs) {";
 function extractTemplateRegion(src) {
   const start = src.indexOf(START_MARKER);
   const end = src.indexOf(END_MARKER);
-  if (start === -1) throw new Error("start marker not found in runtime.js");
-  if (end === -1) throw new Error("end marker not found in runtime.js");
-  if (!(start < end)) throw new Error("markers out of order in runtime.js");
+  if (start === -1) throw new Error("start marker not found in template");
+  if (end === -1) throw new Error("end marker not found in template");
+  if (!(start < end)) throw new Error("markers out of order in template");
   return src.slice(start, end);
 }
 
 function cookLikeGenerateTemplate(region) {
-  // The region must contain no backticks or ${...}: then cooking is pure
-  // escape processing, byte-identical to what generate()'s template does.
-  expect(region).not.toMatch(/[`$]/);
-  return new Function("return `" + region + "`;")();
+  // The template is now JSON-encoded (not a template literal), so no cooking
+  // is needed: the template value IS the final JS. Return as-is.
+  return region;
 }
 
 describe("vite7 wrapper template: vfs resolver escape integrity", () => {
   test("template-cooked vfs resolvers parse as valid JS", () => {
-    const src = fs.readFileSync(RUNTIME_PATH, "utf8");
+    const src = TEMPLATE_SRC;
     for (const [startMarker, endMarker] of [
       [START_MARKER, END_MARKER],
       [START_MARKER_2, END_MARKER_2],
@@ -74,7 +75,7 @@ describe("vite7 wrapper template: vfs resolver escape integrity", () => {
   });
 
   test("intended escaped quotes survive template cooking", () => {
-    const src = fs.readFileSync(RUNTIME_PATH, "utf8");
+    const src = TEMPLATE_SRC;
     const cooked = cookLikeGenerateTemplate(extractTemplateRegion(src));
     // The generated wrapper must contain \" (backslash-quote) inside the
     // double-quoted message strings — a bare " would terminate the string.
@@ -85,7 +86,7 @@ describe("vite7 wrapper template: vfs resolver escape integrity", () => {
   });
 
   test("no backslash-dependent regex literals in template text", () => {
-    const src = fs.readFileSync(RUNTIME_PATH, "utf8");
+    const src = TEMPLATE_SRC;
     const start = src.indexOf(START_MARKER_2);
     const end = src.indexOf(END_MARKER_2);
     const cooked = cookLikeGenerateTemplate(src.slice(start, end));

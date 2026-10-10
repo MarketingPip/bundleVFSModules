@@ -13,6 +13,13 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          # The structural guard tests diff against origin/main; the default
+          # checkout only fetches the PR branch. The "Commit generated file"
+          # step pushes back to the PR branch, so for PRs we need the branch
+          # ref (not the detached merge commit).
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -30,10 +37,19 @@ jobs:
           npm install  als-browser magic-string acorn-walk acorn @noble/hashes @noble/ciphers @noble/curves node-forge node-fetch jest @bjorn3/browser_wasi_shim web-streams-polyfill brotli pako browser-stdout easy-table timers-browserify path-browserify string_decoder setimmediate punycode serialize-javascript browserify-zlib constants-browserify terser assert vm-browserify querystring-browser http-browserify base32-encode dohjs dns-packet stream-browserify https-browserify crypto-browserify stream events
 
       - name: Run Tests
-        run: npm test
+        # Serial: parallel Jest workers are flaky in CI (resource contention;
+        # verified locally: parallel runs fail nondeterministically on main
+        # too, serial --runInBand is green). Deterministic CI beats fast CI.
+        run: NODE_OPTIONS=--experimental-vm-modules npx jest --runInBand
 
       - name: Build VFS
         run: node src/build-vfs.mjs
+
+      - name: Check sandbox template is fresh
+        # The sandbox template (src/sandbox-template.js) is built from
+        # src/sandbox/*.js via src/build-sandbox.mjs. If the fragments change
+        # without rebuilding, the runtime would use a stale template.
+        run: node src/build-sandbox.mjs --check
 
       - name: Commit generated file
         run: |
@@ -53,6 +69,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v5

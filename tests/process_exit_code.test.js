@@ -30,6 +30,17 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 // Extract a brace-balanced block starting at the opening brace index.
 function balanced(src, openIdx) {
@@ -73,10 +84,10 @@ function balanced(src, openIdx) {
 // The real sandbox-side exit: `async exit(code = 0) { ... }` inside rawMethods.
 function sandboxExitFn() {
   const anchor = "async exit(code = 0) {";
-  const idx = RUNTIME_SRC.indexOf(anchor);
+  const idx = TEMPLATE_SRC.indexOf(anchor);
   if (idx === -1)
-    throw new Error("sandbox exit() not found in runtime.js (moved?)");
-  return balanced(RUNTIME_SRC, idx + anchor.length - 1);
+    throw new Error("sandbox exit() not found in template (moved?)");
+  return balanced(TEMPLATE_SRC, idx + anchor.length - 1);
 }
 
 // The real host-side 'kill' handler block.

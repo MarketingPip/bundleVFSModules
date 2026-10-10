@@ -23,24 +23,32 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 function loadResolver() {
-  const start = RUNTIME_SRC.indexOf(
+  const start = TEMPLATE_SRC.indexOf(
     "// --- VFS existence probing for the sync resolver",
   );
-  const end = RUNTIME_SRC.indexOf("function createSyncRequire(");
-  const fnSrc = RUNTIME_SRC.slice(start, end).replace(
-    /\$\{config\.uuid\}/g,
-    "testuuid",
-  );
+  const end = TEMPLATE_SRC.indexOf("function createSyncRequire(");
+  const fnSrc = TEMPLATE_SRC.slice(start, end).replace(/%%UUID%%/g, "testuuid");
   const factory = new Function(`${fnSrc}; return resolveSyncRequest;`);
   // unflattenUserFiles is defined just before the helpers block; slice to
   // the block's opening comment.
-  const uStart = RUNTIME_SRC.indexOf("function unflattenUserFiles(flatObj)");
-  const uEnd = RUNTIME_SRC.indexOf(
+  const uStart = TEMPLATE_SRC.indexOf("function unflattenUserFiles(flatObj)");
+  const uEnd = TEMPLATE_SRC.indexOf(
     "// --- VFS existence probing for the sync resolver",
   );
-  const uSrc = RUNTIME_SRC.slice(uStart, uEnd);
+  const uSrc = TEMPLATE_SRC.slice(uStart, uEnd).replace(/%%UUID%%/g, "testuuid");
   const uFactory = new Function(`${uSrc}; return unflattenUserFiles;`);
   const resolveSyncRequest = factory();
   return { resolveSyncRequest, unflattenUserFiles: uFactory() };
@@ -60,12 +68,12 @@ const VFS = unflattenUserFiles({
 describe("require.resolve() VFS resolution", () => {
   test("resolveSyncRequest function exists and is used", () => {
     // The resolution logic should be extracted into a shared function.
-    expect(RUNTIME_SRC).toContain("function resolveSyncRequest(");
+    expect(TEMPLATE_SRC).toContain("function resolveSyncRequest(");
     // syncRequire.resolve should use it, not be an identity stub.
-    expect(RUNTIME_SRC).not.toContain(
+    expect(TEMPLATE_SRC).not.toContain(
       "syncRequire.resolve = (request) => request;",
     );
-    expect(RUNTIME_SRC).toContain("syncRequire.resolve = (request) => {");
+    expect(TEMPLATE_SRC).toContain("syncRequire.resolve = (request) => {");
   });
 
   test("resolveSyncRequest handles relative paths", () => {

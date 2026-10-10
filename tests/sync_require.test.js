@@ -33,6 +33,17 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 function functionEnd(src, start) {
   // start: index of "function name". Returns the index just past the
@@ -122,20 +133,20 @@ function loadTransform() {
 // createSyncRequire's catch re-wrapped as ERR_MODULE_NOT_FOUND.
 const TEST_UUID = "testuuid";
 function loadSyncRequireHelpers() {
-  const blockStart = RUNTIME_SRC.indexOf(
+  const blockStart = TEMPLATE_SRC.indexOf(
     "// Read a CJS module's source for the sync require path",
   );
   if (blockStart === -1)
     throw new Error("sync-require template block not found");
-  const createStart = RUNTIME_SRC.indexOf(
+  const createStart = TEMPLATE_SRC.indexOf(
     "function createSyncRequire(parentPath, vfs",
     blockStart,
   );
   if (createStart === -1)
     throw new Error("createSyncRequire not found in sync-require block");
   let code = "const _builtinManifest = {};\nconst _builtinCache = new Map();\n";
-  code += RUNTIME_SRC.slice(blockStart, functionEnd(RUNTIME_SRC, createStart));
-  code = code.replace(/\$\{config\.uuid\}/g, TEST_UUID);
+  code += TEMPLATE_SRC.slice(blockStart, functionEnd(TEMPLATE_SRC, createStart));
+  code = code.replace(/%%UUID%%/g, TEST_UUID);
   const factory = new Function(
     code +
       "\nreturn { vfsLookup, readModuleSourceLiveFirst, unflattenUserFiles, createSyncRequire };",

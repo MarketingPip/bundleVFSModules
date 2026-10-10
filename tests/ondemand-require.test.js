@@ -25,6 +25,17 @@ import * as acorn from "acorn";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
 const RUNTIME_SRC = fs.readFileSync(path.join(REPO_ROOT, "runtime.js"), "utf8");
+// The sandbox template now lives in src/sandbox-template.js; extract the
+// template VALUE (JSON-decode the exported string) for template extractions.
+const TEMPLATE_FILE = fs.readFileSync(
+  path.join(REPO_ROOT, "src", "sandbox-template.js"),
+  "utf8",
+);
+const TEMPLATE_SRC = JSON.parse(
+  TEMPLATE_FILE.match(
+    /export const SANDBOX_TEMPLATE = ("(?:[^"\\]|\\.)*");/s,
+  )[1],
+);
 
 // --- Verbatim extraction helpers -------------------------------------------
 
@@ -45,7 +56,8 @@ function blockEnd(src, braceIndex) {
 
 function extractFunction(src, marker) {
   const start = src.indexOf(marker);
-  if (start === -1) throw new Error("marker not found in runtime.js: " + marker);
+  if (start === -1)
+    throw new Error("marker not found in runtime.js: " + marker);
   // Skip past the balanced parameter list first: the first "{" after "("
   // may belong to a default parameter (e.g. `opts = {}`), not the body.
   let p = src.indexOf("(", start);
@@ -64,7 +76,8 @@ function extractFunction(src, marker) {
 function extractConstBlock(src, marker) {
   // marker like "const _builtinManifest ="; extracts through the matching "};"
   const start = src.indexOf(marker);
-  if (start === -1) throw new Error("marker not found in runtime.js: " + marker);
+  if (start === -1)
+    throw new Error("marker not found in runtime.js: " + marker);
   const brace = src.indexOf("{", start);
   return src.slice(start, blockEnd(src, brace)) + ";";
 }
@@ -96,7 +109,10 @@ function loadTransform() {
   const code =
     extractConstBlock(RUNTIME_SRC, "const _builtinManifest =") +
     "\n" +
-    extractFunction(RUNTIME_SRC, "function generateImportBinding(node, liftedVar)") +
+    extractFunction(
+      RUNTIME_SRC,
+      "function generateImportBinding(node, liftedVar)",
+    ) +
     "\n" +
     extractFunction(RUNTIME_SRC, "function transformImportsToLoadModule(");
   const factory = new Function(
@@ -120,7 +136,7 @@ function loadBvmRequireSync() {
       // reliably resolvable in the es-module-shims-executed sandbox); the
       // harness shadows globalThis with a fake carrying the injected loader.
       "var _bvmRequirePending = new Map();\n" +
-      extractFunction(RUNTIME_SRC, "function __bvmRequireSync(request)");
+      extractFunction(TEMPLATE_SRC, "function __bvmRequireSync(request)");
   const src = cachedBvmSrc;
   return {
     src,
@@ -207,13 +223,12 @@ describe("transform: on-demand require hoisting", () => {
       "function t(){ return require('fs'); }",
     );
     const calls = [];
-    const t = new Function(
-      "__bvmRequireSync",
-      out.code + "\nreturn t;",
-    )((req) => {
-      calls.push(req);
-      return { fake: true };
-    });
+    const t = new Function("__bvmRequireSync", out.code + "\nreturn t;")(
+      (req) => {
+        calls.push(req);
+        return { fake: true };
+      },
+    );
     expect(calls).toEqual([]); // definition alone: zero loader interaction
     const ret = t(); // now call it
     expect(calls).toEqual(["fs"]);
@@ -222,7 +237,10 @@ describe("transform: on-demand require hoisting", () => {
 
   test("top-level builtin require still hoists to await loadModule", () => {
     const { transformImportsToLoadModule } = loadTransform();
-    const out = transformImportsToLoadModule("uuid", "const fs = require('fs');");
+    const out = transformImportsToLoadModule(
+      "uuid",
+      "const fs = require('fs');",
+    );
     expect(out.code).toContain("await");
     expect(out.code).toContain('loadModule("fs"');
     expect(out.code).not.toContain("__bvmRequireSync");
@@ -269,7 +287,10 @@ describe("transform: on-demand require hoisting", () => {
 
   test("top-level dynamic require(moduleName) also defers to __bvmRequireSync", () => {
     const { transformImportsToLoadModule } = loadTransform();
-    const out = transformImportsToLoadModule("uuid", "const x = require(name);");
+    const out = transformImportsToLoadModule(
+      "uuid",
+      "const x = require(name);",
+    );
     expect(out.code).toContain("__bvmRequireSync(name)");
     expect(out.code).not.toContain("loadModule");
   });
@@ -292,9 +313,15 @@ describe("transform: on-demand require hoisting", () => {
 
   test("preserveRequireCalls still leaves dynamic require() intact (CJS build)", () => {
     const { transformImportsToLoadModule } = loadTransform();
-    const out = transformImportsToLoadModule("uuid", "function t(){ return require(name); }", null, null, {
-      preserveRequireCalls: true,
-    });
+    const out = transformImportsToLoadModule(
+      "uuid",
+      "function t(){ return require(name); }",
+      null,
+      null,
+      {
+        preserveRequireCalls: true,
+      },
+    );
     expect(out.code).toContain("require(name)");
     expect(out.code).not.toContain("__bvmRequireSync");
   });
@@ -333,8 +360,7 @@ describe("__bvmRequireSync", () => {
     const f = make(
       MANIFEST,
       new Map(),
-      (mod) =>
-        mod && typeof mod.default === "function" ? mod.default : mod,
+      (mod) => (mod && typeof mod.default === "function" ? mod.default : mod),
       () => Promise.resolve(ns),
     );
     expect(await f("fs")).toBe(FakeEmitter);
@@ -346,7 +372,9 @@ describe("__bvmRequireSync", () => {
     let calls = 0;
     const fakeLoadModule = () => {
       calls++;
-      return new Promise((resolve) => setTimeout(() => resolve(fakeModule), 10));
+      return new Promise((resolve) =>
+        setTimeout(() => resolve(fakeModule), 10),
+      );
     };
     const f = make(MANIFEST, new Map(), (m) => m, fakeLoadModule);
     const p1 = f("fs");
@@ -455,12 +483,22 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
   // to guard.
   const diffBase = "origin/main...HEAD";
 
-  test("dist/ is untouched by the branch", () => {
-    const out = execSync(`git diff --stat ${diffBase} -- dist/`, {
+  test("dist/ changes are exactly the rebuilt artifacts", () => {
+    const out = execSync(`git diff --name-only ${diffBase} -- dist/`, {
       cwd: REPO_ROOT,
       encoding: "utf8",
     });
-    expect(out.trim()).toBe("");
+    const files = out
+      .trim()
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    // src/test.js changed (Item 1: --test auto-run moved into the node:test
+    // shim), so its build output dist/test.js must be rebuilt — the committed
+    // dist was stale (built from the pre-autorun src). dist/vfs.js bundles
+    // the updated shim and is rebuilt by the same ./src/build-vfs.mjs run.
+    // Any other dist/ change is a stray.
+    expect(files.sort()).toEqual(["dist/test.js", "dist/vfs.js"].sort());
   });
 
   test("branch footprint outside tests/ is exactly the allowlist (catches strays)", () => {
@@ -474,21 +512,54 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     if (files.length === 0) return; // on main post-merge: nothing to guard
-    // The branch footprint is the union of the committed work on it:
-    // - 5505fb7e: feature-matrix plan doc
-    // - 130f64dd: inlineWasmDataUrls guard dedupe (runtime.js)
-    // - 9df7bd01: stale-claim fixes in the runtime contract docs
-    // - this change: require/loadModule region of runtime.js + RUNTIME.md
-    //   require() semantics. Sibling workers' untracked e2e files and
-    //   working-tree edits to the plan doc are theirs, not strays.
+    // The branch footprint is the union of the committed work on it
+    // (feat/test-autorun-and-modularization, Items 1+2: --test auto-run moves
+    // into the node:test shim; sandbox fragments re-synced and generate() cut
+    // over to SANDBOX_TEMPLATE): src/test.js owns the trigger, runtime.js
+    // drops the template interception and the inline template, playground.js
+    // updates the tests example, docs record the contract, CI gates the
+    // template freshness. Items 3+4: live bindings in the transform +
+    // buildModuleProxy, prettier-mangled parity fixtures restored with
+    // parity/node-test/ added to .prettierignore. tests/ is excluded above.
     expect(files.sort()).toEqual(
       [
+        ".github/workflows/run.yaml",
+        ".prettierignore",
+        "dist/test.js",
+        "dist/vfs.js",
         "docs/E2E_FEATURE_MATRIX.md",
         "docs/RUNTIME.md",
-        "docs/SHIM_AUTHORING.md",
-        "docs/SINGLETONS.md",
+        "package.json",
+        "parity/node-test/fixtures/assert-first-line.js",
+        "parity/node-test/fixtures/assert-long-line.js",
+        "parity/node-test/parallel/test-assert-first-line.js",
+        "parity/node-test/parallel/test-assert.js",
         "runtime.js",
-      ].sort()
+        "src/build-sandbox.mjs",
+        "src/sandbox-template.js",
+        "src/sandbox/00-runtime-object.js",
+        "src/sandbox/05-vitest-mocks.js",
+        "src/sandbox/10-task-tracker.js",
+        "src/sandbox/20-module-loader.js",
+        "src/sandbox/21-sync-require.js",
+        "src/sandbox/30-interop.js",
+        "src/sandbox/31-node-globals.js",
+        "src/sandbox/32-path-resolve.js",
+        "src/sandbox/40-console.js",
+        "src/sandbox/41-events-warnings.js",
+        "src/sandbox/50-process.js",
+        "src/sandbox/60-timers.js",
+        "src/sandbox/70-fetch.js",
+        "src/sandbox/71-xhr.js",
+        "src/sandbox/80-errors.js",
+        "src/sandbox/85-keydecoder.js",
+        "src/sandbox/90-server-request.js",
+        "src/sandbox/95-init.js",
+        "src/sandbox/96-user-code.js",
+        "src/sandbox/97-finalize.js",
+        "src/test.js",
+        "src/ui/playground.js",
+      ].sort(),
     );
   });
 
@@ -502,9 +573,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       cwd: REPO_ROOT,
       encoding: "utf8",
     });
-    const addedFns = out
-      .split("\n")
-      .filter((l) => l.startsWith("+function "));
+    const addedFns = out.split("\n").filter((l) => l.startsWith("+function "));
     expect(addedFns).toEqual([]);
   });
 
@@ -516,6 +585,13 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const addedImports = out
       .split("\n")
       .filter((l) => l.startsWith("+import "));
-    expect(addedImports).toEqual([]);
+    // Item 2 cutover: generate() imports the built sandbox template and the
+    // log-token table. These two are the only expected additions.
+    expect(addedImports.sort()).toEqual(
+      [
+        '+import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";',
+        '+import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";',
+      ].sort(),
+    );
   });
 });

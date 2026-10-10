@@ -47,8 +47,13 @@ describe("node_globals installs the Node.js `global` alias", () => {
   });
 });
 
-describe("runtime.js sandbox template keeps the operative `global` hunk", () => {
-  const src = fs.readFileSync(path.join(__dirname, "..", "runtime.js"), "utf8");
+describe("sandbox template keeps the operative `global` hunk", () => {
+  // The template now lives in src/sandbox-template.js (built from
+  // src/sandbox/*.js); guarded here so the hunk is never silently dropped.
+  const src = fs.readFileSync(
+    path.join(__dirname, "..", "src", "sandbox-template.js"),
+    "utf8",
+  );
   test("generate() installs globalThis.global when missing", () => {
     expect(src).toMatch(/typeof globalThis\.global === ['"]undefined['"]/);
     expect(src).toMatch(/globalThis\.global = globalThis/);

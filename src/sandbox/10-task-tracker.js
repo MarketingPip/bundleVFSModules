@@ -2,11 +2,6 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
-class TaskTracker {
-  constructor() {
-    this.pendingCount = 0;
-    this.resolvers = [];
-  }
 
   // Wraps any function (sync or async)
   track(fn) {
@@ -53,11 +48,11 @@ const responsePortRemote = new MessageChannel().port2;
 Object.getOwnPropertyNames(globalThis).forEach(name => {
   // Skip internal properties, the runtime itself, and 'globalThis' to avoid recursion
   if (
-    !name.startsWith('_') &&
-    name !== 'globalThis'
-    // (the Symbol-keyed runtime is not in getOwnPropertyNames, so no check needed)
+    !name.startsWith('_') && 
+    name !== 'globalThis' && 
+    name !== `_RUNTIME__UUID___`
   ) {
-    Object.defineProperty(globalThis[_BVM_RT_KEY_].globals, name, {
+    Object.defineProperty(globalThis._RUNTIME__UUID___.globals, name, {
       get: () => globalThis[name],
       enumerable: true,
       configurable: true
@@ -161,8 +156,6 @@ const GlobalTracker = {
   
 }; 
  
-globalThis[_BVM_RT_KEY_].taskTracker = GlobalTracker;
+globalThis._RUNTIME__UUID___.taskTracker = GlobalTracker;
 
-// _RUNTIME_SANDBOX_UUID_.taskTracker.patch(myUtils, 'calculate');
-
-
+// _RUNTIME__UUID___.taskTracker.patch(myUtils, 'calculate');

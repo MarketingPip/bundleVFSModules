@@ -47,7 +47,7 @@ const FN_MARKER = "function _builtinRequireValue(mod) {";
 function extractHelper(src) {
   const start = src.indexOf(FN_MARKER);
   if (start === -1)
-    throw new Error("_builtinRequireValue not found in runtime.js");
+    throw new Error("_builtinRequireValue not found in template");
   // Balanced-brace scan from the opening brace of the marker.
   let depth = 0;
   let i = src.indexOf("{", start);
@@ -62,15 +62,21 @@ function extractHelper(src) {
   if (depth !== 0)
     throw new Error("unbalanced braces extracting _builtinRequireValue");
   const fnSrc = src.slice(start, i + 1);
-  // The template region is template-cooked: it must not contain backticks or
-  // ${...}, otherwise cooking could have altered the extracted source.
-  expect(fnSrc).not.toMatch(/[`$]/);
+  // The template is JSON-encoded (not a template literal), so backticks and
+  // ${...} are safe. Only %%TOKENS%% would be a problem (none here).
   return new Function(`${fnSrc}; return _builtinRequireValue;`)();
 }
 
-const _builtinRequireValue = extractHelper(
-  fs.readFileSync(RUNTIME_PATH, "utf8"),
+// The template now lives in src/sandbox-template.js.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
 );
+const _builtinRequireValue = extractHelper(TEMPLATE_SRC);
 
 describe("sync builtin require interop (_builtinRequireValue)", () => {
   test("require('events') returns the EventEmitter class, not the namespace", () => {

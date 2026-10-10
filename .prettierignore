@@ -2,3 +2,7 @@
 # (pre-commit-format's prettier --write and check:sandbox conflict on these —
 # prettier reflows the template string, breaking the byte-identity gate.)
 src/sandbox-template.js
+# Vendored official Node.js tests: prettier reformatting breaks
+# source-text-sensitive assertions (Node's assert.ok() quotes the verbatim
+# callsite source in generated messages). Never format these.
+parity/node-test/

@@ -2,6 +2,9 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
+
+
+
 // Save the original console methods
 const originalConsole = { ...console };
 
@@ -135,6 +138,7 @@ window.parent.postMessage({
 
 }
 
+
  if(fn === "fs"){
   window.parent.postMessage({
     type: 'fs',
@@ -165,7 +169,7 @@ function sanitizeArg(arg) {
 }
 globalThis.emitMe = emitMe;
 
-globalThis[_BVM_RT_KEY_].emit = emitMe;
+globalThis._RUNTIME__UUID___.emit = emitMe;
 
 function sendConsoleMessage(method, args) {
 
@@ -223,4 +227,3 @@ EventEmitter.prototype.removeListener = EventEmitter.prototype.off;
   let _intervalId = null;
     const listeners = Object.create(null);
   let traceWarningHelperShown = false;
-  

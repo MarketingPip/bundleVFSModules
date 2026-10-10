@@ -18,25 +18,37 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
 
-function extractBraced(marker) {
-  const start = RUNTIME_SRC.indexOf(marker);
-  if (start === -1) throw new Error(`${marker} not found in runtime.js`);
-  let i = RUNTIME_SRC.indexOf("{", start);
+
+function extractBraced(src, marker) {
+  const start = src.indexOf(marker);
+  if (start === -1) throw new Error(`${marker} not found`);
+  let i = src.indexOf("{", start);
   let depth = 0;
-  for (; i < RUNTIME_SRC.length; i++) {
-    if (RUNTIME_SRC[i] === "{") depth++;
-    else if (RUNTIME_SRC[i] === "}") {
+  for (; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") {
       depth--;
       if (depth === 0) break;
     }
   }
   if (depth !== 0) throw new Error(`unbalanced braces extracting ${marker}`);
-  return RUNTIME_SRC.slice(start, i + 1);
+  return src.slice(start, i + 1);
 }
 
 // --- parent side: CodeSandbox.setTerminalSize --------------------------------
 const setTerminalSizeSrc = extractBraced(
+  RUNTIME_SRC,
   "async setTerminalSize(cols, rows)",
 ).replace(
   "async setTerminalSize(cols, rows)",
@@ -59,7 +71,7 @@ function fakeSandbox(invokeImpl) {
 }
 
 // --- sandbox side: __terminal_resize__ interop handler -----------------------
-const handlerSrc = extractBraced(`expose('__terminal_resize__', (args) =>`);
+const handlerSrc = extractBraced(TEMPLATE_SRC, `expose('__terminal_resize__', (args) =>`);
 // the extracted text starts at "expose('__terminal_resize__', (args) => {"
 const arrowSrc = handlerSrc.slice(handlerSrc.indexOf("(args) =>"));
 function makeHandler(fakeProcess) {
@@ -155,7 +167,7 @@ describe("__terminal_resize__ (sandbox side)", () => {
 
 describe("runtime method registration", () => {
   test("__terminal_resize__ is a runtime method (no interop_registered noise)", () => {
-    const m = RUNTIME_SRC.match(/const RUNTIME_METHODS = \[([^\]]+)\]/);
+    const m = TEMPLATE_SRC.match(/const RUNTIME_METHODS = \[([^\]]+)\]/);
     expect(m).not.toBeNull();
     expect(m[1]).toMatch(/'__terminal_resize__'/);
   });

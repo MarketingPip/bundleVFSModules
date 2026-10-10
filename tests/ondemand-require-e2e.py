@@ -19,9 +19,10 @@ Covers docs/E2E_FEATURE_MATRIX.md "Other matrix items":
      top level still hoists (eager, by design); if(false){ await import() }
      stays lazy.
   e. import->require and require->import identity: same instance both ways.
-  f. live bindings: export-let reassignment inside a shim is NOT visible
-     through the interop proxy (snapshot semantics - documented gap);
-     same-object mutation IS visible (identity, not live bindings).
+  f. live bindings: export-let reassignment inside a shim IS visible
+     through the interop proxy (named imports compile to live member
+     access; the proxy reads the real ESM namespace); same-object mutation
+     IS visible (identity).
   g. side-effect count: diagnostics_channel registry is a singleton across
      import+require (module evaluated exactly once).
   h. CJS default/named export shape through interop.
@@ -203,9 +204,10 @@ CASES = [
      ["E1_NS_EQ=true", "E1_NAMED_EQ=true", "E1_R2I_EQ=true", "E1_SYNC=true"]),
 
     # (f) live bindings. node:domain keeps `export let active` in sync via
-    # enter(); the interop proxy snapshots export values at load time, so
-    # reassignment inside the shim is NOT visible (documented gap). Same-
-    # object mutation IS visible (identity, not live bindings).
+    # enter(); the interop proxy now reads the live ESM namespace (2026-10-09:
+    # named imports compile to live member access, no more import-time
+    # destructuring), so reassignment inside the shim IS visible. Same-object
+    # mutation is still visible (identity).
     ("f-live-bindings",
      "import * as domain from 'node:domain';\n"
      "const d = domain.create();\n"
@@ -220,8 +222,8 @@ CASES = [
      "fs1.__e2e_mut = 'mut-ok';\n"
      "console.log('F_MUT_VISIBLE=' + (fs2.__e2e_mut === 'mut-ok'));",
      "Done",
-     ["F_ACTIVE_BEFORE=null", "F_ACTIVE_AFTER=null", "F_LIVE=false",
-      "F_ACTIVE_EXIT=null", "F_MUT_VISIBLE=true"]),
+     ["F_ACTIVE_BEFORE=null", "F_ACTIVE_AFTER=[object Object]", "F_LIVE=true",
+      "F_ACTIVE_EXIT=undefined", "F_MUT_VISIBLE=true"]),
 
     # (g) side-effect count: the module is evaluated exactly once across
     # multiple requires/imports - the diagnostics_channel registry is a

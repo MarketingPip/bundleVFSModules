@@ -125,7 +125,11 @@ describe("dynamic import() is not lifted to a preamble await", () => {
     const lifts = out.match(LIFT_RE) || [];
     expect(lifts.length).toBe(1);
     expect(out).toContain('loadModule("foo", "import", "index.js", null)');
-    expect(out).toMatch(/const \{ x \} = __lm_[a-z0-9]{5};/);
+    // Live bindings (2026-10-09): named imports no longer destructure
+    // (`const { x } = __lm_…` was a snapshot); references compile to live
+    // member access on the lifted namespace.
+    expect(out).not.toMatch(/const \{ x \} = __lm_[a-z0-9]{5};/);
+    expect(out).toMatch(/console\.log\(__lm_[a-z0-9]{5}\.x\);/);
   });
 
   test("mixed static + dynamic: only the static import lifts", () => {

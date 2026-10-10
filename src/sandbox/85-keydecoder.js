@@ -2,7 +2,25 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
-// --- Key Decoder Function ---
+      
+// Interop exposes hoisted before the sync builtin preload: the preload
+// does ~49 sequential loadModule interop calls and can exceed the
+// execution timeout; these handlers must be available immediately.
+globalThis.__INTEROP_VAR__.expose('__stdin__', (args) => {
+    const s = process?.stdin;
+  const hasListeners = s && (s.listenerCount('data') > 0 || s.listenerCount('keypress') > 0); 
+ 
+  if (s && hasListeners && (typeof s.isPaused !== 'function' || !s.isPaused())) {
+    return s.pushData(args);
+  }
+  
+  
+  // process.stdin.pushData(args)
+   if(process && process.stdin && process.stdin.listenerCount('data') != 0 && (typeof process.stdin.isPaused !== 'function' || process.stdin.isPaused() == false)){
+    return process.stdin.pushData(args);
+   }
+  
+  // --- Key Decoder Function ---
   function decodeKeyPress(str) {
     if (!str) return null;
 
@@ -47,6 +65,14 @@
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 }
   // TODO: handle if buffered pass or possible remove if emulating node?
+    // Buffer early input instead of silently dropping it: if the sandbox
+    // hasn't attached a stdin listener yet (race between __stdin__ and
+    // user code), queue the input and flush on first 'data' listener.
+    if (s && !hasListeners) {
+      s._pendingStdin = s._pendingStdin || [];
+      s._pendingStdin.push(args);
+      return;
+    }
     try {   
               const cleanedCode = stripKeySequencesPreserveWhitespace(args);
               
@@ -68,21 +94,20 @@
 
  
 
-globalThis.__INTEROP_VAR__.expose('__serverRequest__', async (port=8080, URL = "/", type = "GET", body= {}, headers = {}) => {
-    const __RT = globalThis[_BVM_RT_KEY_];
-    // Normalize the legacy arg order (port, method, url, headers, body) to the
-    // canonical (port, url, method, body, headers) BEFORE any cookie logic,
-    // mirroring handleRequest's normalization in src/http.js. Without this the
-    // jar would key/store cookies under the wrong path/method.
-    let __url = URL, __method = type, __body = body, __headers = headers;
-    if (typeof URL === 'string' && /^[A-Z]+$/.test(URL) &&
-        typeof type === 'string' && type.startsWith('/')) {
-      __method = URL;
-      __url = type;
-      __headers = body;
-      __body = headers;
-    }
-    URL = __url; type = __method; body = __body; headers = __headers;
-    const __h = { ...(headers || {}) };
-    let __jarCtx = null;
-    
+// Runtime method (not reported via execution:interop_registered).
+// Updates the sandbox TTY dimensions and emits Node's 'resize' event on
+// stdout/stderr so readline and guest 'resize' listeners react.
+globalThis.__INTEROP_VAR__.expose('__terminal_resize__', (args) => {
+  const cols = Math.floor(Number(args && args.cols));
+  const rows = Math.floor(Number(args && args.rows));
+  if (!Number.isFinite(cols) || cols <= 0 || !Number.isFinite(rows) || rows <= 0) {
+    throw new Error('__terminal_resize__ requires positive integer cols and rows');
+  }
+  for (const s of [process.stdout, process.stderr]) {
+    if (!s) continue;
+    s.columns = cols;
+    s.rows = rows;
+    if (typeof s.emit === 'function') s.emit('resize');
+  }
+  return { cols, rows };
+});

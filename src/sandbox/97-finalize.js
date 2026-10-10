@@ -2,7 +2,9 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
-// Multiple drain cycles to catch cascading async operations
+   
+       
+    // Multiple drain cycles to catch cascading async operations
      for (let i = 0; i < 1; i++) {
        await Promise.resolve(); // Drain microtasks
        await new Promise(r => setTimeout(r, 100)); // Let macrotasks run
@@ -16,19 +18,25 @@
     await Promise.race([
   
       Promise.all([
-       globalThis[_BVM_RT_KEY_].taskTracker.waitForAll(),
+       _RUNTIME__UUID___.taskTracker.waitForAll(),
         waitForAllFetches(),
         waitForAllXhrs(),
         waitForAllTimers(),
-                 typeof process?.stdin?.waitUntilNoListeners === "function" ? process?.stdin?.waitUntilNoListeners() ?? Promise.resolve()
-  : Promise.resolve(),
-           typeof globalThis[_BVM_RT_KEY_].__httpServerRunTime !== "undefined"
-  ? globalThis[_BVM_RT_KEY_].__httpServerRunTime.waitForAllServers?.() ?? Promise.resolve()
+           typeof _RUNTIME__UUID___.__httpServerRunTime !== "undefined"
+  ? _RUNTIME__UUID___.__httpServerRunTime.waitForAllServers?.() ?? Promise.resolve()
   : Promise.resolve()
       ]),
        
    
     ])
+
+    // Sequential stdin wait (NOT in Promise.all): runs after main execution
+    // completes, so async module loading has finished attaching listeners.
+    // Event-driven via waitUntilNoListeners — no polling. If no listeners,
+    // resolves immediately.
+    if (typeof process?.stdin?.waitUntilNoListeners === "function") {
+      await (process.stdin.waitUntilNoListeners() ?? Promise.resolve());
+    }
     
     revertTrueOriginals();
     
@@ -53,7 +61,7 @@
   const stackLines = err.stack.split('\n');
 
   for (let i = 1; i < stackLines.length; i++) {
-    const parsed = __parseStackLocation(stackLines[i]);
+    const parsed = __parseStackLocationFn(stackLines[i]);
     if (parsed) {
       frames.push(parsed);
       if (!loc) {
@@ -88,7 +96,7 @@
 
   // need a better way to do this - since dev use export {promises}
 
- const fs = globalThis[_BVM_RT_KEY_].__FS__; // This is the fs-like object
+ const fs = globalThis._RUNTIME__UUID___.__FS__; // This is the fs-like object
 const vol = fs?._vol;      // This is the underlying volume
 
 const serializedFs = {};

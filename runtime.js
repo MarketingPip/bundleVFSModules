@@ -1,6 +1,8 @@
 import * as acorn from "https://esm.sh/acorn";
 import { importAssertions } from "https://esm.sh/acorn-import-assertions";
 import { v4 as uuid } from "https://esm.sh/uuid";
+import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";
+import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";
 // Vendor browser/WASM builds for native-only packages (real Vite 7:
 // rollup → @rollup/browser, esbuild → esbuild-wasm shim). Used by the
 // parent '_dynamic_import' handler so ESM 'import 'rollup'' resolves
@@ -1518,9 +1520,37 @@ export function transformImportsToLoadModule(
   // --- Utilities ---
   const liftedModules = new Map();
   let starSeq = 0;
+  let reexpSeq = 0;
   const importBindings = [];
   const functionsToMakeAsync = new Set();
   const moduleImportType = new Map();
+  // Live-binding table: imported local name -> { liftedVar, importedName }.
+  // Named/default imports no longer emit `const { x } = __lm` (a snapshot);
+  // instead every live reference to the local is rewritten to
+  // `liftedVar.importedName` (the esbuild/rollup pattern). Namespace imports
+  // keep `const ns = __lm` and are NOT in this map.
+  const importBindingMap = new Map();
+
+  // Track every range the transform overwrites/removes so the later
+  // reference-rewrite pass never touches already-rewritten code (overlapping
+  // MagicString edits throw).
+  const editedRanges = [];
+  const _overwrite = s.overwrite.bind(s);
+  s.overwrite = (start, end, content, ...rest) => {
+    editedRanges.push([start, end]);
+    return _overwrite(start, end, content, ...rest);
+  };
+  const _remove = s.remove.bind(s);
+  s.remove = (start, end) => {
+    editedRanges.push([start, end]);
+    return _remove(start, end);
+  };
+  const rangeIsEdited = (start, end) => {
+    for (const [rs, re] of editedRanges) {
+      if (start < re && end > rs) return true;
+    }
+    return false;
+  };
 
   function getLiftedVar(modulePath) {
     if (!liftedModules.has(modulePath)) {
@@ -1528,6 +1558,31 @@ export function transformImportsToLoadModule(
       liftedModules.set(modulePath, safeName);
     }
     return liftedModules.get(modulePath);
+  }
+
+  function registerImportBindings(node) {
+    // Record local -> { liftedVar, importedName } for the live-reference
+    // rewrite. First import wins (a duplicate local name is invalid ESM).
+    const v = getLiftedVar(node.source.value);
+    for (const sp of node.specifiers) {
+      if (sp.type === "ImportSpecifier") {
+        if (!importBindingMap.has(sp.local.name)) {
+          importBindingMap.set(sp.local.name, {
+            liftedVar: v,
+            importedName: sp.imported.name,
+          });
+        }
+      } else if (sp.type === "ImportDefaultSpecifier") {
+        if (!importBindingMap.has(sp.local.name)) {
+          importBindingMap.set(sp.local.name, {
+            liftedVar: v,
+            importedName: "default",
+          });
+        }
+      }
+      // ImportNamespaceSpecifier keeps `const ns = __lm` (live via the
+      // fixed proxy) — never rewritten, never registered here.
+    }
   }
 
   function setImportType(modulePath, type) {
@@ -1557,6 +1612,15 @@ export function transformImportsToLoadModule(
     return null;
   }
 
+  // --- Phase 0: pre-register import bindings ---
+  // An `export { x }` (no source) may textually precede the import it
+  // re-exports — `export { x }; import { x } from './m'` is legal ESM
+  // because imports hoist — so the live-binding table must be complete
+  // before the main walk reaches the export declarations.
+  for (const node of ast.body) {
+    if (node.type === "ImportDeclaration") registerImportBindings(node);
+  }
+
   // --- AST walk ---
   walk.simple(ast, {
     // Static ESM imports
@@ -1564,6 +1628,7 @@ export function transformImportsToLoadModule(
       const modulePath = node.source.value;
       const v = getLiftedVar(modulePath);
       importBindings.push({ node, liftedVar: v });
+      registerImportBindings(node);
       setImportType(modulePath, "import");
       s.remove(node.start, node.end);
     },
@@ -1767,26 +1832,344 @@ export function transformImportsToLoadModule(
 
     // export { a, b as c } from "./x" — re-export with source.
     // Like ExportAllDeclaration, the source must be lifted via loadModule
-    // because relative resolution fails from data: URLs. Destructure the
-    // lifted namespace and re-export the bindings.
+    // because relative resolution fails from data: URLs. The re-export is
+    // LIVE: instead of destructuring (a snapshot), emit a marker export
+    // `__bvm_reexp_N`; buildModuleProxy collects these markers and resolves
+    // each name through the (live) source namespace on every read.
     ExportNamedDeclaration(node) {
-      if (!node.source) return; // export { x } without source: leave as-is
+      if (!node.source) {
+        // export { x } / export { x as y } without source: any specifier
+        // whose local is an imported binding becomes a live re-export
+        // marker; the remaining (truly local) specifiers keep a real
+        // export declaration. Untouched when nothing is imported.
+        const liveParts = [];
+        const kept = [];
+        for (const sp of node.specifiers) {
+          const b = importBindingMap.get(sp.local.name);
+          if (b) liveParts.push([sp.exported.name, b]);
+          else kept.push(code.slice(sp.start, sp.end));
+        }
+        if (liveParts.length === 0) return; // leave as-is
+        const marker =
+          `export const __bvm_reexp_${reexpSeq++} = { ` +
+          liveParts
+            .map(
+              ([exported, b]) =>
+                `${JSON.stringify(exported)}: [${b.liftedVar}, ${JSON.stringify(b.importedName)}]`,
+            )
+            .join(", ") +
+          ` };`;
+        s.overwrite(
+          node.start,
+          node.end,
+          kept.length === 0 ? marker : `export { ${kept.join(", ")} };\n${marker}`,
+        );
+        return;
+      }
       const modulePath = node.source.value;
       const v = getLiftedVar(modulePath);
       setImportType(modulePath, "import");
-      const named = node.specifiers.map((s) => {
-        // s.exported is the exported name, s.local is the imported name
+      const entries = node.specifiers.map((sp) => {
+        // sp.exported is the exported name, sp.local is the imported name
         // For `export { foo } from`, exported=foo, local=foo
         // For `export { bar as baz } from`, exported=baz, local=bar
-        const imported = s.local.name;
-        const exported = s.exported.name;
-        return imported === exported ? exported : `${imported}: ${exported}`;
+        return `${JSON.stringify(sp.exported.name)}: [${v}, ${JSON.stringify(sp.local.name)}]`;
       });
       s.overwrite(
         node.start,
         node.end,
-        `export const { ${named.join(", ")} } = ${v};`,
+        `export const __bvm_reexp_${reexpSeq++} = { ${entries.join(", ")} };`,
       );
+    },
+  });
+
+  // --- Phase 2: rewrite references to imported bindings as live member
+  // access (the esbuild/rollup pattern). Named/default imports no longer
+  // destructure in the preamble, so every live reference `x` becomes
+  // `__lm_N.importedName`.
+  const scopeDecls = new Map(); // scope-introducing AST node -> Set(names)
+  const scopeSet = (n) => {
+    let st = scopeDecls.get(n);
+    if (!st) {
+      st = new Set();
+      scopeDecls.set(n, st);
+    }
+    return st;
+  };
+  const namesOfPattern = (pat, out) => {
+    if (!pat) return out;
+    if (pat.type === "Identifier") {
+      out.push(pat.name);
+      return out;
+    }
+    if (pat.type === "ObjectPattern") {
+      for (const pr of pat.properties) {
+        if (pr.type === "Property") namesOfPattern(pr.value, out);
+        else namesOfPattern(pr.argument, out); // RestElement
+      }
+      return out;
+    }
+    if (pat.type === "ArrayPattern") {
+      for (const el of pat.elements) if (el) namesOfPattern(el, out);
+      return out;
+    }
+    if (pat.type === "RestElement") {
+      namesOfPattern(pat.argument, out);
+      return out;
+    }
+    if (pat.type === "AssignmentPattern") {
+      namesOfPattern(pat.left, out);
+      return out;
+    }
+    return out;
+  };
+  // Single recursive pass: for every scope node record the names it binds.
+  // `var` declarations hoist to the nearest function/program scope; every
+  // other binding form lives in its own lexical scope.
+  const buildScopes = (node, lexScope, varScope) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const c of node) buildScopes(c, lexScope, varScope);
+      return;
+    }
+    if (!node.type) return;
+    const t = node.type;
+    let newLex = lexScope;
+    let newVar = varScope;
+    if (
+      t === "Program" ||
+      t === "BlockStatement" ||
+      t === "StaticBlock" ||
+      t === "SwitchStatement"
+    ) {
+      newLex = node;
+      scopeSet(node);
+    } else if (
+      t === "FunctionDeclaration" ||
+      t === "FunctionExpression" ||
+      t === "ArrowFunctionExpression"
+    ) {
+      newLex = node;
+      newVar = node;
+      scopeSet(node);
+      if (t === "FunctionExpression" && node.id)
+        scopeSet(node).add(node.id.name);
+      for (const p of node.params)
+        for (const nm of namesOfPattern(p, [])) scopeSet(node).add(nm);
+      // A function declaration binds its name in the ENCLOSING scope.
+      if (t === "FunctionDeclaration" && node.id)
+        scopeSet(lexScope).add(node.id.name);
+    } else if (t === "ClassDeclaration" || t === "ClassExpression") {
+      newLex = node;
+      scopeSet(node);
+      if (node.id) {
+        scopeSet(node).add(node.id.name);
+        if (t === "ClassDeclaration") scopeSet(lexScope).add(node.id.name);
+      }
+    } else if (t === "CatchClause") {
+      newLex = node;
+      scopeSet(node);
+      if (node.param)
+        for (const nm of namesOfPattern(node.param, []))
+          scopeSet(node).add(nm);
+    } else if (
+      t === "ForStatement" ||
+      t === "ForInStatement" ||
+      t === "ForOfStatement"
+    ) {
+      const decl = t === "ForStatement" ? node.init : node.left;
+      if (
+        decl &&
+        decl.type === "VariableDeclaration" &&
+        (decl.kind === "let" || decl.kind === "const")
+      ) {
+        newLex = node;
+        scopeSet(node);
+        for (const d of decl.declarations)
+          for (const nm of namesOfPattern(d.id, [])) scopeSet(node).add(nm);
+      }
+    }
+    if (t === "VariableDeclaration") {
+      const target = node.kind === "var" ? newVar : newLex;
+      for (const d of node.declarations)
+        for (const nm of namesOfPattern(d.id, [])) scopeSet(target).add(nm);
+    }
+    for (const k of Object.keys(node)) {
+      if (k === "parent") continue;
+      const v = node[k];
+      if (Array.isArray(v)) {
+        for (const c of v) buildScopes(c, newLex, newVar);
+      } else if (v && typeof v === "object" && v.type) {
+        buildScopes(v, newLex, newVar);
+      }
+    }
+  };
+  buildScopes(ast, null, null);
+
+  // Is `name` shadowed by a nearer lexical binding at this reference?
+  // Import bindings live at Program (module) scope; any declaration of the
+  // name in a scope between the reference and Program shadows the import.
+  const isShadowed = (name, node) => {
+    let n = node.parent;
+    while (n && n !== ast) {
+      const st = scopeDecls.get(n);
+      if (st && st.has(name)) return true;
+      n = n.parent;
+    }
+    return false;
+  };
+
+  // True when this Identifier is a binding position rather than a value
+  // reference (declaration id, function param, catch param, import/export
+  // specifier, ...). Climbs through binding patterns to the declaration.
+  const isBindingIdentifier = (node) => {
+    let n = node;
+    let p = node.parent;
+    while (p) {
+      if (
+        (p.type === "VariableDeclarator" && p.id === n) ||
+        ((p.type === "FunctionDeclaration" ||
+          p.type === "FunctionExpression" ||
+          p.type === "ArrowFunctionExpression") &&
+          (p.id === n || p.params.indexOf(n) !== -1)) ||
+        ((p.type === "ClassDeclaration" || p.type === "ClassExpression") &&
+          p.id === n) ||
+        (p.type === "CatchClause" && p.param === n) ||
+        p.type === "ImportSpecifier" ||
+        p.type === "ImportDefaultSpecifier" ||
+        p.type === "ImportNamespaceSpecifier" ||
+        p.type === "ExportSpecifier"
+      )
+        return true;
+      if (p.type === "Property" && p.value === n) {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      if (p.type === "ObjectPattern" || p.type === "ArrayPattern") {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      if (
+        (p.type === "RestElement" && p.argument === n) ||
+        (p.type === "AssignmentPattern" && p.left === n)
+      ) {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      return false;
+    }
+    return false;
+  };
+
+  // True when the identifier is a non-computed property key, a label, or
+  // part of `import.meta` — positions that never read the binding.
+  const isNonReferencePosition = (node) => {
+    const p = node.parent;
+    if (!p) return true;
+    if (
+      p.type === "MetaProperty" ||
+      p.type === "LabeledStatement" ||
+      ((p.type === "BreakStatement" || p.type === "ContinueStatement") &&
+        p.label === node)
+    )
+      return true;
+    if (
+      (p.type === "Property" || p.type === "MethodDefinition") &&
+      p.key === node &&
+      !p.computed &&
+      !p.shorthand
+    )
+      return true;
+    if (
+      p.type === "PropertyDefinition" &&
+      p.key === node &&
+      !p.computed
+    )
+      return true;
+    if (
+      (p.type === "MemberExpression" ||
+        p.type === "OptionalMemberExpression") &&
+      p.property === node &&
+      !p.computed
+    )
+      return true;
+    return false;
+  };
+
+  // True when the reference WRITES the binding (`x = 1`, `x++`,
+  // `for (x of ...)`). Assignment to an import binding is invalid ESM;
+  // leaving the bare identifier (a ReferenceError — no binding exists)
+  // preserves the "it throws" behavior instead of silently writing the
+  // proxy's snapshot copy.
+  const isWriteTarget = (node) => {
+    let n = node;
+    let p = node.parent;
+    while (p) {
+      if (p.type === "AssignmentExpression" && p.left === n) return true;
+      if (
+        p.type === "UpdateExpression" ||
+        ((p.type === "ForInStatement" || p.type === "ForOfStatement") &&
+          p.left === n)
+      )
+        return true;
+      if (p.type === "Property" && p.value === n) {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      if (p.type === "ObjectPattern" || p.type === "ArrayPattern") {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      if (
+        (p.type === "RestElement" && p.argument === n) ||
+        (p.type === "AssignmentPattern" && p.left === n)
+      ) {
+        n = p;
+        p = p.parent;
+        continue;
+      }
+      return false;
+    }
+    return false;
+  };
+
+  walk.simple(ast, {
+    Identifier(node) {
+      const b = importBindingMap.get(node.name);
+      if (!b) return;
+      if (rangeIsEdited(node.start, node.end)) return;
+      if (isBindingIdentifier(node)) return;
+      if (isNonReferencePosition(node)) return;
+      if (isShadowed(node.name, node)) return;
+      if (isWriteTarget(node)) return;
+      const p = node.parent;
+      let replacement = `${b.liftedVar}.${b.importedName}`;
+      if (p && p.type === "Property" && p.shorthand) {
+        // `{ x }` -> `{ x: __lm_N.x }` (overwriting the shared key/value
+        // identifier with a member expression alone would be a syntax
+        // error). Acorn models the shorthand key and value as two distinct
+        // nodes over the same range: rewrite on the key (visited first by
+        // the naive walker; acorn-walk visits only the value) and let the
+        // range guard skip the twin.
+        replacement = `${node.name}: ${replacement}`;
+      } else if (
+        p &&
+        ((p.type === "CallExpression" && p.callee === node) ||
+          (p.type === "OptionalCallExpression" && p.callee === node) ||
+          (p.type === "TaggedTemplateExpression" && p.tag === node))
+      ) {
+        // `x()` -> `(0, __lm_N.x)()`: the indirect call keeps `this`
+        // undefined, matching ESM call semantics (a plain `__lm_N.x()`
+        // would bind `this` to the interop proxy).
+        replacement = `(0, ${replacement})`;
+      }
+      s.overwrite(node.start, node.end, replacement);
+      editedRanges.push([node.start, node.end]);
     },
   });
 
@@ -1796,22 +2179,38 @@ export function transformImportsToLoadModule(
   }
 
   // --- Build the preamble for lifted modules ---
-  let preambleParts = [];
+  // Split by lift kind: `import`-type lifts (entry static imports) are
+  // hoisted by execute() to %%IMPORTS%% (init scope, as the old `custom`
+  // preloads were); `require`-type lifts stay atop the user code, exactly
+  // where the old preamble put them (they must load after init's timer
+  // patching, not before). Namespace-import consts
+  // (`const ns = __lm`) ride with the import lifts. In `code` the import
+  // lifts come first — matching ESM evaluation order (imports before the
+  // module body, requires included).
+  const importPreambleParts = [];
+  const bodyPreambleParts = [];
   for (const [modulePath, v] of liftedModules.entries()) {
     const type = moduleImportType.get(modulePath) || "import";
-    preambleParts.push(
+    const line =
       `const ${v} = await globalThis._RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
         modulePath,
-      )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`,
-    );
+      )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`;
+    if (type === "import") importPreambleParts.push(line);
+    else bodyPreambleParts.push(line);
   }
 
   for (const { node, liftedVar } of importBindings) {
-    preambleParts.push(generateImportBinding(node, liftedVar));
+    const binding = generateImportBinding(node, liftedVar);
+    if (binding) importPreambleParts.push(binding);
   }
 
-  if (preambleParts.length > 0) {
-    s.prepend(preambleParts.join("\n") + "\n\n");
+  const importPreamble = importPreambleParts.join("\n");
+  const bodyPreamble =
+    bodyPreambleParts.length > 0 ? bodyPreambleParts.join("\n") + "\n\n" : "";
+  // `body`: require lifts + user code (what execute() runs as user code).
+  const bodySrc = bodyPreamble + s.toString();
+  if (importPreamble || bodyPreamble) {
+    s.prepend((importPreamble ? importPreamble + "\n\n" : "") + bodyPreamble);
   }
   //console.log(preambleParts.join("\n") + "\n\n")
   const outCode = s.toString();
@@ -1820,7 +2219,19 @@ export function transformImportsToLoadModule(
     hires: false, // line-level maps: hires VLQ explodes on MB-size inputs (74MB mappings for 16MB source), blocking the main thread; line-level suffices for stack traces,
     includeContent: true,
   });
-  return { code: outCode, map };
+  // preamble/body split: execute() hoists the *import* preamble (the
+  // `await loadModule(...)` lifts for static imports, plus namespace consts)
+  // to the sandbox init scope (%%IMPORTS%%) and runs `body` (require lifts +
+  // user code) as the user code. Both share the sandbox IIFE scope, so the
+  // live member access (`__lm_N.x`) in the body resolves to the preamble's
+  // lifted vars. `code` (full preamble + body) is unchanged for all
+  // existing consumers.
+  return {
+    code: outCode,
+    map,
+    preamble: importPreamble,
+    body: bodySrc,
+  };
 }
 
 function generateImportBinding(node, liftedVar) {
@@ -1828,26 +2239,17 @@ function generateImportBinding(node, liftedVar) {
 
   if (!specifiers.length) return "";
 
-  let d = null,
-    ns = null,
-    named = [];
+  // Namespace imports keep a live alias: `const ns = __lm` (the proxy read
+  // is live once buildModuleProxy reads from the real namespace).
+  // Named/default imports emit NO binding: every reference was rewritten to
+  // `liftedVar.importedName` (live member access, the esbuild/rollup
+  // pattern). The old `const { x } = __lm` destructured once at import time
+  // — a snapshot that killed live bindings.
   for (const s of specifiers) {
-    if (s.type === "ImportDefaultSpecifier") d = s.local.name;
-    else if (s.type === "ImportNamespaceSpecifier") ns = s.local.name;
-    else
-      named.push(
-        s.imported.name === s.local.name
-          ? s.local.name
-          : `${s.imported.name}: ${s.local.name}`,
-      );
+    if (s.type === "ImportNamespaceSpecifier")
+      return `const ${s.local.name} = ${liftedVar};`;
   }
-
-  if (ns) return `const ${ns} = ${liftedVar};`;
-  if (d && named.length)
-    return `const { default: ${d}, ${named.join(", ")} } = ${liftedVar};`;
-  if (d) return `const ${d} = ${liftedVar}.default;`;
-
-  return `const { ${named.join(", ")} } = ${liftedVar};`;
+  return "";
 }
 
 /*
@@ -2168,6 +2570,16 @@ export class ImportResolver {
     }
 
     if (transformed.startsWith("./") || transformed.startsWith("../")) {
+      return transformed;
+    }
+
+    // Absolute VFS paths ("/...") are resolved by the sandbox loader's
+    // _dynamic_import (absolute-VFS branch) — same as the parent
+    // es-module-shims resolve hook — not by the CDN. (Previously they fell
+    // through to `${cdnBase}//...` and 400'd, so no entry could statically
+    // or dynamically import a VFS file by absolute path.)
+    if (transformed.startsWith("/")) {
+      this.cache.set(cacheKey, transformed);
       return transformed;
     }
 
@@ -3530,3892 +3942,50 @@ export class SandboxRuntime {
       typeof config.shell === "function"
         ? `__SHELL__: (${config.shell.toString()}),`
         : "";
-    return `
-
-
-globalThis._RUNTIME${config.uuid}_ = {globals: new Set(), process:${JSON.stringify(config.process)}, taskTracker:null, __USER_FILES__:${JSON.stringify(config.fs)}, __SEA_ASSETS__:${JSON.stringify(config.seaAssets && Object.keys(config.seaAssets).length ? config.seaAssets : undefined)}, ${shellField}};
-// Stable alias for platform shims: they write globalThis._RUNTIME_ expecting the
-// sandbox-scoped object, but the AST rewrite only applies to Node builtins, not
-// VFS-loaded CJS. Per-realm (each sandbox has its own globalThis), so isolation
-// is preserved.
-globalThis._RUNTIME_ = globalThis._RUNTIME${config.uuid}_;
-
-// Builtin manifest for the sandbox-side sync require: createSyncRequire
-// checks _builtinManifest/_builtinCache, but the parent-scope originals are
-// not visible inside this generated script. The cache starts empty, so a
-// sync require() of a builtin throws ERR_REQUIRE_ASYNC (load it async first).
-const _builtinManifest = ${JSON.stringify(_builtinManifest)};
-const _builtinCache = new Map();
-// In-flight cold-require promises, keyed by manifest key. A synchronous
-// require() cannot block on the async loader, so a cold builtin require()
-// triggers loadModule() and returns its promise; this map lets concurrent
-// cold requires for the same builtin share one load and resolve to the same
-// instance. Entries are deleted on settle (success and failure), so a failed
-// load is retried on the next call instead of caching a rejection.
-var _bvmRequirePending = new Map();
-
-// --- begin sync builtin require interop (gap #3) ---
-// Single-default interop shared by the sync builtin consumers
-// (createSyncRequire, process.getBuiltinModule): what a synchronous
-// require() of a builtin returns. Mirrors the unwrap in 21-sync-require.
-function _builtinRequireValue(mod) {
-  // Every builtin port declares its CJS module.exports equivalent via
-  // export default (events.js: export default EventEmitter). Sync require()
-  // must return that value, not the ESM namespace, or
-  // const E = require("events"); new E() dies with "not a constructor".
-  // Unwrap only when the default is callable (a class like EventEmitter):
-  // for object defaults the namespace must be preserved, because loadModule
-  // returns an interop Proxy whose lazy getters (CJS named-export fallback,
-  // star re-exports) live on the proxy, not on the plain target object.
-  if (mod && typeof mod.default === 'function') return mod.default;
-  return (mod && mod.default !== undefined && Object.keys(mod).length === 1)
-    ? mod.default
-    : mod;
-}
-// On-demand sync builtin require (transform-time hoisting companion):
-// nested require() of a builtin that is already cached returns it
-// synchronously; otherwise throws ERR_REQUIRE_ASYNC_MODULE directing the
-// user to await import() first. String-concat only inside this block:
-// it lives inside the outer sandbox template literal, so backticks and
-// template placeholders are forbidden here.
-function __bvmRequireSync(request) {
-  var bare = (typeof request === 'string' && request.indexOf('node:') === 0) ? request.slice(5) : request;
-  var key = Object.prototype.hasOwnProperty.call(_builtinManifest, bare) ? bare
-    : Object.prototype.hasOwnProperty.call(_builtinManifest, request) ? request : null;
-  if (key !== null && typeof _builtinCache !== 'undefined' && _builtinCache.has(key)) {
-    return _builtinRequireValue(_builtinCache.get(key));
-  }
-  if (key !== null) {
-    // Cold builtin: true lazy-on-call with a synchronous return is impossible
-    // - JS has no primitive that blocks the event loop on a promise - so the
-    // call triggers the async load now and returns its promise. The promise is
-    // cached in _bvmRequirePending so concurrent cold requires share one
-    // loadModule() call and resolve to the same instance. loadModule's own
-    // _builtinCache hook makes every later require() of this builtin
-    // synchronous, so the warm contract is unchanged; only the cold path
-    // changes (previously it threw ERR_REQUIRE_ASYNC_MODULE telling the user
-    // to await import() first - still valid, just no longer required).
-    // NOTE: call loadModule via the runtime object, NOT the bare identifier.
-    // The bare top-level loadModule binding is not reliably resolvable from
-    // this scope in the executed sandbox module (es-module-shims execution
-    // quirk: only some top-level function declarations survive as bindings -
-    // verified live 2026-10-09: typeof loadModule === 'undefined' while
-    // globalThis._RUNTIME_.loadModule === 'function'). The runtime-object
-    // property path is the same one the transform emits for imports, and it
-    // always works. globalThis._RUNTIME_ is the stable per-sandbox alias set
-    // at the top of this template.
-    if (!_bvmRequirePending.has(key)) {
-      _bvmRequirePending.set(key, globalThis._RUNTIME_.loadModule(request).then(
-        function (mod) { _bvmRequirePending.delete(key); return _builtinRequireValue(mod); },
-        function (loadErr) { _bvmRequirePending.delete(key); throw loadErr; }
-      ));
-    }
-    return _bvmRequirePending.get(key);
-  }
-  var err = new Error("[ERR_REQUIRE_ASYNC_MODULE] Cannot require '" + request + "' synchronously: unknown module '" + request + "' is not a Node builtin; dynamic require() of a non-builtin has no sync path, use import()");
-  err.code = 'ERR_REQUIRE_ASYNC_MODULE';
-  throw err;
-}
-// --- end sync builtin require interop (gap #3) ---
-
-window._RUNTIME${config.uuid}_ = globalThis._RUNTIME${config.uuid}_;
-
-
-
-// ─── Vitest/fork support patches ───
-// 1. Force configurable:true on global defineProperty. All forks share one
-//    globalThis, and vitest sets globals (like __vitest_index__) non-configurably
-//    which crashes every re-run (watch mode). Neuter at the lowest level.
-//
-// maskFunction must be defined BEFORE its first use in source order: the
-// template is injected as type="module-shim" and executed by es-module-shims,
-// which does not hoist function declarations from later in the script to
-// earlier call sites (2026-10-01: early call threw "ReferenceError:
-// maskFunction is not defined", killing iframe bootstrap).
-function maskFunction(patchedFn, originalFn) {
-  Object.defineProperty(patchedFn, 'name', { value: originalFn.name });
-  patchedFn.toString = () => originalFn.toString();
-}
-(function() {
-  const origDefineProperty = Object.defineProperty;
-  Object.defineProperty = function(obj, prop, descriptor) {
-    if (obj === globalThis && descriptor && typeof descriptor === 'object') {
-      descriptor = { ...descriptor, configurable: true };
-    }
-    return origDefineProperty.call(this, obj, prop, descriptor);
-  };
-  // Cloak the patch: it wraps a host builtin, so it must read as native.
-  maskFunction(Object.defineProperty, origDefineProperty);
-})();
-
-// 2. process.exit semantics: in sync context throw to halt execution (like
-//    real Node), in async context resolve silently. This lets forked workers
-//    terminate cleanly without killing the parent realm.
-(function() {
-  const rt = globalThis._RUNTIME${config.uuid}_;
-  if (rt && rt.process) {
-    const origExit = rt.process.exit;
-    rt.process.exit = function(code) {
-      code = code || 0;
-      // Emit 'exit' event if listeners exist
-      if (typeof rt.process.emit === 'function') {
-        try { rt.process.emit('exit', code); } catch {}
-      }
-      // In async context (we're in a promise), resolve silently.
-      // In sync context, throw to halt like real Node.
-      // Heuristic: if we're inside a microtask, we're async.
-      // For now, throw a special error that the runtime catches.
-      const err = new Error('process.exit(' + code + ')');
-      err.code = 'PROCESS_EXIT';
-      err.exitCode = code;
-      throw err;
+    // The sandbox template lives in src/sandbox-template.js (built from
+    // src/sandbox/*.js by src/build-sandbox.mjs). Substitute %%TOKEN%%s.
+    // IMPORTANT: use replacement FUNCTIONS (not strings) — String.replace()
+    // interprets $ patterns ($&, $', $1...) in string replacements, and user
+    // code / imports can contain $.
+    let result = SANDBOX_TEMPLATE;
+    const sub = (token, value) => {
+      result = result.replace(new RegExp(token, "g"), () => value);
     };
-    // Cloak the patch: it replaces a host builtin, so it must read as native.
-    Object.defineProperty(rt.process.exit, 'name', { value: 'exit' });
-    rt.process.exit.toString = () => "function exit() { [native code] }";
-  }
-})();
-
-
-if (!Array.prototype.toSorted) {
-  Array.prototype.toSorted = function(compareFn) {
-    // Create a shallow copy of the array and sort it in place
-    const copy = [...this];
-    copy.sort(compareFn);
-    return copy;
-  };
-}
-// Cloak the polyfill so it reads as native (matches the native toString
-// shape on engines that already have toSorted).
-// prettier-ignore
-Array.prototype.toSorted.toString = () => "function toSorted() { [native code] }";
-
-// A recursive Proxy that intercepts *any* missing property access and returns safe stubs
-    function createSafeProxy(target = {}) {
-      return new Proxy(target, {
-        get(obj, prop) {
-          if (prop === Symbol.iterator) return obj[Symbol.iterator];
-          if (prop in obj) {
-            const val = obj[prop];
-            if (val && typeof val === 'object') return createSafeProxy(val);
-            return val;
-          }
-          // Fallback recursive proxy for any unmapped configuration property
-          return createSafeProxy();
-        }
-      });
-    }
-
-    // Mock globalThis.__vitest_worker__ using the Proxy so .config or anything else never throws
-    globalThis.__vitest_worker__ = createSafeProxy({
-      config: {
-        root: '/',
-        globals: true,
-        environment: 'node',
-        test: {
-          globals: true,
-          environment: 'node',
-          reporters: [],
-          pool: 'threads'
-        }
-      },
-      durations: { environment: 0, prepare: 0 },
-      rpc: {}
-    });
-  
-class TaskTracker {
-  constructor() {
-    this.pendingCount = 0;
-    this.resolvers = [];
-  }
-
-  // Wraps any function (sync or async)
-  track(fn) {
-    const self = this;
-    return async function(...args) {
-      self.pendingCount++;
-      try {
-        return await fn.apply(this, args);
-      } finally {
-        self.pendingCount--;
-        if (self.pendingCount === 0) {
-          self._notify();
-        }
-      }
-    };
-  }
-
-  // The equivalent to your waitForAllTimers()
-  waitForIdle() {
-    if (this.pendingCount === 0) return Promise.resolve();
-    return new Promise(resolve => this.resolvers.push(resolve));
-  }
- 
-  _notify() {
-    while (this.resolvers.length) {
-      this.resolvers.shift()();
-    }
-  }
-}
-
-
-
-
-const channel = new MessageChannel();
-
-/*
-TODO: Build stream protocol over message passing (fetch for streams etc.)
-
-const requestPort = channel.port1;
-const responsePort = new MessageChannel().port1;
-const responsePortRemote = new MessageChannel().port2;
-*/
-
-Object.getOwnPropertyNames(globalThis).forEach(name => {
-  // Skip internal properties, the runtime itself, and 'globalThis' to avoid recursion
-  if (
-    !name.startsWith('_') && 
-    name !== 'globalThis' && 
-    name !== \`_RUNTIME${config.uuid}_\`
-  ) {
-    Object.defineProperty(globalThis._RUNTIME${config.uuid}_.globals, name, {
-      get: () => globalThis[name],
-      enumerable: true,
-      configurable: true
-    });
-  }
-});
-
-(async () => {
-
-
-const GlobalTracker = {
-  activeTasks: 0,
-  resolvers: [],
-  // Increments the counter
-  start() {
-    this.activeTasks++;
-  },
-
-  // Decrements and checks if we are done
-  stop() {
-    this.activeTasks--;
-    if (this.activeTasks === 0) {
-      while (this.resolvers.length) this.resolvers.shift()();
-    }
-  },
-
-  // The waiter function
-  waitForAll: function() {
-    if (this.activeTasks === 0) return Promise.resolve();
-    return new Promise(res => this.resolvers.push(res));
-  },
-
-  // The Magic: This patches any function you point it at
-  patch: function(obj, methodName) {
-    const original = obj[methodName];
-    const self = this;
-
-    obj[methodName] = function(...args) {
-      self.start();
-      try {
-        const result = original.apply(this, args);
-        
-        // Handle Async/Promises
-        if (result instanceof Promise || result && typeof result.then === "function") {
-          return result.finally(() => self.stop());
-        }
-
-        // Handle Sync
-        self.stop();
-        return result;
-      } catch (e) {
-        self.stop();
-        throw e;
-      }
-    };
-  },
-  patchChildProcess(fn) {
-    return (...args) => {
-      this.start();
-      try {
-        const child = fn(...args);
-        let stopped = false;
-        const stopOnce = () => {
-          if (stopped) return;
-          stopped = true;
-          this.stop();
-        };
-        child.once('close', stopOnce);
-        child.once('error', stopOnce);
-        return child;
-      } catch (err) {
-        this.stop();
-        throw err;
-      }
-    }
-  },
-  patchChildProcess2(fn) {
-    return (...args) => {
-      this.start(); // Start tracking when exec/spawn is called
-      
-      try {
-        const child = fn(...args);
-        
-        // Listen for the final event to stop tracking
-        // We use 'once' to ensure we only decrement once
-        child.once('close', () => this.stop());
-        
-        // Also handle cases where the process might error out immediately
-        child.once('error', (err) => {
-          // Only stop if 'close' hasn't fired yet
-          if (child.exitCode === null) this.stop();
-        });
-
-        return child;
-      } catch (err) {
-        this.stop(); // Stop if the synchronous part fails (like execSync)
-        throw err;
-      }
-    }
-  },
-  
-}; 
- 
-globalThis._RUNTIME${config.uuid}_.taskTracker = GlobalTracker;
-
-// _RUNTIME${config.uuid}_.taskTracker.patch(myUtils, 'calculate');
-
-
-// Registry of in-flight modules to catch circular references.
-// Maps resolvedKey -> { status: 'loading' | 'done', exports, promise }
-const moduleRegistry = new Map();
-
-/**
- * Safely augment a caught load error with module context.
- *
- * loadModule's catch block used to assign error.message directly to add
- * " in <path> at <entry>" context. If the caught error has a getter-only
- * message property (DOMException, exotic WASM binding errors, frozen
- * error-likes), that assignment throws 'setting getter-only property
- * "message"', masking the real failure. Seen in headed Firefox as
- * success=false with the getter-only error instead of the root cause.
- *
- * This helper never throws: it tries in-place augmentation, and falls back
- * to wrapping the original (as cause) when message is not writable.
- * Returns the error to throw.
- *
- * No template literals here: runtime.js is itself a template file, and
- * this function is also extracted verbatim by tests via new Function().
- */
-function augmentLoadError(error, displayPath, entryPoint) {
-  var baseMessage;
-  try {
-    baseMessage = String(error && error.message);
-  } catch (_) {
-    baseMessage = String(error);
-  }
-  var augmented = baseMessage + " in " + displayPath + " at " + entryPoint;
-  try {
-    error.message = augmented;
-    return error;
-  } catch (_) {
-    var wrapped = new Error(augmented);
-    try {
-      wrapped.cause = error;
-    } catch (_) {}
-    return wrapped;
-  }
-}
-
-/**
- * @param {string} modulePath     - The import path as written (e.g. './foo', '../bar', or a URL)
- * @param {string} moduleType     - 'import' | 'require'
- * @param {string} [entryPoint]   - The original top-level entry file; passed through to interop
- * @param {string} [parentEntryPoint]   - The original file entry file point; passed through to interop
- 
- *                                  so _build_file can resolve context-sensitive paths correctly.
- *                                  Defaults to modulePath when called at the root level.
- */
-async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint) {
-
-  const isDynamicModule = p => typeof p === 'string' && /^(data:text\\/javascript|blob:)/.test(p);
-  
-  if(isDynamicModule(modulePath)){
-   return await import(modulePath);
-  }
- 
-  let relativeName = null;
- 
-  const node_builtin = ${JSON.stringify(builtinModules)}
-  // Gap #6: "node:"-prefix normalization lives in the host-scope
-  // normalizeBuiltinSpecifier; its source is inlined so the generated
-  // script stays self-contained.
-  const __normalizeBuiltinSpecifier = (${normalizeBuiltinSpecifier.toString()});
-
-  const __builtinNorm = __normalizeBuiltinSpecifier(modulePath, node_builtin);
-  const isNodeBuiltIn = __builtinNorm.isNodeBuiltIn;
-  modulePath = __builtinNorm.modulePath;
-
-  // The very first caller doesn't know the entry point yet — it IS the entry point.
-  if (entryPoint === undefined) entryPoint = modulePath;
-
-  if (parentEntryPoint === undefined) parentEntryPoint = null;
-
-  try {
-    // Normalize file:// URLs (e.g. from pathToFileURL) to absolute VFS paths.
-    // Vite's terser plugin does await import(pathToFileURL(p).href).
-    if (modulePath.startsWith("file://")) {
-      modulePath = modulePath.slice("file://".length);
-      // file:///x → /x (keep the leading slash); file://host/x → /x (VFS has no hosts)
-      if (!modulePath.startsWith("/")) modulePath = "/" + modulePath;
-    }
-    const extension = modulePath.split('.').pop().toLowerCase();
-    const isRelative = modulePath.startsWith('./') || modulePath.startsWith('../');
-  const isAbsolute = modulePath.startsWith('/')
-
-  let sourceResolvedError = false;
-  
-   const isJSModule = !['css'].includes(extension); // json is ESM via _build_file (Part B)
-    // ─── Relative / interop-channel path ────────────────────────────────────
-    if (isRelative || isNodeBuiltIn || isAbsolute || !isRelative && !isNodeBuiltIn && !isAbsolute && !modulePath.includes("https://")) {
-      relativeName = modulePath;
-
-      // Use a stable key for the registry (entry + requested path disambiguates
-      // the same filename required from different entry points).
-      // Provisional: keyed by raw specifier until _dynamic_import resolves it.
-      // canonicalizeRegistryEntry migrates to the resolved-path key below.
-      let registryKey = \`\${entryPoint}::\${modulePath}\`;
-      // ── Circular reference guard ─────────────────────────────────────────
-      if (moduleRegistry.has(registryKey) && isJSModule) {
-        const record = moduleRegistry.get(registryKey);
-
-        if (record.status === 'loading') {
-          // Circular dep detected — return the partially-populated exports object
-          // so the caller gets a live reference that will be filled in once the
-          // module finishes executing (same pattern Node.js uses).
-          console.warn(
-            \`[loadModule] Circular dependency detected for "\${modulePath}" \` +
-            \`(entry: "\${entryPoint}"). Returning partial exports.\`
-          );
-          return record.exports;
-        }
-
-        // Already fully resolved — return cached result.
-        return record.exports;
-      }
-
-      // Create a placeholder record immediately so any re-entrant call above
-      // sees 'loading' and gets the partial exports object.
-      const partialExports = {};
-      const record = { status: 'loading', exports: partialExports, promise: null };
-      moduleRegistry.set(registryKey, record);
-
-      try {
-        const cwd =
-          typeof process !== 'undefined' &&
-          process &&
-          typeof process.cwd === 'function'
-            ? process.cwd()
-            : undefined;
-        // Pass the entry point to the parent so _build_file can use it for
-        // things like resolving sibling imports or source-map hints.
-        // The seed is served host-side (pickDynamicImportVfs): pass undefined
-        // instead of __USER_FILES__ — structured-cloning ~22MB per call
-        // stalled bootstrap for minutes.
-        let importResult = await interopChannel.callParent(
-          '_dynamic_import',
-          modulePath,
-          moduleType,
-          entryPoint,
-          parentEntryPoint,
-          isNodeBuiltIn, 
-          cwd,
-          undefined   
-        );
-        
-        // Handle both object {source, resolvedPath} and raw string (legacy handlers)
-        if (typeof importResult === 'string') {
-          importResult = { source: importResult, resolvedPath: null };
-        }
-          
-        if(!importResult || !importResult.source){
-        throw new Error(\`[ERR_MODULE_NOT_FOUND]: Cannot find module \${modulePath}\`)
-        return;
-        }  
-
-        let source = importResult.source;
-        // Vitest E2E gap #1: the host resolves the request to a VFS path.
-        // _build_file must receive the RESOLVED path as its fileName — it
-        // becomes the entryPoint that transformImportsToLoadModule stamps
-        // into nested imports. Passing the raw request string lost the VFS
-        // prefix at import depth >=2 (nested relative imports 404'd).
-        const buildFileName = importResult.resolvedPath || modulePath;
-        // Dedup by resolved path: an aliased specifier resolving to an
-        // already-loading/done file reuses that record instead of evaluating
-        // the module a second time (see canonicalRegistryKey).
-        const canonicalKey = canonicalRegistryKey(
-          entryPoint,
-          modulePath,
-          importResult.resolvedPath,
-        );
-        const dedup = canonicalizeRegistryEntry(
-          moduleRegistry,
-          registryKey,
-          canonicalKey,
-          record,
-        );
-        if (dedup.reused) {
-          return dedup.reused.exports;
-        }
-        registryKey = canonicalKey;
-        
-          // Save original source for fallback if transform breaks the module
-          const originalSourceForFallback = source;
-          
-          // Part B: .json flows through _build_file (built-in json plugin
-          // handles it via loader dispatch); css still bypasses.
-          if (extension != 'css') {
-        source = await interopChannel.callParent(
-          '_build_file',
-          source,
-          buildFileName,
-          moduleType,
-          entryPoint,
-          parentEntryPoint,
-          isNodeBuiltIn
-        );
-        
-       }
-
-        let resolved; 
-
-        if (extension === 'css') {
-          const sheet = new CSSStyleSheet();
-          await sheet.replace(source);
-          resolved = sheet;
-          return resolved;
-        } else {
-          if (moduleType === 'require') {
-            // Provide sync require bound to THIS module's own RESOLVED path
-            // (buildFileName: importResult.resolvedPath, always an absolute
-            // VFS path), so its relative require() calls resolve against its
-            // own directory. Binding to modulePath (the as-written request,
-            // which may be relative like './lib/picomatch') broke nested
-            // requires — e.g. picomatch's require('./scan') resolving to
-            // lib/scan.js instead of /node_modules/picomatch/lib/scan.js.
-            // vfsLookup walks a nested tree, so unflatten the flat
-            // __USER_FILES__ map first (keys may carry a leading slash).
-            const vfsForRequire = unflattenUserFiles(globalThis._RUNTIME${config.uuid}_.__USER_FILES__ || {});
-            globalThis.__syncRequire__ = createSyncRequire(buildFileName, vfsForRequire);
-            source = wrapCommonJS(source, buildFileName, vfsForRequire);
-          }
- 
-         function makeIdentitySourceMap(source, filename) {
-  // One mapping per line, all pointing to column 0 of the original
-  const lineCount = source.split('\\n').length;
-  // Each ';' = next line, 'AAAA' = col 0 -> col 0, same source, same line
-  const mappings = Array(lineCount).fill('AAAA').join(';');
-
-  const map = {
-    version: 3,
-    sources: [filename],
-    sourcesContent: [source],
-    names: [],
-    mappings,
-  };
-
-  return \`\\n//# sourceMappingURL=data:application/json;charset=utf-8,\${
-    encodeURIComponent(JSON.stringify(map))
-  }\`;
-}
- 
-         // Stamp sourceURL with the RESOLVED path: identical files yield
-         // identical data: URLs, so the browser module map dedupes as
-         // a second line of defense against double evaluation.
-         source  = source + \`\\n //# sourceURL=\${buildFileName}\`
-
-           const url = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(source)}\`;
-          
-          
-          
-          resolved = await importAndProxy(url, modulePath, relativeName, moduleType);
-          
-          // Verify critical builtins: if the transform broke the module
-          // (e.g. node:stream's Readable is undefined), retry with the
-          // original untransformed source.
-          if (isNodeBuiltIn && resolved && typeof resolved === 'object') {
-            let needsFallback = false;
-            try {
-              // Access via the proxy to trigger the get handler
-              if (modulePath === 'stream' && typeof resolved.Readable === 'undefined') {
-                needsFallback = true;
-              }
-            } catch (e) {
-              // get handler threw — module is broken
-              needsFallback = true;
-            }
-            if (needsFallback) {
-              console.warn('[loadModule] ' + modulePath + ' transform produced broken exports; retrying with original source');
-              const fallbackUrl = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(originalSourceForFallback)}\`;
-              resolved = await importAndProxy(fallbackUrl, modulePath, relativeName, moduleType);
-            }
-          }
-        }
-
-        // Populate the partial exports object in-place so any circular
-        // reference holders also see the final values.
-        if (resolved && typeof resolved === 'object') {
-          Object.assign(partialExports, resolved);
-        }
-
-        record.status = 'done';
-        record.exports = resolved; // replace reference for future callers
-        // Unified sync/async builtin cache (fix/ondemand-require, Worker A):
-        // an async import() of a builtin now populates the sync _builtinCache,
-        // so a later sync require() returns the SAME instance with no preload.
-        // modulePath is underscore-normalized here (fs/promises -> fs_promises),
-        // so convert back to the slash-form manifest key; skip RUNTIME:*
-        // pseudo-builtins; only write keys the manifest actually lists
-        // (this also guards underscore-named builtins: child_process ->
-        // child/process misses, so fall back to the raw modulePath form).
-        // Best-effort: a cache failure must never break the load path.
-        try {
-          if (isNodeBuiltIn && resolved && typeof resolved === 'object') {
-            let manifestKey = String(modulePath).split('_').join('/');
-            if (manifestKey.indexOf('RUNTIME') !== 0) {
-              if (!Object.prototype.hasOwnProperty.call(_builtinManifest, manifestKey)) {
-                manifestKey = String(modulePath);
-              }
-              if (Object.prototype.hasOwnProperty.call(_builtinManifest, manifestKey) &&
-                  !_builtinCache.has(manifestKey)) {
-                _builtinCache.set(manifestKey, resolved);
-              }
-            }
-          }
-        } catch (cacheErr) { /* sync-cache write is best-effort only */ }
-        return resolved;
-
-      } catch (err) {
-        // Remove failed entry so a retry can attempt a fresh load.
-        moduleRegistry.delete(registryKey);
-        throw err;
-      }
-    }
-
-    // ─── Asset handling (JSON / TXT / MD) ───────────────────────────────────
-    if (['json', 'txt', 'md'].includes(extension)) {
-      const response = await fetch(modulePath);
-      if (!response.ok) throw new Error(\`HTTP error! status: \${response.status}\`);
-
-      const contentType = response.headers.get('content-type');
-      if (extension === 'json' || (contentType && contentType.includes('application/json'))) {
-        try { return await response.json(); }
-        catch { return await response.text(); }
-      }
-      return await response.text();
-    }
-
-    // ─── CSS (absolute URL) ──────────────────────────────────────────────────
-    if (extension === 'css') {
-      const response = await fetch(modulePath);
-      if (!response.ok) throw new Error(\`HTTP error! status: \${response.status}\`);
-      const cssText = await response.text();
-      const sheet = new CSSStyleSheet();
-      await sheet.replace(cssText);
-      return sheet;
-    }
-
-    // ─── Standard JS import (absolute URL / bare specifier) ─────────────────
-    const requiredSupportedYet = false; // sync require transform not yet implemented
-
-    let data;
-     if (moduleType === 'require' && !isRelative && !isAbsolute){
-     throw new Error(\`[ERR_MODULE_NOT_FOUND]: Cannot find module \${modulePath}\`)
-     }
-    
-    if (moduleType === 'require' && requiredSupportedYet) {
-      let src = await fetch(modulePath).then(r => r.text());
-      const vfsForRequire2 = unflattenUserFiles(globalThis._RUNTIME${config.uuid}_.__USER_FILES__ || {});
-      globalThis.__syncRequire__ = createSyncRequire(modulePath, vfsForRequire2);
-      src = wrapCommonJS(src, modulePath, vfsForRequire2);
-      const url = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(src)}\`;
-      data = await import(url);
-    } else {
-     /*  
- 
-     this actually works as is planned to use possibly.. (so we can patch node.js) - crazy slow. 
-      
-      data = await interopChannel.callParent(
-          '_bundler_',
-          modulePath
-        );
-      data = await import(data)  
-      */ 
-      
-      data = await import(modulePath);
-    } 
-
-    return buildModuleProxy(data, modulePath, relativeName, moduleType);
-
-  } catch (error) {
-     
-     // TODO Implement true stacks... 
-     // Fix errors for not found files... 
-     if (relativeName){
-     
-  const displayPath = relativeName || modulePath;
-  
- 
- const err = new Error(\`\${error.message} in \${displayPath}\`);
-
-err.stack = \`Error: Something broke
-    at myFunction (index.js:123:45)
-    at main (index.js:200:10)\`;
-    
-  
-  
-  
-  // Check if this error has already been wrapped by checking for our pattern
-  const alreadyWrapped = error.message.match(" in \\./");
-  
-  //error.stack = \'\${error.message}\'
- 
-  
-  if (alreadyWrapped) {
-    // Already has path context, just re-throw as-is
-    throw error;
-  }
-  
-  // First time catching - add context
-   if(entryPoint){
-   throw augmentLoadError(error, displayPath, entryPoint);
-  }
-
-  
-  
- 
- 
-   
-   }
- 
-     
-    if (relativeName) modulePath = relativeName;
-    
-    
-    
-    // todo make stacks for relatives 
-    throw error;
-  }
-}
-
-globalThis._RUNTIME${config.uuid}_.loadModule = loadModule;
- 
-
-
-  
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-// Registry dedup by resolved path (platform fix, AGENTS.md rule 6).
-// loadModule keyed moduleRegistry by the RAW import specifier, so the same
-// file imported via different specifiers ("../binding.wasi.cjs" vs
-// "@rolldown/browser") evaluated once PER SPECIFIER - observed 7x, each
-// committing 1GB of WebAssembly.Memory, killing the browser process.
-// Key by the RESOLVED VFS path instead; an aliased import reuses the
-// in-flight/done record.
-//
-// 2026-10-02: the entryPoint prefix had to go entirely. Each vite chunk
-// stamps its own resolved path as entryPoint, so "entry::resolved" still
-// split one file into N evaluations (9x observed, browser died at +112s).
-// Node evaluates once per resolved path per realm; the registry now does
-// too. Resolved paths already disambiguate (/a/utils.js vs /b/utils.js).
-function canonicalRegistryKey(entryPoint, modulePath, resolvedPath) {
-  return resolvedPath || modulePath;
-}
-
-// Migrate-or-reuse decision for a just-resolved module. provisionalKey is the
-// raw-specifier key created before _dynamic_import; canonicalKey is the
-// resolved-path key. Returns { reused } - non-null when another specifier
-// already resolved to this file (return reused.exports; a "loading" record's
-// partial exports mirror Node's circular-import semantics).
-function canonicalizeRegistryEntry(
-  moduleRegistry,
-  provisionalKey,
-  canonicalKey,
-  record,
-) {
-  if (canonicalKey === provisionalKey) return { reused: null };
-  var existing = moduleRegistry.get(canonicalKey);
-  moduleRegistry.delete(provisionalKey);
-  if (existing) return { reused: existing };
-  moduleRegistry.set(canonicalKey, record);
-  return { reused: null };
-}
-
-
-/** Wraps a CommonJS source string in an ESM-compatible IIFE. */
-/**
- * Synchronous require() for CJS modules (vitest support).
- * Resolves against VFS, loads source synchronously, executes with
- * cycle tolerance (returns partial exports on circular require).
- */
-// Read a CJS module's source for the sync require path: live memfs first,
-// startup snapshot as fallback. The memfs volume is seeded from
-// __USER_FILES__ at startup and stays live, so files written at runtime via
-// __FS__.writeFileSync() are require-able (and deleted files stop being
-// require-able), matching Node semantics. Template-safe: no backticks or
-// dollar-brace sequences in this code.
-function readModuleSourceLiveFirst(resolved, vfs) {
-  const cands = resolved.endsWith('.js') ? [resolved] : [resolved, resolved + '.js'];
-  const rt = globalThis._RUNTIME${config.uuid}_;
-  const liveFs = rt && rt.__FS__;
-  if (liveFs && typeof liveFs.readFileSync === 'function') {
-    for (let i = 0; i < cands.length; i++) {
-      const c = cands[i];
-      const forms = c.charAt(0) === '/' ? [c] : [c, '/' + c];
-      for (let j = 0; j < forms.length; j++) {
-        try {
-          const data = liveFs.readFileSync(forms[j], 'utf8');
-          if (typeof data === 'string') return data;
-        } catch (e) { /* try next form */ }
-      }
-    }
-    return undefined;
-  }
-  for (let i = 0; i < cands.length; i++) {
-    const hit = vfsLookup(cands[i], vfs);
-    if (hit != null) return hit;
-  }
-  return undefined;
-}
-
-// Local copy of the parent's vfsLookup for the sandbox-side sync require.
-// (Written without template literals or backslash escapes: this code lives
-// inside the generate() template literal, where dollar-brace sequences
-// would interpolate and backslash-slash would collapse.)
-function vfsLookup(path, vfs) {
-  const tryPath = (p) => {
-    const segments = p.split('/').filter(Boolean);
-    let node = vfs;
-    for (const seg of segments) {
-      if (node == null || typeof node !== 'object') return undefined;
-      node = node[seg];
-    }
-    return typeof node === 'string' ? node : undefined;
-  };
-  // Platform fix (AGENTS.md rule 6): in the browser, prefer -browser.js
-  // variants over .cjs files (see nested vfsLookup in _dynamic_import).
-  if (path.endsWith('.cjs')) {
-    const hit = tryPath(path.replace(/\.cjs$/, '-browser.js'));
-    if (hit !== undefined) return hit;
-  }
-  const withJs = path.endsWith('.js') ? path : path + '.js';
-  const hit = tryPath(path);
-  return hit !== undefined ? hit : tryPath(withJs);
-}
-
-// __USER_FILES__ is a flat { 'lib/util.js': source } map whose keys may
-// carry a leading slash. createSyncRequire's vfsLookup walks a nested tree,
-// so normalize once here (same normalization as the parent's
-// unflattenFileSystem in _dynamic_import).
-function unflattenUserFiles(flatObj) {
-  const result = {};
-  if (!flatObj || typeof flatObj !== 'object') return result;
-  for (const rawPath of Object.keys(flatObj)) {
-    // NOTE: this code lives inside the generate() template literal, so every
-    // backslash here is template-cooked: \\/ becomes /, \\" becomes " (which
-    // breaks "..." strings — the wrapper needs \\\\\\" there), and /\\*/
-    // becomes /*/ (an unterminated comment — use /[*]/ instead). If the
-    // generated wrapper must contain a backslash, write two (\\). Pinned by
-    // tests/vite7-wrapper-vfs-syntax.test.js (2026-09-30: the 883:26 SyntaxError).
-    const parts = String(rawPath).replace(/^[/]+/, '').split('/');
-    let current = result;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
-      if (!current[part] || typeof current[part] !== 'object') {
-        current[part] = {};
-      }
-      current = current[part];
-    }
-    current[parts[parts.length - 1]] = flatObj[rawPath];
-  }
-  return result;
-}
-
-/**
- * Resolves a require() request to an absolute VFS path (Node.js semantics).
- * Used by both syncRequire() and syncRequire.resolve().
- * - Relative requests (./, ../) resolve against parentPath's directory
- * - Absolute requests (/) are used as-is
- * - Appends .js extension if not present
- */
-// --- VFS existence probing for the sync resolver (template-safe: no
-// backticks, no dollar-brace, no backslash-slash in this code) ---
-
-// Walk the nested snapshot vfs tree ({dir: {file: 'source'}}). Returns the
-// node at path, or undefined. Directories are objects, files are strings.
-function vfsNodeAt(path, vfs) {
-  var segments = String(path).split('/').filter(Boolean);
-  var node = vfs;
-  for (var i = 0; i < segments.length; i++) {
-    if (node == null || typeof node !== 'object') return undefined;
-    node = node[segments[i]];
-  }
-  return node;
-}
-
-// The sandbox's live memfs (__FS__), or null when absent (e.g. unit tests
-// extracting this code under Node).
-function vfsLiveFs() {
-  var rt = globalThis._RUNTIME${config.uuid}_;
-  return rt && rt.__FS__ ? rt.__FS__ : null;
-}
-
-function vfsIsFile(path, vfs) {
-  var live = vfsLiveFs();
-  if (live && typeof live.statSync === 'function') {
-    try {
-      if (live.statSync(path).isFile()) return true;
-    } catch (e) { /* fall through to snapshot */ }
-  }
-  return typeof vfsNodeAt(path, vfs) === 'string';
-}
-
-function vfsIsDir(path, vfs) {
-  var live = vfsLiveFs();
-  if (live && typeof live.statSync === 'function') {
-    try {
-      if (live.statSync(path).isDirectory()) return true;
-    } catch (e) { /* fall through to snapshot */ }
-  }
-  var node = vfsNodeAt(path, vfs);
-  return node != null && typeof node === 'object';
-}
-
-function vfsReadText(path, vfs) {
-  var live = vfsLiveFs();
-  if (live && typeof live.readFileSync === 'function') {
-    try {
-      var data = live.readFileSync(path, 'utf8');
-      if (typeof data === 'string') return data;
-    } catch (e) { /* fall through to snapshot */ }
-  }
-  var node = vfsNodeAt(path, vfs);
-  return typeof node === 'string' ? node : undefined;
-}
-
-// POSIX normalize: collapse . and .. segments, preserve leading slash.
-// Never escapes root (leading .. segments are dropped).
-function vfsNormalizePath(path) {
-  var isAbs = path.charAt(0) === '/';
-  var parts = String(path).split('/');
-  var out = [];
-  for (var i = 0; i < parts.length; i++) {
-    var p = parts[i];
-    if (p === '..') {
-      if (out.length > 0) out.pop();
-    } else if (p !== '.' && p !== '') {
-      out.push(p);
-    }
-  }
-  return (isAbs ? '/' : '') + out.join('/');
-}
-
-function vfsDirname(path) {
-  var idx = String(path).lastIndexOf('/');
-  if (idx <= 0) return '/';
-  return path.slice(0, idx);
-}
-
-// Node's Module._nodeModulePaths (POSIX): from the start dir upward,
-// collecting each "<dir>/node_modules". Mirrors src/module.js in this repo.
-function vfsNodeModulePaths(from) {
-  var cur = vfsNormalizePath(from);
-  var paths = [];
-  while (true) {
-    paths.push(cur === '/' ? '/node_modules' : cur + '/node_modules');
-    if (cur === '/') break;
-    var parent = vfsDirname(cur);
-    if (parent === cur) break;
-    cur = parent;
-  }
-  return paths;
-}
-
-// Node LOAD_AS_FILE: X, then X.js, X.json (extension probing order).
-function vfsLoadAsFile(basePath, vfs) {
-  if (vfsIsFile(basePath, vfs)) return basePath;
-  var exts = ['.js', '.json'];
-  for (var i = 0; i < exts.length; i++) {
-    var p = basePath + exts[i];
-    if (vfsIsFile(p, vfs)) return p;
-  }
-  return null;
-}
-
-// Node LOAD_AS_DIRECTORY: package.json "main", then index.js / index.json.
-function vfsLoadAsDirectory(dirPath, vfs, _seen) {
-  _seen = _seen || {};
-  var normPath = vfsNormalizePath(dirPath);
-  if (_seen[normPath]) {
-    // Directory cycle via package.json main (a/main -> ./dir, a/dir/main -> ..).
-    // Node would eventually fail; we throw instead of infinite-looping.
-    return null;
-  }
-  _seen[normPath] = true;
-  var pkg = vfsReadPackageJson(dirPath, vfs);
-  // The 'exports' field wins over 'main' when present (Node parity, and the
-  // async path's tryResolveFileOrPackage). A present-but-unresolvable
-  // exports map is an honest miss — never fall through to main/index.
-  if (pkg && pkg.exports !== undefined && pkg.exports !== null) {
-    var target = vfsResolvePackageExportsSync(pkg, ".");
-    if (typeof target === "string") {
-      return vfsLoadAsFile(vfsNormalizePath(dirPath + "/" + target), vfs);
-    }
-    return null;
-  }
-  if (pkg && typeof pkg.main === "string" && pkg.main) {
-    var mainPath = vfsNormalizePath(dirPath + "/" + pkg.main);
-    var viaMain = vfsLoadAsFile(mainPath, vfs);
-    if (viaMain) return viaMain;
-    if (vfsIsDir(mainPath, vfs)) {
-      var viaMainDir = vfsLoadAsDirectory(mainPath, vfs, _seen);
-      if (viaMainDir) return viaMainDir;
-    }
-  }
-  return vfsLoadAsFile(dirPath + "/index", vfs);
-}
-
-function vfsLoadAsFileOrDirectory(basePath, vfs) {
-  var asFile = vfsLoadAsFile(basePath, vfs);
-  if (asFile) return asFile;
-  if (vfsIsDir(basePath, vfs)) return vfsLoadAsDirectory(basePath, vfs);
-  return null;
-}
-
-function vfsModuleNotFound(request) {
-  var err = new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
-  err.code = 'ERR_MODULE_NOT_FOUND';
-  return err;
-}
-
-function vfsPackagePathNotExported(packageName, subpath, packageJsonPath) {
-  var err = new Error(
-    "[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '" + subpath +
-    "' is not defined by \\\"exports\\\" in " + packageJsonPath
-  );
-  err.code = 'ERR_PACKAGE_PATH_NOT_EXPORTED';
-  return err;
-}
-
-function vfsPackageImportNotDefined(specifier, packageJsonPath) {
-  var err = new Error(
-    "[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier \\\"" + specifier +
-    "\\\" is not defined in package " + packageJsonPath
-  );
-  err.code = 'ERR_PACKAGE_IMPORT_NOT_DEFINED';
-  return err;
-}
-
-// Node's message when no package.json scope exists above the importer:
-// "Package import specifier \"#x\" is not defined imported from <path>".
-function vfsPackageImportNotDefinedNoScope(specifier, importerPath) {
-  var err = new Error(
-    '[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier "' + specifier +
-    '" is not defined imported from ' + importerPath
-  );
-  err.code = 'ERR_PACKAGE_IMPORT_NOT_DEFINED';
-  return err;
-}
-
-// Node LOOKUP_PACKAGE_SCOPE: nearest ancestor dir (of a module FILE's dir)
-// containing a package.json, or null when none exists.
-function vfsLookupPackageScope(dir, vfs) {
-  var d = dir || "/";
-  while (true) {
-    if (vfsReadPackageJson(d, vfs) !== null) return d;
-    if (d === "/") return null;
-    d = vfsDirname(d);
-  }
-}
-
-function vfsIsRelativeRequest(request) {
-  return (
-    request === '.' ||
-    request === '..' ||
-    request.charAt(0) === '/' ||
-    (request.charAt(0) === '.' &&
-      (request.charAt(1) === '/' ||
-        (request.charAt(1) === '.' &&
-          (request.length === 2 || request.charAt(2) === '/'))))
-  );
-}
-
-/**
- * Sync-path package exports/imports resolution (Node's PACKAGE_EXPORTS_RESOLVE
- * / PACKAGE_IMPORTS_RESOLVE, path-based edition for the sync require path).
- * Mirrors the algorithm PR #122 added to vfsLookup for the async
- * dynamic-import() path, but with the CJS require() condition set —
- * ["node", "require", "default"] instead of ["node", "import", "default"] —
- * and returning resolved VFS paths instead of { source } records.
- */
-// Condition order mirrors Node's require() defaults.
-var VFS_SYNC_EXPORT_CONDITIONS = ["node", "require", "default"];
-
-function vfsSplitPackageSpecifier(request) {
-  // '@scope/pkg/sub/deep' -> { packageName: '@scope/pkg', subpath: './sub/deep' }
-  // 'pkg/sub'             -> { packageName: 'pkg',        subpath: './sub' }
-  // 'pkg'                 -> { packageName: 'pkg',        subpath: '.' }
-  if (request.charAt(0) === "@") {
-    var parts = request.split("/");
-    var packageName = parts.slice(0, 2).join("/");
-    var rest = parts.slice(2).join("/");
-    return { packageName: packageName, subpath: rest ? "./" + rest : "." };
-  }
-  var idx = request.indexOf("/");
-  if (idx === -1) return { packageName: request, subpath: "." };
-  return {
-    packageName: request.slice(0, idx),
-    subpath: "." + request.slice(idx),
-  };
-}
-
-function vfsResolvePackageTargetSync(target, conditions) {
-  // string | null (blocked subpath) | string[] (fallback chain) |
-  // { condition: target } — same shape as the async path's resolvePackageTarget.
-  if (target === null || target === undefined) return null;
-  if (typeof target === "string") return target;
-  if (Array.isArray(target)) {
-    for (var i = 0; i < target.length; i++) {
-      var r = vfsResolvePackageTargetSync(target[i], conditions);
-      if (r !== null) return r;
-    }
-    return null;
-  }
-  if (typeof target === "object") {
-    for (var c = 0; c < conditions.length; c++) {
-      var cond = conditions[c];
-      if (Object.prototype.hasOwnProperty.call(target, cond)) {
-        var resolved = vfsResolvePackageTargetSync(target[cond], conditions);
-        if (resolved !== null) return resolved;
-      }
-    }
-    return null;
-  }
-  return null;
-}
-
-function vfsResolvePackageExportsSync(pkg, subpath) {
-  var exportsField = pkg.exports;
-  if (exportsField === null || exportsField === undefined) return null;
-  var target;
-  if (typeof exportsField === "string") {
-    if (subpath !== ".") return null;
-    target = exportsField;
-  } else if (
-    typeof exportsField === "object" &&
-    !Array.isArray(exportsField)
-  ) {
-    var keys = Object.keys(exportsField);
-    var isSugar =
-      keys.length > 0 &&
-      keys.every(function (k) {
-        return k.charAt(0) !== ".";
-      });
-    if (isSugar) {
-      // Condition-only object: the main entry.
-      if (subpath !== ".") return null;
-      target = exportsField;
-    } else if (Object.prototype.hasOwnProperty.call(exportsField, subpath)) {
-      target = exportsField[subpath];
-    } else {
-      // Longest './x/*' pattern-key match.
-      var best = null;
-      for (var i = 0; i < keys.length; i++) {
-        var key = keys[i];
-        if (key.slice(-2) === "/*") {
-          var prefix = key.slice(0, -1);
-          if (
-            subpath.indexOf(prefix) === 0 &&
-            (best === null || key.length > best.length)
-          ) {
-            best = key;
-          }
-        }
-      }
-      if (best === null) return null;
-      var star = subpath.slice(best.length - 1);
-      var patternTarget = vfsResolvePackageTargetSync(
-        exportsField[best],
-        VFS_SYNC_EXPORT_CONDITIONS,
-      );
-      if (typeof patternTarget !== "string") return null;
-      return patternTarget.replace(/[*]/g, star);
-    }
-  } else {
-    return null;
-  }
-  var resolved = vfsResolvePackageTargetSync(target, VFS_SYNC_EXPORT_CONDITIONS);
-  return typeof resolved === "string" ? resolved : null;
-}
-
-function vfsReadPackageJson(dirPath, vfs) {
-  var text = vfsReadText(dirPath + "/package.json", vfs);
-  if (typeof text !== "string") return null;
-  try {
-    return JSON.parse(text);
-  } catch (e) {
-    return null; // invalid package.json: callers fall through to legacy probing
-  }
-}
-
-function vfsPackageHasExports(dirPath, vfs) {
-  var pkg = vfsReadPackageJson(dirPath, vfs);
-  return !!pkg && pkg.exports !== undefined && pkg.exports !== null;
-}
-
-function vfsLoadPackageRoot(packageRoot, subpath, vfs) {
-  // 1. The 'exports' field wins when present (Node PACKAGE_EXPORTS_RESOLVE).
-  //    When present it is the ONLY legal route — a miss is honest, never
-  //    legacy probing (matches the async path's tryResolveFileOrPackage).
-  if (vfsPackageHasExports(packageRoot, vfs)) {
-    var pkg = vfsReadPackageJson(packageRoot, vfs);
-    var target = vfsResolvePackageExportsSync(pkg, subpath);
-    if (typeof target === "string") {
-      return vfsLoadAsFile(vfsNormalizePath(packageRoot + "/" + target), vfs);
-    }
-    return null;
-  }
-  // 2. Legacy probing: main/index for ".", file probing for subpaths.
-  if (subpath === ".") return vfsLoadAsDirectory(packageRoot, vfs);
-  return vfsLoadAsFileOrDirectory(
-    vfsNormalizePath(packageRoot + "/" + subpath.slice(2)),
-    vfs,
-  );
-}
-
-function vfsResolvePackageImportsSync(importPath, importerPath, vfs) {
-  // Node PACKAGE_IMPORTS_RESOLVE: nearest parent package.json scope wins;
-  // a scope without an 'imports' field means the specifier is unresolvable.
-  var dir = vfsDirname(importerPath || "/");
-  while (true) {
-    var pkg = vfsReadPackageJson(dir, vfs);
-    if (pkg && pkg.imports && typeof pkg.imports === "object") {
-      var imports = pkg.imports;
-      var target;
-      if (Object.prototype.hasOwnProperty.call(imports, importPath)) {
-        target = imports[importPath];
-      } else {
-        // Longest '#x/*' pattern-key match.
-        var best = null;
-        var keys = Object.keys(imports);
-        for (var i = 0; i < keys.length; i++) {
-          var key = keys[i];
-          if (
-            key.slice(-2) === "/*" &&
-            importPath.indexOf(key.slice(0, -1)) === 0 &&
-            (best === null || key.length > best.length)
-          ) {
-            best = key;
-          }
-        }
-        if (best === null) return null;
-        var star = importPath.slice(best.length - 1);
-        var patternTarget = vfsResolvePackageTargetSync(
-          imports[best],
-          VFS_SYNC_EXPORT_CONDITIONS,
-        );
-        if (typeof patternTarget !== "string") return null;
-        target = patternTarget.replace(/[*]/g, star);
-      }
-      var resolved = vfsResolvePackageTargetSync(
-        target,
-        VFS_SYNC_EXPORT_CONDITIONS,
-      );
-      // Node requires imports targets to be relative (./-prefixed).
-      if (typeof resolved !== "string" || resolved.slice(0, 2) !== "./")
-        return null;
-      return vfsLoadAsFile(vfsNormalizePath(dir + "/" + resolved), vfs);
-    }
-    if (pkg) return null; // nearest scope has no 'imports' — unresolvable
-    if (dir === "/") break;
-    dir = vfsDirname(dir);
-  }
-  return null;
-}
-
-/**
- * Resolves a require() request to an absolute VFS path (Node.js CJS
- * semantics), WITHOUT loading or executing the module. Used by both
- * syncRequire() and syncRequire.resolve().
- * - Relative requests (./, ../, .) resolve against parentPath's directory.
- * - Absolute requests (/) are used as-is.
- * - Bare specifiers walk node_modules from the parent directory upward
- *   (nearest wins), like Node and like src/module.js.
- * - Each candidate goes through LOAD_AS_FILE (X, X.js, X.json) then
- *   LOAD_AS_DIRECTORY (package.json "exports" first — the only legal route
- *   when present — then "main", index.js, index.json), with existence
- *   probed against the live memfs first, then the snapshot VFS.
- * - "#"-prefixed requests resolve via the nearest parent package.json
- *   "imports" field (Node PACKAGE_IMPORTS_RESOLVE).
- * - Builtins are handled by the caller (syncRequire checks _builtinManifest
- *   before calling this); a bare request that matches no VFS entry throws
- *   ERR_MODULE_NOT_FOUND.
- */
-function resolveSyncRequest(request, parentPath, vfs) {
-  var parentDir = vfsDirname(parentPath || '/');
-  // #-imports resolve against the nearest parent package.json scope
-  // (Node PACKAGE_IMPORTS_RESOLVE). Handled before the relative check:
-  // '#x' is not a relative request.
-  if (request.charAt(0) === '#') {
-    var viaImports = vfsResolvePackageImportsSync(request, parentPath, vfs);
-    if (viaImports) return viaImports;
-    // Node PACKAGE_IMPORTS_RESOLVE names the NEAREST parent package.json
-    // scope in the error — never the importer FILE + "/package.json".
-    var scopeDir = vfsLookupPackageScope(vfsDirname(parentPath || '/'), vfs);
-    throw scopeDir
-      ? vfsPackageImportNotDefined(request, scopeDir + "/package.json")
-      : vfsPackageImportNotDefinedNoScope(request, parentPath);
-  }
-  var basePath;
-  if (vfsIsRelativeRequest(request)) {
-    basePath =
-      request.charAt(0) === '/'
-        ? vfsNormalizePath(request)
-        : vfsNormalizePath(parentDir + '/' + request);
-    var resolved = vfsLoadAsFileOrDirectory(basePath, vfs);
-    if (resolved) return resolved;
-    throw vfsModuleNotFound(request);
-  }
-  // Bare specifier: node_modules walk, nearest directory wins
-  // (Node LOAD_NODE_MODULES: per directory, LOAD_AS_FILE then
-  // LOAD_AS_DIRECTORY with package-aware resolution).
-  var spec = vfsSplitPackageSpecifier(request);
-  var nmPaths = vfsNodeModulePaths(parentDir);
-  for (var i = 0; i < nmPaths.length; i++) {
-    var dir = nmPaths[i];
-    var packageRoot = vfsNormalizePath(dir + '/' + spec.packageName);
-    var isPkgDir = vfsIsDir(packageRoot, vfs);
-    // When 'exports' is present it is the ONLY legal route (Node
-    // PACKAGE_EXPORTS_RESOLVE): a subpath absent from the map is an honest
-    // miss even if the file exists on disk (real Node throws
-    // ERR_PACKAGE_PATH_NOT_EXPORTED). Stop walking — a parent
-    // node_modules must not shadow the denial.
-    if (isPkgDir && vfsPackageHasExports(packageRoot, vfs)) {
-      var viaExports = vfsLoadPackageRoot(packageRoot, spec.subpath, vfs);
-      if (viaExports) return viaExports;
-      throw vfsPackagePathNotExported(
-        spec.packageName,
-        spec.subpath,
-        packageRoot + "/package.json"
-      );
-    }
-    // Legacy: LOAD_AS_FILE(DIR/X) first (preserves require('foo') resolving
-    // to /node_modules/foo.js, and file-wins-over-dir like Node), then
-    // package-aware directory probing ('main'/index when no 'exports').
-    var direct = vfsLoadAsFile(vfsNormalizePath(dir + '/' + request), vfs);
-    if (direct) return direct;
-    if (isPkgDir) {
-      var hit = vfsLoadPackageRoot(packageRoot, spec.subpath, vfs);
-      if (hit) return hit;
-    }
-  }
-  throw vfsModuleNotFound(request);
-}
-
-function createSyncRequire(parentPath, vfs, cache) {
-  // One cache shared across the whole require tree (passed down to recursive
-  // requires). A fresh Map per recursion would break cache identity and turn
-  // circular requires into infinite recursion instead of Node-style partial
-  // exports.
-  cache = cache || new Map(); // resolvedPath -> module record (for cycles)
-  
-  function syncRequire(request) {
-    // 1. Built-in modules: return from cache if loaded, else throw
-    // (async loadBuiltin must have been called first)
-    let builtinKey = request.startsWith('node:') ? request.slice(5) : request;
-    if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
-      const key = _builtinManifest[builtinKey] ? builtinKey : request;
-      if (_builtinCache.has(key)) {
-        return _builtinRequireValue(_builtinCache.get(key));
-      }
-      throw new Error('[ERR_REQUIRE_ASYNC]: Built-in "' + request + '" not yet loaded. ' +
-        'Call await loadBuiltin("' + request + '") first, or use dynamic import().');
-    }
-    
-    // 2. Resolve path (relative/absolute)
-    // Uses resolveSyncRequest for Node.js-compatible path resolution.
-    // Bare specifiers (node_modules) throw ERR_MODULE_NOT_FOUND (TODO: full
-    // node_modules walk with package.json exports).
-    let resolved;
-    try {
-      resolved = resolveSyncRequest(request, parentPath, vfs);
-    } catch (err) {
-      throw new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "'");
-    }
-    
-    // 3. Check cache (cycle tolerance: return partial exports)
-    if (cache.has(resolved)) {
-      return cache.get(resolved).exports;
-    }
-    
-    // 4. Load source synchronously: live memfs first, snapshot VFS fallback
-    const source = readModuleSourceLiveFirst(resolved, vfs);
-    if (source == null) {
-      throw new Error("[ERR_MODULE_NOT_FOUND]: Cannot find module '" + request + "' (resolved: " + resolved + ")");
-    }
-    
-    // 5. Create module object, cache BEFORE executing (for cycles)
-    const module = { exports: {}, id: resolved, filename: resolved, loaded: false };
-    cache.set(resolved, module);
-    
-    // 5b. JSON modules: parse the source as JSON (Node semantics)
-    // instead of executing it as JavaScript.
-    if (resolved.endsWith('.json')) {
-      try {
-        module.exports = JSON.parse(source);
-      } catch (err) {
-        cache.delete(resolved);
-        throw err;
-      }
-      module.loaded = true;
-      return module.exports;
-    }
-    
-    // 6. Wrap and execute
-    // Node.js CJS semantics: 'this' at module top-level === 'module.exports'.
-    // Invoke via .call(module.exports, ...) so 'this' is correct. A plain
-    // wrapper(...) call would make 'this' undefined (strict) or globalThis
-    // (sloppy), breaking 'this.foo = bar' (should set module.exports.foo,
-    // not a global).
-    const wrapper = new Function('require', 'module', 'exports', '__filename', '__dirname',
-      source + String.fromCharCode(10) + '//# sourceURL=' + resolved);
-    const dirname = resolved.split('/').slice(0, -1).join('/') || '.';
-    try {
-      wrapper.call(
-        module.exports, // 'this' === module.exports (Node CJS parity)
-        createSyncRequire(resolved, vfs, cache), // recursive require shares the cache
-        module,
-        module.exports,
-        resolved,
-        dirname
-      );
-    } catch (err) {
-      cache.delete(resolved); // remove failed module from cache
-      throw err;
-    }
-    module.loaded = true;
-    return module.exports;
-  }
-  
-  syncRequire.cache = cache;
-  // Node.js parity: require.resolve() locates the module entry point on
-  // the VFS without loading it. Uses the same resolution logic as require().
-  syncRequire.resolve = (request) => {
-    // Builtins resolve to their specifier (Node returns the builtin name).
-    let builtinKey = request.startsWith('node:') ? request.slice(5) : request;
-    if (_builtinManifest[builtinKey] || _builtinManifest[request]) {
-      return request;
-    }
-    return resolveSyncRequest(request, parentPath, vfs);
-  };
-  return syncRequire;
-}
-
-function wrapCommonJS(source, parentPath, vfs) {
-  // The require function is provided at module instantiation time via
-  // the runtime's sync require. For ESM-converted CJS, we embed a
-  // placeholder that gets replaced with the real require.
-  //
-  // Node.js CJS semantics:
-  // - 'this' at module top-level === 'module.exports' (via .call)
-  // - '__filename' and '__dirname' are available
-  const filename = parentPath;
-  // Node path.dirname semantics: "/x.js" -> "/", "a/b.js" -> "a", "x.js" -> "."
-  const _parts = parentPath.split('/');
-  _parts.pop();
-  const _dir = _parts.join('/');
-  const dirname = _dir === '' ? (parentPath.charAt(0) === '/' ? '/' : '.') : _dir;
-  return \`
-const exports = {};
-const module = { exports };
-const __filename = \${JSON.stringify(filename)};
-const __dirname = \${JSON.stringify(dirname)};
-// Sync require is provided by the runtime via __syncRequire__
-const require = typeof __syncRequire__ !== 'undefined'
-  ? __syncRequire__
-  : (() => { throw new Error('[ERR_REQUIRE_NOT_SUPPORTED]: sync require not available in this context'); });
-
-(function (require, module, exports, __filename, __dirname) {
-  \${source}
-}).call(module.exports, require, module, exports, __filename, __dirname);
-
-export default module.exports;
-\`;
-}
- 
-/** Dynamically imports a data-URL and returns a proxied module object. */
-async function importAndProxy(url, modulePath, relativeName, moduleType) {
-  const data = await import(url);
-  return buildModuleProxy(data, modulePath, relativeName, moduleType);
-}
-
-/**
- * Builds the module proxy / plain object returned to the caller.
- * - For require(): unwraps \`.default\` (CommonJS compat).
- * - For ESM:       throws on missing named exports, hides \`.default\` when absent.
- */
-function buildModuleProxy(data, modulePath, relativeName, moduleType) {
-  const moduleObject = Object.assign({}, data);
-
-  Object.defineProperty(moduleObject, Symbol.toStringTag, {
-    value: 'Module',
-    enumerable: false,
-  });
-
-  // CJS marker (see convertCjsToEsm): named ESM imports from a CJS module
-  // resolve against module.exports (Node cjs-module-lexer parity). Keep the
-  // marker out of the visible namespace.
-  const isCjs = !!moduleObject.__bvm_cjs__;
-  delete moduleObject.__bvm_cjs__;
-
-  // Star re-exports (see convertCjsToEsm __exportStar -> export * from).
-  // __bvm_star_* hold lifted module namespaces to re-export (all keys
-  // except default, per ESM semantics). Collected for proxy fallback and
-  // hidden from the visible namespace like __bvm_cjs__.
-  const starSources = [];
-  for (const key of Object.keys(moduleObject)) {
-    if (key.startsWith('__bvm_star_')) {
-      const starMod = moduleObject[key];
-      if (
-        starMod &&
-        (typeof starMod === 'object' || typeof starMod === 'function')
-      ) {
-        starSources.push(starMod);
-      }
-      delete moduleObject[key];
-    }
-  }
-
-  if (moduleType === 'require') {
-    return moduleObject.default ?? moduleObject;
-  }
-
-  const hasDefault = Object.prototype.hasOwnProperty.call(data, 'default');
-  
-  
-   // Keep .default enumerable and accessible when the module exported one.
-  // If there's no default export, define it as undefined (non-enumerable)
-  // so \'import { default as x }\' still resolves without a throw, but
-  // Object.keys() / for..in won't surface a spurious \'default\' key.
-  /* if (!hasDefault) {
-    Object.defineProperty(moduleObject, 'default', {
-      value: undefined,
-      enumerable: false,
-      configurable: true,
-    });
-  }*/ 
-  
-  //if (!hasDefault) delete moduleObject.default;
-
-  return new Proxy(moduleObject, {
-    get(target, prop) {
-      if (typeof prop === 'symbol' || prop === 'then') return target[prop];
-
-      if (prop === 'default') return  target?.default || target; // TODO: if sourceType is CJS - force default.
-      if (prop === '__esModule') return true;
-
-      if (!(prop in target)) {
-        // Star re-export fallback (ESM 'export *' semantics): check each
-        // star source, skipping 'default'. Star modules are proxied and
-        // throw SyntaxError for missing exports; try the next source.
-        for (const starMod of starSources) {
-          if (prop === 'default') break;
-          try {
-            return starMod[prop];
-          } catch (e) {
-            if (e instanceof SyntaxError) continue;
-            throw e;
-          }
-        }
-        // CJS interop (Node parity): a named import from a CJS module
-        // resolves against module.exports, including keys it inherited
-        // via spread (which static analysis cannot see).
-        if (isCjs) {
-          const cjsExports = target.default;
-          if (
-            cjsExports !== null &&
-            (typeof cjsExports === 'object' ||
-              typeof cjsExports === 'function') &&
-            prop in cjsExports
-          ) {
-            return cjsExports[prop];
-          }
-        }
-        const displayPath = relativeName ?? modulePath;
-        throw new SyntaxError(
-          \`The requested module '\${displayPath}' does not provide an export named '\${String(prop)}'\`
-        );
-      }
-
-      return target[prop];
-    },
-  });
-}  
- 
- 
- 
- 
- // ─── Interop Channel ──────────────────────────────────────────────────────────
-
-const interopChannel = {
-  // Call parent functions from sandbox
-  callParent: async (method, ...args) => {
-    const callId = Math.random().toString(36).substr(2, 9);
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Interop call timeout'));
-      }, 60000);
-      
-      const handler = (event) => {
-     
-        if (event.data.type === 'interop_response' && event.data.callId === callId) {
-          clearTimeout(timeout);
-          window.removeEventListener('message', handler);
-          if (event.data.error) {
-            // Parent sends structured { message, code, name } (or a legacy string).
-            // Reconstruct the error so err.code / err.name survive the boundary.
-            var errInfo = event.data.error;
-            var errMessage = (errInfo && typeof errInfo === 'object') ? errInfo.message : errInfo;
-            var bvmErr = new Error(errMessage);
-            if (errInfo && typeof errInfo === 'object') {
-              if (errInfo.code) bvmErr.code = errInfo.code;
-              if (errInfo.name && errInfo.name !== 'Error') bvmErr.name = errInfo.name;
-            }
-            reject(bvmErr);
-          } else {
-            resolve(event.data.result);
-          }
-        }
-      };
-      
-      window.addEventListener('message', handler);
-      window.parent.postMessage({
-        type: 'interop_call',
-        callId,
-        method,
-        args
-      }, '*');
-    });
-  },
-  
-  // Register functions that parent can call
-  exports: {},
-  
-  
-  expose: (name, fn) => {
-    interopChannel.exports[name] = fn;
-    const RUNTIME_METHODS = ['__check_exists__', '__stdin__', '__terminal_resize__', '__serverRequest__']
-    if(!RUNTIME_METHODS.includes(name)){
-    window.parent.postMessage({ type: 'interop_registered', name }, '*');
-    };
-  }
-};
-
-//  window.parent.postMessage({ type: 'sandbox_ready' }, '*'); 
- 
-// Listen for parent calling sandbox functions
-window.addEventListener('message', (event) => {
-  if (event.data.type === 'interop_invoke') {
-    const { callId, method, args } = event.data;
-     
-    if (globalThis.${config.interopVariable}.exports[method]) {
-      try {
-        const result = globalThis.${config.interopVariable}.exports[method](...args);
-         
-        // Handle async functions
-        Promise.resolve(result).then(res => {
-          window.parent.postMessage({
-            type: 'interop_result',
-            callId,
-            result: res
-          }, '*');
-        }).catch(err => {
-          window.parent.postMessage({
-            type: 'interop_result',
-            callId,
-            error: err.message
-          }, '*');
-        });
-      } catch (err) {
-      
-      // Using STDIN error was thrown - pipe back into runtime
-       if(method === "__stdin__"){
-         throw err
-       }
-      
-      if(method != "__stdin__"){
-        window.parent.postMessage({
-          type: 'interop_result',
-          callId,
-          error: err.message
-        }, '*');
-      }
-     }
-    } else {
-      window.parent.postMessage({
-        type: 'interop_result',
-        callId,
-        error: \`Method '\${method}' not found\`
-      }, '*');
-    }
-  }
-}); 
-
-interopChannel.expose('__check_exists__', (methodName) => {
-  return typeof interopChannel.exports[methodName] === 'function';
-});
-
-
-
- 
-
-// Make available globally
-globalThis[Symbol.for("bvm.interop")] = interopChannel;
-
-
-// Node.js Globals
-
-const global = globalThis;
-
-const setImmediate = globalThis.setImmediate || ((fn, ...args) => {
-  return setTimeout(fn, 0, ...args);
-});
-
-
-
- 
- 
-})();
- 
- 
-// Execute user code with comprehensive error handling
-(async () => {
-   
-
-
-
-// globalThis?.__RUNTIME_FS__ = await globalThis._RUNTIME_.loadModule("RUNTIME:NODE_GLOBALS"); if emulating node (for import.meta.resolve && other fs ops.) 
- 
-// all interop.expose() will be hoisted here when code is running. 
- 
-window.${config.interopVariable} =  globalThis[Symbol.for("bvm.interop")];  // this sets marker & exposes.
-
-
-
-//await _RUNTIME${config.uuid}_.loadModule("fs");
-//await _RUNTIME${config.uuid}_.__FS__.promises.writeFile("/data.json", JSON.stringify({ hello: "worlds" }), "utf8", );
- /**
- * Runtime-compliant shim for import.meta.resolve
- * @param {string} specifier - The path to resolve (e.g., './utils.js')
- * @param {string} [parent=import.meta.url] - The base URL (defaults to current module)
- * @returns {string} - The absolute resolved URL string
- */
- function __RUNTIME_RESOLVE__HANDLE(specifier, parent = 'file:') {
-  try {
-  
-  if(globalThis?._RUNTIME${config.uuid}_?.__FS__){
-  const fs = globalThis._RUNTIME${config.uuid}_.__FS__;
-  const parentDir = "./"
-   if(process){
-  parent = process.cwd();
-  }
-  if (!fs.existsSync(parentDir)) {
-    throw new TypeError(
-      \`Failed to resolve module specifier "\${specifier}" relative to "\${parent}"\`
+    sub("%%UUID%%", config.uuid);
+    sub("%%INTEROP_VAR%%", config.interopVariable);
+    sub("%%PROCESS_JSON%%", JSON.stringify(config.process));
+    sub("%%USER_FILES_JSON%%", JSON.stringify(config.fs));
+    sub(
+      "%%SEA_ASSETS_JSON%%",
+      JSON.stringify(
+        config.seaAssets && Object.keys(config.seaAssets).length
+          ? config.seaAssets
+          : undefined,
+      ),
     );
-  } 
-  if (fs.statSync(parentDir).isFile()) {
-    // If parent is a file, strip the file name
-    const lastSlash = parentDir.lastIndexOf('/');
-    parentDir = lastSlash >= 0 ? parentDir.slice(0, lastSlash) : '.';
-  }
-
-  // Handle relative paths: ./ or ../
-  if (specifier.startsWith('./') || specifier.startsWith('../')) {
-    let parts = (parentDir + '/' + specifier).split('/');
-    const resolvedParts = [];
-    for (const part of parts) {
-      if (part === '.' || part === '') continue;
-      if (part === '..') resolvedParts.pop();
-      else resolvedParts.push(part);
-    }
-    const resolvedPath = '/' + resolvedParts.join('/');
-    if (fs.existsSync(resolvedPath) || fs.existsSync(resolvedPath + '.js')) {
-      return resolvedPath;
-    }
-    throw new TypeError(
-      \`Failed to resolve module specifier "\${specifier}" relative to "\${parent}"\`
+    sub("%%BUILTIN_MODULES_JSON%%", JSON.stringify(_builtinManifest));
+    sub("%%BUILTIN_MODULES_ARRAY_JSON%%", JSON.stringify(builtinModules));
+    sub("%%FILENAME%%", config.fileName);
+    sub("%%STRIP_ANSI_FN%%", String(stripAnsi));
+    sub("%%PARSE_STACK_LOCATION_FN%%", __parseStackLocationFn.toString());
+    sub("%%SHELL_FIELD%%", shellField);
+    sub(
+      "%%NORMALIZE_BUILTIN_SPECIFIER_FN%%",
+      normalizeBuiltinSpecifier.toString(),
     );
-  }
-  
-  
-  throw new Error("Failed to find.")
-  
-  }
-
-   return new URL(specifier, parent).href; // for browser emulation
-   
-  } catch (err) {
- 
-    // 2. The spec requires throwing a TypeError on resolution failure
-   throw new TypeError(\`Failed to resolve module specifier "\${specifier}" relative to "\${parent}"\`);
-  }
-}
-
-Object.defineProperty(__RUNTIME_RESOLVE__HANDLE, 'toString', {
-  value: function() {
-    return 'function resolve() { [native code] }';
-  },
-  writable: false,
-  configurable: true
-});
-
- 
-
-
-    
- const observer = new PerformanceObserver((list) => {
-  list.getEntries().forEach((r) => {
-   
-   emitMe("resource_timing", null, {
-      url: r.name,
-      type: r.initiatorType,
-      start: r.startTime,
-      duration: r.duration,
-      size: r.transferSize,
-      encoded: r.encodedBodySize,
-      decoded: r.decodedBodySize
-    });
-   return;
-    console.log({
-      url: r.name,
-      type: r.initiatorType,
-      start: r.startTime,
-      duration: r.duration,
-      size: r.transferSize,
-      encoded: r.encodedBodySize,
-      decoded: r.decodedBodySize
-    });
-  });
-});
-
-observer.observe({ type: "resource", buffered: true });
-
-
-// Add to SandboxRuntime.generate() before user code execution:
-
-
- 
-// Full path to the current file (commonJS)
-/*
-globalThis.__filename = "";
-
-// Directory of the current file
-globalThis.__dirname = "";
-*/
-
-
-
-   // Track pending module imports
-const pendingModules = new Map();
-
- 
-function waitForAllModules() {
-  return new Promise(resolve => {
-    const check = () => {
-      if (pendingModules.size === 0) {
-        resolve();
-      } else {
-        setTimeout(check, 50);
-      }
-    };
-    check();
-  });
-}
-
-
-
-    
-
-
-const startTime = performance.now();
-
-
-
-// Save the original console methods
-const originalConsole = { ...console };
-
-
-const stripAnsi = ${String(stripAnsi)}
-
- 
-
-// Patch each console method
-for (const method in originalConsole) {
-  if (typeof originalConsole[method] === 'function') {
-    console[method] = function (...args) {
-     // const cleanArgs = args.map(arg => typeof arg === 'string' ? stripAnsi(arg) : arg);
-
-     // TODO STRIP ANSI 
-     if(process && process.env?.FORCE_COLOR === 0){
-     
-     }
-      emitMe("console", method, ...args);
-
-      if (originalConsole[method]) {
-        // originalConsole[method].apply(originalConsole, cleanArgs);
-      }
-    };
-  }
-}
-
- 
-// Example custom function that gets called before console methods
-function serialize(...args) {
-  const sanitized = args.map(arg => {
-    if (arg === null) return "null";
-    if (arg === undefined) return "undefined";
-    
-    // 1. If the argument is a function
-    if (typeof arg === 'function') {
-      return arg.toString();
-    }
-    
-    
-    // Handle all TypedArrays
-if (ArrayBuffer.isView(arg) && !(arg instanceof DataView)) {
-  
-
-  
-  return JSON.stringify({
-    type: "binary",
-    data: arg
-  }); 
-  
-   
-}
-
-    
-    function containsFunction(obj) {
-  return Object.values(obj).some(v => typeof v === 'function');
-}
-
-     // 2. Check for our custom [object Process] or other native tags
-     const tag = Object.prototype.toString.call(arg); 
-    // 3. Check for arrays specifically
-    if (Array.isArray(arg) || tag === '[object Object]' && typeof arg === 'object' && typeof tag != 'function' && !containsFunction(arg) || tag === '[object Module]' && typeof arg === 'object' && typeof tag != 'function' && !containsFunction(arg)) {
-      try {
-        return JSON.stringify(arg);
-      } catch {
-        return String(arg);
-      } 
-    }
-     
- 
-    
-    
-    
-     //if (tag !== '[object Objects]' && typeof arg === 'object') {
-    
-     if (tag && typeof arg === 'object') {
-  const properties = Object.getOwnPropertyNames(arg)
-    .map(p => {
-      const val = arg[p];
-      let valueStr;
-
-      if (typeof val === 'function') {
-        valueStr = val.toString();
-      } else if (typeof val === 'object' && val !== null) {
-        try {
-          valueStr = JSON.stringify(val);
-        } catch {
-          valueStr = String(val);
-        }
-      } else {
-        valueStr = JSON.stringify(val); // handles numbers, strings, booleans
-      }
-
-      return \`\n  "\${p}": \${valueStr}\`;
-    })
-    .join(',');
-
-  return \`\${tag} {\${properties}\n}\`;
-}
-
-    
-    // 4. Normal object handling
-    if (typeof arg === 'object') {
-      try {
-        return JSON.stringify(arg, null, 2);
-      } catch {
-        // Fallback for circular structures
-        return String(arg);
-      }
-    }
-    
-    // 5. Primitive values (Strings, Numbers, Booleans)
-    return String(arg);
-  });
-  return sanitized;
-}
- 
-
-function emitMe(fn, method, ...args) {
-const sanitized = serialize(...args)
-
-
-
-if(fn != "console" && fn != "fs"){
-window.parent.postMessage({
-    type: fn,
-    message: sanitized.join(' ')
-  }, '*');
-
-}
-
-
- if(fn === "fs"){
-  window.parent.postMessage({
-    type: 'fs',
-    method: method.replace("promises.", ''),
-    filename: args[0],
-    data: args[1]
-  }, '*');
- }
-
-function sanitizeArg(arg) {
-  const type = typeof arg;
-
-  if (
-    type === "string" ||
-    type === "number" ||
-    type === "boolean" ||
-    arg === null ||
-    arg === undefined
-  ) {
-    return arg; // primitives are safe
-  }
-
-  if (type === "object"){
-  return serialize(arg)
-  }
-
-  return arg.toString();
-}
-globalThis.emitMe = emitMe;
-
-globalThis._RUNTIME${config.uuid}_.emit = emitMe;
-
-function sendConsoleMessage(method, args) {
-
-const sanitizedArray = typeof serialize === 'function' ? serialize(...args) : args;
-const message = sanitizedArray.join(' ');
-
-  window.parent.postMessage({
-    type: "stdout",
-    method,
-    message: message,
-  }, "*");
-}
-
- if(fn === "console"){
- sendConsoleMessage(method, args);
- }
-}
-
-
-
-// Console capture with multiple levels
-const logs = [];
-const errors = [];
-
-class EventEmitter {
-  constructor() { this._events = {}; }
-  on(type, listener) {
-    (this._events[type] || (this._events[type] = [])).push(listener);
-    return this;
-  }
-  emit(type, ...args) {
-    if (!this._events[type]) return false;
-    this._events[type].forEach(fn => fn.apply(this, args));
-    return true;
-  }
-  once(type, listener) {
-    const selfClosing = (...args) => {
-      this.off(type, selfClosing);
-      listener.apply(this, args);
-    };
-    return this.on(type, selfClosing);
-  }
-  off(type, listener) {
-    if (!this._events[type]) return this;
-    this._events[type] = this._events[type].filter(fn => fn !== listener);
-    return this;
-  }
-}
-// Alias for Node compliance
-EventEmitter.prototype.addListener = EventEmitter.prototype.on;
-EventEmitter.prototype.removeListener = EventEmitter.prototype.off;
-
- 
- const process2 = (function () {
-  let _intervalId = null;
-    const listeners = Object.create(null);
-  let traceWarningHelperShown = false;
-  // --- Minimal EventEmitter ---
-  async function emit(event, ...args) {
-    const handlers = listeners[event];
-    if (!handlers) return false;
-
-    // Make a copy to avoid mutation during iteration
-    const results = handlers.slice().map(fn => {
-      if (fn._once) off(event, fn);
-      return fn.apply(processFinal, args);
-    });
-
-    // Await any promises returned by async functions
-    await Promise.all(results);
-
-    return true;
-  }
-
-function binding(name) {
-    if (name === "natives") return {
-      assert: true, buffer: true, child_process: true, constants: true,
-      crypto: true, events: true, fs: true, http: true, https: true,
-      module: true, os: true, path: true, process: true, stream: true,
-      string_decoder: true, timers: true, tty: true, url: true, util: true, zlib: true
-    };
-    if (name === "config") return { exposeInternals: false };
-    if (name === "constants")
-      return {
-        os: {
-          UV_UDP_REUSEADDR: 4,
-          signals: {
-            SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5,
-            SIGABRT: 6, SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10,
-            SIGSEGV: 11, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15,
-            SIGCHLD: 17, SIGCONT: 18, SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21,
-            SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24, SIGXFSZ: 25, SIGVTALRM: 26,
-            SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGPWR: 30, SIGSYS: 31,
-          },
-          errno: {},
-        },
-        fs: {
-          O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128,
-          O_NOCTTY: 256, O_TRUNC: 512, O_APPEND: 1024, O_NONBLOCK: 2048,
-          O_DSYNC: 4096, O_SYNC: 1052672, O_DIRECT: 16384, O_DIRECTORY: 65536,
-          O_NOATIME: 262144, O_NOFOLLOW: 131072, O_CLOEXEC: 524288,
-          UV_FS_O_FILEMAP: 0,
-          S_IFMT: 61440, S_IFREG: 32768, S_IFDIR: 16384, S_IFCHR: 8192,
-          S_IFBLK: 24576, S_IFIFO: 4096, S_IFLNK: 40960, S_IFSOCK: 49152,
-          F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1,
-        },
-        crypto: {},
-        zlib: {},
-      };
-    if (name === "util") return {};
-    if (name === "fs") return {};
-    if (name === "buffer") return {};
-    if (name === "stream_wrap") return {};
-    if (name === "tcp_wrap") return {};
-    if (name === "pipe_wrap") return {};
-    
-    // Throw for unknown bindings so callers fall back gracefully
-    throw new Error(\`No such module: \${name}\`);
-  }
-
-
-
-  function on(event, fn) {
-    if (!listeners[event]) listeners[event] = [];
-    listeners[event].push(fn);
-    return processFinal;
-  }
-  const addListener = on;
-
-  function prependListener(event, fn) {
-    if (!listeners[event]) listeners[event] = [];
-    listeners[event].unshift(fn);
-    return processFinal;
-  }
-
-  function once(event, fn) {
-    fn._once = true;
-    return on(event, fn);
-  }
-
-  function prependOnceListener(event, fn) {
-    fn._once = true;
-    return prependListener(event, fn);
-  }
-
-  function off(event, fn) {
-    const arr = listeners[event];
-    if (!arr) return processFinal;
-    const i = arr.indexOf(fn);
-    if (i !== -1) arr.splice(i, 1);
-    return processFinal;
-  }
-  const removeListener = off;
-
-  function listenerCount(event) {
-    return listeners[event] ? listeners[event].length : 0;
-  }
-
-  function nextTick(fn, ...args) {
-    Promise.resolve().then(() => fn(...args));
-  }
-
-  // --- Warning internals ---
-  function createWarningObject(message, type, code, ctor, detail) {
-    const warning = new Error(message);
-    warning.name = type || 'Warning';
-    if (code !== undefined) warning.code = code;
-    if (detail !== undefined) warning.detail = detail;
-
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(warning, ctor || processFinal.emitWarning);
-    }
-
-    return warning;
-  }
-
-  function formatWarning(warning) {
-    const isDeprecation = warning.name === 'DeprecationWarning';
-
-    const trace =
-      processFinal.traceProcessWarnings ||
-      (isDeprecation && processFinal.traceDeprecation);
-
-    let msg = \`(node:\${processFinal.pid || 1}) \`;
-
-    if (warning.code) {
-      msg += \`[\${warning.code}] \`;
-    }
-
-    if (trace && warning.stack) {
-      msg += warning.stack;
-    } else {
-      msg += warning.toString();
-    }
-
-    if (typeof warning.detail === 'string') {
-      msg += \`\n\${warning.detail}\`;
-    }
-
-    if (!trace && !traceWarningHelperShown) {
-      const flag = isDeprecation
-        ? '--trace-deprecation'
-        : '--trace-warnings';
-
-      const msg = \`\\n(Use \\\`node \\\${flag} ...\\\` to show where the warning was created)\`;
-      traceWarningHelperShown = true;
-    }
-
-    return msg;
-  }
-
-  function defaultWarningHandler(warning) {
-    if (!(warning instanceof Error)) return;
-
-    const isDeprecation = warning.name === 'DeprecationWarning';
-    if (isDeprecation && processFinal.noDeprecation) return;
-
-    console.error(formatWarning(warning));
-  }
-
-  function emitWarning(warning, type, code, ctor) {
-    if (processFinal.noDeprecation && type === 'DeprecationWarning') {
-      return;
-    }
-
-    let detail;
-
-    if (type && typeof type === 'object' && !Array.isArray(type)) {
-      ctor = type.ctor;
-      code = type.code;
-      detail = type.detail;
-      type = type.type || 'Warning';
-    } else if (typeof type === 'function') {
-      ctor = type;
-      type = 'Warning';
-      code = undefined;
-    }
-
-    if (typeof code === 'function') {
-      ctor = code;
-      code = undefined;
-    }
-
-    if (typeof warning === 'string') {
-      warning = createWarningObject(warning, type, code, ctor, detail);
-    } else if (!(warning instanceof Error)) {
-      throw new TypeError('warning must be a string or Error');
-    }
-
-    if (warning.name === 'DeprecationWarning') {
-      if (processFinal.noDeprecation) return;
-
-      if (processFinal.throwDeprecation) {
-        return nextTick(() => { throw warning; });
-      }
-    }
-
-    nextTick(() => {
-      if (listenerCount('warning') === 0) {
-        defaultWarningHandler(warning);
-      }
-      emit('warning', warning);
-    });
-  }
-
-  function emitWarningSync(warning, type, code, ctor) {
-    if (typeof warning === 'string') {
-      warning = createWarningObject(warning, type, code, ctor);
-    }
-
-    if (listenerCount('warning') === 0) {
-      defaultWarningHandler(warning);
-    }
-
-    emit('warning', warning);
-  }
-
-
- // Report 
- 
- const report = (function () {
-  let _directory = '';
-  let _filename = '';
-  let _compact = false;
-  let _excludeNetwork = false;
-  let _signal = null;
-  let _reportOnFatalError = false;
-  let _reportOnSignal = false;
-  let _reportOnUncaughtException = false;
-  let _excludeEnv = false;
-
-  // Internal store for reports
-  const reports = [];
-
-  function writeReport(file, err) {
-    if (typeof file === 'object' && file !== null) {
-      err = file;
-      file = undefined;
-    } else if (file !== undefined && typeof file !== 'string') {
-      throw new TypeError('file must be a string');
-    }
-
-    if (err === undefined) {
-      err = new Error('Synthetic error');
-    } else if (typeof err !== 'object' || err === null) {
-      throw new TypeError('err must be an object');
-    }
-
-    const r = {
-      source: 'JavaScript API',
-      type: 'API',
-      file: file || _filename || null,
-      error: err,
-      timestamp: Date.now(),
-      compact: _compact,
-      directory: _directory,
-      excludeNetwork: _excludeNetwork,
-      excludeEnv: _excludeEnv,
-    };
-
-    reports.push(r);
-
-    // For demo, log to console
-    console.warn('Report written:', r);
-
-    return r;
-  }
-
-  function getReport(err) {
-    if (err === undefined) {
-      err = new Error('Synthetic error');
-    } else if (typeof err !== 'object' || err === null) {
-      throw new TypeError('err must be an object');
-    }
-
-    // Return the latest report matching this error, if any
-    const r = reports.find(r => r.error === err);
-    return r ? JSON.parse(JSON.stringify(r)) : null;
-  }
- 
-  function addSignalHandler(sig) {
-    if (!_reportOnSignal) return;
-
-    if (typeof sig !== 'string') sig = _signal;
-
-    if (sig) {
-      process.on(sig, signalHandler);
-    }
-  }
-
-  function removeSignalHandler() {
-    if (_signal) {
-      process.removeListener(_signal, signalHandler);
-    }
-  }
-
-  function signalHandler(sig) {
-    writeReport(sig, { type: 'Signal', message: 'Signal received' });
-  }
-
-   function hrtime(previous) {
-  const now = performance.now() / 1000; // seconds
-  const sec = Math.floor(now);
-  const nano = Math.floor((now - sec) * 1e9);
-
-  if (!previous) return [sec, nano];
-
-  let diffSec = sec - previous[0];
-  let diffNano = nano - previous[1];
-
-  if (diffNano < 0) {
-    diffSec -= 1;
-    diffNano += 1e9;
-  }
-
-hrtime.bigint = () => {
-  return BigInt(Math.floor(performance.now() * 1e6));
-};
-
-  return [diffSec, diffNano];
-};
-
-
-
-
-  return {
-   
-    writeReport,
-    getReport,
-
-    get directory() { return _directory; },
-    set directory(dir) { _directory = String(dir); },
-
-    get filename() { return _filename; },
-    set filename(name) { _filename = String(name); },
-
-    get compact() { return _compact; },
-    set compact(b) { _compact = Boolean(b); },
-
-    get excludeNetwork() { return _excludeNetwork; },
-    set excludeNetwork(b) { _excludeNetwork = Boolean(b); },
-
-    get signal() { return _signal; },
-    set signal(sig) { 
-      removeSignalHandler();
-      _signal = String(sig); 
-      addSignalHandler(sig);
-    },
-
-    get reportOnFatalError() { return _reportOnFatalError; },
-    set reportOnFatalError(trigger) { _reportOnFatalError = Boolean(trigger); },
-
-    get reportOnSignal() { return _reportOnSignal; },
-    set reportOnSignal(trigger) { 
-      _reportOnSignal = Boolean(trigger);
-      removeSignalHandler();
-      addSignalHandler();
-    },
-
-    get reportOnUncaughtException() { return _reportOnUncaughtException; },
-    set reportOnUncaughtException(trigger) { _reportOnUncaughtException = Boolean(trigger); },
-
-    get excludeEnv() { return _excludeEnv; },
-    set excludeEnv(b) { _excludeEnv = Boolean(b); },
-  };
-})
-
-  let cwd = "/"
-  // 1. Real logic
-  const rawMethods = {
- 
-    async exit(code = 0) {
-      emit('beforeExit', code);  // async breaks kill
-      emit('exit', code);
-       if (_intervalId) {
-        clearInterval(_intervalId);
-        _intervalId = null;
-      }
-    const endTime = performance.now();
-    const executionTime = (endTime - startTime).toFixed(2); 
-     
-      window.parent.postMessage({ type: 'kill', logs: logs || [], executionTime: parseFloat(executionTime), exitCode: code }, '*');
-    },
-    
-    abort() {
-    throw new Error('Process aborted');
-    },
-    // --- begin sandbox getBuiltinModule (gap #3) ---
-    // Synchronous builtin access for createRequire()/Module._load: the
-    // sandbox preloads every manifest builtin into _builtinCache at init
-    // (see the preload block after RUNTIME:NODE_GLOBALS), so this never
-    // needs to await. Matches Node v24: a non-string id throws
-    // ERR_INVALID_ARG_TYPE; unknown ids return undefined (no throw).
-    getBuiltinModule(id) {
-      if (typeof id !== 'string') {
-        const err = new TypeError(
-          'The "id" argument must be of type string. Received type ' + typeof id + ' (' + String(id) + ')'
-        );
-        err.code = 'ERR_INVALID_ARG_TYPE';
-        throw err;
-      }
-      const bare = id.startsWith('node:') ? id.slice(5) : id;
-      if (typeof _builtinManifest === 'undefined' || typeof _builtinCache === 'undefined') {
-        return undefined;
-      }
-      if (!Object.prototype.hasOwnProperty.call(_builtinManifest, bare)) {
-        return undefined;
-      }
-      if (!_builtinCache.has(bare)) {
-        // Unified cache fallback (fix/ondemand-require, Worker A): the async
-        // loader populates _builtinCache on completion (see the hook in
-        // loadModule), but a builtin loaded through another path may live
-        // only in moduleRegistry. Scan for a completed record of the same
-        // builtin and return the same instance instead of throwing.
-        // _builtinCache stays the O(1) fast path; this O(n) scan is the
-        // safety net (kept deliberately after the fast path, not before).
-        // Registry keys store the underscore-normalized modulePath
-        // (entryPoint::fs_promises), so match both the slash-form bare and
-        // its underscore form, each with and without the node: prefix.
-        const bareUnderscored = bare.split('/').join('_');
-        let registryHit = null;
-        try {
-          for (const entry of moduleRegistry) {
-            const regKey = entry[0];
-            const rec = entry[1];
-            if (typeof regKey !== 'string' || !rec || rec.status !== 'done') continue;
-            if (regKey.endsWith('::node:' + bare) || regKey.endsWith('::' + bare) ||
-                regKey.endsWith('::node:' + bareUnderscored) || regKey.endsWith('::' + bareUnderscored)) {
-              registryHit = rec;
-              break;
-            }
-          }
-        } catch (scanErr) { /* fall through to the explicit error below */ }
-        if (registryHit) {
-          return _builtinRequireValue(registryHit.exports);
-        }
-        // Manifest-listed but in neither cache (preload failed or was
-        // skipped): a sync require() can never wait for the async loader,
-        // so say so explicitly instead of the old silent undefined
-        // that surfaced far away as MODULE_NOT_FOUND.
-        const err = new Error(
-          "[ERR_REQUIRE_ASYNC_MODULE] Cannot require builtin '" + id + "' synchronously: it was not preloaded into the sync builtin cache"
-        );
-        err.code = 'ERR_REQUIRE_ASYNC_MODULE';
-        throw err;
-      }
-      return _builtinRequireValue(_builtinCache.get(bare));
-    },
-    // --- end sandbox getBuiltinModule (gap #3) ---
-      // --- Timing ---
-  uptime() {
-    return (Date.now() - startTime) / 1000;
-  },
-
-  // --- Working directory ---
-  cwd() {
-    return cwd;
-  }, 
-
-  chdir(_cwd){
-     if(!globalThis._RUNTIME${config.uuid}_.__FS__.existsSync(_cwd)){
-        throw new Error(\`ENOENT: no such file or directory, chdir '\${_cwd}'\`)
-     }
-     cwd = _cwd
-     // fs.chdir(cwd)
-  },
-
-
-  hrtime:function hrtime(previous) {
-      const now = performance.now() / 1000;
-      const sec = Math.floor(now);
-      const nano = Math.floor((now - sec) * 1e9);
-
-      if (!previous) return [sec, nano];
-
-      let diffSec = sec - previous[0];
-      let diffNano = nano - previous[1];
-
-      if (diffNano < 0) {
-        diffSec -= 1;
-        diffNano += 1e9;
-      }
-
-  
-
-      return [diffSec, diffNano];
-    },
-  
-  // --- Memory ---
-    memoryUsage() {
-    return {
-      rss: 0,
-      heapTotal: 0,
-      heapUsed: 0,
-      external: 0,
-      arrayBuffers: 0
-    };
-   },
-
-  // --- CPU ---
-  cpuUsage() {
-    return {
-      user: 0,
-      system: 0
-    };
-  },
-
-
-
-  kill(pid, signal = 'SIGTERM') {
-  if (typeof pid !== 'number') {
-    throw new TypeError('The "pid" argument must be of type number');
-  }
-
-  if (typeof signal !== 'string') {
-    throw new TypeError('The "signal" argument must be of type string');
-  }
-  
-  
-        const endTime = performance.now();
-    const executionTime = (endTime - startTime).toFixed(2); 
-     
-      window.parent.postMessage({ type: 'process_kill', logs: logs || [], executionTime: parseFloat(executionTime) }, '*');
-     //this.emit('kill', { pid, signal });
-   },
-   
-   
-       emitWarning,
-    emitWarningSync,
-    on,
-    off,
-    emit,
-    listenerCount, 
-    binding,
-    nextTick,
-    title:globalThis._RUNTIME${config.uuid}_.process.title,
-    arch:globalThis._RUNTIME${config.uuid}_.process.arch,
-    env:globalThis._RUNTIME${config.uuid}_.process.env,
-    platform:globalThis._RUNTIME${config.uuid}_.process.platform,
-    pid: globalThis._RUNTIME${config.uuid}_.process.pid,
-    ppid: globalThis._RUNTIME${config.uuid}_.process.ppid,
-    argv0: globalThis._RUNTIME${config.uuid}_.process.argv,
-    execPath: globalThis._RUNTIME${config.uuid}_.process.execPath,
-    execArgv: globalThis._RUNTIME${config.uuid}_.process.execArgv,
-    version: globalThis._RUNTIME${config.uuid}_.process.version,
-    versions: globalThis._RUNTIME${config.uuid}_.process.versions,
-    argv: globalThis._RUNTIME${config.uuid}_.process.argv,
-    once,
-    prependListener,
-    prependOnceListener,
-    report: report(),
-    cwd: function(){
-     return cwd
-    }
-  };
-   
-   
-  
-  
-       
-
-  // 2. Cloak all methods
-  const processBase = {};
-
-  Object.getOwnPropertyNames(rawMethods).forEach(key => {
-  
-  const value = rawMethods[key];
-
-    // If it's NOT a function, just copy it as-is
-    if (typeof value !== "function") {
-      processBase[key] = value;
-      return;
-    }
-    const fn = function () {
-      return rawMethods[key].apply(this, arguments);
-    };
-
-    Object.defineProperties(fn, {
-      name: { value: key },
-      toString: {
-        value: function () {
-          return \`function \${key}() { [native code] }\`;
-        }
-      }
-    });
-
-    processBase[key] = fn;
-  });
-
-  // 3. Create object with fake type
-  const processFinal = Object.create({}, {
-    [Symbol.toStringTag]: { value: 'Process', enumerable: false }
-  });
-
-  Object.assign(processFinal, processBase);
- // Object.freeze(processFinal);
-
-
-   // Deprecation flags
-  processFinal.noDeprecation = false;
-  processFinal.throwDeprecation = false;
-  processFinal.traceDeprecation = false;
-  processFinal.traceProcessWarnings = false;
-// Save restorable reference BEFORE the try block: the defineProperty on
-// window may throw in some sandbox realms, which would skip everything in
-// the try. The template's process (with getBuiltinModule) is authoritative.
-try { globalThis.__bvm_process_final__ = processFinal; } catch (e) {}
-try{
-  // 4. Optionally expose globally
-  
-Object.defineProperty(window, 'process', {
-    value: processFinal,
-    writable: false,
-    configurable: false,
-   enumerable: true
-  });
-   
-   globalThis.process = processFinal;
-  }catch(err){
-  
-  }
-  // Node.js global alias — installed OUTSIDE the try block above on purpose.
-  // defineProperty(window, 'process') throws in some sandbox realms, which used
-  // to skip this alias and left bare global (e.g. vite's bundled isexe,
-  // global.TESTING_WINDOWS) as a ReferenceError. Platform-level: bare
-  // global must resolve in the sandbox generally, like Node.
-  if (typeof globalThis.global === 'undefined') {
-    globalThis.global = globalThis;
-  }
-  return processFinal;
-})(); 
-  
-
-  
-
-
- 
-
-const cloakedConsole = (function () {
-  const logLevels = Object.getOwnPropertyNames(console).filter(k => typeof console[k] === 'function');
-
- 
-
-  // 1. Logic Storage (The "Raw" Methods)
-  const rawMethods = {};
-  logLevels.forEach(level => {
-    const original = console[level];
-    rawMethods[level] = function (...args) {
-      const sanitizedArray = typeof serialize === 'function' ? serialize(...args) : args;
-      const message = sanitizedArray.join(' ');
- 
-      if (level === 'error') errors.push(message);
-      
-      if (level != 'clear'){
-      logs.push({type:level, args:message});
-      }
-      return original.apply(console, args);
-    };
-  });
-
-  // 2. Cloak all methods (Mirroring your processBase logic)
-  const consoleBase = {};
-  Object.getOwnPropertyNames(rawMethods).forEach(key => {
-    const fn = function () {
-      return rawMethods[key].apply(this, arguments);
-    };
-
-    Object.defineProperties(fn, {
-      name: { value: key },
-      toString: {
-        value: function () {
-          return \`function \${key}() { [native code] }\`;
-        }
-      }
-    });
-
-    consoleBase[key] = fn;
-  });
-
-  // 3. Create the final object with the fake "Console" type
-  const consoleFinal = Object.create({}, {
-    [Symbol.toStringTag]: { value: 'Object', enumerable: false }
-  });
-
-  Object.assign(consoleFinal, consoleBase);
-  
-  // Note: We don't freeze it here because some 3rd party libs 
-  // might try to add properties to console, which would crash the script.
-
-  // 4. Swap the global console
-  // We use defineProperty to overwrite the existing window.console
-  Object.defineProperty(window, 'console', {
-    value: consoleFinal,
-    writable: true,
-    configurable: true,
-    enumerable: true
-  });
-
-  return consoleFinal;
-})();
-
-await globalThis._RUNTIME${config.uuid}_.loadModule("RUNTIME:NODE_GLOBALS"); 
-// Restore the template's process (with getBuiltinModule) if a dist shim
-// overwrote globalThis.process during RUNTIME:NODE_GLOBALS import.
-if (globalThis.__bvm_process_final__ && globalThis.process !== globalThis.__bvm_process_final__) {
-  globalThis.process = globalThis.__bvm_process_final__;
-}
-      
-// Interop exposes hoisted before the sync builtin preload: the preload
-// does ~49 sequential loadModule interop calls and can exceed the
-// execution timeout; these handlers must be available immediately.
-globalThis.${config.interopVariable}.expose('__stdin__', (args) => {
-    const s = process?.stdin;
-  const hasListeners = s && (s.listenerCount('data') > 0 || s.listenerCount('keypress') > 0); 
- 
-  if (s && hasListeners && (typeof s.isPaused !== 'function' || !s.isPaused())) {
-    return s.pushData(args);
-  }
-  
-  
-  // process.stdin.pushData(args)
-   if(process && process.stdin && process.stdin.listenerCount('data') != 0 && (typeof process.stdin.isPaused !== 'function' || process.stdin.isPaused() == false)){
-    return process.stdin.pushData(args);
-   }
-  
-  // --- Key Decoder Function ---
-  function decodeKeyPress(str) {
-    if (!str) return null;
-
-    // ANSI Escape sequences for arrow keys
-    if (str === '\\x1b[A' || str === '\\x1bOA') return { name: 'up', sequence: str };
-    if (str === '\\x1b[B' || str === '\\x1bOB') return { name: 'down', sequence: str };
-    if (str === '\\x1b[C' || str === '\\x1bOC') return { name: 'right', sequence: str };
-    if (str === '\\x1b[D' || str === '\\x1bOD') return { name: 'left', sequence: str };
-
-    // Enter / Return keys
-    if (str === '\\r' || str === '\\n') return { name: 'return', sequence: str };
-
-    // Backspace
-    if (str === '\\x7f' || str === '\\b') return { name: 'backspace', sequence: str };
-
-    // Handle single characters & Ctrl combinations
-    if (str.length === 1) {
-      const code = str.charCodeAt(0);
-      // Check for Ctrl+A through Ctrl+Z (ASCII codes 1 to 26)
-      if (code >= 1 && code <= 26) {
-        return {
-          name: String.fromCharCode(code + 96),
-          ctrl: true,
-          sequence: str
-        };
-      }
-      return { name: str, sequence: str };
-    }
-
-    // Fallback for complex/unrecognized sequences
-    return { name: 'unknown', sequence: str };
-  }
-  
-  function stripKeySequencesPreserveWhitespace(str) {
-  if (!str) return "";
-
-  return str
-    // Remove ANSI escape sequences (arrow keys, function keys, CSI sequences)
-    .replace(/\\x1b\\[[0-9;?]*[A-Za-z]/g, '')
-    .replace(/\\x1b[\\(\\)][0-9A-Za-z]/g, '')
-    // Remove control characters except \\n (\\x0A) and \\t (\\x09)
-    .replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
-}
-  // TODO: handle if buffered pass or possible remove if emulating node?
-    // Buffer early input instead of silently dropping it: if the sandbox
-    // hasn't attached a stdin listener yet (race between __stdin__ and
-    // user code), queue the input and flush on first 'data' listener.
-    if (s && !hasListeners) {
-      s._pendingStdin = s._pendingStdin || [];
-      s._pendingStdin.push(args);
-      return;
-    }
-    try {   
-              const cleanedCode = stripKeySequencesPreserveWhitespace(args);
-              
-               const keyEvent = decodeKeyPress(args);
-              if (keyEvent) {
-                // emitMe("key_event", null, keyEvent)
-                return;  
-              }
-              
-               if(!cleanedCode){
-                return; 
-               }
-                const E = window.eval(cleanedCode);
-                console.log(E)
-            } catch (E) {
-                return void console.error(E.message)
-            }
-});
-
- 
-
-// Runtime method (not reported via execution:interop_registered).
-// Updates the sandbox TTY dimensions and emits Node's 'resize' event on
-// stdout/stderr so readline and guest 'resize' listeners react.
-globalThis.${config.interopVariable}.expose('__terminal_resize__', (args) => {
-  const cols = Math.floor(Number(args && args.cols));
-  const rows = Math.floor(Number(args && args.rows));
-  if (!Number.isFinite(cols) || cols <= 0 || !Number.isFinite(rows) || rows <= 0) {
-    throw new Error('__terminal_resize__ requires positive integer cols and rows');
-  }
-  for (const s of [process.stdout, process.stderr]) {
-    if (!s) continue;
-    s.columns = cols;
-    s.rows = rows;
-    if (typeof s.emit === 'function') s.emit('resize');
-  }
-  return { cols, rows };
-});
-
-globalThis.${config.interopVariable}.expose('__serverRequest__', async (port=8080, URL = "/", type = "GET", body= {}, headers = {}) => {
-    const __RT = globalThis._RUNTIME${config.uuid}_;
-    const __h = { ...(headers || {}) };
-    let __jarCtx = null;
-    // Inject cookies from the virtual jar (RFC 6265). The jar must never
-    // break a request, so every jar interaction is guarded.
-    if (__RT.__cookieJar) {
-      try {
-        const __host = __h.host || __h.Host || "localhost";
-        __jarCtx = { host: __host, path: URL, method: type };
-        const __jarCookie = __RT.__cookieJar.cookieHeader("${config.uuid}", port, __jarCtx);
-        const __merged = __RT.__mergeCookieHeaders(__h.cookie ?? __h.Cookie, __jarCookie);
-        delete __h.Cookie;
-        if (__merged) __h.cookie = __merged; else delete __h.cookie;
-      } catch (__jarErr) { /* jar must not break requests */ }
-    }
-    const __res = await __RT.__httpServerRunTime.handleRequest(port, URL, type, body, __h);
-    // Store any Set-Cookie response headers back into the jar.
-    if (__RT.__cookieJar && __res && __res.headers) {
-      try {
-        __RT.__cookieJar.store("${config.uuid}", port, __res.headers["set-cookie"],
-          __jarCtx || { host: (__h.host || __h.Host || "localhost"), path: URL });
-      } catch (__jarErr) { /* jar must not break requests */ }
-    }
-    return __res;
-});
-
-// Host fetch bridge: revoke a lost port claim. The host calls this when
-// another sandbox already owns the port, so the loser's listen() fails
-// loudly with EADDRINUSE instead of silently shadowing the winner.
-globalThis.${config.interopVariable}.expose('__closeServer__', async (port) => {
-    const __RT = globalThis._RUNTIME${config.uuid}_;
-    if (__RT && __RT.__httpServerRunTime && typeof __RT.__httpServerRunTime.closeServer === 'function') {
-      return __RT.__httpServerRunTime.closeServer(port);
-    }
-    return false;
-});
-
-// --- begin sync builtin preload (gap #3) ---
-// DISABLED 2026-10-08: Preload causes random shim execution and 30s timeouts. Shims must load on-demand.
-if (false) {
-// Populate the SYNC builtin cache before user code runs. dist/module.js's
-// loadBuiltinModule() can only use the sandbox RT.loadModule() when it
-// returns synchronously — it never does — so sync require('fs') via
-// createRequire()/Module._load falls through to process.getBuiltinModule(),
-// which reads this cache. Without the preload every sync builtin require
-// died with MODULE_NOT_FOUND (Vitest E2E: Rolldown's createRequire('fs')).
-// Per-key try/catch: one unfetchable builtin must not abort the rest or
-// sandbox init. Async import() of builtins keeps working independently of
-// this cache (separate moduleRegistry path).
-// Batched (not fully sequential, not fully concurrent): the interop channel
-// times out under 51 concurrent loadModule calls, but sequential is too slow
-// (15-23s for 49 modules). Batches of 10 are fast and reliable.
-// ponytail: batch size 10, increase if interop channel proves stable
-try {
-  var _preloadKeys = Object.keys(_builtinManifest).filter(function(k) { return k.indexOf('RUNTIME') !== 0; });
-  var _batchSize = 10;
-  for (var _bi = 0; _bi < _preloadKeys.length; _bi += _batchSize) {
-    var _batch = _preloadKeys.slice(_bi, _bi + _batchSize);
-    await Promise.all(_batch.map(function(_pkey) {
-      return globalThis._RUNTIME${config.uuid}_.loadModule(_pkey, 'import').then(
-        function(mod) { _builtinCache.set(_pkey, mod); },
-        function(e) { console.warn('[bvm] sync-builtin preload skipped ' + _pkey + ': ' + String((e && e.message) || e)); }
+    for (const [suffix, stmt] of Object.entries(LOG_TOKENS)) {
+      sub(
+        `%%LOG_${suffix}%%`,
+        config.logNetworkRequests ? stmt : "",
       );
-    }));
-  }
-} catch (e) {
-  console.warn('[bvm] sync-builtin preload failed: ' + String((e && e.message) || e));
-}
-} // end if(false) - DISABLED preload
-// --- end sync builtin preload (gap #3) ---
-
-   
-// Enhanced timer tracking with WeakMap for cleanup
-const timerRegistry = new Map();
-let timerIdCounter = 0;
-const originalSetInterval = setInterval;
-const originalClearInterval = clearInterval;
-const originalSetTimeout = setTimeout;
-const originalClearTimeout = clearTimeout;
-
-function revertTrueOriginals(){
-globalThis.setTimeout = originalSetTimeout;
-globalThis.clearTimeout = originalClearTimeout;
-globalThis.setInterval = originalSetInterval;
-globalThis.clearInterval = originalClearInterval;
-globalThis.console = originalConsole;
-}
-
-globalThis.setTimeout = (fn, delay, ...args) => {
-  const timerId = originalSetTimeout(() => {
-    timerRegistry.delete(timerId);
-    try {
-      fn(...args);
-    } catch (err) {
-      console.log(err.stack)
-      console.error('Timer error:', err.message);
     }
-  }, Math.max(0, delay || 0));
-  
-  timerRegistry.set(timerId, { type: 'timeout', created: Date.now() });
-  return timerId;
-};
-
-globalThis.clearTimeout = (id) => {
-  timerRegistry.delete(id);
-  originalClearTimeout(id);
-};
-  
-function waitForAllTimers() {
-  return new Promise(resolve => {
-    const check = () => {
-      const pending = Array.from(timerRegistry.values())
-        .filter(t => t.type === 'timeout' || t.type === 'interval');
-      
-      if (pending.length === 0) {
-        resolve();
-      } else {
-        originalSetTimeout(check, 50);
-      }
-    };
-    check();
-  });
-}
-
-
-
-setInterval = (fn, delay, ...args) => {
-  const id = originalSetInterval(() => {
-    try {
-      fn(...args);
-    } catch (err) {
-      console.error('Interval error:', err.message);
-      clearInterval(id);
+    sub("%%IMPORTS%%", config.imports?.join("\n") || "");
+    // USER_CODE last: its value could theoretically contain %%TOKEN%%-like text.
+    sub("%%USER_CODE%%", code);
+    if (/%%[A-Z_]+%%/.test(result)) {
+      throw new Error("SandboxRuntime.generate: unreplaced token in template");
     }
-  }, Math.max(0, delay || 0));
-  
-  timerRegistry.set(id, { type: 'interval', created: Date.now() });
-  return id;
-};
-
-clearInterval = (id) => {
-  timerRegistry.delete(id);
-  originalClearInterval(id);
-};
-
-function clearAllIntervals() {
-  timerRegistry.forEach((info, id) => {
-    if (info.type === 'interval') {
-      clearInterval(id);
-    }
-  });
-}
-
-
-const _realCreateElement = document.createElement;
-
-document.createElement = function(tagName, options) {
-  const tag = tagName.toLowerCase();
-  if (tag === 'iframe' || tag === 'frame' || tag === 'object' || tag === 'embed') {
-     // throw new SecurityError("Creation of frames/objects is disabled in this sandbox.");
-  }
-  return _realCreateElement.apply(document, [tagName, options]);
-};
-
-// Mask it
-// Object.defineProperty(document.createElement, 'name', { value: 'createElement' });
-// document.createElement.toString = () => "function createElement() { [native code] }";
-
-const _originalInnerHTML = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set;
-
-Object.defineProperty(Element.prototype, 'innerHTML', {
-  set: function(value) {
-    if (typeof value === 'string' && /<iframe|<frame|<object|<embed/i.test(value)) {
-     // throw new SecurityError("Illegal HTML injection detected.");
-    }
-    _originalInnerHTML.call(this, value);
-  },
-  configurable: false
-});
-
-
-const OrigEventSource = window.EventSource;
-
-globalThis.EventSource = function (url, options) {
-  if (url.includes('blocked.com')) throw new Error(\`Blocked EventSource to \${url}\`);
-  return new OrigEventSource(url, options);
-};
-maskFunction(globalThis.EventSource, OrigEventSource);
-
-
-
-const OrigWS = window.WebSocket;
-
-globalThis.WebSocket = function (url, protocols) {
-  if (url.includes('blocked.com')) throw new Error(\`Blocked WebSocket to \${url}\`);
-  return new OrigWS(url, protocols);
-};
-maskFunction(globalThis.WebSocket, OrigWS);
-
-
-const origBeacon = navigator.sendBeacon.bind(navigator);
-
-globalThis.navigator.sendBeacon = (url, data) => {
-  if (url.includes('blocked.com')) return false;
-  return origBeacon(url, data);
-};
-maskFunction(globalThis.navigator.sendBeacon, origBeacon);
-
-
-// Enhanced fetch tracking with timeout and abort support
-
-
-
-
-function wrapNetwork(fnName, origFn, blocker) {
-  return function (...args) {
-    const url = typeof args[0] === 'string' ? args[0] : args[0]?.url;
-    if (blocker(url)) throw new Error(\`Blocked \${fnName} to \${url}\`);
-    return origFn(...args);
-  };
-}
-
-const _realFetch = window.fetch;
-const pendingFetches = new Map();
-
-  // Create the patched fetch
-  
-const patchedFetch = async function (input, init = {}) {
-  const requestInfo = typeof input === 'string' ? input : input?.url;
-  const requestId = Math.random().toString(36).substr(2, 9);
-
- 
-
-  const blockedUrls = [
-    'https://example.com/bad',
-  ];
-
-  const url = typeof input === 'string' ? input : input.url;
-
-  if (
-    blockedUrls.some(pattern =>
-      typeof pattern === 'string'
-        ? pattern === url
-        : pattern.test(url)
-    )
-  ) {
-    return Promise.reject(new Error(\`Blocked fetch to \${url}\`));
-  }
-
-  emitMe("network_request", null, {
-    url: input,
-    id: requestId,
-    type: "fetch",
-    status: "started",
-    body: init
-  });
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
-  const fetchInit = { ...init, signal: controller.signal };
-
-  let hasError = null;
-  let response;
-
-  try {
-const { signal, ...serializableInit } = fetchInit;
-
-if (serializableInit.headers) {
-  const h = serializableInit.headers;
-
-  serializableInit.headers =
-    h instanceof Headers
-      ? Object.fromEntries(h.entries())
-      : Array.isArray(h)
-        ? Object.fromEntries(h)
-        : { ...h };
-}
-
-
-    let fetchPromise;
-
-    // pendingFetches.set(requestId, { url: requestInfo, promise: fetchPromise });
-
-    try {
-      // 🔥 FIRST: Try parent
-      if(serializableInit.body){
-       // serializableInit.body = JSON.parse(serializableInit.body)
-       }
-      const parentFetch = globalThis.${config.interopVariable}?.callParent?.(
-        '_fetch_',
-        input,
-        serializableInit
-      );
-
-      if (parentFetch == null) {
-        throw new Error('Parent declined fetch');
-      }
-
-       fetchPromise = parentFetch 
-
-      self.operations?.fetches?.add(fetchPromise);
-      fetchPromise.finally(() =>
-        self.operations?.fetches?.delete(fetchPromise)
-      );
-
-      response = await fetchPromise;
-      if(!response){
-      throw new Error("Parent Fetch Returned Null")
-      }
-      
-      const res = new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: response.headers, 
-            url: "test"
-          })
-      
-      Object.defineProperty(res, 'url', { value: response.url });
-      return res
-
-    } catch (parentError) {
- 
-      // 🔥 Parent failed — fallback to real fetch
-      ${config.logNetworkRequests ? "console.log('[FETCH] Parent failed, falling back:', requestInfo);" : ""}
-
-      fetchPromise = _realFetch.apply(window, [input, fetchInit]);
-
-      self.operations?.fetches?.add(fetchPromise);
-      fetchPromise.finally(() =>
-        self.operations?.fetches?.delete(fetchPromise)
-      );
-
-      response = await fetchPromise;
-    }
-
-    // ${config.logNetworkRequests ? "console.log('[FETCH] Completed:', requestInfo, '- Status:', response.status);" : ""}
-
-    return response;
-
-  } catch (error) {
-    hasError = error;
-
-    if (error.name === 'AbortError') {
-      ${config.logNetworkRequests ? "console.log('[FETCH] Timeout:', requestInfo);" : ""}
-    } else {
-      ${config.logNetworkRequests ? "console.log('[FETCH] Failed:', requestInfo, '- Error:', error.message);" : ""}
-    }
-
-    throw error;
-
-  } finally {
-    clearTimeout(timeoutId);
-
-    if (!hasError) {
-      emitMe("network_request", null, {
-        url: input,
-        id: requestId,
-        type: "fetch",
-        status: "finished"
-      });
-    } else {
-      emitMe("network_request", null, {
-        url: input,
-        id: requestId,
-        type: "fetch",
-        status: "failed",
-        error: hasError?.message || hasError
-      });
-    }
-
-    pendingFetches.delete(requestId);
-  }
-};
-  
-  const patchedFetch2 = async function(input, init = {}) {
-    const requestInfo = typeof input === 'string' ? input : input.url;
-    const requestId = Math.random().toString(36).substr(2, 9);
-    
-    
-    const blockedUrls = [
-  'https://example.com/bad',
-  //https:\//\//malware\.site\///
-];
-       const url = input;
-
-  // Check blocked URLs
-  if (blockedUrls.some(pattern => 
-    typeof pattern === 'string' ? pattern === url : pattern.test(url)
-  )) {
-    return Promise.reject(new Error(\`Blocked fetch to \${url}\`));
-  }
-    
-    
-
-    emitMe("network_request", null, {
-      url:input,
-      id:requestId,
-      type:"fetch",
-      status: "started",
-      body:init
-    });
-    ${config.logNetworkRequests ? "console.log('[FETCH] Request started:', requestInfo);" : ""}
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-    
-    const fetchInit = { ...init, signal: controller.signal };
-    
-    // We use .apply(window) to ensure 'this' context is correct
-    const fetchPromise = _realFetch.apply(window, [input, fetchInit]);
-    
-    pendingFetches.set(requestId, { url: requestInfo, promise: fetchPromise });
-    let hasError = false;
-    try {
-      const response = await fetchPromise;
-      ${config.logNetworkRequests ? "console.log('[FETCH] Completed:', requestInfo, '- Status:', response.status);" : ""}
-      return response;
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        ${config.logNetworkRequests ? "console.log('[FETCH] Timeout:', requestInfo);" : ""}
-      } else {
-        ${config.logNetworkRequests ? "console.log('[FETCH] Failed:', requestInfo, '- Error:', error.message);" : ""}
-      }
-      hasError = error;
-      throw error;
-    } finally {
-      clearTimeout(timeoutId);
-      if(!hasError){
-      emitMe("network_request", null, {
-      url:input,
-      id:requestId,
-      type:"fetch",
-      status: "finished",
-       
-      });
-     }
-    if(hasError){
-      emitMe("network_request", null, {
-      url:input,
-      id:requestId,
-      type:"fetch",
-      status: "failed",
-      error: hasError?.message || hasError
-      });
-     }  
-
-      pendingFetches.delete(requestId);
-    }
-  };
- 
-  // MASKING: Make the patched function look exactly like the native one
-  Object.defineProperty(patchedFetch, 'name', { value: 'fetch' });
-  patchedFetch.toString = () => "function fetch() { [native code] }";
-
-  // LOCKING: Replace global fetch and prevent modification
-  Object.defineProperty(window, 'fetch', {
-    value: patchedFetch,
-    writable: true,
-    configurable: true,
-    enumerable: true
-  });
-  
-
-
-function waitForAllFetches() {
-  const promises = Array.from(pendingFetches.values()).map(f => f.promise);
-  return Promise.allSettled(promises);
-}
-
-// Enhanced XHR tracking
-const originalXHR = window.XMLHttpRequest;
-const pendingXhrs = new Map();
-
-function PatchedXHR() {
-  const xhr = new originalXHR();
-  const xhrId = Math.random().toString(36).substr(2, 9);
-  
-  const originalOpen = xhr.open;
-  const originalSend = xhr.send;
-
-  let url = '';
-  let method = '';
-
-  xhr.open = function(m, u, ...args) {
-    method = m;
-    url = u;
-    return originalOpen.apply(this, [m, u, ...args]);
-  };
-
-  xhr.send = function(body) {
-    ${config.logNetworkRequests ? "console.log('[XHR] Request started:', method, url);" : ""}
-    
-    emitMe("network_request", null, {
-      method,
-      url,
-      type:"xhr",
-      status: xhr.status
-    });
-    
-
-    const cleanup = () => {
-      pendingXhrs.delete(xhrId);
-      ${config.logNetworkRequests ? "console.log('[XHR] Completed:', method, url, '- Status:', xhr.status);" : ""}
-    };
-
-    xhr.addEventListener('loadend', cleanup);
-    xhr.addEventListener('error', () => {
-      pendingXhrs.delete(xhrId);
-      ${config.logNetworkRequests ? "console.log('[XHR] Failed:', method, url);" : ""}
-    });
-    xhr.addEventListener('abort', () => {
-      pendingXhrs.delete(xhrId);
-      ${config.logNetworkRequests ? "console.log('[XHR] Aborted:', method, url);" : ""}
-    });
-
-    pendingXhrs.set(xhrId, xhr);
-    return originalSend.apply(this, [body]);
-  };
-
-  return xhr;
-  
-}
-
-// maskFunction is defined near the top of this template (must precede all uses).
-maskFunction(PatchedXHR, originalXHR)
-maskFunction(setTimeout, originalSetTimeout)
-maskFunction(clearTimeout, originalClearTimeout)
-maskFunction(setInterval, originalSetInterval)
-maskFunction(clearInterval, originalClearInterval)
- 
- Object.defineProperty(document.createElement, 'name', { value: 'createElement' });
-document.createElement.toString = () => "function createElement() { [native code] }";
-
-window.XMLHttpRequest = PatchedXHR;
-
-function waitForAllXhrs() {
-  return new Promise(resolve => {
-    const check = () => {
-      if (pendingXhrs.size === 0) {
-        resolve();
-      } else {
-        setTimeout(check, 50);
-      }
-    };
-    check();
-  });
-}
-
-// __parseStackLocation is defined once at module scope (exported for
-// unit tests) and inlined here so the iframe runs the identical code.
-const __parseStackLocationFn = (${__parseStackLocationFn.toString()});
-
-// Enhanced error handling with stack traces
-window.onerror = function(message, source, lineno, colno, error) {
-  const errorMsg = error ? (error.stack || error.message || message) : message;
-  console.error('Uncaught error:', errorMsg);
-
-  // Parse all frames for parent-side source-map mapping.
-  const frames = [];
-  if (error?.stack) {
-    for (const line of String(error.stack).split('\\n')) {
-      const loc = __parseStackLocationFn(line);
-      if (loc) frames.push(loc);
-    }
-  }
-
-  window.parent.postMessage({
-    type: 'window_error',
-    message: error ? (error.message || String(message)) : String(message),
-    source,
-    lineno,
-    colno,
-    stack: error?.stack || null,
-    frames,
-    errorName: error?.name || 'Error'
-  }, '*');
-
-  return true;
-};
-
-window.onunhandledrejection = function (event) {
-  let reason = event.reason;
-
-  // Normalize non-Error rejections
-  if (!(reason instanceof Error)) {
-    reason = new Error(typeof reason === 'string'
-      ? reason
-      : JSON.stringify(reason));
-  }
-
-  const stack = reason.stack || '';
-  const message = reason.message || String(reason);
-
-  // Extract the first stack frame (where it happened) with a parser that
-  // understands URLs — no naive split(':').
-  let loc = null;
-  const frames = [];
-  const stackLines = stack.split('\\n');
-  for (let i = 1; i < stackLines.length; i++) {
-    const parsed = __parseStackLocationFn(stackLines[i]);
-    if (parsed) {
-      frames.push(parsed);
-      if (!loc) loc = parsed;
-    }
-  }
-
-window.parent.postMessage({
-    type: 'unhandled_promise_rejection',
-    reason: \`Uncaught (in promise) \${reason.name || 'Error'}: \${message}\`,
-    stack: stack || null,
-    file: loc?.file || null,
-    line: loc?.line ?? null,
-    column: loc?.column ?? null,
-    location: loc ? \`\${loc.file}:\${loc.line}:\${loc.column}\` : null,
-    frames,
-    errorName: reason?.name || 'Error'
-  }, '*');
-
-  event.preventDefault();
-};
-
-
- 
-
-async function initSandboxState(){
-let __initSandboxState = await globalThis.${config.interopVariable}.callParent('_getState');
-
-__initSandboxState = \`data:text/javascript;charset=utf-8,\${encodeURIComponent(__initSandboxState)}\`;
-
- 
-await import(__initSandboxState);
-
-}
-
-
- 
-
-
- 
-
-
-  try {
-  await initSandboxState();
-
-
-  await globalThis._RUNTIME${config.uuid}_.loadModule("fs");
-
-  // Virtual cookie jar (RFC 6265) for emulated HTTP servers. The IIFE bundle
-  // is inlined (see COOKIE_JAR_IIFE) so no network fetch is needed. The jar
-  // is keyed per sandbox instance + server port.
-  try {
-    ${COOKIE_JAR_IIFE}
-    globalThis._RUNTIME${config.uuid}_.__cookieJar =
-      new globalThis.__cookieJarLib.VirtualCookieJar();
-    globalThis._RUNTIME${config.uuid}_.__mergeCookieHeaders =
-      globalThis.__cookieJarLib.mergeCookieHeaders;
-  } catch (__jarInitErr) {
-    console.warn("[cookieJar] init failed:", __jarInitErr && __jarInitErr.message);
-  }
-  
- window.parent.postMessage({ type: 'sandbox_ready' }, '*'); 
-
-  
-// Remove these when emulating Node.js true behaviour
-// let document = undefined;
-// let location = undefined; 
- 
-    
-  ${
-    config?.process?.argv.includes("--test")
-      ? "" // if --test is present, include nothing
-      : config.imports?.join("\n") || "" // otherwise include imports
-  }
-  
-  
- // globalThis.window =  _window;
-  // globalThis.document =  _document;
-
-
-
-
- 
-  for (const [name, fn] of [
-  ['setTimeout',    setTimeout],
-  ['clearTimeout',  clearTimeout],
-  ['setInterval',   setInterval],
-  ['clearInterval', clearInterval],
-]) {
-  Object.defineProperty(globalThis, name, {
-    get: () => fn,
-    set: () => {},       // silently swallow user writes
-    configurable: false,
-    enumerable: true,
-  });
-}
-      
-     
- 
-   
-      // const tracker = new AsyncOperationTracker();
-    /* TODO: add flags for --test-reporter=spec mytest.js (json, dot, spec - exists) or if in env.NODE_TEST_REPORTER
-     node --test file.js 
-    node --test (run all test files in VFS)
-    */ 
- ${
-   config?.process?.argv.includes("--test")
-     ? `
-    
-     let _testRunner;
-     
-      try{ 
-      
-      if(!globalThis._RUNTIME${config.uuid}_._TEST_RUNNER_){
-       await globalThis._RUNTIME${config.uuid}_.loadModule("node:test")
-       }
-      // globalThis._RUNTIME_TEST_RUNNER_.REPORTER_TYPE = 'tap';
-       // console.log(globalThis._RUNTIME_TEST_RUNNER_._activeReporter)
-     
-       // const reporter = process.argv.find(arg => arg.startsWith('--test-reporter='))?.split('=')[1];
-       
-       function getTestReporters(argv) {
-  const reporters = [];
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-
-    if (arg === '--test-reporter') {
-      const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
-        reporters.push(...next.split(','));
-        i++;
-      }
-    } else if (arg.startsWith('--test-reporter=')) {
-      const value = arg.split('=').slice(1).join('=');
-      reporters.push(...value.split(','));
-    }
-  }
-
-  if(reporters.filter(Boolean).length === 0){
-    return ['spec'];
-  }
-
-  return reporters.filter(Boolean);
-}
-
- 
-
-   
- 
-       const _REPORTERS = getTestReporters(process.argv)
-       for (const REPORTER in _REPORTERS){
-
-       if(_REPORTERS[REPORTER] === "lcov"){
-         // TODO: inject a coverage event into events somehow.
-         throw new Error("lcov is not implemented")
-       };
-       const testRunner = await globalThis._RUNTIME${config.uuid}_._TEST_RUNNER_.execute(\`
-       
-       
-       ${config.imports?.join("\n") || ""}
-       //__$PROVIDED_RUNTIME_CODE__/
-       
-       ${code.replace(/`/g, "\\\`").replace(/\$\{/g, "\\\\\${")}
-       
-       
-       
-       \`, {reporter:_REPORTERS[REPORTER]});
-       
-       console.log(testRunner.output)
-       
-       }
-       
-       
-       
-       
-         
-      // console.log(globalThis._RUNTIME_TEST_RUNNER_.tap(testRunner));
-       }catch(err){
-         err.stack = err.message;
-         throw err
-       }
-       `
-     : `
-await (async () => {
-//__$PROVIDED_RUNTIME_CODE__/
-${code}\n})();
-`
- }
-  
-     
-   
-    // await tracker.waitForCompletion();
-   
-       
-    // Multiple drain cycles to catch cascading async operations
-     for (let i = 0; i < 1; i++) {
-       await Promise.resolve(); // Drain microtasks
-       await new Promise(r => setTimeout(r, 100)); // Let macrotasks run
-    } 
-    
-    
-     
-   
-     
- 
-    await Promise.race([
-  
-      Promise.all([
-       _RUNTIME${config.uuid}_.taskTracker.waitForAll(),
-        waitForAllFetches(),
-        waitForAllXhrs(),
-        waitForAllTimers(),
-           typeof _RUNTIME${config.uuid}_.__httpServerRunTime !== "undefined"
-  ? _RUNTIME${config.uuid}_.__httpServerRunTime.waitForAllServers?.() ?? Promise.resolve()
-  : Promise.resolve()
-      ]),
-       
-   
-    ])
-
-    // Sequential stdin wait (NOT in Promise.all): runs after main execution
-    // completes, so async module loading has finished attaching listeners.
-    // Event-driven via waitUntilNoListeners — no polling. If no listeners,
-    // resolves immediately.
-    if (typeof process?.stdin?.waitUntilNoListeners === "function") {
-      await (process.stdin.waitUntilNoListeners() ?? Promise.resolve());
-    }
-    
-    revertTrueOriginals();
-    
-    //clearAllIntervals();
-   
-
-  } catch (err) {
-    const sanitized_logs = serialize(logs)
-    revertTrueOriginals();
-    console.error('Execution error:', err.stack);
-    const endTime = performance.now();
-    const executionTime = (endTime - startTime).toFixed(2); 
-    
-   // const stack = reason.stack || '';
- // const message = reason.message || String(reason);
-
-  // Extract the first stack frame (where it happened) with a parser that
-  // understands URLs — no naive split(':').
-  let location = null;
-  let loc = null;
-  const frames = [];
-  const stackLines = err.stack.split('\\n');
-
-  for (let i = 1; i < stackLines.length; i++) {
-    const parsed = __parseStackLocationFn(stackLines[i]);
-    if (parsed) {
-      frames.push(parsed);
-      if (!loc) {
-        loc = parsed;
-        location = \`\${loc.file}:\${loc.line}:\${loc.column}\`;
-      }
-    }
-  }
-
-    window.parent.postMessage({
-      type: 'function_error',
-      error: err.message || String(err),
-      stack: err.stack,
-      location,
-      line: loc?.line ?? null,
-      column: loc?.column ?? null,
-      frames,
-      errorName: err?.name || 'Error',
-      logs: logs,
-      executionTime: parseFloat(executionTime)
-    }, '*');
-    return;
-  } 
-  
-  
-  
-  console = originalConsole;
-  const endTime = performance.now();
-  const executionTime = (endTime - startTime).toFixed(2);
-  
-  const sanitized_logs = serialize(logs)
-
-  // need a better way to do this - since dev use export {promises}
-
- const fs = globalThis._RUNTIME${config.uuid}_.__FS__; // This is the fs-like object
-const vol = fs?._vol;      // This is the underlying volume
-
-const serializedFs = {};
-
-// 1. Get all file paths in the volume
-const files = vol?.toJSON?.() ?? {}; // We use this JUST to get the list of keys/paths
-
-for (const path in files) {
-  try {
-    // 2. Read each file as a raw Buffer (no encoding = binary)
-    // In the browser, memfs Buffers are actually Uint8Arrays
-    const data = fs.readFileSync(path);
-    
-    // 3. Store it. postMessage handles Uint8Array perfectly.
-    serializedFs[path] = data instanceof Uint8Array ? data : new Uint8Array(data);
-  } catch (e) {
-    
-  }
-}
- 
- 
- 
- 
-  
-  window.parent.postMessage({ 
-    type: 'function_results', 
-    logs,
-    errors,
-    fs: serializedFs,
-    executionTime: parseFloat(executionTime)
-  }, '*');
- })();
-
-//# sourceURL=sandbox://${config.uuid}/${config.fileName}
-`;
+    return result;
   }
 }
 
@@ -9207,11 +5777,24 @@ function _parseKey(s) {
           this.config.codeTransformers
         );*/
         //  let transformedCode = code;
-        // Generate runtime code
 
-        const custom = imports.map(
-          (i) => transformImportsToLoadModule(this.uuid, i).code,
-        );
+        // Live bindings (2026-10-09): the entry's static imports are
+        // transformed TOGETHER WITH the entry body in a single
+        // transformImportsToLoadModule call, so references to imported
+        // bindings compile to live member access (`__lm_N.x`) on the same
+        // lifted vars whose `await loadModule(...)` preamble is hoisted to
+        // %%IMPORTS%% (init scope). The old shape — transforming each
+        // import statement separately into a preload — emitted
+        // `const { x } = __lm` snapshots; with live bindings the preload
+        // emits no binding at all, which would leave the body's references
+        // dangling (ReferenceError). Both scopes share the sandbox IIFE,
+        // so the body's `__lm_N.x` resolves to the preamble's lifted vars.
+        const combinedCode =
+          imports.length > 0
+            ? imports.join("\n") + "\n" + cleanedCode
+            : cleanedCode;
+
+        // Generate runtime code
 
         //  transformedCode =  transformedCode.replaceAll("await import", "await loadModule")
 
@@ -9234,22 +5817,24 @@ function _parseKey(s) {
         }
 
         // Transform the main entry code and capture its source map for error mapping.
+        // (combinedCode: the entry's static imports + body, transformed
+        // together for live bindings — see above.)
         const mainTransform = transformImportsToLoadModule(
           this.uuid,
-          cleanedCode,
+          combinedCode,
           this.config.fileName,
         );
         if (mainTransform.map) {
           const sourceURL = `sandbox://${this.uuid}/${this.config.fileName}`;
           this._sourceMapRegistry.set(sourceURL, {
             map: mainTransform.map,
-            originalSource: cleanedCode,
+            originalSource: combinedCode,
             filename: this.config.fileName,
           });
         }
 
-        runtimeCode = SandboxRuntime.generate(mainTransform.code, {
-          imports: custom,
+        runtimeCode = SandboxRuntime.generate(mainTransform.body, {
+          imports: mainTransform.preamble ? [mainTransform.preamble] : [],
           logNetworkRequests: this.config.logNetworkRequests,
           interopVariable: this.config.interopVariable,
           process: this.config.process,

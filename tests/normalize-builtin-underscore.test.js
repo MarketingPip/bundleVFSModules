@@ -22,10 +22,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(__dirname, "..");
-const LOADER_SRC = fs.readFileSync(
-  path.join(REPO, "src", "sandbox", "20-module-loader.js"),
-  "utf8",
-);
+// normalizeBuiltinSpecifier is a host function in runtime.js (inlined into the
+// template via %%NORMALIZE_BUILTIN_SPECIFIER_FN%%).
+const LOADER_SRC = fs.readFileSync(path.join(REPO, "runtime.js"), "utf8");
 
 function extractBalanced(src, openIdx, openCh, closeCh) {
   let depth = 0;

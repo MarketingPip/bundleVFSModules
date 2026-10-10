@@ -95,15 +95,31 @@ EXAMPLES = [
     dict(key="typescript", expects=["hello typed world", "answer = 42", "add(2, 3) = 5"]),
     dict(key="relative", expects=["Resolve ./lib/util.js from /app: /app/lib/util.js",
                                   "Relative from /app/src to /app/lib: ../lib"]),
-    # NOTE (verified 2026-10-09): the snippet claims "runner executes them
-    # automatically", but in the playground path the tests only REGISTER —
-    # nothing executes them. Root cause: execute() computes
-    # isTest: containsNodeTest(...) (runtime.js:9194) and passes it to
-    # SandboxRuntime.generate(), but generate() and the sandbox template
-    # never read config.isTest, and src/test.js _maybeAutoRun() bails in
-    # the host-driven lane (typeof globalThis._RUNTIME_ !== "undefined").
-    # Reported as a runtime gap; the test asserts the honest behavior.
-    dict(key="tests", expects=["Tests registered — runner executes them automatically."], timeout=90),
+    # NOTE (2026-10-09): test auto-run lives in the node:test shim
+    # (src/test.js _maybeAutoRun). The host lane runs registered tests only
+    # when --test is in process.argv (Node parity with `node --test`); the
+    # shim formats the events through each --test-reporter (default spec)
+    # and console.logs the output.
+    dict(key="tests", argv="--test",
+         expects=["Tests registered — pass --test in argv to execute them.",
+                  "✔ addition works", "✔ strings concatenate",
+                  "ℹ tests 2", "ℹ pass 2", "ℹ fail 0"],
+         timeout=90),
+    # Without --test the shim only registers the tests — nothing executes.
+    dict(key="tests", name="tests-no-flag",
+         expects=["Tests registered — pass --test in argv to execute them."],
+         absent=["✔", "ℹ tests"],
+         timeout=90),
+    # __VITEST_SHIM_MANUAL__ opts out of shim auto-run even with --test.
+    dict(key="tests", name="tests-manual-optout", argv="--test",
+         code="// __VITEST_SHIM_MANUAL__ suppresses shim auto-run\n"
+              "globalThis.__VITEST_SHIM_MANUAL__ = true;\n"
+              "import test from 'node:test';\n"
+              "test('never runs', () => { throw new Error('should not run'); });\n"
+              "console.log('Tests registered — manual mode, no auto-run.');",
+         expects=["Tests registered — manual mode, no auto-run."],
+         absent=["✔", "ℹ tests", "never runs"],
+         timeout=90),
     dict(key="cli",
          stdin_steps=[("Waiting for your input", "hello-stdin", None)],
          expects=["You typed: hello-stdin", "Uppercase: HELLO-STDIN"]),
@@ -137,7 +153,7 @@ EXAMPLES = [
 ]
 
 DRIVER = r"""
-import sys, time
+import re, sys, time
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
@@ -147,9 +163,13 @@ GD = __GD__
 URL = __URL__
 EXAMPLES = __EXAMPLES__
 
+# The spec reporter wraps symbols in ANSI colour codes
+# (\x1b[32m✔ \x1b[39m…); strip them so assertions read the plain text.
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
 
 def output_text(d):
-    return d.find_element("id", "output").text
+    return ANSI_RE.sub("", d.find_element("id", "output").text)
 
 
 def wait_status(d, timeout):
@@ -203,11 +223,14 @@ def run_example(d, spec):
         return False, "button-missing", "", "example button not found"
     # Click the example button (not just setting codeInput): the playground
     # sets currentExample, which the typescript example needs for its
-    # transpile step.
+    # transpile step. A spec may override the snippet (code) and/or the
+    # argv box contents (argv) after the click.
     d.execute_script("document.getElementById('codeInput').value = '';")
     btns[0].click()
     time.sleep(0.5)
-    d.execute_script("document.getElementById('argvInput').value = '';")
+    if "code" in spec:
+        d.execute_script("document.getElementById('codeInput').value = arguments[0];", spec["code"])
+    d.execute_script("document.getElementById('argvInput').value = arguments[0];", spec.get("argv", ""))
     d.find_element("id", "runBtn").click()
     # Interactive steps: wait for each prompt marker, then send input.
     # stdin_steps entries are (marker, input, expect_after): expect_after
@@ -232,8 +255,15 @@ def run_example(d, spec):
     status = wait_status(d, timeout)
     out = output_text(d)
     missing = [s for s in spec["expects"] if s not in out]
-    ok = (status == "Done") and not missing
-    detail = "" if ok else ("missing=" + repr(missing) if missing else "")
+    present = [s for s in spec.get("absent", []) if s in out]
+    ok = (status == "Done") and not missing and not present
+    detail = ""
+    if not ok:
+        detail = " ".join(
+            x for x in
+            (("missing=" + repr(missing)) if missing else "",
+             ("unexpected=" + repr(present)) if present else "")
+            if x)
     return ok, status, out, detail
 
 
@@ -267,9 +297,9 @@ for spec in EXAMPLES:
     except Exception as e:  # never let one example kill the matrix
         ok, status, out, detail = False, "driver-exception", "", repr(e)
     dt = time.time() - t0
-    results.append({"name": spec["key"], "ok": ok, "status": status})
-    print("CASE %-14s: %s (status=%r, %.1fs)%s" % (
-        spec["key"], "PASS" if ok else "FAIL", status, dt,
+    results.append({"name": spec.get("name", spec["key"]), "ok": ok, "status": status})
+    print("CASE %-18s: %s (status=%r, %.1fs)%s" % (
+        spec.get("name", spec["key"]), "PASS" if ok else "FAIL", status, dt,
         (" " + detail) if detail else ""), flush=True)
     if not ok:
         print("  output tail: " + out[-1200:], flush=True)
@@ -300,7 +330,7 @@ def main():
     print(proc.stderr[-2000:], file=sys.stderr)
     httpd.shutdown()
     if proc.returncode == 0:
-        print("E2E-PASS: all 20 playground examples execute with asserted outputs", flush=True)
+        print("E2E-PASS: all %d playground example cases execute with asserted outputs" % len(EXAMPLES), flush=True)
     else:
         print("E2E-FAIL: playground example execution matrix", flush=True)
     sys.exit(proc.returncode)

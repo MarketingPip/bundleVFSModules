@@ -2,6 +2,8 @@
 // Built into src/sandbox-template.js by src/build-sandbox.mjs
 // (npm run build:sandbox). Sections are ordered fragments of one script,
 // not standalone modules — see the build script header.
+
+   
 // Enhanced timer tracking with WeakMap for cleanup
 const timerRegistry = new Map();
 let timerIdCounter = 0;
@@ -10,29 +12,26 @@ const originalClearInterval = clearInterval;
 const originalSetTimeout = setTimeout;
 const originalClearTimeout = clearTimeout;
 
-function revertTrueOriginals() {
-  globalThis.setTimeout = originalSetTimeout;
-  globalThis.clearTimeout = originalClearTimeout;
-  globalThis.setInterval = originalSetInterval;
-  globalThis.clearInterval = originalClearInterval;
-  globalThis.console = originalConsole;
+function revertTrueOriginals(){
+globalThis.setTimeout = originalSetTimeout;
+globalThis.clearTimeout = originalClearTimeout;
+globalThis.setInterval = originalSetInterval;
+globalThis.clearInterval = originalClearInterval;
+globalThis.console = originalConsole;
 }
 
 globalThis.setTimeout = (fn, delay, ...args) => {
-  const timerId = originalSetTimeout(
-    () => {
-      timerRegistry.delete(timerId);
-      try {
-        fn(...args);
-      } catch (err) {
-        console.log(err.stack);
-        console.error("Timer error:", err.message);
-      }
-    },
-    Math.max(0, delay || 0),
-  );
-
-  timerRegistry.set(timerId, { type: "timeout", created: Date.now() });
+  const timerId = originalSetTimeout(() => {
+    timerRegistry.delete(timerId);
+    try {
+      fn(...args);
+    } catch (err) {
+      console.log(err.stack)
+      console.error('Timer error:', err.message);
+    }
+  }, Math.max(0, delay || 0));
+  
+  timerRegistry.set(timerId, { type: 'timeout', created: Date.now() });
   return timerId;
 };
 
@@ -40,14 +39,13 @@ globalThis.clearTimeout = (id) => {
   timerRegistry.delete(id);
   originalClearTimeout(id);
 };
-
+  
 function waitForAllTimers() {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const check = () => {
-      const pending = Array.from(timerRegistry.values()).filter(
-        (t) => t.type === "timeout",
-      );
-
+      const pending = Array.from(timerRegistry.values())
+        .filter(t => t.type === 'timeout' || t.type === 'interval');
+      
       if (pending.length === 0) {
         resolve();
       } else {
@@ -58,20 +56,19 @@ function waitForAllTimers() {
   });
 }
 
-setInterval = (fn, delay, ...args) => {
-  const id = originalSetInterval(
-    () => {
-      try {
-        fn(...args);
-      } catch (err) {
-        console.error("Interval error:", err.message);
-        clearInterval(id);
-      }
-    },
-    Math.max(0, delay || 0),
-  );
 
-  timerRegistry.set(id, { type: "interval", created: Date.now() });
+
+setInterval = (fn, delay, ...args) => {
+  const id = originalSetInterval(() => {
+    try {
+      fn(...args);
+    } catch (err) {
+      console.error('Interval error:', err.message);
+      clearInterval(id);
+    }
+  }, Math.max(0, delay || 0));
+  
+  timerRegistry.set(id, { type: 'interval', created: Date.now() });
   return id;
 };
 
@@ -82,23 +79,19 @@ clearInterval = (id) => {
 
 function clearAllIntervals() {
   timerRegistry.forEach((info, id) => {
-    if (info.type === "interval") {
+    if (info.type === 'interval') {
       clearInterval(id);
     }
   });
 }
 
+
 const _realCreateElement = document.createElement;
 
-document.createElement = function (tagName, options) {
+document.createElement = function(tagName, options) {
   const tag = tagName.toLowerCase();
-  if (
-    tag === "iframe" ||
-    tag === "frame" ||
-    tag === "object" ||
-    tag === "embed"
-  ) {
-    // throw new SecurityError("Creation of frames/objects is disabled in this sandbox.");
+  if (tag === 'iframe' || tag === 'frame' || tag === 'object' || tag === 'embed') {
+     // throw new SecurityError("Creation of frames/objects is disabled in this sandbox.");
   }
   return _realCreateElement.apply(document, [tagName, options]);
 };
@@ -107,49 +100,42 @@ document.createElement = function (tagName, options) {
 // Object.defineProperty(document.createElement, 'name', { value: 'createElement' });
 // document.createElement.toString = () => "function createElement() { [native code] }";
 
-const _originalInnerHTML = Object.getOwnPropertyDescriptor(
-  Element.prototype,
-  "innerHTML",
-).set;
+const _originalInnerHTML = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set;
 
-Object.defineProperty(Element.prototype, "innerHTML", {
-  set: function (value) {
-    if (
-      typeof value === "string" &&
-      /<iframe|<frame|<object|<embed/i.test(value)
-    ) {
-      // throw new SecurityError("Illegal HTML injection detected.");
+Object.defineProperty(Element.prototype, 'innerHTML', {
+  set: function(value) {
+    if (typeof value === 'string' && /<iframe|<frame|<object|<embed/i.test(value)) {
+     // throw new SecurityError("Illegal HTML injection detected.");
     }
     _originalInnerHTML.call(this, value);
   },
-  configurable: false,
+  configurable: false
 });
+
 
 const OrigEventSource = window.EventSource;
 
 globalThis.EventSource = function (url, options) {
-  if (url.includes("blocked.com"))
-    throw new Error(`Blocked EventSource to ${url}`);
+  if (url.includes('blocked.com')) throw new Error(`Blocked EventSource to ${url}`);
   return new OrigEventSource(url, options);
 };
-// eslint-disable-next-line no-undef -- defined cross-fragment by 71-xhr.js
 maskFunction(globalThis.EventSource, OrigEventSource);
+
+
 
 const OrigWS = window.WebSocket;
 
 globalThis.WebSocket = function (url, protocols) {
-  if (url.includes("blocked.com"))
-    throw new Error(`Blocked WebSocket to ${url}`);
+  if (url.includes('blocked.com')) throw new Error(`Blocked WebSocket to ${url}`);
   return new OrigWS(url, protocols);
 };
-// eslint-disable-next-line no-undef -- defined cross-fragment by 71-xhr.js
 maskFunction(globalThis.WebSocket, OrigWS);
+
 
 const origBeacon = navigator.sendBeacon.bind(navigator);
 
 globalThis.navigator.sendBeacon = (url, data) => {
-  if (url.includes("blocked.com")) return false;
+  if (url.includes('blocked.com')) return false;
   return origBeacon(url, data);
 };
-// eslint-disable-next-line no-undef -- defined cross-fragment by 71-xhr.js
 maskFunction(globalThis.navigator.sendBeacon, origBeacon);

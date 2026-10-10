@@ -30,6 +30,17 @@ const RUNTIME_SRC = fs.readFileSync(
   path.join(__dirname, "..", "runtime.js"),
   "utf8",
 );
+// The sandbox template now lives in src/sandbox-template.js (built from
+// src/sandbox/*.js). TEMPLATE_SRC is the decoded template value.
+const TEMPLATE_SRC = JSON.parse(
+  fs
+    .readFileSync(
+      path.join(__dirname, "..", "src", "sandbox-template.js"),
+      "utf8",
+    )
+    .match(/export const SANDBOX_TEMPLATE = (".*");/s)[1],
+);
+
 
 function extractFunction(src, marker) {
   const start = src.indexOf(marker);
@@ -83,16 +94,16 @@ function loadSyncRequireHelpers() {
     "function resolveSyncRequest(request,",
     "function createSyncRequire(parentPath, vfs",
   ];
-  const templateStart = RUNTIME_SRC.indexOf(
+  const templateStart = TEMPLATE_SRC.indexOf(
     "// Read a CJS module's source for the sync require path",
   );
   if (templateStart === -1)
     throw new Error("sync-require template block not found");
-  const templateSrc = RUNTIME_SRC.slice(templateStart);
+  const templateSrc = TEMPLATE_SRC.slice(templateStart);
   let code = "const _builtinManifest = {};\nconst _builtinCache = new Map();\n";
   for (const marker of parts)
     code += extractFunction(templateSrc, marker) + "\n";
-  code = code.replace(/\$\{config\.uuid\}/g, TEST_UUID);
+  code = code.replace(/%%UUID%%/g, TEST_UUID);
   const factory = new Function(
     code +
       "\nreturn { vfsLookup, readModuleSourceLiveFirst, unflattenUserFiles, createSyncRequire };",
@@ -167,25 +178,25 @@ describe("loadModule binds sync require to the resolved module path", () => {
   // module's resolved absolute VFS path — rather than modulePath, the
   // as-written request which may be relative (B1).
   function extractLiveRequireBranch() {
-    const lmStart = RUNTIME_SRC.indexOf(
+    const lmStart = TEMPLATE_SRC.indexOf(
       "async function loadModule(modulePath, moduleType, entryPoint, parentEntryPoint)",
     );
     if (lmStart === -1) throw new Error("inline loadModule not found");
-    const ifStart = RUNTIME_SRC.indexOf(
+    const ifStart = TEMPLATE_SRC.indexOf(
       "if (moduleType === 'require') {",
       lmStart,
     );
     if (ifStart === -1) throw new Error("live require branch not found");
-    let i = RUNTIME_SRC.indexOf("{", ifStart);
+    let i = TEMPLATE_SRC.indexOf("{", ifStart);
     let depth = 0;
-    for (; i < RUNTIME_SRC.length; i++) {
-      if (RUNTIME_SRC[i] === "{") depth++;
-      else if (RUNTIME_SRC[i] === "}") {
+    for (; i < TEMPLATE_SRC.length; i++) {
+      if (TEMPLATE_SRC[i] === "{") depth++;
+      else if (TEMPLATE_SRC[i] === "}") {
         depth--;
         if (depth === 0) break;
       }
     }
-    return RUNTIME_SRC.slice(ifStart, i + 1);
+    return TEMPLATE_SRC.slice(ifStart, i + 1);
   }
 
   test("require branch uses buildFileName, not modulePath", () => {
