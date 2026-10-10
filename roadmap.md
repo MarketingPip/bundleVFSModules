@@ -18,6 +18,12 @@ unimplementable-in-browser APIs stay honest noop stubs, never throws.
 
 ## Recently completed
 
+- **runtime.js full modularization** (2026-10-10): the 6,382-line monolith
+  is now a GENERATED file built from 21 `src/runtime/*.js` modules via
+  `src/build-runtime.mjs`. `node src/build-runtime.mjs --check` is the CI
+  drift gate (like the sandbox template). Full jest suite green (2918
+  passed). The `_RUNTIME_` contract is preserved; the export surface is
+  byte-identical to the monolith.
 - **ui.html playground wired to v1** (2026-10-03, PR #165): managed
   CodeSandbox wiring (Run, console, status/elapsed, argv, stdin, clear).
   Adds `__BVM_DISABLE_PLAYGROUND` opt-out to the runtime's demo-playground
