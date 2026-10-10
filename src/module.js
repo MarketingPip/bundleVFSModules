@@ -774,41 +774,128 @@ function splitPackageSpecifier(request) {
   };
 }
 
-// Node PACKAGE_EXPORTS_RESOLVE target resolution (condition matching only).
+// Node patternKeyCompare (lib/internal/modules/cjs/resolve.js): picks the
+// most specific single-`*` pattern key. -1 when `a` is more specific,
+// 1 when `b` is (or `a` is null / not a pattern).
+function patternKeyCompare(a, b) {
+  if (a === null) return 1;
+  const aStar = a.indexOf("*");
+  const bStar = b.indexOf("*");
+  const aBase = aStar === -1 ? a.length : aStar + 1;
+  const bBase = bStar === -1 ? b.length : bStar + 1;
+  if (aBase > bBase) return -1;
+  if (bBase > aBase) return 1;
+  if (aStar === -1) return 1;
+  if (bStar === -1) return -1;
+  const aTrailer = a.length - aStar;
+  const bTrailer = b.length - bStar;
+  if (aTrailer > bTrailer) return -1;
+  if (bTrailer > aTrailer) return 1;
+  return 0;
+}
+
+// Best single-`*` pattern-key match for a subpath/request, Node semantics:
+// exactly one `*`, prefix + trailer match, and the star is non-empty
+// (subpath.length >= key.length). Returns { key, star } or null.
+function matchSubpathPattern(keys, subpath) {
+  if (subpath.endsWith("/")) return null;
+  let best = null;
+  let bestStar = "";
+  for (const key of keys) {
+    const starIdx = key.indexOf("*");
+    if (starIdx === -1 || key.indexOf("*", starIdx + 1) !== -1) continue;
+    if (subpath.length < key.length) continue;
+    const prefix = key.slice(0, starIdx);
+    const trailer = key.slice(starIdx + 1);
+    if (
+      subpath.startsWith(prefix) &&
+      subpath.endsWith(trailer) &&
+      patternKeyCompare(best, key) === 1
+    ) {
+      best = key;
+      bestStar = subpath.slice(starIdx, subpath.length - trailer.length);
+    }
+  }
+  return best === null ? null : { key: best, star: bestStar };
+}
+
+// Node PACKAGE_TARGET_RESOLVE (condition matching only — no FS access).
+// Returns the target string, null for an explicit-null target (terminal:
+// Node maps this to ERR_PACKAGE_PATH_NOT_EXPORTED /
+// ERR_PACKAGE_IMPORT_NOT_DEFINED, with NO fallthrough to later keys), or
+// undefined when no condition matched.
 function resolveExportsTarget(target, conditions) {
-  if (target === null || target === undefined) return null;
+  if (target === null) return null;
+  if (target === undefined) return undefined;
   if (typeof target === "string") return target;
   if (Array.isArray(target)) {
     for (const t of target) {
       const r = resolveExportsTarget(t, conditions);
-      if (typeof r === "string") return r;
+      if (r === undefined || r === null) continue;
+      return r;
     }
-    return null;
+    return undefined;
   }
   if (typeof target === "object") {
+    // Node iterates keys in insertion order: the first key that is
+    // "default" or a matching condition wins, even when a later key would
+    // also match.
     for (const key of Object.keys(target)) {
       if (key === "default" || conditions.indexOf(key) !== -1) {
         const r = resolveExportsTarget(target[key], conditions);
-        if (typeof r === "string") return r;
+        if (r === undefined) continue;
+        return r; // string or explicit null — terminal (Node parity)
       }
     }
-    return null;
+    return undefined;
   }
-  return null;
+  return undefined;
+}
+
+// Throw an ERR_INVALID_PACKAGE_CONFIG for a mixed `exports` object (some
+// keys starting with "." and some not). Node parity.
+function throwInvalidPackageConfig(pjsonPath) {
+  const err = new Error(
+    `[ERR_INVALID_PACKAGE_CONFIG]: Invalid package config '${pjsonPath}'. ` +
+      `"exports" cannot contain some keys starting with '.' and some not. ` +
+      `The exports object must either be an object of package subpath keys ` +
+      `or an object of main entry condition name keys only.`,
+  );
+  err.code = "ERR_INVALID_PACKAGE_CONFIG";
+  err.path = pjsonPath;
+  throw stampCode(err, false);
 }
 
 // Node PACKAGE_EXPORTS_RESOLVE for the require condition set: string-form,
-// subpath map, condition-sugar, and ./x/* patterns. Returns the target string
-// or null for an honest miss.
-function resolvePackageExportsField(exportsField, subpath, conditions) {
+// top-level fallback arrays, subpath maps, condition-sugar, and single-`*`
+// subpath patterns. Returns the target string or null for an honest miss
+// (caller maps null to ERR_PACKAGE_PATH_NOT_EXPORTED).
+function resolvePackageExportsField(
+  exportsField,
+  subpath,
+  conditions,
+  pjsonPath,
+) {
   if (exportsField === null || exportsField === undefined) return null;
-  let target;
   if (typeof exportsField === "string") {
     if (subpath !== ".") return null;
-    target = exportsField;
-  } else if (typeof exportsField === "object" && !Array.isArray(exportsField)) {
+    return exportsField;
+  }
+  if (Array.isArray(exportsField)) {
+    // Top-level fallback array: first resolvable entry wins. (A missing
+    // *file* is MODULE_NOT_FOUND downstream, not a fallback — Node parity.)
+    if (subpath !== ".") return null;
+    const r = resolveExportsTarget(exportsField, conditions);
+    return typeof r === "string" ? r : null;
+  }
+  if (typeof exportsField === "object") {
     const keys = Object.keys(exportsField);
-    const isSugar = keys.length > 0 && keys.every((k) => !k.startsWith("."));
+    const dotKeys = keys.filter((k) => k.startsWith("."));
+    if (dotKeys.length > 0 && dotKeys.length < keys.length) {
+      throwInvalidPackageConfig(pjsonPath);
+    }
+    const isSugar = keys.length > 0 && dotKeys.length === 0;
+    let target;
     if (isSugar) {
       // Condition-only object: the main entry.
       if (subpath !== ".") return null;
@@ -816,31 +903,19 @@ function resolvePackageExportsField(exportsField, subpath, conditions) {
     } else if (Object.prototype.hasOwnProperty.call(exportsField, subpath)) {
       target = exportsField[subpath];
     } else {
-      // Longest ./x/* pattern-key match.
-      let best = null;
-      for (const key of keys) {
-        if (
-          key.endsWith("/*") &&
-          subpath.startsWith(key.slice(0, -1)) &&
-          (best === null || key.length > best.length)
-        ) {
-          best = key;
-        }
-      }
-      if (best === null) return null;
-      const star = subpath.slice(best.length - 1);
-      const r = resolveExportsTarget(exportsField[best], conditions);
-      return typeof r === "string" ? r.replace(/\*/g, star) : null;
+      const m = matchSubpathPattern(keys, subpath);
+      if (m === null) return null;
+      const r = resolveExportsTarget(exportsField[m.key], conditions);
+      return typeof r === "string" ? r.replace(/\*/g, m.star) : null;
     }
-  } else {
-    return null;
+    const resolved = resolveExportsTarget(target, conditions);
+    return typeof resolved === "string" ? resolved : null;
   }
-  const resolved = resolveExportsTarget(target, conditions);
-  return typeof resolved === "string" ? resolved : null;
+  return null;
 }
 
 // Node PACKAGE_IMPORTS_RESOLVE target lookup: `imports` keys are `#`
-// specifiers (exact or `#prefix/*` patterns). Same condition matching as
+// specifiers (exact or single-`*` patterns). Same condition matching as
 // exports via resolveExportsTarget. Returns the target string or null.
 function resolvePackageImportsField(importsField, request, conditions) {
   if (
@@ -854,33 +929,21 @@ function resolvePackageImportsField(importsField, request, conditions) {
     const r = resolveExportsTarget(importsField[request], conditions);
     return typeof r === "string" ? r : null;
   }
-  // Longest `#prefix/*` pattern-key match.
-  let best = null;
-  for (const key of Object.keys(importsField)) {
-    if (
-      key.endsWith("/*") &&
-      request.startsWith(key.slice(0, -1)) &&
-      (best === null || key.length > best.length)
-    ) {
-      best = key;
-    }
-  }
-  if (best === null) return null;
-  const star = request.slice(best.length - 1);
-  const r = resolveExportsTarget(importsField[best], conditions);
-  return typeof r === "string" ? r.replace(/\*/g, star) : null;
+  const m = matchSubpathPattern(Object.keys(importsField), request);
+  if (m === null) return null;
+  const r = resolveExportsTarget(importsField[m.key], conditions);
+  return typeof r === "string" ? r.replace(/\*/g, m.star) : null;
 }
 
 // Resolve a `#` specifier against the nearest parent package.json scope.
-// Returns the filename or throws ERR_PACKAGE_IMPORT_NOT_DEFINED (Node parity:
-// the nearest scope wins; a scope without `imports` or without a match is
-// an honest miss, not a fallthrough to outer scopes).
-function resolvePackageImports(request, parentDir, exts, isMain) {
+// Returns { target, scopeDir } or throws ERR_PACKAGE_IMPORT_NOT_DEFINED
+// (Node parity: the nearest scope wins; a scope without `imports` or without
+// a match is an honest miss, not a fallthrough to outer scopes).
+function resolvePackageImports(request, parentDir) {
   let dir = parentDir;
   while (true) {
     const pkg = readPackageJson(dir);
     if (pkg.exists) {
-      let filename = null;
       if (
         pkg.data &&
         pkg.data.imports !== undefined &&
@@ -891,13 +954,9 @@ function resolvePackageImports(request, parentDir, exts, isMain) {
           request,
           EXPORTS_REQUIRE_CONDITIONS,
         );
-        if (typeof target === "string" && target.startsWith("./")) {
-          const base = posixResolve(dir, target);
-          filename =
-            tryFile(base, isMain) || tryExtensions(base, exts, isMain) || null;
-        }
+        if (typeof target === "string")
+          return { target, scopeDir: dir, pjsonPath: pkg.pjsonPath };
       }
-      if (filename) return filename;
       const err = new Error(
         `[ERR_PACKAGE_IMPORT_NOT_DEFINED]: Package import specifier "${request}" is not defined in '${pkg.pjsonPath}'`,
       );
@@ -916,6 +975,46 @@ function resolvePackageImports(request, parentDir, exts, isMain) {
   throw stampCode(err, false);
 }
 
+// Resolve an `exports`/`imports` target string against a package root to an
+// existing file. Node parity:
+// - `exports` targets must be "./"-relative (external targets are
+//   ERR_INVALID_PACKAGE_TARGET); `imports` targets may also be external
+//   bare specifiers (handled by the caller).
+// - the resolved path must stay inside the package root, else
+//   ERR_INVALID_PACKAGE_TARGET.
+// - targets resolve verbatim: no extension or directory probing. A missing
+//   file is MODULE_NOT_FOUND.
+function resolvePackageTargetFile(pkgRoot, target, isMain, pjsonPath, field) {
+  field = field || "exports";
+  if (!target.startsWith("./")) {
+    const err = new Error(
+      `[ERR_INVALID_PACKAGE_TARGET]: Invalid "${field}" target "${target}" defined in '${pjsonPath}'; targets must start with "./"`,
+    );
+    err.code = "ERR_INVALID_PACKAGE_TARGET";
+    err.path = pjsonPath;
+    throw stampCode(err, false);
+  }
+  const base = posixResolve(pkgRoot, target);
+  const inside =
+    base === pkgRoot || base.startsWith(pkgRoot === "/" ? "/" : pkgRoot + "/");
+  if (!inside) {
+    const err = new Error(
+      `[ERR_INVALID_PACKAGE_TARGET]: Invalid "${field}" target "${target}" defined in '${pjsonPath}'; target escapes the package`,
+    );
+    err.code = "ERR_INVALID_PACKAGE_TARGET";
+    err.path = pjsonPath;
+    throw stampCode(err, false);
+  }
+  const filename = tryFile(base, isMain);
+  if (!filename) {
+    const err = new Error(`Cannot find module '${base}'`);
+    err.code = "MODULE_NOT_FOUND";
+    err.path = pjsonPath;
+    throw stampCode(err, false);
+  }
+  return filename;
+}
+
 function tryPackage(requestPath, exts, isMain, originalPath) {
   const pkg = Module._readPackage(requestPath);
   // Node parity (PACKAGE_EXPORTS_RESOLVE): when `exports` is present, `main`
@@ -932,14 +1031,19 @@ function tryPackage(requestPath, exts, isMain, originalPath) {
       pkg.data.exports,
       ".",
       EXPORTS_REQUIRE_CONDITIONS,
+      pkg.pjsonPath,
     );
-    if (typeof target === "string" && target.startsWith("./")) {
-      const filename = posixResolve(requestPath, target);
-      const actual =
-        tryFile(filename, isMain) ||
-        tryExtensions(filename, exts, isMain) ||
-        tryExtensions(posixResolve(filename, "index"), exts, isMain);
-      if (actual) return actual;
+    if (typeof target === "string") {
+      // Node parity: the target resolves verbatim (no extension/directory
+      // probing). A missing file is MODULE_NOT_FOUND; only a null target
+      // (no match) is ERR_PACKAGE_PATH_NOT_EXPORTED.
+      return resolvePackageTargetFile(
+        requestPath,
+        target,
+        isMain,
+        pkg.pjsonPath,
+        "exports",
+      );
     }
     const err = new Error(
       `[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '.' is not defined by "exports" in '${pkg.pjsonPath}' imported from '${originalPath}'`,
@@ -1118,7 +1222,7 @@ function _resolveLookupPaths(request, parent) {
   return [posixDirname(parent.filename)];
 }
 
-function _findPath(request, paths, isMain) {
+function _findPath(request, paths, isMain, skipImportsBranch) {
   const absoluteRequest = posixIsAbsolute(request);
   if (absoluteRequest) {
     paths = [""];
@@ -1135,15 +1239,41 @@ function _findPath(request, paths, isMain) {
   // Node PACKAGE_IMPORTS_RESOLVE: `#` specifiers resolve via the nearest
   // parent package.json `imports` field. Handled before the bare-specifier
   // logic: `#x` is not a bare package name.
-  if (!absoluteRequest && request.charCodeAt(0) === 35 /* # */) {
-    if (exts === undefined) exts = Object.keys(_extensions);
+  if (
+    !absoluteRequest &&
+    request.charCodeAt(0) === 35 /* # */ &&
+    !skipImportsBranch
+  ) {
     // paths[0] is <parentDir>/node_modules; dirname gives the importer dir.
     const parentDir = paths.length > 0 ? posixDirname(paths[0]) : "/";
-    const filename = resolvePackageImports(request, parentDir, exts, isMain);
-    // resolvePackageImports throws ERR_PACKAGE_IMPORT_NOT_DEFINED on miss —
-    // it never returns falsy.
-    _pathCache[cacheKey] = filename;
-    return filename;
+    // resolvePackageImports throws ERR_PACKAGE_IMPORT_NOT_DEFINED on miss.
+    const { target, scopeDir, pjsonPath } = resolvePackageImports(
+      request,
+      parentDir,
+    );
+    let filename = false;
+    if (target.startsWith("./")) {
+      // Internal target: verbatim file resolution, no extension probing
+      // (Node parity — a missing file is MODULE_NOT_FOUND).
+      filename = resolvePackageTargetFile(
+        scopeDir,
+        target,
+        isMain,
+        pjsonPath,
+        "imports",
+      );
+    } else {
+      // External target: resolve as a bare specifier (Node parity). A
+      // `#`-prefixed target is NOT re-resolved through `imports` — Node
+      // reports MODULE_NOT_FOUND for it, and skipping re-entry also breaks
+      // `#a: "#a"` self-reference cycles.
+      filename = _findPath(target, paths, isMain, true);
+    }
+    if (filename) {
+      _pathCache[cacheKey] = filename;
+      return filename;
+    }
+    return false;
   }
 
   // Node parity: a package.json `exports` field encapsulates the package.
@@ -1169,22 +1299,28 @@ function _findPath(request, paths, isMain) {
           pkg.data.exports,
           subpath,
           EXPORTS_REQUIRE_CONDITIONS,
+          pkg.pjsonPath,
         );
-        let filename = false;
-        if (typeof target === "string" && target.startsWith("./")) {
-          const base = posixResolve(pkgRoot, target);
-          filename = tryFile(base, isMain) || tryExtensions(base, exts, isMain);
-        }
-        if (!filename) {
-          const err = new Error(
-            `[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '${subpath}' is not defined by "exports" in '${pkg.pjsonPath}'`,
+        if (typeof target === "string") {
+          // Node parity: the target resolves verbatim (no extension or
+          // directory probing). A missing file is MODULE_NOT_FOUND; only a
+          // null target (no match) is ERR_PACKAGE_PATH_NOT_EXPORTED.
+          const filename = resolvePackageTargetFile(
+            pkgRoot,
+            target,
+            isMain,
+            pkg.pjsonPath,
+            "exports",
           );
-          err.code = "ERR_PACKAGE_PATH_NOT_EXPORTED";
-          err.path = pkg.pjsonPath;
-          throw stampCode(err, false);
+          _pathCache[cacheKey] = filename;
+          return filename;
         }
-        _pathCache[cacheKey] = filename;
-        return filename;
+        const err = new Error(
+          `[ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath '${subpath}' is not defined by "exports" in '${pkg.pjsonPath}'`,
+        );
+        err.code = "ERR_PACKAGE_PATH_NOT_EXPORTED";
+        err.path = pkg.pjsonPath;
+        throw stampCode(err, false);
       }
     }
   }
