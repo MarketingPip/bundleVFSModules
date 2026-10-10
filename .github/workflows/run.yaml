@@ -51,6 +51,11 @@ jobs:
         # without rebuilding, the runtime would use a stale template.
         run: node src/build-sandbox.mjs --check
 
+      - name: Check runtime.js is fresh
+        # runtime.js is built from src/runtime/*.js via src/build-runtime.mjs.
+        # If the modules change without rebuilding, the runtime would be stale.
+        run: node src/build-runtime.mjs --check
+
       - name: Commit generated file
         run: |
           git config user.name "github-actions[bot]"
