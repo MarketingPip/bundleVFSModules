@@ -162,28 +162,35 @@ A sysroot gets into the VFS in two stages:
    `(seed, toolchain)` pair (tracked in a `WeakMap`; `isSysrootMounted`
    queries it). `CodeSandbox.compileToolchain` / `mountToolchainSysroot`
    do this against `config.fs` before compiling.
-2. **Follow-up seam: read-only lazy mounts** (roadmap lists this as a
-   separate seam). A *string* sysroot (`"/opt/wasi-sysroot"`) throws a
-   clear `ToolchainError` today — no silent partial mount. The follow-up
-   mount must satisfy:
+2. **Read-only lazy mounts** (landed): `mountSysroot(name)` from
+   `src/toolchain.js` returns a `SysrootMount` for a registered toolchain —
+   no pre-copy, files are served on demand:
 
 ```js
-// Interface the lazy-mount seam must provide:
-interface SysrootMount {
-  readonly: true;                                   // enforce, don't document
-  readFile(absPath: string): Promise<Uint8Array | null>;  // lazy, no full copy
-  stat?(absPath: string): Promise<{ size: number, isDirectory: boolean } | null>;
-  listDir?(absPath: string): Promise<string[] | null>;
-}
-mountSysroot(name: string): Promise<SysrootMount>
+const mount = await mountSysroot("wasi-clang");
+mount.readonly; // true — enforced via Object.freeze, not documented
+await mount.readFile("/usr/include/stdio.h"); // Uint8Array | null (lazy)
+await mount.stat("/usr/include");  // { size, isDirectory } | null | undefined
+await mount.listDir("/usr/include"); // string[] | null | undefined
 ```
 
-Until it lands: hosts needing large sysroots keep them in the toolchain's
-own `readFile`/`exists` accessors (already supported) and pass
-`sysrootMount` through `opts`.
+   - `readFile(absPath)` takes a sysroot-absolute path and resolves it
+     lazily. File-map sysroots serve from the map; string sysroots delegate
+     to the toolchain's `readFile(absPath)` accessor with the sysroot path
+     prefixed (a missing accessor is a clear `ToolchainError` at mount
+     time — never a silent empty mount). Absent sysroots miss on every read.
+   - `stat`/`listDir` exist only when the file set is enumerable (file-map
+     sysroots). A string sysroot's host cannot be enumerated, so the mount
+     omits them rather than faking answers.
+   - Path traversal (`..` above the sysroot root) is a miss by construction —
+     the accessor is never consulted for escaping paths.
+   - `mountSysrootIntoSeed` with a string sysroot copies nothing into the
+     seed; it returns the `/.sysroot/<name>` prefix (still idempotent per
+     seed) and the toolchain reads via the mount.
 
-The mount is **read-only by convention** until the seam enforces it: hosts
-must not write under `/.sysroot/…`.
+The mount is **read-only by construction**: it exposes no write path and is
+frozen. Hosts needing large sysroots keep them behind the toolchain's own
+`readFile`/`exists` accessors and pass `sysrootMount` through `opts`.
 
 ---
 

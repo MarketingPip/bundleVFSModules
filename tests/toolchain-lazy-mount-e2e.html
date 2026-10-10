@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>lazy-mount E2E</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Toolchain lazy-mount browser proof (docs/TOOLCHAIN.md §4).
+//
+// Proves via the REAL host-side module in a real browser:
+//   - `mountSysroot(name)` from /local-repo/src/toolchain.js (no Node-isms:
+//     TextEncoder, Object.freeze, dynamic behavior all browser-native)
+//   - string sysroot: lazy reads through the toolchain's readFile accessor,
+//     nothing pre-copied, traversal blocked, read-only enforced
+//   - file-map sysroot: readFile/stat/listDir from the map
+//   - mountSysrootIntoSeed: string sysroots copy nothing into the seed
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text,
+// and POST /report (crash-proof). No screenshots.
+import {
+  registerToolchain,
+  mountSysroot,
+  mountSysrootIntoSeed,
+  isSysrootMounted,
+  clearToolchains,
+  ToolchainError,
+} from "/local-repo/src/toolchain.js";
+
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const __t0 = Date.now();
+const phase = (p) => { window.__phase = p; document.title = "E2E:" + p; log("PHASE " + p + " @" + ((Date.now() - __t0) / 1000).toFixed(1) + "s"); };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) { /* ignore */ }
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+const dec = (u8) => new TextDecoder().decode(u8);
+
+try {
+  phase("setup");
+  clearToolchains();
+  const fetched = [];
+  registerToolchain({
+    name: "e2e-cc",
+    compile: async () => ({ bytes: new Uint8Array([0, 0x61, 0x73, 0x6d]) }),
+    sysroot: "/opt/wasi-sysroot",
+    readFile: async (p) => {
+      fetched.push(p);
+      return p === "/opt/wasi-sysroot/usr/include/stdio.h" ? "#define NULL ((void*)0)\n" : null;
+    },
+  });
+  registerToolchain({
+    name: "e2e-map",
+    compile: async () => ({ bytes: new Uint8Array([1]) }),
+    sysroot: { "/lib/libc.a": new Uint8Array([7, 7]), "/include/x.h": "int x;\n" },
+  });
+
+  phase("string-sysroot-lazy-read");
+  const m = await mountSysroot("e2e-cc");
+  check("readonly true", m.readonly === true, String(m.readonly));
+  check("frozen", Object.isFrozen(m), "not frozen");
+  const stdio = await m.readFile("/usr/include/stdio.h");
+  check("readFile returns Uint8Array", stdio instanceof Uint8Array, typeof stdio);
+  check("readFile content", dec(stdio) === "#define NULL ((void*)0)\n", dec(stdio));
+  check("lazy: only requested file fetched", fetched.length === 1 && fetched[0] === "/opt/wasi-sysroot/usr/include/stdio.h", JSON.stringify(fetched));
+  check("miss -> null", (await m.readFile("/nope.h")) === null);
+  check("traversal blocked", (await m.readFile("/../etc/passwd")) === null);
+  check("traversal never hit accessor", fetched.length === 2, JSON.stringify(fetched));
+  check("no stat on string sysroot", m.stat === undefined, typeof m.stat);
+  check("no listDir on string sysroot", m.listDir === undefined, typeof m.listDir);
+
+  phase("string-sysroot-seed");
+  const seed = {};
+  const prefix = mountSysrootIntoSeed(
+    { name: "e2e-cc", compile: async () => ({}), sysroot: "/opt/wasi-sysroot", readFile: async () => null },
+    seed,
+  );
+  check("prefix", prefix === "/.sysroot/e2e-cc", prefix);
+  check("seed gains no files (lazy)", Object.keys(seed).length === 0, JSON.stringify(Object.keys(seed)));
+  check("isSysrootMounted", isSysrootMounted("e2e-cc", seed) === true);
+
+  phase("file-map-mount");
+  const mm = await mountSysroot("e2e-map");
+  check("map readFile", dec(await mm.readFile("/include/x.h")) === "int x;\n");
+  check("map readFile bytes", (await mm.readFile("/lib/libc.a")).length === 2);
+  check("map stat file", JSON.stringify(await mm.stat("/include/x.h")) === JSON.stringify({ size: 7, isDirectory: false }), JSON.stringify(await mm.stat("/include/x.h")));
+  check("map stat dir", (await mm.stat("/include")).isDirectory === true);
+  check("map listDir", JSON.stringify(await mm.listDir("/")) === JSON.stringify(["include", "lib"]), JSON.stringify(await mm.listDir("/")));
+
+  phase("errors");
+  let threw = false;
+  try { await mountSysroot("nope"); } catch (e) { threw = e instanceof ToolchainError; }
+  check("unknown toolchain -> ToolchainError", threw);
+  registerToolchain({ name: "e2e-noread", compile: async () => ({}), sysroot: "/opt/x" });
+  let threw2 = false;
+  try { await mountSysroot("e2e-noread"); } catch (e) { threw2 = /readFile.*accessor/.test(e.message); }
+  check("string sysroot without readFile -> clear error", threw2);
+
+  const failed = results.filter((r) => r.startsWith("FAIL"));
+  phase("done");
+  log(results.join("\n"));
+  if (failed.length === 0) {
+    document.title = "E2E-PASS";
+    report({ ok: true, checks: results.length });
+  } else {
+    document.title = "E2E-FAIL: " + failed.join("; ");
+    report({ ok: false, failures: failed });
+  }
+} catch (e) {
+  document.title = "E2E-FAIL: exception " + (e && e.message);
+  log("EXCEPTION: " + (e && e.stack || e));
+  report({ ok: false, exception: String(e && e.message || e) });
+}
+</script>
+</body>
+</html>
