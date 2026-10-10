@@ -10,6 +10,10 @@
 //   - transpile.js dual-lane acorn dropped (unified static esm.sh import)
 //   - export * from ./host-utils.js dropped as redundant (host-utils.js is
 //     bundled in the same scope with its own exports)
+//   - export stripped except the monolith's 22-name export surface
+//     (KEEP_EXPORTS) so marker-extracted blocks stay new-Function-able
+//   - "// EXECUTION CONTEXT MODULE" re-emitted after the import-resolver
+//     section (extractBlock end marker used by tests)
 
 import * as acorn from "https://esm.sh/acorn";
 import * as walk from "https://esm.sh/acorn-walk";
@@ -49,7 +53,7 @@ import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";
  * native→browser/WASM substitution table only applies when the host has
  * opted in via registerPlugin(viteBrowserPlugin).
  */
-export function isViteBrowserInterceptionActive() {
+function isViteBrowserInterceptionActive() {
   const plugins = getPlugins();
   for (const p of plugins) {
     if (p && p.name === "vite-browser") return true;
@@ -74,18 +78,6 @@ registerPlugin(jsonPlugin);
 // above. Re-exported here so the cutover can replace those imports with a
 // single import from this module. lookupNativeInterception is re-exported
 // for the _dynamic_import handler (runtime.js:2616, 5583).
-export {
-  applyTransformPlugins,
-  applyResolvePlugins,
-  applyLoadPlugins,
-  dispatchLoader,
-  registerPlugin,
-  validatePlugin,
-  getPlugins,
-  typescriptPlugin,
-  jsonPlugin,
-  lookupNativeInterception,
-};
 
 // ── src/runtime/builtins.js ─────────────────────────────────────────────
 /**
@@ -96,7 +88,7 @@ export {
  *   esbuild src/sandbox/cookie-entry.js --bundle --format=iife --minify
  *     --platform=browser, then JSON.stringify the output.
  */
-export const COOKIE_JAR_IIFE =
+const COOKIE_JAR_IIFE =
   'globalThis.__cookieJarLib=(()=>{var N=Object.defineProperty;var U=Object.getOwnPropertyDescriptor;var G=Object.getOwnPropertyNames;var R=Object.prototype.hasOwnProperty;var J=(e,t)=>{for(var s in t)N(e,s,{get:t[s],enumerable:!0})},Q=(e,t,s,a)=>{if(t&&typeof t=="object"||typeof t=="function")for(let i of G(t))!R.call(e,i)&&i!==s&&N(e,i,{get:()=>t[i],enumerable:!(a=U(t,i))||a.enumerable});return e};var X=e=>Q(N({},"__esModule",{value:!0}),e);var ie={};J(ie,{VirtualCookieJar:()=>M,canonicalHost:()=>O,cookieJarKey:()=>w,cookiePathMatches:()=>F,defaultPath:()=>z,domainMatches:()=>E,mergeCookieHeaders:()=>ne,parseSetCookie:()=>K});var k={decodeValues:!0,map:!1,silent:!1,split:"auto"};function _(e){return typeof e!="string"||e in{}}function C(){return Object.create(null)}function V(e){return typeof e=="string"&&!!e.trim()}function $(e,t){var s=e.split(";").filter(V),a=s.shift();if(!a)return null;var i=Y(a),r=i.name,n=i.value;if(t=t?Object.assign({},k,t):k,_(r))return null;try{n=t.decodeValues?decodeURIComponent(n):n}catch(c){console.error("set-cookie-parser: failed to decode cookie value. Set options.decodeValues=false to disable decoding.",c)}var o=C();return o.name=r,o.value=n,s.forEach(function(c){var m=c.split("="),f=m.shift().trim().toLowerCase();if(!_(f)){var d=m.join("=").trim();if(f==="expires")o.expires=new Date(d);else if(f==="max-age"){var p=parseInt(d,10);Number.isNaN(p)||(o.maxAge=p)}else f==="secure"?o.secure=!0:f==="httponly"?o.httpOnly=!0:f==="samesite"?o.sameSite=d:f==="partitioned"?o.partitioned=!0:f&&(o[f]=d)}}),o}function Y(e){var t="",s="",a=e.split("=");return a.length>1?(t=a.shift(),s=a.join("=")):s=e,{name:t,value:s}}function y(e,t){if(t=t?Object.assign({},k,t):k,!e)return t.map?C():[];if(e.headers)if(typeof e.headers.getSetCookie=="function")e=e.headers.getSetCookie();else if(e.headers["set-cookie"])e=e.headers["set-cookie"];else{var s=e.headers[Object.keys(e.headers).find(function(n){return n.toLowerCase()==="set-cookie"})];!s&&e.headers.cookie&&!t.silent&&console.warn("Warning: set-cookie-parser appears to have been called on a request object. It is designed to parse Set-Cookie headers from responses, not Cookie headers from requests. Set the option {silent: true} to suppress this warning."),e=s}var a=t.split,i=Array.isArray(e);if(a==="auto"&&(a=!i),i||(e=[e]),e=e.filter(V),a&&(e=e.map(A).flat()),t.map){var r=C();return e.reduce(function(n,o){var c=$(o,t);return c&&!_(c.name)&&(n[c.name]=c),n},r)}else return e.map(function(n){return $(n,t)}).filter(Boolean)}function A(e){if(Array.isArray(e))return e;if(typeof e!="string")return[];var t=[],s=0,a,i,r,n,o;function c(){for(;s<e.length&&/\\s/.test(e.charAt(s));)s+=1;return s<e.length}function m(){return i=e.charAt(s),i!=="="&&i!==";"&&i!==","}for(;s<e.length;){for(a=s,o=!1;c();)if(i=e.charAt(s),i===","){for(r=s,s+=1,c(),n=s;s<e.length&&m();)s+=1;s<e.length&&e.charAt(s)==="="?(o=!0,s=n,t.push(e.substring(a,r)),a=s):s=r+1}else s+=1;(!o||s>=e.length)&&t.push(e.substring(a,e.length))}return t}y.parseSetCookie=y;y.parse=y;y.parseString=$;y.splitCookiesString=A;var Z={maxNameValueBytes:4096,maxAttrValueBytes:1024,maxPerDomain:180,maxTotal:3e3,maxLifetimeMs:400*24*60*60*1e3,defaultSameSite:"lax",treatLocalhostAsSecure:!0,defaultHost:"localhost",isPublicSuffix:e=>!e.includes(".")},ee=new TextEncoder,j=e=>ee.encode(e).length;function w(e,t){return`\${e}\\0\${t}`}var te=e=>`\${e.domain}\\0\${e.path}\\0\${e.name}`;function O(e){return e.trim().toLowerCase().replace(/^\\[|\\]$/g,"").replace(/\\.$/,"")}var se=e=>/^\\d{1,3}(\\.\\d{1,3}){3}$/.test(e)||e.includes(":"),re=e=>e==="localhost"||e.endsWith(".localhost")||e==="::1"||/^127\\./.test(e);function E(e,t){return e===t?!0:!se(e)&&e.endsWith("."+t)}function z(e){let t=e.split("?")[0]||"/";if(!t.startsWith("/"))return"/";let s=t.lastIndexOf("/");return s<=0?"/":t.slice(0,s)}function F(e,t){return t===e||e.indexOf(t)===0&&(t.charAt(t.length-1)==="/"||e.charAt(t.length)==="/")}var D=(e,t)=>e.expires!==null&&e.expires<=t;function ae(e,t,s,a){return e==="none"||t?!0:e==="lax"?s&&a:!1}function K(e,t,s,a,i=Date.now()){let r=g=>({ok:!1,reason:g}),n=O(t.host),o=String(e).split(";"),c=o.shift()??"",m=c.indexOf("=");if(m<0)return r("missing \'=\' in name-value pair");let f=c.slice(0,m).trim(),d=c.slice(m+1).trim();if(!f)return r("empty cookie name");if(j(f)+j(d)>a.maxNameValueBytes)return r(`name+value exceeds \${a.maxNameValueBytes} bytes`);let p=null,u=null,l=!1,h=!1,W=null,H=null,I=null;for(let g of o){let b=g.indexOf("="),P=(b<0?g:g.slice(0,b)).trim().toLowerCase(),v=b<0?"":g.slice(b+1).trim();if(!(j(v)>a.maxAttrValueBytes))switch(P){case"path":p=v.startsWith("/")?v:null;break;case"domain":u=v.replace(/^\\./,"").toLowerCase()||null;break;case"secure":l=!0;break;case"httponly":h=!0;break;case"samesite":{let x=v.toLowerCase();W=x==="strict"||x==="lax"||x==="none"?x:null;break}case"max-age":if(/^-?\\d+$/.test(v)){let x=parseInt(v,10);H=x<=0?0:i+Math.min(x*1e3,a.maxLifetimeMs)}break;case"expires":{let x=Date.parse(v);Number.isNaN(x)||(I=Math.min(x,i+a.maxLifetimeMs));break}}}let T=n,L=!0;if(u)if(a.isPublicSuffix(u)){if(u!==n)return r(`Domain=\${u} is a public suffix`)}else if(E(n,u))T=u,L=!1;else return r(`host "\${n}" does not domain-match Domain=\${u}`);let q=p??z(t.path??"/");if(l&&!s)return r("Secure cookie set from an insecure origin");let S=W??a.defaultSameSite;if(S==="none"&&!l)return r("SameSite=None requires Secure");if(S!=="none"&&t.sameSite===!1&&!t.topLevelNavigation)return r(`SameSite=\${S} cookie set from a cross-site response`);let B=f.toLowerCase();return B.startsWith("__secure-")&&!l?r("__Secure- prefix requires Secure"):B.startsWith("__host-")&&(!l||!L||q!=="/")?r("__Host- prefix requires Secure, no Domain, and Path=/"):{ok:!0,cookie:{name:f,value:d,domain:T,hostOnly:L,path:q,secure:l,httpOnly:h,sameSite:S,expires:H??I,created:i,lastAccessed:i}}}function ne(e,t){if(!t)return e||"";if(!e)return t;let s=new Set,a=[];for(let i of t.split(";")){let r=i.trim();if(!r)continue;let n=r.indexOf("=");s.add((n<0?r:r.slice(0,n)).trim()),a.push(r)}for(let i of e.split(";")){let r=i.trim();if(!r)continue;let n=r.indexOf("=");s.has((n<0?r:r.slice(0,n)).trim())||a.push(r)}return a.join("; ")}var M=class{_jars=new Map;cfg;constructor(t={}){this.cfg={...Z,...t}}isSecureOrigin(t){return!!t.secure||this.cfg.treatLocalhostAsSecure&&re(O(t.host))}store(t,s,a,i={host:this.cfg.defaultHost}){let r=[];if(a==null)return r;let n=Array.isArray(a)?a.flatMap(d=>A(d)):A(a),o=w(t,s),c=this._jars.get(o);c||(c=new Map,this._jars.set(o,c));let m=Date.now(),f=this.isSecureOrigin(i);for(let d of n){let p=K(d,i,f,this.cfg,m);if(!p.ok){r.push({raw:d,reason:p.reason});continue}let u=p.cookie,l=te(u);if(D(u,m)){c.delete(l);continue}let h=c.get(l);h&&(u.created=h.created),c.set(l,u)}return this.enforceLimits(c,m),c.size===0&&this._jars.delete(o),r}enforceLimits(t,s){for(let[r,n]of t)D(n,s)&&t.delete(r);let a=new Map;for(let r of t){let n=a.get(r[1].domain);n?n.push(r):a.set(r[1].domain,[r])}for(let r of a.values()){let n=r.length-this.cfg.maxPerDomain;if(!(n<=0)){r.sort((o,c)=>o[1].lastAccessed-c[1].lastAccessed);for(let[o]of r.slice(0,n))t.delete(o)}}let i=t.size-this.cfg.maxTotal;if(i>0){let r=[...t].sort((n,o)=>n[1].lastAccessed-o[1].lastAccessed);for(let[n]of r.slice(0,i))t.delete(n)}}cookieHeader(t,s,a){let i=this._jars.get(w(t,s));if(!i||i.size===0)return"";let r=typeof a=="string"?{host:this.cfg.defaultHost,path:a}:a,n=Date.now(),o=O(r.host),c=(r.path??"/").split("?")[0]||"/",m=this.isSecureOrigin(r),f=r.sameSite??!0,d=!!r.topLevelNavigation,p=["GET","HEAD","OPTIONS","TRACE"].includes((r.method??"GET").toUpperCase()),u=[];for(let[l,h]of i){if(D(h,n)){i.delete(l);continue}(h.hostOnly?h.domain!==o:!E(o,h.domain))||F(c,h.path)&&(h.secure&&!m||r.script&&h.httpOnly||ae(h.sameSite,f,d,p)&&u.push(h))}u.sort((l,h)=>h.path.length-l.path.length||l.created-h.created);for(let l of u)l.lastAccessed=n;return u.map(l=>`\${l.name}=\${l.value}`).join("; ")}list(t,s){let a=this._jars.get(w(t,s));return a?[...a.values()].map(i=>({...i})):[]}clearInstance(t){for(let s of[...this._jars.keys()])s.startsWith(t+"\\0")&&this._jars.delete(s)}clearAll(){this._jars.clear()}};return X(ie);})();';
 // NOTE: The full vfs.js bundle (6.8MB) is NOT imported statically.
 // Built-in modules are loaded lazily on-demand via loadBuiltin() below,
@@ -109,11 +101,11 @@ export const COOKIE_JAR_IIFE =
  * Fetches individual dist files on-demand instead of the full 6.8MB bundle.
  * Results are cached; subsequent loads for the same module return instantly.
  */
-export const _builtinCache = new Map();
-export const _builtinBaseUrl =
+const _builtinCache = new Map();
+const _builtinBaseUrl =
   "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/";
 // Maps Node.js specifiers to dist filenames (mirrors dist/manifest.json)
-export const _builtinManifest = {
+const _builtinManifest = {
   assert: "assert.js",
   "assert/strict": "assert_strict.js",
   async_hooks: "async_hooks.js",
@@ -169,8 +161,8 @@ export const _builtinManifest = {
   worker_threads: "worker_threads.js",
   zlib: "zlib.js",
 };
-export const _builtinSourceCache = new Map();
-export async function fetchBuiltinSource(specifier) {
+const _builtinSourceCache = new Map();
+async function fetchBuiltinSource(specifier) {
   let key = String(specifier).trim();
   if (key.startsWith("node:")) key = key.slice(5);
   let file = _builtinManifest[key];
@@ -220,7 +212,7 @@ export async function fetchBuiltinSource(specifier) {
 // via 'normalizeBuiltinSpecifier.toString()', so it must stay
 // self-contained (no closure references) and must not contain backticks or
 // '${' (it is embedded inside outer template literals).
-export function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
+function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
   var modulePath = specifier;
   var bare =
     typeof specifier === "string" && specifier.indexOf("node:") === 0
@@ -256,7 +248,7 @@ export function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
 }
 // --- end node: builtin normalization (gap #6) ---
 
-export async function loadBuiltin(specifier) {
+async function loadBuiltin(specifier) {
   // Normalize: strip "node:" prefix
   let key = String(specifier).trim();
   if (key.startsWith("node:")) key = key.slice(5);
@@ -395,7 +387,7 @@ export function toNodeKeypress(element, callback) {
 /**
  * Consolidated ANSI stripper and console interceptor
  */
-export const stripAnsi = (string) => {
+const stripAnsi = (string) => {
   if (typeof string !== "string") return string;
 
   // Fast path: ANSI codes require ESC (7-bit) or CSI (8-bit) introducer
@@ -412,7 +404,7 @@ export const stripAnsi = (string) => {
   return string.replace(new RegExp(pattern, "g"), "");
 };
 
-export function mergeProcess(user = {}, defaults = {}) {
+function mergeProcess(user = {}, defaults = {}) {
   return Object.keys(defaults).reduce((acc, key) => {
     const userVal = user[key];
     const defaultVal = defaults[key];
@@ -614,7 +606,6 @@ const memfsModule = await (isNodeLane()
 const fs = memfsModule.default ?? memfsModule;
 
 // The host-side default volume (also exported for other runtime modules).
-export { fs as memfsFs };
 
 // Initialize virtual filesystem structure
 fs.vol.fromJSON({
@@ -622,7 +613,7 @@ fs.vol.fromJSON({
   "/dir/nested.txt": "Nested file",
 });
 
-export const TEXT_EXTS = new Set([
+const TEXT_EXTS = new Set([
   "js",
   "jsx",
   "ts",
@@ -656,7 +647,7 @@ export const TEXT_EXTS = new Set([
   "conf",
 ]);
 
-export const BINARY_EXTS = new Set([
+const BINARY_EXTS = new Set([
   "png",
   "jpg",
   "jpeg",
@@ -681,7 +672,7 @@ export const BINARY_EXTS = new Set([
   "tar",
 ]);
 
-export function getExt(path) {
+function getExt(path) {
   return path.split(".").pop()?.toLowerCase() ?? "";
 }
 
@@ -1227,7 +1218,7 @@ export function convertCjsToEsm_backup(code) {
     .replace(/\n\s*\n/g, "\n"); // Clean up empty lines
 }
 
-export function _convertCjsToEsm(code) {
+function _convertCjsToEsm(code) {
   const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: "script" });
   let offset = 0;
   let newCode = code;
@@ -1287,7 +1278,7 @@ export function _convertCjsToEsm(code) {
   return newCode;
 }
 
-export function isCommonJS(code) {
+function isCommonJS(code) {
   try {
     const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: "module" });
     let hasCJS = false;
@@ -1335,7 +1326,7 @@ export function isCommonJS(code) {
   }
 }
 
-export function detectModuleSystem(code) {
+function detectModuleSystem(code) {
   let result = { isCJS: false, isESM: false };
 
   try {
@@ -1467,7 +1458,7 @@ export function detectModuleSystem(code) {
  * @returns {string}
  *   The transformed source code with matching imports replaced.
  */
-export function transformRelativeModule(code) {
+function transformRelativeModule(code) {
   const s = new MagicString(code);
   const ast = acorn.parse(code, {
     ecmaVersion: "latest",
@@ -2338,7 +2329,7 @@ export function transformImportsToLoadModule(
   };
 }
 
-export function generateImportBinding(node, liftedVar) {
+function generateImportBinding(node, liftedVar) {
   const specifiers = node.specifiers;
 
   if (!specifiers.length) return "";
@@ -2402,7 +2393,7 @@ export class SyntaxChecker {
 /**
  * A simple EventEmitter implementation for managing custom events.
  */
-export class EventEmitter {
+class EventEmitter {
   constructor() {
     /**
      * Stores event names mapped to arrays of handler functions.
@@ -2683,6 +2674,8 @@ export class ImportResolver {
   }
 }
 
+// EXECUTION CONTEXT MODULE
+
 // ── src/runtime/vfs-server.js ─────────────────────────────────────────────
 // src/runtime/vfs-server.js — extracted verbatim from runtime.js
 // (lines 2646-2808), branch modular/resolution. `export` added to every
@@ -2705,12 +2698,12 @@ const _vfsServerRoutes = new Map();
 /** The native fetch, captured while the patch is installed. */
 let _vfsOriginalFetch = null;
 
-export function _vfsIsLoopbackHostname(hostname) {
+function _vfsIsLoopbackHostname(hostname) {
   const h = String(hostname || "").toLowerCase();
   return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
 }
 
-export function _vfsExtractServerPort(data) {
+function _vfsExtractServerPort(data) {
   if (data && typeof data.port === "number") return data.port;
   // Sandbox posts server events via emitMe: { type, message: 'null {"port":N}' }.
   const msg = data && typeof data.message === "string" ? data.message : "";
@@ -2718,7 +2711,7 @@ export function _vfsExtractServerPort(data) {
   return m ? Number(m[1]) : null;
 }
 
-export function _vfsEnsureFetchPatched() {
+function _vfsEnsureFetchPatched() {
   if (typeof window === "undefined" || typeof window.fetch !== "function")
     return false;
   if (window.fetch && window.fetch.__vfsBridged) return true;
@@ -2728,7 +2721,7 @@ export function _vfsEnsureFetchPatched() {
   return true;
 }
 
-export function _vfsMaybeRestoreFetch() {
+function _vfsMaybeRestoreFetch() {
   if (
     _vfsServerRoutes.size === 0 &&
     _vfsOriginalFetch &&
@@ -2740,7 +2733,7 @@ export function _vfsMaybeRestoreFetch() {
 }
 
 /** Returns true when this owner holds the route (first claim wins). */
-export function _vfsRegisterServerRoute(port, owner) {
+function _vfsRegisterServerRoute(port, owner) {
   if (port == null) return false;
   const existing = _vfsServerRoutes.get(port);
   if (existing === owner) return true; // idempotent re-register
@@ -2750,7 +2743,7 @@ export function _vfsRegisterServerRoute(port, owner) {
   return true;
 }
 
-export function _vfsUnregisterServerRoute(port, owner) {
+function _vfsUnregisterServerRoute(port, owner) {
   if (port == null) return;
   if (_vfsServerRoutes.get(port) === owner) {
     _vfsServerRoutes.delete(port);
@@ -2758,7 +2751,7 @@ export function _vfsUnregisterServerRoute(port, owner) {
   }
 }
 
-export async function _vfsPatchedFetch(input, init) {
+async function _vfsPatchedFetch(input, init) {
   let url = null;
   try {
     const raw = typeof input === "string" ? input : input && input.url;
@@ -2780,7 +2773,7 @@ export async function _vfsPatchedFetch(input, init) {
   return _vfsOriginalFetch.apply(this, arguments);
 }
 
-export async function _vfsDispatchToSandbox(owner, port, url, input, init) {
+async function _vfsDispatchToSandbox(owner, port, url, input, init) {
   const method = String(
     (init && init.method) ||
       (input && typeof input === "object" && input.method) ||
@@ -2888,7 +2881,7 @@ export async function _vfsDispatchToSandbox(owner, port, url, input, init) {
 //   - `iframe`: .contentWindow, .parentNode, .remove(), .src, .srcdoc
 //
 
-export class ExecutionContext {
+class ExecutionContext {
   constructor(iframe, sandbox) {
     this.iframe = iframe;
     this.sandbox = sandbox;
@@ -6151,7 +6144,7 @@ export function createSandbox(options = {}) {
 // and never move inside the demo-playground init below. (Vitest gap #0
 // reorganization: previously interleaved with the playground init.)
 
-export class FormattedError extends Error {
+class FormattedError extends Error {
   constructor(originalError, formattedMessage) {
     super(formattedMessage);
 
@@ -6222,7 +6215,7 @@ export function formatErrors(code, err) {
   return new FormattedError(err, formattedMessage);
 }
 
-export function formatErrors2(code, err) {
+function formatErrors2(code, err) {
   const message = err?.message || "Unknown error";
 
   function _getContext(lines, lineNum, contextSize = 2) {
@@ -6275,7 +6268,7 @@ export function formatErrors2(code, err) {
 //   { encoding: 'utf8'|'base64', data: string }  -> used as-is
 // Anything else (including empty keys) is dropped: a misconfigured asset
 // must never break sandbox bootstrap.
-export function normalizeSeaAssets(assets) {
+function normalizeSeaAssets(assets) {
   const out = {};
   if (!assets || typeof assets !== "object") return out;
   const entries =
@@ -6317,7 +6310,7 @@ export function normalizeSeaAssets(assets) {
   return out;
 }
 
-export function base64EncodeBytes(bytes) {
+function base64EncodeBytes(bytes) {
   let binary = "";
   const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) {
@@ -6333,7 +6326,7 @@ export function base64EncodeBytes(bytes) {
 // sandbox can decode it; recursing would create bogus 'encoding'/'data'
 // files. The two-key strictness keeps a user directory that merely happens
 // to contain encoding/data files from being reinterpreted.
-export function isSeedEnvelope(value) {
+function isSeedEnvelope(value) {
   return (
     value !== null &&
     typeof value === "object" &&
@@ -6348,7 +6341,7 @@ export function isSeedEnvelope(value) {
 // Normalize raw bytes (Uint8Array/Buffer/ArrayBuffer) to a JSON-safe
 // { encoding: 'base64', data } envelope. __USER_FILES__ is JSON-serialized
 // into the sandbox bootstrap, where raw bytes would corrupt to {"0":..}.
-export function seedBytesToBase64(value) {
+function seedBytesToBase64(value) {
   const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
   if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
     return Buffer.from(
@@ -6410,7 +6403,7 @@ export function flattenFileTree(obj, parentPath = "") {
 // copy would silently break ESC-sequence recognition in both uses; this was
 // verified empirically (see tests). Pure function: no dependencies.
 
-export function _parseKey(s) {
+function _parseKey(s) {
   const specials = {
     "\x1b[A": "up",
     "\x1b[B": "down",
@@ -6493,7 +6486,7 @@ export function _parseKey(s) {
 // install faithful equivalents on globalThis.
 /* global Writable */
 
-export function makeOutputShim2(type) {
+function makeOutputShim2(type) {
   const isError = type === "stderr";
 
   // Inherit from Writable to get all internal Node logic for free

@@ -493,12 +493,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .split("\n")
       .map((l) => l.trim())
       .filter(Boolean);
-    // src/test.js changed (Item 1: --test auto-run moved into the node:test
-    // shim), so its build output dist/test.js must be rebuilt — the committed
-    // dist was stale (built from the pre-autorun src). dist/vfs.js bundles
-    // the updated shim and is rebuilt by the same ./src/build-vfs.mjs run.
-    // Any other dist/ change is a stray.
-    expect(files.sort()).toEqual(["dist/test.js", "dist/vfs.js"].sort());
+    // On the modularization branch no dist inputs changed (no shim sources
+    // touched — only src/runtime/* extraction + src/build-runtime.mjs + the
+    // regenerated runtime.js), so dist/ must be untouched. Any dist/ change
+    // here is a stray.
+    expect(files.sort()).toEqual([]);
   });
 
   test("branch footprint outside tests/ is exactly the allowlist (catches strays)", () => {
@@ -512,53 +511,40 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     if (files.length === 0) return; // on main post-merge: nothing to guard
-    // The branch footprint is the union of the committed work on it
-    // (feat/test-autorun-and-modularization, Items 1+2: --test auto-run moves
-    // into the node:test shim; sandbox fragments re-synced and generate() cut
-    // over to SANDBOX_TEMPLATE): src/test.js owns the trigger, runtime.js
-    // drops the template interception and the inline template, playground.js
-    // updates the tests example, docs record the contract, CI gates the
-    // template freshness. Items 3+4: live bindings in the transform +
-    // buildModuleProxy, prettier-mangled parity fixtures restored with
-    // parity/node-test/ added to .prettierignore. tests/ is excluded above.
+    // The branch footprint is the union of the committed work on it.
+    // modular/integration: the runtime.js monolith was cut over to generated
+    // output (src/build-runtime.mjs assembles it from src/runtime/* modules;
+    // runtime.js itself is regenerated). The workflow change gates the
+    // generated file's freshness in CI. WORKER-F-HOST-TODO.md is worker
+    // scratch committed during extraction (coordinator to archive).
+    // tests/ is excluded above.
     expect(files.sort()).toEqual(
       [
         ".github/workflows/run.yaml",
-        ".prettierignore",
-        "dist/test.js",
-        "dist/vfs.js",
-        "docs/E2E_FEATURE_MATRIX.md",
-        "docs/RUNTIME.md",
-        "package.json",
-        "parity/node-test/fixtures/assert-first-line.js",
-        "parity/node-test/fixtures/assert-long-line.js",
-        "parity/node-test/parallel/test-assert-first-line.js",
-        "parity/node-test/parallel/test-assert.js",
+        "WORKER-F-HOST-TODO.md",
         "runtime.js",
-        "src/build-sandbox.mjs",
-        "src/sandbox-template.js",
-        "src/sandbox/00-runtime-object.js",
-        "src/sandbox/05-vitest-mocks.js",
-        "src/sandbox/10-task-tracker.js",
-        "src/sandbox/20-module-loader.js",
-        "src/sandbox/21-sync-require.js",
-        "src/sandbox/30-interop.js",
-        "src/sandbox/31-node-globals.js",
-        "src/sandbox/32-path-resolve.js",
-        "src/sandbox/40-console.js",
-        "src/sandbox/41-events-warnings.js",
-        "src/sandbox/50-process.js",
-        "src/sandbox/60-timers.js",
-        "src/sandbox/70-fetch.js",
-        "src/sandbox/71-xhr.js",
-        "src/sandbox/80-errors.js",
-        "src/sandbox/85-keydecoder.js",
-        "src/sandbox/90-server-request.js",
-        "src/sandbox/95-init.js",
-        "src/sandbox/96-user-code.js",
-        "src/sandbox/97-finalize.js",
-        "src/test.js",
-        "src/ui/playground.js",
+        "src/build-runtime.mjs",
+        "src/runtime/bootstrap.js",
+        "src/runtime/builtin-modules.js",
+        "src/runtime/builtins.js",
+        "src/runtime/code-sandbox.js",
+        "src/runtime/code-transformer.js",
+        "src/runtime/entry.js",
+        "src/runtime/events.js",
+        "src/runtime/execution-context.js",
+        "src/runtime/host-utils.js",
+        "src/runtime/import-resolver.js",
+        "src/runtime/message-handler.js",
+        "src/runtime/output-shim.js",
+        "src/runtime/sandbox-runtime.js",
+        "src/runtime/syntax.js",
+        "src/runtime/terminal.js",
+        "src/runtime/transforms-cjs.js",
+        "src/runtime/transforms-esm.js",
+        "src/runtime/transforms-imports.js",
+        "src/runtime/transpile.js",
+        "src/runtime/vfs-serialize.js",
+        "src/runtime/vfs-server.js",
       ].sort(),
     );
   });
