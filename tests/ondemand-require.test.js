@@ -484,21 +484,51 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
   const diffBase = "origin/main...HEAD";
 
   test("dist/ changes are exactly the rebuilt artifacts", () => {
-    const out = execSync(`git diff --name-only ${diffBase} -- dist/`, {
+    const distChanged = execSync(`git diff --name-only ${diffBase} -- dist/`, {
       cwd: REPO_ROOT,
       encoding: "utf8",
-    });
-    const files = out
+    })
       .trim()
       .split("\n")
       .map((l) => l.trim())
       .filter(Boolean);
-    // src/test.js changed (Item 1: --test auto-run moved into the node:test
-    // shim), so its build output dist/test.js must be rebuilt — the committed
-    // dist was stale (built from the pre-autorun src). dist/vfs.js bundles
-    // the updated shim and is rebuilt by the same ./src/build-vfs.mjs run.
-    // Any other dist/ change is a stray.
-    expect(files.sort()).toEqual(["dist/test.js", "dist/vfs.js"].sort());
+    const srcChanged = execSync(`git diff --name-only ${diffBase} -- src/`, {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (distChanged.length === 0 && srcChanged.length === 0) return; // nothing to guard
+    // dist/<key>.js is built from src/<entry> per BUNDLED_MODULES in
+    // src/build-vfs.mjs; dist/vfs.js embeds every bundle. A changed dist
+    // artifact must be the rebuild of a changed bundle entry (no strays),
+    // and a changed bundle entry must have its dist artifact rebuilt
+    // (no stale dist — committed dist must match the branch's src).
+    const buildScript = fs.readFileSync(
+      path.join(REPO_ROOT, "src/build-vfs.mjs"),
+      "utf8",
+    );
+    const block = buildScript.match(
+      /const BUNDLED_MODULES = \{([\s\S]*?)\n\};/,
+    )[1];
+    const entryToDist = new Map();
+    for (const m of block.matchAll(/^\s*(\w+):\s*"([^"]+)"\s*,?\s*$/gm)) {
+      entryToDist.set(m[2], `dist/${m[1]}.js`);
+    }
+    const expectedDist = new Set();
+    for (const f of srcChanged) {
+      const entry = f.replace(/^src\//, "");
+      if (entryToDist.has(entry)) expectedDist.add(entryToDist.get(entry));
+    }
+    const moduleDistChanged = distChanged.filter((f) => f !== "dist/vfs.js");
+    expect(moduleDistChanged.sort()).toEqual([...expectedDist].sort());
+    // dist/vfs.js embeds every bundle: it may only change when a bundle
+    // entry changed (its own freshness is enforced by CI's regenerate step).
+    if (distChanged.includes("dist/vfs.js")) {
+      expect(expectedDist.size).toBeGreaterThan(0);
+    }
   });
 
   test("branch footprint outside tests/ is exactly the allowlist (catches strays)", () => {
@@ -512,6 +542,14 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     if (files.length === 0) return; // on main post-merge: nothing to guard
+    // The allowlist below describes the feat/test-autorun-and-modularization
+    // footprint (PR #201, merged): the sandbox-template cutover. On branches
+    // that don't touch the sandbox-template surface it is meaningless — the
+    // footprint is the branch's own work — so only enforce it there.
+    const touchesTemplateSurface = files.some(
+      (f) => f === "src/sandbox-template.js" || f.startsWith("src/sandbox/"),
+    );
+    if (!touchesTemplateSurface) return; // not a sandbox-template branch: nothing to guard
     // The branch footprint is the union of the committed work on it
     // (feat/test-autorun-and-modularization, Items 1+2: --test auto-run moves
     // into the node:test shim; sandbox fragments re-synced and generate() cut
