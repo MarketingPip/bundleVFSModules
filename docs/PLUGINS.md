@@ -357,6 +357,16 @@ The host page then does `import { add } from "./add.c"` and gets the
 WASM exports — the same shape as the existing Clang/WASI spike (PR #164),
 but generalized through the plugin hooks instead of bespoke wiring.
 
+> **Superseded:** this sketch is now implemented as the toolchain plugin
+> API — see `docs/TOOLCHAIN.md`. `registerToolchain({ name, compile,
+> sysroot })` (in `src/toolchain.js`, host-side, following the
+> `registerPlugin` precedent) auto-installs exactly the `onResolve` /
+> `onLoad` bridge sketched above, and `compile(files, opts)` is the
+> generalized contract (`{ "main.c": "…" }` in, `{ bytes, warnings,
+> errors }` out) that a clang plugin and a rustc plugin both satisfy.
+> The reference stub (`tests/toolchain-stub-plugin.js`) proves it against
+> a fake compiler.
+
 ---
 
 ## Decision: `execution:stderr`
