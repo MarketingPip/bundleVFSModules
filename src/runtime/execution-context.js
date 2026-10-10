@@ -9,16 +9,19 @@
 // MemberExpression to the sandbox-scoped object). A bare `_RUNTIME_` is never
 // rewritten and throws ReferenceError.
 //
-// Cross-module dependencies (host scope, NOT imported here — runtime.js still
-// owns them; the final modularization wires these as imports):
-//   - normalizeBuiltinSpecifier(specifier, nodeBuiltins)  [runtime.js:180]
-//   - builtinModules                                       [runtime.js:400]
+// Cross-module dependencies (wired as real ESM imports by the integration
+// step; previously bare references to the original runtime.js module scope):
+//   - normalizeBuiltinSpecifier(specifier, nodeBuiltins)  <- ./builtins.js
+//   - builtinModules                                       <- ./builtin-modules.js
 //     (both are inlined into the generated sandbox HTML via .toString() /
 //     JSON.stringify in inject(), so the iframe gets identical copies)
-//   - _vfsExtractServerPort(data)                          [runtime.js:2666]
-//   - _vfsRegisterServerRoute(port, owner)                [runtime.js:2696]
-//   - _vfsUnregisterServerRoute(port, owner)              [runtime.js:2706]
+//   - _vfsExtractServerPort(data)                          <- ./vfs-server.js
+//   - _vfsRegisterServerRoute(port, owner)                <- ./vfs-server.js
+//   - _vfsUnregisterServerRoute(port, owner)              <- ./vfs-server.js
 //     (VFS fetch bridge: virtual-server routes owned by this sandbox)
+//   - acorn / walk (acorn-walk): bare npm specifiers, same convention as
+//     the transforms-* modules (browser host resolves via its import map;
+//     Node tests resolve via node_modules).
 //
 // Runtime (duck-typed) dependencies, passed in rather than imported:
 //   - `sandbox`: .config {capturePromiseRejections, captureWindowErrors,
@@ -27,6 +30,15 @@
 //     (in practice a CodeSandbox, which extends EventEmitter)
 //   - `iframe`: .contentWindow, .parentNode, .remove(), .src, .srcdoc
 //
+import * as acorn from "acorn";
+import * as walk from "acorn-walk";
+import { normalizeBuiltinSpecifier } from "./builtins.js";
+import { builtinModules } from "./builtin-modules.js";
+import {
+  _vfsExtractServerPort,
+  _vfsRegisterServerRoute,
+  _vfsUnregisterServerRoute,
+} from "./vfs-server.js";
 export class ExecutionContext {
   constructor(iframe, sandbox) {
     this.iframe = iframe;
