@@ -523,7 +523,19 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       if (entryToDist.has(entry)) expectedDist.add(entryToDist.get(entry));
     }
     const moduleDistChanged = distChanged.filter((f) => f !== "dist/vfs.js");
-    expect(moduleDistChanged.sort()).toEqual([...expectedDist].sort());
+    // Two invariants (not a strict equality): bundles are self-contained, so
+    // a changed entry legitimately rebuilds every bundle that transitively
+    // embeds it (e.g. src/net.js -> dist/http.js, dist/https.js, ...).
+    // (a) no strays: every changed dist artifact must be a real bundle key;
+    // (b) no stale dist: every directly-changed entry must have its own
+    // artifact rebuilt.
+    const allDistArtifacts = new Set(entryToDist.values());
+    for (const f of moduleDistChanged) {
+      expect(allDistArtifacts.has(f)).toBe(true);
+    }
+    for (const f of expectedDist) {
+      expect(moduleDistChanged).toContain(f);
+    }
     // dist/vfs.js embeds every bundle: it may only change when a bundle
     // entry changed (its own freshness is enforced by CI's regenerate step).
     if (distChanged.includes("dist/vfs.js")) {
@@ -542,26 +554,29 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // feat/real-parity-harness: real-runtime parity harness (roadmap §4).
-    // Headless host abstraction (parity/headless/: runtime-scope, vm-sandbox,
-    // builtin-source, host, lane, channel, worker-entry) + runner
-    // (parity/run-headless.mjs) + headless expectations file +
-    // parity/README.md docs + roadmap checkoff. tests/ is excluded above.
-    // (Prior branch feat/fetch-audit is merged; its files are on main.)
+    // fix/open-handles: roadmap §3 open-handle investigation.
+    // - src/net.js: _acceptConnection refuses cleanly (ECONNREFUSED) when the
+    //   server closed between the deferred lookup and the deferred accept,
+    //   instead of throwing TypeError on the nulled _bindAddress.
+    // - dist/: rebuilt via node src/build-vfs.mjs (the 8 net-transitive
+    //   bundles + dist/vfs.js; all other bundles byte-identical).
+    // - roadmap.md: §3 checkoff with evidence.
+    // tests/ is excluded above (tests/net.test.js regression test + this
+    // allowlist update).
+    // (Prior branch feat/real-parity-harness is merged; its files are on main.)
     expect(files.sort()).toEqual(
       [
-        "parity/README.md",
-        "parity/expected-failures.headless.json",
-        "parity/headless/builtin-source.mjs",
-        "parity/headless/channel.mjs",
-        "parity/headless/host.mjs",
-        "parity/headless/lane.mjs",
-        "parity/headless/runtime-scope.mjs",
-        "parity/headless/vm-sandbox.mjs",
-        "parity/headless/worker-entry.mjs",
-        "parity/run-headless.mjs",
-        "parity/triage-headless.sh",
+        "dist/_http_agent.js",
+        "dist/_http_client.js",
+        "dist/_http_incoming.js",
+        "dist/_http_outgoing.js",
+        "dist/_http_server.js",
+        "dist/http.js",
+        "dist/https.js",
+        "dist/net.js",
+        "dist/vfs.js",
         "roadmap.md",
+        "src/net.js",
       ].sort(),
     );
   });

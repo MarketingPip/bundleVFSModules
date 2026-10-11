@@ -678,6 +678,35 @@ describe("connection failures", () => {
       c.on("error", reject);
     });
   });
+
+  test("connect racing server.close() after lookup fails cleanly, never throws in _acceptConnection", async () => {
+    // The virtual handshake is two deferred macrotasks: connect() defers
+    // _doConnect (server lookup), which defers _acceptConnection. Closing the
+    // server between the two used to make _acceptConnection throw
+    // "Cannot read properties of null (reading 'address')" on the nulled
+    // _bindAddress. It must surface ECONNREFUSED like a real refused dial.
+    const sv = trackServer(createServer(() => {}));
+    const addr = await listenAsync(sv, 0);
+    const s = trackSocket(new Socket());
+    const events = [];
+    const done = new Promise((resolve) => {
+      s.on("error", (e) => events.push(["error", e.code]));
+      s.on("close", (h) => {
+        events.push(["close", h]);
+        resolve();
+      });
+    });
+    s.connect(addr.port);
+    // Let the deferred _doConnect run (server found, accept scheduled)…
+    await new Promise((r) => setImmediate(r));
+    // …then close before the deferred accept fires.
+    sv.close();
+    await done;
+    expect(events).toEqual([
+      ["error", "ECONNREFUSED"],
+      ["close", true],
+    ]);
+  });
 });
 
 describe("Server", () => {
