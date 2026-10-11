@@ -172,8 +172,17 @@ bytes" and "run wasm bytes on my VFS".
   2026-10-03 (PR #173)**
 - ~~Update the main `__serverRequest__` example from the legacy argument
   order.~~ — **done 2026-10-03 (PR #173)**
-- Complete Chrome 137 verification: iframe / postMessage /
-  `sandbox.invoke()` and the cookie wrapper.
+- ~~Complete Chrome 137 verification: iframe / postMessage /
+  `sandbox.invoke()` and the cookie wrapper.~~ — **done 2026-10-11**:
+  `tests/chrome137-interop-e2e.py` grew a `BROWSER=chrome137` lane (pinned
+  Chrome for Testing 137.0.7151.119 + matching chromedriver, headless; the
+  Firefox lane is byte-identical to before). Full E2E green **25/25 in real
+  Chrome 137** on 2026-10-11: iframe boots, postMessage round-trip,
+  `invoke('__stdin__')` + custom `interop.expose` methods, VirtualCookieJar
+  read/write, and the `__serverRequest__` HTTP wrapper with Set-Cookie →
+  Cookie re-injection. Notes: Chrome 137 CAN reach loopback (only Chromium
+  152 has the loopback block); external esm.sh fetches must go through the
+  127.0.0.1:18080 relay (direct Chromium TLS gets ERR_CONNECTION_RESET).
 - ~~Resolve the runtime-template source of truth.~~ — **done 2026-10-03
   (PR #173)**: documented in `docs/INTEROP.md` — live template is the
   inline literal returned by `_getState` in `runtime.js`;
