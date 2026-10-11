@@ -470,7 +470,12 @@ export class CodeSandbox extends EventEmitter {
             statusText: response.statusText,
             headers,
             ok: response.status >= 200 && response.status < 300,
-            url: input,
+            // Fetch audit 2026-10-11: report the post-redirect URL (was: the
+            // request input), plus the redirect flag and response type, so
+            // the sandbox reconstruction matches undici-visible fields.
+            url: response.url,
+            redirected: response.redirected,
+            type: response.type,
           };
         };
       }

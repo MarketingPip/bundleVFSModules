@@ -342,10 +342,27 @@ and the process story. Technique references in
   getaddrinfo (no /etc/hosts/mDNS — literal IPs + `localhost` answered
   locally, rest via DoH); plain `IP[:port]` in `setServers()` cannot do raw
   UDP/TCP in the browser (recorded verbatim, unusable as transports).
-- **Fetch platform-layer audit (must):** check whether our iframe realm
-  needs the browser `fetch`/`Headers`/`Response` patched to Node 20 undici
-  behavior (set-cookie handling, Headers parity — Nodepod's
-  `fetch-response.ts`).
+- **[x] Fetch platform-layer audit (done 2026-10-11, verified end-to-end):**
+  checked whether our iframe realm needs the browser `fetch`/`Headers`/
+  `Response` patched to Node 20 undici behavior (set-cookie handling, Headers
+  parity — Nodepod's `fetch-response.ts`). 46-observation differential across
+  three lanes (Node 24 undici reference, native browser page lane, genuine
+  CodeSandbox wrapper lane — `tests/fetch-audit-deep.js`,
+  `tests/fetch-audit-deep-e2e.html/.py`, `tests/fetch-wrapper-e2e.html/.py`).
+  **Layer 1 (native): 39/46 parity** — the 7 divergences are browser security
+  boundaries/spec differences (set-cookie filtering, `redirect:'manual'`→
+  opaqueredirect, forbidden request headers, Firefox streaming-upload quirk),
+  none patchable. **Layer 2 (our wrapper): 4 real gaps, all patched** —
+  caller's `AbortSignal` was silently swallowed (now composes; `AbortError`
+  at ~204ms), `redirected`/`type`/`url` lost in reconstruction (parent now
+  reports post-redirect `url`+`redirected`+`type`), `fetch(requestObject)`
+  died with an unhandled `{}` rejection (now normalized to serializable
+  `(url, init)` with body buffered via `clone().arrayBuffer()` — incl. a
+  Firefox quirk found en route: `Request.prototype.body` is `undefined`
+  there), plus `.finally()` unhandled-rejection noise fixed. Findings + gap
+  tables in `docs/FETCH_PLATFORM.md` ("Deep audit 2026-10-11"). Patch:
+  `src/sandbox/70-fetch.js` + `src/runtime/code-sandbox.js` (rebuilt
+  `src/sandbox-template.js`, `runtime.js` — both `--check` clean).
   error page, never a blank tab or a hang (see "Preview routing" above:
   `buildPreviewErrorHtml` + the SW transport `errorPage`, browser-E2E
   proven 2026-10-11).
