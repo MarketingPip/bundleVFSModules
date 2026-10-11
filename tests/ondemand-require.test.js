@@ -545,7 +545,17 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // docs/preview-routing: verified + documented preview routing and
     // forwardPreviewErrors (roadmap §5). roadmap.md records the
     // completion. tests/ is excluded above.
-    expect(files.sort()).toEqual(["roadmap.md"].sort());
+    // feat/worker-spawn: worker-backed spawn, the honest process story
+    // (roadmap §5 "must"). Implementation in src/plugins/worker-spawn.js,
+    // host usage in docs/WORKER_SPAWN.md, roadmap.md records completion.
+    expect(files.sort()).toEqual(
+      [
+        "src/plugins/worker-spawn.js",
+        "docs/WORKER_SPAWN.md",
+        "docs/LIFECYCLE.md",
+        "roadmap.md",
+      ].sort(),
+    );
   });
 
   test("no new function declarations added by the branch diff", () => {

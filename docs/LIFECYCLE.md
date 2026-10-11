@@ -382,3 +382,22 @@ Config options validated in the constructor:
 - `shell`
 - `plugins`
 - `iframeElement`
+
+### Worker-backed spawn (the runtime's own shell)
+
+Hosts that don't bring their own shell can use the opt-in worker-spawn
+plugin instead of a hand-rolled `shell` function: real worker-backed child
+processes with stdio streaming, signals, and exit codes. Workers boot from
+a VFS snapshot and receive changes over a VFS bridge (Nodepod's
+`process-manager.ts` + `process-worker-entry.ts` pattern).
+
+```js
+import { workerSpawnPlugin, workerBackedShell } from "./src/plugins/worker-spawn.js";
+import { registerPlugin } from "./src/plugins.js";
+registerPlugin(workerSpawnPlugin);
+const sb = new CodeSandbox({ shell: workerBackedShell });
+```
+
+Full API (`spawnWorkerProcess`, `createProcessManager`, the Node
+`worker_threads` lane, the VFS bridge protocol, honest scope and limits):
+`docs/WORKER_SPAWN.md`.

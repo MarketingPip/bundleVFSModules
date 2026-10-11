@@ -1,203 +1,247 @@
 // tests/worker-spawn.test.js — worker-backed spawn (opt-in plugin).
 //
-// TDD red-first: these tests define the contract before the implementation.
-// The Worker is mocked in Node; the real browser proof is tests/worker-spawn-e2e.py.
+// Unit tests for the plugin shape, the pure script builder, and the
+// sandbox-serialization constraint. The fake Worker below executes the
+// REAL worker entry source inside a node:vm context (not a simulation of
+// it), and the shell under test is re-materialized from
+// workerBackedShell.toString() with NO access to module scope -- proving
+// the assembled shell is genuinely self-contained for .toString()
+// serialization into the sandbox. Real-OS-thread proof lives in
+// tests/worker-spawn-real.test.js; browser proof in tests/worker-spawn-e2e.py.
 
+import vm from "node:vm";
 import {
   workerSpawnPlugin,
   buildWorkerScript,
   workerBackedShell,
+  spawnWorkerProcess,
+  createProcessManager,
+  nodeWorkerFactory,
+  WORKER_ENTRY_SOURCE,
 } from "../src/plugins/worker-spawn.js";
 
-// ─── Mock Worker ────────────────────────────────────────────────────────────
-// Simulates a browser Worker: receives a blob URL, executes the script
-// in a fake scope, posts messages back.
+// ─── vm-backed fake Worker ───────────────────────────────────────────────
+// Executes the REAL entry script in a vm context. `self`/`postMessage` are
+// wired to the browser Worker message shape; console/timers are sandbox
+// locals so the entry's overrides can't leak into the test process.
 
-class MockWorker {
-  constructor(url) {
-    this.url = url;
+class VmWorker {
+  constructor(script) {
+    this.script = script;
     this.terminated = false;
-    this.onmessage = null;
-    MockWorker.instances.push(this);
-    // Extract the script from the blob URL (test-only: we store it)
-    this.script = MockWorker.blobStore[url] || "";
+    this._hostOnMessage = null;
+    this._workerOnMessage = null;
+    const worker = this;
+    const self = {};
+    Object.defineProperty(self, "onmessage", {
+      configurable: true,
+      get: () => worker._workerOnMessage,
+      set: (fn) => {
+        worker._workerOnMessage = fn;
+      },
+    });
+    const sandbox = {
+      self,
+      postMessage: (msg) => {
+        const h = worker._hostOnMessage;
+        if (h && !worker.terminated) h({ data: msg });
+      },
+      console: {
+        log: () => {},
+        info: () => {},
+        error: () => {},
+        warn: () => {},
+      },
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+    };
+    sandbox.globalThis = sandbox;
+    this._ctx = vm.createContext(sandbox);
+    vm.runInContext(script, this._ctx);
   }
-
   postMessage(msg) {
     if (this.terminated) return;
-    // Simulate the worker receiving the init message. Deferred to a
-    // macrotask so kill()/abort() can win the race (like a real worker).
-    if (msg.type === "init") {
-      setTimeout(() => this._run(msg), 0);
-    }
+    // Deferred like a real worker: lets kill()/abort() win the race.
+    setTimeout(() => {
+      if (this.terminated) return;
+      const fn = this._workerOnMessage;
+      if (fn) fn({ data: msg });
+    }, 0);
   }
-
   terminate() {
     this.terminated = true;
   }
-
-  _emit(data) {
-    if (this.onmessage && !this.terminated) {
-      this.onmessage({ data });
-    }
+  set onmessage(fn) {
+    this._hostOnMessage = fn;
   }
-
-  _run(initMsg) {
-    if (this.terminated) return;
-    // Very simplified worker simulation: parse the command from the script
-    // and simulate execution. The real logic is in buildWorkerScript;
-    // here we just verify the plumbing.
-    const { command } = initMsg;
-    if (command.startsWith("node -e ")) {
-      // Extract and "run" — for the mock, we simulate console.log output
-      this._emit({ type: "stdout", data: "hi\n" });
-      this._emit({ type: "exit", code: 0 });
-    } else if (command === "node --version") {
-      this._emit({ type: "stdout", data: "v24.0.0\n" });
-      this._emit({ type: "exit", code: 0 });
-    } else if (command.startsWith("fail")) {
-      this._emit({ type: "stderr", data: "boom\n" });
-      this._emit({ type: "exit", code: 1 });
-    } else {
-      this._emit({ type: "stderr", data: `${command}: command not found\n` });
-      this._emit({ type: "exit", code: 127 });
-    }
-  }
-
-  static reset() {
-    MockWorker.instances = [];
-    MockWorker.blobStore = {};
+  get onmessage() {
+    return this._hostOnMessage;
   }
 }
-MockWorker.instances = [];
-MockWorker.blobStore = {};
 
-// Mock URL.createObjectURL / revokeObjectURL
-const origCreateObjectURL = globalThis.URL?.createObjectURL;
-const origRevokeObjectURL = globalThis.URL?.revokeObjectURL;
-
-beforeEach(() => {
-  MockWorker.reset();
-  globalThis.Worker = MockWorker;
-  let blobId = 0;
-  globalThis.URL.createObjectURL = (blob) => {
-    const url = `blob:mock-${++blobId}`;
-    // Store the blob content for the mock worker to "execute"
-    if (blob && typeof blob.text === "function") {
-      // async — store synchronously for the mock via a sync read hack
-      MockWorker.blobStore[url] = "[blob content]";
-    } else {
-      MockWorker.blobStore[url] = String(blob);
+// Fake Blob/URL/Worker globals for the re-materialized shell. The shell is
+// re-created from its .toString() with zero module scope -- if it referenced
+// anything outside itself, this throws.
+function installFakes() {
+  const store = new Map();
+  let nextId = 0;
+  globalThis.Blob = class FakeBlob {
+    constructor(parts) {
+      this._text = parts.map(String).join("");
     }
+  };
+  globalThis.URL.createObjectURL = (blob) => {
+    const url = `blob:fake-${++nextId}`;
+    store.set(url, blob._text);
     return url;
   };
-  globalThis.URL.revokeObjectURL = () => {};
-});
+  globalThis.URL.revokeObjectURL = (url) => {
+    store.delete(url);
+  };
+  globalThis.Worker = class FakeWorker extends VmWorker {
+    constructor(url) {
+      super(store.get(url) || "");
+      this.url = url;
+    }
+  };
+}
 
+const origBlob = globalThis.Blob;
+const origCreateObjectURL = globalThis.URL.createObjectURL;
+const origRevokeObjectURL = globalThis.URL.revokeObjectURL;
+const origWorker = globalThis.Worker;
+
+beforeEach(() => {
+  installFakes();
+});
 afterEach(() => {
-  delete globalThis.Worker;
-  if (origCreateObjectURL) {
-    globalThis.URL.createObjectURL = origCreateObjectURL;
-  }
-  if (origRevokeObjectURL) {
-    globalThis.URL.revokeObjectURL = origRevokeObjectURL;
-  }
+  globalThis.Blob = origBlob;
+  globalThis.URL.createObjectURL = origCreateObjectURL;
+  globalThis.URL.revokeObjectURL = origRevokeObjectURL;
+  if (origWorker === undefined) delete globalThis.Worker;
+  else globalThis.Worker = origWorker;
 });
 
-// ─── Plugin shape ───────────────────────────────────────────────────────────
+// Re-materialize the shell from its serialized source with no module scope.
+function freshShell() {
+  const src = workerBackedShell.toString();
+  return new Function(`return (${src});`)();
+}
+
+// ─── Plugin shape ───────────────────────────────────────────────────────
 
 test("workerSpawnPlugin has the opt-in plugin shape", () => {
   expect(workerSpawnPlugin.name).toBe("worker-spawn");
   expect(workerSpawnPlugin.builtIn).toBe(true);
 });
 
-test("workerBackedShell is a function matching the shell contract", () => {
+test("module exports the process-manager surface", () => {
+  expect(typeof spawnWorkerProcess).toBe("function");
+  expect(typeof createProcessManager).toBe("function");
+  expect(typeof nodeWorkerFactory).toBe("function");
+  expect(typeof buildWorkerScript).toBe("function");
   expect(typeof workerBackedShell).toBe("function");
+  expect(typeof WORKER_ENTRY_SOURCE).toBe("string");
 });
 
-// ─── buildWorkerScript (pure, testable) ─────────────────────────────────────
+// ─── buildWorkerScript (pure) ───────────────────────────────────────────
 
-test("buildWorkerScript matches the inlined template in workerBackedShell", () => {
-  // The shell is serialized via .toString() — it cannot reference the
-  // module-scope builder. This test guards that the inlined copy stays
-  // in sync with the canonical _workerScriptTemplate.
-  const src = workerBackedShell.toString();
-  // The inlined template must contain the key markers from the canonical.
-  const canonical = buildWorkerScript("node -e 'x'", [], null);
-  expect(canonical).toContain("worker-spawn entry");
-  expect(src).toContain("worker-spawn entry");
-  expect(src).toContain("VFS_SNAPSHOT");
-  expect(src).toContain("command not found");
-  // Spot-check: the inlined version handles node -e (regex present).
-  expect(src).toContain("node\\\\s+-e");
-});
-
-test("buildWorkerScript returns a string containing the command", () => {
-  const script = buildWorkerScript("node -e 'console.log(1)'", [], null);
+test("buildWorkerScript bakes command, args, vfs and env as JSON", () => {
+  const script = buildWorkerScript(
+    "node -e 'a\"b\nc'",
+    ["--flag"],
+    { "/a.js": "console.log(1);" },
+    { FOO: "bar" },
+  );
   expect(typeof script).toBe("string");
-  expect(script).toContain("node -e");
+  expect(script).toContain("worker-spawn entry");
+  expect(script).not.toMatch(/__WORKER_(COMMAND|ARGS|VFS|ENV)__/);
+  // The baked values round-trip through JSON.parse (proves safe embedding).
+  for (const m of script.matchAll(
+    /var (COMMAND|ARGS|VFS_SNAPSHOT|ENV) = (null|\{[\s\S]*?\}|"(?:[^"\\]|\\.)*"|\[[^\]]*\]);/g,
+  )) {
+    expect(() => JSON.parse(m[2])).not.toThrow();
+  }
 });
 
-test("buildWorkerScript embeds the VFS snapshot when provided", () => {
-  const vfs = { "/app.js": "console.log('vfs');" };
-  const script = buildWorkerScript("node /app.js", [], vfs);
+test("buildWorkerScript embeds the VFS snapshot", () => {
+  const script = buildWorkerScript("node /app.js", [], {
+    "/app.js": "console.log('vfs');",
+  });
   expect(script).toContain("/app.js");
 });
 
-test("buildWorkerScript sets up console capture", () => {
-  const script = buildWorkerScript("node -e '1'", [], null);
-  expect(script).toContain("postMessage");
-  expect(script).toContain("stdout");
+// ─── Self-containment: the assembled shell embeds the canonical entry ──
+
+test("workerBackedShell embeds WORKER_ENTRY_SOURCE byte-for-byte (no drift)", () => {
+  const src = workerBackedShell.toString();
+  expect(src).toContain("worker-spawn entry");
+  const m = src.match(/var WORKER_ENTRY_SOURCE = ("(?:[^"\\]|\\.)*");/);
+  expect(m).not.toBeNull();
+  expect(JSON.parse(m[1])).toBe(WORKER_ENTRY_SOURCE);
 });
 
-// ─── workerBackedShell (mocked Worker) ──────────────────────────────────────
+// ─── Re-materialized shell runs the REAL entry with no module scope ─────
 
-test("workerBackedShell resolves with stdout on success", async () => {
-  const result = await workerBackedShell("node -e 'console.log(\"hi\")'", [], {});
+test("re-materialized shell executes node -e in a real vm worker", async () => {
+  const shell = freshShell();
+  const result = await shell("node -e 'console.log(\"hi\")'", [], {});
   expect(result.stdout).toBe("hi\n");
   expect(result.stderr).toBe("");
   expect(result.exitCode).toBe(0);
+  expect(result.signal).toBeNull();
 });
 
-test("workerBackedShell reports non-zero exit codes", async () => {
-  const result = await workerBackedShell("fail-command", [], {});
-  expect(result.exitCode).toBe(1);
-  expect(result.stderr).toBe("boom\n");
+test("re-materialized shell reports exit codes and stderr", async () => {
+  const shell = freshShell();
+  const r1 = await shell("node --version", [], {});
+  expect(r1.stdout).toContain("v24.0.0-worker");
+  expect(r1.exitCode).toBe(0);
+  const r2 = await shell(
+    "node",
+    ["-e", 'console.error("boom"); process.exit(3);'],
+    {},
+  );
+  expect(r2.stderr).toBe("boom\n");
+  expect(r2.exitCode).toBe(3);
 });
 
-test("workerBackedShell reports 127 for unknown commands", async () => {
-  const result = await workerBackedShell("nonexistent-cmd", [], {});
+test("re-materialized shell reports 127 for unknown commands", async () => {
+  const shell = freshShell();
+  const result = await shell("nonexistent-cmd --flag", [], {});
   expect(result.exitCode).toBe(127);
   expect(result.stderr).toContain("command not found");
 });
 
-test("workerBackedShell returns a Promise (async contract)", () => {
-  const result = workerBackedShell("node -e '1'", [], {});
-  expect(typeof result.then).toBe("function");
-  return result; // ensure it resolves
+test("re-materialized shell runs files from the VFS snapshot", async () => {
+  const shell = freshShell();
+  const result = await shell("node", ["/app.js"], {
+    vfs: { "/app.js": 'console.log("from-vfs");' },
+  });
+  expect(result.stdout).toBe("from-vfs\n");
+  expect(result.exitCode).toBe(0);
 });
 
-test("workerBackedShell exposes kill() on the returned promise", async () => {
-  const promise = workerBackedShell("node -e 'while(true){}'", [], {});
+test("re-materialized shell kill() wins the race before init", async () => {
+  const shell = freshShell();
+  const promise = shell("node -e 'while(true){}'", [], {});
   expect(typeof promise.kill).toBe("function");
-  // Kill before it resolves
-  promise.kill("SIGTERM");
+  promise.kill("SIGKILL");
   const result = await promise;
-  expect(result.signal).toBe("SIGTERM");
+  expect(result.signal).toBe("SIGKILL");
   expect(result.exitCode).toBeNull();
 });
 
-test("workerBackedShell terminates on AbortSignal", async () => {
+test("re-materialized shell terminates on AbortSignal", async () => {
+  const shell = freshShell();
   const controller = new AbortController();
-  const promise = workerBackedShell("node -e 'while(true){}'", [], {
+  const promise = shell("node -e 'while(true){}'", [], {
     signal: controller.signal,
   });
   controller.abort();
   const result = await promise;
   expect(result.signal).toBe("SIGTERM");
-});
-
-test("workerBackedShell passes args to the worker", async () => {
-  const result = await workerBackedShell("node --version", ["--version"], {});
-  expect(result.stdout).toContain("v24");
+  expect(result.exitCode).toBeNull();
 });

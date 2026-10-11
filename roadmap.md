@@ -295,10 +295,35 @@ and the process story. Technique references in
   escaping); transport side: the SW's own `errorPage()` for host-never-
   answered failures only, so the two can't drift. Error table and the
   502 page are covered by the browser E2E above.
-- **Worker-backed spawn (must):** stdio streaming, signals, exit codes —
-  workers boot from a VFS snapshot and receive changes over a VFS bridge
-  (Nodepod's `process-manager.ts` + `process-worker-entry.ts`). The honest
-  process story.
+- **[x] Worker-backed spawn (done 2026-10-11, the honest process story):**
+  `spawnWorkerProcess(command, args, options)` in
+  `src/plugins/worker-spawn.js` boots one worker per child from a VFS
+  snapshot, with chunked stdio streaming (`on("stdout"|"stderr")`),
+  signals (`kill("SIGTERM"|"SIGKILL")` -> `{exitCode: null, signal}`,
+  AbortSignal support), and Node-style exit codes. Two lanes share one
+  canonical entry source (`WORKER_ENTRY_SOURCE`): browser Web Workers via
+  `defaultBrowserWorkerFactory`, and Node `worker_threads` via
+  `nodeWorkerFactory` (temp-file boot, `onunexpectedexit` safety net).
+  `createProcessManager()` tracks/lists/killAll's groups (the Nodepod
+  `process-manager.ts` idea). The VFS bridge is real:
+  `proc.applyVfsDiff({path: src|null})` patches a RUNNING worker's live
+  snapshot (ack'd, 2s timeout). The worker stays alive while timers are
+  pending (event-loop-drain liveness); `process.exit(code)` exits
+  immediately. The BYO shell `workerBackedShell` is assembled at module
+  load from the canonical pieces (byte-for-byte sync guard) so it stays
+  `.toString()`-serializable into the sandbox. Verified: 11/11 unit
+  (`tests/worker-spawn.test.js`, incl. re-materialized shells executing
+  the real entry in `node:vm` with zero module scope) + 19/19 real
+  execution (`tests/worker-spawn-real.test.js`, genuine worker_threads:
+  spawn, ordered stdio chunks, exit codes 0/42/7/1, 127, VFS boot with
+  relative require, env/argv, mid-run SIGTERM/SIGKILL, AbortSignal,
+  bridge add+delete observed live, shell end-to-end, manager group kill)
+  + browser E2E (`tests/worker-spawn-e2e.py`, headed Firefox, real Web
+  Workers through `CodeSandbox.execute()`). Host usage: `docs/WORKER_SPAWN.md`
+  (substantial) + a "Worker-backed spawn" section in `docs/LIFECYCLE.md`.
+  Honest scope documented there: JS only (else loud 127), no syscalls /
+  sockets / Node builtins in the worker, no module cache (bridge-visible),
+  bare promise chains untracked, synthetic pids, host->worker bridge only.
 - **DNS-over-HTTPS (must):** real DNS against
   `https://cloudflare-dns.com/dns-query` for `dns.js` — no inventing
   answers (Nodepod's `dns.ts`).
