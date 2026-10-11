@@ -1,21 +1,50 @@
+// runtime.js — GENERATED FILE. DO NOT EDIT BY HAND.
+// Assembled from src/runtime/*.js by: node src/build-runtime.mjs
+// Module order: bootstrap.js, builtins.js, terminal.js, builtin-modules.js, transpile.js, vfs-serialize.js, transforms-esm.js, transforms-cjs.js, transforms-imports.js, syntax.js, events.js, import-resolver.js, vfs-server.js, execution-context.js, code-sandbox.js, sandbox-runtime.js, code-transformer.js, entry.js, host-utils.js, message-handler.js, output-shim.js
+// Adaptations vs the extracted sources (see src/build-runtime.mjs):
+//   - static imports hoisted once; bare npm specifiers rewritten to the
+//     exact esm.sh URLs the original runtime.js used (browser target)
+//   - duplicate isNodeLane() helpers deduped (kept from builtin-modules.js)
+//   - test-only _builtinManifest/setBuiltinManifest shim dropped (shared
+//     const from builtins.js is used, as in the original)
+//   - transpile.js dual-lane acorn dropped (unified static esm.sh import)
+//   - export * from ./host-utils.js dropped as redundant (host-utils.js is
+//     bundled in the same scope with its own exports)
+//   - export stripped except the monolith's 22-name export surface
+//     (KEEP_EXPORTS) so marker-extracted blocks stay new-Function-able
+//   - "// EXECUTION CONTEXT MODULE" re-emitted after the import-resolver
+//     section (extractBlock end marker used by tests)
+
 import * as acorn from "https://esm.sh/acorn";
-import { importAssertions } from "https://esm.sh/acorn-import-assertions";
+import * as walk from "https://esm.sh/acorn-walk";
+import MagicString from "https://esm.sh/magic-string";
+import { walk as walker } from "https://esm.sh/estree-walker";
 import { v4 as uuid } from "https://esm.sh/uuid";
+import { TraceMap, originalPositionFor } from "https://esm.sh/@jridgewell/trace-mapping";
+import remapping from "https://esm.sh/@ampproject/remapping";
+import { applyTransformPlugins, applyResolvePlugins, applyLoadPlugins, dispatchLoader, registerPlugin, validatePlugin, getPlugins } from "./src/plugins.js";
+import { jsonPlugin } from "./src/plugins/json.js";
+import { typescriptPlugin } from "./src/plugins/typescript.js";
+import { lookupNativeInterception } from "./src/plugins/vite-browser.js";
+import { bundle } from "./src/quick_bundle.js";
 import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";
 import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";
+
+
+// ── src/runtime/bootstrap.js ─────────────────────────────────────────────
 // Vendor browser/WASM builds for native-only packages (real Vite 7:
 // rollup → @rollup/browser, esbuild → esbuild-wasm shim). Used by the
 // parent '_dynamic_import' handler so ESM 'import 'rollup'' resolves
 // exactly like CJS require('rollup') (src/module.js). Ungated lookup: the
 // handler only runs when serving the browser runtime's VFS.
-import { lookupNativeInterception } from "./src/plugins/vite-browser.js";
+
 
 /**
  * Sync gate for Vite browser interception (Jared 2026-10-04): the
  * native→browser/WASM substitution table only applies when the host has
  * opted in via registerPlugin(viteBrowserPlugin).
  */
-function isViteBrowserInterceptionActive() {
+ function isViteBrowserInterceptionActive() {
   const plugins = getPlugins();
   for (const p of plugins) {
     if (p && p.name === "vite-browser") return true;
@@ -28,23 +57,25 @@ function isViteBrowserInterceptionActive() {
 // unregisterPlugin("typescript") or register their own. Plugin transforms
 // run at the TOP of _build_file, before detectModuleSystem, so TS->JS
 // output flows through the existing CJS/ESM detection unchanged.
-import {
-  applyTransformPlugins,
-  applyResolvePlugins,
-  applyLoadPlugins,
-  dispatchLoader,
-  registerPlugin,
-  validatePlugin,
-  getPlugins,
-} from "./src/plugins.js";
-import { typescriptPlugin } from "./src/plugins/typescript.js";
-import { jsonPlugin } from "./src/plugins/json.js";
+
+
+
 
 registerPlugin(typescriptPlugin);
 // The JSON plugin is built-in (builtIn:true → lowest priority): it proves
 // the Part B hooks cover what used to be hardcoded, and any user plugin
 // registered later for /\.json$/ wins over it.
 registerPlugin(jsonPlugin);
+
+// ─── Re-exports for the rest of the host runtime (cutover) ───────────────────
+// The sections of runtime.js below line 690 use the plugin API imported
+// above. Re-exported here so the cutover can replace those imports with a
+// single import from this module. lookupNativeInterception is re-exported
+// for the _dynamic_import handler (runtime.js:2616, 5583).
+
+
+
+// ── src/runtime/builtins.js ─────────────────────────────────────────────
 /**
  * Inlined IIFE bundle of src/cookieJar.js (RFC 6265 virtual cookie jar).
  * The sandbox cannot fetch dist files at runtime without a network round
@@ -53,7 +84,7 @@ registerPlugin(jsonPlugin);
  *   esbuild src/sandbox/cookie-entry.js --bundle --format=iife --minify
  *     --platform=browser, then JSON.stringify the output.
  */
-const COOKIE_JAR_IIFE =
+ const COOKIE_JAR_IIFE =
   'globalThis.__cookieJarLib=(()=>{var N=Object.defineProperty;var U=Object.getOwnPropertyDescriptor;var G=Object.getOwnPropertyNames;var R=Object.prototype.hasOwnProperty;var J=(e,t)=>{for(var s in t)N(e,s,{get:t[s],enumerable:!0})},Q=(e,t,s,a)=>{if(t&&typeof t=="object"||typeof t=="function")for(let i of G(t))!R.call(e,i)&&i!==s&&N(e,i,{get:()=>t[i],enumerable:!(a=U(t,i))||a.enumerable});return e};var X=e=>Q(N({},"__esModule",{value:!0}),e);var ie={};J(ie,{VirtualCookieJar:()=>M,canonicalHost:()=>O,cookieJarKey:()=>w,cookiePathMatches:()=>F,defaultPath:()=>z,domainMatches:()=>E,mergeCookieHeaders:()=>ne,parseSetCookie:()=>K});var k={decodeValues:!0,map:!1,silent:!1,split:"auto"};function _(e){return typeof e!="string"||e in{}}function C(){return Object.create(null)}function V(e){return typeof e=="string"&&!!e.trim()}function $(e,t){var s=e.split(";").filter(V),a=s.shift();if(!a)return null;var i=Y(a),r=i.name,n=i.value;if(t=t?Object.assign({},k,t):k,_(r))return null;try{n=t.decodeValues?decodeURIComponent(n):n}catch(c){console.error("set-cookie-parser: failed to decode cookie value. Set options.decodeValues=false to disable decoding.",c)}var o=C();return o.name=r,o.value=n,s.forEach(function(c){var m=c.split("="),f=m.shift().trim().toLowerCase();if(!_(f)){var d=m.join("=").trim();if(f==="expires")o.expires=new Date(d);else if(f==="max-age"){var p=parseInt(d,10);Number.isNaN(p)||(o.maxAge=p)}else f==="secure"?o.secure=!0:f==="httponly"?o.httpOnly=!0:f==="samesite"?o.sameSite=d:f==="partitioned"?o.partitioned=!0:f&&(o[f]=d)}}),o}function Y(e){var t="",s="",a=e.split("=");return a.length>1?(t=a.shift(),s=a.join("=")):s=e,{name:t,value:s}}function y(e,t){if(t=t?Object.assign({},k,t):k,!e)return t.map?C():[];if(e.headers)if(typeof e.headers.getSetCookie=="function")e=e.headers.getSetCookie();else if(e.headers["set-cookie"])e=e.headers["set-cookie"];else{var s=e.headers[Object.keys(e.headers).find(function(n){return n.toLowerCase()==="set-cookie"})];!s&&e.headers.cookie&&!t.silent&&console.warn("Warning: set-cookie-parser appears to have been called on a request object. It is designed to parse Set-Cookie headers from responses, not Cookie headers from requests. Set the option {silent: true} to suppress this warning."),e=s}var a=t.split,i=Array.isArray(e);if(a==="auto"&&(a=!i),i||(e=[e]),e=e.filter(V),a&&(e=e.map(A).flat()),t.map){var r=C();return e.reduce(function(n,o){var c=$(o,t);return c&&!_(c.name)&&(n[c.name]=c),n},r)}else return e.map(function(n){return $(n,t)}).filter(Boolean)}function A(e){if(Array.isArray(e))return e;if(typeof e!="string")return[];var t=[],s=0,a,i,r,n,o;function c(){for(;s<e.length&&/\\s/.test(e.charAt(s));)s+=1;return s<e.length}function m(){return i=e.charAt(s),i!=="="&&i!==";"&&i!==","}for(;s<e.length;){for(a=s,o=!1;c();)if(i=e.charAt(s),i===","){for(r=s,s+=1,c(),n=s;s<e.length&&m();)s+=1;s<e.length&&e.charAt(s)==="="?(o=!0,s=n,t.push(e.substring(a,r)),a=s):s=r+1}else s+=1;(!o||s>=e.length)&&t.push(e.substring(a,e.length))}return t}y.parseSetCookie=y;y.parse=y;y.parseString=$;y.splitCookiesString=A;var Z={maxNameValueBytes:4096,maxAttrValueBytes:1024,maxPerDomain:180,maxTotal:3e3,maxLifetimeMs:400*24*60*60*1e3,defaultSameSite:"lax",treatLocalhostAsSecure:!0,defaultHost:"localhost",isPublicSuffix:e=>!e.includes(".")},ee=new TextEncoder,j=e=>ee.encode(e).length;function w(e,t){return`\${e}\\0\${t}`}var te=e=>`\${e.domain}\\0\${e.path}\\0\${e.name}`;function O(e){return e.trim().toLowerCase().replace(/^\\[|\\]$/g,"").replace(/\\.$/,"")}var se=e=>/^\\d{1,3}(\\.\\d{1,3}){3}$/.test(e)||e.includes(":"),re=e=>e==="localhost"||e.endsWith(".localhost")||e==="::1"||/^127\\./.test(e);function E(e,t){return e===t?!0:!se(e)&&e.endsWith("."+t)}function z(e){let t=e.split("?")[0]||"/";if(!t.startsWith("/"))return"/";let s=t.lastIndexOf("/");return s<=0?"/":t.slice(0,s)}function F(e,t){return t===e||e.indexOf(t)===0&&(t.charAt(t.length-1)==="/"||e.charAt(t.length)==="/")}var D=(e,t)=>e.expires!==null&&e.expires<=t;function ae(e,t,s,a){return e==="none"||t?!0:e==="lax"?s&&a:!1}function K(e,t,s,a,i=Date.now()){let r=g=>({ok:!1,reason:g}),n=O(t.host),o=String(e).split(";"),c=o.shift()??"",m=c.indexOf("=");if(m<0)return r("missing \'=\' in name-value pair");let f=c.slice(0,m).trim(),d=c.slice(m+1).trim();if(!f)return r("empty cookie name");if(j(f)+j(d)>a.maxNameValueBytes)return r(`name+value exceeds \${a.maxNameValueBytes} bytes`);let p=null,u=null,l=!1,h=!1,W=null,H=null,I=null;for(let g of o){let b=g.indexOf("="),P=(b<0?g:g.slice(0,b)).trim().toLowerCase(),v=b<0?"":g.slice(b+1).trim();if(!(j(v)>a.maxAttrValueBytes))switch(P){case"path":p=v.startsWith("/")?v:null;break;case"domain":u=v.replace(/^\\./,"").toLowerCase()||null;break;case"secure":l=!0;break;case"httponly":h=!0;break;case"samesite":{let x=v.toLowerCase();W=x==="strict"||x==="lax"||x==="none"?x:null;break}case"max-age":if(/^-?\\d+$/.test(v)){let x=parseInt(v,10);H=x<=0?0:i+Math.min(x*1e3,a.maxLifetimeMs)}break;case"expires":{let x=Date.parse(v);Number.isNaN(x)||(I=Math.min(x,i+a.maxLifetimeMs));break}}}let T=n,L=!0;if(u)if(a.isPublicSuffix(u)){if(u!==n)return r(`Domain=\${u} is a public suffix`)}else if(E(n,u))T=u,L=!1;else return r(`host "\${n}" does not domain-match Domain=\${u}`);let q=p??z(t.path??"/");if(l&&!s)return r("Secure cookie set from an insecure origin");let S=W??a.defaultSameSite;if(S==="none"&&!l)return r("SameSite=None requires Secure");if(S!=="none"&&t.sameSite===!1&&!t.topLevelNavigation)return r(`SameSite=\${S} cookie set from a cross-site response`);let B=f.toLowerCase();return B.startsWith("__secure-")&&!l?r("__Secure- prefix requires Secure"):B.startsWith("__host-")&&(!l||!L||q!=="/")?r("__Host- prefix requires Secure, no Domain, and Path=/"):{ok:!0,cookie:{name:f,value:d,domain:T,hostOnly:L,path:q,secure:l,httpOnly:h,sameSite:S,expires:H??I,created:i,lastAccessed:i}}}function ne(e,t){if(!t)return e||"";if(!e)return t;let s=new Set,a=[];for(let i of t.split(";")){let r=i.trim();if(!r)continue;let n=r.indexOf("=");s.add((n<0?r:r.slice(0,n)).trim()),a.push(r)}for(let i of e.split(";")){let r=i.trim();if(!r)continue;let n=r.indexOf("=");s.has((n<0?r:r.slice(0,n)).trim())||a.push(r)}return a.join("; ")}var M=class{_jars=new Map;cfg;constructor(t={}){this.cfg={...Z,...t}}isSecureOrigin(t){return!!t.secure||this.cfg.treatLocalhostAsSecure&&re(O(t.host))}store(t,s,a,i={host:this.cfg.defaultHost}){let r=[];if(a==null)return r;let n=Array.isArray(a)?a.flatMap(d=>A(d)):A(a),o=w(t,s),c=this._jars.get(o);c||(c=new Map,this._jars.set(o,c));let m=Date.now(),f=this.isSecureOrigin(i);for(let d of n){let p=K(d,i,f,this.cfg,m);if(!p.ok){r.push({raw:d,reason:p.reason});continue}let u=p.cookie,l=te(u);if(D(u,m)){c.delete(l);continue}let h=c.get(l);h&&(u.created=h.created),c.set(l,u)}return this.enforceLimits(c,m),c.size===0&&this._jars.delete(o),r}enforceLimits(t,s){for(let[r,n]of t)D(n,s)&&t.delete(r);let a=new Map;for(let r of t){let n=a.get(r[1].domain);n?n.push(r):a.set(r[1].domain,[r])}for(let r of a.values()){let n=r.length-this.cfg.maxPerDomain;if(!(n<=0)){r.sort((o,c)=>o[1].lastAccessed-c[1].lastAccessed);for(let[o]of r.slice(0,n))t.delete(o)}}let i=t.size-this.cfg.maxTotal;if(i>0){let r=[...t].sort((n,o)=>n[1].lastAccessed-o[1].lastAccessed);for(let[n]of r.slice(0,i))t.delete(n)}}cookieHeader(t,s,a){let i=this._jars.get(w(t,s));if(!i||i.size===0)return"";let r=typeof a=="string"?{host:this.cfg.defaultHost,path:a}:a,n=Date.now(),o=O(r.host),c=(r.path??"/").split("?")[0]||"/",m=this.isSecureOrigin(r),f=r.sameSite??!0,d=!!r.topLevelNavigation,p=["GET","HEAD","OPTIONS","TRACE"].includes((r.method??"GET").toUpperCase()),u=[];for(let[l,h]of i){if(D(h,n)){i.delete(l);continue}(h.hostOnly?h.domain!==o:!E(o,h.domain))||F(c,h.path)&&(h.secure&&!m||r.script&&h.httpOnly||ae(h.sameSite,f,d,p)&&u.push(h))}u.sort((l,h)=>h.path.length-l.path.length||l.created-h.created);for(let l of u)l.lastAccessed=n;return u.map(l=>`\${l.name}=\${l.value}`).join("; ")}list(t,s){let a=this._jars.get(w(t,s));return a?[...a.values()].map(i=>({...i})):[]}clearInstance(t){for(let s of[...this._jars.keys()])s.startsWith(t+"\\0")&&this._jars.delete(s)}clearAll(){this._jars.clear()}};return X(ie);})();';
 // NOTE: The full vfs.js bundle (6.8MB) is NOT imported statically.
 // Built-in modules are loaded lazily on-demand via loadBuiltin() below,
@@ -66,11 +97,11 @@ const COOKIE_JAR_IIFE =
  * Fetches individual dist files on-demand instead of the full 6.8MB bundle.
  * Results are cached; subsequent loads for the same module return instantly.
  */
-const _builtinCache = new Map();
-const _builtinBaseUrl =
+ const _builtinCache = new Map();
+ const _builtinBaseUrl =
   "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/";
 // Maps Node.js specifiers to dist filenames (mirrors dist/manifest.json)
-const _builtinManifest = {
+ const _builtinManifest = {
   assert: "assert.js",
   "assert/strict": "assert_strict.js",
   async_hooks: "async_hooks.js",
@@ -126,8 +157,8 @@ const _builtinManifest = {
   worker_threads: "worker_threads.js",
   zlib: "zlib.js",
 };
-const _builtinSourceCache = new Map();
-async function fetchBuiltinSource(specifier) {
+ const _builtinSourceCache = new Map();
+ async function fetchBuiltinSource(specifier) {
   let key = String(specifier).trim();
   if (key.startsWith("node:")) key = key.slice(5);
   let file = _builtinManifest[key];
@@ -177,7 +208,7 @@ async function fetchBuiltinSource(specifier) {
 // via 'normalizeBuiltinSpecifier.toString()', so it must stay
 // self-contained (no closure references) and must not contain backticks or
 // '${' (it is embedded inside outer template literals).
-function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
+ function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
   var modulePath = specifier;
   var bare =
     typeof specifier === "string" && specifier.indexOf("node:") === 0
@@ -213,7 +244,7 @@ function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
 }
 // --- end node: builtin normalization (gap #6) ---
 
-async function loadBuiltin(specifier) {
+ async function loadBuiltin(specifier) {
   // Normalize: strip "node:" prefix
   let key = String(specifier).trim();
   if (key.startsWith("node:")) key = key.slice(5);
@@ -255,6 +286,8 @@ How to handle dynamic / variables (simulate evaluation) for ImportResolver
 
 */
 
+
+// ── src/runtime/terminal.js ─────────────────────────────────────────────
 // import {table} from "https://esm.sh/gh/MarketingPip/bundleVFSModules@main/src/cli_table.js"
 
 /**
@@ -351,7 +384,7 @@ export function toNodeKeypress(element, callback) {
 /**
  * Consolidated ANSI stripper and console interceptor
  */
-const stripAnsi = (string) => {
+ const stripAnsi = (string) => {
   if (typeof string !== "string") return string;
 
   // Fast path: ANSI codes require ESC (7-bit) or CSI (8-bit) introducer
@@ -368,7 +401,7 @@ const stripAnsi = (string) => {
   return string.replace(new RegExp(pattern, "g"), "");
 };
 
-function mergeProcess(user = {}, defaults = {}) {
+ function mergeProcess(user = {}, defaults = {}) {
   return Object.keys(defaults).reduce((acc, key) => {
     const userVal = user[key];
     const defaultVal = defaults[key];
@@ -395,7 +428,24 @@ function mergeProcess(user = {}, defaults = {}) {
   }, {});
 }
 
-import _builtinModules from "https://esm.sh/builtin-modules";
+
+// ── src/runtime/builtin-modules.js ─────────────────────────────────────────────
+// Dual-lane import (pattern from src/plugins/typescript.js):
+// - Under Node (tests, direct import): Node's own builtin list via
+//   node:module (the npm `builtin-modules` package is not a dependency).
+// - In the browser host page: https://esm.sh/builtin-modules — the exact
+//   specifier runtime.js used.
+function isNodeLane() {
+  return (
+    typeof process !== "undefined" &&
+    process.versions &&
+    typeof process.versions.node === "string"
+  );
+}
+
+const _builtinModules = isNodeLane()
+  ? (await import("node:module")).builtinModules
+  : (await import("https://esm.sh/builtin-modules")).default;
 
 export const builtinModules = [
   ..._builtinModules,
@@ -489,9 +539,37 @@ builtinModules.push("RUNTIME:NODE_GLOBALS");
 - Possible handler for dynamic imports (relative path)
 */
 
-import * as walk from "https://esm.sh/acorn-walk";
 
-import ts from "https://esm.sh/typescript@5.4.5";
+// ── src/runtime/transpile.js ─────────────────────────────────────────────
+// Dual-lane imports (pattern from src/plugins/typescript.js):
+// - Under Node (tests, direct import): the npm `acorn` / `typescript`
+//   packages declared in package.json.
+// - In the browser host page: the exact esm.sh specifiers runtime.js used.
+
+
+
+
+const tsModule = await (isNodeLane()
+  ? import("typescript")
+  : import("https://esm.sh/typescript@5.4.5"));
+const ts = tsModule.default ?? tsModule;
+
+// acorn-import-assertions is not in this repo's node_modules, so the Node
+// lane degrades to the plain acorn Parser (still parses standard ESM; only
+// `import ... assert {}` needs the plugin). The browser lane keeps the exact
+// runtime.js behavior via esm.sh.
+const importAssertions = await (async () => {
+  if (isNodeLane()) {
+    try {
+      const m = await import("acorn-import-assertions");
+      return m.default ?? m;
+    } catch {
+      return null;
+    }
+  }
+  return (await import("https://esm.sh/acorn-import-assertions"))
+    .importAssertions;
+})();
 
 /**
  * Transpiles a string of TypeScript code into JavaScript.
@@ -511,28 +589,28 @@ export function transpileTypeScript(tsCode) {
   return result.outputText;
 }
 
-export const customAcorn = acorn.Parser.extend(importAssertions);
+export const customAcorn = importAssertions
+  ? acorn.Parser.extend(importAssertions)
+  : acorn.Parser;
 
-//
-/**
- * JavaScript Code Sandbox Library (Enhanced)
- * A robust ES6 library for safe code execution in isolated environments
- * @version 2.0.0
- */
 
-// ============================================================================
-// UTILITIES
-// ============================================================================
-import MagicString from "https://esm.sh/magic-string";
-import {
-  TraceMap,
-  originalPositionFor,
-} from "https://esm.sh/@jridgewell/trace-mapping";
-import remapping from "https://esm.sh/@ampproject/remapping";
-
+// ── src/runtime/vfs-serialize.js ─────────────────────────────────────────────
 //import {Buffer} from "https://esm.sh/buffer"
 
-import fs from "https://esm.sh/memfs";
+// Dual-lane import (pattern from src/plugins/typescript.js):
+// - Under Node (tests, direct import): the npm `memfs` package declared in
+//   package.json.
+// - In the browser host page: https://esm.sh/memfs — the exact specifier
+//   runtime.js used.
+
+
+const memfsModule = await (isNodeLane()
+  ? import("memfs")
+  : import("https://esm.sh/memfs"));
+const fs = memfsModule.default ?? memfsModule;
+
+// The host-side default volume (also exported for other runtime modules).
+
 
 // Initialize virtual filesystem structure
 fs.vol.fromJSON({
@@ -540,7 +618,7 @@ fs.vol.fromJSON({
   "/dir/nested.txt": "Nested file",
 });
 
-const TEXT_EXTS = new Set([
+ const TEXT_EXTS = new Set([
   "js",
   "jsx",
   "ts",
@@ -574,7 +652,7 @@ const TEXT_EXTS = new Set([
   "conf",
 ]);
 
-const BINARY_EXTS = new Set([
+ const BINARY_EXTS = new Set([
   "png",
   "jpg",
   "jpeg",
@@ -599,7 +677,7 @@ const BINARY_EXTS = new Set([
   "tar",
 ]);
 
-function getExt(path) {
+ function getExt(path) {
   return path.split(".").pop()?.toLowerCase() ?? "";
 }
 
@@ -684,6 +762,18 @@ export function rehydrateVfs(deserializedFs, fs) {
     }
   }
 }
+
+
+
+// ── src/runtime/transforms-esm.js ─────────────────────────────────────────────
+// Extracted from runtime.js (lines 688-801) — Worker B, modular/transforms.
+// DO NOT EDIT by hand: re-extract from runtime.js. Code is byte-identical
+// to the original except: top-level `export` keywords added, imports use
+// bare specifiers (browser resolves via the same esm.sh packages; Node
+// tests resolve via node_modules).
+
+
+
 
 export function convertEsmToCjs(code, options = {}) {
   const { filename = "input.js" } = options;
@@ -798,6 +888,20 @@ export function convertEsmToCjs(code, options = {}) {
   });
   return { code: outCode, map };
 }
+
+
+
+// ── src/runtime/transforms-cjs.js ─────────────────────────────────────────────
+// Extracted from runtime.js (lines 802-1431) — Worker B, modular/transforms.
+// DO NOT EDIT by hand: re-extract from runtime.js. Code is byte-identical
+// to the original except: top-level `export` keywords added, imports use
+// bare specifiers (browser resolves via the same esm.sh packages; Node
+// tests resolve via node_modules).
+
+
+
+// Moved to module top from its mid-file position (runtime.js line 1371).
+
 
 export function convertCjsToEsm(code, options = {}) {
   const { filename = "input.js" } = options;
@@ -1054,6 +1158,7 @@ export function convertCjsToEsm(code, options = {}) {
   return { code: finalCode, map };
 }
 
+
 export function convertCjsToEsm_backup(code) {
   const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: "script" });
   const s = new MagicString(code);
@@ -1129,7 +1234,8 @@ export function convertCjsToEsm_backup(code) {
     .replace(/\n\s*\n/g, "\n"); // Clean up empty lines
 }
 
-function _convertCjsToEsm(code) {
+
+ function _convertCjsToEsm(code) {
   const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: "script" });
   let offset = 0;
   let newCode = code;
@@ -1189,7 +1295,8 @@ function _convertCjsToEsm(code) {
   return newCode;
 }
 
-function isCommonJS(code) {
+
+ function isCommonJS(code) {
   try {
     const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: "module" });
     let hasCJS = false;
@@ -1237,7 +1344,8 @@ function isCommonJS(code) {
   }
 }
 
-function detectModuleSystem(code) {
+
+ function detectModuleSystem(code) {
   let result = { isCJS: false, isESM: false };
 
   try {
@@ -1354,6 +1462,7 @@ function detectModuleSystem(code) {
 
   return result;
 }
+
 /**
  * Transforms static and dynamic module loading calls into `loadModule(...)`.
  *
@@ -1368,9 +1477,7 @@ function detectModuleSystem(code) {
  * @returns {string}
  *   The transformed source code with matching imports replaced.
  */
-import { walk as walker } from "https://esm.sh/estree-walker";
-
-function transformRelativeModule(code) {
+ function transformRelativeModule(code) {
   const s = new MagicString(code);
   const ast = acorn.parse(code, {
     ecmaVersion: "latest",
@@ -1429,6 +1536,23 @@ function transformRelativeModule(code) {
 
   return s.toString();
 }
+
+
+// ── src/runtime/transforms-imports.js ─────────────────────────────────────────────
+// Extracted from runtime.js (lines 1433-2253) — Worker B, modular/transforms.
+// DO NOT EDIT by hand: re-extract from runtime.js. Code is byte-identical
+// to the original except: top-level `export` keywords added, imports use
+// bare specifiers (browser resolves via the same esm.sh packages; Node
+// tests resolve via node_modules).
+
+
+
+
+// Cross-module dependency: in runtime.js this is the top-level const at
+// line 73 (builtin key -> dist file). Kept as a mutable module binding so
+// the host can inject the real manifest; defaults to {} (no builtins).
+
+
 
 /**
  * Replaces occurrences of globalThis.<variableName> in JS code
@@ -1862,9 +1986,7 @@ export function transformImportsToLoadModule(
         s.overwrite(
           node.start,
           node.end,
-          kept.length === 0
-            ? marker
-            : `export { ${kept.join(", ")} };\n${marker}`,
+          kept.length === 0 ? marker : `export { ${kept.join(", ")} };\n${marker}`,
         );
         return;
       }
@@ -1972,7 +2094,8 @@ export function transformImportsToLoadModule(
       newLex = node;
       scopeSet(node);
       if (node.param)
-        for (const nm of namesOfPattern(node.param, [])) scopeSet(node).add(nm);
+        for (const nm of namesOfPattern(node.param, []))
+          scopeSet(node).add(nm);
     } else if (
       t === "ForStatement" ||
       t === "ForInStatement" ||
@@ -2084,7 +2207,11 @@ export function transformImportsToLoadModule(
       !p.shorthand
     )
       return true;
-    if (p.type === "PropertyDefinition" && p.key === node && !p.computed)
+    if (
+      p.type === "PropertyDefinition" &&
+      p.key === node &&
+      !p.computed
+    )
       return true;
     if (
       (p.type === "MemberExpression" ||
@@ -2188,9 +2315,10 @@ export function transformImportsToLoadModule(
   const bodyPreambleParts = [];
   for (const [modulePath, v] of liftedModules.entries()) {
     const type = moduleImportType.get(modulePath) || "import";
-    const line = `const ${v} = await globalThis._RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
-      modulePath,
-    )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`;
+    const line =
+      `const ${v} = await globalThis._RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
+        modulePath,
+      )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`;
     if (type === "import") importPreambleParts.push(line);
     else bodyPreambleParts.push(line);
   }
@@ -2230,7 +2358,7 @@ export function transformImportsToLoadModule(
   };
 }
 
-function generateImportBinding(node, liftedVar) {
+ function generateImportBinding(node, liftedVar) {
   const specifiers = node.specifiers;
 
   if (!specifiers.length) return "";
@@ -2248,87 +2376,11 @@ function generateImportBinding(node, liftedVar) {
   return "";
 }
 
-/*
- // Import JSHint as an ES module
-    import { JSHINT } from 'https://esm.sh/jshint';
 
-    // Example JavaScript code to lint
-    const code = `
-      let x = 10;
-      y = 20;  // undeclared variable, should raise a warning
-      console.log(x + y);;
-      
-      await test()
-    `;
-
-    // Lint the code
-    JSHINT(code, { esversion: 6,
-      esversion: 6,     // Support ES6 syntax
-      undef: true,      // Warn on undeclared variables
-      unused: true,     // Warn on unused variables
-      asi: true,        // Allow missing semicolons
-      browser: true,    // Define browser environment to avoid undefined 'console'
-      validthis: true,  // Allow 'this' in functions for browser compatibility
-      globals: { console: true } // Explicitly allow 'console'
-                 });
-
-    // Check results
-    if (JSHINT.errors.length) {
-      console.log("Errors found:");
-      JSHINT.errors.forEach(err => {
-        if (err) {
-          console.log(`Line ${err.line}, Col ${err.character}: ${err.reason}`);
-        }
-      });
-    } else {
-      console.log("No errors found!");
-    }
-    */
-
-/*
-// Assuming ESLint is loaded via <script src="https://cdn.jsdelivr.net/npm/eslint@8.46.0/lib/api.js"></script>
-
-import eslintModule from 'https://esm.sh/eslint-linter-browserify';
-
-const { Linter } = eslintModule
-
-const code = `import { readFile } from "https://esm.sh/fs"; 
-async function demo() {
-  console.log("Waiting...");
-  await sleep(1000); // wait 1 second
-  console.log("Done!");
-  console.log("Waiting...");
-  await sleep(1000); // wait 1 second
-  console.log("Done!");
-}
-
-await demo();`;
-
-const linter = new Linter();
-
-const messages = linter.verify(code, [
-  {
-    languageOptions: {
-      ecmaVersion: 2022,    // supports top-level await, modern JS
-      sourceType: "module",
-      globals: {
-        console: "readonly", // allow console as a global
-        window: "readonly",
-        //document: "readonly"
-      }
-    },
-    rules: {
-      "no-undef": "error" // catch only reference errors
-    }
-  }
-]);
-
-console.log(messages);
-
-
-
-*/
-
+// ── src/runtime/syntax.js ─────────────────────────────────────────────
+// src/runtime/syntax.js — extracted verbatim from runtime.js (lines 2336-2365),
+// branch modular/resolution. Host-provided global: `acorn` (runtime.js imports
+// it from "https://esm.sh/acorn"); kept as a bare reference like the original.
 // ============================================================================
 // SYNTAX CHECKER MODULE
 // ============================================================================
@@ -2360,6 +2412,11 @@ export class SyntaxChecker {
   }
 }
 
+
+// ── src/runtime/events.js ─────────────────────────────────────────────
+// src/runtime/events.js — extracted verbatim from runtime.js (lines 2367-2432),
+// branch modular/resolution. `export` added to EventEmitter (the only change);
+// it is the base class of CodeSandbox (runtime.js:4036). Self-contained.
 // NOTE: The reference-error checker (generateGlobalBuiltInsSet,
 // checkForReferenceErrors, checkForReferenceErrors2, refCheck) lived here.
 // It was playground-only, so it moved to src/ui/playground.js.
@@ -2367,7 +2424,7 @@ export class SyntaxChecker {
 /**
  * A simple EventEmitter implementation for managing custom events.
  */
-class EventEmitter {
+ class EventEmitter {
   constructor() {
     /**
      * Stores event names mapped to arrays of handler functions.
@@ -2427,9 +2484,29 @@ class EventEmitter {
   }
 }
 
+
+// ── src/runtime/import-resolver.js ─────────────────────────────────────────────
+// src/runtime/import-resolver.js — extracted verbatim from runtime.js
+// (lines 2434-2641), branch modular/resolution. Cross-module deps (wired as
+// real ESM imports by the integration step; previously bare references to
+// the original runtime.js module scope):
+//   - customAcorn                   <- ./transpile.js  (acorn.Parser extended
+//                                          with import assertions; Node lane
+//                                          degrades to plain acorn.Parser)
+//   - normalizeBuiltinSpecifier     <- ./builtins.js   (byte-identical to
+//                                          runtime.js:180)
+//   - builtinModules                <- ./builtin-modules.js
+//   - isViteBrowserInterceptionActive <- ./bootstrap.js
+//   - lookupNativeInterception      <- ../plugins/vite-browser.js
 // ============================================================================
 // IMPORT RESOLVER MODULE
 // ============================================================================
+
+
+
+
+
+
 
 export class ImportResolver {
   constructor(options = {}) {
@@ -2635,10 +2712,15 @@ export class ImportResolver {
   }
 }
 
-// ============================================================================
 // EXECUTION CONTEXT MODULE
-// ============================================================================
 
+// ── src/runtime/vfs-server.js ─────────────────────────────────────────────
+// src/runtime/vfs-server.js — extracted verbatim from runtime.js
+// (lines 2646-2808), branch modular/resolution. `export` added to every
+// _vfs* function (the only change). `_vfsServerRoutes` / `_vfsOriginalFetch`
+// stay module-private shared state. Consumers in other sections:
+// ExecutionContext calls _vfsRegisterServerRoute / _vfsUnregisterServerRoute /
+// _vfsExtractServerPort (runtime.js:3279-3300, 3781).
 // VFS_FETCH_BRIDGE_START
 // ── Host virtual-server fetch bridge ───────────────────────────────────────
 // Patches the real parent/host 'fetch' (once) so requests to loopback URLs
@@ -2654,12 +2736,12 @@ const _vfsServerRoutes = new Map();
 /** The native fetch, captured while the patch is installed. */
 let _vfsOriginalFetch = null;
 
-function _vfsIsLoopbackHostname(hostname) {
+ function _vfsIsLoopbackHostname(hostname) {
   const h = String(hostname || "").toLowerCase();
   return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
 }
 
-function _vfsExtractServerPort(data) {
+ function _vfsExtractServerPort(data) {
   if (data && typeof data.port === "number") return data.port;
   // Sandbox posts server events via emitMe: { type, message: 'null {"port":N}' }.
   const msg = data && typeof data.message === "string" ? data.message : "";
@@ -2667,7 +2749,7 @@ function _vfsExtractServerPort(data) {
   return m ? Number(m[1]) : null;
 }
 
-function _vfsEnsureFetchPatched() {
+ function _vfsEnsureFetchPatched() {
   if (typeof window === "undefined" || typeof window.fetch !== "function")
     return false;
   if (window.fetch && window.fetch.__vfsBridged) return true;
@@ -2677,7 +2759,7 @@ function _vfsEnsureFetchPatched() {
   return true;
 }
 
-function _vfsMaybeRestoreFetch() {
+ function _vfsMaybeRestoreFetch() {
   if (
     _vfsServerRoutes.size === 0 &&
     _vfsOriginalFetch &&
@@ -2689,7 +2771,7 @@ function _vfsMaybeRestoreFetch() {
 }
 
 /** Returns true when this owner holds the route (first claim wins). */
-function _vfsRegisterServerRoute(port, owner) {
+ function _vfsRegisterServerRoute(port, owner) {
   if (port == null) return false;
   const existing = _vfsServerRoutes.get(port);
   if (existing === owner) return true; // idempotent re-register
@@ -2699,7 +2781,7 @@ function _vfsRegisterServerRoute(port, owner) {
   return true;
 }
 
-function _vfsUnregisterServerRoute(port, owner) {
+ function _vfsUnregisterServerRoute(port, owner) {
   if (port == null) return;
   if (_vfsServerRoutes.get(port) === owner) {
     _vfsServerRoutes.delete(port);
@@ -2707,7 +2789,7 @@ function _vfsUnregisterServerRoute(port, owner) {
   }
 }
 
-async function _vfsPatchedFetch(input, init) {
+ async function _vfsPatchedFetch(input, init) {
   let url = null;
   try {
     const raw = typeof input === "string" ? input : input && input.url;
@@ -2729,7 +2811,7 @@ async function _vfsPatchedFetch(input, init) {
   return _vfsOriginalFetch.apply(this, arguments);
 }
 
-async function _vfsDispatchToSandbox(owner, port, url, input, init) {
+ async function _vfsDispatchToSandbox(owner, port, url, input, init) {
   const method = String(
     (init && init.method) ||
       (input && typeof input === "object" && input.method) ||
@@ -2803,7 +2885,46 @@ async function _vfsDispatchToSandbox(owner, port, url, input, init) {
 }
 // VFS_FETCH_BRIDGE_END
 
-class ExecutionContext {
+
+// ── src/runtime/execution-context.js ─────────────────────────────────────────────
+// ExecutionContext — extracted from runtime.js (original lines 2810-3802).
+//
+// One iframe execution: CSP-wrapped code injection, the sandbox message
+// protocol (listen/handleInteropCall), the hoisting CJS->ESM transform, and
+// forceKill/cleanup teardown.
+//
+// `_RUNTIME_` contract: anywhere generated sandbox code touches the runtime,
+// always use `globalThis._RUNTIME_` (the host AST-rewrites exactly that
+// MemberExpression to the sandbox-scoped object). A bare `_RUNTIME_` is never
+// rewritten and throws ReferenceError.
+//
+// Cross-module dependencies (wired as real ESM imports by the integration
+// step; previously bare references to the original runtime.js module scope):
+//   - normalizeBuiltinSpecifier(specifier, nodeBuiltins)  <- ./builtins.js
+//   - builtinModules                                       <- ./builtin-modules.js
+//     (both are inlined into the generated sandbox HTML via .toString() /
+//     JSON.stringify in inject(), so the iframe gets identical copies)
+//   - _vfsExtractServerPort(data)                          <- ./vfs-server.js
+//   - _vfsRegisterServerRoute(port, owner)                <- ./vfs-server.js
+//   - _vfsUnregisterServerRoute(port, owner)              <- ./vfs-server.js
+//     (VFS fetch bridge: virtual-server routes owned by this sandbox)
+//   - acorn / walk (acorn-walk): bare npm specifiers, same convention as
+//     the transforms-* modules (browser host resolves via its import map;
+//     Node tests resolve via node_modules).
+//
+// Runtime (duck-typed) dependencies, passed in rather than imported:
+//   - `sandbox`: .config {capturePromiseRejections, captureWindowErrors,
+//     shell}, .destroyIframe, .emit(...), .executionCount,
+//     .interopHandlers, ._formatMappedError(...), ._mapStackFrames(...)
+//     (in practice a CodeSandbox, which extends EventEmitter)
+//   - `iframe`: .contentWindow, .parentNode, .remove(), .src, .srcdoc
+//
+
+
+
+
+
+ class ExecutionContext {
   constructor(iframe, sandbox) {
     this.iframe = iframe;
     this.sandbox = sandbox;
@@ -3797,230 +3918,57 @@ child.on('error', (err) => {
   }
 }
 
-// ============================================================================
-// SANDBOX RUNTIME TEMPLATE
-// ============================================================================
 
-// To hide your internal runtime logic and prevent user code from tampering with your patches, you need to use **lexical scoping (closures)** and **Shadow Realms** (or the pattern of "Localizing Globals").
+// ── src/runtime/code-sandbox.js ─────────────────────────────────────────────
+// src/runtime/code-sandbox.js — extracted verbatim from runtime.js
+// (lines 4032-6053: the CodeSandbox class), branch modular/sandbox. `export`
+// added to CodeSandbox (the only change).
 //
-// If you just define 'originalFetch' in the global scope, a clever user can find it, delete it, or bypass your tracking.
+// NOTE on line numbers: the task brief assigned lines 3936-4900, but the
+// CodeSandbox class actually spans runtime.js:4036-6053 (14 methods, not 8:
+// run, runWasi, typecheck, getStats, reset and setTerminalSize live past
+// line 4900). The full class is extracted here so the module is complete.
+// The executeCode / createSandbox convenience functions (runtime.js:6062-6073)
+// are NOT duplicated here — Worker F extracts them into src/runtime/entry.js
+// (their assigned section); see WORKER-F-HOST-TODO.md.
 //
-// Here are the three best ways to "cloak" your runtime:
-//
-// ---
-//
-// ### 1. The IIFE Wrapper (Closure Isolation)
-//
-// By wrapping your entire runtime in an **Immediately Invoked Function Expression (IIFE)**, all your 'original' variables and 'pendingMaps' exist only in a private scope that the user code cannot physically reach.
-//
-// '''javascript
-// static generate(code, config = {}) {
-//   return '
-//   (() => {
-//     // --- PRIVATE SCOPE START ---
-//     // User code cannot see these variables
-//     const _originalFetch = window.fetch;
-//     const _internalRegistry = new Map();
-//
-//     function _loadModuleInternal(path) {
-//        /* logic */
-//     }
-//
-//     // --- PATCHING ---
-//     // We overwrite the global, but the pointer to the 'real' one is hidden above
-//     window.fetch = async (...args) => {
-//        console.log("Tracking...");
-//        return _originalFetch(...args);
-//     };
-//
-//     // --- EXECUTION ---
-//     (async () => {
-//       try {
-//         ${code} // User code runs here
-//       } catch(e) { /* ... */ }
-//     })();
-//     // --- PRIVATE SCOPE END ---
-//   })();
-//   ';
-// }
-// '''
-//
-// ### 2. The "Hidden Property" Pattern (Using Symbols)
-//
-// If you must attach something to a global object but don't want the user to see it when they run 'Object.keys(window)', use **Symbols**. Symbols are non-enumerable and "invisible" to standard loops.
-//
-// '''javascript
-// const INTERNAL_STATE = Symbol("runtimeState");
-//
-// window[INTERNAL_STATE] = {
-//   pendingCount: 0,
-//   originalSetTimeout: window.setTimeout
-// };
-//
-// // Even if the user does:
-// for (let key in window) { console.log(key); }
-// // Your symbol will NOT show up.
-//
-// '''
-//
-// ### 3. Object Shielding (Freezing the Prototype)
-//
-// Users can often bypass patches by going to the prototype (e.g., 'HTMLAnchorElement.prototype.click'). To prevent them from un-patching your work, you can **freeze** the descriptors of the functions you’ve patched.
-//
-// '''javascript
-// Object.defineProperty(window, 'fetch', {
-//   value: myPatchedFetch,
-//   writable: false,     // User can't do: window.fetch = ...
-//   configurable: false,  // User can't delete it or change this config
-//   enumerable: true
-// });
-//
-// '''
-//
-// ---
-//
-// ### 4. Advanced: The "Clean Room" Helper
-//
-// When patching, users can sometimes detect your "traps" by checking 'fetch.toString()'. A truly hidden runtime will "mask" the function string to look native.
-//
-// '''javascript
-// function maskFunction(patchedFn, originalFn) {
-//   Object.defineProperty(patchedFn, 'name', { value: originalFn.name });
-//   patchedFn.toString = () => originalFn.toString();
-// }
-//
-// // Now console.log(fetch.toString()) prints "function fetch() { [native code] }"
-// // instead of your internal source code.
-//
-// '''
-//
-// ### Recommendation for your Sandbox
-//
-// I suggest combining **Method 1 (IIFE)** and **Method 4 (Masking)**.
-//
-// 1. Put all your 'originalFetch', 'pendingModules', and 'asyncRegistry' variables at the very top of the IIFE.
-// 2. Only expose the final "public" API (the patched 'fetch', 'setTimeout', etc.).
-// 3. Mask the 'toString' so the user can't inspect your tracking logic.
-//
-// **Would you like me to update the 'SandboxRuntime' class to wrap everything in this secure "Private Closure" structure?**
+// Static ESM imports (paths adjusted for src/runtime/; esm.sh specifiers kept
+// verbatim — this module targets the browser host, like runtime.js):
 
-// Parse one V8 stack-frame line into {file, line, column}.
-// Handles "at fn (https://host/app.js:10:15)", "at async fn (...)", and
-// "at https://host/app.js:10:15". Anchored at the end so URL schemes
-// (https://...) are never mistaken for the line/column separators.
-// Defined once at module scope and exported for unit tests; the sandbox
-// template below inlines it via const __parseStackLocationFn = (${__parseStackLocationFn.toString()}); so the
-// iframe gets the identical implementation (single source of truth).
-export function __parseStackLocationFn(frame) {
-  let s = String(frame || "")
-    .trim()
-    .replace(/^at\s+(async\s+)?/, "");
-  // data: URLs embed the whole (encoded) module source, which may contain
-  // unencoded parens/quotes — match the URL as one unit before the generic
-  // paren-stripping below (whose lastIndexOf('(') would land inside the
-  // module source). Greedy: the only literal colons are the trailing
-  // :line:column (inner colons are %-encoded).
-  let m = s.match(/\(?(data:[^\s]*):(\d+):(\d+)\)?$/);
-  if (m) return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
-  const open = s.lastIndexOf("(");
-  if (open !== -1 && s.endsWith(")")) s = s.slice(open + 1, -1);
-  m = s.match(/^(.*):(\d+):(\d+)$/);
-  if (!m) return null;
-  return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
-}
 
-export class SandboxRuntime {
-  static generate(code, config = {}) {
-    // Serialize the BYO shell function (if provided) into the sandbox.
-    // .toString() captures source, not closures — the function must be
-    // self-contained.
-    const shellField =
-      typeof config.shell === "function"
-        ? `__SHELL__: (${config.shell.toString()}),`
-        : "";
-    // The sandbox template lives in src/sandbox-template.js (built from
-    // src/sandbox/*.js by src/build-sandbox.mjs). Substitute %%TOKEN%%s.
-    // IMPORTANT: use replacement FUNCTIONS (not strings) — String.replace()
-    // interprets $ patterns ($&, $', $1...) in string replacements, and user
-    // code / imports can contain $.
-    let result = SANDBOX_TEMPLATE;
-    const sub = (token, value) => {
-      result = result.replace(new RegExp(token, "g"), () => value);
-    };
-    sub("%%UUID%%", config.uuid);
-    sub("%%INTEROP_VAR%%", config.interopVariable);
-    sub("%%PROCESS_JSON%%", JSON.stringify(config.process));
-    sub("%%USER_FILES_JSON%%", JSON.stringify(config.fs));
-    sub(
-      "%%SEA_ASSETS_JSON%%",
-      JSON.stringify(
-        config.seaAssets && Object.keys(config.seaAssets).length
-          ? config.seaAssets
-          : undefined,
-      ),
-    );
-    sub("%%BUILTIN_MODULES_JSON%%", JSON.stringify(_builtinManifest));
-    sub("%%BUILTIN_MODULES_ARRAY_JSON%%", JSON.stringify(builtinModules));
-    sub("%%FILENAME%%", config.fileName);
-    sub("%%STRIP_ANSI_FN%%", String(stripAnsi));
-    sub("%%PARSE_STACK_LOCATION_FN%%", __parseStackLocationFn.toString());
-    sub("%%SHELL_FIELD%%", shellField);
-    sub(
-      "%%NORMALIZE_BUILTIN_SPECIFIER_FN%%",
-      normalizeBuiltinSpecifier.toString(),
-    );
-    for (const [suffix, stmt] of Object.entries(LOG_TOKENS)) {
-      sub(`%%LOG_${suffix}%%`, config.logNetworkRequests ? stmt : "");
-    }
-    sub("%%IMPORTS%%", config.imports?.join("\n") || "");
-    // USER_CODE last: its value could theoretically contain %%TOKEN%%-like text.
-    sub("%%USER_CODE%%", code);
-    if (/%%[A-Z_]+%%/.test(result)) {
-      throw new Error("SandboxRuntime.generate: unreplaced token in template");
-    }
-    return result;
-  }
-}
 
-// ============================================================================
-// CODE TRANSFORMER MODULE
-// ============================================================================
 
-export class CodeTransformer {
-  /**
-   * Apply multiple transformations to code
-   */
-  static transform(code, transformers = []) {
-    return transformers.reduce((result, transformer) => {
-      try {
-        return transformer(result);
-      } catch (err) {
-        console.warn("Transformer error:", err);
-        return result;
-      }
-    }, code);
-  }
 
-  /**
-   * Built-in transformers
-   */
-  static transformers = {
-    // Remove console statements
-    removeConsole: (code) =>
-      code.replace(/console\.(log|info|warn|error|debug)\([^)]*\);?/g, ""),
+//
+// Cross-module dependencies — wired as real ESM imports by the integration
+// step (previously bare references to the original runtime.js module scope).
+// EventEmitter comes from Worker C's verbatim extraction (src/runtime/events.js).
 
-    // Wrap in async IIFE if not already wrapped
-    wrapAsync: (code) => {
-      if (!code.trim().startsWith("(async")) {
-        return `(async () => {\n${code}\n})();`;
-      }
-      return code;
-    },
 
-    // Add strict mode
-    addStrictMode: (code) => `'use strict';\n${code}`,
-  };
-}
+
+
+
+
+
+
+
+
+
+
+// NOTE: normalizeBuiltinSpecifier / stripAnsi / _builtinManifest /
+// builtinModules appeared in the wiring brief for this module but have zero
+// references in its body (the %%BUILTIN_MODULES_JSON%% / %%STRIP_ANSI_FN%%
+// substitutions live in sandbox-runtime.js's section) — intentionally not
+// imported.
+// Browser globals used (method scope only, never module scope): document,
+// HTMLIFrameElement.
+// _bundler_ interop: `bundle` is now imported from ../quick_bundle.js — it
+// exists in-repo but was never in runtime.js's module scope, so the handler
+// threw ReferenceError when reached. Its only caller
+// (src/sandbox/20-module-loader.js) is commented out, and the handler still
+// reads `bundle(url).url` while quick_bundle's bundle() returns a data: URL
+// string — the full body fix (`return await bundle(toBundleUrl(url));`)
+// is deferred to keep this module byte-identical with runtime.js.
 
 // ============================================================================
 // MAIN SANDBOX CLASS
@@ -5966,68 +5914,6 @@ function _parseKey(s) {
   }
 
   /**
-   * Mount a registered toolchain's sysroot into the sandbox VFS seed.
-   *
-   * Merges the sysroot file map under `/.sysroot/<name>/...` (idempotent).
-   * Read-only by convention — hosts must not write under the prefix; the
-   * read-only lazy mount follow-up seam will enforce it. String (VFS path)
-   * sysroots throw until that seam lands (see src/toolchain.js).
-   *
-   * @param {string} name — toolchain name
-   * @returns {Promise<string>} the mount prefix
-   */
-  async mountToolchainSysroot(name) {
-    const { requireToolchain, mountSysrootIntoSeed } =
-      await import("./src/toolchain.js");
-    const tc = requireToolchain(name);
-    this.config.fs = this.config.fs || {};
-    return mountSysrootIntoSeed(tc, this.config.fs);
-  }
-
-  /**
-   * Compile sources with a registered toolchain plugin (roadmap §1).
-   *
-   * Mounts the toolchain's sysroot into the sandbox VFS, then calls the
-   * toolchain's `compile(files, opts)` per the docs/TOOLCHAIN.md contract.
-   * The host page owns the toolchain — core never ships one.
-   *
-   * @param {string} name — toolchain name (see registerToolchain)
-   * @param {Record<string,string|Uint8Array>} files — `{ "main.c": "..." }`
-   * @param {object} [opts] — compile opts (cflags, ldflags, target, entry…)
-   * @returns {Promise<{bytes:Uint8Array, warnings:Array, errors:Array,
-   *   stdout:string, stderr:string, elapsedMs:number|undefined}>}
-   *
-   * @example
-   * const { bytes } = await sandbox.compileToolchain("wasi-clang",
-   *   { "add.c": "int add(int a,int b){return a+b;}" }, { cflags: ["-O2"] });
-   * await sandbox.runWasi(bytes, { args: ["add.wasm"] });
-   */
-  async compileToolchain(name, files, opts = {}) {
-    const { requireToolchain, compileWithToolchain, mountSysrootIntoSeed } =
-      await import("./src/toolchain.js");
-    const tc = requireToolchain(name);
-    this.config.fs = this.config.fs || {};
-    const sysrootMount = mountSysrootIntoSeed(tc, this.config.fs);
-    return compileWithToolchain(tc, files, { ...opts, sysrootMount });
-  }
-
-  /**
-   * Compile with a registered toolchain and immediately run the result
-   * through runWasi (roadmap §1: compile sources → wasm bytes → run).
-   *
-   * `opts.args` / `opts.env` / `opts.preopenDir` go to runWasi; every other
-   * opt goes to the toolchain's compile().
-   *
-   * @returns {Promise<{exitCode:number, stdout:string[], stderr:string[],
-   *   files:Record<string,Uint8Array>}>} — the runWasi result
-   */
-  async runToolchain(name, files, opts = {}) {
-    const { args, env, preopenDir, ...compileOpts } = opts;
-    const { bytes } = await this.compileToolchain(name, files, compileOpts);
-    return this.runWasi(bytes, { args, env, preopenDir });
-  }
-
-  /**
    * Opt-in true type-checking over the sandbox's TypeScript VFS files.
    *
    * Runs a full `ts.createProgram` via the registered plugin's
@@ -6107,9 +5993,179 @@ function _parseKey(s) {
   }
 }
 
+
+// ── src/runtime/sandbox-runtime.js ─────────────────────────────────────────────
+// src/runtime/sandbox-runtime.js — extracted verbatim from runtime.js
+// (lines 3911-3990), branch modular/sandbox. `export` added to
+// __parseStackLocationFn and SandboxRuntime (the only changes).
+//
+// __parseStackLocationFn is the single source of truth for V8 stack-frame
+// parsing: the sandbox template inlines it via
+// `const __parseStackLocationFn = (${__parseStackLocationFn.toString()});`
+// so the iframe gets the identical implementation.
+//
+// Static ESM imports (paths adjusted for src/runtime/):
+
+
+//
+// Host-provided bare references (still module scope in runtime.js; kept as-is
+// like the original — the integration step will turn them into imports):
+//   - normalizeBuiltinSpecifier (runtime.js:180)
+//   - stripAnsi                (runtime.js:354)
+//   - _builtinManifest         (runtime.js:73)
+//   - builtinModules           (runtime.js:400, exported)
+
+// Parse one V8 stack-frame line into {file, line, column}.
+// Handles "at fn (https://host/app.js:10:15)", "at async fn (...)", and
+// "at https://host/app.js:10:15". Anchored at the end so URL schemes
+// (https://...) are never mistaken for the line/column separators.
+// Defined once at module scope and exported for unit tests; the sandbox
+// template below inlines it via const __parseStackLocationFn = (${__parseStackLocationFn.toString()}); so the
+// iframe gets the identical implementation (single source of truth).
+export function __parseStackLocationFn(frame) {
+  let s = String(frame || "")
+    .trim()
+    .replace(/^at\s+(async\s+)?/, "");
+  // data: URLs embed the whole (encoded) module source, which may contain
+  // unencoded parens/quotes — match the URL as one unit before the generic
+  // paren-stripping below (whose lastIndexOf('(') would land inside the
+  // module source). Greedy: the only literal colons are the trailing
+  // :line:column (inner colons are %-encoded).
+  let m = s.match(/\(?(data:[^\s]*):(\d+):(\d+)\)?$/);
+  if (m) return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
+  const open = s.lastIndexOf("(");
+  if (open !== -1 && s.endsWith(")")) s = s.slice(open + 1, -1);
+  m = s.match(/^(.*):(\d+):(\d+)$/);
+  if (!m) return null;
+  return { file: m[1], line: Number(m[2]), column: Number(m[3]) };
+}
+
+export class SandboxRuntime {
+  static generate(code, config = {}) {
+    // Serialize the BYO shell function (if provided) into the sandbox.
+    // .toString() captures source, not closures — the function must be
+    // self-contained.
+    const shellField =
+      typeof config.shell === "function"
+        ? `__SHELL__: (${config.shell.toString()}),`
+        : "";
+    // The sandbox template lives in src/sandbox-template.js (built from
+    // src/sandbox/*.js by src/build-sandbox.mjs). Substitute %%TOKEN%%s.
+    // IMPORTANT: use replacement FUNCTIONS (not strings) — String.replace()
+    // interprets $ patterns ($&, $', $1...) in string replacements, and user
+    // code / imports can contain $.
+    let result = SANDBOX_TEMPLATE;
+    const sub = (token, value) => {
+      result = result.replace(new RegExp(token, "g"), () => value);
+    };
+    sub("%%UUID%%", config.uuid);
+    sub("%%INTEROP_VAR%%", config.interopVariable);
+    sub("%%PROCESS_JSON%%", JSON.stringify(config.process));
+    sub("%%USER_FILES_JSON%%", JSON.stringify(config.fs));
+    sub(
+      "%%SEA_ASSETS_JSON%%",
+      JSON.stringify(
+        config.seaAssets && Object.keys(config.seaAssets).length
+          ? config.seaAssets
+          : undefined,
+      ),
+    );
+    sub("%%BUILTIN_MODULES_JSON%%", JSON.stringify(_builtinManifest));
+    sub("%%BUILTIN_MODULES_ARRAY_JSON%%", JSON.stringify(builtinModules));
+    sub("%%FILENAME%%", config.fileName);
+    sub("%%STRIP_ANSI_FN%%", String(stripAnsi));
+    sub("%%PARSE_STACK_LOCATION_FN%%", __parseStackLocationFn.toString());
+    sub("%%SHELL_FIELD%%", shellField);
+    sub(
+      "%%NORMALIZE_BUILTIN_SPECIFIER_FN%%",
+      normalizeBuiltinSpecifier.toString(),
+    );
+    for (const [suffix, stmt] of Object.entries(LOG_TOKENS)) {
+      sub(
+        `%%LOG_${suffix}%%`,
+        config.logNetworkRequests ? stmt : "",
+      );
+    }
+    sub("%%IMPORTS%%", config.imports?.join("\n") || "");
+    // USER_CODE last: its value could theoretically contain %%TOKEN%%-like text.
+    sub("%%USER_CODE%%", code);
+    if (/%%[A-Z_]+%%/.test(result)) {
+      throw new Error("SandboxRuntime.generate: unreplaced token in template");
+    }
+    return result;
+  }
+}
+
+
+// ── src/runtime/code-transformer.js ─────────────────────────────────────────────
+// src/runtime/code-transformer.js — extracted verbatim from runtime.js
+// (lines 3992-4030), branch modular/sandbox. `export` added to CodeTransformer
+// (the only change). Self-contained: no external dependencies.
+
 // ============================================================================
-// CONVENIENCE API
+// CODE TRANSFORMER MODULE
 // ============================================================================
+
+export class CodeTransformer {
+  /**
+   * Apply multiple transformations to code
+   */
+  static transform(code, transformers = []) {
+    return transformers.reduce((result, transformer) => {
+      try {
+        return transformer(result);
+      } catch (err) {
+        console.warn("Transformer error:", err);
+        return result;
+      }
+    }, code);
+  }
+
+  /**
+   * Built-in transformers
+   */
+  static transformers = {
+    // Remove console statements
+    removeConsole: (code) =>
+      code.replace(/console\.(log|info|warn|error|debug)\([^)]*\);?/g, ""),
+
+    // Wrap in async IIFE if not already wrapped
+    wrapAsync: (code) => {
+      if (!code.trim().startsWith("(async")) {
+        return `(async () => {\n${code}\n})();`;
+      }
+      return code;
+    },
+
+    // Add strict mode
+    addStrictMode: (code) => `'use strict';\n${code}`,
+  };
+}
+
+
+// ── src/runtime/entry.js ─────────────────────────────────────────────
+// Public entry API of the host runtime (Worker F extraction, branch
+// modular/host): `executeCode` / `createSandbox`.
+//
+// Sources: runtime.js lines 6059-6073, copied verbatim.
+//
+// Error-formatting and seed/fs helpers (FormattedError, formatErrors,
+// formatErrors2, normalizeSeaAssets, base64EncodeBytes, isSeedEnvelope,
+// seedBytesToBase64, flattenFileTree) live in `./host-utils.js` and are
+// re-exported here, so `entry.js` remains the single public surface for
+// this section. They are split out because they are pure and independently
+// testable, while this module's top-level `CodeSandbox` import cannot
+// resolve until the class is extracted.
+//
+// CROSS-MODULE DEPENDENCY — `CodeSandbox`:
+//   `export class CodeSandbox extends EventEmitter` (runtime.js:4036) was
+//   extracted by Worker E to `src/runtime/code-sandbox.js` — the import
+//   below points at that real module (present on the integration branch;
+//   absent on a bare checkout of this branch until merged).
+
+
+
+
 
 /**
  * Quick execution without configuration
@@ -6127,13 +6183,31 @@ export function createSandbox(options = {}) {
   return new CodeSandbox(options);
 }
 
-// NOTE: The demo playground (module-level example CodeSandbox, event
-// handlers, and the `examples` snippet map) lived here. It moved to
-// src/ui/playground.js — runtime.js is a pure library with no demo UI.
 
-// NOTE: The playground DOM helpers (getArgv, toggleArgvInput, filesDiv,
-// initPlayground, and the __BVM_DISABLE_PLAYGROUND auto-init guard) lived
-// here. They moved to src/ui/playground.js.
+// ── src/runtime/host-utils.js ─────────────────────────────────────────────
+// Host-side pure helpers for the runtime entry API (Worker F extraction,
+// branch modular/host). All functions/classes are exported.
+//
+// Sources (copied verbatim from runtime.js except for added `export`s):
+//   FormattedError      lines 6089-6113  (was module-private `class`)
+//   formatErrors        lines 6115-6158  (already exported)
+//   formatErrors2       lines 6160-6203  (added `export`)
+//   normalizeSeaAssets  lines 6215-6255  (added `export`; kept its doc comment
+//                                        6207-6214; dropped the stray
+//                                        "// 2. Then declare ..." note at 6205)
+//   base64EncodeBytes   lines 6257-6264  (added `export`)
+//   isSeedEnvelope      lines 6273-6283  (added `export`; kept doc comment)
+//   seedBytesToBase64   lines 6288-6298  (added `export`; kept doc comment)
+//   flattenFileTree     lines 6300-6323  (already exported)
+//
+// No cross-module dependencies: the only intra-file references are
+// normalizeSeaAssets -> base64EncodeBytes,
+// seedBytesToBase64   -> base64EncodeBytes (+ guarded global `Buffer`),
+// flattenFileTree     -> isSeedEnvelope, seedBytesToBase64,
+// formatErrors/formatErrors2 -> FormattedError.
+// Globals used: `btoa` (base64EncodeBytes), `Blob` (flattenFileTree,
+// `instanceof` — same as the original), `Buffer` (seedBytesToBase64,
+// guarded by `typeof Buffer !== "undefined"`).
 
 // ---------------------------------------------------------------------------
 // Shared error-formatting helpers. Used by core sandbox code (acorn
@@ -6141,7 +6215,7 @@ export function createSandbox(options = {}) {
 // and never move inside the demo-playground init below. (Vitest gap #0
 // reorganization: previously interleaved with the playground init.)
 
-class FormattedError extends Error {
+ class FormattedError extends Error {
   constructor(originalError, formattedMessage) {
     super(formattedMessage);
 
@@ -6212,7 +6286,7 @@ export function formatErrors(code, err) {
   return new FormattedError(err, formattedMessage);
 }
 
-function formatErrors2(code, err) {
+ function formatErrors2(code, err) {
   const message = err?.message || "Unknown error";
 
   function _getContext(lines, lineNum, contextSize = 2) {
@@ -6257,8 +6331,6 @@ function formatErrors2(code, err) {
   return new FormattedError(err, formattedMessage);
 }
 
-// 2. Then declare your helper function and main function
-
 // Normalize the 'seaAssets' sandbox option into a JSON-safe map for the
 // bootstrap object: { [key]: { encoding: 'utf8'|'base64', data: string } }.
 // Accepted value shapes (mirrors the leniency of 'fs' -> __USER_FILES__):
@@ -6267,7 +6339,7 @@ function formatErrors2(code, err) {
 //   { encoding: 'utf8'|'base64', data: string }  -> used as-is
 // Anything else (including empty keys) is dropped: a misconfigured asset
 // must never break sandbox bootstrap.
-function normalizeSeaAssets(assets) {
+ function normalizeSeaAssets(assets) {
   const out = {};
   if (!assets || typeof assets !== "object") return out;
   const entries =
@@ -6309,7 +6381,7 @@ function normalizeSeaAssets(assets) {
   return out;
 }
 
-function base64EncodeBytes(bytes) {
+ function base64EncodeBytes(bytes) {
   let binary = "";
   const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) {
@@ -6325,7 +6397,7 @@ function base64EncodeBytes(bytes) {
 // sandbox can decode it; recursing would create bogus 'encoding'/'data'
 // files. The two-key strictness keeps a user directory that merely happens
 // to contain encoding/data files from being reinterpreted.
-function isSeedEnvelope(value) {
+ function isSeedEnvelope(value) {
   return (
     value !== null &&
     typeof value === "object" &&
@@ -6340,7 +6412,7 @@ function isSeedEnvelope(value) {
 // Normalize raw bytes (Uint8Array/Buffer/ArrayBuffer) to a JSON-safe
 // { encoding: 'base64', data } envelope. __USER_FILES__ is JSON-serialized
 // into the sandbox bootstrap, where raw bytes would corrupt to {"0":..}.
-function seedBytesToBase64(value) {
+ function seedBytesToBase64(value) {
   const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
   if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
     return Buffer.from(
@@ -6377,6 +6449,162 @@ export function flattenFileTree(obj, parentPath = "") {
   return flat;
 }
 
-// NOTE: The files-panel UI (activeBlobUrls, detectMimeType, renderFiles,
-// renderFiles2) lived here at the end of the module. It moved to
-// src/ui/playground.js — runtime.js is a pure library with no demo UI.
+
+// ── src/runtime/message-handler.js ─────────────────────────────────────────────
+// Iframe stdin keypress parser (Worker F extraction, branch modular/host).
+//
+// Source: runtime.js lines 4979-5002 (`_parseKey`), copied with ONE
+// deliberate adaptation (see below) plus the added `export` keyword.
+//
+// ORIGIN — iframe-side code: defined INSIDE the `_getState` interop template
+// literal (runtime.js:4635-5005). Called by the iframe bootstrap's stdin
+// `_dispatch` (template lines ~4770/~4777) to turn raw keypress chunks into
+// `{ name, ctrl, meta, shift, sequence }` descriptors.
+//
+// TEMPLATE ESCAPE LAYER — WHY THE SOURCE DIFFERS BY ONE CHARACTER CLASS:
+// In runtime.js the specials keys are written with DOUBLE backslashes
+// (e.g. `'\\x1b[A'`) because the source sits as literal text inside the host
+// template literal, whose engine collapses `\\` -> `\` at parse time — so the
+// iframe receives `'\x1b[A'` (real ESC). A module is NOT inside that template,
+// so the escapes here are SINGLE backslashes: this is the only spelling that
+// preserves the function's runtime contract (real keypress in -> key name
+// out) both when imported directly AND when integrated via verbatim
+// interpolation `${_parseKey.toString()}` into the bootstrap template
+// (interpolated values are inserted verbatim — no escape processing — so the
+// iframe then parses `'\x1b[A'` exactly as it does today). A byte-verbatim
+// copy would silently break ESC-sequence recognition in both uses; this was
+// verified empirically (see tests). Pure function: no dependencies.
+
+ function _parseKey(s) {
+  const specials = {
+    "\x1b[A": "up",
+    "\x1b[B": "down",
+    "\x1b[C": "right",
+    "\x1b[D": "left",
+    "\x1b[H": "home",
+    "\x1b[F": "end",
+    "\x1b[3~": "delete",
+    "\x1b[2~": "insert",
+    "\x1b[5~": "pageup",
+    "\x1b[6~": "pagedown",
+    "\x1b": "escape",
+    "\r": "return",
+    "\n": "return",
+    "\t": "tab",
+    "\x7f": "backspace",
+    "\b": "backspace",
+  };
+
+  if (specials[s]) {
+    return {
+      name: specials[s],
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: s,
+    };
+  }
+
+  if (s.length === 1) {
+    const code = s.charCodeAt(0);
+    if (code >= 1 && code <= 26) {
+      return {
+        name: String.fromCharCode(code + 96),
+        ctrl: true,
+        meta: false,
+        shift: false,
+        sequence: s,
+      };
+    }
+    return {
+      name: s.toLowerCase(),
+      ctrl: false,
+      meta: false,
+      shift: s !== s.toLowerCase(),
+      sequence: s,
+    };
+  }
+
+  return {
+    name: "unknown",
+    ctrl: false,
+    meta: false,
+    shift: false,
+    sequence: s,
+  };
+}
+
+
+// ── src/runtime/output-shim.js ─────────────────────────────────────────────
+// Host/iframe output-stream shim (Worker F extraction, branch modular/host).
+//
+// Source: runtime.js lines 4900-4938 (`makeOutputShim2`), copied verbatim
+// except for the added `export` keyword.
+//
+// ORIGIN — iframe-side code: this function is defined INSIDE the `_getState`
+// interop template literal (runtime.js:4635-5005) that builds the sandboxed
+// iframe's bootstrap IIFE. It is NOT host-side code.
+//
+// STATUS — dead code: `makeOutputShim2` is never called anywhere in
+// runtime.js. The live output shims are the (separate) `makeOutputShim`
+// defined later in the same template.
+//
+// FREE-VARIABLE DEPENDENCIES (resolved from the enclosing scope at the use
+// site — inside the iframe these are the iframe's own globals):
+//   - `Writable`  (stream.Writable; the template has `//const { Writable } =
+//      require('stream');` commented out just above the definition)
+//   - `Buffer`
+//   - `process` (with `.stdout` / `.stderr`)
+// Per the established worker convention these stay bare references; tests
+// install faithful equivalents on globalThis.
+/* global Writable */
+
+ function makeOutputShim2(type) {
+  const isError = type === "stderr";
+
+  // Inherit from Writable to get all internal Node logic for free
+  const stream = new Writable({
+    decodeStrings: false, // Prevents automatic conversion of strings to buffers
+    write(chunk, encoding, callback) {
+      const data = Buffer.isBuffer(chunk) ? chunk.toString() : chunk;
+
+      // Use process.binding or low-level write if you want to avoid console.log
+      // but for a shim, this is the safest way to ensure output visibility.
+      if (isError) {
+        process.stderr.write(data);
+      } else {
+        process.stdout.write(data);
+      }
+
+      // Node specs require calling the callback to signal the write is finished
+      callback();
+    },
+  });
+
+  // TTY Specific properties required by CLI tools (like chalk or inquirer)
+  Object.defineProperties(stream, {
+    isTTY: { value: true },
+    fd: { value: isError ? 2 : 1 },
+    columns: { value: process.stdout.columns || 80, writable: true },
+    rows: { value: process.stdout.rows || 24, writable: true },
+    isRaw: { value: false, writable: true },
+  });
+
+  // Mandatory TTY methods for cursor manipulation
+  stream.clearLine = (dir, cb) => {
+    if (cb) cb();
+    return true;
+  };
+  stream.cursorTo = (x, y, cb) => {
+    if (cb) cb();
+    return true;
+  };
+  stream.moveCursor = (dx, dy, cb) => {
+    if (cb) cb();
+    return true;
+  };
+  stream.getColorDepth = () => 8; // Reports 256-color support
+
+  return stream;
+}
+

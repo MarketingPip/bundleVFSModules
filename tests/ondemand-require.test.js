@@ -541,98 +541,103 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
-    if (files.length === 0) return; // on main post-merge: nothing to guard
-    // The allowlist below describes the feat/test-autorun-and-modularization
-    // footprint (PR #201, merged): the sandbox-template cutover. On branches
-    // that don't touch the sandbox-template surface it is meaningless — the
-    // footprint is the branch's own work — so only enforce it there.
-    const touchesTemplateSurface = files.some(
-      (f) => f === "src/sandbox-template.js" || f.startsWith("src/sandbox/"),
-    );
-    if (!touchesTemplateSurface) return; // not a sandbox-template branch: nothing to guard
-    // The branch footprint is the union of the committed work on it
-    // (feat/test-autorun-and-modularization, Items 1+2: --test auto-run moves
-    // into the node:test shim; sandbox fragments re-synced and generate() cut
-    // over to SANDBOX_TEMPLATE): src/test.js owns the trigger, runtime.js
-    // drops the template interception and the inline template, playground.js
-    // updates the tests example, docs record the contract, CI gates the
-    // template freshness. Items 3+4: live bindings in the transform +
-    // buildModuleProxy, prettier-mangled parity fixtures restored with
-    // parity/node-test/ added to .prettierignore. tests/ is excluded above.
+    // The branch footprint is the union of the committed work on it.
+    // modular/integration-v2: the runtime.js monolith was cut over to generated
+    // output (src/build-runtime.mjs assembles it from src/runtime/* modules;
+    // runtime.js itself is regenerated). The workflow change gates the
+    // generated file's freshness in CI. roadmap.md records the completion.
+    // tests/ is excluded above.
     expect(files.sort()).toEqual(
       [
         ".github/workflows/run.yaml",
-        ".prettierignore",
-        "dist/test.js",
-        "dist/vfs.js",
-        "docs/E2E_FEATURE_MATRIX.md",
-        "docs/RUNTIME.md",
-        "package.json",
-        "parity/node-test/fixtures/assert-first-line.js",
-        "parity/node-test/fixtures/assert-long-line.js",
-        "parity/node-test/parallel/test-assert-first-line.js",
-        "parity/node-test/parallel/test-assert.js",
+        "roadmap.md",
         "runtime.js",
-        "src/build-sandbox.mjs",
-        "src/sandbox-template.js",
-        "src/sandbox/00-runtime-object.js",
-        "src/sandbox/05-vitest-mocks.js",
-        "src/sandbox/10-task-tracker.js",
-        "src/sandbox/20-module-loader.js",
-        "src/sandbox/21-sync-require.js",
-        "src/sandbox/30-interop.js",
-        "src/sandbox/31-node-globals.js",
-        "src/sandbox/32-path-resolve.js",
-        "src/sandbox/40-console.js",
-        "src/sandbox/41-events-warnings.js",
-        "src/sandbox/50-process.js",
-        "src/sandbox/60-timers.js",
-        "src/sandbox/70-fetch.js",
-        "src/sandbox/71-xhr.js",
-        "src/sandbox/80-errors.js",
-        "src/sandbox/85-keydecoder.js",
-        "src/sandbox/90-server-request.js",
-        "src/sandbox/95-init.js",
-        "src/sandbox/96-user-code.js",
-        "src/sandbox/97-finalize.js",
-        "src/test.js",
-        "src/ui/playground.js",
+        "src/build-runtime.mjs",
+        "src/runtime/bootstrap.js",
+        "src/runtime/builtin-modules.js",
+        "src/runtime/builtins.js",
+        "src/runtime/code-sandbox.js",
+        "src/runtime/code-transformer.js",
+        "src/runtime/entry.js",
+        "src/runtime/events.js",
+        "src/runtime/execution-context.js",
+        "src/runtime/host-utils.js",
+        "src/runtime/import-resolver.js",
+        "src/runtime/message-handler.js",
+        "src/runtime/output-shim.js",
+        "src/runtime/sandbox-runtime.js",
+        "src/runtime/syntax.js",
+        "src/runtime/terminal.js",
+        "src/runtime/transforms-cjs.js",
+        "src/runtime/transforms-esm.js",
+        "src/runtime/transforms-imports.js",
+        "src/runtime/transpile.js",
+        "src/runtime/vfs-serialize.js",
+        "src/runtime/vfs-server.js",
       ].sort(),
     );
   });
 
   test("no new function declarations added by the branch diff", () => {
-    // Post-merge of PR #199, __bvmRequireSync pre-exists on the base, so the
-    // old expectation (exactly one added `+function __bvmRequireSync`) is
-    // stale. This change modifies __bvmRequireSync and the require()
-    // CallExpression handler but declares no new functions; neither does the
-    // sibling inlineWasmDataUrls dedupe.
-    const out = execSync(`git diff ${diffBase} -- runtime.js`, {
+    // The modularization regenerates runtime.js from src/runtime/*, so diff
+    // lines cannot tell moved code from new code. Compare the SET of
+    // top-level function declarations between the merge-base monolith and
+    // the branch instead. The one intentional addition is isNodeLane(), the
+    // dual-lane Node/browser helper factored out during extraction (the
+    // monolith always imported the esm.sh builtin-modules build, even under
+    // Node; the modules use node:module there now).
+    const baseRef = execSync("git merge-base origin/main HEAD", {
       cwd: REPO_ROOT,
       encoding: "utf8",
+    }).trim();
+    const baseSrc = execSync(`git show ${baseRef}:runtime.js`, {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
     });
-    const addedFns = out.split("\n").filter((l) => l.startsWith("+function "));
-    expect(addedFns).toEqual([]);
+    const branchSrc = fs.readFileSync(
+      path.join(REPO_ROOT, "runtime.js"),
+      "utf8",
+    );
+    const fnNames = (src) =>
+      new Set(
+        [
+          ...src.matchAll(/^\s*(?:export\s+)?function\s+([A-Za-z_$][\w$]*)/gm),
+        ].map((m) => m[1]),
+      );
+    const base = fnNames(baseSrc);
+    const added = [...fnNames(branchSrc)].filter((n) => !base.has(n));
+    expect(added).toEqual(["isNodeLane"]);
   });
 
   test("no new import statements added to runtime.js", () => {
-    const out = execSync(`git diff ${diffBase} -- runtime.js`, {
+    // Same regeneration-aware comparison for import specifiers: the
+    // generated file unifies the monolith's scattered import header, so
+    // diff lines are meaningless. The one intentional addition is
+    // ./src/quick_bundle.js — the monolith called bundle() without ever
+    // importing it (latent ReferenceError); code-sandbox.js now imports it
+    // properly (see the _bundler_ interop comment).
+    const baseRef = execSync("git merge-base origin/main HEAD", {
       cwd: REPO_ROOT,
       encoding: "utf8",
+    }).trim();
+    const baseSrc = execSync(`git show ${baseRef}:runtime.js`, {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
     });
-    const addedImports = out
-      .split("\n")
-      .filter((l) => l.startsWith("+import "));
-    // Item 2 cutover: generate() imports the built sandbox template and the
-    // log-token table. These two are the only expected additions.
-    // On post-Item-2 branches (diffBase already has them), zero additions is correct.
-    const expected = [
-      '+import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";',
-      '+import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";',
-    ].sort();
-    const actual = addedImports.sort();
-    // Allow either: the two Item 2 imports (if branch includes the cutover)
-    // or zero (if branch is based on post-cutover main)
-    expect([[], expected]).toContainEqual(actual);
+    const branchSrc = fs.readFileSync(
+      path.join(REPO_ROOT, "runtime.js"),
+      "utf8",
+    );
+    const specifiers = (src) =>
+      new Set(
+        [...src.matchAll(/^\s*import\s+[^;]*?["']([^"']+)["']/gms)].map(
+          (m) => m[1],
+        ),
+      );
+    const base = specifiers(baseSrc);
+    const added = [...specifiers(branchSrc)].filter((s) => !base.has(s));
+    expect(added).toEqual(["./src/quick_bundle.js"]);
   });
 });
