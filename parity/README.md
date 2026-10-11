@@ -68,6 +68,40 @@ fail in the browser lane (real process spawning is a noop by design) while
 passing through the bridge, so one flat file cannot describe both lanes.
 `parity/report.json` records which lane a run used.
 
+### The headless real-runtime lane
+
+`node parity/run-headless.mjs [module]` runs the same official test files
+through the **actual sandbox runtime** instead of the stub marker: the real
+generated template (`SandboxRuntime.generate()`), the real `loadModule`
+interop, the real `taskTracker`, the real `globalThis._RUNTIME_` →
+`globalThis._RUNTIME<uuid>_` AST rewrite, the real `node_globals.js`
+startup wiring — hosted headlessly in Node `worker_threads` via `node:vm`
+instead of an iframe (the headless host abstraction, `parity/headless/`;
+Nodepod's `src/headless.ts` + `src/host/` pattern, techniques only).
+
+Builtins are served from the worktree's `dist/` bundles — exactly what the
+browser host serves the iframe — and the `_build_file` pipeline
+(plugin hooks, CJS↔ESM conversion, the `_RUNTIME_` rewrite,
+`transformImportsToLoadModule`) is the same code path `execute()` uses.
+Native delegation is structurally impossible: the vm realm starts with no
+host Node builtins (`process`, `require`, `Buffer`, … are all undefined
+until the sandbox's own services install them), and `_RUNTIME_` is the
+genuine runtime object (`loadModule` function, `taskTracker` present, no
+`parityForceShim`). The markers stay non-enumerable, like the shim lane's.
+
+Each test file runs in its own worker (per-file isolation, like run.mjs's
+per-file child processes); a hung file terminates its worker and reports a
+harness error, never a hang and never a misattributed shim failure.
+Expectations live in `parity/expected-failures.headless.json`, and
+`parity/report.json` records `lane: "headless"` plus the runtime identity
+(`kind`, template path, template SHA-256, Node version) — so a score is
+always traceable to the exact runtime that produced it.
+
+The headless lane complements the other two; it does not replace them:
+the shim lane stays the fast CI gate, the native lane stays the
+bridge diagnostic, and the headed-Firefox browser lane
+(`parity/real-runtime.mjs`) stays the full iframe/postMessage proof.
+
 ## Scoreboard
 
 Official suites are Node.js's own `test/parallel/test-<module>*.js` files,

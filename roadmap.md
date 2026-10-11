@@ -223,6 +223,19 @@ changes caused it — measure first.
 
 ### 4. Real-runtime parity harness — official suites through the iframe host protocol
 
+**[x] Done 2026-10-11 — headless real-runtime lane** (`parity/run-headless.mjs`,
+branch `feat/real-parity-harness`): a faithful adapter to the real host
+protocol. The vendored official suites execute inside the ACTUAL sandbox
+runtime — the real generated template (`SandboxRuntime.generate()`), the
+real `loadModule` interop, the real `taskTracker` drain, the real
+`globalThis._RUNTIME_` → `globalThis._RUNTIME<uuid>_` AST rewrite, the real
+`node_globals.js` startup wiring — hosted headlessly in Node
+`worker_threads` via `node:vm` instead of an iframe. Builtins are served
+from the worktree's `dist/` bundles (exactly what the browser host serves
+the iframe); the `_build_file` pipeline is the same code path `execute()`
+uses. The headed-Firefox browser lane (`parity/real-runtime.mjs`, PRs
+#182/#190) remains the full iframe/postMessage proof.
+
 **Problem** (2026-09-28): parity runs under Node with a
 `{ parityForceShim: true }` stub marker — a bridge kill-switch, not the
 real runtime (see `parity/README.md`). It proves our shim code with bridges
@@ -246,6 +259,35 @@ as expected failures.
 **Must**: headless host abstraction — the same core runtime runs on browser
 Web Workers and Node/Bun worker threads (Nodepod's `src/headless.ts` +
 `src/host/`), which gives a real-Node test lane for free.
+
+**Evidence**:
+- `parity/headless/` — the abstraction: `runtime-scope.mjs` (the shared
+  core: real `SandboxRuntime.generate()` + the `_build_file` transform
+  pipeline + `ImportResolver`, importable under Node), `vm-sandbox.mjs`
+  (the template in `node:vm` with a faithful `window === globalThis`
+  browser surface and the iframe postMessage message types),
+  `builtin-source.mjs` (builtins from local `dist/`, mirroring
+  `fetchBuiltinSource`), `host.mjs` (`HeadlessHost`: the `_dynamic_import`
+  / `_build_file` / `_fetch_` interop adapters + entry pipeline mirroring
+  `CodeSandbox.execute()`), `channel.mjs` (in-process and worker_threads
+  transports, one `run()` contract), `worker-entry.mjs`, `lane.mjs`
+  (expectation selection, `__RESULT__` protocol, runtime record).
+- Durable tests `tests/headless-parity.test.js`: **23/23 green**, pinning
+  all four requirements — (a) in-sandbox probe: `_RUNTIME_` is the real
+  object (`loadModule` fn, `taskTracker` present, uuid alias, no
+  `parityForceShim`) and the fresh vm realm has no host Node builtins;
+  (b) sandbox markers non-enumerable (plus the shim lane's marker pinned);
+  (c) `expectedFailuresPath()` selects `expected-failures.headless.json`;
+  (d) `report.json` records `{kind: "headless-vm", template, templateSha256}`.
+- Re-triage: strict-gate modules through the lane; `path` 15/17 (2
+  inherent: `path/posix`/`path/win32` reference identity across
+  per-specifier dist bundles — the browser lane behaves identically, so a
+  real runtime characteristic, not a harness artifact). Expectations in
+  `parity/expected-failures.headless.json` (Deno-style, with reasons).
+- Non-goals honored: the shim lane is untouched (still the fast CI gate),
+  no shim was changed for the harness, and harness-only issues
+  (e.g. `test/common` stubbing) are fixed in the harness, never recorded
+  as expected failures.
 
 ### 5. Host runtime product surface
 

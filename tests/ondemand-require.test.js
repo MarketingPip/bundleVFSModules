@@ -542,23 +542,26 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // feat/fetch-audit: fetch platform-layer audit (roadmap §5 "must").
-    // 46-observation differential (Node undici / browser-native / genuine
-    // CodeSandbox lanes) + wrapper-layer patches: src/sandbox/70-fetch.js
-    // (Request→(url,init) normalization, AbortSignal composition + abort
-    // race, redirected/type/url preservation, .finally() noise fix) and
-    // src/runtime/code-sandbox.js (parent reports post-redirect url,
-    // redirected, type), with rebuilt src/sandbox-template.js + runtime.js,
-    // findings in docs/FETCH_PLATFORM.md, roadmap checkoff. tests/ is
-    // excluded above.
+    // feat/real-parity-harness: real-runtime parity harness (roadmap §4).
+    // Headless host abstraction (parity/headless/: runtime-scope, vm-sandbox,
+    // builtin-source, host, lane, channel, worker-entry) + runner
+    // (parity/run-headless.mjs) + headless expectations file +
+    // parity/README.md docs + roadmap checkoff. tests/ is excluded above.
+    // (Prior branch feat/fetch-audit is merged; its files are on main.)
     expect(files.sort()).toEqual(
       [
-        "docs/FETCH_PLATFORM.md",
+        "parity/README.md",
+        "parity/expected-failures.headless.json",
+        "parity/headless/builtin-source.mjs",
+        "parity/headless/channel.mjs",
+        "parity/headless/host.mjs",
+        "parity/headless/lane.mjs",
+        "parity/headless/runtime-scope.mjs",
+        "parity/headless/vm-sandbox.mjs",
+        "parity/headless/worker-entry.mjs",
+        "parity/run-headless.mjs",
+        "parity/triage-headless.sh",
         "roadmap.md",
-        "runtime.js",
-        "src/runtime/code-sandbox.js",
-        "src/sandbox-template.js",
-        "src/sandbox/70-fetch.js",
       ].sort(),
     );
   });
