@@ -197,10 +197,20 @@ bytes" and "run wasm bytes on my VFS".
   hook omission, Symbol-based introspection), shared `assets.js` helper,
   `docs/INTEGRATIONS.md`; 27/27 unit green + real E2E (Vite build/preview/dev
   and Next 16 build/dev/start serve byte-identical assets over HTTP).
-- **Demo-only fake shell:** a fake shell for developers learning the
-  library — npm install-time behavior (reads each package's `bin` field,
-  routes through the runtime's `node`) plus sample code. Clearly marked
-  demo; never on the product path (AGENTS.md rule 11).
+- ~~**Demo-only fake shell**~~ — **done 2026-10-11** (initial landing PR
+  #194; hardened on `feat/demo-fake-shell`): `examples/fake-shell/`
+  (`fake-shell.js` with a DEMO ONLY header, `README.md` sample) simulates
+  npm install-time behavior — reads each package's `bin` field
+  (string/object forms; string-form names drop a scoped package's
+  `@scope/` prefix, matching npm), lays files into
+  `/node_modules/<name>/`, registers command names, and routes each bin
+  script through the runtime's `node` via an injected `execute()` with
+  `process.argv` set the npm way (`["node", scriptPath, ...args]`).
+  `tests/demo-fake-shell.test.js` 11/11: bin-field parsing (incl. the
+  scoped-name case), install file layout + command registration, exec
+  routing with argv, and the rule-11 guard — every `src/**/*.js` plus
+  `runtime.js` is scanned and the suite fails if any product file imports
+  or references `examples/fake-shell`. Never on the product path.
 - **Vite 7 browser E2E gaps** (follow-ups to M3/M4, `docs/VITE_BROWSER.md`):
   - ~~esbuild-wasm `transform()` hang → terser~~ — **done 2026-09-29**
     (PR #133): `minify: "terser"` works; only revisit esbuild if a real TS

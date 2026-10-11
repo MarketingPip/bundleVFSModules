@@ -37,6 +37,12 @@ describe("resolveBinCommands", () => {
     expect(resolveBinCommands(PKG)).toEqual({ cowsay: "./bin/cowsay.js" });
   });
 
+  test("string bin on a scoped package drops the @scope/ prefix (npm behavior)", () => {
+    expect(
+      resolveBinCommands({ name: "@scope/tool", bin: "./cli.js" }),
+    ).toEqual({ tool: "./cli.js" });
+  });
+
   test("object bin passes through", () => {
     const pkg = { name: "x", bin: { a: "./a.js", b: "./b.js" } };
     expect(resolveBinCommands(pkg)).toEqual({ a: "./a.js", b: "./b.js" });
@@ -101,12 +107,24 @@ describe("createFakeShell", () => {
     expect(code).toContain(FILES["bin/cowsay.js"]);
   });
 
-  test("DEMO ONLY: runtime.js never references the fake shell", () => {
-    const runtimeSrc = fs.readFileSync(
-      path.join(__dirname, "..", "runtime.js"),
-      "utf8",
-    );
-    expect(runtimeSrc).not.toContain("fake-shell");
-    expect(runtimeSrc).not.toContain("examples/");
+  test("DEMO ONLY: no product file imports or references the fake shell", () => {
+    // AGENTS.md rule 11: the demo shell must never sit on the product path.
+    // Scan every product file (all of src/ + runtime.js); any import or
+    // reference to examples/fake-shell fails the suite.
+    const repoRoot = path.join(__dirname, "..");
+    const productFiles = [path.join(repoRoot, "runtime.js")];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else if (entry.isFile() && p.endsWith(".js")) productFiles.push(p);
+      }
+    };
+    walk(path.join(repoRoot, "src"));
+    const offenders = productFiles.filter((f) => {
+      const src = fs.readFileSync(f, "utf8");
+      return src.includes("fake-shell") || src.includes("examples/fake-shell");
+    });
+    expect(offenders.map((f) => path.relative(repoRoot, f))).toEqual([]);
   });
 });
