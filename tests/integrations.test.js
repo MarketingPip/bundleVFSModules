@@ -13,7 +13,12 @@ import {
   RUNTIME_JS,
 } from "../src/integrations/assets.js";
 import { bundleVFSModules } from "../src/integrations/vite.js";
-import { withBundleVFSModules } from "../src/integrations/next.js";
+import {
+  withBundleVFSModules,
+  detectNextMajor,
+  BVM_ASSET_BASE,
+  BVM_ASSET_DIR,
+} from "../src/integrations/next.js";
 
 let tmp;
 beforeEach(() => {
@@ -134,18 +139,75 @@ describe("next.js wrapper", () => {
     ).toBe(true);
   });
 
-  test("exposes __bvmAssetBase and __bvmAssetDir on the wrapped config", () => {
+  test("exposes asset base/dir via symbols (no string keys for Next to warn about)", () => {
     const wrapped = withBundleVFSModules(
       {},
       { assetDir: "bvm-meta", publicPath: "/bvm/" },
     );
     // Trailing slash normalized
-    expect(wrapped.__bvmAssetBase).toBe("/bvm");
-    expect(wrapped.__bvmAssetDir).toBe("bvm-meta");
+    expect(wrapped[BVM_ASSET_BASE]).toBe("/bvm");
+    expect(wrapped[BVM_ASSET_DIR]).toBe("bvm-meta");
+    // No string keys leak: Next 16's strict zod validation warns on every
+    // unrecognized string key, so the introspection must be symbol-only.
+    expect(Object.keys(wrapped).filter((k) => k.startsWith("__bvm"))).toEqual(
+      [],
+    );
+    // Symbols survive a Reflect.ownKeys clone the way Next 16 clones configs
+    const cloned = {};
+    for (const key of Reflect.ownKeys(wrapped)) cloned[key] = wrapped[key];
+    expect(cloned[BVM_ASSET_BASE]).toBe("/bvm");
+    expect(cloned[BVM_ASSET_DIR]).toBe("bvm-meta");
   });
 
   test("invalid publicPath throws eagerly at config-evaluation time", () => {
     expect(() => withBundleVFSModules({}, { publicPath: "bvm" })).toThrow();
+  });
+
+  describe("Next 16+ Turbopack handling", () => {
+    function fakeNextVersion(version) {
+      const pkgDir = path.join(tmp, "node_modules", "next");
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pkgDir, "package.json"),
+        JSON.stringify({ name: "next", version }),
+      );
+    }
+
+    test("detectNextMajor returns null when next is not installed", () => {
+      expect(detectNextMajor()).toBeNull();
+    });
+
+    test("detectNextMajor reads the installed major version", () => {
+      fakeNextVersion("16.4.0");
+      expect(detectNextMajor()).toBe(16);
+    });
+
+    test("webpack hook attached when Next version undetectable (old behavior)", () => {
+      const wrapped = withBundleVFSModules({});
+      expect(typeof wrapped.webpack).toBe("function");
+    });
+
+    test("webpack hook attached on Next 15 (webpack default)", () => {
+      fakeNextVersion("15.0.0");
+      const wrapped = withBundleVFSModules({});
+      expect(typeof wrapped.webpack).toBe("function");
+      const out = wrapped.webpack({ entry: "x" });
+      expect(out.entry).toBe("x");
+    });
+
+    test("webpack hook omitted on Next 16 (Turbopack default); eager copy still runs", () => {
+      fakeNextVersion("16.4.0");
+      const wrapped = withBundleVFSModules({}, { assetDir: "bvm-tp" });
+      expect("webpack" in wrapped).toBe(false);
+      expect(wrapped.webpack).toBeUndefined();
+      // Eager copy is the primary trigger under Turbopack — no hook needed
+      expect(
+        fs.existsSync(path.join(tmp, "public", "bvm-tp", "runtime.js")),
+      ).toBe(true);
+      expect(
+        fs.existsSync(path.join(tmp, "public", "bvm-tp", "dist", "vfs.js")),
+      ).toBe(true);
+    });
   });
 
   test("wraps config and preserves user webpack", () => {
