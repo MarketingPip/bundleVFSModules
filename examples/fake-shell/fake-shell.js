@@ -13,7 +13,8 @@
 
 /**
  * Read a package descriptor's `bin` field the way npm does:
- * - string → a single command named after the package
+ * - string → a single command named after the package (scoped packages
+ *   drop the `@scope/` prefix, e.g. `@foo/bar` → command `bar`)
  * - object → { commandName: scriptPath } as-is
  * - missing → no commands
  *
@@ -23,7 +24,10 @@
 export function resolveBinCommands(pkg) {
   const bin = pkg.bin;
   if (!bin) return {};
-  if (typeof bin === "string") return { [pkg.name]: bin };
+  if (typeof bin === "string") {
+    const name = pkg.name.startsWith("@") ? pkg.name.split("/")[1] : pkg.name;
+    return { [name]: bin };
+  }
   return { ...bin };
 }
 

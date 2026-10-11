@@ -554,30 +554,17 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // fix/open-handles: roadmap §3 open-handle investigation.
-    // - src/net.js: _acceptConnection refuses cleanly (ECONNREFUSED) when the
-    //   server closed between the deferred lookup and the deferred accept,
-    //   instead of throwing TypeError on the nulled _bindAddress.
-    // - dist/: rebuilt via node src/build-vfs.mjs (the 8 net-transitive
-    //   bundles + dist/vfs.js; all other bundles byte-identical).
-    // - roadmap.md: §3 checkoff with evidence.
-    // tests/ is excluded above (tests/net.test.js regression test + this
+    // feat/demo-fake-shell: roadmap §2 demo-only fake shell hardening.
+    // - examples/fake-shell/fake-shell.js: npm-faithful scope stripping for
+    //   string-form `bin` (@scope/pkg → command pkg). The file carries a
+    //   DEMO ONLY header (AGENTS.md rule 11: never on the product path).
+    // - roadmap.md: §2 "Demo-only fake shell" checkoff with evidence.
+    // tests/ is excluded above (tests/demo-fake-shell.test.js: scoped-bin
+    // test + rule-11 guard widened from runtime.js to all of src/, and this
     // allowlist update).
-    // (Prior branch feat/real-parity-harness is merged; its files are on main.)
+    // (Prior branches merged; their files are on main.)
     expect(files.sort()).toEqual(
-      [
-        "dist/_http_agent.js",
-        "dist/_http_client.js",
-        "dist/_http_incoming.js",
-        "dist/_http_outgoing.js",
-        "dist/_http_server.js",
-        "dist/http.js",
-        "dist/https.js",
-        "dist/net.js",
-        "dist/vfs.js",
-        "roadmap.md",
-        "src/net.js",
-      ].sort(),
+      ["examples/fake-shell/fake-shell.js", "roadmap.md"].sort(),
     );
   });
 
