@@ -13,7 +13,12 @@ import {
   RUNTIME_JS,
 } from "../src/integrations/assets.js";
 import { bundleVFSModules } from "../src/integrations/vite.js";
-import { withBundleVFSModules } from "../src/integrations/next.js";
+import {
+  withBundleVFSModules,
+  detectNextMajor,
+  BVM_ASSET_BASE,
+  BVM_ASSET_DIR,
+} from "../src/integrations/next.js";
 
 let tmp;
 beforeEach(() => {
@@ -81,6 +86,14 @@ describe("vite plugin", () => {
     expect(plugin.name).toBe("vite-plugin-bundle-vfs-modules");
     expect(typeof plugin.configResolved).toBe("function");
     expect(typeof plugin.configureServer).toBe("function");
+    expect(typeof plugin.buildStart).toBe("function");
+  });
+
+  test("exposes assetBase for host URL construction", () => {
+    expect(bundleVFSModules().assetBase).toBe("/bvm");
+    expect(bundleVFSModules({ publicPath: "/custom/" }).assetBase).toBe(
+      "/custom",
+    );
   });
 
   test("configResolved copies assets to publicDir", () => {
@@ -104,6 +117,66 @@ describe("vite plugin", () => {
     ).toBe(true);
   });
 
+  test("configResolved removes stale files from a previous copy", () => {
+    const publicDir = path.join(tmp, "public");
+    const destDir = path.join(publicDir, "bvm");
+    fs.mkdirSync(destDir, { recursive: true });
+    // Simulate a stale file left by an older copy of the library.
+    fs.writeFileSync(path.join(destDir, "removed-shim.js"), "stale");
+    const plugin = bundleVFSModules({ assetDir: "bvm" });
+    plugin.configResolved({ publicDir });
+    expect(fs.existsSync(path.join(destDir, "removed-shim.js"))).toBe(false);
+    expect(fs.existsSync(path.join(destDir, "runtime.js"))).toBe(true);
+  });
+
+  test("buildStart is a no-op when configResolved already copied", () => {
+    const publicDir = path.join(tmp, "public");
+    fs.mkdirSync(publicDir, { recursive: true });
+    const plugin = bundleVFSModules({ assetDir: "bvm" });
+    plugin.configResolved({ publicDir });
+    const mtime1 = fs.statSync(
+      path.join(publicDir, "bvm", "runtime.js"),
+    ).mtimeMs;
+    const start = Date.now();
+    while (Date.now() - start < 10) {}
+    plugin.buildStart();
+    const mtime2 = fs.statSync(
+      path.join(publicDir, "bvm", "runtime.js"),
+    ).mtimeMs;
+    expect(mtime2).toBe(mtime1);
+  });
+
+  test("buildStart is safe to call at any point (safety net)", () => {
+    const publicDir = path.join(tmp, "public");
+    fs.mkdirSync(publicDir, { recursive: true });
+    const plugin = bundleVFSModules({ assetDir: "bvm" });
+    // buildStart before any config resolution: nothing to copy to, no throw.
+    expect(() => plugin.buildStart()).not.toThrow();
+    // After configResolved, buildStart must not re-copy (idempotent).
+    plugin.configResolved({ publicDir });
+    const mtime1 = fs.statSync(
+      path.join(publicDir, "bvm", "runtime.js"),
+    ).mtimeMs;
+    const start = Date.now();
+    while (Date.now() - start < 10) {}
+    expect(() => plugin.buildStart()).not.toThrow();
+    const mtime2 = fs.statSync(
+      path.join(publicDir, "bvm", "runtime.js"),
+    ).mtimeMs;
+    expect(mtime2).toBe(mtime1);
+  });
+
+  test("includePlayground copies ui.html through the plugin", () => {
+    const publicDir = path.join(tmp, "public");
+    fs.mkdirSync(publicDir, { recursive: true });
+    const plugin = bundleVFSModules({
+      assetDir: "bvm",
+      includePlayground: true,
+    });
+    plugin.configResolved({ publicDir });
+    expect(fs.existsSync(path.join(publicDir, "bvm", "ui.html"))).toBe(true);
+  });
+
   test("interception: true throws (reserved for future plugin)", () => {
     expect(() => bundleVFSModules({ interception: true })).toThrow(
       /opt-in browser-interception plugin/,
@@ -112,6 +185,99 @@ describe("vite plugin", () => {
 });
 
 describe("next.js wrapper", () => {
+  let origCwd;
+  beforeEach(() => {
+    // NOTE: chdir BEFORE calling withBundleVFSModules — the wrapper copies
+    // eagerly at config-evaluation time into <cwd>/public.
+    origCwd = process.cwd();
+    process.chdir(tmp);
+    fs.mkdirSync(path.join(tmp, "public"), { recursive: true });
+  });
+  afterEach(() => {
+    process.chdir(origCwd);
+  });
+
+  test("copies assets eagerly at config-evaluation time (no webpack call)", () => {
+    withBundleVFSModules({}, { assetDir: "bvm-eager" });
+    expect(
+      fs.existsSync(path.join(tmp, "public", "bvm-eager", "runtime.js")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(tmp, "public", "bvm-eager", "dist", "vfs.js")),
+    ).toBe(true);
+  });
+
+  test("exposes asset base/dir via symbols (no string keys for Next to warn about)", () => {
+    const wrapped = withBundleVFSModules(
+      {},
+      { assetDir: "bvm-meta", publicPath: "/bvm/" },
+    );
+    // Trailing slash normalized
+    expect(wrapped[BVM_ASSET_BASE]).toBe("/bvm");
+    expect(wrapped[BVM_ASSET_DIR]).toBe("bvm-meta");
+    // No string keys leak: Next 16's strict zod validation warns on every
+    // unrecognized string key, so the introspection must be symbol-only.
+    expect(Object.keys(wrapped).filter((k) => k.startsWith("__bvm"))).toEqual(
+      [],
+    );
+    // Symbols survive a Reflect.ownKeys clone the way Next 16 clones configs
+    const cloned = {};
+    for (const key of Reflect.ownKeys(wrapped)) cloned[key] = wrapped[key];
+    expect(cloned[BVM_ASSET_BASE]).toBe("/bvm");
+    expect(cloned[BVM_ASSET_DIR]).toBe("bvm-meta");
+  });
+
+  test("invalid publicPath throws eagerly at config-evaluation time", () => {
+    expect(() => withBundleVFSModules({}, { publicPath: "bvm" })).toThrow();
+  });
+
+  describe("Next 16+ Turbopack handling", () => {
+    function fakeNextVersion(version) {
+      const pkgDir = path.join(tmp, "node_modules", "next");
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pkgDir, "package.json"),
+        JSON.stringify({ name: "next", version }),
+      );
+    }
+
+    test("detectNextMajor returns null when next is not installed", () => {
+      expect(detectNextMajor()).toBeNull();
+    });
+
+    test("detectNextMajor reads the installed major version", () => {
+      fakeNextVersion("16.4.0");
+      expect(detectNextMajor()).toBe(16);
+    });
+
+    test("webpack hook attached when Next version undetectable (old behavior)", () => {
+      const wrapped = withBundleVFSModules({});
+      expect(typeof wrapped.webpack).toBe("function");
+    });
+
+    test("webpack hook attached on Next 15 (webpack default)", () => {
+      fakeNextVersion("15.0.0");
+      const wrapped = withBundleVFSModules({});
+      expect(typeof wrapped.webpack).toBe("function");
+      const out = wrapped.webpack({ entry: "x" });
+      expect(out.entry).toBe("x");
+    });
+
+    test("webpack hook omitted on Next 16 (Turbopack default); eager copy still runs", () => {
+      fakeNextVersion("16.4.0");
+      const wrapped = withBundleVFSModules({}, { assetDir: "bvm-tp" });
+      expect("webpack" in wrapped).toBe(false);
+      expect(wrapped.webpack).toBeUndefined();
+      // Eager copy is the primary trigger under Turbopack — no hook needed
+      expect(
+        fs.existsSync(path.join(tmp, "public", "bvm-tp", "runtime.js")),
+      ).toBe(true);
+      expect(
+        fs.existsSync(path.join(tmp, "public", "bvm-tp", "dist", "vfs.js")),
+      ).toBe(true);
+    });
+  });
+
   test("wraps config and preserves user webpack", () => {
     const userWebpack = (c) => ({ ...c, userCalled: true });
     const wrapped = withBundleVFSModules(
@@ -120,57 +286,35 @@ describe("next.js wrapper", () => {
     );
     expect(wrapped.reactStrictMode).toBe(true);
     expect(typeof wrapped.webpack).toBe("function");
-    // webpack hook triggers the copy (cwd/public)
-    const origCwd = process.cwd();
-    process.chdir(tmp);
-    fs.mkdirSync(path.join(tmp, "public"), { recursive: true });
-    try {
-      const out = wrapped.webpack({});
-      expect(out.userCalled).toBe(true);
-      expect(
-        fs.existsSync(path.join(tmp, "public", "bvm-test", "runtime.js")),
-      ).toBe(true);
-    } finally {
-      process.chdir(origCwd);
-    }
+    // webpack hook still triggers the copy (belt-and-braces) and chains
+    const out = wrapped.webpack({});
+    expect(out.userCalled).toBe(true);
+    expect(
+      fs.existsSync(path.join(tmp, "public", "bvm-test", "runtime.js")),
+    ).toBe(true);
   });
 
   test("works without a user webpack function", () => {
     const wrapped = withBundleVFSModules({}, { assetDir: "bvm2" });
-    const origCwd = process.cwd();
-    process.chdir(tmp);
-    fs.mkdirSync(path.join(tmp, "public"), { recursive: true });
-    try {
-      const out = wrapped.webpack({ entry: "x" });
-      expect(out.entry).toBe("x");
-      expect(
-        fs.existsSync(path.join(tmp, "public", "bvm2", "runtime.js")),
-      ).toBe(true);
-    } finally {
-      process.chdir(origCwd);
-    }
+    const out = wrapped.webpack({ entry: "x" });
+    expect(out.entry).toBe("x");
+    expect(
+      fs.existsSync(path.join(tmp, "public", "bvm2", "runtime.js")),
+    ).toBe(true);
   });
 
-  test("second webpack call does not re-copy (idempotent flag)", () => {
+  test("webpack hook does not re-copy after eager copy (idempotent flag)", () => {
     const wrapped = withBundleVFSModules({}, { assetDir: "bvm3" });
-    const origCwd = process.cwd();
-    process.chdir(tmp);
-    fs.mkdirSync(path.join(tmp, "public"), { recursive: true });
-    try {
-      wrapped.webpack({});
-      const mtime1 = fs.statSync(
-        path.join(tmp, "public", "bvm3", "runtime.js"),
-      ).mtimeMs;
-      // Small delay to detect a re-copy via mtime change
-      const start = Date.now();
-      while (Date.now() - start < 10) {}
-      wrapped.webpack({});
-      const mtime2 = fs.statSync(
-        path.join(tmp, "public", "bvm3", "runtime.js"),
-      ).mtimeMs;
-      expect(mtime2).toBe(mtime1);
-    } finally {
-      process.chdir(origCwd);
-    }
+    const mtime1 = fs.statSync(
+      path.join(tmp, "public", "bvm3", "runtime.js"),
+    ).mtimeMs;
+    // Small delay to detect a re-copy via mtime change
+    const start = Date.now();
+    while (Date.now() - start < 10) {}
+    wrapped.webpack({});
+    const mtime2 = fs.statSync(
+      path.join(tmp, "public", "bvm3", "runtime.js"),
+    ).mtimeMs;
+    expect(mtime2).toBe(mtime1);
   });
 });

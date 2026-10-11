@@ -179,10 +179,15 @@ bytes" and "run wasm bytes on my VFS".
   inline literal returned by `_getState` in `runtime.js`;
   `src/sandbox/*.js` + `src/build-sandbox.mjs` pipeline is built but
   unwired (migrating is a separate project).
-- **Framework integrations (must):** Vite/Next copy-based setup + plugins
+- ~~**Framework integrations (must):** Vite/Next copy-based setup + plugins
   so host apps serve runtime assets and previews (Nodepod's
   `src/integrations/vite.ts`, `next.ts` pattern) — zero manual wiring for
-  host developers.
+  host developers.~~ — **done 2026-10-11**: `src/integrations/vite.js`
+  (buildStart hook, dev-mode watcher, stale-file wipe, `assetBase`) and
+  `src/integrations/next.js` (eager config-eval copy, Next 16 Turbopack-safe
+  hook omission, Symbol-based introspection), shared `assets.js` helper,
+  `docs/INTEGRATIONS.md`; 27/27 unit green + real E2E (Vite build/preview/dev
+  and Next 16 build/dev/start serve byte-identical assets over HTTP).
 - **Demo-only fake shell:** a fake shell for developers learning the
   library — npm install-time behavior (reads each package's `bin` field,
   routes through the runtime's `node`) plus sample code. Clearly marked
