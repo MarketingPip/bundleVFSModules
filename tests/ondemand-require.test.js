@@ -542,20 +542,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // docs/preview-routing: verified + documented preview routing and
-    // forwardPreviewErrors (roadmap §5). roadmap.md records the
-    // completion. tests/ is excluded above.
-    // feat/worker-spawn: worker-backed spawn, the honest process story
-    // (roadmap §5 "must"). Implementation in src/plugins/worker-spawn.js,
-    // host usage in docs/WORKER_SPAWN.md, roadmap.md records completion.
-    expect(files.sort()).toEqual(
-      [
-        "src/plugins/worker-spawn.js",
-        "docs/WORKER_SPAWN.md",
-        "docs/LIFECYCLE.md",
-        "roadmap.md",
-      ].sort(),
-    );
+    // feat/dns-doh: DNS-over-HTTPS verification + documentation (roadmap §5
+    // "must"). The DoH implementation itself shipped earlier (PR #186 + #108
+    // + #109); this branch adds docs/DNS.md and checks the roadmap item off
+    // with verification evidence. tests/ is excluded above.
+    expect(files.sort()).toEqual(["docs/DNS.md", "roadmap.md"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {

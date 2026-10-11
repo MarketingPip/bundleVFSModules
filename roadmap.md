@@ -324,9 +324,24 @@ and the process story. Technique references in
   Honest scope documented there: JS only (else loud 127), no syscalls /
   sockets / Node builtins in the worker, no module cache (bridge-visible),
   bare promise chains untracked, synthetic pids, host->worker bridge only.
-- **DNS-over-HTTPS (must):** real DNS against
-  `https://cloudflare-dns.com/dns-query` for `dns.js` — no inventing
-  answers (Nodepod's `dns.ts`).
+- **[x] DNS-over-HTTPS (done 2026-10-11, verified end-to-end):** real DNS
+  against `https://cloudflare-dns.com/dns-query` for `dns.js` — no inventing
+  answers (Nodepod's `dns.ts` idea). RFC 8484 wire format over `fetch()`
+  with the `dns-packet` codec; Cloudflare→Google failover; full `node:dns`
+  surface (`lookup`, `resolve`/`resolve4`/`resolve6`/typed shorthands,
+  `reverse`, `lookupService`, `Resolver`, `dns/promises`); NXDOMAIN→
+  `ENOTFOUND`, SERVFAIL→`ESERVFAIL`, timeouts→`ETIMEOUT`, network down→
+  `ECONNREFUSED`; DNSSEC validated by delegation (fail-closed SERVFAIL on
+  bogus, verified live). Verified: 83/83 `tests/dns.test.js` (stub-server
+  parser lane + real Cloudflare queries: `resolve4`/`resolve6`/`resolve`
+  A/AAAA, `lookup`, `reverse("8.8.8.8")`→`dns.google`, NXDOMAIN→`ENOTFOUND`)
+  + differential-vs-real-Node check 2026-10-11 (shim returns authoritative
+  Cloudflare answers where the sandbox's local resolver forges
+  `198.18.209.x`) + headed-Firefox proof (`tests/dns-doh-e2e.py`).
+  Host usage documented in `docs/DNS.md`. Honest gaps: `lookup()` has no
+  getaddrinfo (no /etc/hosts/mDNS — literal IPs + `localhost` answered
+  locally, rest via DoH); plain `IP[:port]` in `setServers()` cannot do raw
+  UDP/TCP in the browser (recorded verbatim, unusable as transports).
 - **Fetch platform-layer audit (must):** check whether our iframe realm
   needs the browser `fetch`/`Headers`/`Response` patched to Node 20 undici
   behavior (set-cookie handling, Headers parity — Nodepod's
