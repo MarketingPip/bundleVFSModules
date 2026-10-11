@@ -3,14 +3,23 @@
 
 Serves the worktree at /local-repo (runtime.js with ONLY _builtinBaseUrl
 rewritten to the local worktree dist/), loads tests/chrome137-interop-e2e.html
-in headed Firefox under Xvfb, waits for the E2E verdict via document.title
-AND POST /report (crash-proof), exits 0 on E2E-PASS, 1 otherwise.
+in a browser, waits for the E2E verdict via document.title AND POST /report
+(crash-proof), exits 0 on E2E-PASS, 1 otherwise.
+
+Browser selection via BROWSER env var:
+  firefox   (default) — headed Firefox under Xvfb
+                      (xvfb-run -a <venv>/bin/python tests/chrome137-interop-e2e.py [port])
+  chrome137 — pinned Chrome 137 headless (Chrome for Testing 137.0.7151.119
+                      + matching chromedriver in ~/workspace/local/chrome-137/)
+                      — no Xvfb needed. Chrome 137 CAN reach loopback here
+                      (verified 2026-10-11); only Chromium 152 has the
+                      ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS loopback block.
 
 Proves on the REAL CodeSandbox host protocol: iframe boots, postMessage
 round-trip, sandbox.invoke('__stdin__') + custom exposed methods, and the
 virtual cookie jar through the HTTP server wrapper.
 
-Usage: xvfb-run -a /home/hatch/workspace/venvs/ffauto/bin/python tests/chrome137-interop-e2e.py [port]
+Usage: BROWSER=chrome137 /home/hatch/workspace/venvs/ffauto/bin/python tests/chrome137-interop-e2e.py [port]
 """
 import os
 import subprocess
@@ -32,6 +41,9 @@ MIME = {
 
 FF = "/home/hatch/workspace/local/firefox/firefox/firefox"
 GD = "/home/hatch/workspace/local/bin/geckodriver"
+CHROME137 = "/home/hatch/workspace/local/chrome-137/chrome-linux64/chrome"
+CD137 = "/home/hatch/workspace/local/chrome-137/chromedriver-linux64/chromedriver"
+BROWSER = os.environ.get("BROWSER", "firefox").lower()
 VENV_PY = "/home/hatch/workspace/venvs/ffauto/bin/python"
 VERDICT_FILE = "/tmp/chrome137-interop-e2e-verdict.jsonl"
 
@@ -102,16 +114,44 @@ def main():
     url = f"http://127.0.0.1:{PORT}/local-repo/tests/chrome137-interop-e2e.html"
     print("serving worktree ->", url, flush=True)
 
-    driver_script = (
-        "import sys, time, json\n"
-        "from selenium import webdriver\n"
-        "from selenium.webdriver.firefox.options import Options\n"
-        "from selenium.webdriver.firefox.service import Service\n"
-        "opts = Options()\n"
-        "opts.binary_location = %r\n"
-        "svc = Service(executable_path=%r)\n"
-        "d = webdriver.Firefox(options=opts, service=svc)\n"
-        "d.set_page_load_timeout(120)\n"
+    if BROWSER == "chrome137":
+        driver_script = (
+            "import sys, time, json\n"
+            "from selenium import webdriver\n"
+            "from selenium.webdriver.chrome.options import Options\n"
+            "from selenium.webdriver.chrome.service import Service\n"
+            "opts = Options()\n"
+            "opts.binary_location = %r\n"
+            "# External fetches (runtime.js's esm.sh imports) must go through the\n"
+            "# auth-injecting relay: direct Chromium TLS gets ERR_CONNECTION_RESET\n"
+            "# from the sandbox egress. Loopback stays direct via no_proxy /\n"
+            "# the bypass list. (Matches the pydoll quirk: Chrome launches here\n"
+            "# REQUIRE --proxy-server=127.0.0.1:18080.)\n"
+            "for _a in ('--headless=new', '--no-sandbox', '--disable-gpu',\n"
+            "           '--disable-dev-shm-usage', '--ignore-certificate-errors',\n"
+            "           '--proxy-server=http://127.0.0.1:18080',\n"
+            "           '--proxy-bypass-list=127.0.0.1,localhost'):\n"
+            "    opts.add_argument(_a)\n"
+            "svc = Service(executable_path=%r)\n"
+            "d = webdriver.Chrome(options=opts, service=svc)\n"
+            "d.set_page_load_timeout(120)\n"
+        ) % (CHROME137, CD137)
+    elif BROWSER != "firefox":
+        print(f"unknown BROWSER={BROWSER!r} (want firefox|chrome137)", file=sys.stderr)
+        sys.exit(2)
+    else:
+        driver_script = (
+            "import sys, time, json\n"
+            "from selenium import webdriver\n"
+            "from selenium.webdriver.firefox.options import Options\n"
+            "from selenium.webdriver.firefox.service import Service\n"
+            "opts = Options()\n"
+            "opts.binary_location = %r\n"
+            "svc = Service(executable_path=%r)\n"
+            "d = webdriver.Firefox(options=opts, service=svc)\n"
+            "d.set_page_load_timeout(120)\n"
+        ) % (FF, GD)
+    driver_script += (
         "d.get(%r)\n"
         "title = ''\n"
         "deadline = time.time() + 240\n"
@@ -131,7 +171,7 @@ def main():
         "    print('no #out: %%s' %% e, flush=True)\n"
         "d.quit()\n"
         "sys.exit(0 if title.startswith('E2E-PASS') else 1)\n"
-    ) % (FF, GD, url)
+    ) % (url,)
 
     proc = subprocess.run(
         [VENV_PY, "-c", driver_script], capture_output=True, text=True, timeout=300
