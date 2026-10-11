@@ -81,6 +81,14 @@ describe("vite plugin", () => {
     expect(plugin.name).toBe("vite-plugin-bundle-vfs-modules");
     expect(typeof plugin.configResolved).toBe("function");
     expect(typeof plugin.configureServer).toBe("function");
+    expect(typeof plugin.buildStart).toBe("function");
+  });
+
+  test("exposes assetBase for host URL construction", () => {
+    expect(bundleVFSModules().assetBase).toBe("/bvm");
+    expect(bundleVFSModules({ publicPath: "/custom/" }).assetBase).toBe(
+      "/custom",
+    );
   });
 
   test("configResolved copies assets to publicDir", () => {
@@ -102,6 +110,66 @@ describe("vite plugin", () => {
     expect(
       fs.existsSync(path.join(publicDir, "custom-assets", "runtime.js")),
     ).toBe(true);
+  });
+
+  test("configResolved removes stale files from a previous copy", () => {
+    const publicDir = path.join(tmp, "public");
+    const destDir = path.join(publicDir, "bvm");
+    fs.mkdirSync(destDir, { recursive: true });
+    // Simulate a stale file left by an older copy of the library.
+    fs.writeFileSync(path.join(destDir, "removed-shim.js"), "stale");
+    const plugin = bundleVFSModules({ assetDir: "bvm" });
+    plugin.configResolved({ publicDir });
+    expect(fs.existsSync(path.join(destDir, "removed-shim.js"))).toBe(false);
+    expect(fs.existsSync(path.join(destDir, "runtime.js"))).toBe(true);
+  });
+
+  test("buildStart is a no-op when configResolved already copied", () => {
+    const publicDir = path.join(tmp, "public");
+    fs.mkdirSync(publicDir, { recursive: true });
+    const plugin = bundleVFSModules({ assetDir: "bvm" });
+    plugin.configResolved({ publicDir });
+    const mtime1 = fs.statSync(
+      path.join(publicDir, "bvm", "runtime.js"),
+    ).mtimeMs;
+    const start = Date.now();
+    while (Date.now() - start < 10) {}
+    plugin.buildStart();
+    const mtime2 = fs.statSync(
+      path.join(publicDir, "bvm", "runtime.js"),
+    ).mtimeMs;
+    expect(mtime2).toBe(mtime1);
+  });
+
+  test("buildStart is safe to call at any point (safety net)", () => {
+    const publicDir = path.join(tmp, "public");
+    fs.mkdirSync(publicDir, { recursive: true });
+    const plugin = bundleVFSModules({ assetDir: "bvm" });
+    // buildStart before any config resolution: nothing to copy to, no throw.
+    expect(() => plugin.buildStart()).not.toThrow();
+    // After configResolved, buildStart must not re-copy (idempotent).
+    plugin.configResolved({ publicDir });
+    const mtime1 = fs.statSync(
+      path.join(publicDir, "bvm", "runtime.js"),
+    ).mtimeMs;
+    const start = Date.now();
+    while (Date.now() - start < 10) {}
+    expect(() => plugin.buildStart()).not.toThrow();
+    const mtime2 = fs.statSync(
+      path.join(publicDir, "bvm", "runtime.js"),
+    ).mtimeMs;
+    expect(mtime2).toBe(mtime1);
+  });
+
+  test("includePlayground copies ui.html through the plugin", () => {
+    const publicDir = path.join(tmp, "public");
+    fs.mkdirSync(publicDir, { recursive: true });
+    const plugin = bundleVFSModules({
+      assetDir: "bvm",
+      includePlayground: true,
+    });
+    plugin.configResolved({ publicDir });
+    expect(fs.existsSync(path.join(publicDir, "bvm", "ui.html"))).toBe(true);
   });
 
   test("interception: true throws (reserved for future plugin)", () => {
