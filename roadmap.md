@@ -253,9 +253,15 @@ The public surface host developers actually touch — lifecycle, previews,
 and the process story. Technique references in
 `docs/COMPETITOR_TECHNIQUES.md`.
 
-- **Lifecycle API docs (must):** explicit boot/teardown promises, exit
-  codes, `server-ready` events, preview URL scheme — the product surface we
-  don't have yet (WebContainers' public docs are the template).
+- **[x] Lifecycle API docs (done 2026-10-11, `docs/LIFECYCLE.md`):**
+  explicit boot/execute/teardown semantics, exit codes (guest `process.exit`
+  only), `execution:server` open/closed (no `server-ready` event yet —
+  documented as a gap), `/__virtual__/{port}/` preview URL scheme via
+  `registerPreviewSW()` + `trackSandbox()` (documented as host-constructed;
+  no `getPreviewUrl()` method — gap), thrown-vs-emitted error contract,
+  machine-readable API inventory kept green by
+  `tests/lifecycle-docs.test.js`. Also documented as gaps: no
+  `destroy()`/`close()` teardown promise.
 - **Preview routing (must):** Service-Worker `/__virtual__/{port}/` route so
   guest servers are real navigable URLs. Patching `fetch` only covers
   programmatic requests from JS — the SW route covers address-bar
