@@ -542,11 +542,25 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // feat/dns-doh: DNS-over-HTTPS verification + documentation (roadmap §5
-    // "must"). The DoH implementation itself shipped earlier (PR #186 + #108
-    // + #109); this branch adds docs/DNS.md and checks the roadmap item off
-    // with verification evidence. tests/ is excluded above.
-    expect(files.sort()).toEqual(["docs/DNS.md", "roadmap.md"].sort());
+    // feat/fetch-audit: fetch platform-layer audit (roadmap §5 "must").
+    // 46-observation differential (Node undici / browser-native / genuine
+    // CodeSandbox lanes) + wrapper-layer patches: src/sandbox/70-fetch.js
+    // (Request→(url,init) normalization, AbortSignal composition + abort
+    // race, redirected/type/url preservation, .finally() noise fix) and
+    // src/runtime/code-sandbox.js (parent reports post-redirect url,
+    // redirected, type), with rebuilt src/sandbox-template.js + runtime.js,
+    // findings in docs/FETCH_PLATFORM.md, roadmap checkoff. tests/ is
+    // excluded above.
+    expect(files.sort()).toEqual(
+      [
+        "docs/FETCH_PLATFORM.md",
+        "roadmap.md",
+        "runtime.js",
+        "src/runtime/code-sandbox.js",
+        "src/sandbox-template.js",
+        "src/sandbox/70-fetch.js",
+      ].sort(),
+    );
   });
 
   test("no new function declarations added by the branch diff", () => {

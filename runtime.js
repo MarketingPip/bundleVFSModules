@@ -20,16 +20,26 @@ import * as walk from "https://esm.sh/acorn-walk";
 import MagicString from "https://esm.sh/magic-string";
 import { walk as walker } from "https://esm.sh/estree-walker";
 import { v4 as uuid } from "https://esm.sh/uuid";
-import { TraceMap, originalPositionFor } from "https://esm.sh/@jridgewell/trace-mapping";
+import {
+  TraceMap,
+  originalPositionFor,
+} from "https://esm.sh/@jridgewell/trace-mapping";
 import remapping from "https://esm.sh/@ampproject/remapping";
-import { applyTransformPlugins, applyResolvePlugins, applyLoadPlugins, dispatchLoader, registerPlugin, validatePlugin, getPlugins } from "./src/plugins.js";
+import {
+  applyTransformPlugins,
+  applyResolvePlugins,
+  applyLoadPlugins,
+  dispatchLoader,
+  registerPlugin,
+  validatePlugin,
+  getPlugins,
+} from "./src/plugins.js";
 import { jsonPlugin } from "./src/plugins/json.js";
 import { typescriptPlugin } from "./src/plugins/typescript.js";
 import { lookupNativeInterception } from "./src/plugins/vite-browser.js";
 import { bundle } from "./src/quick_bundle.js";
 import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";
 import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";
-
 
 // ── src/runtime/bootstrap.js ─────────────────────────────────────────────
 // Vendor browser/WASM builds for native-only packages (real Vite 7:
@@ -38,13 +48,12 @@ import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";
 // exactly like CJS require('rollup') (src/module.js). Ungated lookup: the
 // handler only runs when serving the browser runtime's VFS.
 
-
 /**
  * Sync gate for Vite browser interception (Jared 2026-10-04): the
  * native→browser/WASM substitution table only applies when the host has
  * opted in via registerPlugin(viteBrowserPlugin).
  */
- function isViteBrowserInterceptionActive() {
+function isViteBrowserInterceptionActive() {
   const plugins = getPlugins();
   for (const p of plugins) {
     if (p && p.name === "vite-browser") return true;
@@ -58,9 +67,6 @@ import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";
 // run at the TOP of _build_file, before detectModuleSystem, so TS->JS
 // output flows through the existing CJS/ESM detection unchanged.
 
-
-
-
 registerPlugin(typescriptPlugin);
 // The JSON plugin is built-in (builtIn:true → lowest priority): it proves
 // the Part B hooks cover what used to be hardcoded, and any user plugin
@@ -73,8 +79,6 @@ registerPlugin(jsonPlugin);
 // single import from this module. lookupNativeInterception is re-exported
 // for the _dynamic_import handler (runtime.js:2616, 5583).
 
-
-
 // ── src/runtime/builtins.js ─────────────────────────────────────────────
 /**
  * Inlined IIFE bundle of src/cookieJar.js (RFC 6265 virtual cookie jar).
@@ -84,7 +88,7 @@ registerPlugin(jsonPlugin);
  *   esbuild src/sandbox/cookie-entry.js --bundle --format=iife --minify
  *     --platform=browser, then JSON.stringify the output.
  */
- const COOKIE_JAR_IIFE =
+const COOKIE_JAR_IIFE =
   'globalThis.__cookieJarLib=(()=>{var N=Object.defineProperty;var U=Object.getOwnPropertyDescriptor;var G=Object.getOwnPropertyNames;var R=Object.prototype.hasOwnProperty;var J=(e,t)=>{for(var s in t)N(e,s,{get:t[s],enumerable:!0})},Q=(e,t,s,a)=>{if(t&&typeof t=="object"||typeof t=="function")for(let i of G(t))!R.call(e,i)&&i!==s&&N(e,i,{get:()=>t[i],enumerable:!(a=U(t,i))||a.enumerable});return e};var X=e=>Q(N({},"__esModule",{value:!0}),e);var ie={};J(ie,{VirtualCookieJar:()=>M,canonicalHost:()=>O,cookieJarKey:()=>w,cookiePathMatches:()=>F,defaultPath:()=>z,domainMatches:()=>E,mergeCookieHeaders:()=>ne,parseSetCookie:()=>K});var k={decodeValues:!0,map:!1,silent:!1,split:"auto"};function _(e){return typeof e!="string"||e in{}}function C(){return Object.create(null)}function V(e){return typeof e=="string"&&!!e.trim()}function $(e,t){var s=e.split(";").filter(V),a=s.shift();if(!a)return null;var i=Y(a),r=i.name,n=i.value;if(t=t?Object.assign({},k,t):k,_(r))return null;try{n=t.decodeValues?decodeURIComponent(n):n}catch(c){console.error("set-cookie-parser: failed to decode cookie value. Set options.decodeValues=false to disable decoding.",c)}var o=C();return o.name=r,o.value=n,s.forEach(function(c){var m=c.split("="),f=m.shift().trim().toLowerCase();if(!_(f)){var d=m.join("=").trim();if(f==="expires")o.expires=new Date(d);else if(f==="max-age"){var p=parseInt(d,10);Number.isNaN(p)||(o.maxAge=p)}else f==="secure"?o.secure=!0:f==="httponly"?o.httpOnly=!0:f==="samesite"?o.sameSite=d:f==="partitioned"?o.partitioned=!0:f&&(o[f]=d)}}),o}function Y(e){var t="",s="",a=e.split("=");return a.length>1?(t=a.shift(),s=a.join("=")):s=e,{name:t,value:s}}function y(e,t){if(t=t?Object.assign({},k,t):k,!e)return t.map?C():[];if(e.headers)if(typeof e.headers.getSetCookie=="function")e=e.headers.getSetCookie();else if(e.headers["set-cookie"])e=e.headers["set-cookie"];else{var s=e.headers[Object.keys(e.headers).find(function(n){return n.toLowerCase()==="set-cookie"})];!s&&e.headers.cookie&&!t.silent&&console.warn("Warning: set-cookie-parser appears to have been called on a request object. It is designed to parse Set-Cookie headers from responses, not Cookie headers from requests. Set the option {silent: true} to suppress this warning."),e=s}var a=t.split,i=Array.isArray(e);if(a==="auto"&&(a=!i),i||(e=[e]),e=e.filter(V),a&&(e=e.map(A).flat()),t.map){var r=C();return e.reduce(function(n,o){var c=$(o,t);return c&&!_(c.name)&&(n[c.name]=c),n},r)}else return e.map(function(n){return $(n,t)}).filter(Boolean)}function A(e){if(Array.isArray(e))return e;if(typeof e!="string")return[];var t=[],s=0,a,i,r,n,o;function c(){for(;s<e.length&&/\\s/.test(e.charAt(s));)s+=1;return s<e.length}function m(){return i=e.charAt(s),i!=="="&&i!==";"&&i!==","}for(;s<e.length;){for(a=s,o=!1;c();)if(i=e.charAt(s),i===","){for(r=s,s+=1,c(),n=s;s<e.length&&m();)s+=1;s<e.length&&e.charAt(s)==="="?(o=!0,s=n,t.push(e.substring(a,r)),a=s):s=r+1}else s+=1;(!o||s>=e.length)&&t.push(e.substring(a,e.length))}return t}y.parseSetCookie=y;y.parse=y;y.parseString=$;y.splitCookiesString=A;var Z={maxNameValueBytes:4096,maxAttrValueBytes:1024,maxPerDomain:180,maxTotal:3e3,maxLifetimeMs:400*24*60*60*1e3,defaultSameSite:"lax",treatLocalhostAsSecure:!0,defaultHost:"localhost",isPublicSuffix:e=>!e.includes(".")},ee=new TextEncoder,j=e=>ee.encode(e).length;function w(e,t){return`\${e}\\0\${t}`}var te=e=>`\${e.domain}\\0\${e.path}\\0\${e.name}`;function O(e){return e.trim().toLowerCase().replace(/^\\[|\\]$/g,"").replace(/\\.$/,"")}var se=e=>/^\\d{1,3}(\\.\\d{1,3}){3}$/.test(e)||e.includes(":"),re=e=>e==="localhost"||e.endsWith(".localhost")||e==="::1"||/^127\\./.test(e);function E(e,t){return e===t?!0:!se(e)&&e.endsWith("."+t)}function z(e){let t=e.split("?")[0]||"/";if(!t.startsWith("/"))return"/";let s=t.lastIndexOf("/");return s<=0?"/":t.slice(0,s)}function F(e,t){return t===e||e.indexOf(t)===0&&(t.charAt(t.length-1)==="/"||e.charAt(t.length)==="/")}var D=(e,t)=>e.expires!==null&&e.expires<=t;function ae(e,t,s,a){return e==="none"||t?!0:e==="lax"?s&&a:!1}function K(e,t,s,a,i=Date.now()){let r=g=>({ok:!1,reason:g}),n=O(t.host),o=String(e).split(";"),c=o.shift()??"",m=c.indexOf("=");if(m<0)return r("missing \'=\' in name-value pair");let f=c.slice(0,m).trim(),d=c.slice(m+1).trim();if(!f)return r("empty cookie name");if(j(f)+j(d)>a.maxNameValueBytes)return r(`name+value exceeds \${a.maxNameValueBytes} bytes`);let p=null,u=null,l=!1,h=!1,W=null,H=null,I=null;for(let g of o){let b=g.indexOf("="),P=(b<0?g:g.slice(0,b)).trim().toLowerCase(),v=b<0?"":g.slice(b+1).trim();if(!(j(v)>a.maxAttrValueBytes))switch(P){case"path":p=v.startsWith("/")?v:null;break;case"domain":u=v.replace(/^\\./,"").toLowerCase()||null;break;case"secure":l=!0;break;case"httponly":h=!0;break;case"samesite":{let x=v.toLowerCase();W=x==="strict"||x==="lax"||x==="none"?x:null;break}case"max-age":if(/^-?\\d+$/.test(v)){let x=parseInt(v,10);H=x<=0?0:i+Math.min(x*1e3,a.maxLifetimeMs)}break;case"expires":{let x=Date.parse(v);Number.isNaN(x)||(I=Math.min(x,i+a.maxLifetimeMs));break}}}let T=n,L=!0;if(u)if(a.isPublicSuffix(u)){if(u!==n)return r(`Domain=\${u} is a public suffix`)}else if(E(n,u))T=u,L=!1;else return r(`host "\${n}" does not domain-match Domain=\${u}`);let q=p??z(t.path??"/");if(l&&!s)return r("Secure cookie set from an insecure origin");let S=W??a.defaultSameSite;if(S==="none"&&!l)return r("SameSite=None requires Secure");if(S!=="none"&&t.sameSite===!1&&!t.topLevelNavigation)return r(`SameSite=\${S} cookie set from a cross-site response`);let B=f.toLowerCase();return B.startsWith("__secure-")&&!l?r("__Secure- prefix requires Secure"):B.startsWith("__host-")&&(!l||!L||q!=="/")?r("__Host- prefix requires Secure, no Domain, and Path=/"):{ok:!0,cookie:{name:f,value:d,domain:T,hostOnly:L,path:q,secure:l,httpOnly:h,sameSite:S,expires:H??I,created:i,lastAccessed:i}}}function ne(e,t){if(!t)return e||"";if(!e)return t;let s=new Set,a=[];for(let i of t.split(";")){let r=i.trim();if(!r)continue;let n=r.indexOf("=");s.add((n<0?r:r.slice(0,n)).trim()),a.push(r)}for(let i of e.split(";")){let r=i.trim();if(!r)continue;let n=r.indexOf("=");s.has((n<0?r:r.slice(0,n)).trim())||a.push(r)}return a.join("; ")}var M=class{_jars=new Map;cfg;constructor(t={}){this.cfg={...Z,...t}}isSecureOrigin(t){return!!t.secure||this.cfg.treatLocalhostAsSecure&&re(O(t.host))}store(t,s,a,i={host:this.cfg.defaultHost}){let r=[];if(a==null)return r;let n=Array.isArray(a)?a.flatMap(d=>A(d)):A(a),o=w(t,s),c=this._jars.get(o);c||(c=new Map,this._jars.set(o,c));let m=Date.now(),f=this.isSecureOrigin(i);for(let d of n){let p=K(d,i,f,this.cfg,m);if(!p.ok){r.push({raw:d,reason:p.reason});continue}let u=p.cookie,l=te(u);if(D(u,m)){c.delete(l);continue}let h=c.get(l);h&&(u.created=h.created),c.set(l,u)}return this.enforceLimits(c,m),c.size===0&&this._jars.delete(o),r}enforceLimits(t,s){for(let[r,n]of t)D(n,s)&&t.delete(r);let a=new Map;for(let r of t){let n=a.get(r[1].domain);n?n.push(r):a.set(r[1].domain,[r])}for(let r of a.values()){let n=r.length-this.cfg.maxPerDomain;if(!(n<=0)){r.sort((o,c)=>o[1].lastAccessed-c[1].lastAccessed);for(let[o]of r.slice(0,n))t.delete(o)}}let i=t.size-this.cfg.maxTotal;if(i>0){let r=[...t].sort((n,o)=>n[1].lastAccessed-o[1].lastAccessed);for(let[n]of r.slice(0,i))t.delete(n)}}cookieHeader(t,s,a){let i=this._jars.get(w(t,s));if(!i||i.size===0)return"";let r=typeof a=="string"?{host:this.cfg.defaultHost,path:a}:a,n=Date.now(),o=O(r.host),c=(r.path??"/").split("?")[0]||"/",m=this.isSecureOrigin(r),f=r.sameSite??!0,d=!!r.topLevelNavigation,p=["GET","HEAD","OPTIONS","TRACE"].includes((r.method??"GET").toUpperCase()),u=[];for(let[l,h]of i){if(D(h,n)){i.delete(l);continue}(h.hostOnly?h.domain!==o:!E(o,h.domain))||F(c,h.path)&&(h.secure&&!m||r.script&&h.httpOnly||ae(h.sameSite,f,d,p)&&u.push(h))}u.sort((l,h)=>h.path.length-l.path.length||l.created-h.created);for(let l of u)l.lastAccessed=n;return u.map(l=>`\${l.name}=\${l.value}`).join("; ")}list(t,s){let a=this._jars.get(w(t,s));return a?[...a.values()].map(i=>({...i})):[]}clearInstance(t){for(let s of[...this._jars.keys()])s.startsWith(t+"\\0")&&this._jars.delete(s)}clearAll(){this._jars.clear()}};return X(ie);})();';
 // NOTE: The full vfs.js bundle (6.8MB) is NOT imported statically.
 // Built-in modules are loaded lazily on-demand via loadBuiltin() below,
@@ -97,11 +101,11 @@ registerPlugin(jsonPlugin);
  * Fetches individual dist files on-demand instead of the full 6.8MB bundle.
  * Results are cached; subsequent loads for the same module return instantly.
  */
- const _builtinCache = new Map();
- const _builtinBaseUrl =
+const _builtinCache = new Map();
+const _builtinBaseUrl =
   "https://cdn.jsdelivr.net/gh/MarketingPip/bundleVFSModules@main/dist/";
 // Maps Node.js specifiers to dist filenames (mirrors dist/manifest.json)
- const _builtinManifest = {
+const _builtinManifest = {
   assert: "assert.js",
   "assert/strict": "assert_strict.js",
   async_hooks: "async_hooks.js",
@@ -157,8 +161,8 @@ registerPlugin(jsonPlugin);
   worker_threads: "worker_threads.js",
   zlib: "zlib.js",
 };
- const _builtinSourceCache = new Map();
- async function fetchBuiltinSource(specifier) {
+const _builtinSourceCache = new Map();
+async function fetchBuiltinSource(specifier) {
   let key = String(specifier).trim();
   if (key.startsWith("node:")) key = key.slice(5);
   let file = _builtinManifest[key];
@@ -208,7 +212,7 @@ registerPlugin(jsonPlugin);
 // via 'normalizeBuiltinSpecifier.toString()', so it must stay
 // self-contained (no closure references) and must not contain backticks or
 // '${' (it is embedded inside outer template literals).
- function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
+function normalizeBuiltinSpecifier(specifier, nodeBuiltins) {
   var modulePath = specifier;
   var bare =
     typeof specifier === "string" && specifier.indexOf("node:") === 0
@@ -244,7 +248,7 @@ registerPlugin(jsonPlugin);
 }
 // --- end node: builtin normalization (gap #6) ---
 
- async function loadBuiltin(specifier) {
+async function loadBuiltin(specifier) {
   // Normalize: strip "node:" prefix
   let key = String(specifier).trim();
   if (key.startsWith("node:")) key = key.slice(5);
@@ -285,7 +289,6 @@ const mod = await import(``); // backticks not working
 How to handle dynamic / variables (simulate evaluation) for ImportResolver
 
 */
-
 
 // ── src/runtime/terminal.js ─────────────────────────────────────────────
 // import {table} from "https://esm.sh/gh/MarketingPip/bundleVFSModules@main/src/cli_table.js"
@@ -384,7 +387,7 @@ export function toNodeKeypress(element, callback) {
 /**
  * Consolidated ANSI stripper and console interceptor
  */
- const stripAnsi = (string) => {
+const stripAnsi = (string) => {
   if (typeof string !== "string") return string;
 
   // Fast path: ANSI codes require ESC (7-bit) or CSI (8-bit) introducer
@@ -401,7 +404,7 @@ export function toNodeKeypress(element, callback) {
   return string.replace(new RegExp(pattern, "g"), "");
 };
 
- function mergeProcess(user = {}, defaults = {}) {
+function mergeProcess(user = {}, defaults = {}) {
   return Object.keys(defaults).reduce((acc, key) => {
     const userVal = user[key];
     const defaultVal = defaults[key];
@@ -427,7 +430,6 @@ export function toNodeKeypress(element, callback) {
     return acc;
   }, {});
 }
-
 
 // ── src/runtime/builtin-modules.js ─────────────────────────────────────────────
 // Dual-lane import (pattern from src/plugins/typescript.js):
@@ -539,15 +541,11 @@ builtinModules.push("RUNTIME:NODE_GLOBALS");
 - Possible handler for dynamic imports (relative path)
 */
 
-
 // ── src/runtime/transpile.js ─────────────────────────────────────────────
 // Dual-lane imports (pattern from src/plugins/typescript.js):
 // - Under Node (tests, direct import): the npm `acorn` / `typescript`
 //   packages declared in package.json.
 // - In the browser host page: the exact esm.sh specifiers runtime.js used.
-
-
-
 
 const tsModule = await (isNodeLane()
   ? import("typescript")
@@ -593,7 +591,6 @@ export const customAcorn = importAssertions
   ? acorn.Parser.extend(importAssertions)
   : acorn.Parser;
 
-
 // ── src/runtime/vfs-serialize.js ─────────────────────────────────────────────
 //import {Buffer} from "https://esm.sh/buffer"
 
@@ -603,7 +600,6 @@ export const customAcorn = importAssertions
 // - In the browser host page: https://esm.sh/memfs — the exact specifier
 //   runtime.js used.
 
-
 const memfsModule = await (isNodeLane()
   ? import("memfs")
   : import("https://esm.sh/memfs"));
@@ -611,14 +607,13 @@ const fs = memfsModule.default ?? memfsModule;
 
 // The host-side default volume (also exported for other runtime modules).
 
-
 // Initialize virtual filesystem structure
 fs.vol.fromJSON({
   "/hello.txt": "Hello world",
   "/dir/nested.txt": "Nested file",
 });
 
- const TEXT_EXTS = new Set([
+const TEXT_EXTS = new Set([
   "js",
   "jsx",
   "ts",
@@ -652,7 +647,7 @@ fs.vol.fromJSON({
   "conf",
 ]);
 
- const BINARY_EXTS = new Set([
+const BINARY_EXTS = new Set([
   "png",
   "jpg",
   "jpeg",
@@ -677,7 +672,7 @@ fs.vol.fromJSON({
   "tar",
 ]);
 
- function getExt(path) {
+function getExt(path) {
   return path.split(".").pop()?.toLowerCase() ?? "";
 }
 
@@ -763,17 +758,12 @@ export function rehydrateVfs(deserializedFs, fs) {
   }
 }
 
-
-
 // ── src/runtime/transforms-esm.js ─────────────────────────────────────────────
 // Extracted from runtime.js (lines 688-801) — Worker B, modular/transforms.
 // DO NOT EDIT by hand: re-extract from runtime.js. Code is byte-identical
 // to the original except: top-level `export` keywords added, imports use
 // bare specifiers (browser resolves via the same esm.sh packages; Node
 // tests resolve via node_modules).
-
-
-
 
 export function convertEsmToCjs(code, options = {}) {
   const { filename = "input.js" } = options;
@@ -889,8 +879,6 @@ export function convertEsmToCjs(code, options = {}) {
   return { code: outCode, map };
 }
 
-
-
 // ── src/runtime/transforms-cjs.js ─────────────────────────────────────────────
 // Extracted from runtime.js (lines 802-1431) — Worker B, modular/transforms.
 // DO NOT EDIT by hand: re-extract from runtime.js. Code is byte-identical
@@ -898,10 +886,7 @@ export function convertEsmToCjs(code, options = {}) {
 // bare specifiers (browser resolves via the same esm.sh packages; Node
 // tests resolve via node_modules).
 
-
-
 // Moved to module top from its mid-file position (runtime.js line 1371).
-
 
 export function convertCjsToEsm(code, options = {}) {
   const { filename = "input.js" } = options;
@@ -1158,7 +1143,6 @@ export function convertCjsToEsm(code, options = {}) {
   return { code: finalCode, map };
 }
 
-
 export function convertCjsToEsm_backup(code) {
   const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: "script" });
   const s = new MagicString(code);
@@ -1234,8 +1218,7 @@ export function convertCjsToEsm_backup(code) {
     .replace(/\n\s*\n/g, "\n"); // Clean up empty lines
 }
 
-
- function _convertCjsToEsm(code) {
+function _convertCjsToEsm(code) {
   const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: "script" });
   let offset = 0;
   let newCode = code;
@@ -1295,8 +1278,7 @@ export function convertCjsToEsm_backup(code) {
   return newCode;
 }
 
-
- function isCommonJS(code) {
+function isCommonJS(code) {
   try {
     const ast = acorn.parse(code, { ecmaVersion: 2022, sourceType: "module" });
     let hasCJS = false;
@@ -1344,8 +1326,7 @@ export function convertCjsToEsm_backup(code) {
   }
 }
 
-
- function detectModuleSystem(code) {
+function detectModuleSystem(code) {
   let result = { isCJS: false, isESM: false };
 
   try {
@@ -1477,7 +1458,7 @@ export function convertCjsToEsm_backup(code) {
  * @returns {string}
  *   The transformed source code with matching imports replaced.
  */
- function transformRelativeModule(code) {
+function transformRelativeModule(code) {
   const s = new MagicString(code);
   const ast = acorn.parse(code, {
     ecmaVersion: "latest",
@@ -1537,7 +1518,6 @@ export function convertCjsToEsm_backup(code) {
   return s.toString();
 }
 
-
 // ── src/runtime/transforms-imports.js ─────────────────────────────────────────────
 // Extracted from runtime.js (lines 1433-2253) — Worker B, modular/transforms.
 // DO NOT EDIT by hand: re-extract from runtime.js. Code is byte-identical
@@ -1545,14 +1525,9 @@ export function convertCjsToEsm_backup(code) {
 // bare specifiers (browser resolves via the same esm.sh packages; Node
 // tests resolve via node_modules).
 
-
-
-
 // Cross-module dependency: in runtime.js this is the top-level const at
 // line 73 (builtin key -> dist file). Kept as a mutable module binding so
 // the host can inject the real manifest; defaults to {} (no builtins).
-
-
 
 /**
  * Replaces occurrences of globalThis.<variableName> in JS code
@@ -1986,7 +1961,9 @@ export function transformImportsToLoadModule(
         s.overwrite(
           node.start,
           node.end,
-          kept.length === 0 ? marker : `export { ${kept.join(", ")} };\n${marker}`,
+          kept.length === 0
+            ? marker
+            : `export { ${kept.join(", ")} };\n${marker}`,
         );
         return;
       }
@@ -2094,8 +2071,7 @@ export function transformImportsToLoadModule(
       newLex = node;
       scopeSet(node);
       if (node.param)
-        for (const nm of namesOfPattern(node.param, []))
-          scopeSet(node).add(nm);
+        for (const nm of namesOfPattern(node.param, [])) scopeSet(node).add(nm);
     } else if (
       t === "ForStatement" ||
       t === "ForInStatement" ||
@@ -2207,11 +2183,7 @@ export function transformImportsToLoadModule(
       !p.shorthand
     )
       return true;
-    if (
-      p.type === "PropertyDefinition" &&
-      p.key === node &&
-      !p.computed
-    )
+    if (p.type === "PropertyDefinition" && p.key === node && !p.computed)
       return true;
     if (
       (p.type === "MemberExpression" ||
@@ -2315,10 +2287,9 @@ export function transformImportsToLoadModule(
   const bodyPreambleParts = [];
   for (const [modulePath, v] of liftedModules.entries()) {
     const type = moduleImportType.get(modulePath) || "import";
-    const line =
-      `const ${v} = await globalThis._RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
-        modulePath,
-      )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`;
+    const line = `const ${v} = await globalThis._RUNTIME${sandboxUUID}_.loadModule(${JSON.stringify(
+      modulePath,
+    )}, ${JSON.stringify(type)}, ${JSON.stringify(entryPoint)}, ${JSON.stringify(parentEntryPoint)});`;
     if (type === "import") importPreambleParts.push(line);
     else bodyPreambleParts.push(line);
   }
@@ -2358,7 +2329,7 @@ export function transformImportsToLoadModule(
   };
 }
 
- function generateImportBinding(node, liftedVar) {
+function generateImportBinding(node, liftedVar) {
   const specifiers = node.specifiers;
 
   if (!specifiers.length) return "";
@@ -2375,7 +2346,6 @@ export function transformImportsToLoadModule(
   }
   return "";
 }
-
 
 // ── src/runtime/syntax.js ─────────────────────────────────────────────
 // src/runtime/syntax.js — extracted verbatim from runtime.js (lines 2336-2365),
@@ -2412,7 +2382,6 @@ export class SyntaxChecker {
   }
 }
 
-
 // ── src/runtime/events.js ─────────────────────────────────────────────
 // src/runtime/events.js — extracted verbatim from runtime.js (lines 2367-2432),
 // branch modular/resolution. `export` added to EventEmitter (the only change);
@@ -2424,7 +2393,7 @@ export class SyntaxChecker {
 /**
  * A simple EventEmitter implementation for managing custom events.
  */
- class EventEmitter {
+class EventEmitter {
   constructor() {
     /**
      * Stores event names mapped to arrays of handler functions.
@@ -2484,7 +2453,6 @@ export class SyntaxChecker {
   }
 }
 
-
 // ── src/runtime/import-resolver.js ─────────────────────────────────────────────
 // src/runtime/import-resolver.js — extracted verbatim from runtime.js
 // (lines 2434-2641), branch modular/resolution. Cross-module deps (wired as
@@ -2501,12 +2469,6 @@ export class SyntaxChecker {
 // ============================================================================
 // IMPORT RESOLVER MODULE
 // ============================================================================
-
-
-
-
-
-
 
 export class ImportResolver {
   constructor(options = {}) {
@@ -2736,12 +2698,12 @@ const _vfsServerRoutes = new Map();
 /** The native fetch, captured while the patch is installed. */
 let _vfsOriginalFetch = null;
 
- function _vfsIsLoopbackHostname(hostname) {
+function _vfsIsLoopbackHostname(hostname) {
   const h = String(hostname || "").toLowerCase();
   return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
 }
 
- function _vfsExtractServerPort(data) {
+function _vfsExtractServerPort(data) {
   if (data && typeof data.port === "number") return data.port;
   // Sandbox posts server events via emitMe: { type, message: 'null {"port":N}' }.
   const msg = data && typeof data.message === "string" ? data.message : "";
@@ -2749,7 +2711,7 @@ let _vfsOriginalFetch = null;
   return m ? Number(m[1]) : null;
 }
 
- function _vfsEnsureFetchPatched() {
+function _vfsEnsureFetchPatched() {
   if (typeof window === "undefined" || typeof window.fetch !== "function")
     return false;
   if (window.fetch && window.fetch.__vfsBridged) return true;
@@ -2759,7 +2721,7 @@ let _vfsOriginalFetch = null;
   return true;
 }
 
- function _vfsMaybeRestoreFetch() {
+function _vfsMaybeRestoreFetch() {
   if (
     _vfsServerRoutes.size === 0 &&
     _vfsOriginalFetch &&
@@ -2771,7 +2733,7 @@ let _vfsOriginalFetch = null;
 }
 
 /** Returns true when this owner holds the route (first claim wins). */
- function _vfsRegisterServerRoute(port, owner) {
+function _vfsRegisterServerRoute(port, owner) {
   if (port == null) return false;
   const existing = _vfsServerRoutes.get(port);
   if (existing === owner) return true; // idempotent re-register
@@ -2781,7 +2743,7 @@ let _vfsOriginalFetch = null;
   return true;
 }
 
- function _vfsUnregisterServerRoute(port, owner) {
+function _vfsUnregisterServerRoute(port, owner) {
   if (port == null) return;
   if (_vfsServerRoutes.get(port) === owner) {
     _vfsServerRoutes.delete(port);
@@ -2789,7 +2751,7 @@ let _vfsOriginalFetch = null;
   }
 }
 
- async function _vfsPatchedFetch(input, init) {
+async function _vfsPatchedFetch(input, init) {
   let url = null;
   try {
     const raw = typeof input === "string" ? input : input && input.url;
@@ -2811,7 +2773,7 @@ let _vfsOriginalFetch = null;
   return _vfsOriginalFetch.apply(this, arguments);
 }
 
- async function _vfsDispatchToSandbox(owner, port, url, input, init) {
+async function _vfsDispatchToSandbox(owner, port, url, input, init) {
   const method = String(
     (init && init.method) ||
       (input && typeof input === "object" && input.method) ||
@@ -2885,7 +2847,6 @@ let _vfsOriginalFetch = null;
 }
 // VFS_FETCH_BRIDGE_END
 
-
 // ── src/runtime/execution-context.js ─────────────────────────────────────────────
 // ExecutionContext — extracted from runtime.js (original lines 2810-3802).
 //
@@ -2920,11 +2881,7 @@ let _vfsOriginalFetch = null;
 //   - `iframe`: .contentWindow, .parentNode, .remove(), .src, .srcdoc
 //
 
-
-
-
-
- class ExecutionContext {
+class ExecutionContext {
   constructor(iframe, sandbox) {
     this.iframe = iframe;
     this.sandbox = sandbox;
@@ -3918,7 +3875,6 @@ child.on('error', (err) => {
   }
 }
 
-
 // ── src/runtime/code-sandbox.js ─────────────────────────────────────────────
 // src/runtime/code-sandbox.js — extracted verbatim from runtime.js
 // (lines 4032-6053: the CodeSandbox class), branch modular/sandbox. `export`
@@ -3935,25 +3891,10 @@ child.on('error', (err) => {
 // Static ESM imports (paths adjusted for src/runtime/; esm.sh specifiers kept
 // verbatim — this module targets the browser host, like runtime.js):
 
-
-
-
-
 //
 // Cross-module dependencies — wired as real ESM imports by the integration
 // step (previously bare references to the original runtime.js module scope).
 // EventEmitter comes from Worker C's verbatim extraction (src/runtime/events.js).
-
-
-
-
-
-
-
-
-
-
-
 
 // NOTE: normalizeBuiltinSpecifier / stripAnsi / _builtinManifest /
 // builtinModules appeared in the wiring brief for this module but have zero
@@ -4375,7 +4316,12 @@ export class CodeSandbox extends EventEmitter {
             statusText: response.statusText,
             headers,
             ok: response.status >= 200 && response.status < 300,
-            url: input,
+            // Fetch audit 2026-10-11: report the post-redirect URL (was: the
+            // request input), plus the redirect flag and response type, so
+            // the sandbox reconstruction matches undici-visible fields.
+            url: response.url,
+            redirected: response.redirected,
+            type: response.type,
           };
         };
       }
@@ -5993,7 +5939,6 @@ function _parseKey(s) {
   }
 }
 
-
 // ── src/runtime/sandbox-runtime.js ─────────────────────────────────────────────
 // src/runtime/sandbox-runtime.js — extracted verbatim from runtime.js
 // (lines 3911-3990), branch modular/sandbox. `export` added to
@@ -6005,7 +5950,6 @@ function _parseKey(s) {
 // so the iframe gets the identical implementation.
 //
 // Static ESM imports (paths adjusted for src/runtime/):
-
 
 //
 // Host-provided bare references (still module scope in runtime.js; kept as-is
@@ -6081,10 +6025,7 @@ export class SandboxRuntime {
       normalizeBuiltinSpecifier.toString(),
     );
     for (const [suffix, stmt] of Object.entries(LOG_TOKENS)) {
-      sub(
-        `%%LOG_${suffix}%%`,
-        config.logNetworkRequests ? stmt : "",
-      );
+      sub(`%%LOG_${suffix}%%`, config.logNetworkRequests ? stmt : "");
     }
     sub("%%IMPORTS%%", config.imports?.join("\n") || "");
     // USER_CODE last: its value could theoretically contain %%TOKEN%%-like text.
@@ -6095,7 +6036,6 @@ export class SandboxRuntime {
     return result;
   }
 }
-
 
 // ── src/runtime/code-transformer.js ─────────────────────────────────────────────
 // src/runtime/code-transformer.js — extracted verbatim from runtime.js
@@ -6142,7 +6082,6 @@ export class CodeTransformer {
   };
 }
 
-
 // ── src/runtime/entry.js ─────────────────────────────────────────────
 // Public entry API of the host runtime (Worker F extraction, branch
 // modular/host): `executeCode` / `createSandbox`.
@@ -6163,10 +6102,6 @@ export class CodeTransformer {
 //   below points at that real module (present on the integration branch;
 //   absent on a bare checkout of this branch until merged).
 
-
-
-
-
 /**
  * Quick execution without configuration
  */
@@ -6182,7 +6117,6 @@ export async function executeCode(code, options = {}) {
 export function createSandbox(options = {}) {
   return new CodeSandbox(options);
 }
-
 
 // ── src/runtime/host-utils.js ─────────────────────────────────────────────
 // Host-side pure helpers for the runtime entry API (Worker F extraction,
@@ -6215,7 +6149,7 @@ export function createSandbox(options = {}) {
 // and never move inside the demo-playground init below. (Vitest gap #0
 // reorganization: previously interleaved with the playground init.)
 
- class FormattedError extends Error {
+class FormattedError extends Error {
   constructor(originalError, formattedMessage) {
     super(formattedMessage);
 
@@ -6286,7 +6220,7 @@ export function formatErrors(code, err) {
   return new FormattedError(err, formattedMessage);
 }
 
- function formatErrors2(code, err) {
+function formatErrors2(code, err) {
   const message = err?.message || "Unknown error";
 
   function _getContext(lines, lineNum, contextSize = 2) {
@@ -6339,7 +6273,7 @@ export function formatErrors(code, err) {
 //   { encoding: 'utf8'|'base64', data: string }  -> used as-is
 // Anything else (including empty keys) is dropped: a misconfigured asset
 // must never break sandbox bootstrap.
- function normalizeSeaAssets(assets) {
+function normalizeSeaAssets(assets) {
   const out = {};
   if (!assets || typeof assets !== "object") return out;
   const entries =
@@ -6381,7 +6315,7 @@ export function formatErrors(code, err) {
   return out;
 }
 
- function base64EncodeBytes(bytes) {
+function base64EncodeBytes(bytes) {
   let binary = "";
   const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) {
@@ -6397,7 +6331,7 @@ export function formatErrors(code, err) {
 // sandbox can decode it; recursing would create bogus 'encoding'/'data'
 // files. The two-key strictness keeps a user directory that merely happens
 // to contain encoding/data files from being reinterpreted.
- function isSeedEnvelope(value) {
+function isSeedEnvelope(value) {
   return (
     value !== null &&
     typeof value === "object" &&
@@ -6412,7 +6346,7 @@ export function formatErrors(code, err) {
 // Normalize raw bytes (Uint8Array/Buffer/ArrayBuffer) to a JSON-safe
 // { encoding: 'base64', data } envelope. __USER_FILES__ is JSON-serialized
 // into the sandbox bootstrap, where raw bytes would corrupt to {"0":..}.
- function seedBytesToBase64(value) {
+function seedBytesToBase64(value) {
   const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
   if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
     return Buffer.from(
@@ -6449,7 +6383,6 @@ export function flattenFileTree(obj, parentPath = "") {
   return flat;
 }
 
-
 // ── src/runtime/message-handler.js ─────────────────────────────────────────────
 // Iframe stdin keypress parser (Worker F extraction, branch modular/host).
 //
@@ -6475,7 +6408,7 @@ export function flattenFileTree(obj, parentPath = "") {
 // copy would silently break ESC-sequence recognition in both uses; this was
 // verified empirically (see tests). Pure function: no dependencies.
 
- function _parseKey(s) {
+function _parseKey(s) {
   const specials = {
     "\x1b[A": "up",
     "\x1b[B": "down",
@@ -6534,7 +6467,6 @@ export function flattenFileTree(obj, parentPath = "") {
   };
 }
 
-
 // ── src/runtime/output-shim.js ─────────────────────────────────────────────
 // Host/iframe output-stream shim (Worker F extraction, branch modular/host).
 //
@@ -6559,7 +6491,7 @@ export function flattenFileTree(obj, parentPath = "") {
 // install faithful equivalents on globalThis.
 /* global Writable */
 
- function makeOutputShim2(type) {
+function makeOutputShim2(type) {
   const isError = type === "stderr";
 
   // Inherit from Writable to get all internal Node logic for free
@@ -6607,4 +6539,3 @@ export function flattenFileTree(obj, parentPath = "") {
 
   return stream;
 }
-

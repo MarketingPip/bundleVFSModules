@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Fetch Wrapper Audit (CodeSandbox lane)</title></head>
+<body>
+<div id="out">pending</div>
+<script type="module">
+// Fetch WRAPPER audit — CodeSandbox lane.
+//
+// Boots a genuine CodeSandbox (full runtime pipeline) and runs the checks
+// INSIDE the sandbox iframe, where window.fetch is our patchedFetch
+// (src/sandbox/70-fetch.js) backed by the parent _fetch_ interop
+// (src/runtime/code-sandbox.js createFetchAdapter). This lane measures OUR
+// wrapper's divergence from undici — the patchable layer.
+//
+// Reports via document.title ("E2E-PASS" / "E2E-FAIL: ..."), #out text, and
+// POST /report (crash-proof). The JSON verdict is saved by the driver to
+// /tmp/fetch-deep-wrapper.json for diffing against the Node lane.
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+const report = (v) => {
+  window.__done__ = v;
+  try {
+    fetch("/report", { method: "POST", body: JSON.stringify(v), keepalive: true }).catch(() => {});
+  } catch (e) {}
+};
+
+const results = [];
+const check = (name, cond, extra) => {
+  results.push((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " :: " + (extra || "")));
+};
+
+const userCode = `
+(async () => {
+const results = [];
+async function obs(name, fn) {
+  const rec = { name };
+  try {
+    const r = await fn();
+    rec.observed = r === undefined ? null : r;
+  } catch (e) {
+    rec.observed = { threw: e && e.constructor ? e.constructor.name : typeof e,
+                      name: e && e.name, message: String((e && e.message) || e).slice(0, 160) };
+  }
+  results.push(rec);
+}
+const loc = (typeof location !== "undefined" && location.origin) || "n/a";
+
+// W1: user AbortSignal must abort the fetch (undici: AbortError ~immediately)
+await obs("W1 abort-user-signal", async () => {
+  const c = new AbortController();
+  const p = fetch("/slow", { signal: c.signal });
+  const t0 = Date.now();
+  setTimeout(() => c.abort(), 200);
+  try { const r = await p; return { result: "resolved", body: await r.text(), ms: Date.now() - t0 }; }
+  catch (e) { return { threw: e.constructor.name, name: e.name, ms: Date.now() - t0 }; }
+});
+
+// W2: already-aborted signal must reject immediately
+await obs("W2 abort-already-aborted", async () => {
+  const c = new AbortController();
+  c.abort();
+  const t0 = Date.now();
+  try { await fetch("/slow", { signal: c.signal }); return { result: "resolved", ms: Date.now() - t0 }; }
+  catch (e) { return { threw: e.constructor.name, name: e.name, ms: Date.now() - t0 }; }
+});
+
+// W3: multiple set-cookie headers must survive the parent round-trip
+await obs("W3 setcookie-multi", async () => {
+  const r = await fetch("/cookies");
+  return { get: r.headers.get("set-cookie"), getSetCookie: r.headers.getSetCookie(), body: await r.text() };
+});
+
+// W4: redirect following must preserve redirected/url/type
+await obs("W4 redirect-follow", async () => {
+  const r = await fetch("/redirect");
+  return { status: r.status, body: await r.text(), redirected: r.redirected,
+           urlEndsDone: r.url.endsWith("/done"), url: r.url.slice(-40), type: r.type, ok: r.ok };
+});
+
+// W5: redirect manual (browser gives opaqueredirect; wrapper must not crash)
+await obs("W5 redirect-manual", async () => {
+  const r = await fetch("/redirect", { redirect: "manual" });
+  return { status: r.status, type: r.type, location: r.headers.get("location") };
+});
+
+// W6: custom request headers through the parent path
+await obs("W6 echo-headers", async () => {
+  const r = await fetch("/echo", { headers: { "x-keep": "yes", "x-other": "1" } });
+  const j = await r.json();
+  return { xkeep: j.headers["x-keep"] || null, xother: j.headers["x-other"] || null, method: j.method };
+});
+
+// W7: POST JSON body through the parent path
+await obs("W7 post-json", async () => {
+  const r = await fetch("/echo", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ a: 1 }) });
+  const j = await r.json();
+  return { method: j.method, body: j.body, ct: j.headers["content-type"] };
+});
+
+// W8: fetch(new Request(...)) — Request-object input
+await obs("W8 request-object", async () => {
+  const req = new Request("/echo", { method: "POST", headers: { "x-via": "req" }, body: "rb" });
+  const r = await fetch(req);
+  const j = await r.json();
+  return { method: j.method, body: j.body, xvia: j.headers["x-via"] || null };
+});
+
+// W9: headers passed as a Headers instance
+await obs("W9 headers-instance", async () => {
+  const h = new Headers({ "x-hi": "there" });
+  const r = await fetch("/echo", { headers: h });
+  const j = await r.json();
+  return { xhi: j.headers["x-hi"] || null };
+});
+
+// W10: status/ok through the parent path
+await obs("W10 status-ok", async () => {
+  const r = await fetch("/done");
+  return { status: r.status, ok: r.ok, body: await r.text(), statusText: r.statusText };
+});
+
+// W11: data: URL through the wrapper
+await obs("W11 data-url", async () => {
+  const r = await fetch("data:text/plain,hi");
+  return { status: r.status, body: await r.text() };
+});
+
+// W12: which fetch is installed in the realm (sanity)
+await obs("W12 fetch-identity", () => {
+  const f = fetch;
+  return { type: typeof f, name: f.name, isNative: Function.prototype.toString.call(f).includes("[native code]"), loc };
+});
+
+console.log("__AUDIT__" + JSON.stringify({ lane: "sandbox-wrapper", total: results.length, results }));
+})().catch((e) => console.log("__AUDIT__" + JSON.stringify({ lane: "sandbox-wrapper", harnessError: String((e && e.message) || e) })));
+`;
+
+function parseAudit(result) {
+  for (const entry of (result.logs || [])) {
+    let raw = typeof entry === "string" ? entry : JSON.stringify(entry);
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.args === "string") raw = parsed.args;
+    } catch (e) {}
+    const j = raw.indexOf("__AUDIT__");
+    if (j !== -1) {
+      try { return JSON.parse(raw.slice(j + "__AUDIT__".length)); }
+      catch (e) { return { harnessError: "audit parse error: " + raw.slice(j, j + 200) }; }
+    }
+  }
+  return { harnessError: "no __AUDIT__ marker in sandbox logs" };
+}
+
+try {
+  const rt = await import("/local-repo/runtime.js");
+  check("real runtime exports CodeSandbox", typeof rt.CodeSandbox === "function");
+  const { CodeSandbox } = rt;
+
+  const sandbox = new CodeSandbox({
+    fs: {},
+    fileName: "fetch-wrapper-audit.mjs",
+    timeout: 90000,
+    process: { env: {} },
+    fallbackCDN: false,
+  });
+
+  const watchdog = setTimeout(() => {
+    if (!window.__done__) {
+      document.title = "E2E-FAIL: watchdog timeout";
+      report({ ok: false, checks: results, error: "watchdog timeout" });
+    }
+  }, 120000);
+
+  let verdict;
+  try {
+    const result = await sandbox.execute(userCode);
+    const a = parseAudit(result);
+    check("audit marker received from sandbox", !a.harnessError, a.harnessError || "");
+    verdict = { ok: !a.harnessError, lane: "sandbox-wrapper", audit: a, checks: results };
+    (a.results || []).forEach((r) => log(r.name + " => " + JSON.stringify(r.observed).slice(0, 200)));
+  } finally {
+    clearTimeout(watchdog);
+  }
+
+  document.title = verdict.ok ? "E2E-PASS" : "E2E-FAIL: harness";
+  report(verdict);
+} catch (e) {
+  const msg = "E2E-FAIL: harness: " + String((e && e.message) || e);
+  document.title = msg.slice(0, 200);
+  log(msg);
+  report({ ok: false, checks: results, error: String((e && e.stack) || e) });
+}
+</script>
+</body>
+</html>
