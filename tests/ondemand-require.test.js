@@ -579,37 +579,65 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
   });
 
   test("no new function declarations added by the branch diff", () => {
-    // Post-merge of PR #199, __bvmRequireSync pre-exists on the base, so the
-    // old expectation (exactly one added `+function __bvmRequireSync`) is
-    // stale. This change modifies __bvmRequireSync and the require()
-    // CallExpression handler but declares no new functions; neither does the
-    // sibling inlineWasmDataUrls dedupe.
-    const out = execSync(`git diff ${diffBase} -- runtime.js`, {
+    // The modularization regenerates runtime.js from src/runtime/*, so diff
+    // lines cannot tell moved code from new code. Compare the SET of
+    // top-level function declarations between the merge-base monolith and
+    // the branch instead. The one intentional addition is isNodeLane(), the
+    // dual-lane Node/browser helper factored out during extraction (the
+    // monolith always imported the esm.sh builtin-modules build, even under
+    // Node; the modules use node:module there now).
+    const baseRef = execSync("git merge-base origin/main HEAD", {
       cwd: REPO_ROOT,
       encoding: "utf8",
+    }).trim();
+    const baseSrc = execSync(`git show ${baseRef}:runtime.js`, {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
     });
-    const addedFns = out.split("\n").filter((l) => l.startsWith("+function "));
-    expect(addedFns).toEqual([]);
+    const branchSrc = fs.readFileSync(
+      path.join(REPO_ROOT, "runtime.js"),
+      "utf8",
+    );
+    const fnNames = (src) =>
+      new Set(
+        [
+          ...src.matchAll(/^\s*(?:export\s+)?function\s+([A-Za-z_$][\w$]*)/gm),
+        ].map((m) => m[1]),
+      );
+    const base = fnNames(baseSrc);
+    const added = [...fnNames(branchSrc)].filter((n) => !base.has(n));
+    expect(added).toEqual(["isNodeLane"]);
   });
 
   test("no new import statements added to runtime.js", () => {
-    const out = execSync(`git diff ${diffBase} -- runtime.js`, {
+    // Same regeneration-aware comparison for import specifiers: the
+    // generated file unifies the monolith's scattered import header, so
+    // diff lines are meaningless. The one intentional addition is
+    // ./src/quick_bundle.js — the monolith called bundle() without ever
+    // importing it (latent ReferenceError); code-sandbox.js now imports it
+    // properly (see the _bundler_ interop comment).
+    const baseRef = execSync("git merge-base origin/main HEAD", {
       cwd: REPO_ROOT,
       encoding: "utf8",
+    }).trim();
+    const baseSrc = execSync(`git show ${baseRef}:runtime.js`, {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
     });
-    const addedImports = out
-      .split("\n")
-      .filter((l) => l.startsWith("+import "));
-    // Item 2 cutover: generate() imports the built sandbox template and the
-    // log-token table. These two are the only expected additions.
-    // On post-Item-2 branches (diffBase already has them), zero additions is correct.
-    const expected = [
-      '+import { LOG_TOKENS } from "./src/sandbox/log-tokens.js";',
-      '+import { SANDBOX_TEMPLATE } from "./src/sandbox-template.js";',
-    ].sort();
-    const actual = addedImports.sort();
-    // Allow either: the two Item 2 imports (if branch includes the cutover)
-    // or zero (if branch is based on post-cutover main)
-    expect([[], expected]).toContainEqual(actual);
+    const branchSrc = fs.readFileSync(
+      path.join(REPO_ROOT, "runtime.js"),
+      "utf8",
+    );
+    const specifiers = (src) =>
+      new Set(
+        [...src.matchAll(/^\s*import\s+[^;]*?["']([^"']+)["']/gms)].map(
+          (m) => m[1],
+        ),
+      );
+    const base = specifiers(baseSrc);
+    const added = [...specifiers(branchSrc)].filter((s) => !base.has(s));
+    expect(added).toEqual(["./src/quick_bundle.js"]);
   });
 });
