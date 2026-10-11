@@ -542,16 +542,15 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // modular/integration: the runtime.js monolith was cut over to generated
+    // modular/integration-v2: the runtime.js monolith was cut over to generated
     // output (src/build-runtime.mjs assembles it from src/runtime/* modules;
     // runtime.js itself is regenerated). The workflow change gates the
-    // generated file's freshness in CI. WORKER-F-HOST-TODO.md is worker
-    // scratch committed during extraction (coordinator to archive).
+    // generated file's freshness in CI. roadmap.md records the completion.
     // tests/ is excluded above.
     expect(files.sort()).toEqual(
       [
         ".github/workflows/run.yaml",
-        "WORKER-F-HOST-TODO.md",
+        "roadmap.md",
         "runtime.js",
         "src/build-runtime.mjs",
         "src/runtime/bootstrap.js",
