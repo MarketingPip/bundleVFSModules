@@ -216,10 +216,56 @@ bytes" and "run wasm bytes on my VFS".
 
 ### 3. Full-suite open-handle investigation
 
-Full jest run passes all assertions but Jest reports it "did not exit one
-second after the test run" (2026-09-26). Investigate with
-`--detectOpenHandles` and suite isolation. Do not assume the http/net
-changes caused it — measure first.
+**[x] Done 2026-10-11** (branch `fix/open-handles`) — measured, not assumed.
+
+**Measurement.** Full runs with `--detectOpenHandles`: `--runInBand` exits
+cleanly every time (167s, 3066 passed); parallel (default) runs exit cleanly
+in 4 of 5 observations — one post-summary hang of the main jest process was
+observed (summary printed at 158s, process still alive with no workers at
+330s; killed for the trap). A plain parallel run (the original 2026-09-26
+condition) exited cleanly with no "did not exit" warning. Note for future
+investigations: Jest 30's `--detectOpenHandles` no longer prints a
+per-handle report — it only changes exit behavior — so the hang was trapped
+with a `NODE_OPTIONS --require` preload that dumps
+`process._getActiveHandles()`/`_getActiveRequests()` 45s after jest prints
+"Ran all test suites." (kept at `/tmp/dump-handles.js`, not committed).
+
+**Root cause found and fixed (red-first).** `src/net.js`
+`Server.prototype._acceptConnection` threw `TypeError: Cannot read
+properties of null (reading 'address')` when the server closed between the
+deferred client lookup and the deferred virtual accept — the virtual
+handshake is two macrotasks (`connect()` defers `_doConnect`, which defers
+`_acceptConnection`), and `close()` nulls `_bindAddress` in between. The
+flaky `http-socket.test.js` "closeAllConnections" failure exposed it live:
+accept delayed by load → `getConnections` returned 0 → test failed →
+`afterEach` closed the server → the pending accept fired on the nulled
+address and threw inside the worker's Immediate. The hanging run is the
+only run where this flake fired. Fix: refuse cleanly with `ECONNREFUSED`
+through the existing `_connectFailed(_refusedError(req))` path (honest
+error, never a fake success — AGENTS.md rule 7). Regression test in
+`tests/net.test.js` ("connect racing server.close() after lookup fails
+cleanly, never throws in _acceptConnection") — fails with the TypeError
+before the fix, passes after.
+
+**Rebuild.** `dist/` regenerated with `node src/build-vfs.mjs`: the 8
+net-transitive bundles (`net`, `http`, `https`, `_http_agent`,
+`_http_client`, `_http_incoming`, `_http_outgoing`, `_http_server`) plus
+`dist/vfs.js`; every other bundle rebuilt byte-identical. Environment note:
+the build's esm.sh fetches fail from this sandbox without the egress relay
+— run `https_proxy=http://127.0.0.1:18080 node --use-env-proxy
+src/build-vfs.mjs`.
+
+**Structural guards.** The "dist/ changes are exactly the rebuilt artifacts"
+test now enforces the two real invariants (no strays: every changed dist
+file is a real bundle key; no stale dist: every directly-changed entry's
+artifact is rebuilt) instead of a strict equality, because self-contained
+bundles legitimately rebuild transitively. Branch-footprint allowlist
+updated to this branch's files.
+
+**Verification.** `tests/net.test.js` 78/78, `tests/http-socket.test.js` +
+`tests/http.test.js` 93/93, new regression test red→green; 15/15
+repeated parallel runs of the handle-heavy suites (http-socket, http, net,
+dns, worker-spawn-real) exit cleanly; full suite re-run green (see commit).
 
 ### 4. Real-runtime parity harness — official suites through the iframe host protocol
 

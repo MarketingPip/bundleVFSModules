@@ -1751,6 +1751,14 @@ Server.prototype.address = function address() {
 Server.prototype._acceptConnection = function _acceptConnection(client, req) {
   const bindAddr = this._bindAddress;
 
+  // The accept is deferred a macrotask after the client's lookup; the server
+  // may have closed in between (close() nulls _bindAddress and clears
+  // _listening). Refuse cleanly instead of throwing on the nulled address.
+  if (!this._listening || !bindAddr) {
+    client._connectFailed(client._refusedError(req));
+    return;
+  }
+
   // Server-side blockList: silently refused, like Node closing clientHandle.
   if (this.blockList) {
     let blocked = false;
