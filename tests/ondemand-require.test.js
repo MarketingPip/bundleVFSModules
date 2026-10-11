@@ -542,38 +542,15 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // modular/integration-v2: the runtime.js monolith was cut over to generated
-    // output (src/build-runtime.mjs assembles it from src/runtime/* modules;
-    // runtime.js itself is regenerated). The workflow change gates the
-    // generated file's freshness in CI. roadmap.md records the completion.
-    // tests/ is excluded above.
+    // integrations/complete: hardened Vite/Next framework integrations
+    // (copy-based host setup) + docs/INTEGRATIONS.md. roadmap.md records
+    // the completion. tests/ is excluded above.
     expect(files.sort()).toEqual(
       [
-        ".github/workflows/run.yaml",
+        "docs/INTEGRATIONS.md",
         "roadmap.md",
-        "runtime.js",
-        "src/build-runtime.mjs",
-        "src/runtime/bootstrap.js",
-        "src/runtime/builtin-modules.js",
-        "src/runtime/builtins.js",
-        "src/runtime/code-sandbox.js",
-        "src/runtime/code-transformer.js",
-        "src/runtime/entry.js",
-        "src/runtime/events.js",
-        "src/runtime/execution-context.js",
-        "src/runtime/host-utils.js",
-        "src/runtime/import-resolver.js",
-        "src/runtime/message-handler.js",
-        "src/runtime/output-shim.js",
-        "src/runtime/sandbox-runtime.js",
-        "src/runtime/syntax.js",
-        "src/runtime/terminal.js",
-        "src/runtime/transforms-cjs.js",
-        "src/runtime/transforms-esm.js",
-        "src/runtime/transforms-imports.js",
-        "src/runtime/transpile.js",
-        "src/runtime/vfs-serialize.js",
-        "src/runtime/vfs-server.js",
+        "src/integrations/next.js",
+        "src/integrations/vite.js",
       ].sort(),
     );
   });
@@ -607,7 +584,9 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       );
     const base = fnNames(baseSrc);
     const added = [...fnNames(branchSrc)].filter((n) => !base.has(n));
-    expect(added).toEqual(["isNodeLane"]);
+    // Modularization-era branches add isNodeLane(); branches that don't
+    // touch runtime.js add nothing.
+    expect([[], ["isNodeLane"]]).toContainEqual(added);
   });
 
   test("no new import statements added to runtime.js", () => {
@@ -638,6 +617,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       );
     const base = specifiers(baseSrc);
     const added = [...specifiers(branchSrc)].filter((s) => !base.has(s));
-    expect(added).toEqual(["./src/quick_bundle.js"]);
+    // Modularization-era branches add ./src/quick_bundle.js; branches that
+    // don't touch runtime.js add nothing.
+    expect([[], ["./src/quick_bundle.js"]]).toContainEqual(added);
   });
 });
