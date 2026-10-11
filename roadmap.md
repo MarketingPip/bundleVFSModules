@@ -262,10 +262,39 @@ and the process story. Technique references in
   machine-readable API inventory kept green by
   `tests/lifecycle-docs.test.js`. Also documented as gaps: no
   `destroy()`/`close()` teardown promise.
-- **Preview routing (must):** Service-Worker `/__virtual__/{port}/` route so
-  guest servers are real navigable URLs. Patching `fetch` only covers
-  programmatic requests from JS — the SW route covers address-bar
-  navigation, iframes, and new-tab previews.
+- **[x] Preview routing (done 2026-10-11, verified end-to-end):**
+  Service-Worker `/__virtual__/{port}/` route making guest servers real
+  navigable URLs — address-bar navigation, iframes, and new-tab previews,
+  which the fetch patch can never cover. Implementation:
+  `src/plugins/preview-routing.js` (host authority: URL parsing, the
+  port→handler registry with first-claim-wins, body normalization, error
+  mapping) + `src/preview-sw.js` (thin transport, no imports, coarse
+  pre-filter, `clients.claim()` on activate). Opt-in: the host calls
+  `registerPreviewSW()` (throws outside a secure context — HTTPS or
+  localhost; awaits activation itself instead of
+  `navigator.serviceWorker.ready`, which would hang for hosts outside the
+  scope), and `trackSandbox(sb)` wires `execution:server` open/close into
+  the registry via `sb.invoke("__serverRequest__", port, path, method,
+  body, headers)` — the same bridge as the host fetch patch. Verified:
+  32/32 unit tests (`tests/preview-routing.test.js`) + 11/11 browser
+  checks (`tests/preview-routing-e2e.py` + `.html`, headed Firefox):
+  guest `http.createServer().listen(3117)` reached through a real iframe
+  navigation, unclaimed port renders the 502 page, POST echo round-trips.
+  Host usage documented in `docs/PREVIEW_ROUTING.md` and the Preview URLs
+  section of `docs/LIFECYCLE.md`. Known limits documented there too
+  (first-load race, no streaming, no WebSocket upgrade, cross-tab
+  fan-out first-reply-wins).
+- **[x] `forwardPreviewErrors` (done 2026-10-11):** the WebContainers
+  pattern is implemented: every failed preview renders a readable HTML
+  error page instead of a blank tab or a hang — 502 for an unclaimed
+  port (names the port, hints `http.createServer(...).listen(N)`),
+  502 when the guest handler throws (the error message, HTML-escaped),
+  504 when the host never answers (20s cap — the SW never hangs), 400
+  for a malformed preview URL, 502 when the SW has no client page.
+  Host side: `buildPreviewErrorHtml()` (unit-tested incl. injection
+  escaping); transport side: the SW's own `errorPage()` for host-never-
+  answered failures only, so the two can't drift. Error table and the
+  502 page are covered by the browser E2E above.
 - **Worker-backed spawn (must):** stdio streaming, signals, exit codes —
   workers boot from a VFS snapshot and receive changes over a VFS bridge
   (Nodepod's `process-manager.ts` + `process-worker-entry.ts`). The honest
@@ -277,5 +306,6 @@ and the process story. Technique references in
   needs the browser `fetch`/`Headers`/`Response` patched to Node 20 undici
   behavior (set-cookie handling, Headers parity — Nodepod's
   `fetch-response.ts`).
-- **`forwardPreviewErrors`** pattern for preview error surfacing
-  (WebContainers).
+  error page, never a blank tab or a hang (see "Preview routing" above:
+  `buildPreviewErrorHtml` + the SW transport `errorPage`, browser-E2E
+  proven 2026-10-11).

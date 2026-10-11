@@ -542,11 +542,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // docs/lifecycle-api: Lifecycle API documentation (roadmap §5).
-    // roadmap.md records the completion. tests/ is excluded above.
-    expect(files.sort()).toEqual(
-      ["docs/LIFECYCLE.md", "roadmap.md"].sort(),
-    );
+    // docs/preview-routing: verified + documented preview routing and
+    // forwardPreviewErrors (roadmap §5). roadmap.md records the
+    // completion. tests/ is excluded above.
+    expect(files.sort()).toEqual(["roadmap.md"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
