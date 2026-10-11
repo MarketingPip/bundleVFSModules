@@ -112,6 +112,42 @@ describe("vite plugin", () => {
 });
 
 describe("next.js wrapper", () => {
+  let origCwd;
+  beforeEach(() => {
+    // NOTE: chdir BEFORE calling withBundleVFSModules — the wrapper copies
+    // eagerly at config-evaluation time into <cwd>/public.
+    origCwd = process.cwd();
+    process.chdir(tmp);
+    fs.mkdirSync(path.join(tmp, "public"), { recursive: true });
+  });
+  afterEach(() => {
+    process.chdir(origCwd);
+  });
+
+  test("copies assets eagerly at config-evaluation time (no webpack call)", () => {
+    withBundleVFSModules({}, { assetDir: "bvm-eager" });
+    expect(
+      fs.existsSync(path.join(tmp, "public", "bvm-eager", "runtime.js")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(tmp, "public", "bvm-eager", "dist", "vfs.js")),
+    ).toBe(true);
+  });
+
+  test("exposes __bvmAssetBase and __bvmAssetDir on the wrapped config", () => {
+    const wrapped = withBundleVFSModules(
+      {},
+      { assetDir: "bvm-meta", publicPath: "/bvm/" },
+    );
+    // Trailing slash normalized
+    expect(wrapped.__bvmAssetBase).toBe("/bvm");
+    expect(wrapped.__bvmAssetDir).toBe("bvm-meta");
+  });
+
+  test("invalid publicPath throws eagerly at config-evaluation time", () => {
+    expect(() => withBundleVFSModules({}, { publicPath: "bvm" })).toThrow();
+  });
+
   test("wraps config and preserves user webpack", () => {
     const userWebpack = (c) => ({ ...c, userCalled: true });
     const wrapped = withBundleVFSModules(
@@ -120,57 +156,35 @@ describe("next.js wrapper", () => {
     );
     expect(wrapped.reactStrictMode).toBe(true);
     expect(typeof wrapped.webpack).toBe("function");
-    // webpack hook triggers the copy (cwd/public)
-    const origCwd = process.cwd();
-    process.chdir(tmp);
-    fs.mkdirSync(path.join(tmp, "public"), { recursive: true });
-    try {
-      const out = wrapped.webpack({});
-      expect(out.userCalled).toBe(true);
-      expect(
-        fs.existsSync(path.join(tmp, "public", "bvm-test", "runtime.js")),
-      ).toBe(true);
-    } finally {
-      process.chdir(origCwd);
-    }
+    // webpack hook still triggers the copy (belt-and-braces) and chains
+    const out = wrapped.webpack({});
+    expect(out.userCalled).toBe(true);
+    expect(
+      fs.existsSync(path.join(tmp, "public", "bvm-test", "runtime.js")),
+    ).toBe(true);
   });
 
   test("works without a user webpack function", () => {
     const wrapped = withBundleVFSModules({}, { assetDir: "bvm2" });
-    const origCwd = process.cwd();
-    process.chdir(tmp);
-    fs.mkdirSync(path.join(tmp, "public"), { recursive: true });
-    try {
-      const out = wrapped.webpack({ entry: "x" });
-      expect(out.entry).toBe("x");
-      expect(
-        fs.existsSync(path.join(tmp, "public", "bvm2", "runtime.js")),
-      ).toBe(true);
-    } finally {
-      process.chdir(origCwd);
-    }
+    const out = wrapped.webpack({ entry: "x" });
+    expect(out.entry).toBe("x");
+    expect(
+      fs.existsSync(path.join(tmp, "public", "bvm2", "runtime.js")),
+    ).toBe(true);
   });
 
-  test("second webpack call does not re-copy (idempotent flag)", () => {
+  test("webpack hook does not re-copy after eager copy (idempotent flag)", () => {
     const wrapped = withBundleVFSModules({}, { assetDir: "bvm3" });
-    const origCwd = process.cwd();
-    process.chdir(tmp);
-    fs.mkdirSync(path.join(tmp, "public"), { recursive: true });
-    try {
-      wrapped.webpack({});
-      const mtime1 = fs.statSync(
-        path.join(tmp, "public", "bvm3", "runtime.js"),
-      ).mtimeMs;
-      // Small delay to detect a re-copy via mtime change
-      const start = Date.now();
-      while (Date.now() - start < 10) {}
-      wrapped.webpack({});
-      const mtime2 = fs.statSync(
-        path.join(tmp, "public", "bvm3", "runtime.js"),
-      ).mtimeMs;
-      expect(mtime2).toBe(mtime1);
-    } finally {
-      process.chdir(origCwd);
-    }
+    const mtime1 = fs.statSync(
+      path.join(tmp, "public", "bvm3", "runtime.js"),
+    ).mtimeMs;
+    // Small delay to detect a re-copy via mtime change
+    const start = Date.now();
+    while (Date.now() - start < 10) {}
+    wrapped.webpack({});
+    const mtime2 = fs.statSync(
+      path.join(tmp, "public", "bvm3", "runtime.js"),
+    ).mtimeMs;
+    expect(mtime2).toBe(mtime1);
   });
 });
