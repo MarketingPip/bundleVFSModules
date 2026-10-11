@@ -542,17 +542,9 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // integrations/complete: hardened Vite/Next framework integrations
-    // (copy-based host setup) + docs/INTEGRATIONS.md. roadmap.md records
-    // the completion. tests/ is excluded above.
-    expect(files.sort()).toEqual(
-      [
-        "docs/INTEGRATIONS.md",
-        "roadmap.md",
-        "src/integrations/next.js",
-        "src/integrations/vite.js",
-      ].sort(),
-    );
+    // verify/chrome137-interop: Chrome 137 E2E verification (roadmap §2).
+    // roadmap.md records the completion. tests/ is excluded above.
+    expect(files.sort()).toEqual(["roadmap.md"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
@@ -584,8 +576,6 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       );
     const base = fnNames(baseSrc);
     const added = [...fnNames(branchSrc)].filter((n) => !base.has(n));
-    // Modularization-era branches add isNodeLane(); branches that don't
-    // touch runtime.js add nothing.
     expect([[], ["isNodeLane"]]).toContainEqual(added);
   });
 
@@ -617,8 +607,6 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       );
     const base = specifiers(baseSrc);
     const added = [...specifiers(branchSrc)].filter((s) => !base.has(s));
-    // Modularization-era branches add ./src/quick_bundle.js; branches that
-    // don't touch runtime.js add nothing.
     expect([[], ["./src/quick_bundle.js"]]).toContainEqual(added);
   });
 });
