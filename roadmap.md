@@ -279,11 +279,20 @@ Web Workers and Node/Bun worker threads (Nodepod's `src/headless.ts` +
   (b) sandbox markers non-enumerable (plus the shim lane's marker pinned);
   (c) `expectedFailuresPath()` selects `expected-failures.headless.json`;
   (d) `report.json` records `{kind: "headless-vm", template, templateSha256}`.
-- Re-triage: strict-gate modules through the lane; `path` 15/17 (2
-  inherent: `path/posix`/`path/win32` reference identity across
-  per-specifier dist bundles — the browser lane behaves identically, so a
-  real runtime characteristic, not a harness artifact). Expectations in
-  `parity/expected-failures.headless.json` (Deno-style, with reasons).
+- Re-triage: strict-gate modules through the lane — `path` 15/17,
+  `querystring` 4/4, `assert` 16/19, `events` 3/9, `os` 2/7, `url` 10/17,
+  `tty` 1/5, `punycode` 0/1, `string_decoder` 0/3, `sys` 0/1,
+  `constants` 0/1. All failures triaged as inherent (real runtime
+  characteristics the browser lane shares): per-specifier dist-bundle
+  reference identity (`path/posix`, `path/win32`, `sys`→`util`),
+  hoisted-require warning timing (`punycode` DEP0040, `assert`
+  DEP0094 — the transform hoists requires into the preamble, so warnings
+  fire before `common.expectWarning` runs), missing `Buffer` global
+  (`string_decoder`), Node-internal test helpers
+  (`internal/test/binding`, `internal/assert/myers_diff`), no shell,
+  unimplemented `URLPattern`. Expectations in
+  `parity/expected-failures.headless.json` (29 Deno-style entries, with
+  reasons).
 - Non-goals honored: the shim lane is untouched (still the fast CI gate),
   no shim was changed for the harness, and harness-only issues
   (e.g. `test/common` stubbing) are fixed in the harness, never recorded
