@@ -12,7 +12,12 @@
 //   - No `window`/`document` at module scope.
 //   - No global pollution.
 
-import { EventEmitter } from "../events.js";
+// Self-contained EventEmitter (./event-emitter.js): the shared ../events.js
+// statically imports ../async_hooks.js -> the `als-browser` npm package,
+// which replaces globalThis.setTimeout/setInterval/setImmediate/
+// queueMicrotask at import time and trips the official test harness's
+// global-leak check. The local emitter has zero imports and zero globals.
+import { EventEmitter } from "./event-emitter.js";
 import { StringDecoder } from "../string_decoder.js";
 
 // ======================================================================
