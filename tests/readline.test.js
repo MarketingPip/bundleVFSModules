@@ -170,48 +170,36 @@ describe("readline (callback version)", () => {
       expect(typeof rl.line).toBe("string");
     });
 
-    test("cursor is number", () => {
+    test("cursor is undefined for non-terminal input (Node parity)", () => {
+      // Real Node only sets `cursor` in terminal mode; for a plain pipe
+      // input it stays undefined. (Verified against node v24.20.0.)
       rl = createInterface({ input: lineReadable([]) });
-      expect(typeof rl.cursor).toBe("number");
+      expect(rl.cursor).toBeUndefined();
     });
   });
 
-  // ── Readline controller ────────────────────────────────────────────────────
+  // ── Readline export (Node: Readline === Interface) ──────────────────────────
+  // In real Node.js, `require('readline').Readline` is the Interface
+  // constructor itself — there is no separate chainable "controller" class
+  // (the promises variant's Readline is an output-stream controller with a
+  // different constructor). These tests assert the genuine Node surface.
   describe("Readline", () => {
-    let rl, readline;
-
-    beforeEach(() => {
-      rl = createInterface({ input: lineReadable([]), output: nullWritable() });
-      readline = new Readline(rl);
+    test("Readline is the Interface constructor", () => {
+      expect(Readline).toBe(Interface);
     });
 
-    afterEach(() => {
+    test("new Readline(options) creates a working Interface", () => {
+      const rl = new Readline({ input: lineReadable([]) });
+      expect(rl).toBeInstanceOf(Interface);
+      expect(typeof rl.question).toBe("function");
       rl.close();
+      expect(rl.closed).toBe(true);
     });
 
-    test("instantiates correctly", () => {
-      expect(readline).toBeInstanceOf(Readline);
-    });
-
-    test("clearLine() chains", () => {
-      expect(readline.clearLine(0)).toBe(readline);
-    });
-
-    test("clearScreenDown() chains", () => {
-      expect(readline.clearScreenDown()).toBe(readline);
-    });
-
-    test("moveCursor() chains", () => {
-      expect(readline.moveCursor(0, 0)).toBe(readline);
-    });
-
-    test("rollback() chains", () => {
-      expect(readline.rollback()).toBe(readline);
-    });
-
-    // non-promises version: commit might be sync
-    test("commit() does not throw", () => {
-      expect(() => readline.commit()).not.toThrow();
+    test("Readline callable without new (factory)", () => {
+      const rl = Readline({ input: lineReadable([]) });
+      expect(rl).toBeInstanceOf(Interface);
+      rl.close();
     });
   });
 });

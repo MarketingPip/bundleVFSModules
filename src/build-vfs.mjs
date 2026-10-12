@@ -495,4 +495,12 @@ async function main() {
   console.log(`✅ VFS written → ${vfsPath}`);
 }
 
-main();
+// Only run the full build when executed directly (`node src/build-vfs.mjs`).
+// Importing this module (e.g. for nodeGitHubPlugin/esmShPlugin in a
+// single-module rebuild script) must not trigger a whole-dist rebuild.
+const isMainModule =
+  typeof process.argv[1] === "string" &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMainModule) {
+  main();
+}
