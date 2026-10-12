@@ -1,0 +1,84 @@
+# Parity Hit List — Node builtin shims ranked by official-test pass rate
+
+Generated 2026-10-11 (sweep of `parity/node-test/parallel`, shim lane).
+Updated 2026-10-12: readline 0/22 → 3/22 after PR #218.
+Method: each `test-<module>-*` file run via `parity/preload.mjs` with
+`PARITY_TARGET=<module>` (30s timeout per file). Pass rates are **raw** —
+they do not subtract `parity/expected-failures.shim.json` entries.
+
+> Note: the stock `parity/run.mjs` matches files with `startsWith("test-http")`,
+> which also catches `test-http2-*`/`test-https-*` (those then run against real
+> Node — false passes). This sweep used exact prefix matching instead.
+
+## Bottom 10 — biggest parity gaps (port Node's `lib/*.js` here first)
+
+| # | Module | Passed | Total | Rate | Gap type |
+|---|--------|--------|-------|------|----------|
+| 1 | readline | 3 | 22 | 13.6% | PR #218: factory pattern fixed, emitKeypressEvents implemented, API surface expanded; remaining are TTY-specific (raw mode, cursor positioning, complex escape sequences) |
+| 2 | sea | 0 | 2 | 0.0% | Single-executable-application API — likely inherent (no SEA in browser); verify before investing |
+| 3 | sqlite | 0 | 17 | 0.0% | Partial API surface (defensive mode, authz, backup, aggregate fns missing); the wa-sqlite WASM path (AGENTS.md rule 8) is the intended implementation |
+| 4 | dgram | 1 | 80 | 1.3% | UDP sockets are honest noops by design (no raw UDP in browser); `socket.address()` returns null — document as inherent, don't chase |
+| 5 | https | 1 | 67 | 1.5% | TLS-over-virtual-socket stack incomplete; real TLS client has no byte transport in browser (roadmap 2026-10-05 verdict: honest stub until transport exists) — mostly inherent |
+| 6 | http2 | 7 | 277 | 2.5% | HTTP/2 framing/session multiplexing largely unimplemented; large surface (277 tests) |
+| 7 | child_process | 4 | 112 | 3.6% | Real process spawning is a noop by design; 100 failures already documented in `expected-failures.shim.json` as inherent (harness global-leak detector vs ALS timer patching) |
+| 8 | fs | 13 | 349 | 3.7% | Largest test surface (349); VFS covers basics but sync/async edge cases, flags, and permission semantics diverge widely — highest-leverage fixable target |
+| 9 | domain | 2 | 50 | 4.0% | Deprecated Node API; low value — deprioritize unless cheap wins |
+| 10 | cluster | 4 | 83 | 4.8% | Multi-process clustering is a noop in browser (single worker); mostly inherent |
+
+## Full ranking (39/40 swept)
+
+| Module | Passed | Total | Rate |
+|--------|--------|-------|------|
+| readline | 0 | 21 | 0.0% |
+| sea | 0 | 2 | 0.0% |
+| sqlite | 0 | 17 | 0.0% |
+| dgram | 1 | 80 | 1.3% |
+| https | 1 | 67 | 1.5% |
+| http2 | 7 | 277 | 2.5% |
+| child_process | 4 | 112 | 3.6% |
+| fs | 13 | 349 | 3.7% |
+| domain | 2 | 50 | 4.0% |
+| cluster | 4 | 83 | 4.8% |
+| events | 1 | 9 | 11.1% |
+| tls | 29 | 220 | 13.2% |
+| stream | 42 | 236 | 17.8% |
+| async_hooks | 9 | 36 | 25.0% |
+| dns | 9 | 30 | 30.0% |
+| inspector | 29 | 74 | 39.2% |
+| vm | 41 | 97 | 42.3% |
+| zlib | 31 | 64 | 48.4% |
+| tty | 3 | 5 | 60.0% |
+| repl | 71 | 101 | 70.3% |
+| util | 23 | 30 | 76.7% |
+| perf_hooks | 12 | 15 | 80.0% |
+| os | 5 | 6 | 83.3% |
+| process | 81 | 97 | 83.5% |
+| module | 28 | 32 | 87.5% |
+| trace_events | 26 | 29 | 89.7% |
+| worker_threads | 134 | 142 | 94.4% |
+| console | 20 | 21 | 95.2% |
+| buffer | 60 | 62 | 96.8% |
+| timers | 43 | 44 | 97.7% |
+| crypto | 126 | 128 | 98.4% |
+| assert | 18 | 18 | 100% |
+| diagnostics_channel | 26 | 26 | 100% |
+| path | 16 | 16 | 100% |
+| querystring | 3 | 3 | 100% |
+| string_decoder | 2 | 2 | 100% |
+| url | 16 | 16 | 100% |
+| v8 | 22 | 22 | 100% |
+| wasi | 2 | 2 | 100% |
+
+## Not swept
+
+- **http** (398 test files): sweep hung past 35 min at 0% CPU — noted per task instructions, needs investigation separately (likely a test that deadlocks the runner rather than hitting the 30s spawn timeout).
+- **constants, punycode, sys**: zero official test files — "no official tests".
+- Internal shims with no test target (`_http_*`, `_stream_*`, `_tls_*`, `node_globals`, `fetch-patch`, `browser-builds`, etc.): not applicable.
+
+## Notes for prioritization
+
+- **events 1/9 is misleading**: 8 of the 9 failures are documented in `expected-failures.shim.json` as inherent (harness limitations). Effective parity is higher than raw rate suggests.
+- **buffer 60/62**: the 2 failures are the documented expected failures — effectively at parity.
+- **Fixable-first candidates** (real gaps, browser-achievable): `fs`, `readline`, `stream`, `async_hooks`, `dns`, `zlib`, `vm`, `tls`, `http2`.
+- **Inherent / deprioritize**: `dgram` (no UDP in browser), `https` (no byte transport), `child_process`/`cluster` (no real processes), `domain` (deprecated), `sea` (likely N/A).
+- `sqlite` should go the WASM-of-the-real-thing route (wa-sqlite), not hand-rolled.
