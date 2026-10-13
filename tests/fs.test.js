@@ -92,8 +92,11 @@ describe("Stats shape", () => {
   test("date fields are prototype getters returning Date", () => {
     fs.writeFileSync(`${R}/a.txt`, "hello");
     const st = fs.statSync(`${R}/a.txt`);
-    expect(st.birthtime instanceof Date).toBe(true);
+    // Real Node: prototype getters until first access, then lazily defined
+    // as own enumerable props.
     expect(Object.keys(st)).not.toContain("birthtime");
+    expect(st.birthtime instanceof Date).toBe(true);
+    expect(Object.keys(st)).toContain("birthtime");
   });
   test("type methods", () => {
     fs.writeFileSync(`${R}/a.txt`, "hello");

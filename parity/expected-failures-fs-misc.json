@@ -1,0 +1,22 @@
+{
+  "test-fs-promises-file-handle-aggregate-errors.js": {
+    "category": "inherent",
+    "reason": "Requires --expose-internals: monkey-patches real Node's internal FileHandle.prototype.fd (via require('internal/fs/promises')) to inject op/close failures. The shim's FileHandle is a separate memfs-backed class, so the patch never fires; the AggregateError path is unreachable in this lane. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-promises-file-handle-close-errors.js": {
+    "category": "inherent",
+    "reason": "Requires --expose-internals: wraps real Node's internal FileHandle.prototype.close via an fd-getter patch on require('internal/fs/promises'). The shim never instantiates real Node's FileHandle, so the injected CLOSE_ERROR never occurs. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-promises-file-handle-op-errors.js": {
+    "category": "inherent",
+    "reason": "Requires --expose-internals: replaces real Node's internal FileHandle.prototype.fd getter (via require('internal/fs/promises')) to throw INTERNAL_ERROR. The shim's path-based truncate/readFile/writeFile use its own FileHandle class; the patch is invisible to them. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-promisified.js": {
+    "category": "inherent",
+    "reason": "Needs util.promisify.custom on fs.read/fs.write/fs.exists (resolving {bytesRead,buffer}/{bytesWritten,buffer}/boolean). src/fs.js defines them, but the parity harness's wrapFn copies only string-keyed props (Object.keys), dropping the symbol. Unfixable from src/fs.js without harness edits. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-sync-fd-leak.js": {
+    "category": "inherent",
+    "reason": "Requires --expose-internals + patching Node's C++ binding (internalBinding('fs').writeFileUtf8) and mocking fs.openSync to return a fake fd. The memfs-backed shim has no C++ fast path; writeFileSync delegates to vol, so neither the mock nor the binding patch takes effect. Fails identically at pristine base 1a89d258."
+  }
+}
