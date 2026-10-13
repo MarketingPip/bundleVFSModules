@@ -2028,6 +2028,28 @@ function buildApi(vol) {
       }
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
+      // Match readFileSyncManual: fail fast with ERR_FS_FILE_TOO_LARGE for
+      // files > 2GiB instead of attempting the read (test-fs-readfile.js).
+      // Only for path args; fd reads go through the fd's own state.
+      if (typeof p === "string" || Buffer.isBuffer(p) || p instanceof URL) {
+        try {
+          const st = vol.statSync(p);
+          if (st.size > 2 ** 31 - 1) {
+            const err = new RangeError(
+              `File size (${st.size}) is greater than 2 GiB`,
+            );
+            err.code = "ERR_FS_FILE_TOO_LARGE";
+            nextTick(callback, err);
+            return;
+          }
+        } catch (e) {
+          // stat failed (e.g. ENOENT) — let origReadFile produce the error.
+          if (e.code !== "ENOENT") {
+            nextTick(callback, e);
+            return;
+          }
+        }
+      }
       return origReadFile.call(this, p, options, callback);
     }, 1);
 
@@ -4773,6 +4795,24 @@ function buildApi(vol) {
         if (flush) {
           writeFileSyncWithFlush(fp, data, rest[1], syncName, existed);
         } else {
+          // readFileSync: fail fast with ERR_FS_FILE_TOO_LARGE for files
+          // > 2GiB (test-fs-readfile.js). The manual path above already
+          // checks; this covers the memfs fast path for path args.
+          if (syncName === "readFileSync" && typeof fp !== "number") {
+            try {
+              const st = vol.statSync(fp);
+              if (st.size > 2 ** 31 - 1) {
+                const err = new RangeError(
+                  `File size (${st.size}) is greater than 2 GiB`,
+                );
+                err.code = "ERR_FS_FILE_TOO_LARGE";
+                throw err;
+              }
+            } catch (e) {
+              if (e.code === "ERR_FS_FILE_TOO_LARGE") throw e;
+              // stat failed (e.g. ENOENT) — let origSync produce the error.
+            }
+          }
           result = origSync.call(this, fp, data, ...rest.slice(1));
         }
       } catch (e) {
