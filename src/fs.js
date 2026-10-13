@@ -4009,6 +4009,32 @@ function buildApi(vol) {
     }
     return null;
   }
+  // Node's getValidatedFd for the stream fd option: a non-negative 32-bit
+  // integer or a FileHandle; anything else throws (probed v24.20.0).
+  // Returns null (path mode), the number, or the FileHandle.
+  function validateStreamFd(fdOpt) {
+    if (fdOpt === undefined || fdOpt === null) return null;
+    const handle = asFileHandle(fdOpt);
+    if (handle) return handle;
+    if (typeof fdOpt !== "number")
+      throw errInvalidArgTypeProp(
+        "options.fd",
+        "number or an instance of FileHandle",
+        fdOpt,
+      );
+    if (!Number.isSafeInteger(fdOpt))
+      throw errOutOfRange("fd", "an integer", fdOpt);
+    if (fdOpt < 0 || fdOpt > 0x7fffffff)
+      throw errOutOfRange("fd", ">= 0 && <= 2147483647", fdOpt);
+    return fdOpt;
+  }
+  // Node validates the effective fs object's function props at stream
+  // construction (lib/internal/fs/streams.js): options.fs.open in path
+  // mode, .read/.write/.writev always, .close when autoDestroy.
+  function validateFsFnProp(value, name) {
+    if (typeof value !== "function")
+      throw errInvalidArgTypeProp(name, "function", value);
+  }
   // Node's FileHandleOperations (lib/internal/fs/streams.js): route the
   // stream's I/O through the handle's promise API, adapted to callbacks.
   // Destroying a handle-backed stream closes the handle.
@@ -4068,10 +4094,17 @@ function buildApi(vol) {
       super(streamOpts(opts));
       // options.signal validated for every stream (invalid type throws).
       const signal = validateAbortSignal(opts.signal);
-      const handle = asFileHandle(opts.fd);
-      this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
+      const fdValidated = validateStreamFd(opts.fd);
+      const handle =
+        fdValidated !== null && typeof fdValidated !== "number"
+          ? fdValidated
+          : null;
+      this.fd = typeof fdValidated === "number" ? fdValidated : null;
       // Node leaves .path unset (undefined) when fd is specified.
-      if (this.fd === null) this.path = toPathString(path);
+      if (this.fd === null) {
+        validatePath(path);
+        this.path = toPathString(path);
+      }
       this.flags = opts.flags || "r";
       this.mode = opts.mode || 0o666;
       this.start = opts.start;
@@ -4087,6 +4120,12 @@ function buildApi(vol) {
       // operations (test-fs-read-stream.js, test-fs-write-stream-fs.js).
       // Looked up lazily so patches apply at call time.
       const customFs = opts.fs || {};
+      // Node validates the effective fs object's function props at
+      // construction (lib/internal/fs/streams.js).
+      const kFs = opts.fs || fs;
+      if (this.fd === null) validateFsFnProp(kFs.open, "options.fs.open");
+      validateFsFnProp(kFs.read, "options.fs.read");
+      if (this.autoClose) validateFsFnProp(kFs.close, "options.fs.close");
       if (handle) {
         // Node: FileHandle is not supported with custom fs operations.
         for (const k of ["open", "read", "write", "writev", "close"]) {
@@ -4135,6 +4174,9 @@ function buildApi(vol) {
           nextTick(() => this._openWithImpl());
         }
       } else {
+        // A caller-provided fd is already open (Node closes it on destroy
+        // when autoClose, like a stream-opened fd).
+        this._opened = true;
         nextTick(() => this.emit("open", this.fd));
       }
     }
@@ -4148,15 +4190,13 @@ function buildApi(vol) {
           );
           return;
         }
-        if (this.destroyed) {
-          // Destroyed while the open was in flight: release the fd
-          // immediately instead of leaking it.
-          this._impl.close(fd, () => {});
-          return;
-        }
         this.fd = fd;
         this._opened = true;
+        // Node emits 'open' even when destroy() ran while the open was in
+        // flight (test-fs-stream-double-close); the destroy machinery then
+        // releases the fd — run _cleanup now since _destroy already ran.
         this.emit("open", fd);
+        if (this.destroyed) this._cleanup();
       });
     }
     _read(size) {
@@ -4208,12 +4248,46 @@ function buildApi(vol) {
     }
     // Node's ReadStream.prototype.close(cb): destroys the stream; the fd
     // is released via _destroy -> _cleanup (test-fs-read-stream-fd-leak.js
-    // asserts no leaked fds across close()/destroy()).
+    // asserts no leaked fds across close()/destroy()). Like Node's
+    // finished(), a callback on an already-closed stream fires on next
+    // tick instead of waiting for a 'close' that already happened.
     close(cb) {
-      if (typeof cb === "function") this.once("close", cb);
+      if (typeof cb === "function") {
+        if (this.closed) nextTick(cb);
+        else this.once("close", cb);
+      }
       this.destroy();
     }
   }
+  // Node exposes autoClose as a prototype accessor proxying the stream
+  // state's autoDestroy; touching it on the bare prototype throws
+  // ERR_INVALID_THIS (lib/internal/fs/streams.js).
+  function errInvalidThis(className) {
+    const err = new TypeError(`Value of "this" must be of type ${className}`);
+    err.code = "ERR_INVALID_THIS";
+    return err;
+  }
+  Object.defineProperty(FsReadStream.prototype, "autoClose", {
+    configurable: true,
+    get() {
+      if (
+        typeof this !== "object" ||
+        this === null ||
+        !Object.prototype.hasOwnProperty.call(this, "_readableState")
+      )
+        throw errInvalidThis("ReadStream");
+      return this._readableState.autoDestroy;
+    },
+    set(val) {
+      if (
+        typeof this !== "object" ||
+        this === null ||
+        !Object.prototype.hasOwnProperty.call(this, "_readableState")
+      )
+        throw errInvalidThis("ReadStream");
+      this._readableState.autoDestroy = val;
+    },
+  });
   class FsWriteStream extends Writable {
     constructor(path, options) {
       validateStreamOptions(options);
@@ -4221,10 +4295,17 @@ function buildApi(vol) {
       super(streamOpts(opts));
       // options.signal validated for every stream (invalid type throws).
       const signal = validateAbortSignal(opts.signal);
-      const handle = asFileHandle(opts.fd);
-      this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
+      const fdValidated = validateStreamFd(opts.fd);
+      const handle =
+        fdValidated !== null && typeof fdValidated !== "number"
+          ? fdValidated
+          : null;
+      this.fd = typeof fdValidated === "number" ? fdValidated : null;
       // Node leaves .path unset (undefined) when fd is specified.
-      if (this.fd === null) this.path = toPathString(path);
+      if (this.fd === null) {
+        validatePath(path);
+        this.path = toPathString(path);
+      }
       this.flags = opts.flags || "w";
       this.mode = opts.mode || 0o666;
       this.start = opts.start;
@@ -4239,6 +4320,15 @@ function buildApi(vol) {
       // individual operations. Looked up lazily so patches apply at call
       // time.
       const customFs = opts.fs || {};
+      // Node validates the effective fs object's function props at
+      // construction (lib/internal/fs/streams.js).
+      const kFs = opts.fs || fs;
+      if (this.fd === null) validateFsFnProp(kFs.open, "options.fs.open");
+      if (!kFs.write && !kFs.writev)
+        throw errInvalidArgTypeProp("options.fs.write", "function", kFs.write);
+      if (kFs.write) validateFsFnProp(kFs.write, "options.fs.write");
+      if (kFs.writev) validateFsFnProp(kFs.writev, "options.fs.writev");
+      if (this.autoClose) validateFsFnProp(kFs.close, "options.fs.close");
       if (handle) {
         // Node: FileHandle is not supported with custom fs operations.
         for (const k of ["open", "read", "write", "writev", "close"]) {
@@ -4292,6 +4382,9 @@ function buildApi(vol) {
           nextTick(() => this._openWithImpl());
         }
       } else {
+        // A caller-provided fd is already open (Node closes it on destroy
+        // when autoClose, like a stream-opened fd).
+        this._opened = true;
         nextTick(() => this.emit("open", this.fd));
       }
     }
@@ -4305,15 +4398,13 @@ function buildApi(vol) {
           );
           return;
         }
-        if (this.destroyed) {
-          // Destroyed while the open was in flight: release the fd
-          // immediately instead of leaking it.
-          this._impl.close(fd, () => {});
-          return;
-        }
         this.fd = fd;
         this._opened = true;
+        // Node emits 'open' even when destroy() ran while the open was in
+        // flight (test-fs-stream-double-close); the destroy machinery then
+        // releases the fd — run _cleanup now since _destroy already ran.
         this.emit("open", fd);
+        if (this.destroyed) this._cleanup();
       });
     }
     _write(chunk, encoding, callback) {
@@ -4385,7 +4476,10 @@ function buildApi(vol) {
     }
     // Node's WriteStream.prototype.close(cb): same contract as ReadStream.
     close(cb) {
-      if (typeof cb === "function") this.once("close", cb);
+      if (typeof cb === "function") {
+        if (this.closed) nextTick(cb);
+        else this.once("close", cb);
+      }
       this.destroy();
     }
   }
@@ -4422,6 +4516,28 @@ function buildApi(vol) {
   }
   ReadStreamFactory.prototype = FsReadStream.prototype;
   WriteStreamFactory.prototype = FsWriteStream.prototype;
+  // WriteStream autoClose accessor (placed after the class is defined).
+  Object.defineProperty(FsWriteStream.prototype, "autoClose", {
+    configurable: true,
+    get() {
+      if (
+        typeof this !== "object" ||
+        this === null ||
+        !Object.prototype.hasOwnProperty.call(this, "_writableState")
+      )
+        throw errInvalidThis("WriteStream");
+      return this._writableState.autoDestroy;
+    },
+    set(val) {
+      if (
+        typeof this !== "object" ||
+        this === null ||
+        !Object.prototype.hasOwnProperty.call(this, "_writableState")
+      )
+        throw errInvalidThis("WriteStream");
+      this._writableState.autoDestroy = val;
+    },
+  });
   fs.ReadStream = ReadStreamFactory;
   fs.WriteStream = WriteStreamFactory;
   fs.FileReadStream = ReadStreamFactory;
