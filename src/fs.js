@@ -1206,6 +1206,28 @@ const S_IFMT = 0o170000,
   S_IFIFO = 0o010000,
   S_IFSOCK = 0o140000;
 
+// UV_DIRENT_* type constants (stable ABI, mirror src/constants.js).
+const UV_DIRENT_UNKNOWN = 0,
+  UV_DIRENT_FILE = 1,
+  UV_DIRENT_DIR = 2,
+  UV_DIRENT_LINK = 3,
+  UV_DIRENT_FIFO = 4,
+  UV_DIRENT_SOCKET = 5,
+  UV_DIRENT_CHAR = 6,
+  UV_DIRENT_BLOCK = 7;
+
+function modeToDirentType(mode) {
+  const fmt = mode & S_IFMT;
+  if (fmt === S_IFREG) return UV_DIRENT_FILE;
+  if (fmt === S_IFDIR) return UV_DIRENT_DIR;
+  if (fmt === S_IFLNK) return UV_DIRENT_LINK;
+  if (fmt === S_IFIFO) return UV_DIRENT_FIFO;
+  if (fmt === S_IFSOCK) return UV_DIRENT_SOCKET;
+  if (fmt === S_IFCHR) return UV_DIRENT_CHAR;
+  if (fmt === S_IFBLK) return UV_DIRENT_BLOCK;
+  return UV_DIRENT_UNKNOWN;
+}
+
 class Stats {
   constructor(m, bigint = false) {
     const asNum = (v) => (typeof v === "bigint" ? Number(v) : Number(v));
@@ -1301,32 +1323,34 @@ function toStats(m, options) {
 // ── 6. Node-shaped Dirent ───────────────────────────────────────────────────
 // Enumerable own keys: name, parentPath only.
 class Dirent {
-  constructor(name, parentPath, mode) {
+  // Real Node signature: new Dirent(name, type, parentPath) where type is
+  // a UV_DIRENT_* constant.
+  constructor(name, type, parentPath) {
     this.name = name;
     this.parentPath = parentPath;
     // Non-enumerable: real Node Dirent exposes only name/parentPath.
-    Object.defineProperty(this, "_mode", { value: mode, enumerable: false });
+    Object.defineProperty(this, "_type", { value: type, enumerable: false });
   }
   isFile() {
-    return (this._mode & S_IFMT) === S_IFREG;
+    return this._type === UV_DIRENT_FILE;
   }
   isDirectory() {
-    return (this._mode & S_IFMT) === S_IFDIR;
+    return this._type === UV_DIRENT_DIR;
   }
   isSymbolicLink() {
-    return (this._mode & S_IFMT) === S_IFLNK;
+    return this._type === UV_DIRENT_LINK;
   }
   isBlockDevice() {
-    return (this._mode & S_IFMT) === S_IFBLK;
+    return this._type === UV_DIRENT_BLOCK;
   }
   isCharacterDevice() {
-    return (this._mode & S_IFMT) === S_IFCHR;
+    return this._type === UV_DIRENT_CHAR;
   }
   isFIFO() {
-    return (this._mode & S_IFMT) === S_IFIFO;
+    return this._type === UV_DIRENT_FIFO;
   }
   isSocket() {
-    return (this._mode & S_IFMT) === S_IFSOCK;
+    return this._type === UV_DIRENT_SOCKET;
   }
 }
 
@@ -1930,9 +1954,15 @@ function buildApi(vol) {
     fs.writeFileSync = function (file, data, options) {
       // fd variant: current-position write, no truncation (memfs truncates).
       if (typeof file === "number") {
+        const flush =
+          options !== null && typeof options === "object"
+            ? (options.flush ?? false)
+            : false;
+        validateBoolean(flush, "options.flush");
         checkFdWritable(file, "write");
         const buf = dataToBuffer(data, options);
         vol.writeSync(file, buf, 0, buf.byteLength, null);
+        if (flush) fs.fsyncSync(file);
         emitFs("fs", "writeFileSync", file, buf.byteLength);
         return;
       }
@@ -1955,7 +1985,7 @@ function buildApi(vol) {
           } catch {
             continue;
           }
-          if (wantDirent) out.push(new Dirent(name, dir, st.mode));
+          if (wantDirent) out.push(new Dirent(name, modeToDirentType(st.mode), dir));
           else out.push(rp);
           if (st.isDirectory()) walk(full, rp);
         }
@@ -1971,7 +2001,7 @@ function buildApi(vol) {
         } catch {
           /* ignore */
         }
-        return new Dirent(name, p, mode);
+        return new Dirent(name, modeToDirentType(mode), p);
       });
     }
     return names;
@@ -3270,6 +3300,36 @@ function buildApi(vol) {
     }
   }
 
+  // writeFileSync/appendFileSync with { flush: true }: open, write, fsync
+  // (through the fs object so spies observe it), close. `existed` mirrors
+  // the umask fix-up in the shared wrapper.
+  function writeFileSyncWithFlush(fp, data, options, syncName, existed) {
+    const isUserFd = typeof fp === "number";
+    const opts = options !== null && typeof options === "object" ? options : {};
+    const flag =
+      syncName === "appendFileSync" ? "a" : opts.flag || "w";
+    const fd = isUserFd ? fp : vol.openSync(fp, flag, opts.mode || 0o666);
+    try {
+      if (isUserFd && syncName === "appendFileSync") {
+        const st = vol.fstatSync(fd);
+        vol.writeSync(fd, data, 0, data.byteLength, st.size);
+      } else {
+        vol.writeSync(fd, data, 0, data.byteLength, null);
+      }
+      fs.fsyncSync(fd);
+    } finally {
+      if (!isUserFd) {
+        try {
+          vol.closeSync(fd);
+        } catch {}
+      }
+    }
+    if (!existed && !isUserFd && opts.mode === undefined) {
+      try {
+        vol.chmodSync(fp, applyUmask(0o666));
+      } catch {}
+    }
+  }
   // ── readFile/writeFile/appendFile: accept fd-or-path ──
   function fileArg(p) {
     if (typeof p === "number") return p;
@@ -3428,9 +3488,24 @@ function buildApi(vol) {
       } catch {
         existed = false;
       }
+      // writeFile/appendFile `flush` option (Node v22+): validate the flag,
+      // then write + fsync through the fs object (so spies observe it).
+      let flush = false;
+      if (syncName === "writeFileSync" || syncName === "appendFileSync") {
+        const options = rest[1];
+        flush =
+          options !== null && typeof options === "object"
+            ? (options.flush ?? false)
+            : false;
+        validateBoolean(flush, "options.flush");
+      }
       let result;
       try {
-        result = origSync.call(this, fp, data, ...rest.slice(1));
+        if (flush) {
+          writeFileSyncWithFlush(fp, data, rest[1], syncName, existed);
+        } else {
+          result = origSync.call(this, fp, data, ...rest.slice(1));
+        }
       } catch (e) {
         throw enrichErr(e, syncName);
       }
@@ -3483,6 +3558,20 @@ function buildApi(vol) {
         });
         return;
       }
+      if (cbName === "writeFile" || cbName === "appendFile") {
+        // `flush` validated synchronously (Node's getOptions order); the
+        // manual dance runs async.
+        const options = args[1];
+        const flush =
+          options !== null && typeof options === "object"
+            ? (options.flush ?? false)
+            : false;
+        validateBoolean(flush, "options.flush");
+        if (flush) {
+          writeFileWithFlushAsync(fp, args[0], options, cbName, callback, p);
+          return;
+        }
+      }
       origCb.call(this, fp, ...args, (err, result) => {
         if (err) return callback(enrichErr(err, cbName));
         emitFs("fs", cbName, p, result);
@@ -3492,6 +3581,53 @@ function buildApi(vol) {
         else callback(null);
       });
     };
+  }
+
+  // writeFile/appendFile with { flush: true } (async): open, write, fsync
+  // via the fs object (so spies observe fs.fsync), close.
+  function writeFileWithFlushAsync(fp, data, options, cbName, callback, p) {
+    const isUserFd = typeof fp === "number";
+    const opts =
+      options !== null && typeof options === "object" ? options : {};
+    const flag = cbName === "appendFile" ? "a" : opts.flag || "w";
+    let fd;
+    try {
+      fd = isUserFd ? fp : vol.openSync(fp, flag, opts.mode || 0o666);
+    } catch (e) {
+      nextTick(callback, enrichErr(e, cbName));
+      return;
+    }
+    const done = (err) => {
+      if (!isUserFd) {
+        try {
+          vol.closeSync(fd);
+        } catch {}
+      }
+      if (err) {
+        callback(enrichErr(err, cbName));
+        return;
+      }
+      emitFs("fs", cbName, p, undefined);
+      callback(null);
+    };
+    nextTick(() => {
+      try {
+        if (isUserFd && cbName === "appendFile") {
+          const st = vol.fstatSync(fd);
+          vol.writeSync(fd, data, 0, data.byteLength, st.size);
+        } else {
+          vol.writeSync(fd, data, 0, data.byteLength, null);
+        }
+      } catch (e) {
+        done(e);
+        return;
+      }
+      try {
+        fs.fsync(fd, (syncErr) => done(syncErr));
+      } catch (e) {
+        done(e);
+      }
+    });
   }
 
   // ── opendir/opendirSync + Dir (auto-close after for-await) ──
@@ -3522,7 +3658,7 @@ function buildApi(vol) {
           } catch {
             /* ignore */
           }
-          return new Dirent(name, this.path, mode);
+          return new Dirent(name, modeToDirentType(mode), this.path);
         });
         this._index = 0;
       }
@@ -3718,9 +3854,9 @@ function buildApi(vol) {
           results.push(
             new Dirent(
               full.slice(full.lastIndexOf("/") + 1),
+              modeToDirentType(mode),
               full.slice(0, full.lastIndexOf("/") + 1).replace(/\/$/, "") ||
                 "/",
-              mode,
             ),
           );
         } else {
@@ -6395,6 +6531,9 @@ function buildSingleton() {
   if (rt && rt.__FS__) return rt.__FS__;
   const vol = createVolume();
   const fs = buildApi(vol);
+  // readdirImpl builds the module-scope Dirent class; expose that same
+  // class as fs.Dirent so `dirent instanceof fs.Dirent` holds.
+  fs.Dirent = Dirent;
   fs._vol = vol;
   fs.constants = nodeConstants;
   fs.promises.constants = nodeConstants;
