@@ -20,6 +20,7 @@
     "dns-packet": "^5.6.1",
     "magic-string": "^1.4.1",
     "memfs": "^3.4.0",
+    "minimatch": "^10.2.6",
     "pako": "^3.0.2",
     "set-cookie-parser": "3.1.2",
     "typescript": "^5.9.2"

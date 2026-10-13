@@ -23,6 +23,7 @@
 import { Volume, createFsFromVolume } from "memfs";
 import { Readable, Writable } from "./stream.js";
 import { errorOrDestroy } from "./stream/destroy.js";
+import { Minimatch } from "minimatch";
 
 // Browser-safe nextTick (process.nextTick under Node, queueMicrotask otherwise).
 function nextTick(fn, ...args) {
@@ -517,6 +518,91 @@ function* applyIterTransformsSync(source, transforms) {
   }
   if (run.length > 0) current = applyFusedStatelessSync(current, run);
   yield* current;
+}
+
+// Node's ERR_INVALID_ARG_VALUE for the watch ignore option (probed
+// v24.20.0): `The property 'options.ignore' must be a non-empty string.
+// Received ''`.
+function errInvalidArgValueNonEmptyString(name, value) {
+  const err = new TypeError(
+    `The property '${name}' must be a non-empty string. Received '${value}'`,
+  );
+  err.code = "ERR_INVALID_ARG_VALUE";
+  return err;
+}
+// Node's ignore-option element validation (lib/internal/validators.js):
+// string (non-empty), RegExp, or Function. The type error reads
+// `The "options.ignore" property must be one of type string or function
+// or an instance of RegExp. Received type number (123)` (probed v24.20.0).
+function errIgnoreArgType(name, received) {
+  let what;
+  if (received === undefined) what = "undefined";
+  else if (received === null) what = "null";
+  else if (typeof received === "object") {
+    what = `an instance of ${
+      received.constructor ? received.constructor.name : "Object"
+    }`;
+  } else {
+    const inspected =
+      typeof received === "string"
+        ? `'${received.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
+        : String(received);
+    what = `type ${typeof received} (${inspected})`;
+  }
+  const err = new TypeError(
+    `The "${name}" property must be one of type string or function or an ` +
+      `instance of RegExp. Received ${what}`,
+  );
+  err.code = "ERR_INVALID_ARG_TYPE";
+  return err;
+}
+function validateIgnoreOptionElement(value, name) {
+  if (typeof value === "string") {
+    if (value.length === 0) throw errInvalidArgValueNonEmptyString(name, value);
+    return;
+  }
+  if (value instanceof RegExp) return;
+  if (typeof value === "function") return;
+  throw errIgnoreArgType(name, value);
+}
+function validateIgnoreOption(value, name = "options.ignore") {
+  if (value == null) return;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++)
+      validateIgnoreOptionElement(value[i], `${name}[${i}]`);
+    return;
+  }
+  validateIgnoreOptionElement(value, name);
+}
+// Creates an ignore matcher from the fs.watch `ignore` option, mirroring
+// Node's lib/internal/fs/watchers.js createIgnoreMatcher: glob strings via
+// minimatch (matchBase so `*.log` matches `subdir/file.log`), RegExps, and
+// predicate functions. Returns null when no ignore option is set.
+function createIgnoreMatcher(ignore) {
+  if (ignore == null) return null;
+  const matchers = Array.isArray(ignore) ? ignore : [ignore];
+  const compiled = matchers.map((matcher) => {
+    if (typeof matcher === "string") {
+      const mm = new Minimatch(matcher, {
+        nonegate: true,
+        nocomment: true,
+        // matchBase allows patterns without slashes to match the basename,
+        // e.g. '*.log' matches 'subdir/file.log' (Node's option).
+        matchBase: true,
+      });
+      return (filename) => mm.match(filename);
+    }
+    if (matcher instanceof RegExp) {
+      return (filename) => matcher.test(filename);
+    }
+    return matcher;
+  });
+  return (filename) => {
+    for (const fn of compiled) {
+      if (fn(filename)) return true;
+    }
+    return false;
+  };
 }
 
 // Wrap a (…, callback) fs function with AbortSignal support. The options
@@ -3761,6 +3847,12 @@ function buildApi(vol) {
         options !== null && typeof options === "object"
           ? validateAbortSignal(options.signal)
           : undefined;
+      // Node validates options.ignore in the FSWatcher constructor.
+      const ignore =
+        options !== null && typeof options === "object"
+          ? options.ignore
+          : undefined;
+      validateIgnoreOption(ignore);
       validateEncodingOpt(options);
       validatePath(p);
       const ps = toPathString(p);
@@ -3771,6 +3863,18 @@ function buildApi(vol) {
         throw enrichErr(e, "watch");
       }
       patchWatcher(w, ps);
+      // Filter change events whose filename matches the ignore option, like
+      // Node's watcher (which drops them before emitting).
+      const ignoreMatcher = createIgnoreMatcher(ignore);
+      if (ignoreMatcher) {
+        const origEmit = w.emit.bind(w);
+        w.emit = function (event, ...args) {
+          if (event === "change" && args[1] != null && ignoreMatcher(args[1])) {
+            return false;
+          }
+          return origEmit(event, ...args);
+        };
+      }
       if (signal) {
         // Aborting closes the watcher (its 'close' event fires as usual).
         if (signal.aborted) nextTick(() => w.close());
@@ -5687,29 +5791,14 @@ function buildApi(vol) {
   }
   // watch returns an async-iterable watcher in real Node's promises API.
   promises.watch = function (p, options) {
-    // Validate `ignore` like real Node (throws on iteration start).
-    const ignore = options && options.ignore;
-    if (ignore !== undefined) {
-      const isValid = typeof ignore === "string" || ignore instanceof RegExp;
-      if (!isValid) {
-        const err = errInvalidArgType(
-          "options.ignore",
-          ["string", "RegExp"],
-          ignore,
-        );
-        return (async function* () {
-          throw err;
-        })();
-      }
-      if (ignore === "") {
-        const err = new TypeError(
-          'The "options.ignore" argument must not be empty',
-        );
-        err.code = "ERR_INVALID_ARG_VALUE";
-        return (async function* () {
-          throw err;
-        })();
-      }
+    // Validate `ignore` with the shared validator (throws on iteration
+    // start, like real Node).
+    try {
+      validateIgnoreOption(options && options.ignore);
+    } catch (err) {
+      return (async function* () {
+        throw err;
+      })();
     }
     // Node validates persistent/recursive/maxQueue/overflow/encoding at
     // iteration start (before the handle starts). A throwing generator
