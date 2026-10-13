@@ -143,11 +143,10 @@ function syncArgs(args) {
       p = a.toString();
     else if (a instanceof URL && a.protocol === "file:") p = fileURLToPath(a);
     if (p && underSyncRoot(p)) {
-      // The test may create this path through the shim (it won't exist on
-      // real disk): make sure its parent chain exists in memfs first.
-      try {
-        raw.mkdirSync(realPath.dirname(p), { recursive: true });
-      } catch {}
+      // Sync real-disk content into memfs. (syncPath mkdirs parent chains
+      // itself before copying; we must NOT pre-create parents here — that
+      // would mask ENOENT for genuinely missing paths, e.g. mkdtemp with a
+      // nonexistent prefix.)
       syncPath(p);
     }
   }
@@ -164,6 +163,15 @@ function wrapFn(fn) {
   }
   Object.setPrototypeOf(wrapped, Object.getPrototypeOf(fn));
   if (fn.prototype) wrapped.prototype = fn.prototype;
+  // Preserve own function props (fs.realpath.native / realpathSync.native
+  // are distinct functions in src/fs.js; wrap them too).
+  for (const k of Object.keys(fn)) {
+    if (k === "length" || k === "name" || k === "prototype") continue;
+    try {
+      const v = fn[k];
+      wrapped[k] = v === fn ? wrapped : typeof v === "function" ? wrapFn(v) : v;
+    } catch {}
+  }
   return wrapped;
 }
 

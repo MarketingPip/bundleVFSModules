@@ -95,7 +95,7 @@ const ERRNO_BY_CODE = {
   ELOOP: -40,
   ENODATA: -61,
   ETIME: -62,
-  ENOTEMPTY: -66,
+  ENOTEMPTY: -39,
   EOVERFLOW: -75,
   EOPNOTSUPP: -95,
   // Node JS-level fs errors that still carry errno/syscall:
@@ -195,15 +195,33 @@ function enrichErr(err, methodName) {
       }
     }
     if (NO_ENRICH_CODES.has(err.code)) return err;
-    if (!err.syscall) {
-      const base = methodName.endsWith("Sync")
-        ? methodName.slice(0, -4)
-        : methodName;
-      try {
-        err.syscall = SYSCALL_BY_METHOD[base] || methodName;
-      } catch {
-        /* ignore */
+    const base = methodName.endsWith("Sync")
+      ? methodName.slice(0, -4)
+      : methodName;
+    const canonical = SYSCALL_BY_METHOD[base];
+    try {
+      if (err._syscallOverride !== undefined) {
+        // Set explicitly by the throwing site (e.g. realpath's lstat ENOENT,
+        // whose message is already rewritten there).
+        err.syscall = err._syscallOverride;
+        delete err._syscallOverride;
+      } else if (canonical !== undefined) {
+        // Probed canonical syscall for this method (overrides memfs's
+        // internal syscall leaking into the message, e.g. chmod's ENOENT
+        // surfaces as chmod, not open). SYSCALL_BY_METHOD was probed against
+        // real Node v24.20.0.
+        if (typeof err.message === "string") {
+          err.message = err.message.replace(
+            /, [A-Za-z]+(?= '|$)/,
+            `, ${canonical}`,
+          );
+        }
+        err.syscall = canonical;
+      } else if (!err.syscall) {
+        err.syscall = methodName;
       }
+    } catch {
+      /* ignore */
     }
     if (err.errno === undefined && ERRNO_BY_CODE[err.code] !== undefined) {
       try {
@@ -763,7 +781,28 @@ function buildApi(vol) {
   }
 
   // ── generic wrappers ──
-  function wrapSync(name, impl, validatePathFirst) {
+  // Two-path operations (link, symlink, rename, copyFile): Node sets
+  // err.dest and formats the message as `CODE: msg, syscall 'src' -> 'dest'`
+  // (test-fs-error-messages.js).
+  function enrichDestErr(err, methodName, src, dest) {
+    err = enrichErr(err, methodName);
+    if (!err || typeof err !== "object" || !err.code) return err;
+    try {
+      const srcStr = toPathString(src);
+      const destStr = toPathString(dest);
+      err.dest = destStr;
+      if (typeof err.message === "string" && !err.message.includes(" -> ")) {
+        const tail = `'${srcStr}'`;
+        if (err.message.endsWith(tail)) {
+          err.message =
+            err.message.slice(0, -tail.length) +
+            `'${srcStr}' -> '${destStr}'`;
+        }
+      }
+    } catch {}
+    return err;
+  }
+  function wrapSync(name, impl, validatePathFirst, destIdx) {
     const orig = fs[name];
     const needsUidGid = /chown/i.test(name);
     fs[name] = function (...args) {
@@ -773,7 +812,9 @@ function buildApi(vol) {
         if (needsUidGid) validateUidGid(args[1], args[2]);
         result = (impl || orig).apply(this, args);
       } catch (e) {
-        throw enrichErr(e, name);
+        throw destIdx !== undefined
+          ? enrichDestErr(e, name, args[0], args[destIdx])
+          : enrichErr(e, name);
       }
       emitFs("fs", name, ...args, result);
       return result;
@@ -826,7 +867,7 @@ function buildApi(vol) {
     exists: 1,
     mkdtempDisposable: 1,
   };
-  function wrapCb(name, impl, validatePathFirst) {
+  function wrapCb(name, impl, validatePathFirst, destIdx) {
     const orig = fs[name];
     const arity = cbResultArity[name];
     const needsUidGid = /chown/i.test(name);
@@ -836,7 +877,11 @@ function buildApi(vol) {
         throw errInvalidArgType("cb", "function", last);
       const userCb = last;
       args[args.length - 1] = function (err, ...rest) {
-        if (err) err = enrichErr(err, name);
+        if (err)
+          err =
+            destIdx !== undefined
+              ? enrichDestErr(err, name, args[0], args[destIdx])
+              : enrichErr(err, name);
         const trimmed = arity !== undefined ? rest.slice(0, arity) : rest;
         emitFs("fs", name, ...args.slice(0, -1), trimmed[0]);
         userCb(err, ...trimmed);
@@ -846,7 +891,9 @@ function buildApi(vol) {
         if (needsUidGid) validateUidGid(args[1], args[2]);
         return (impl || orig).apply(this, args);
       } catch (e) {
-        throw enrichErr(e, name);
+        throw destIdx !== undefined
+          ? enrichDestErr(e, name, args[0], args[destIdx])
+          : enrichErr(e, name);
       }
     };
   }
@@ -1426,6 +1473,7 @@ function buildApi(vol) {
     err.errno = ERRNO_BY_CODE[code];
     err.syscall = "rename";
     err.path = src;
+    err.dest = dest;
     return err;
   }
   function checkRename(oldPath, newPath) {
@@ -1455,6 +1503,17 @@ function buildApi(vol) {
           dest,
         );
       }
+      // Node refuses to rename onto a non-empty directory (ENOTEMPTY);
+      // memfs is lax here.
+      if (srcSt.isDirectory() && destSt.isDirectory()) {
+        let entries = [];
+        try {
+          entries = vol.readdirSync(dest);
+        } catch {}
+        if (entries.length > 0) {
+          throw renameTypeError("ENOTEMPTY", "directory not empty", src, dest);
+        }
+      }
     }
   }
   {
@@ -1467,7 +1526,7 @@ function buildApi(vol) {
         checkRename(oldPath, newPath);
         origSync.call(this, toPathString(oldPath), toPathString(newPath));
       } catch (e) {
-        throw enrichErr(e, "renameSync");
+        throw enrichDestErr(e, "renameSync", oldPath, newPath);
       }
       emitFs("fs", "renameSync", oldPath, undefined);
     };
@@ -1484,13 +1543,14 @@ function buildApi(vol) {
             toPathString(oldPath),
             toPathString(newPath),
             (err) => {
-              if (err) return callback(enrichErr(err, "rename"));
+              if (err)
+                return callback(enrichDestErr(err, "rename", oldPath, newPath));
               emitFs("fs", "rename", oldPath, undefined);
               callback(null);
             },
           );
         } catch (e) {
-          callback(enrichErr(e, "rename"));
+          callback(enrichDestErr(e, "rename", oldPath, newPath));
         }
       });
     };
@@ -1752,9 +1812,75 @@ function buildApi(vol) {
     nextTick(() => callback(null, fs.existsSync(p)));
   };
 
-  // ── copyFile: delegate + enrich ──
-  wrapSync("copyFileSync", null, true);
-  wrapCb("copyFile", null, true);
+  // ── copyFile: delegate + enrich + sync mode validation ──
+  // Node validates mode synchronously for both forms (probed v24.20.0):
+  // non-number -> ERR_INVALID_ARG_TYPE; NaN/±Infinity -> ERR_OUT_OF_RANGE
+  // ("mode is out of range"); ToInt32 outside 0..7 -> ERR_OUT_OF_RANGE.
+  function validateCopyFileMode(mode) {
+    if (mode === undefined || mode === null) return 0;
+    if (typeof mode !== "number") {
+      const err = new TypeError("mode must be int32 or null/undefined");
+      err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+    if (Number.isNaN(mode) || mode === Infinity || mode === -Infinity) {
+      const err = new RangeError("mode is out of range");
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    const int = Math.trunc(mode);
+    if (int < 0 || int > 7) {
+      const err = new RangeError("mode is out of range: >= 0 && <= 7");
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    return int;
+  }
+  {
+    const origSync = fs.copyFileSync;
+    fs.copyFileSync = function (src, dest, mode) {
+      validatePath(src);
+      validatePath(dest, "dest");
+      const m = validateCopyFileMode(mode);
+      try {
+        const r = origSync.call(this, toPathString(src), toPathString(dest), m);
+        emitFs("fs", "copyFileSync", src, r);
+        return r;
+      } catch (e) {
+        throw enrichDestErr(e, "copyFileSync", src, dest);
+      }
+    };
+  }
+  {
+    const orig = fs.copyFile;
+    fs.copyFile = function (src, dest, mode, callback) {
+      if (typeof mode === "function") {
+        callback = mode;
+        mode = undefined;
+      }
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      validatePath(src);
+      validatePath(dest, "dest");
+      const m = validateCopyFileMode(mode);
+      const userCb = callback;
+      try {
+        return orig.call(
+          this,
+          toPathString(src),
+          toPathString(dest),
+          m,
+          (err) => {
+            if (err) return userCb(enrichDestErr(err, "copyFile", src, dest));
+            emitFs("fs", "copyFile", src, undefined);
+            userCb(null);
+          },
+        );
+      } catch (e) {
+        throw enrichDestErr(e, "copyFile", src, dest);
+      }
+    };
+  }
 
   // ── cp/cpSync ──
   function cpCheckRange(options) {
@@ -2508,12 +2634,25 @@ function buildApi(vol) {
   };
 
   // ── realpath/realpathSync + .native ──
-  function realpathImpl(p, options) {
+  // Node's JS realpath resolves by lstat()ing each path component, so a
+  // missing path surfaces as an lstat ENOENT; realpath.native goes to the
+  // binding and surfaces a realpath ENOENT (test-fs-error-messages).
+  function realpathImpl(p, options, native) {
     const ps = toPathString(p);
     let resolved;
     try {
       resolved = vol.realpathSync(ps);
     } catch (e) {
+      if (!native && e && e.code === "ENOENT") {
+        // Node's JS realpath surfaces the lstat ENOENT (message rewritten
+        // here; enrichErr honors the _syscallOverride marker).
+        try {
+          e._syscallOverride = "lstat";
+          if (typeof e.message === "string") {
+            e.message = e.message.replace(/, realpath '/, ", lstat '");
+          }
+        } catch {}
+      }
       throw e;
     }
     if (
@@ -2525,49 +2664,56 @@ function buildApi(vol) {
     }
     return resolved;
   }
-  fs.realpathSync = function (p, options) {
-    validatePath(p);
-    let result;
-    try {
-      result = realpathImpl(
-        p,
-        typeof options === "string" ? { encoding: options } : options,
-      );
-    } catch (e) {
-      throw enrichErr(e, "realpathSync");
-    }
-    emitFs("fs", "realpathSync", p, result);
-    return result;
-  };
-  fs.realpathSync.native = fs.realpathSync;
-  fs.realpath = function (p, options, callback) {
-    if (typeof options === "function") {
-      callback = options;
-      options = undefined;
-    }
-    if (typeof callback !== "function")
-      throw errInvalidArgType("cb", "function", callback);
-    validatePath(p);
-    nextTick(() => {
+  function normalizeRealpathOptions(options) {
+    return typeof options === "string" ? { encoding: options } : options;
+  }
+  function makeRealpathSync(native) {
+    return function (p, options) {
+      validatePath(p);
+      let result;
       try {
-        const result = realpathImpl(
-          p,
-          typeof options === "string" ? { encoding: options } : options,
-        );
-        emitFs("fs", "realpath", p, result);
-        callback(null, result);
+        result = realpathImpl(p, normalizeRealpathOptions(options), native);
       } catch (e) {
-        callback(enrichErr(e, "realpath"));
+        throw enrichErr(e, "realpathSync");
       }
-    });
-  };
-  fs.realpath.native = fs.realpath;
+      emitFs("fs", "realpathSync", p, result);
+      return result;
+    };
+  }
+  fs.realpathSync = makeRealpathSync(false);
+  fs.realpathSync.native = makeRealpathSync(true);
+  function makeRealpath(native) {
+    return function (p, options, callback) {
+      if (typeof options === "function") {
+        callback = options;
+        options = undefined;
+      }
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      validatePath(p);
+      nextTick(() => {
+        try {
+          const result = realpathImpl(
+            p,
+            normalizeRealpathOptions(options),
+            native,
+          );
+          emitFs("fs", "realpath", p, result);
+          callback(null, result);
+        } catch (e) {
+          callback(enrichErr(e, "realpath"));
+        }
+      });
+    };
+  }
+  fs.realpath = makeRealpath(false);
+  fs.realpath.native = makeRealpath(true);
 
   // ── link/symlink/readlink: delegate + enrich/emit ──
-  wrapSync("linkSync", null, true);
-  wrapCb("link", null, true);
-  wrapSync("symlinkSync", null, true);
-  wrapCb("symlink", null, true);
+  wrapSync("linkSync", null, true, 1);
+  wrapCb("link", null, true, 1);
+  wrapSync("symlinkSync", null, true, 1);
+  wrapCb("symlink", null, true, 1);
   wrapSync("readlinkSync", null, true);
   wrapCb("readlink", null, true);
   wrapSync("chmodSync", null, true);
