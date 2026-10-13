@@ -192,7 +192,92 @@ const NO_ENRICH_CODES = new Set([
   "ERR_DIR_CLOSED",
   "ERR_INVALID_ARG_VALUE",
   "ERR_INVALID_OPT_VALUE",
+  "ABORT_ERR",
+  "ERR_FS_FILE_TOO_LARGE",
 ]);
+
+// Node's fs AbortError: name "AbortError", code "ABORT_ERR", message
+// "The operation was aborted", cause = signal.reason when provided
+// (probed against real Node v24.20.0).
+function makeAbortError(signal) {
+  const err = new Error("The operation was aborted");
+  err.name = "AbortError";
+  err.code = "ABORT_ERR";
+  if (signal && signal.reason !== undefined) err.cause = signal.reason;
+  return err;
+}
+
+// Mirrors Node's internal validateAbortSignal: undefined passes, anything
+// that is not an AbortSignal throws ERR_INVALID_ARG_TYPE.
+function validateAbortSignal(signal, name = "options.signal") {
+  if (signal === undefined) return undefined;
+  if (
+    signal === null ||
+    (typeof signal !== "object" && typeof signal !== "function") ||
+    !("aborted" in Object(signal)) ||
+    typeof signal.addEventListener !== "function"
+  ) {
+    throw errInvalidArgType(name, "AbortSignal", signal);
+  }
+  return signal;
+}
+
+// Wrap a (…, callback) fs function with AbortSignal support. The options
+// object sits at args[optionsIndex] (a string options value, e.g. an
+// encoding, carries no signal). Semantics match Node: an invalid signal
+// type throws synchronously; an already-aborted signal invokes the
+// callback with an AbortError on the next tick; an abort that lands while
+// the operation is in flight replaces the result with an AbortError.
+function withAbortSignal(fn, optionsIndex) {
+  return function (...args) {
+    const callback = args[args.length - 1];
+    const options = args[optionsIndex];
+    const signal =
+      options !== null && typeof options === "object"
+        ? validateAbortSignal(options.signal)
+        : undefined;
+    if (!signal) return Reflect.apply(fn, this, args);
+    if (signal.aborted) {
+      nextTick(callback, makeAbortError(signal));
+      return undefined;
+    }
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      callback(makeAbortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    args[args.length - 1] = (err, ...rest) => {
+      if (settled) return;
+      settled = true;
+      try {
+        signal.removeEventListener("abort", onAbort);
+      } catch {}
+      callback(err, ...rest);
+    };
+    return Reflect.apply(fn, this, args);
+  };
+}
+
+// For promise-returning APIs: reject with AbortError when the signal is
+// (or becomes) aborted. When a signal is present we yield a full macrotask
+// before doing the synchronous-under-the-hood work, so an abort queued via
+// process.nextTick OR setImmediate before the call lands first — matching
+// Node, where the threadpool round-trip always loses that race.
+async function throwIfAborted(signal) {
+  if (!signal) return;
+  if (signal.aborted) throw makeAbortError(signal);
+  await new Promise((resolve) => {
+    try {
+      if (typeof setImmediate === "function") setImmediate(resolve);
+      else nextTick(resolve);
+    } catch {
+      nextTick(resolve);
+    }
+  });
+  if (signal.aborted) throw makeAbortError(signal);
+}
 
 function enrichErr(err, methodName) {
   if (err && typeof err === "object" && err.code) {
@@ -1023,7 +1108,10 @@ function buildApi(vol) {
   }
   for (const name of ["stat", "lstat"]) {
     const orig = fs[name];
-    fs[name] = function (p, options, callback) {
+    // withAbortSignal composes outside: it validates options.signal before
+    // the path (Node's getOptions order) and swaps the callback for the
+    // abort-aware one. The inner wrapper keeps its arg normalization.
+    fs[name] = withAbortSignal(function (p, options, callback) {
       if (typeof options === "function") {
         callback = options;
         options = undefined;
@@ -1038,7 +1126,7 @@ function buildApi(vol) {
         emitFs("fs", name, p, st);
         callback(null, st);
       });
-    };
+    }, 1);
   }
   {
     const orig = fs.fstat;
@@ -1062,6 +1150,178 @@ function buildApi(vol) {
         emitFs("fs", "fstat", fd, st);
         callback(null, st);
       });
+    };
+  }
+
+  // ── readFile/writeFile/appendFile: AbortSignal + fd-position fidelity ──
+  // memfs ignores options.signal entirely and its writeFile-on-fd truncates
+  // at position 0 (real Node writes at the fd's current position without
+  // truncating) and never checks writability (real Node: EBADF on O_RDONLY).
+  // String data -> bytes honoring options.encoding (string or object form).
+  function dataToBuffer(data, options) {
+    if (typeof data === "string") {
+      const encoding =
+        typeof options === "string" ? options : options?.encoding;
+      return typeof Buffer !== "undefined"
+        ? Buffer.from(data, encoding)
+        : new TextEncoder().encode(data);
+    }
+    return normalizeDataArg(data);
+  }
+  // Normalize writeFile/appendFile data: string | Buffer | TypedArray |
+  // DataView | ArrayBuffer | Blob | Readable | Iterable | AsyncIterable.
+  // Anything else (numbers, plain objects, null, …) is ERR_INVALID_ARG_TYPE,
+  // matching Node. Stream/iterable chunks are validated element-wise.
+  function coerceWriteChunk(chunk, encoding) {
+    if (typeof chunk === "string")
+      return typeof Buffer !== "undefined"
+        ? Buffer.from(chunk, encoding)
+        : new TextEncoder().encode(chunk);
+    if (typeof Buffer !== "undefined" && Buffer.isBuffer(chunk)) return chunk;
+    if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(chunk)) {
+      return typeof Buffer !== "undefined"
+        ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+        : new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    }
+    throw errInvalidArgType(
+      "data",
+      ["string", "Buffer", "TypedArray", "DataView", "Iterable", "AsyncIterable"],
+      chunk,
+    );
+  }
+  async function coerceWriteData(data, encoding, signal) {
+    if (typeof data === "string")
+      return typeof Buffer !== "undefined"
+        ? Buffer.from(data, encoding)
+        : new TextEncoder().encode(data);
+    if (typeof Buffer !== "undefined" && Buffer.isBuffer(data)) return data;
+    if (typeof ArrayBuffer !== "undefined") {
+      if (ArrayBuffer.isView(data)) return coerceWriteChunk(data, encoding);
+      if (
+        data instanceof ArrayBuffer ||
+        (typeof SharedArrayBuffer !== "undefined" &&
+          data instanceof SharedArrayBuffer)
+      )
+        return new Uint8Array(data);
+    }
+    if (typeof Blob !== "undefined" && data instanceof Blob)
+      return new Uint8Array(await data.arrayBuffer());
+    if (
+      data !== null &&
+      (typeof data === "object" || typeof data === "function") &&
+      (typeof data[Symbol.asyncIterator] === "function" ||
+        typeof data[Symbol.iterator] === "function")
+    ) {
+      const chunks = [];
+      for await (const chunk of data) {
+        if (signal && signal.aborted) throw makeAbortError(signal);
+        chunks.push(coerceWriteChunk(chunk, encoding));
+      }
+      return typeof Buffer !== "undefined"
+        ? Buffer.concat(chunks)
+        : chunks.reduce(
+            (acc, c) => {
+              const out = new Uint8Array(acc.length + c.length);
+              out.set(acc);
+              out.set(c, acc.length);
+              return out;
+            },
+            new Uint8Array(0),
+          );
+    }
+    throw errInvalidArgType(
+      "data",
+      ["string", "Buffer", "TypedArray", "DataView", "Iterable", "AsyncIterable"],
+      data,
+    );
+  }
+  // Validate options.signal for the promise APIs (invalid type rejects).
+  function promiseSignal(options) {
+    return options !== null && typeof options === "object"
+      ? validateAbortSignal(options.signal)
+      : undefined;
+  }
+  {
+    const origReadFile = fs.readFile;
+    fs.readFile = withAbortSignal(function (p, options, callback) {
+      if (typeof options === "function") {
+        callback = options;
+        options = undefined;
+      }
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      return origReadFile.call(this, p, options, callback);
+    }, 1);
+
+    // writeFile(file-descriptor, …): write at the fd's current position,
+    // never truncate; EBADF when the fd is not writable.
+    function writeFileToFd(fd, data, options, callback) {
+      let buf;
+      try {
+        checkFdWritable(fd, "write");
+        buf = dataToBuffer(data, options);
+      } catch (e) {
+        nextTick(callback, enrichErr(e, "write"));
+        return;
+      }
+      let n;
+      try {
+        n = vol.writeSync(fd, buf, 0, buf.byteLength, null);
+      } catch (e) {
+        nextTick(callback, enrichErr(e, "write"));
+        return;
+      }
+      emitFs("fs", "writeFile", fd, n);
+      nextTick(callback, null);
+    }
+    const origWriteFile = fs.writeFile;
+    fs.writeFile = withAbortSignal(function (file, data, options, callback) {
+      if (typeof options === "function") {
+        callback = options;
+        options = undefined;
+      }
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      if (typeof file === "number") {
+        writeFileToFd(file, data, options, callback);
+        return;
+      }
+      // A read-only open flag ("r", "rs", "sr") fails the write with EBADF
+      // (memfs silently writes anyway).
+      const flag =
+        options !== null && typeof options === "object"
+          ? options.flag
+          : undefined;
+      if (typeof flag === "string" && /^(rs?|sr)$/.test(flag)) {
+        const err = makeFsError("EBADF", "write", undefined, "bad file descriptor");
+        err.errno = -9;
+        nextTick(callback, err);
+        return;
+      }
+      return origWriteFile.call(this, file, data, options, callback);
+    }, 2);
+    const origAppendFile = fs.appendFile;
+    fs.appendFile = withAbortSignal(function (path, data, options, callback) {
+      if (typeof options === "function") {
+        callback = options;
+        options = undefined;
+      }
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      return origAppendFile.call(this, path, data, options, callback);
+    }, 2);
+
+    const origWriteFileSync = fs.writeFileSync;
+    fs.writeFileSync = function (file, data, options) {
+      // fd variant: current-position write, no truncation (memfs truncates).
+      if (typeof file === "number") {
+        checkFdWritable(file, "write");
+        const buf = dataToBuffer(data, options);
+        vol.writeSync(file, buf, 0, buf.byteLength, null);
+        emitFs("fs", "writeFileSync", file, buf.byteLength);
+        return;
+      }
+      return origWriteFileSync.call(this, file, data, options);
     };
   }
 
@@ -2330,7 +2590,10 @@ function buildApi(vol) {
       origCb.call(this, fp, ...args, (err, result) => {
         if (err) return callback(enrichErr(err, cbName));
         emitFs("fs", cbName, p, result);
-        callback(null, result);
+        // Node calls writeFile/appendFile callbacks with a single argument
+        // (no result); readFile passes (null, data).
+        if (cbName === "readFile") callback(null, result);
+        else callback(null);
       });
     };
   }
@@ -2400,6 +2663,15 @@ function buildApi(vol) {
           callback(e);
         }
       });
+    }
+    // Explicit resource management; repeat invocations are silent no-ops
+    // (unlike closeSync, which throws ERR_DIR_CLOSED when already closed).
+    [Symbol.dispose]() {
+      if (!this._closed) this.closeSync();
+    }
+    [Symbol.asyncDispose]() {
+      if (!this._closed) this.closeSync();
+      return Promise.resolve();
     }
     async *[Symbol.asyncIterator]() {
       try {
@@ -3066,9 +3338,24 @@ function buildApi(vol) {
       }
       const origClose = w.close ? w.close.bind(w) : null;
       if (origClose) {
+        // memfs's FSWatcher.close() never emits 'close'; Node emits it
+        // asynchronously (and once). AbortSignal integration and the
+        // promises.watch async iterator both depend on it.
+        let closeEmitted = false;
         w.close = function (...args) {
           emitFs("fs", "watcher.close", path, undefined);
-          return origClose(...args);
+          const cb = args.find((a) => typeof a === "function");
+          if (cb) w.once("close", cb);
+          const r = origClose(...args);
+          if (!closeEmitted) {
+            closeEmitted = true;
+            nextTick(() => {
+              try {
+                w.emit("close");
+              } catch {}
+            });
+          }
+          return r;
         };
       }
     }
@@ -3081,6 +3368,20 @@ function buildApi(vol) {
         listener = options;
         options = undefined;
       }
+      // Node's getOptions: options must be an object, a string, or absent.
+      if (
+        options !== undefined &&
+        options !== null &&
+        typeof options !== "object" &&
+        typeof options !== "string"
+      ) {
+        throw errInvalidArgType("options", ["Object", "string"], options);
+      }
+      // Node validates options.signal before the path (getOptions order).
+      const signal =
+        options !== null && typeof options === "object"
+          ? validateAbortSignal(options.signal)
+          : undefined;
       validatePath(p);
       const ps = toPathString(p);
       let w;
@@ -3090,6 +3391,11 @@ function buildApi(vol) {
         throw enrichErr(e, "watch");
       }
       patchWatcher(w, ps);
+      if (signal) {
+        // Aborting closes the watcher (its 'close' event fires as usual).
+        if (signal.aborted) nextTick(() => w.close());
+        else signal.addEventListener("abort", () => w.close(), { once: true });
+      }
       emitFs("fs", "watch", p, w);
       return w;
     };
@@ -3168,6 +3474,18 @@ function buildApi(vol) {
   // internal volume), so user monkey-patches and observability hooks see it
   // (test-fs-write-stream.js replaces fs.close and asserts it is called).
   function closeStreamFd(stream) {
+    // A handle-backed stream closes the handle on destroy (Node's
+    // streams.js _close -> FileHandleOperations.close -> handle.close()),
+    // even with autoClose:false (FileHandle.createReadStream passes it).
+    if (stream._fileHandle) {
+      const h = stream._fileHandle;
+      stream._fileHandle = null;
+      try {
+        const r = h.close();
+        if (r && typeof r.catch === "function") r.catch(() => {});
+      } catch {}
+      return;
+    }
     // A FileHandle-owned fd (or autoClose:false) is never closed by us.
     if (!stream.autoClose || !stream._opened || stream.fd === null) return;
     const fd = stream.fd;
@@ -3296,11 +3614,81 @@ function buildApi(vol) {
       stream.emit("error", e);
     }
   }
+  // A FileHandle passed as options.fd (Node allows `fd` to be a FileHandle;
+  // test-fs-read-stream-file-handle.js passes the handle object itself).
+  // Duck-typed on the handle's method surface.
+  function asFileHandle(fdOpt) {
+    if (
+      fdOpt !== null &&
+      typeof fdOpt === "object" &&
+      typeof fdOpt.read === "function" &&
+      typeof fdOpt.write === "function" &&
+      typeof fdOpt.close === "function"
+    ) {
+      return fdOpt;
+    }
+    return null;
+  }
+  // Node's FileHandleOperations (lib/internal/fs/streams.js): route the
+  // stream's I/O through the handle's promise API, adapted to callbacks.
+  // Destroying a handle-backed stream closes the handle.
+  function handleStreamImpl(handle) {
+    return {
+      open: (p, flags, mode, cb) => nextTick(cb, null, handle.fd),
+      read: (fd, buf, offset, length, pos, cb) => {
+        handle.read(buf, offset, length, pos).then(
+          (r) => cb(null, r.bytesRead, r.buffer),
+          (err) => cb(err, 0, buf),
+        );
+      },
+      write: (fd, buf, offset, length, pos, cb) => {
+        handle.write(buf, offset, length, pos).then(
+          (r) => cb(null, r.bytesWritten, r.buffer),
+          (err) => cb(err, 0, buf),
+        );
+      },
+      writev:
+        typeof handle.writev === "function"
+          ? (fd, buffers, pos, cb) => {
+              handle.writev(buffers, pos).then(
+                (r) => cb(null, r.bytesWritten, r.buffers),
+                (err) => cb(err, 0, buffers),
+              );
+            }
+          : null,
+      close: (fd, cb) => {
+        handle.close().then(
+          () => cb(null),
+          (err) => cb(err),
+        );
+      },
+    };
+  }
+  // AbortSignal for fs streams: invalid type throws; an already-aborted
+  // signal destroys the stream with an AbortError; a later abort does the
+  // same (stream emits 'error' then 'close', no data flows).
+  function armStreamSignal(stream, signal) {
+    if (!signal) return;
+    if (signal.aborted) {
+      nextTick(() => stream.destroy(makeAbortError(signal)));
+      return;
+    }
+    const onAbort = () => stream.destroy(makeAbortError(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    stream.once("close", () => {
+      try {
+        signal.removeEventListener("abort", onAbort);
+      } catch {}
+    });
+  }
   class FsReadStream extends Readable {
     constructor(path, options) {
       validateStreamOptions(options);
       const opts = options || {};
       super(streamOpts(opts));
+      // options.signal validated for every stream (invalid type throws).
+      const signal = validateAbortSignal(opts.signal);
+      const handle = asFileHandle(opts.fd);
       this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
       // Node leaves .path unset (undefined) when fd is specified.
       if (this.fd === null) this.path = toPathString(path);
@@ -3319,20 +3707,38 @@ function buildApi(vol) {
       // operations (test-fs-read-stream.js, test-fs-write-stream-fs.js).
       // Looked up lazily so patches apply at call time.
       const customFs = opts.fs || {};
-      const defaultOr = (name) => (...a) =>
-        typeof customFs[name] === "function"
-          ? customFs[name](...a)
-          : fs[name](...a);
-      this._impl = {
-        open: defaultOr("open"),
-        read: defaultOr("read"),
-        write: defaultOr("write"),
-        writev:
-          typeof customFs.writev === "function"
-            ? (...a) => customFs.writev(...a)
-            : null,
-        close: defaultOr("close"),
-      };
+      if (handle) {
+        // Node: FileHandle is not supported with custom fs operations.
+        for (const k of ["open", "read", "write", "writev", "close"]) {
+          if (typeof customFs[k] === "function") {
+            const err = new Error("The FileHandle with fs method is not implemented");
+            err.code = "ERR_METHOD_NOT_IMPLEMENTED";
+            throw err;
+          }
+        }
+        this.fd = typeof handle.fd === "number" ? handle.fd : null;
+        this._fileHandle = handle;
+        this._impl = handleStreamImpl(handle);
+        // Node: the stream closes itself when the handle emits 'close'.
+        if (typeof handle.on === "function")
+          handle.on("close", () => this.close());
+      } else {
+        const defaultOr = (name) => (...a) =>
+          typeof customFs[name] === "function"
+            ? customFs[name](...a)
+            : fs[name](...a);
+        this._impl = {
+          open: defaultOr("open"),
+          read: defaultOr("read"),
+          write: defaultOr("write"),
+          writev:
+            typeof customFs.writev === "function"
+              ? (...a) => customFs.writev(...a)
+              : null,
+          close: defaultOr("close"),
+        };
+      }
+      armStreamSignal(this, signal);
       emitFs("fs", "createReadStream", this.path, this);
       if (this.fd === null) {
         if (this.open !== readStreamOpenNoop) {
@@ -3429,6 +3835,9 @@ function buildApi(vol) {
       validateStreamOptions(options);
       const opts = options || {};
       super(streamOpts(opts));
+      // options.signal validated for every stream (invalid type throws).
+      const signal = validateAbortSignal(opts.signal);
+      const handle = asFileHandle(opts.fd);
       this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
       // Node leaves .path unset (undefined) when fd is specified.
       if (this.fd === null) this.path = toPathString(path);
@@ -3446,25 +3855,43 @@ function buildApi(vol) {
       // individual operations. Looked up lazily so patches apply at call
       // time.
       const customFs = opts.fs || {};
-      const defaultOr = (name) => (...a) =>
-        typeof customFs[name] === "function"
-          ? customFs[name](...a)
-          : fs[name](...a);
-      this._impl = {
-        open: defaultOr("open"),
-        read: defaultOr("read"),
-        write: defaultOr("write"),
-        writev:
-          typeof customFs.writev === "function"
-            ? (...a) => customFs.writev(...a)
-            : null,
-        close: defaultOr("close"),
-      };
+      if (handle) {
+        // Node: FileHandle is not supported with custom fs operations.
+        for (const k of ["open", "read", "write", "writev", "close"]) {
+          if (typeof customFs[k] === "function") {
+            const err = new Error("The FileHandle with fs method is not implemented");
+            err.code = "ERR_METHOD_NOT_IMPLEMENTED";
+            throw err;
+          }
+        }
+        this.fd = typeof handle.fd === "number" ? handle.fd : null;
+        this._fileHandle = handle;
+        this._impl = handleStreamImpl(handle);
+        // Node: the stream closes itself when the handle emits 'close'.
+        if (typeof handle.on === "function")
+          handle.on("close", () => this.close());
+      } else {
+        const defaultOr = (name) => (...a) =>
+          typeof customFs[name] === "function"
+            ? customFs[name](...a)
+            : fs[name](...a);
+        this._impl = {
+          open: defaultOr("open"),
+          read: defaultOr("read"),
+          write: defaultOr("write"),
+          writev:
+            typeof customFs.writev === "function"
+              ? (...a) => customFs.writev(...a)
+              : null,
+          close: defaultOr("close"),
+        };
+      }
       // writev batching only when the impl provides it (installing _writev
       // unconditionally would change batching for the default path).
       if (this._impl.writev) {
         this._writev = (chunks, callback) => this._writevImpl(chunks, callback);
       }
+      armStreamSignal(this, signal);
       emitFs("fs", "createWriteStream", this.path, this);
       if (this.fd === null) {
         if (this.open !== writeStreamOpenNoop) {
@@ -3613,6 +4040,8 @@ function buildApi(vol) {
   class FileHandle extends MemFileHandle {
     constructor(fd) {
       super(fd);
+      // EventEmitter state init (the class itself can't be .call()ed).
+      _FsEventEmitter.init.call(this);
       this.fd = fd;
     }
     async stat(options) {
@@ -3622,7 +4051,8 @@ function buildApi(vol) {
         emitFs("fs", "promises.stat", this.fd, st);
         return st;
       } catch (e) {
-        throw enrichErr(e, "stat");
+        // Node reports the fstat syscall for FileHandle.stat.
+        throw enrichErr(e, "fstat");
       }
     }
     async read(arg1, arg2, arg3, arg4) {
@@ -3735,7 +4165,21 @@ function buildApi(vol) {
       }
     }
     async readFile(options) {
+      const signal =
+        options !== null && typeof options === "object"
+          ? validateAbortSignal(options.signal)
+          : undefined;
+      await throwIfAborted(signal);
       try {
+        // Node refuses reads past 2 GiB - 1 (kIoMaxLength).
+        const st = vol.fstatSync(this.fd);
+        if (st.size > 2 ** 31 - 1) {
+          const err = new RangeError(
+            `File size (${st.size}) is greater than 2 GiB`,
+          );
+          err.code = "ERR_FS_FILE_TOO_LARGE";
+          throw err;
+        }
         const data = vol.readFileSync(this.fd, options);
         emitFs("fs", "promises.readFile", this.fd, data);
         return data;
@@ -3744,21 +4188,29 @@ function buildApi(vol) {
       }
     }
     async writeFile(data, options) {
-      validateDataArg(data, "data");
-      data = normalizeDataArg(data);
+      const signal = promiseSignal(options);
+      await throwIfAborted(signal);
+      const encoding = typeof options === "string" ? options : options?.encoding;
+      // Node writes at the fd's current position without truncating
+      // (memfs's writeFileSync-on-fd truncates at 0).
+      const buf = await coerceWriteData(data, encoding, signal);
       try {
-        // Write at position 0 and truncate, mirroring writeFile-on-fd.
-        vol.writeFileSync(this.fd, data, options);
+        checkFdWritable(this.fd, "write");
+        vol.writeSync(this.fd, buf, 0, buf.byteLength, null);
         emitFs("fs", "promises.writeFile", this.fd, undefined);
       } catch (e) {
         throw enrichErr(e, "writeFile");
       }
     }
     async appendFile(data, options) {
-      data = normalizeDataArg(data);
+      const signal = promiseSignal(options);
+      await throwIfAborted(signal);
+      const encoding = typeof options === "string" ? options : options?.encoding;
+      const buf = await coerceWriteData(data, encoding, signal);
+      const chunks = buf instanceof Uint8Array ? buf : normalizeDataArg(buf);
       try {
         const st = vol.fstatSync(this.fd);
-        vol.writeSync(this.fd, data, 0, data.byteLength, st.size);
+        vol.writeSync(this.fd, chunks, 0, chunks.byteLength, st.size);
         emitFs("fs", "promises.appendFile", this.fd, undefined);
       } catch (e) {
         throw enrichErr(e, "appendFile");
@@ -3815,12 +4267,26 @@ function buildApi(vol) {
       }
     }
     async close() {
+      // Node: fd becomes -1, 'close' is emitted once, and a second close()
+      // is a silent no-op (probed against real Node v24.20.0).
+      if (this._closed) return;
+      this._closed = true;
+      const fd = this.fd;
       try {
-        vol.closeSync(this.fd);
-        emitFs("fs", "promises.close", this.fd, undefined);
+        vol.closeSync(fd);
+        emitFs("fs", "promises.close", fd, undefined);
       } catch (e) {
         throw enrichErr(e, "close");
       }
+      this.fd = -1;
+      this.emit("close");
+    }
+    // Explicit resource management: `using h = await open(...)`.
+    [Symbol.dispose]() {
+      return this.close();
+    }
+    [Symbol.asyncDispose]() {
+      return this.close();
     }
     async readableWebStream(options) {
       const stream = this.createReadStream(options);
@@ -3839,16 +4305,18 @@ function buildApi(vol) {
       });
     }
     createReadStream(options) {
+      // Node passes the handle itself (not the raw fd): the stream routes
+      // I/O through the handle's methods and closes it on destroy.
       return new FsReadStream(null, {
         ...options,
-        fd: this.fd,
+        fd: this,
         autoClose: false,
       });
     }
     createWriteStream(options) {
       return new FsWriteStream(null, {
         ...options,
-        fd: this.fd,
+        fd: this,
         autoClose: false,
       });
     }
@@ -3874,6 +4342,16 @@ function buildApi(vol) {
         }
         if (leftover) yield leftover;
       })();
+    }
+  }
+
+  // Node's FileHandle is an EventEmitter (emits 'close'). Mixin the
+  // instance methods; the constructor already ran _FsEventEmitter.call.
+  for (const k of Object.getOwnPropertyNames(_FsEventEmitter.prototype)) {
+    if (k !== "constructor" && !(k in FileHandle.prototype)) {
+      try {
+        FileHandle.prototype[k] = _FsEventEmitter.prototype[k];
+      } catch {}
     }
   }
 
@@ -3925,21 +4403,24 @@ function buildApi(vol) {
       );
     });
   });
-  definePromise("writeFile", (p, data, options) => {
-    if (p instanceof FileHandle) return p.writeFile(data, options);
+  definePromise("writeFile", async (p, data, options) => {
+    const signal = promiseSignal(options);
+    await throwIfAborted(signal);
+    const encoding = typeof options === "string" ? options : options?.encoding;
+    const buf = await coerceWriteData(data, encoding, signal);
+    if (p instanceof FileHandle) return p.writeFile(buf, options);
     return new Promise((resolve, reject) => {
-      fs.writeFile(p, data, options, (err) => (err ? reject(err) : resolve()));
+      fs.writeFile(p, buf, options, (err) => (err ? reject(err) : resolve()));
     });
   });
-  definePromise("appendFile", (p, data, options) => {
-    if (p instanceof FileHandle) {
-      // Append via handle: write at end.
-      return p
-        .stat()
-        .then((st) => p.write(data, Number(st.size)).then(() => {}));
-    }
+  definePromise("appendFile", async (p, data, options) => {
+    const signal = promiseSignal(options);
+    await throwIfAborted(signal);
+    const encoding = typeof options === "string" ? options : options?.encoding;
+    const buf = await coerceWriteData(data, encoding, signal);
+    if (p instanceof FileHandle) return p.appendFile(buf, options);
     return new Promise((resolve, reject) => {
-      fs.appendFile(p, data, options, (err) => (err ? reject(err) : resolve()));
+      fs.appendFile(p, buf, options, (err) => (err ? reject(err) : resolve()));
     });
   });
   definePromise(
@@ -4152,6 +4633,52 @@ function buildApi(vol) {
       if (Array.isArray(arr)) for (const p of arr) yield p;
     })();
   };
+  // Node's promises.watch validates these options at iteration start
+  // (before the handle starts): persistent/recursive booleans,
+  // maxQueue integer, overflow one-of, encoding validity. Returns the
+  // error to throw, or null when valid.
+  function validateWatchOptions(options) {
+    if (options === undefined || options === null) return null;
+    if (typeof options !== "object") return null; // fs.watch reports it
+    for (const k of ["persistent", "recursive"]) {
+      const v = options[k];
+      if (v !== undefined && typeof v !== "boolean")
+        return errInvalidArgType(`options.${k}`, "boolean", v);
+    }
+    const maxQueue = options.maxQueue;
+    if (maxQueue !== undefined && !Number.isInteger(maxQueue))
+      return errInvalidArgType("options.maxQueue", "integer", maxQueue);
+    const overflow = options.overflow;
+    if (
+      overflow !== undefined &&
+      overflow !== "ignore" &&
+      overflow !== "error"
+    ) {
+      const err = new TypeError(
+        `The "options.overflow" argument must be one of: ignore, error. Received ${String(overflow)}`,
+      );
+      err.code = "ERR_INVALID_ARG_VALUE";
+      return err;
+    }
+    const encoding = options.encoding;
+    if (encoding !== undefined && encoding !== null) {
+      const ok =
+        typeof encoding === "string" &&
+        (typeof Buffer !== "undefined" && Buffer.isEncoding
+          ? Buffer.isEncoding(encoding)
+          : /^(utf-?8|ascii|latin1|binary|base64|base64url|hex|ucs-?2|utf-?16le)$/i.test(
+              encoding,
+            ));
+      if (!ok) {
+        const err = new TypeError(
+          `The "options.encoding" argument is invalid encoding: ${String(encoding)}`,
+        );
+        err.code = "ERR_INVALID_ARG_VALUE";
+        return err;
+      }
+    }
+    return null;
+  }
   // watch returns an async-iterable watcher in real Node's promises API.
   promises.watch = function (p, options) {
     // Validate `ignore` like real Node (throws on iteration start).
@@ -4178,31 +4705,107 @@ function buildApi(vol) {
         })();
       }
     }
+    // Node validates persistent/recursive/maxQueue/overflow/encoding at
+    // iteration start (before the handle starts). A throwing generator
+    // keeps the "rejects on first next()" semantics.
+    const watchOptErr = validateWatchOptions(options);
+    if (watchOptErr) {
+      const err = watchOptErr;
+      return (async function* () {
+        throw err;
+      })();
+    }
     const w = fs.watch(p, options);
     // Attach async iteration yielding { eventType, filename }.
+    // Memoized per watcher: like Node's native async generator, a second
+    // for-await over the same watcher resumes the exhausted generator
+    // (a no-op) instead of starting a fresh wait on a closed watcher.
     if (!w[Symbol.asyncIterator]) {
-      w[Symbol.asyncIterator] = async function* () {
-        const queue = [];
-        let resolve;
-        const onEvent = (eventType, filename) => {
-          if (resolve) {
-            const r = resolve;
-            resolve = null;
-            r({ eventType, filename });
-          } else queue.push({ eventType, filename });
-        };
-        w.on("change", onEvent);
-        try {
-          for (;;) {
-            if (queue.length) yield queue.shift();
-            else
-              yield await new Promise((res) => {
-                resolve = res;
-              });
+      // Signal validated up front: invalid type rejects at iteration start
+      // (like the ignore validation above), an aborted signal rejects the
+      // iteration with an AbortError, and a mid-iteration abort closes the
+      // watcher and rejects the pending next().
+      let signal;
+      try {
+        signal =
+          options !== null && typeof options === "object"
+            ? validateAbortSignal(options.signal)
+            : undefined;
+      } catch (e) {
+        const err = e;
+        w[Symbol.asyncIterator] = () =>
+          (async function* () {
+            throw err;
+          })();
+        return w;
+      }
+      let gen = null;
+      const makeIterator = () =>
+        (async function* () {
+          const queue = [];
+          let resolve;
+          let reject;
+          const onEvent = (eventType, filename) => {
+            if (resolve) {
+              const r = resolve;
+              resolve = null;
+              reject = null;
+              r({ eventType, filename });
+            } else queue.push({ eventType, filename });
+          };
+          const onClose = () => {
+            // An aborted signal turns watcher close into an AbortError
+            // (carrying signal.reason as cause); a plain close ends the
+            // iteration.
+            const done =
+              signal && signal.aborted
+                ? { error: makeAbortError(signal) }
+                : { done: true };
+            if (resolve) {
+              const r = resolve;
+              const j = reject;
+              resolve = null;
+              reject = null;
+              if (done.error) j(done.error);
+              else r({ value: undefined, done: true });
+            } else if (done.error) {
+              queue.push(done);
+            } else {
+              queue.push({ done: true });
+            }
+          };
+          w.on("change", onEvent);
+          w.on("close", onClose);
+          try {
+            for (;;) {
+              if (queue.length) {
+                const item = queue.shift();
+                if (item.done) return;
+                if (item.error) throw item.error;
+                yield item;
+              } else {
+                const item = await new Promise((res, rej) => {
+                  resolve = res;
+                  reject = rej;
+                });
+                if (item && item.done) return;
+                yield item;
+              }
+            }
+          } finally {
+            w.off("change", onEvent);
+            w.off("close", onClose);
+            // Node's promises.watch generator closes the watcher when the
+            // iteration ends (break/throw/return) — otherwise the process
+            // hangs on the open watcher.
+            try {
+              w.close();
+            } catch {}
           }
-        } finally {
-          w.off("change", onEvent);
-        }
+        })();
+      w[Symbol.asyncIterator] = () => {
+        if (!gen) gen = makeIterator();
+        return gen;
       };
     }
     return w;

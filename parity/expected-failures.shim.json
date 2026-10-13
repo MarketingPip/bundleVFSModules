@@ -439,13 +439,29 @@
     "category": "inherent",
     "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
   },
+  "test-fs-filehandle-use-after-close.js": {
+    "category": "inherent",
+    "reason": "Opens process.execPath (the real 90MB Node binary) to test fd-number reuse after close. Same class as test-fs-negative-zero.js: outside the harness sync roots, no browser equivalent. The fd-reuse semantics it guards (fd -> -1 on close, EBADF use-after-close) are implemented and probed directly."
+  },
   "test-fs-negative-zero.js": {
     "category": "inherent",
     "reason": "Opens process.execPath (the real Node binary at /usr/bin/node) to test -0 flag/mode handling. That path is outside the harness sync roots and has no browser equivalent; the -0 handling itself is verified working on synced files (openSync/readFile accept -0 as 0)."
   },
+  "test-fs-promises-file-handle-close.js": {
+    "category": "inherent",
+    "reason": "Expects a DEP0137 process warning when a FileHandle is garbage-collected unclosed ('Closing file descriptor N on garbage collection'). A memfs-backed JS shim has no native finalizer hook to close fds on GC; cannot be implemented without native bindings."
+  },
+  "test-fs-promises-readfile.js": {
+    "category": "inherent",
+    "reason": "validateZeroByteLiar subtest monkey-patches Node's internal C++ fs binding (internalBinding('fs').fstat) to lie about file size. The shim never calls the internal binding, so the mock cannot take effect. All other subtests (abort before/during, invalid signal, /proc hostname) pass."
+  },
   "test-fs-read-stream.js": {
     "category": "inherent",
     "reason": "The mkfifo block creates a real OS FIFO via child_process and reads it back through fs.createReadStream. The memfs-backed shim cannot open real-disk FIFOs (no OS file descriptors \u2014 the fs lane's documented honest gap), and proxying to native fs would violate the browser-first rule. The browser lane is identically unable. Everything else in the file passes (bytesRead, start/end validation, options.fs overrides, autoClose/autoDestroy semantics)."
+  },
+  "test-fs-readfile.js": {
+    "category": "inherent",
+    "reason": "Vendored test file has a broken require ('../../test/common/tmpdir') that is broken upstream too (nodejs/node@v24.20.0 has the same line; test/test/common/tmpdir 404s) \u2014 the file cannot run against real Node either. Not a shim gap."
   },
   "test-os-process-priority.js": {
     "category": "inherent",
