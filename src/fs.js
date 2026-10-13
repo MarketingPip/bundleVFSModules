@@ -822,12 +822,14 @@ function buildApi(vol) {
     } catch {}
     return err;
   }
-  function wrapSync(name, impl, validatePathFirst, destIdx) {
+  function wrapSync(name, impl, validatePathFirst, destIdx, fdFirst) {
     const orig = fs[name];
     const needsUidGid = /chown/i.test(name);
     fs[name] = function (...args) {
       let result;
       try {
+        // fd-based ops validate the fd first (test-fs-fchmod).
+        if (fdFirst) validateFd(args[0]);
         if (validatePathFirst) validatePath(args[0]);
         // Two-path ops: the destination is a path too (null-byte check etc.).
         if (destIdx !== undefined) validatePath(args[destIdx], "dest");
@@ -889,11 +891,13 @@ function buildApi(vol) {
     exists: 1,
     mkdtempDisposable: 1,
   };
-  function wrapCb(name, impl, validatePathFirst, destIdx) {
+  function wrapCb(name, impl, validatePathFirst, destIdx, fdFirst) {
     const orig = fs[name];
     const arity = cbResultArity[name];
     const needsUidGid = /chown/i.test(name);
     fs[name] = function (...args) {
+      // fd-based ops validate the fd before the callback (test-fs-fchmod).
+      if (fdFirst) validateFd(args[0]);
       const last = args[args.length - 1];
       if (typeof last !== "function")
         throw errInvalidArgType("cb", "function", last);
@@ -1439,8 +1443,20 @@ function buildApi(vol) {
 
   // ── mkdir/mkdirSync: recursive on existing file → EEXIST; umask ──
   function mkdirImpl(p, options) {
-    const opts =
-      typeof options === "number" ? { mode: options } : options || {};
+    let opts;
+    if (typeof options === "number") opts = { mode: options };
+    else if (typeof options === "string") {
+      // String modes are parsed as octal (fs.mkdirSync(dir, "644")).
+      const m = parseInt(options, 8);
+      if (Number.isNaN(m)) {
+        const err = new TypeError(
+          `The value of "mode" is out of range. It must be an integer. Received '${options}'`,
+        );
+        err.code = "ERR_OUT_OF_RANGE";
+        throw err;
+      }
+      opts = { mode: m };
+    } else opts = options || {};
     if (opts.mode !== undefined) opts.mode = applyUmask(opts.mode);
     if (opts.recursive) {
       // Real Node: recursive mkdir on an existing *file* reports EEXIST.
@@ -1819,8 +1835,23 @@ function buildApi(vol) {
     };
   }
   // ── close/closeSync: fd validates before the callback (test-fs-close-errors) ──
+  // Node's fd validation (probed v24.20.0): type, integer, range 0..2^31-1.
   function validateFd(fd) {
     if (typeof fd !== "number") throw errInvalidArgType("fd", "number", fd);
+    if (!Number.isInteger(fd)) {
+      const err = new RangeError(
+        `The value of "fd" is out of range. It must be an integer. Received ${fd}`,
+      );
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    if (fd < 0 || fd > 2147483647) {
+      const err = new RangeError(
+        `The value of "fd" is out of range. It must be >= 0 && <= 2147483647. Received ${fd}`,
+      );
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
   }
   {
     const origSync = fs.closeSync;
@@ -2791,22 +2822,140 @@ function buildApi(vol) {
   wrapCb("readlink", null, true);
   wrapSync("chmodSync", null, true);
   wrapCb("chmod", null, true);
-  wrapSync("fchmodSync");
-  wrapCb("fchmod");
-  wrapSync("chownSync", null, true);
-  wrapCb("chown", null, true);
-  wrapSync("fchownSync");
-  wrapCb("fchown");
-  wrapSync("lchownSync", null, true);
-  wrapCb("lchown", null, true);
+  // ── fchmod/fchmodSync: fd, then mode, then callback (test-fs-fchmod) ──
+  // fchmod's mode is stricter than open()'s: null/undefined are rejected.
+  function validateFchmodMode(mode) {
+    if (mode === undefined || mode === null)
+      throw errInvalidArgType("mode", "number", mode);
+    return validateMode(mode, 0o666);
+  }
+  {
+    const origSync = fs.fchmodSync;
+    fs.fchmodSync = function (fd, mode) {
+      validateFd(fd);
+      const m = validateFchmodMode(mode);
+      try {
+        const r = origSync.call(this, fd, m);
+        emitFs("fs", "fchmodSync", fd, r);
+        return r;
+      } catch (e) {
+        throw enrichErr(e, "fchmodSync");
+      }
+    };
+  }
+  {
+    const orig = fs.fchmod;
+    fs.fchmod = function (fd, mode, callback) {
+      validateFd(fd);
+      const m = validateFchmodMode(mode);
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      try {
+        return orig.call(this, fd, m, (err) => {
+          if (err) return callback(enrichErr(err, "fchmod"));
+          emitFs("fs", "fchmod", fd, undefined);
+          callback(null);
+        });
+      } catch (e) {
+        throw enrichErr(e, "fchmod");
+      }
+    };
+  }
+  // ── chown/fchown/lchown: uid/gid -1 means "don't change" (POSIX) ──
+  function resolveUidGid(uid, gid, getStats) {
+    if (uid === -1 || gid === -1) {
+      const st = getStats();
+      if (uid === -1) uid = st.uid;
+      if (gid === -1) gid = st.gid;
+    }
+    return [uid, gid];
+  }
+  {
+    const origSync = fs.chownSync;
+    fs.chownSync = function (p, uid, gid) {
+      validatePath(p);
+      validateUidGid(uid, gid);
+      const ps = toPathString(p);
+      [uid, gid] = resolveUidGid(uid, gid, () => vol.statSync(ps));
+      try {
+        const r = origSync.call(this, ps, uid, gid);
+        emitFs("fs", "chownSync", p, r);
+        return r;
+      } catch (e) {
+        throw enrichErr(e, "chownSync");
+      }
+    };
+  }
+  {
+    const orig = fs.chown;
+    fs.chown = function (p, uid, gid, callback) {
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      validatePath(p);
+      validateUidGid(uid, gid);
+      const ps = toPathString(p);
+      let resolved;
+      try {
+        resolved = resolveUidGid(uid, gid, () => vol.statSync(ps));
+      } catch (e) {
+        nextTick(callback, enrichErr(e, "chown"));
+        return;
+      }
+      orig.call(this, ps, resolved[0], resolved[1], (err) => {
+        if (err) return callback(enrichErr(err, "chown"));
+        emitFs("fs", "chown", p, undefined);
+        callback(null);
+      });
+    };
+  }
+  wrapSync("fchownSync", null, null, null, true);
+  wrapCb("fchown", null, null, null, true);
+  {
+    const origSync = fs.lchownSync;
+    fs.lchownSync = function (p, uid, gid) {
+      validatePath(p);
+      validateUidGid(uid, gid);
+      const ps = toPathString(p);
+      [uid, gid] = resolveUidGid(uid, gid, () => vol.lstatSync(ps));
+      try {
+        const r = origSync.call(this, ps, uid, gid);
+        emitFs("fs", "lchownSync", p, r);
+        return r;
+      } catch (e) {
+        throw enrichErr(e, "lchownSync");
+      }
+    };
+  }
+  {
+    const orig = fs.lchown;
+    fs.lchown = function (p, uid, gid, callback) {
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      validatePath(p);
+      validateUidGid(uid, gid);
+      const ps = toPathString(p);
+      let resolved;
+      try {
+        resolved = resolveUidGid(uid, gid, () => vol.lstatSync(ps));
+      } catch (e) {
+        nextTick(callback, enrichErr(e, "lchown"));
+        return;
+      }
+      orig.call(this, ps, resolved[0], resolved[1], (err) => {
+        if (err) return callback(enrichErr(err, "lchown"));
+        emitFs("fs", "lchown", p, undefined);
+        callback(null);
+      });
+    };
+  }
   wrapSync("utimesSync", null, true);
   wrapCb("utimes", null, true);
-  wrapSync("futimesSync");
-  wrapCb("futimes");
-  wrapSync("fsyncSync");
-  wrapCb("fsync");
-  wrapSync("fdatasyncSync");
-  wrapCb("fdatasync");
+  wrapSync("futimesSync", null, null, null, true);
+  wrapCb("futimes", null, null, null, true);
+  wrapSync("fsyncSync", null, null, null, true);
+  wrapCb("fsync", null, null, null, true);
+  wrapSync("fdatasyncSync", null, null, null, true);
+  wrapCb("fdatasync", null, null, null, true);
   // lchmod/lchmodSync are undefined on Linux (Node behavior).
   try {
     if (typeof process !== "undefined" && process.platform === "linux") {
