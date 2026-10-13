@@ -16,6 +16,34 @@ import { fileURLToPath } from "node:url";
 
 import shimFs from "../src/fs.js";
 
+// Route process.chdir/process.cwd through a virtual cwd (Jared's finding:
+// these 3 failures are not inherent — the shim can track virtual cwd). The
+// fs shim resolves relative paths via the global process.cwd(), so patching
+// the globals makes relative-path resolution follow the virtual cwd.
+// Harness-only; src/ is untouched.
+const _origProcessCwd = process.cwd.bind(process);
+let _virtualCwd = null; // set on first chdir; null = use real cwd
+process.cwd = () => _virtualCwd ?? _origProcessCwd();
+process.chdir = (dir) => {
+  if (typeof dir !== "string")
+    throw new TypeError(`The "directory" argument must be of type string`);
+  syncArgs([dir]);
+  // Resolve against current virtual cwd (mirrors src/process.js _absPath).
+  const base = _virtualCwd ?? _origProcessCwd();
+  const target = realPath.resolve(base, dir);
+  // Ensure the target exists in memfs so the shim's path resolution works.
+  // For paths outside the test roots (e.g. restoring the real originalCwd
+  // at test end), mkdir -p an empty placeholder — the test doesn't read
+  // through it, it just needs chdir not to throw.
+  try {
+    raw.mkdirSync(target, { recursive: true });
+  } catch {}
+  // Publish to the __FS__ singleton: shim's process.cwd() reads fs_.cwd.
+  const fsSingleton = globalThis._RUNTIME_ && globalThis._RUNTIME_.__FS__;
+  if (fsSingleton) fsSingleton.cwd = target;
+  _virtualCwd = target;
+};
+
 // als-browser (pulled in via async_hooks → events → stream → fs) replaces
 // the timer globals on import, which trips Node's official-test global-leak
 // detector. Restore the originals snapshotted in preload.mjs: the shim keeps
@@ -139,11 +167,46 @@ function syncArgs(args) {
   }
 }
 
-function wrapFn(fn) {
+function wrapFn(fn, methodName) {
   // new-aware: classes (Dir, ReadStream, …) are constructed in the tests
   // (`new fs.Dir()`, `new ReadStream(tmpfile)`), so route construction
   // through Reflect.construct instead of breaking it with .apply().
   function wrapped(...args) {
+    // If the test chdir'd into a directory and then deleted it, relative
+    // paths must fail with ENOENT (real Node: the OS can't resolve against
+    // a deleted cwd). Check before syncing.
+    if (_virtualCwd) {
+      let cwdExists = false;
+      try {
+        raw.statSync(_virtualCwd);
+        cwdExists = true;
+      } catch {}
+      if (!cwdExists) {
+        for (const a of args) {
+          let p = null;
+          if (typeof a === "string") p = a;
+          else if (typeof Buffer !== "undefined" && Buffer.isBuffer(a))
+            p = a.toString();
+          if (p && !realPath.isAbsolute(p)) {
+            const syscall = (methodName || "open").replace(/Sync$/, "");
+            const err = new Error(
+              `ENOENT: no such file or directory, ${syscall} '${p}'`,
+            );
+            err.code = "ENOENT";
+            err.syscall = syscall;
+            err.path = p;
+            // Async (callback-style) APIs deliver via callback, not throw.
+            const lastArg = args[args.length - 1];
+            if (typeof lastArg === "function" && !methodName.endsWith("Sync")) {
+              // Defer to match Node's async error delivery.
+              queueMicrotask(() => lastArg(err));
+              return;
+            }
+            throw err;
+          }
+        }
+      }
+    }
     syncArgs(args);
     if (new.target) return Reflect.construct(fn, args, new.target);
     return Reflect.apply(fn, this, args);
@@ -156,7 +219,11 @@ function wrapFn(fn) {
 function wrapObj(obj) {
   const out = { ...obj };
   for (const k of Object.keys(out)) {
-    if (typeof out[k] === "function") out[k] = wrapFn(out[k]);
+    if (typeof out[k] === "function") out[k] = wrapFn(out[k], k);
+  }
+  // Symbol keys (e.g. util.promisify.custom) must survive the wrap.
+  for (const s of Object.getOwnPropertySymbols(obj)) {
+    if (typeof obj[s] === "function") out[s] = wrapFn(obj[s], s.toString());
   }
   return out;
 }

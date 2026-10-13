@@ -1063,6 +1063,27 @@ function validatePath(p, name = "path") {
     throw err;
   }
 }
+// Validate open() flags: string (e.g. 'r', 'w+') or number. Memfs does the
+// detailed parsing; this just ensures the type is sane.
+function validateFlags(flags) {
+  if (flags === undefined || flags === null) return "r";
+  if (typeof flags === "string" || typeof flags === "number") return flags;
+  const err = new TypeError(
+    `The "flags" argument must be of type string or number. Received type ${typeof flags}`,
+  );
+  err.code = "ERR_INVALID_ARG_TYPE";
+  throw err;
+}
+// Validate open() mode: number or octal string (or undefined for default).
+function validateMode(mode) {
+  if (mode === undefined || mode === null) return undefined;
+  if (typeof mode === "number" || typeof mode === "string") return mode;
+  const err = new TypeError(
+    `The "mode" argument must be of type number or string. Received type ${typeof mode}`,
+  );
+  err.code = "ERR_INVALID_ARG_TYPE";
+  throw err;
+}
 function toPathString(p) {
   if (typeof p === "string") return p;
   if (isURLLike(p)) return fileURLToPathString(p);

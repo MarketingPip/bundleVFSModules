@@ -452,12 +452,8 @@
     "reason": "Opens process.execPath (the real 90MB Node binary) to test fd-number reuse after close. Same class as test-fs-negative-zero.js: outside the harness sync roots, no browser equivalent. The fd-reuse semantics it guards (fd -> -1 on close, EBADF use-after-close) are implemented and probed directly."
   },
   "test-fs-mkdir.js": {
-    "category": "inherent",
-    "reason": "Real process.chdir() into a memfs-only directory (line 243-248: mkdirpSync dirname loop). The shim cannot make the real process cwd see memfs paths. All shim-side mkdir bugs fixed (options mutation, recursive boolean validation, mkdirp first-created return, recursive ENOTDIR full path). Fails identically at pristine base 1a89d258."
-  },
-  "test-fs-mkdtempDisposableSync.js": {
-    "category": "inherent",
-    "reason": "Real process.chdir(fullFirstPath) into a memfs-only temp dir (chdir-does-not-affect-removal block). Shim now implements remove()/[Symbol.dispose]() with chdir-safe absolute-path capture; basic usage and dispose blocks pass. The real-chdir step cannot succeed with a memfs-backed shim. Fails identically at pristine base 1a89d258."
+    "category": "shim-bug",
+    "reason": "chdir portion FIXED via harness virtual cwd (process.chdir/cwd patched to track memfs). Remaining failure is error message format: errInvalidArgTypeProp says 'Received type function' vs Node's 'Received function' (line 277). Separate shim bug, not chdir-related."
   },
   "test-fs-negative-zero.js": {
     "category": "inherent",
@@ -482,10 +478,6 @@
   "test-fs-promises-file-handle-read-worker.js": {
     "category": "inherent",
     "reason": "FileHandle cannot cross a worker transferList (DataCloneError) \u2014 structural: the shim's FileHandle wraps memfs state that is not transferable. Fails identically on pristine base 1a89d258."
-  },
-  "test-fs-promises-mkdtempDisposable.js": {
-    "category": "inherent",
-    "reason": "Same real-chdir-into-memfs duality as the sync variant. Shim implements async remove()/[Symbol.asyncDispose]() with chdir-safe absolute-path capture. Fails identically at pristine base 1a89d258."
   },
   "test-fs-promises-readfile.js": {
     "category": "inherent",
