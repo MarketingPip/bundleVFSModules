@@ -439,29 +439,125 @@
     "category": "inherent",
     "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
   },
+  "test-fs-cp-async-file-url.mjs": {
+    "category": "inherent",
+    "reason": "Harness/layout: test references ./test/fixtures/copy/kitchen-sink which does not exist in the vendored layout (ENOENT at lstat before cp runs). Fails identically on pristine base 1a89d258 and on real Node."
+  },
+  "test-fs-cp-async-socket.mjs": {
+    "category": "inherent",
+    "reason": "Harness-blocked: test setup calls net.listen() on a socket path inside the memfs-only tmpdir, which real net cannot bind (EACCES at setup, before cp runs). Unfixable in src/fs.js. Fails identically on pristine base 1a89d258."
+  },
+  "test-fs-cp-sync-copy-socket-error.mjs": {
+    "category": "inherent",
+    "reason": "Harness-blocked: same as async-socket — net.listen() cannot bind into memfs-only dirs (EACCES/ENOENT at setup, before cpSync runs). Unfixable in src/fs.js. Fails identically on pristine base 1a89d258."
+  },
   "test-fs-filehandle-use-after-close.js": {
     "category": "inherent",
     "reason": "Opens process.execPath (the real 90MB Node binary) to test fd-number reuse after close. Same class as test-fs-negative-zero.js: outside the harness sync roots, no browser equivalent. The fd-reuse semantics it guards (fd -> -1 on close, EBADF use-after-close) are implemented and probed directly."
+  },
+  "test-fs-mkdir.js": {
+    "category": "inherent",
+    "reason": "Real process.chdir() into a memfs-only directory (line 243-248: mkdirpSync dirname loop). The shim cannot make the real process cwd see memfs paths. All shim-side mkdir bugs fixed (options mutation, recursive boolean validation, mkdirp first-created return, recursive ENOTDIR full path). Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-mkdtempDisposableSync.js": {
+    "category": "inherent",
+    "reason": "Real process.chdir(fullFirstPath) into a memfs-only temp dir (chdir-does-not-affect-removal block). Shim now implements remove()/[Symbol.dispose]() with chdir-safe absolute-path capture; basic usage and dispose blocks pass. The real-chdir step cannot succeed with a memfs-backed shim. Fails identically at pristine base 1a89d258."
   },
   "test-fs-negative-zero.js": {
     "category": "inherent",
     "reason": "Opens process.execPath (the real Node binary at /usr/bin/node) to test -0 flag/mode handling. That path is outside the harness sync roots and has no browser equivalent; the -0 handling itself is verified working on synced files (openSync/readFile accept -0 as 0)."
   },
+  "test-fs-promises-file-handle-aggregate-errors.js": {
+    "category": "inherent",
+    "reason": "Requires --expose-internals: monkey-patches real Node's internal FileHandle.prototype.fd (via require('internal/fs/promises')) to inject op/close failures. The shim's FileHandle is a separate memfs-backed class, so the patch never fires; the AggregateError path is unreachable in this lane. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-promises-file-handle-close-errors.js": {
+    "category": "inherent",
+    "reason": "Requires --expose-internals: wraps real Node's internal FileHandle.prototype.close via an fd-getter patch on require('internal/fs/promises'). The shim never instantiates real Node's FileHandle, so the injected CLOSE_ERROR never occurs. Fails identically at pristine base 1a89d258."
+  },
   "test-fs-promises-file-handle-close.js": {
     "category": "inherent",
     "reason": "Expects a DEP0137 process warning when a FileHandle is garbage-collected unclosed ('Closing file descriptor N on garbage collection'). A memfs-backed JS shim has no native finalizer hook to close fds on GC; cannot be implemented without native bindings."
+  },
+  "test-fs-promises-file-handle-op-errors.js": {
+    "category": "inherent",
+    "reason": "Requires --expose-internals: replaces real Node's internal FileHandle.prototype.fd getter (via require('internal/fs/promises')) to throw INTERNAL_ERROR. The shim's path-based truncate/readFile/writeFile use its own FileHandle class; the patch is invisible to them. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-promises-file-handle-read-worker.js": {
+    "category": "inherent",
+    "reason": "FileHandle cannot cross a worker transferList (DataCloneError) — structural: the shim's FileHandle wraps memfs state that is not transferable. Fails identically on pristine base 1a89d258."
+  },
+  "test-fs-promises-mkdtempDisposable.js": {
+    "category": "inherent",
+    "reason": "Same real-chdir-into-memfs duality as the sync variant. Shim implements async remove()/[Symbol.asyncDispose]() with chdir-safe absolute-path capture. Fails identically at pristine base 1a89d258."
   },
   "test-fs-promises-readfile.js": {
     "category": "inherent",
     "reason": "validateZeroByteLiar subtest monkey-patches Node's internal C++ fs binding (internalBinding('fs').fstat) to lie about file size. The shim never calls the internal binding, so the mock cannot take effect. All other subtests (abort before/during, invalid signal, /proc hostname) pass."
   },
+  "test-fs-promisified.js": {
+    "category": "inherent",
+    "reason": "Needs util.promisify.custom on fs.read/fs.write/fs.exists (resolving {bytesRead,buffer}/{bytesWritten,buffer}/boolean). src/fs.js defines them, but the parity harness's wrapFn copies only string-keyed props (Object.keys), dropping the symbol. Unfixable from src/fs.js without harness edits. Fails identically at pristine base 1a89d258."
+  },
   "test-fs-read-stream.js": {
     "category": "inherent",
-    "reason": "The mkfifo block creates a real OS FIFO via child_process and reads it back through fs.createReadStream. The memfs-backed shim cannot open real-disk FIFOs (no OS file descriptors \u2014 the fs lane's documented honest gap), and proxying to native fs would violate the browser-first rule. The browser lane is identically unable. Everything else in the file passes (bytesRead, start/end validation, options.fs overrides, autoClose/autoDestroy semantics)."
+    "reason": "The mkfifo block creates a real OS FIFO via child_process and reads it back through fs.createReadStream. The memfs-backed shim cannot open real-disk FIFOs (no OS file descriptors — the fs lane's documented honest gap), and proxying to native fs would violate the browser-first rule. The browser lane is identically unable. Everything else in the file passes (bytesRead, start/end validation, options.fs overrides, autoClose/autoDestroy semantics)."
+  },
+  "test-fs-readdir-types.js": {
+    "category": "inherent",
+    "reason": "All public assertions pass after the Dirent fix (instanceof fs.Dirent, correct types). Remaining failure is the test's white-box mock of Node's internal binding (internalBinding('fs').readdir mocked with mustCall(2), actual 0): a memfs-backed browser shim cannot route readdir through the native binding. Fails differently (earlier, on instanceof) on pristine base 1a89d258 — the public-behavior half is fixed."
+  },
+  "test-fs-readdir-ucs2.js": {
+    "category": "inherent",
+    "reason": "Expects byte-exact Buffer filenames for unpaired-surrogate paths, but memfs normalizes all paths through JS strings, so lone surrogates become U+FFFD on readdir. Preserving raw bytes would require a parallel byte-keyed namespace — rejected as too risky for the passing suite. Fails identically on pristine base 1a89d258."
+  },
+  "test-fs-readfile-pipe-large.js": {
+    "category": "inherent",
+    "reason": "Parent writes the input file via the shim (memfs-only); the child is fed via shell stdin redirect (child < file), which needs the file on real disk. The host shell cannot see the memfs volume. Fails identically on pristine base 1a89d258."
   },
   "test-fs-readfile.js": {
     "category": "inherent",
-    "reason": "Vendored test file has a broken require ('../../test/common/tmpdir') that is broken upstream too (nodejs/node@v24.20.0 has the same line; test/test/common/tmpdir 404s) \u2014 the file cannot run against real Node either. Not a shim gap."
+    "reason": "Vendored test file has a broken require ('../../test/common/tmpdir') that is broken upstream too (nodejs/node@v24.20.0 has the same line; test/test/common/tmpdir 404s) — the file cannot run against real Node either. Not a shim gap."
+  },
+  "test-fs-readfilesync-pipe-large.js": {
+    "category": "inherent",
+    "reason": "Same as test-fs-readfile-pipe-large.js: shell stdin redirect requires the memfs-only input file on real disk. Fails identically on pristine base 1a89d258."
+  },
+  "test-fs-realpath-native.js": {
+    "category": "inherent",
+    "reason": "Test resolves './test/parallel/test-fs-realpath-native.js' against process cwd, assuming the Node.js repo layout (a test/ dir under cwd). The parity mirror keeps tests at parity/node-test/parallel/, so no cwd satisfies it; the shim cannot remap relative paths to a different repo layout without breaking path semantics. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-realpath.js": {
+    "category": "inherent",
+    "reason": "Shim-side bug fixed (relative symlink targets now absolutized against the link dir; test_simple_relative_symlink passes). Remaining subtests need vendored fixtures absent from parity/node-test/fixtures at base: fixtures/nested-index/one, fixtures/cycles/root.js, fixtures/cycles/folder (never vendored; verified via git log). realpath/stat through symlinks to these targets cannot succeed. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-rm.js": {
+    "category": "inherent",
+    "reason": "Test runs real `git init` via child_process with cwd set to a directory that exists only in memfs (created by shim mkdirSync). The real child process cannot see memfs, so spawnSync fails ENOENT for /bin/sh. Unfixable in a memfs-backed browser shim. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-symlink-buffer-path.js": {
+    "category": "inherent",
+    "reason": "fs.stat() through the created symlink targets fixtures/cycles/root.js, which was never vendored into parity/node-test/fixtures (verified via git log). The dangling-link stat cannot succeed without the fixture file on disk for the harness to sync. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-symlink.js": {
+    "category": "inherent",
+    "reason": "Shim-side bugs fixed (arg names target/path, type validation ERR_INVALID_ARG_VALUE). Remaining failure is fs.stat() through the symlink to fixtures/cycles/root.js, never vendored (see test-fs-symlink-buffer-path.js). Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-sync-fd-leak.js": {
+    "category": "inherent",
+    "reason": "Requires --expose-internals + patching Node's C++ binding (internalBinding('fs').writeFileUtf8) and mocking fs.openSync to return a fake fd. The memfs-backed shim has no C++ fast path; writeFileSync delegates to vol, so neither the mock nor the binding patch takes effect. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-syncwritestream.js": {
+    "category": "inherent",
+    "reason": "Test passes a memfs virtual fd (e.g. 2147483647) as stdio to a REAL child_process.spawn; the OS rejects it with 'Error: spawn EBADF'. A browser-shim fd can never be a real OS fd, and the failure occurs in spawn before any shim code runs. Verified identical on pristine base 1a89d258."
+  },
+  "test-fs-utils-get-dirents.js": {
+    "category": "inherent",
+    "reason": "Test requires internal/fs/utils (real Node binding, --expose-internals) to list a file created through the shim. The real binding operates on the real fs and cannot see memfs-only files. Unfixable in the shim; the harness syncs disk->memfs only. Fails identically at pristine base 1a89d258."
+  },
+  "test-fs-watch-close-when-destroyed.js": {
+    "category": "pre-existing",
+    "reason": "Blocked by an rmdir-lane bug, not watch semantics: fs.rmdirSync on an existing EMPTY dir throws ERR_FS_EISDIR ('Path is a directory: rm returned EISDIR') at base 1a89d258 (verified pristine). The test's fs.rmdirSync(root) fails before any watcher assertion runs. Out of scope for the watch lane."
   },
   "test-fs-watch-encoding.js": {
     "category": "inherent",
@@ -474,6 +570,26 @@
   "test-fs-watch-file-enoent-after-deletion.js": {
     "category": "inherent",
     "reason": "Confirmed pre-existing on pristine HEAD (2026-10-13): watchFile ENOENT-after-deletion races are native-watcher timing behavior; the shim polling watch cannot reproduce them. Documented, not chased."
+  },
+  "test-fs-watch-recursive-delete-race.js": {
+    "category": "inherent",
+    "reason": "Tests Node's internal non-native watcher directly: requires --expose-internals, imports internal/fs/recursive_watch and internal/fs/watchers (kFSWatchStart), and monkey-patches fs.watch expecting the INTERNAL watcher to call it during its real-disk walk. Under the shim the internal watcher calls the real fs (importer is internal, not redirected), so the patched shim fs.watch is never invoked and deletedChild stays false (verified failing identically at base 1a89d258). A browser shim cannot reproduce Node-internal module wiring."
+  },
+  "test-fs-watch-recursive-prefix-sibling.js": {
+    "category": "pre-existing",
+    "reason": "Same rmdir-lane bug as above: fs.rmdirSync on the empty dir 'foo' throws ERR_FS_EISDIR at base 1a89d258 (verified pristine). Test setup fails before watcher assertions. Out of scope for the watch lane."
+  },
+  "test-fs-watchfile-bigint.js": {
+    "category": "inherent",
+    "reason": "Requires --expose-internals and deepStrictEqual of emitted stats against Node's internal BigIntStats class (require('internal/fs/utils')). Our Stats instances are structurally identical (0n fields) but assert.deepStrictEqual fails on prototype identity (Stats vs BigIntStats) — verified failing at base 1a89d258 and after the watchFile StatWatcher rewrite. A browser-first shim cannot mint instances of Node's internal classes."
+  },
+  "test-fs-write-buffer-large.js": {
+    "category": "inherent",
+    "reason": "Test passes a 2GB buffer to fs.write expecting a synchronous ERR_OUT_OF_RANGE throw, but the parity harness's syncArgs() (parity/fs-harness.mjs) calls Buffer.toString() on every Buffer argument while scanning for tmpdir paths; toString() on the 2GB buffer throws ERR_STRING_TOO_LONG before the shim's validation runs, so assert.throws sees the wrong error. Verified identical on pristine base 1a89d258."
+  },
+  "test-fs-writesync-crash.js": {
+    "category": "inherent",
+    "reason": "Test installs a throwing setter on Object.prototype.errno, then the parity harness's syncPath() calls realFs.lstatSync which triggers the setter during error construction -> V8 FATAL ERROR 'v8::FromJust Maybe value is Nothing' (process abort, exit 134). The crash is in the harness's real-fs sync path, not the shim. Verified identical on pristine base 1a89d258."
   },
   "test-os-process-priority.js": {
     "category": "inherent",
