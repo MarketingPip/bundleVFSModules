@@ -161,12 +161,23 @@ function makeFsError(code, syscall, path, message) {
 }
 
 function errInvalidArgType(name, expected, received) {
-  const what =
-    received === undefined
-      ? "undefined"
-      : received === null
-        ? "null"
-        : `type ${typeof received}`;
+  // Matches Node's format exactly, e.g.:
+  // `The "fd" argument must be of type number. Received type string ('')`
+  // `The "fd" argument must be of type number. Received an instance of Object`
+  let what;
+  if (received === undefined) what = "undefined";
+  else if (received === null) what = "null";
+  else if (typeof received === "object") {
+    what = `an instance of ${
+      received.constructor ? received.constructor.name : "Object"
+    }`;
+  } else {
+    const inspected =
+      typeof received === "string"
+        ? `'${received.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
+        : String(received);
+    what = `type ${typeof received} (${inspected})`;
+  }
   const err = new TypeError(
     `The "${name}" argument must be of type ${expected}. Received ${what}`,
   );
@@ -1792,14 +1803,65 @@ function buildApi(vol) {
       });
     };
   }
-  wrapSync("closeSync");
-  wrapCb("close");
+  // ── close/closeSync: fd validates before the callback (test-fs-close-errors) ──
+  function validateFd(fd) {
+    if (typeof fd !== "number") throw errInvalidArgType("fd", "number", fd);
+  }
+  {
+    const origSync = fs.closeSync;
+    fs.closeSync = function (fd) {
+      validateFd(fd);
+      try {
+        const r = origSync.call(this, fd);
+        emitFs("fs", "closeSync", fd, r);
+        return r;
+      } catch (e) {
+        throw enrichErr(e, "closeSync");
+      }
+    };
+  }
+  {
+    const orig = fs.close;
+    fs.close = function (fd, callback) {
+      validateFd(fd);
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      const userCb = callback;
+      try {
+        return orig.call(this, fd, (err) => {
+          if (err) return userCb(enrichErr(err, "close"));
+          emitFs("fs", "close", fd, undefined);
+          userCb(null);
+        });
+      } catch (e) {
+        throw enrichErr(e, "close");
+      }
+    };
+  }
 
   // ── exists/existsSync: false for invalid paths (never throws) ──
+  let existsSyncWarned = false;
   fs.existsSync = function (p) {
     try {
-      if (typeof p !== "string" && !isUint8ArrayLike(p) && !isURLLike(p))
+      if (typeof p !== "string" && !isUint8ArrayLike(p) && !isURLLike(p)) {
+        // DEP0187: deprecated, warns once, still returns false.
+        if (!existsSyncWarned) {
+          existsSyncWarned = true;
+          try {
+            if (
+              typeof process !== "undefined" &&
+              typeof process.emitWarning === "function"
+            ) {
+              process.emitWarning(
+                "Passing invalid argument types to fs.existsSync is deprecated",
+                "DeprecationWarning",
+                "DEP0187",
+              );
+            }
+          } catch {}
+        }
         return false;
+      }
       vol.statSync(toPathString(p));
       return true;
     } catch {
@@ -1809,7 +1871,8 @@ function buildApi(vol) {
   fs.exists = function (p, callback) {
     if (typeof callback !== "function")
       throw errInvalidArgType("cb", "function", callback);
-    nextTick(() => callback(null, fs.existsSync(p)));
+    // Node's exists callback receives only the boolean (no err argument).
+    nextTick(() => callback(fs.existsSync(p)));
   };
 
   // ── copyFile: delegate + enrich + sync mode validation ──
