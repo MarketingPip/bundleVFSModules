@@ -28,7 +28,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | 4 | https | 1 | 67 | 1.5% | TLS-over-virtual-socket stack incomplete; real TLS client has no byte transport in browser (roadmap 2026-10-05 verdict: honest stub until transport exists) — mostly inherent |
 | 5 | http2 | 7 | 277 | 2.5% | HTTP/2 framing/session multiplexing largely unimplemented; large surface (277 tests) |
 | 6 | child_process | 4 | 112 | 3.6% | Real process spawning is a noop by design; 100 failures already documented in `expected-failures.shim.json` as inherent (harness global-leak detector vs ALS timer patching) |
-| 7 | fs | 130 | 349 | 37.2% | Largest test surface (349); harness-level tmpdir/fixtures sync fixed 227 ENOENT. Since 99: mkdir string modes, chown -1, fchmod/fd validation, umask on file creation, cp dereference:false, common/fs.js shim redirect (fixes 19 cp tests using assertDirEquivalent), fstat validation, throwIfNoEntry, Stats date accessors. Fresh full run in progress. Remaining: abort-signal cluster, stream edges, FileHandle events |
+| 7 | fs | 152 | 349 | 43.6% | Largest test surface (349); harness-level tmpdir/fixtures sync fixed 227 ENOENT. Since 99: mkdir string modes, chown -1, fchmod/fd validation, umask on file creation, cp dereference:false, common/fs.js shim redirect (19 cp tests via assertDirEquivalent), fstat validation, throwIfNoEntry, Stats date accessors. Remaining: abort-signal cluster, stream edges, FileHandle events |
 | 8 | domain | 2 | 50 | 4.0% | Deprecated Node API; low value — deprioritize unless cheap wins |
 | 9 | cluster | 4 | 83 | 4.8% | Multi-process clustering is a noop in browser (single worker); mostly inherent |
 | 10 | events | 1 | 9 | 11.1% | Misleading: 8 of 9 failures documented as inherent in `expected-failures.shim.json` (harness limitations); effective parity higher |
@@ -45,7 +45,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | https | 1 | 67 | 1.5% |
 | http2 | 7 | 277 | 2.5% |
 | child_process | 4 | 112 | 3.6% |
-| fs | 130 | 349 | 37.2% |
+| fs | 152 | 349 | 43.6% |
 | domain | 2 | 50 | 4.0% |
 | cluster | 4 | 83 | 4.8% |
 | events | 1 | 9 | 11.1% |
