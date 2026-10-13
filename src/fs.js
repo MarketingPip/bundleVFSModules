@@ -245,6 +245,20 @@ function fileURLToPathString(url) {
   }
   return pathname;
 }
+function validateUidGid(uid, gid) {
+  for (const [name, value] of [
+    ["uid", uid],
+    ["gid", gid],
+  ]) {
+    if (!Number.isInteger(value) || value < -1 || value > 0xffffffff) {
+      const err = new TypeError(
+        `The "${name}" argument must be of type number. Received ${String(value)}`,
+      );
+      err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+  }
+}
 function validatePath(p, name = "path") {
   if (typeof p !== "string" && !isUint8ArrayLike(p) && !isURLLike(p)) {
     // Match Node's exact message format.
@@ -689,10 +703,12 @@ function buildApi(vol) {
   // ── generic wrappers ──
   function wrapSync(name, impl, validatePathFirst) {
     const orig = fs[name];
+    const needsUidGid = /chown/i.test(name);
     fs[name] = function (...args) {
       let result;
       try {
         if (validatePathFirst) validatePath(args[0]);
+        if (needsUidGid) validateUidGid(args[1], args[2]);
         result = (impl || orig).apply(this, args);
       } catch (e) {
         throw enrichErr(e, name);
@@ -751,6 +767,7 @@ function buildApi(vol) {
   function wrapCb(name, impl, validatePathFirst) {
     const orig = fs[name];
     const arity = cbResultArity[name];
+    const needsUidGid = /chown/i.test(name);
     fs[name] = function (...args) {
       const last = args[args.length - 1];
       if (typeof last !== "function")
@@ -764,6 +781,7 @@ function buildApi(vol) {
       };
       try {
         if (validatePathFirst) validatePath(args[0]);
+        if (needsUidGid) validateUidGid(args[1], args[2]);
         return (impl || orig).apply(this, args);
       } catch (e) {
         throw enrichErr(e, name);
@@ -1943,6 +1961,11 @@ function buildApi(vol) {
   }
   class Dir {
     constructor(path) {
+      if (arguments.length === 0) {
+        const err = new TypeError('The "path" argument must be specified');
+        err.code = "ERR_MISSING_ARGS";
+        throw err;
+      }
       this.path = path;
       this._closed = false;
       this._entries = null;
