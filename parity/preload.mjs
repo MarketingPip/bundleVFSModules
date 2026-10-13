@@ -83,7 +83,13 @@ function polyfillPath(request) {
 const origLoad = Module._load;
 Module._load = function (request, parent, isMain) {
   const parentFile = parent?.filename ?? "";
-  if (parentFile.startsWith(testsDir)) {
+  // For the fs target, common/fs.js (directory-comparison helpers) also
+  // needs the shim: it reads the cp dest out of memfs.
+  const isFsHelper =
+    target === "fs" &&
+    parentFile ===
+      path.join(repoRoot, "parity", "node-test", "common", "fs.js");
+  if (parentFile.startsWith(testsDir) || isFsHelper) {
     // Mirror real CJS builtins: require('path') is module.exports (the
     // default export), and require('path/posix') / require('path/win32')
     // are the identical objects as require('path').posix / .win32.

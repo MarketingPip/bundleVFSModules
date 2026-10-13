@@ -43,7 +43,13 @@ export async function resolve(specifier, context, nextResolve) {
   } catch {
     /* ignore */
   }
-  if (parentPath.startsWith(testsDir)) {
+  // For the fs target, common/fs.js (directory-comparison helpers) also
+  // needs the shim: it reads the cp dest out of memfs.
+  const isFsHelper =
+    target === "fs" &&
+    parentPath ===
+      path.join(repoRoot, "parity", "node-test", "common", "fs.js");
+  if (parentPath.startsWith(testsDir) || isFsHelper) {
     const url = polyfillURL(specifier);
     if (url) return { url, shortCircuit: true };
   }

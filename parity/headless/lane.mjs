@@ -197,10 +197,59 @@ const FIXTURES_STUB = `const fixtures = {
   path(...args) { return "/fixtures/" + args.join("/"); },
 };`;
 
+// test/common/tmpdir.js stages scratch space on REAL disk — impossible in
+// the sandbox. The fs-harness (parity/fs-harness.mjs) syncs that same tree
+// into memfs on access, so stub the require with a memfs-backed
+// implementation whose paths match the harness's tmpdir exactly.
+const __fsTestRoot = process.env.NODE_TEST_DIR
+  ? fs.realpathSync(process.env.NODE_TEST_DIR)
+  : path.join(parityDir, "node-test");
+const __fsTmpdirPath = path.join(
+  __fsTestRoot,
+  ".tmp." + (process.env.TEST_SERIAL_ID || process.env.TEST_THREAD_ID || "0"),
+);
+const TMPDIR_STUB = `const __headlessTmpdirCurrent = ${JSON.stringify(__fsTmpdirPath)};
+const tmpdir = {
+  resolve(...paths) { return require("path").resolve(__headlessTmpdirCurrent, ...paths); },
+  refresh() {
+    const __tfs = require("fs");
+    try { __tfs.rmSync(__headlessTmpdirCurrent, { recursive: true, force: true }); } catch {}
+    try { __tfs.mkdirSync(__headlessTmpdirCurrent, { recursive: true }); } catch {}
+  },
+  hasEnoughSpace() { return true; },
+  fileURL(...paths) {
+    const __tp = require("path");
+    return require("url").pathToFileURL(__tp.resolve(__headlessTmpdirCurrent + __tp.sep, ...paths));
+  },
+  get path() { return __headlessTmpdirCurrent; },
+  set path(v) { __headlessTmpdirCurrent = require("path").resolve(v); },
+};`;
+
 export function makeUserCode(testCode, { filename }) {
   const body = testCode
     .split("\n")
     .map((line) => {
+      // tmpdir before the generic ../common fallback below (which would
+      // comment the line out and leave `tmpdir` undefined).
+      if (
+        /^\s*(?:const|let|var)\s+tmpdir\s*=\s*require\(\s*["']\.\.\/common\/tmpdir["']\s*\)\s*;?\s*$/.test(line)
+      )
+        return TMPDIR_STUB;
+      {
+        const m = line.match(
+          /^\s*(?:const|let|var)\s+(\{[^}]*\})\s*=\s*require\(\s*["']\.\.\/common\/tmpdir["']\s*\)\s*;?\s*$/,
+        );
+        if (m) {
+          return (
+            TMPDIR_STUB.replace("const tmpdir =", "const __headlessTmpdir =") +
+            "\nconst " +
+            m[1] +
+            " = __headlessTmpdir;"
+          );
+        }
+      }
+      if (/^\s*require\(\s*["']\.\.\/common\/tmpdir["']\s*\)\s*;?\s*$/.test(line))
+        return "// (tmpdir stubbed by harness)";
       // fixtures first: ../common/fixtures also matches the ../common prefix
       if (
         /^\s*(?:const|let|var)\s+fixtures\s*=\s*require\(\s*["']\.\.\/common\/fixtures[^"']*["']\s*\)\s*;?\s*$/.test(line)
