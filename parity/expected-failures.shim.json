@@ -555,10 +555,6 @@
     "category": "inherent",
     "reason": "Test requires internal/fs/utils (real Node binding, --expose-internals) to list a file created through the shim. The real binding operates on the real fs and cannot see memfs-only files. Unfixable in the shim; the harness syncs disk->memfs only. Fails identically at pristine base 1a89d258."
   },
-  "test-fs-watch-close-when-destroyed.js": {
-    "category": "pre-existing",
-    "reason": "Blocked by an rmdir-lane bug, not watch semantics: fs.rmdirSync on an existing EMPTY dir throws ERR_FS_EISDIR ('Path is a directory: rm returned EISDIR') at base 1a89d258 (verified pristine). The test's fs.rmdirSync(root) fails before any watcher assertion runs. Out of scope for the watch lane."
-  },
   "test-fs-watch-encoding.js": {
     "category": "inherent",
     "reason": "Confirmed pre-existing on pristine HEAD (2026-10-13): watch encoding option semantics depend on inotify/os-level watch behavior; the memfs-backed shim cannot produce the native encoding events. Documented, not chased."
@@ -567,17 +563,9 @@
     "category": "inherent",
     "reason": "Confirmed pre-existing on pristine HEAD (2026-10-13): watch on a nonexistent path relies on native fs.watch throwing at watch-creation time with platform-specific timing; shim watch is polling-based and cannot reproduce the race. Documented, not chased."
   },
-  "test-fs-watch-file-enoent-after-deletion.js": {
-    "category": "inherent",
-    "reason": "Confirmed pre-existing on pristine HEAD (2026-10-13): watchFile ENOENT-after-deletion races are native-watcher timing behavior; the shim polling watch cannot reproduce them. Documented, not chased."
-  },
   "test-fs-watch-recursive-delete-race.js": {
     "category": "inherent",
     "reason": "Tests Node's internal non-native watcher directly: requires --expose-internals, imports internal/fs/recursive_watch and internal/fs/watchers (kFSWatchStart), and monkey-patches fs.watch expecting the INTERNAL watcher to call it during its real-disk walk. Under the shim the internal watcher calls the real fs (importer is internal, not redirected), so the patched shim fs.watch is never invoked and deletedChild stays false (verified failing identically at base 1a89d258). A browser shim cannot reproduce Node-internal module wiring."
-  },
-  "test-fs-watch-recursive-prefix-sibling.js": {
-    "category": "pre-existing",
-    "reason": "Same rmdir-lane bug as above: fs.rmdirSync on the empty dir 'foo' throws ERR_FS_EISDIR at base 1a89d258 (verified pristine). Test setup fails before watcher assertions. Out of scope for the watch lane."
   },
   "test-fs-watchfile-bigint.js": {
     "category": "inherent",
