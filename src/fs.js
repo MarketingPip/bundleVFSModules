@@ -23,7 +23,7 @@
 import { Volume, createFsFromVolume } from "memfs";
 import { Readable, Writable } from "./stream.js";
 import { errorOrDestroy } from "./stream/destroy.js";
-import { Minimatch } from "minimatch";
+import { Minimatch, GLOBSTAR } from "minimatch";
 
 // Browser-safe nextTick (process.nextTick under Node, queueMicrotask otherwise).
 function nextTick(fn, ...args) {
@@ -744,15 +744,27 @@ function fileURLToPathString(url) {
   return pathname;
 }
 function validateUidGid(uid, gid) {
+  // Mirrors Node's validateInteger(uid, 'uid', -1, 4294967295): non-number ->
+  // ERR_INVALID_ARG_TYPE; non-integer -> ERR_OUT_OF_RANGE ("an integer");
+  // out of [-1, 2**32-1] -> ERR_OUT_OF_RANGE (range message).
   for (const [name, value] of [
     ["uid", uid],
     ["gid", gid],
   ]) {
-    if (!Number.isInteger(value) || value < -1 || value > 0xffffffff) {
-      const err = new TypeError(
-        `The "${name}" argument must be of type number. Received ${String(value)}`,
+    if (typeof value !== "number")
+      throw errInvalidArgType(name, "number", value);
+    if (!Number.isInteger(value)) {
+      const err = new RangeError(
+        `The value of "${name}" is out of range. It must be an integer. Received ${value}`,
       );
-      err.code = "ERR_INVALID_ARG_TYPE";
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    if (value < -1 || value > 4294967295) {
+      const err = new RangeError(
+        `The value of "${name}" is out of range. It must be >= -1 && <= 4294967295. Received ${value}`,
+      );
+      err.code = "ERR_OUT_OF_RANGE";
       throw err;
     }
   }
@@ -877,6 +889,23 @@ function posixDirname(p) {
 function posixResolve(cwd, p) {
   if (p.startsWith("/")) return p;
   return (cwd + "/" + p).replace(/\/+/g, "/");
+}
+// Normalize a posix path lexically (resolves . and .., collapses slashes).
+function posixNormalize(p) {
+  const abs = p.startsWith("/");
+  const out = [];
+  for (const part of p.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (out.length > 0 && out[out.length - 1] !== "..") out.pop();
+      else if (!abs) out.push("..");
+      continue;
+    }
+    out.push(part);
+  }
+  const r = (abs ? "/" : "") + out.join("/");
+  if (r === "") return abs ? "/" : ".";
+  return r;
 }
 
 // ── 4. Volume creation + seeding ────────────────────────────────────────────
@@ -3169,114 +3198,566 @@ function buildApi(vol) {
   };
 
   // ── glob/globSync ──
-  function globMatch(pattern, path) {
-    // Convert a glob pattern to a RegExp (supports *, **, ?).
-    let re = "";
-    let i = 0;
-    while (i < pattern.length) {
-      const c = pattern[i];
-      if (c === "*") {
-        if (pattern[i + 1] === "*") {
-          // **/ or /** or **
-          if (pattern[i + 2] === "/") {
-            re += "(?:.*/)?";
-            i += 3;
-          } else {
-            re += ".*";
-            i += 2;
-          }
-        } else {
-          re += "[^/]*";
-          i += 1;
+  // Sync port of Node's internal glob walker (lib/internal/fs/glob.js, v24):
+  // a queue of (path, patterns); each pattern is a minimatch segment list of
+  // literal strings, RegExps (magic), or GLOBSTAR (**). Symlinked dirs are
+  // descended at most once per pattern chain (Node's symlinks-set rule);
+  // followSymlinks:true switches to realpath cycle detection.
+
+  function gNormalize(p) {
+    return posixNormalize(p);
+  }
+  function gJoin(a, b) {
+    if (b.startsWith("/")) return gNormalize(b);
+    if (b === "") return gNormalize(a);
+    return gNormalize(a + "/" + b);
+  }
+  function gResolve(root, p) {
+    return p.startsWith("/") ? gNormalize(p) : gNormalize(root + "/" + p);
+  }
+  function gBasename(p) {
+    const i = p.lastIndexOf("/");
+    return i < 0 ? p : p.slice(i + 1);
+  }
+  function gDirname(p) {
+    const i = p.lastIndexOf("/");
+    if (i < 0) return ".";
+    if (i === 0) return "/";
+    return p.slice(0, i);
+  }
+
+  class GlobPattern {
+    constructor(segs, globStrings) {
+      this.segs = segs;
+      this.globStrings = globStrings;
+      this.indexes = new Set([0]);
+      this.symlinks = new Set();
+      this.realpaths = new Set();
+      this.last = segs.length - 1;
+    }
+    at(i) {
+      if (i < 0) i = this.segs.length + i;
+      return this.segs[i];
+    }
+    isLast(isDirectory) {
+      return (
+        this.indexes.has(this.last) ||
+        (this.at(-1) === "" &&
+          isDirectory &&
+          this.indexes.has(this.last - 1) &&
+          this.at(-2) === GLOBSTAR)
+      );
+    }
+    isFirst() {
+      return this.indexes.has(0);
+    }
+    get hasSeenSymlinks() {
+      for (const i of this.indexes) if (!this.symlinks.has(i)) return true;
+      return false;
+    }
+    child(indexes, symlinks, realpaths) {
+      const p = new GlobPattern(this.segs, this.globStrings);
+      p.indexes = indexes;
+      p.symlinks = symlinks === undefined ? new Set() : symlinks;
+      p.realpaths = realpaths === undefined ? this.realpaths : realpaths;
+      return p;
+    }
+    test(index, name) {
+      if (index > this.segs.length) return false;
+      const s = this.segs[index];
+      if (s === GLOBSTAR) return true;
+      if (typeof s === "string") return s === name;
+      if (s instanceof RegExp) return s.test(name);
+      return false;
+    }
+    cacheKey(index) {
+      let key = "";
+      for (let i = index; i < this.globStrings.length; i++) {
+        key += this.globStrings[i];
+        if (i !== this.globStrings.length - 1) key += "/";
+      }
+      return key;
+    }
+  }
+
+  function globImpl(patterns, options) {
+    let pats;
+    if (typeof patterns === "string") pats = [patterns];
+    else if (Array.isArray(patterns)) {
+      pats = patterns;
+      for (let i = 0; i < pats.length; i++) {
+        if (typeof pats[i] !== "string")
+          throw errInvalidArgType(`patterns[${i}]`, "string", pats[i]);
+      }
+    } else {
+      throw errInvalidArgType("patterns", ["string", "string[]"], patterns);
+    }
+    const opts = options === undefined ? {} : options;
+    if (opts === null || typeof opts !== "object" || Array.isArray(opts))
+      throw errInvalidArgType("options", "object", options);
+    const { exclude, cwd, followSymlinks, withFileTypes } = opts;
+    if (exclude !== undefined && exclude !== null) {
+      if (Array.isArray(exclude)) {
+        for (let i = 0; i < exclude.length; i++) {
+          if (typeof exclude[i] !== "string")
+            throw errInvalidArgType(
+              `options.exclude[${i}]`,
+              "string",
+              exclude[i],
+            );
         }
-      } else if (c === "?") {
-        re += "[^/]";
-        i += 1;
-      } else if ("+^${}()|[]\\.".includes(c)) {
-        re += "\\" + c;
-        i += 1;
-      } else {
-        re += c;
-        i += 1;
+      } else if (typeof exclude !== "function") {
+        throw errInvalidArgType(
+          "options.exclude",
+          ["string[]", "function"],
+          exclude,
+        );
       }
     }
-    return new RegExp("^" + re + "$").test(path);
-  }
-  function globImpl(patterns, options) {
-    const opts = options || {};
-    const cwd = opts.cwd ? toPathString(opts.cwd) : "/";
-    const pats = Array.isArray(patterns) ? patterns : [patterns];
-    const exclude = opts.exclude
-      ? Array.isArray(opts.exclude)
-        ? opts.exclude
-        : [opts.exclude]
-      : [];
-    const withFileTypes = !!opts.withFileTypes;
-    const results = [];
-    const seen = new Set();
-    // Collect all files/dirs under cwd.
-    const all = [];
-    const walk = (dir) => {
-      let names;
-      try {
-        names = vol.readdirSync(dir);
-      } catch {
+    if (
+      followSymlinks !== undefined &&
+      followSymlinks !== null &&
+      typeof followSymlinks !== "boolean"
+    ) {
+      throw errInvalidArgType(
+        "options.followSymlinks",
+        "boolean",
+        followSymlinks,
+      );
+    }
+    const follow = followSymlinks === true;
+    const withTypes = !!withFileTypes;
+
+    let root =
+      cwd === undefined || cwd === null ? "/" : toPathString(cwd);
+    root = root.startsWith("/") ? gNormalize(root) : gNormalize("/" + root);
+
+    const mmOpts = {
+      windowsPathsNoEscape: true,
+      nonegate: true,
+      nocomment: true,
+      optimizationLevel: 2,
+      platform: "posix",
+      nocaseMagicOnly: true,
+    };
+    let excludeMatchers = null;
+    let excludeFn = null;
+    if (Array.isArray(exclude)) {
+      excludeMatchers = exclude.map(
+        (p) => new Minimatch(gResolve(root, p), mmOpts),
+      );
+    } else if (typeof exclude === "function") {
+      excludeFn = exclude;
+    }
+    const isExcludedPath = (absPath) =>
+      excludeMatchers !== null &&
+      excludeMatchers.some((m) => m.match(absPath));
+
+    // — per-run caches (lstat Dirents, readdir, realpath, follow-stat, seen) —
+    const statCache = new Map();
+    const readdirCache = new Map();
+    const realpathCache = new Map();
+    const followStatCache = new Map();
+    const seenCache = new Map();
+    const volPathCache = new Map();
+
+    // memfs does not resolve symlinks in the middle of a path (real Node
+    // does for every syscall). Resolve intermediate symlinks ourselves so
+    // the walker can traverse through them; the walker's lexical paths are
+    // unaffected (only the vol-level path is rewritten).
+    function resolveVolPath(absPath, followFinal) {
+      const key = (followFinal ? "F" : "L") + "\n" + absPath;
+      if (volPathCache.has(key)) return volPathCache.get(key);
+      const r = resolveVolPathUncached(absPath, followFinal);
+      volPathCache.set(key, r);
+      return r;
+    }
+    function resolveVolPathUncached(absPath, followFinal) {
+      let p = gNormalize(absPath);
+      let hops = 0;
+      for (;;) {
+        if (p === "/") return "/";
+        const parts = p.split("/").filter((s) => s !== "");
+        const lastIdx = parts.length - 1;
+        let resolved = "";
+        let progressed = false;
+        for (let i = 0; i < parts.length; i++) {
+          const isLast = i === lastIdx;
+          const cur = resolved + "/" + parts[i];
+          let st;
+          try {
+            st = vol.lstatSync(cur);
+          } catch {
+            return null;
+          }
+          if (st.isSymbolicLink() && (followFinal || !isLast)) {
+            if (++hops > 40) return null; // ELOOP
+            let target;
+            try {
+              target = vol.readlinkSync(cur);
+            } catch {
+              return null;
+            }
+            const base = resolved === "" ? "/" : resolved;
+            const absTarget = target.startsWith("/")
+              ? target
+              : base + "/" + target;
+            p = gNormalize(absTarget + "/" + parts.slice(i + 1).join("/"));
+            progressed = true;
+            break;
+          }
+          resolved = cur;
+        }
+        if (!progressed) return resolved === "" ? "/" : resolved;
+      }
+    }
+
+    function gStat(absPath) {
+      if (statCache.has(absPath)) return statCache.get(absPath);
+      let d = null;
+      const vp = resolveVolPath(absPath, false);
+      if (vp !== null) {
+        try {
+          const st = vol.lstatSync(vp);
+          d = new Dirent(gBasename(absPath), gDirname(absPath), st.mode);
+        } catch {
+          d = null;
+        }
+      }
+      statCache.set(absPath, d);
+      return d;
+    }
+    function gReaddir(absPath) {
+      if (readdirCache.has(absPath)) return readdirCache.get(absPath);
+      let out = [];
+      const vp = resolveVolPath(absPath, true);
+      if (vp !== null) {
+        try {
+          const names = vol.readdirSync(vp);
+          out = [];
+          for (const name of names) {
+            const fp = vp === "/" ? "/" + name : vp + "/" + name;
+            let d = null;
+            try {
+              const st = vol.lstatSync(fp);
+              d = new Dirent(name, absPath, st.mode);
+            } catch {
+              d = null;
+            }
+            if (d) out.push({ name, dirent: d });
+          }
+        } catch {
+          out = [];
+        }
+      }
+      readdirCache.set(absPath, out);
+      return out;
+    }
+    function gRealpath(absPath) {
+      if (realpathCache.has(absPath)) return realpathCache.get(absPath);
+      // resolveVolPath already canonicalizes; that IS the realpath.
+      const r = resolveVolPath(absPath, true);
+      realpathCache.set(absPath, r);
+      return r;
+    }
+    function gFollowStat(absPath) {
+      if (followStatCache.has(absPath)) return followStatCache.get(absPath);
+      let s = null;
+      const vp = resolveVolPath(absPath, true);
+      if (vp !== null) {
+        try {
+          s = vol.statSync(vp);
+        } catch {
+          s = null;
+        }
+      }
+      followStatCache.set(absPath, s);
+      return s;
+    }
+    function cacheAdd(relPath, pattern) {
+      let set = seenCache.get(relPath);
+      if (!set) {
+        set = new Set();
+        seenCache.set(relPath, set);
+      }
+      const before = set.size;
+      for (const i of pattern.indexes) set.add(pattern.cacheKey(i));
+      // Matches Node's Cache#add exactly: "seen" unless every key was new.
+      return set.size !== before + pattern.indexes.size;
+    }
+    function cacheSeen(relPath, pattern, index) {
+      const set = seenCache.get(relPath);
+      return !!set && set.has(pattern.cacheKey(index));
+    }
+
+    function isDirectorySync(absPath, dirent, pattern) {
+      if (dirent && dirent.isDirectory()) return true;
+      if (!dirent || !dirent.isSymbolicLink()) return false;
+      if (follow) {
+        const st = gFollowStat(absPath);
+        return !!st && st.isDirectory();
+      }
+      return pattern.hasSeenSymlinks;
+    }
+    function isCyclicSync(absPath, isDir, pattern) {
+      if (!follow || !isDir) return false;
+      const real = gRealpath(absPath);
+      return real !== null && pattern.realpaths.has(real);
+    }
+    function nextRealpathsSync(absPath, isDir, pattern) {
+      if (!follow || !isDir) return pattern.realpaths;
+      const real = gRealpath(absPath);
+      if (real === null) return pattern.realpaths;
+      const s = new Set(pattern.realpaths);
+      s.add(real);
+      return s;
+    }
+
+    const results = new Set();
+    function addResult(relPath) {
+      if (isExcludedPath(gResolve(root, relPath))) return;
+      results.add(relPath);
+    }
+
+    const queue = [];
+    const subpatterns = new Map();
+    function addSubpattern(relPath, pattern) {
+      if (isExcludedPath(gResolve(root, relPath))) return;
+      const fullpath = gResolve(root, relPath);
+      if (isExcludedPath(fullpath + "/")) {
+        const d = gStat(fullpath);
+        if (d && d.isDirectory()) return;
+      }
+      if (excludeFn) {
+        if (withTypes) {
+          const st = gStat(fullpath);
+          if (st !== null && excludeFn(st)) return;
+        } else if (excludeFn(relPath)) {
+          return;
+        }
+      }
+      const arr = subpatterns.get(relPath);
+      if (arr) arr.push(pattern);
+      else subpatterns.set(relPath, [pattern]);
+    }
+
+    function addSubpatterns(relPath, pattern) {
+      if (cacheAdd(relPath, pattern)) return;
+      const fullpath = gResolve(root, relPath);
+      const stat = gStat(fullpath);
+      const last = pattern.last;
+      const isDir = isDirectorySync(fullpath, stat, pattern);
+      const isLast = pattern.isLast(isDir);
+      const isFirst = pattern.isFirst();
+
+      if (isExcludedPath(fullpath)) return;
+
+      if (isFirst && pattern.at(0) === "") {
+        // Absolute path, go to root
+        addSubpattern("/", pattern.child(new Set([1])));
         return;
       }
-      for (const name of names) {
-        const full = dir === "/" ? "/" + name : dir + "/" + name;
-        all.push(full);
-        let st;
-        try {
-          st = vol.lstatSync(full);
-        } catch {
-          continue;
-        }
-        if (st.isDirectory() && !st.isSymbolicLink()) walk(full);
+      if (isFirst && pattern.at(0) === "..") {
+        // Start with .., go to parent
+        addSubpattern("../", pattern.child(new Set([1])));
+        return;
       }
-    };
-    walk(cwd);
-    for (let pat of pats) {
-      const p = toPathString(pat);
-      const absPat = p.startsWith("/") ? p : cwd + "/" + p;
-      for (const full of all) {
-        if (!globMatch(absPat, full)) continue;
-        if (
-          exclude.some((e) =>
-            globMatch(
-              toPathString(e).startsWith("/")
-                ? toPathString(e)
-                : cwd + "/" + toPathString(e),
-              full,
-            ),
-          )
-        )
-          continue;
-        // Relative patterns yield cwd-relative results; absolute yield absolute.
-        const out = p.startsWith("/") ? full : full.slice(cwd.length + 1);
-        if (seen.has(out)) continue;
-        seen.add(out);
-        if (withFileTypes) {
-          let mode = 0;
-          try {
-            mode = vol.lstatSync(full).mode;
-          } catch {
-            /* ignore */
-          }
-          results.push(
-            new Dirent(
-              full.slice(full.lastIndexOf("/") + 1),
-              full.slice(0, full.lastIndexOf("/") + 1).replace(/\/$/, "") ||
-                "/",
-              mode,
-            ),
-          );
+      if (isFirst && pattern.at(0) === ".") {
+        // Start with ., proceed
+        addSubpattern(".", pattern.child(new Set([1])));
+        return;
+      }
+
+      if (isLast && typeof pattern.at(-1) === "string") {
+        // Add result if it exists
+        const p = pattern.at(-1);
+        const st = gStat(gJoin(fullpath, p));
+        if (st && (p || isDir)) addResult(gJoin(relPath, p));
+        if (pattern.indexes.size === 1 && pattern.indexes.has(last)) return;
+      } else if (
+        isLast &&
+        pattern.at(-1) === GLOBSTAR &&
+        (relPath !== "." || pattern.at(0) === "." || (last === 0 && stat))
+      ) {
+        // If pattern ends with **, add to results; if path is ".", add it
+        // only if pattern starts with "." or pattern is exactly "**".
+        addResult(relPath);
+      }
+
+      if (!isDir || isCyclicSync(fullpath, isDir, pattern)) return;
+      const nextRealpaths = nextRealpathsSync(fullpath, isDir, pattern);
+
+      let children;
+      let firstPattern;
+      if (pattern.indexes.size === 1) {
+        firstPattern = pattern.at(pattern.indexes.values().next().value);
+      } else {
+        firstPattern = false;
+      }
+      if (typeof firstPattern === "string") {
+        const st = gStat(gJoin(fullpath, firstPattern));
+        if (st) {
+          st.name = firstPattern;
+          children = [{ name: firstPattern, dirent: st }];
         } else {
-          results.push(out);
+          return;
+        }
+      } else {
+        children = gReaddir(fullpath);
+      }
+
+      for (const { name: entryName, dirent: entry } of children) {
+        const entryPath = gJoin(relPath, entryName);
+        const entryFullpath = gJoin(fullpath, entryName);
+        statCache.set(entryFullpath, entry);
+        const entryIsDir =
+          entry.isDirectory() ||
+          (follow &&
+            entry.isSymbolicLink() &&
+            (() => {
+              const s = gFollowStat(entryFullpath);
+              return !!s && s.isDirectory();
+            })());
+
+        const subSet = new Set();
+        const nSymlinks = new Set();
+        for (const index of pattern.indexes) {
+          const current = pattern.at(index);
+          const nextIndex = index + 1;
+          const next = pattern.at(nextIndex);
+          const fromSymlink = !follow && pattern.symlinks.has(index);
+
+          if (current === GLOBSTAR) {
+            const isDot = entryName[0] === ".";
+            const nextMatches = pattern.test(nextIndex, entryName);
+            let nextNonGlobIndex = nextIndex;
+            while (pattern.at(nextNonGlobIndex) === GLOBSTAR) nextNonGlobIndex++;
+            const matchesDot = isDot && pattern.test(nextNonGlobIndex, entryName);
+            if (
+              (isDot && !matchesDot) ||
+              (excludeFn && excludeFn(withTypes ? entry : entryName))
+            ) {
+              continue;
+            }
+            if (!fromSymlink && entryIsDir) {
+              // If directory, add ** to its potential patterns
+              subSet.add(index);
+            } else if (!fromSymlink && index === last) {
+              // If ** is last, add to results
+              addResult(entryPath);
+            }
+            // Any pattern after ** is also a potential pattern
+            // so we can already test it here
+            if (nextMatches && nextIndex === last && !isLast) {
+              // If next pattern is the last one, add to results
+              addResult(entryPath);
+            } else if (nextMatches && entryIsDir) {
+              // Pattern matched, meaning two patterns forward
+              // are also potential patterns
+              subSet.add(index + 2);
+            }
+            if (
+              (nextMatches || pattern.at(0) === ".") &&
+              (entryIsDir || entry.isSymbolicLink()) &&
+              !fromSymlink
+            ) {
+              // If pattern after ** matches, or pattern starts with "."
+              // and entry is a directory or symlink, add to potential patterns
+              subSet.add(nextIndex);
+            }
+            if (!follow && entry.isSymbolicLink()) nSymlinks.add(index);
+            if (next === ".." && entryIsDir) {
+              // In case pattern is "**/..", both parent and current
+              // directory should be added to the queue; if this is the
+              // last pattern, add to results instead.
+              const parent = gJoin(relPath, "..");
+              if (nextIndex < last) {
+                if (
+                  !subpatterns.has(relPath) &&
+                  !cacheSeen(relPath, pattern, nextIndex + 1)
+                ) {
+                  subpatterns.set(relPath, [
+                    pattern.child(new Set([nextIndex + 1])),
+                  ]);
+                }
+                if (
+                  !subpatterns.has(parent) &&
+                  !cacheSeen(parent, pattern, nextIndex + 1)
+                ) {
+                  subpatterns.set(parent, [
+                    pattern.child(new Set([nextIndex + 1])),
+                  ]);
+                }
+              } else {
+                if (!cacheSeen(relPath, pattern, nextIndex)) {
+                  cacheAdd(relPath, pattern.child(new Set([nextIndex])));
+                  addResult(relPath);
+                }
+                if (
+                  !cacheSeen(relPath, pattern, nextIndex) ||
+                  !cacheSeen(parent, pattern, nextIndex)
+                ) {
+                  cacheAdd(parent, pattern.child(new Set([nextIndex])));
+                  addResult(parent);
+                }
+              }
+            }
+          }
+          if (typeof current === "string") {
+            if (pattern.test(index, entryName) && index !== last) {
+              // If current pattern matches entry name
+              // the next pattern is a potential pattern
+              subSet.add(nextIndex);
+            } else if (current === "." && pattern.test(nextIndex, entryName)) {
+              // If current pattern is ".", proceed to test next pattern
+              if (nextIndex === last) addResult(entryPath);
+              else subSet.add(nextIndex + 1);
+            }
+          }
+          if (
+            typeof current === "object" &&
+            current !== null &&
+            pattern.test(index, entryName)
+          ) {
+            // If current pattern is a regex that matches entry name
+            // (e.g *.js): add next pattern to potential patterns, or to
+            // results if it's the last pattern
+            if (index === last) addResult(entryPath);
+            else if (entryIsDir) subSet.add(nextIndex);
+          }
+        }
+        if (subSet.size > 0) {
+          // If there are potential patterns, add to queue
+          addSubpattern(entryPath, pattern.child(subSet, nSymlinks, nextRealpaths));
         }
       }
     }
-    return results;
+
+    const startPatterns = [];
+    for (const pat of pats) {
+      const mm = new Minimatch(pat, mmOpts);
+      for (let i = 0; i < mm.set.length; i++) {
+        startPatterns.push(new GlobPattern(mm.set[i], mm.globParts[i]));
+      }
+    }
+    queue.push({ path: ".", patterns: startPatterns });
+    while (queue.length > 0) {
+      const item = queue.pop();
+      for (const p of item.patterns) addSubpatterns(item.path, p);
+      for (const [p, arr] of subpatterns) queue.push({ path: p, patterns: arr });
+      subpatterns.clear();
+    }
+
+    const out = [];
+    for (const r of results) {
+      if (withTypes) {
+        const d = gStat(gResolve(root, r));
+        if (d) out.push(d);
+      } else {
+        out.push(r);
+      }
+    }
+    return out;
   }
   fs.globSync = function (patterns, options) {
     let result;
@@ -3296,15 +3777,22 @@ function buildApi(vol) {
     if (callback && typeof callback !== "function")
       throw errInvalidArgType("cb", "function", callback);
     const run = () => {
+      // Only the glob itself is guarded: a throw inside the user callback
+      // must propagate (uncaughtException), never re-enter the callback.
+      let result, err;
       try {
-        const result = globImpl(patterns, options);
-        emitFs("fs", "glob", patterns, result);
-        if (callback) callback(null, result);
-        return result;
+        result = globImpl(patterns, options);
       } catch (e) {
-        const err = enrichErr(e, "glob");
-        if (callback) callback(err);
-        else throw err;
+        err = enrichErr(e, "glob");
+      }
+      if (!err) emitFs("fs", "glob", patterns, result);
+      if (callback) {
+        if (err) callback(err);
+        else callback(null, result);
+      } else if (err) {
+        throw err;
+      } else {
+        return result;
       }
     };
     if (callback) {
@@ -3616,10 +4104,75 @@ function buildApi(vol) {
   fs.realpath.native = makeRealpath(true);
 
   // ── link/symlink/readlink: delegate + enrich/emit ──
+  // memfs resolves relative symlink targets against process.cwd() instead of
+  // the link's dirname (POSIX: relative to the link). Store the absolute
+  // target in the volume, but remember the literal target so readlink stays
+  // faithful to what was passed.
+  const symlinkLiterals = new Map();
+  function symlinkVolTarget(target, linkPath) {
+    const t = toPathString(target);
+    if (t.startsWith("/")) return { vol: t, literal: t };
+    const dir = posixDirname(toPathString(linkPath));
+    return { vol: posixNormalize(dir + "/" + t), literal: t };
+  }
+  function readlinkLiteral(linkPath) {
+    if (!symlinkLiterals.has(linkPath)) return undefined;
+    try {
+      const st = vol.lstatSync(linkPath);
+      if (st && st.isSymbolicLink()) return symlinkLiterals.get(linkPath);
+    } catch {}
+    symlinkLiterals.delete(linkPath);
+    return undefined;
+  }
+  function applyReadlinkEncoding(literal, options) {
+    const enc =
+      typeof options === "string" ? options : (options && options.encoding) || "utf8";
+    if (typeof Buffer !== "undefined") {
+      const b = Buffer.from(literal, "utf8");
+      return enc === "buffer" ? b : b.toString(enc);
+    }
+    return literal;
+  }
   wrapSync("linkSync", null, true, 1);
   wrapCb("link", null, true, 1);
-  wrapSync("symlinkSync", null, true, 1);
-  wrapCb("symlink", null, true, 1);
+  {
+    const origSync = fs.symlinkSync;
+    fs.symlinkSync = function (target, path, type) {
+      validatePath(target);
+      validatePath(path, "dest");
+      const ps = toPathString(path);
+      const { vol: vt, literal } = symlinkVolTarget(target, ps);
+      try {
+        const r = origSync.call(this, vt, ps, type);
+        symlinkLiterals.set(ps, literal);
+        emitFs("fs", "symlinkSync", target, r);
+        return r;
+      } catch (e) {
+        throw enrichDestErr(e, "symlinkSync", target, path);
+      }
+    };
+  }
+  {
+    const orig = fs.symlink;
+    fs.symlink = function (target, path, type, callback) {
+      if (typeof type === "function") {
+        callback = type;
+        type = undefined;
+      }
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      validatePath(target);
+      validatePath(path, "dest");
+      const ps = toPathString(path);
+      const { vol: vt, literal } = symlinkVolTarget(target, ps);
+      orig.call(this, vt, ps, type, (err) => {
+        if (err) return callback(enrichDestErr(err, "symlink", target, path));
+        symlinkLiterals.set(ps, literal);
+        emitFs("fs", "symlink", target, undefined);
+        callback(null);
+      });
+    };
+  }
   wrapSync("readlinkSync", null, true);
   wrapCb("readlink", null, true);
   // readlink validates the encoding before the path (getOptions order).
@@ -3628,6 +4181,9 @@ function buildApi(vol) {
       oC = fs.readlink;
     fs.readlinkSync = function (p, options) {
       validateEncodingOpt(options);
+      const ps = toPathString(p);
+      const literal = readlinkLiteral(ps);
+      if (literal !== undefined) return applyReadlinkEncoding(literal, options);
       return oS.call(this, p, options);
     };
     fs.readlink = function (p, options, callback) {
@@ -3636,6 +4192,12 @@ function buildApi(vol) {
         options = undefined;
       }
       validateEncodingOpt(options);
+      const ps = toPathString(p);
+      const literal = readlinkLiteral(ps);
+      if (literal !== undefined) {
+        nextTick(callback, null, applyReadlinkEncoding(literal, options));
+        return;
+      }
       return oC.call(this, p, options, callback);
     };
   }
@@ -3727,8 +4289,43 @@ function buildApi(vol) {
       });
     };
   }
-  wrapSync("fchownSync", null, null, null, true);
-  wrapCb("fchown", null, null, null, true);
+  {
+    const origSync = fs.fchownSync;
+    fs.fchownSync = function (fd, uid, gid) {
+      validateFd(fd);
+      validateUidGid(uid, gid);
+      [uid, gid] = resolveUidGid(uid, gid, () => vol.fstatSync(fd));
+      try {
+        const r = origSync.call(this, fd, uid, gid);
+        emitFs("fs", "fchownSync", fd, r);
+        return r;
+      } catch (e) {
+        throw enrichErr(e, "fchownSync");
+      }
+    };
+  }
+  {
+    const orig = fs.fchown;
+    fs.fchown = function (fd, uid, gid, callback) {
+      // Real Node validates uid, then gid, then callback, then fd.
+      validateUidGid(uid, gid);
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      validateFd(fd);
+      let resolved;
+      try {
+        resolved = resolveUidGid(uid, gid, () => vol.fstatSync(fd));
+      } catch (e) {
+        nextTick(callback, enrichErr(e, "fchown"));
+        return;
+      }
+      orig.call(this, fd, resolved[0], resolved[1], (err) => {
+        if (err) return callback(enrichErr(err, "fchown"));
+        emitFs("fs", "fchown", fd, undefined);
+        callback(null);
+      });
+    };
+  }
   {
     const origSync = fs.lchownSync;
     fs.lchownSync = function (p, uid, gid) {
@@ -5924,14 +6521,112 @@ function buildApi(vol) {
 // ── 8. Singleton assembly ───────────────────────────────────────────────────
 import nodeConstants from "./constants.js";
 
+// fs.constants is the 56-key fs-only subset of node:constants, on a
+// null-prototype object (matches real Node: Object.getPrototypeOf(fs.constants)
+// === null, and fs.promises.constants === fs.constants). Not frozen in real
+// Node either.
+const FS_CONSTANT_NAMES = [
+  "UV_FS_SYMLINK_DIR",
+  "UV_FS_SYMLINK_JUNCTION",
+  "O_RDONLY",
+  "O_WRONLY",
+  "O_RDWR",
+  "UV_DIRENT_UNKNOWN",
+  "UV_DIRENT_FILE",
+  "UV_DIRENT_DIR",
+  "UV_DIRENT_LINK",
+  "UV_DIRENT_FIFO",
+  "UV_DIRENT_SOCKET",
+  "UV_DIRENT_CHAR",
+  "UV_DIRENT_BLOCK",
+  "S_IFMT",
+  "S_IFREG",
+  "S_IFDIR",
+  "S_IFCHR",
+  "S_IFBLK",
+  "S_IFIFO",
+  "S_IFLNK",
+  "S_IFSOCK",
+  "O_CREAT",
+  "O_EXCL",
+  "UV_FS_O_FILEMAP",
+  "O_NOCTTY",
+  "O_TRUNC",
+  "O_APPEND",
+  "O_DIRECTORY",
+  "O_NOATIME",
+  "O_NOFOLLOW",
+  "O_SYNC",
+  "O_DSYNC",
+  "O_DIRECT",
+  "O_NONBLOCK",
+  "S_IRWXU",
+  "S_IRUSR",
+  "S_IWUSR",
+  "S_IXUSR",
+  "S_IRWXG",
+  "S_IRGRP",
+  "S_IWGRP",
+  "S_IXGRP",
+  "S_IRWXO",
+  "S_IROTH",
+  "S_IWOTH",
+  "S_IXOTH",
+  "F_OK",
+  "R_OK",
+  "W_OK",
+  "X_OK",
+  "UV_FS_COPYFILE_EXCL",
+  "COPYFILE_EXCL",
+  "UV_FS_COPYFILE_FICLONE",
+  "COPYFILE_FICLONE",
+  "UV_FS_COPYFILE_FICLONE_FORCE",
+  "COPYFILE_FICLONE_FORCE",
+];
+
+function buildFsConstants() {
+  const c = Object.create(null);
+  for (const k of FS_CONSTANT_NAMES) c[k] = nodeConstants[k];
+  return c;
+}
+
 function buildSingleton() {
   const rt = getRuntime();
   if (rt && rt.__FS__) return rt.__FS__;
   const vol = createVolume();
   const fs = buildApi(vol);
   fs._vol = vol;
-  fs.constants = nodeConstants;
-  fs.promises.constants = nodeConstants;
+  fs.constants = buildFsConstants();
+  fs.promises.constants = fs.constants;
+  // Real Node exposes F_OK/R_OK/W_OK/X_OK on the fs namespace as getter-only
+  // properties (memfs's createFsFromVolume copies them as writable data
+  // props); assignment must throw TypeError in strict mode. Reading any of
+  // them emits DEP0176 — once per process, shared across all four keys.
+  let dep0176Warned = false;
+  for (const k of ["F_OK", "R_OK", "W_OK", "X_OK"]) {
+    const v = fs[k];
+    Object.defineProperty(fs, k, {
+      enumerable: true,
+      get: () => {
+        if (!dep0176Warned) {
+          dep0176Warned = true;
+          try {
+            if (
+              typeof process !== "undefined" &&
+              typeof process.emitWarning === "function"
+            ) {
+              process.emitWarning(
+                `fs.${k} is deprecated, use fs.constants.${k} instead`,
+                "DeprecationWarning",
+                "DEP0176",
+              );
+            }
+          } catch {}
+        }
+        return v;
+      },
+    });
+  }
   if (rt) rt.__FS__ = fs;
   return fs;
 }
