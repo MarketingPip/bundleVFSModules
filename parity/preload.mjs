@@ -47,11 +47,35 @@ if (
   });
 }
 
+// Snapshot the timer globals before any shim loads: als-browser (pulled in
+// via async_hooks → events → stream → fs) replaces them on import, which
+// trips Node's official-test global-leak detector. The fs harness
+// (parity/fs-harness.mjs) restores these after the shim loads. Non-enumerable
+// so the leak detector never sees the snapshot itself.
+Object.defineProperty(globalThis, "__PARITY_ORIG_TIMERS__", {
+  value: {
+    setTimeout: globalThis.setTimeout,
+    setInterval: globalThis.setInterval,
+    setImmediate: globalThis.setImmediate,
+    queueMicrotask: globalThis.queueMicrotask,
+  },
+  writable: true,
+  configurable: true,
+  enumerable: false,
+});
+
 function polyfillPath(request) {
   const name = request.startsWith("node:") ? request.slice(5) : request;
   if (name.startsWith(".") || path.isAbsolute(name)) return null;
   const parts = name.split("/");
   if (target && parts[0] !== target) return null;
+  // Harness-only tmpdir sync for fs parity (parity/fs-harness.mjs): the
+  // official tests stage fixtures on real disk, which the memfs-backed shim
+  // cannot see. The wrapper syncs real-disk tmpdir state into memfs on
+  // access. src/fs.js itself is untouched.
+  if (target === "fs" && name === "fs") {
+    return path.join(repoRoot, "parity", "fs-harness.mjs");
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   return fs.existsSync(candidate) ? candidate : null;
 }
@@ -71,7 +95,8 @@ Module._load = function (request, parent, isMain) {
       (bare === target ||
         bare === `${target}/posix` ||
         bare === `${target}/win32` ||
-        bare === `${target}/strict`)
+        bare === `${target}/strict` ||
+        (target === "fs" && bare === "fs/promises"))
     ) {
       const ns = origLoad.call(this, polyfillPath(target), parent, isMain);
       if (bare === `${target}/posix`) return ns.posix;
@@ -79,6 +104,9 @@ Module._load = function (request, parent, isMain) {
       const def = ns.default ?? ns;
       // Node: require('assert/strict') === require('assert').strict.
       if (bare === `${target}/strict`) return def.strict;
+      // fs/promises goes through the harness wrapper too (timer-globals
+      // restore + tmpdir sync); the wrapper's .promises is the wrapped API.
+      if (target === "fs" && bare === "fs/promises") return def.promises;
       return def;
     }
     const poly = polyfillPath(request);
