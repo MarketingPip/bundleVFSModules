@@ -4673,10 +4673,20 @@ function buildApi(vol) {
   function openWithPatchedOpen(stream) {
     const origEmit = stream.emit;
     stream.emit = function (...args) {
-      if (args[0] === "open" || args[0] === "error") {
+      if (args[0] === "open") {
         stream.emit = origEmit;
         stream._openPending = false;
-        if (args[0] === "open") stream._opened = true;
+        stream._opened = true;
+        return Reflect.apply(origEmit, stream, args);
+      }
+      if (args[0] === "error") {
+        stream.emit = origEmit;
+        stream._openPending = false;
+        // An 'error' from the patched open destroys the stream (real Node
+        // routes it through destroy: destroyed===true and 'close' fires).
+        // destroy() re-emits 'error' async for the user's handler.
+        stream.destroy(args[1]);
+        return true;
       }
       return Reflect.apply(origEmit, stream, args);
     };
@@ -4782,9 +4792,15 @@ function buildApi(vol) {
   class FsReadStream extends Readable {
     constructor(path, options) {
       validateStreamOptions(options);
-      const opts = options || {};
-      super(streamOpts(opts));
+      super(streamOpts(options || {}));
+      this._initReadStream(path, options);
+    }
+    // Initialization factored out so ReadStreamFactory can run it on an
+    // existing `this` for the fs.ReadStream.call(this, ...) subclass
+    // compat pattern (test-fs-stream-construct-compat-error-read.js).
+    _initReadStream(path, options) {
       // options.signal validated for every stream (invalid type throws).
+      const opts = options || {};
       const signal = validateAbortSignal(opts.signal);
       const fdValidated = validateStreamFd(opts.fd);
       const handle =
@@ -4870,7 +4886,10 @@ function buildApi(vol) {
         // A caller-provided fd is already open (Node closes it on destroy
         // when autoClose, like a stream-opened fd).
         this._opened = true;
-        nextTick(() => this.emit("open", this.fd));
+        nextTick(() => {
+          this.emit("open", this.fd);
+          this.emit("ready");
+        });
       }
     }
     _openWithImpl() {
@@ -4889,8 +4908,13 @@ function buildApi(vol) {
         // flight (test-fs-stream-double-close); the destroy machinery then
         // releases the fd — run _cleanup now since _destroy already ran.
         this.emit("open", fd);
+        this.emit("ready");
         if (this.destroyed) this._cleanup();
       });
+    }
+    // Node: pending is true until the fd is open (fd === null).
+    get pending() {
+      return this.fd === null;
     }
     _read(size) {
       const doRead = () => {
@@ -5090,7 +5114,10 @@ function buildApi(vol) {
         // A caller-provided fd is already open (Node closes it on destroy
         // when autoClose, like a stream-opened fd).
         this._opened = true;
-        nextTick(() => this.emit("open", this.fd));
+        nextTick(() => {
+          this.emit("open", this.fd);
+          this.emit("ready");
+        });
       }
     }
     _openWithImpl() {
@@ -5109,8 +5136,13 @@ function buildApi(vol) {
         // flight (test-fs-stream-double-close); the destroy machinery then
         // releases the fd — run _cleanup now since _destroy already ran.
         this.emit("open", fd);
+        this.emit("ready");
         if (this.destroyed) this._cleanup();
       });
+    }
+    // Node: pending is true until the fd is open (fd === null).
+    get pending() {
+      return this.fd === null;
     }
     _write(chunk, encoding, callback) {
       if (this._openPending) {
@@ -5213,6 +5245,16 @@ function buildApi(vol) {
   // checks hold in both directions.
   function ReadStreamFactory(path, options) {
     validateEncodingOpt(options);
+    if (new.target === undefined && this instanceof FsReadStream) {
+      // Subclass compat: fs.ReadStream.call(this, ...) must initialize
+      // `this` in place (test-fs-stream-construct-compat-error-read.js).
+      // Readable is a plain function, so it can run on the existing `this`;
+      // the rest of the constructor is factored as _initReadStream.
+      validateStreamOptions(options);
+      Readable.call(this, streamOpts(options || {}));
+      this._initReadStream(path, options);
+      return this;
+    }
     return new FsReadStream(path, options);
   }
   function WriteStreamFactory(path, options) {
