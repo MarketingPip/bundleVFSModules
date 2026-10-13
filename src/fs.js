@@ -2003,6 +2003,21 @@ function buildApi(vol) {
         throw enrichErr(e, "read");
       }
     };
+    // util.promisify(fs.read) resolves { bytesRead, buffer } (not just the
+    // first callback value).
+    fs.read[Symbol.for("nodejs.util.promisify.custom")] = function (
+      fd,
+      buffer,
+      offset,
+      length,
+      position,
+    ) {
+      return new Promise((resolve, reject) => {
+        fs.read(fd, buffer, offset, length, position, (err, bytesRead, buf) =>
+          err ? reject(err) : resolve({ bytesRead, buffer: buf }),
+        );
+      });
+    };
   }
 
   // ── writeSync/write: EBADF on wrong-direction fd, cursor preservation ──
@@ -2069,6 +2084,18 @@ function buildApi(vol) {
       } catch (e) {
         throw enrichErr(e, "write");
       }
+    };
+    // util.promisify(fs.write) resolves { bytesWritten, buffer }.
+    fs.write[Symbol.for("nodejs.util.promisify.custom")] = function (
+      fd,
+      data,
+      ...args
+    ) {
+      return new Promise((resolve, reject) => {
+        fs.write(fd, data, ...args, (err, bytesWritten, buf) =>
+          err ? reject(err) : resolve({ bytesWritten, buffer: buf }),
+        );
+      });
     };
   }
 
@@ -2374,7 +2401,7 @@ function buildApi(vol) {
     const origSync = fs.renameSync,
       origCb = fs.rename;
     fs.renameSync = function (oldPath, newPath) {
-      validatePath(oldPath);
+      validatePath(oldPath, "oldPath");
       validatePath(newPath, "newPath");
       try {
         checkRename(oldPath, newPath);
@@ -2387,7 +2414,7 @@ function buildApi(vol) {
     fs.rename = function (oldPath, newPath, callback) {
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
-      validatePath(oldPath);
+      validatePath(oldPath, "oldPath");
       validatePath(newPath, "newPath");
       nextTick(() => {
         try {
@@ -2742,6 +2769,11 @@ function buildApi(vol) {
       throw errInvalidArgType("cb", "function", callback);
     // Node's exists callback receives only the boolean (no err argument).
     nextTick(() => callback(fs.existsSync(p)));
+  };
+  // util.promisify(fs.exists) must resolve with the boolean (exists has no
+  // err argument, so the default promisify would reject with `true`).
+  fs.exists[Symbol.for("nodejs.util.promisify.custom")] = function (p) {
+    return new Promise((resolve) => fs.exists(p, resolve));
   };
 
   // ── copyFile: delegate + enrich + sync mode validation ──
