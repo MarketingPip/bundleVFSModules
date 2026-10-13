@@ -878,6 +878,17 @@ function posixResolve(cwd, p) {
   if (p.startsWith("/")) return p;
   return (cwd + "/" + p).replace(/\/+/g, "/");
 }
+// memfs resolves relative paths against process.cwd(); mirror that so the
+// shim absolutizes the same way memfs will.
+function shimCwd() {
+  try {
+    if (typeof process !== "undefined" && typeof process.cwd === "function")
+      return process.cwd().replace(/\/+/g, "/");
+  } catch {
+    /* ignore */
+  }
+  return "/";
+}
 
 // ── 4. Volume creation + seeding ────────────────────────────────────────────
 function getUmask() {
@@ -2165,6 +2176,22 @@ function buildApi(vol) {
   };
 
   // ── mkdir/mkdirSync: recursive on existing file → EEXIST; umask ──
+  // options.recursive must be a boolean when present (throws synchronously,
+  // even for the async mkdir — verified against Node v24).
+  function validateMkdirOptions(options) {
+    if (
+      options !== null &&
+      typeof options === "object" &&
+      options.recursive !== undefined &&
+      typeof options.recursive !== "boolean"
+    ) {
+      throw errInvalidArgTypeProp(
+        "options.recursive",
+        "boolean",
+        options.recursive,
+      );
+    }
+  }
   function mkdirImpl(p, options) {
     let opts;
     if (typeof options === "number") opts = { mode: options };
@@ -2179,7 +2206,7 @@ function buildApi(vol) {
         throw err;
       }
       opts = { mode: m };
-    } else opts = options || {};
+    } else opts = { ...(options || {}) };
     if (opts.mode !== undefined) opts.mode = applyUmask(opts.mode);
     if (opts.recursive) {
       // Real Node: recursive mkdir on an existing *file* reports EEXIST.
@@ -2195,6 +2222,34 @@ function buildApi(vol) {
           "mkdir",
         );
       }
+      // Real Node's recursive mkdir returns the first created path (or
+      // undefined when nothing was created); memfs returns the full path.
+      const firstCreated = (function () {
+        const norm = p.replace(/\/+$/, "") || "/";
+        const segs = norm.split("/");
+        let cur = "";
+        for (let i = 1; i < segs.length; i++) {
+          cur += "/" + segs[i];
+          let exists = false;
+          try {
+            vol.statSync(cur);
+            exists = true;
+          } catch {
+            /* ignore */
+          }
+          if (!exists) return cur;
+        }
+        return undefined;
+      })();
+      try {
+        vol.mkdirSync(p, opts);
+      } catch (e) {
+        // Real Node reports the full path for recursive-mkdir ENOTDIR
+        // (nodejs/node#28015); memfs reports the offending component.
+        if (e && e.code === "ENOTDIR") e.path = p;
+        throw e;
+      }
+      return firstCreated;
     }
     return vol.mkdirSync(p, opts);
   }
@@ -2202,6 +2257,7 @@ function buildApi(vol) {
     const orig = fs.mkdir;
     fs.mkdirSync = function (p, options) {
       validatePath(p);
+      validateMkdirOptions(options);
       let result;
       try {
         result = mkdirImpl(toPathString(p), options);
@@ -2219,6 +2275,7 @@ function buildApi(vol) {
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
       validatePath(p);
+      validateMkdirOptions(options);
       nextTick(() => {
         try {
           const result = mkdirImpl(toPathString(p), options);
@@ -2326,7 +2383,9 @@ function buildApi(vol) {
     const ps = toPathString(p);
     let st = null;
     try {
-      st = vol.statSync(ps);
+      // lstat: a symlink to a directory is still unlinkable (real Node
+      // allows unlink on dir symlinks; stat would wrongly report EISDIR).
+      st = vol.lstatSync(ps);
     } catch {
       /* ignore */
     }
@@ -2394,10 +2453,46 @@ function buildApi(vol) {
       });
     };
   }
-  for (const [syncName, cbName] of [
-    ["rmSync", "rm"],
-    ["rmdirSync", "rmdir"],
-  ]) {
+  // DEP0147 fires once per process in real Node (verified against v24:
+  // repeated rmdir(path, { recursive: true }) calls warn only once).
+  let rmdirRecursiveWarned = false;
+  function warnRmdirRecursive() {
+    if (rmdirRecursiveWarned) return;
+    rmdirRecursiveWarned = true;
+    if (
+      typeof process !== "undefined" &&
+      typeof process.emitWarning === "function"
+    ) {
+      process.emitWarning(
+        "In future versions of Node.js, fs.rmdir(path, { recursive: true }) " +
+          "will be removed. Use fs.rm(path, { recursive: true }) instead",
+        "DeprecationWarning",
+        "DEP0147",
+      );
+    }
+  }
+  // Real Node's recursive rmdir removes the tree (lstat-walk: symlinks are
+  // unlinked, never followed). memfs's recursive rmdirBase merely detaches
+  // the dir link, leaking children; do it properly here.
+  function rmdirRecursiveSync(ps) {
+    let st;
+    try {
+      st = vol.lstatSync(ps);
+    } catch (e) {
+      throw e; // ENOENT surfaces (test-fs-rmdir-recursive-sync-warns-not-found)
+    }
+    if (!st.isDirectory()) {
+      throw makeFsError("ENOTDIR", "rmdir", ps, "not a directory");
+    }
+    for (const name of vol.readdirSync(ps)) {
+      const child = ps + "/" + name;
+      const cst = vol.lstatSync(child);
+      if (cst.isDirectory()) rmdirRecursiveSync(child);
+      else vol.unlinkSync(child);
+    }
+    vol.rmdirSync(ps);
+  }
+  for (const [syncName, cbName] of [["rmSync", "rm"]]) {
     const origSync = fs[syncName],
       origCb = fs[cbName];
     fs[syncName] = function (p, options) {
@@ -2432,11 +2527,71 @@ function buildApi(vol) {
       });
     };
   }
+  // rmdir/rmdirSync: plain rmdir removes an empty dir (memfs raises
+  // ENOTEMPTY/ENOTDIR/ENOENT itself); recursive rmdir warns DEP0147 once and
+  // removes the tree. Never the rm EISDIR path (test-fs-mkdir-rmdir).
+  {
+    const origSync = fs.rmdirSync,
+      origCb = fs.rmdir;
+    fs.rmdirSync = function (p, options) {
+      validatePath(p);
+      const ps = toPathString(p);
+      const recursive = !!(
+        options &&
+        typeof options === "object" &&
+        options.recursive
+      );
+      if (recursive) warnRmdirRecursive();
+      try {
+        if (recursive) rmdirRecursiveSync(ps);
+        else origSync.call(this, ps, options);
+      } catch (e) {
+        throw enrichErr(e, "rmdirSync");
+      }
+      emitFs("fs", "rmdirSync", p, undefined);
+    };
+    fs.rmdir = function (p, options, callback) {
+      if (typeof options === "function") {
+        callback = options;
+        options = undefined;
+      }
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      validatePath(p);
+      const ps = toPathString(p);
+      const recursive = !!(
+        options &&
+        typeof options === "object" &&
+        options.recursive
+      );
+      if (recursive) warnRmdirRecursive();
+      nextTick(() => {
+        try {
+          if (recursive) rmdirRecursiveSync(ps);
+          else
+            origCb.call(this, ps, options, (err) => {
+              if (err) return callback(enrichErr(err, "rmdir"));
+              emitFs("fs", "rmdir", p, undefined);
+              callback(null);
+            });
+          if (recursive) {
+            emitFs("fs", "rmdir", p, undefined);
+            callback(null);
+          }
+        } catch (e) {
+          callback(enrichErr(e, "rmdir"));
+        }
+      });
+    };
+  }
 
-  // ── truncate: negative → 0; fractional/NaN → ERR_OUT_OF_RANGE ──
+  // ── truncate: len must be a number (ERR_INVALID_ARG_TYPE); fractional/NaN
+  // → ERR_OUT_OF_RANGE; negative → 0. Async variants validate len before the
+  // callback and throw synchronously (verified against Node v24).
   function normalizeTruncateLen(len) {
-    if (len === undefined || len === null) return 0;
-    const n = Number(len);
+    if (len === undefined) return 0;
+    if (typeof len !== "number") throw errInvalidArgType("len", "number", len);
+    const n = len;
     if (!Number.isInteger(n)) {
       const err = new RangeError(
         `The value of "len" is out of range. It must be an integer. Received ${len}`,
@@ -2471,16 +2626,11 @@ function buildApi(vol) {
         callback = len;
         len = undefined;
       }
+      // len validates before cb/path (Node v24) and throws synchronously.
+      const norm = normalizeTruncateLen(len);
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
       validatePath(p);
-      let norm;
-      try {
-        norm = normalizeTruncateLen(len);
-      } catch (e) {
-        nextTick(callback, enrichErr(e, "truncate"));
-        return;
-      }
       origCb.call(this, toPathString(p), norm, (err) => {
         if (err) return callback(enrichErr(err, "truncate"));
         emitFs("fs", "truncate", p, undefined);
@@ -2490,7 +2640,10 @@ function buildApi(vol) {
     fs.ftruncateSync = function (fd, len) {
       let result;
       try {
-        result = origFSync.call(this, fd, normalizeTruncateLen(len));
+        // Validation order (Node v24): len, then fd.
+        const norm = normalizeTruncateLen(len);
+        validateFd(fd);
+        result = origFSync.call(this, fd, norm);
       } catch (e) {
         throw enrichErr(e, "ftruncateSync");
       }
@@ -2502,15 +2655,11 @@ function buildApi(vol) {
         callback = len;
         len = undefined;
       }
+      // Validation order (Node v24): len, then cb, then fd; throws sync.
+      const norm = normalizeTruncateLen(len);
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
-      let norm;
-      try {
-        norm = normalizeTruncateLen(len);
-      } catch (e) {
-        nextTick(callback, enrichErr(e, "ftruncate"));
-        return;
-      }
+      validateFd(fd);
       origF.call(this, fd, norm, (err) => {
         if (err) return callback(enrichErr(err, "ftruncate"));
         emitFs("fs", "ftruncate", fd, undefined);
@@ -2940,7 +3089,7 @@ function buildApi(vol) {
   // Node validates the encoding (string options, or options.encoding) via
   // getOptions BEFORE the path: an unknown encoding is a synchronous
   // ERR_INVALID_ARG_VALUE TypeError (test-fs-assert-encoding-error.js).
-  function validateEncodingOpt(options) {
+  function validateEncodingOpt(options, allowBuffer) {
     const enc =
       typeof options === "string"
         ? options
@@ -2948,6 +3097,8 @@ function buildApi(vol) {
           ? options.encoding
           : undefined;
     if (enc === undefined || enc === null) return;
+    // 'buffer' is a valid pseudo-encoding for realpath/readlink/mkdtemp.
+    if (allowBuffer && enc === "buffer") return;
     let ok = false;
     if (typeof enc === "string") {
       ok =
@@ -3332,8 +3483,9 @@ function buildApi(vol) {
   }
   function lutimesImpl(p, atime, mtime) {
     const ps = toPathString(p);
-    const at = toDate(atime, "atime"),
-      mt = toDate(mtime, "mtime");
+    // Port of Node's internal toUnixTimestamp: negative numbers mean "now".
+    const at = _toUnixTimestamp(atime, "atime"),
+      mt = _toUnixTimestamp(mtime, "mtime");
     const steps = ps.split("/").filter(Boolean);
     let link = null;
     try {
@@ -3354,8 +3506,8 @@ function buildApi(vol) {
       );
     }
     const node = link.getNode();
-    node.atime = at;
-    node.mtime = mt;
+    node.atime = new Date(at * 1000);
+    node.mtime = new Date(mt * 1000);
   }
   fs.lutimesSync = function (p, atime, mtime) {
     validatePath(p);
@@ -3431,8 +3583,23 @@ function buildApi(vol) {
   };
 
   // ── mkdtemp/mkdtempSync + Disposable variants ──
+  // The "templates ending with X are not portable" warning fires once per
+  // process in real Node (verified against v24).
+  let mkdtempXWarned = false;
   function mkdtempImpl(prefix, options) {
     const pre = toPathString(prefix);
+    if (
+      !mkdtempXWarned &&
+      pre.endsWith("X") &&
+      typeof process !== "undefined" &&
+      typeof process.emitWarning === "function"
+    ) {
+      mkdtempXWarned = true;
+      process.emitWarning(
+        "mkdtemp() templates ending with X are not portable. " +
+          "For details see: https://nodejs.org/api/fs.html",
+      );
+    }
     const chars =
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     for (let attempt = 0; attempt < 10; attempt++) {
@@ -3457,7 +3624,7 @@ function buildApi(vol) {
     );
   }
   fs.mkdtempSync = function (prefix, options) {
-    validateEncodingOpt(options);
+    validateEncodingOpt(options, true);
     validatePath(prefix, "prefix");
     let result;
     try {
@@ -3475,7 +3642,7 @@ function buildApi(vol) {
     }
     if (typeof callback !== "function")
       throw errInvalidArgType("cb", "function", callback);
-    validateEncodingOpt(options);
+    validateEncodingOpt(options, true);
     validatePath(prefix, "prefix");
     nextTick(() => {
       try {
@@ -3489,29 +3656,40 @@ function buildApi(vol) {
   };
   fs.mkdtempDisposableSync = function (prefix, options) {
     const dir = fs.mkdtempSync(prefix, options);
-    return {
+    // .path is the path as created (relative stays relative); removal uses
+    // the absolute path captured now so a later process.chdir() cannot
+    // redirect it (verified against Node v24).
+    const absDir = posixResolve(shimCwd(), toPathString(dir));
+    const disp = {
       path: dir,
-      [Symbol.dispose]() {
+      remove() {
         try {
-          vol.rmSync(toPathString(dir), { recursive: true, force: true });
+          vol.rmSync(absDir, { recursive: true, force: true });
         } catch {}
       },
+      [Symbol.dispose]() {
+        disp.remove();
+      },
     };
+    return disp;
   };
   fs.mkdtempDisposable = async function (prefix, options) {
     const dir = await new Promise((resolve, reject) => {
       fs.mkdtemp(prefix, options, (err, d) => (err ? reject(err) : resolve(d)));
     });
-    return {
+    const absDir = posixResolve(shimCwd(), toPathString(dir));
+    const disp = {
       path: dir,
-      [Symbol.asyncDispose]() {
+      remove() {
         return new Promise((resolve) => {
-          fs.rm(toPathString(dir), { recursive: true, force: true }, () =>
-            resolve(),
-          );
+          fs.rm(absDir, { recursive: true, force: true }, () => resolve());
         });
       },
+      [Symbol.asyncDispose]() {
+        return disp.remove();
+      },
     };
+    return disp;
   };
 
   // ── openAsBlob ──
@@ -3559,12 +3737,13 @@ function buildApi(vol) {
       }
       throw e;
     }
-    if (
-      options &&
-      options.encoding === "buffer" &&
-      typeof Buffer !== "undefined"
-    ) {
-      return Buffer.from(resolved);
+    if (options && typeof Buffer !== "undefined") {
+      const enc = options.encoding;
+      if (enc === "buffer") return Buffer.from(resolved);
+      // Non-utf8 string encodings are transcoded (test-fs-realpath-buffer-encoding).
+      if (typeof enc === "string" && enc !== "utf8" && enc !== "utf-8") {
+        return Buffer.from(resolved, "utf8").toString(enc);
+      }
     }
     return resolved;
   }
@@ -3573,7 +3752,7 @@ function buildApi(vol) {
   }
   function makeRealpathSync(native) {
     return function (p, options) {
-      validateEncodingOpt(options);
+      validateEncodingOpt(options, true);
       validatePath(p);
       let result;
       try {
@@ -3595,7 +3774,7 @@ function buildApi(vol) {
       }
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
-      validateEncodingOpt(options);
+      validateEncodingOpt(options, true);
       validatePath(p);
       nextTick(() => {
         try {
@@ -3620,6 +3799,70 @@ function buildApi(vol) {
   wrapCb("link", null, true, 1);
   wrapSync("symlinkSync", null, true, 1);
   wrapCb("symlink", null, true, 1);
+  // Node stores symlink targets verbatim and resolves relative targets
+  // against the link's directory at access time; memfs resolves them against
+  // process.cwd() at creation. Absolutize here so access resolves correctly
+  // (test-fs-realpath, test-fs-symlink-dir). Also: real Node names the args
+  // "target"/"path" and validates `type` first with ERR_INVALID_ARG_VALUE.
+  function validateSymlinkType(type) {
+    if (
+      type !== undefined &&
+      type !== null &&
+      type !== "dir" &&
+      type !== "file" &&
+      type !== "junction"
+    ) {
+      const received =
+        typeof type === "string" ? `'${type}'` : String(type);
+      const err = new TypeError(
+        "The argument 'type' must be one of: 'dir', 'file', 'junction', " +
+          `null, undefined. Received ${received}`,
+      );
+      err.code = "ERR_INVALID_ARG_VALUE";
+      throw err;
+    }
+  }
+  function absolutizeSymlinkTarget(target, linkPath) {
+    const t = toPathString(target);
+    if (t.startsWith("/")) return t;
+    let lp = toPathString(linkPath);
+    if (!lp.startsWith("/")) lp = posixResolve(shimCwd(), lp);
+    // memfs normalizes ".." when it resolves this absolute path.
+    return posixDirname(lp) + "/" + t;
+  }
+  {
+    const innerSync = fs.symlinkSync,
+      innerCb = fs.symlink;
+    fs.symlinkSync = function (target, p, type) {
+      validateSymlinkType(type);
+      validatePath(target, "target");
+      validatePath(p, "path");
+      return innerSync.call(
+        this,
+        absolutizeSymlinkTarget(target, p),
+        p,
+        type,
+      );
+    };
+    fs.symlink = function (target, p, type, callback) {
+      if (typeof type === "function") {
+        callback = type;
+        type = undefined;
+      }
+      validatePath(target, "target");
+      validatePath(p, "path");
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+      validateSymlinkType(type);
+      return innerCb.call(
+        this,
+        absolutizeSymlinkTarget(target, p),
+        p,
+        type,
+        callback,
+      );
+    };
+  }
   wrapSync("readlinkSync", null, true);
   wrapCb("readlink", null, true);
   // readlink validates the encoding before the path (getOptions order).
@@ -3627,7 +3870,7 @@ function buildApi(vol) {
     const oS = fs.readlinkSync,
       oC = fs.readlink;
     fs.readlinkSync = function (p, options) {
-      validateEncodingOpt(options);
+      validateEncodingOpt(options, true);
       return oS.call(this, p, options);
     };
     fs.readlink = function (p, options, callback) {
@@ -3635,7 +3878,7 @@ function buildApi(vol) {
         callback = options;
         options = undefined;
       }
-      validateEncodingOpt(options);
+      validateEncodingOpt(options, true);
       return oC.call(this, p, options, callback);
     };
   }
