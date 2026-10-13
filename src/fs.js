@@ -43,6 +43,23 @@ function nextTick(fn, ...args) {
   if (typeof queueMicrotask === "function") queueMicrotask(() => fn(...args));
   else setTimeout(() => fn(...args), 0);
 }
+// Browser-safe setImmediate (real setImmediate under Node, setTimeout(0)
+// otherwise): macrotask deferral, so async I/O interleaves with timers the
+// way real threadpool I/O does. fs.read uses this (not nextTick): a
+// microtask-only read starves the writer's setInterval between a short read
+// and the EOF check, and test-fs-read-stream-pos never sees the
+// short-chunk-then-more-data sequence it needs to exit.
+function setImmediateSafe(fn, ...args) {
+  try {
+    if (typeof setImmediate === "function") {
+      setImmediate(fn, ...args);
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  setTimeout(() => fn(...args), 0);
+}
 
 // ── 1. Runtime bridge (guarded) ─────────────────────────────────────────────
 // Always spell the host reference exactly `globalThis._RUNTIME_`.
@@ -929,9 +946,11 @@ function enrichErr(err, methodName) {
     try {
       if (err._syscallOverride !== undefined) {
         // Set explicitly by the throwing site (e.g. realpath's lstat ENOENT,
-        // whose message is already rewritten there).
+        // whose message is already rewritten there). Kept sticky (not
+        // deleted): callback→promise boundaries re-enrich the same error
+        // object (definePromise), and the throwing site's syscall stays
+        // authoritative through every layer.
         err.syscall = err._syscallOverride;
-        delete err._syscallOverride;
       } else if (canonical !== undefined) {
         // Probed canonical syscall for this method (overrides memfs's
         // internal syscall leaking into the message, e.g. chmod's ENOENT
@@ -2406,7 +2425,10 @@ function buildApi(vol) {
         emitFs("fs", "read", fd, bytesRead);
         nextTick(callback, null, bytesRead, buf);
       };
-      nextTick(run);
+      // Macrotask, not microtask: real threadpool reads interleave with
+      // timers; a microtask-only read would starve a concurrent writer
+      // (test-fs-read-stream-pos).
+      setImmediateSafe(run);
     };
     // util.promisify(fs.read) resolves { bytesRead, buffer } (Node's
     // kCustomPromisifyArgsSymbol). The symbol is module-local in Node, so use
@@ -4041,7 +4063,27 @@ function buildApi(vol) {
     } catch {}
     cpSetTimesExact(d, s);
   }
+  // COPYFILE_FICLONE_FORCE: a virtual FS has no copy-on-write reflinks —
+  // fail honestly (ENOTSUP, syscall 'copyfile'), like Node on a platform
+  // without CoW support. Plain COPYFILE_FICLONE falls back to a regular
+  // copy, exactly like Node (test-fs-cp-{sync,async,promises}-mode-flags).
+  function cpThrowIfFicloneForce(s, d, opts) {
+    if (opts.mode & fs.constants.COPYFILE_FICLONE_FORCE) {
+      const err = new Error(
+        `ENOTSUP: operation not supported, copyfile '${s}' -> '${d}'`,
+      );
+      err.code = "ENOTSUP";
+      err.errno = -95;
+      err.syscall = "copyfile";
+      err.path = s;
+      // enrichErr would otherwise rewrite the syscall to the cp
+      // boundary's canonical 'lstat'.
+      err._syscallOverride = "copyfile";
+      throw err;
+    }
+  }
   function cpCopyFile(s, d, srcStat, opts) {
+    cpThrowIfFicloneForce(s, d, opts);
     vol.copyFileSync(s, d, opts.mode);
     // Node's copy leaves dest with the src mode exactly (probed: 0o666
     // survives a 007 umask); memfs does not preserve it.
@@ -4312,6 +4354,7 @@ function buildApi(vol) {
     }
   }
   function cpFastFile(s, d, opts) {
+    cpThrowIfFicloneForce(s, d, opts);
     // C++ file_copy_opts: force → overwrite_existing; errorOnExist &&
     // !force → EEXIST; else skip_existing.
     let destStat = null;
@@ -6127,9 +6170,14 @@ function buildApi(vol) {
         type = undefined;
       }
       const raw = toPathString(target);
-      rememberSymlinkTarget(newPath, raw);
       return oSymlink.call(this, target, newPath, type, (err) => {
-        if (!err) cpFixupSymlinkNode(newPath, raw);
+        // Remember only on success (and only after the path validated):
+        // remembering up front would poison readlinkSync for paths that
+        // fail validation (test-fs-null-bytes).
+        if (!err) {
+          rememberSymlinkTarget(newPath, raw);
+          cpFixupSymlinkNode(newPath, raw);
+        }
         if (typeof callback === "function") callback(err);
       });
     };
@@ -7272,31 +7320,25 @@ function buildApi(vol) {
     constructor(path, options) {
       validateStreamOptions(options);
       const opts = options || {};
-      super(streamOpts(opts));
-      // options.signal validated for every stream (invalid type throws).
+      // Every synchronous validation runs BEFORE super(): real Node never
+      // schedules _construct on a half-constructed stream — createWriteStream(46),
+      // {start:'4'}, and invalid options.fs fns all throw with no zombie
+      // instance left behind (a zombie _construct would crash on
+      // this._impl === undefined; verified against real Node v24).
       const signal = validateAbortSignal(opts.signal);
       const fdValidated = validateStreamFd(opts.fd);
       const handle =
         fdValidated !== null && typeof fdValidated !== "number"
           ? fdValidated
           : null;
-      this.fd = typeof fdValidated === "number" ? fdValidated : null;
       // Node leaves .path unset (undefined) when fd is specified. Path
       // validation only applies in path mode (fdValidated === null) — a
       // FileHandle fd also lands this.fd at null mid-construction.
-      if (fdValidated === null) {
-        validatePath(path);
-        this.path = toPathString(path);
-      }
-      this.flags = opts.flags || "w";
-      this.mode = opts.mode || 0o666;
-      this.start = opts.start;
+      if (fdValidated === null) validatePath(path);
+      const start = opts.start;
       // Node validates start for write streams too (integer, >= 0).
-      if (this.start !== undefined)
-        validateIntegerInRange(this.start, "start", 0);
-      this.autoClose = opts.autoClose !== false;
-      this._pos = this.start;
-      this._opened = false;
+      if (start !== undefined) validateIntegerInRange(start, "start", 0);
+      const autoClose = opts.autoClose !== false;
       // Node's streams call the PUBLIC fs.open/read/write/close (lib/fs.js),
       // so user monkey-patches are observed. options.fs overrides
       // individual operations. Looked up lazily so patches apply at call
@@ -7319,7 +7361,22 @@ function buildApi(vol) {
         throw errInvalidArgTypeProp("options.fs.write", "function", kFs.write);
       if (kFs.write) validateFsFnProp(kFs.write, "options.fs.write");
       if (kFs.writev) validateFsFnProp(kFs.writev, "options.fs.writev");
-      if (this.autoClose) validateFsFnProp(kFs.close, "options.fs.close");
+      if (autoClose) validateFsFnProp(kFs.close, "options.fs.close");
+      const flushOpt = opts.flush;
+      if (flushOpt != null) {
+        if (typeof flushOpt !== "boolean")
+          throw errInvalidArgType("options.flush", "boolean", flushOpt);
+        validateFsFnProp(kFs.fsync, "options.fs.fsync");
+      }
+      super(streamOpts(opts));
+      this.fd = typeof fdValidated === "number" ? fdValidated : null;
+      if (fdValidated === null) this.path = toPathString(path);
+      this.flags = opts.flags || "w";
+      this.mode = opts.mode || 0o666;
+      this.start = start;
+      this.autoClose = autoClose;
+      this._pos = this.start;
+      this._opened = false;
       if (handle) {
         this.fd = typeof handle.fd === "number" ? handle.fd : null;
         this._fileHandle = handle;
@@ -7355,15 +7412,8 @@ function buildApi(vol) {
       // (test-fs-write-stream-encoding.js).
       if (opts.encoding) this.setDefaultEncoding(opts.encoding);
       // Node's `flush` option: fsync the fd before close
-      // (test-fs-write-stream-flush.js).
-      this.flush = opts.flush;
-      if (this.flush == null) {
-        this.flush = false;
-      } else {
-        if (typeof this.flush !== "boolean")
-          throw errInvalidArgType("options.flush", "boolean", this.flush);
-        validateFsFnProp(kFs.fsync, "options.fs.fsync");
-      }
+      // (test-fs-write-stream-flush.js). Validated pre-super above.
+      this.flush = opts.flush == null ? false : opts.flush;
       armStreamSignal(this, signal);
       emitFs("fs", "createWriteStream", this.path, this);
       // The open runs from _construct (Node's lib/internal/fs/streams.js),
