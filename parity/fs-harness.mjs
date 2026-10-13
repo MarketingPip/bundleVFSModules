@@ -43,8 +43,9 @@ const tmpdir = realPath.join(
 );
 const fixturesDir = realPath.join(testRoot, "fixtures");
 // Sync roots: real-disk trees the official tests treat as readable. tmpdir
-// is scratch (cleaned per test process); fixtures is read-only test data.
-const syncRoots = [tmpdir, fixturesDir];
+// is scratch (cleaned per test process); fixtures is read-only test data;
+// the parallel dir holds the test files themselves (__filename).
+const syncRoots = [tmpdir, fixturesDir, realPath.join(testRoot, "parallel")];
 
 // Raw shim methods for the sync itself — never the wrapped versions below,
 // or syncPath would recurse into itself. wrapObj() below wraps IN PLACE

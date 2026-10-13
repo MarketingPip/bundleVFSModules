@@ -260,6 +260,67 @@ function validateUidGid(uid, gid) {
     }
   }
 }
+// Minimal util.inspect for validation error messages (enough for the
+// shapes the official tests assert: code + name, message best-effort).
+function inspectValue(v) {
+  if (typeof v === "string") return `'${v}'`;
+  try {
+    const j = JSON.stringify(v);
+    return j === undefined ? String(v) : j;
+  } catch {
+    return String(v);
+  }
+}
+// Node's open() flag validation (lib/fs.js), probed against v24.20.0:
+// undefined/null -> 'r'; numbers pass through (O_* constants); known flag
+// strings pass; everything else throws ERR_INVALID_ARG_VALUE.
+const OPEN_FLAG_STRINGS = new Set([
+  "r", "r+", "rs", "rs+",
+  "w", "wx", "w+", "wx+",
+  "a", "ax", "a+", "ax+",
+]);
+function validateFlags(flags) {
+  if (flags === undefined || flags === null) return "r";
+  if (typeof flags === "number") return flags;
+  if (typeof flags === "string" && OPEN_FLAG_STRINGS.has(flags)) return flags;
+  const err = new TypeError(
+    `The argument 'flags' is invalid. Received ${inspectValue(flags)}`,
+  );
+  err.code = "ERR_INVALID_ARG_VALUE";
+  throw err;
+}
+// Node's open() mode validation, probed against v24.20.0:
+// undefined/null -> default; octal strings parsed; numbers must be
+// 32-bit unsigned integers; other types -> ERR_INVALID_ARG_TYPE.
+function validateMode(mode, def = 0o666) {
+  if (mode === undefined || mode === null) return def;
+  if (typeof mode === "string") {
+    if (/^[0-7]+$/.test(mode)) return parseInt(mode, 8);
+    const err = new TypeError(
+      "The argument 'mode' must be a 32-bit unsigned integer or an octal " +
+        `string. Received ${inspectValue(mode)}`,
+    );
+    err.code = "ERR_INVALID_ARG_VALUE";
+    throw err;
+  }
+  if (typeof mode !== "number") throw errInvalidArgType("mode", "number", mode);
+  if (!Number.isInteger(mode)) {
+    const err = new RangeError(
+      `The value of "mode" is out of range. It must be an integer. Received ${mode}`,
+    );
+    err.code = "ERR_OUT_OF_RANGE";
+    throw err;
+  }
+  if (mode < 0 || mode > 0xffffffff) {
+    const err = new RangeError(
+      'The value of "mode" is out of range. It must be >= 0 && <= 4294967295. ' +
+        `Received ${mode}`,
+    );
+    err.code = "ERR_OUT_OF_RANGE";
+    throw err;
+  }
+  return mode;
+}
 function validatePath(p, name = "path") {
   if (typeof p !== "string" && !isUint8ArrayLike(p) && !isURLLike(p)) {
     // Match Node's exact message format.
@@ -1639,6 +1700,8 @@ function buildApi(vol) {
       origCb = fs.open;
     fs.openSync = function (p, flags, mode) {
       validatePath(p);
+      flags = validateFlags(flags);
+      mode = validateMode(mode);
       let fd;
       try {
         fd = origSync.call(this, toPathString(p), flags, applyUmask(mode));
@@ -1649,13 +1712,19 @@ function buildApi(vol) {
       return fd;
     };
     fs.open = function (p, flags, mode, callback) {
-      if (typeof mode === "function") {
+      if (typeof flags === "function") {
+        callback = flags;
+        flags = undefined;
+        mode = undefined;
+      } else if (typeof mode === "function") {
         callback = mode;
         mode = undefined;
       }
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
       validatePath(p);
+      flags = validateFlags(flags);
+      mode = validateMode(mode);
       origCb.call(this, toPathString(p), flags, applyUmask(mode), (err, fd) => {
         if (err) return callback(enrichErr(err, "open"));
         emitFs("fs", "open", p, fd);
@@ -2671,18 +2740,71 @@ function buildApi(vol) {
       }
     }
   }
+  // Build the options object for the stream super() call: preserve the
+  // prototype chain (official tests sneak options in via __proto__, e.g.
+  // { __proto__: { encoding: "utf8" } } in test-fs-read-stream-inherit.js —
+  // a spread would drop them), then apply Node's fs-stream defaults:
+  // autoDestroy = autoClose (default true), highWaterMark 64KB.
+  function streamOpts(opts) {
+    const o = Object.create(Object.getPrototypeOf(opts) || null);
+    Object.assign(o, opts);
+    o.autoDestroy = opts.autoClose === undefined ? true : opts.autoClose;
+    if (o.highWaterMark === undefined) o.highWaterMark = 64 * 1024;
+    return o;
+  }
+  // DEP0135: ReadStream.prototype.open() / WriteStream.prototype.open()
+  // are deprecated noops kept for backwards compat. Overriding open() is
+  // still honored (Node's _construct hack; test-fs-read-stream-patch-open).
+  // Returns the canonical noop so the override check below can compare
+  // against the original, not the (possibly mutated) prototype.
+  function deprecateStreamOpen(prototype, kind) {
+    let warned = false;
+    const noop = function () {
+      if (!warned) {
+        warned = true;
+        try {
+          if (
+            typeof process !== "undefined" &&
+            typeof process.emitWarning === "function"
+          ) {
+            process.emitWarning(
+              `${kind}.prototype.open() is deprecated`,
+              "DeprecationWarning",
+              "DEP0135",
+            );
+          }
+        } catch {}
+      }
+    };
+    prototype.open = noop;
+    return noop;
+  }
+  // Node's _construct backwards-compat hack for monkey-patched open():
+  // when the instance's open() differs from the prototype's deprecated
+  // noop, call it and settle when it emits 'open' or 'error'
+  // (test-fs-read-stream-patch-open.js).
+  function openWithPatchedOpen(stream) {
+    const origEmit = stream.emit;
+    stream.emit = function (...args) {
+      if (args[0] === "open" || args[0] === "error") {
+        stream.emit = origEmit;
+        if (args[0] === "open") stream._opened = true;
+      }
+      return Reflect.apply(origEmit, stream, args);
+    };
+    try {
+      stream.open();
+    } catch (e) {
+      stream.emit("error", e);
+    }
+  }
   class FsReadStream extends Readable {
     constructor(path, options) {
       const opts = options || {};
-      // Node: options.autoDestroy = options.autoClose === undefined ? true
-      // : options.autoClose. fs streams manage their own lifecycle via
-      // close(), so after 'end' with autoClose:false the stream is neither
-      // closed nor destroyed (test-fs-read-stream.js).
-      const autoDestroy =
-        opts.autoClose === undefined ? true : opts.autoClose;
-      super({ ...opts, autoDestroy });
-      this.path = toPathString(path);
+      super(streamOpts(opts));
       this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
+      // Node leaves .path unset (undefined) when fd is specified.
+      if (this.fd === null) this.path = toPathString(path);
       this.flags = opts.flags || "r";
       this.mode = opts.mode || 0o666;
       this.start = opts.start;
@@ -2708,7 +2830,10 @@ function buildApi(vol) {
       this._impl = opts.fs || null;
       emitFs("fs", "createReadStream", this.path, this);
       if (this.fd === null) {
-        if (this._impl && typeof this._impl.open === "function") {
+        if (this.open !== readStreamOpenNoop) {
+          // open() was monkey-patched: Node's _construct hack.
+          nextTick(() => openWithPatchedOpen(this));
+        } else if (this._impl && typeof this._impl.open === "function") {
           // Custom open is callback-style (async); _read waits for 'open'.
           // Deferred so handlers attached after construction still fire.
           nextTick(() => this._openWithImpl());
@@ -2802,12 +2927,10 @@ function buildApi(vol) {
   class FsWriteStream extends Writable {
     constructor(path, options) {
       const opts = options || {};
-      // Same autoDestroy rule as FsReadStream above.
-      const autoDestroy =
-        opts.autoClose === undefined ? true : opts.autoClose;
-      super({ ...opts, autoDestroy });
-      this.path = toPathString(path);
+      super(streamOpts(opts));
       this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
+      // Node leaves .path unset (undefined) when fd is specified.
+      if (this.fd === null) this.path = toPathString(path);
       this.flags = opts.flags || "w";
       this.mode = opts.mode || 0o666;
       this.start = opts.start;
@@ -2823,7 +2946,10 @@ function buildApi(vol) {
       }
       emitFs("fs", "createWriteStream", this.path, this);
       if (this.fd === null) {
-        if (this._impl && typeof this._impl.open === "function") {
+        if (this.open !== writeStreamOpenNoop) {
+          // open() was monkey-patched: Node's _construct hack.
+          nextTick(() => openWithPatchedOpen(this));
+        } else if (this._impl && typeof this._impl.open === "function") {
           // Custom open is callback-style (async); _write waits for 'open'.
           nextTick(() => this._openWithImpl());
         } else {
@@ -2941,6 +3067,14 @@ function buildApi(vol) {
   fs.createWriteStream = function (p, options) {
     return new FsWriteStream(p, options);
   };
+  const readStreamOpenNoop = deprecateStreamOpen(
+    FsReadStream.prototype,
+    "ReadStream",
+  );
+  const writeStreamOpenNoop = deprecateStreamOpen(
+    FsWriteStream.prototype,
+    "WriteStream",
+  );
   // Node's fs.ReadStream/fs.WriteStream are old-style functions with an
   // `instanceof` guard, so calling them WITHOUT `new` returns an instance
   // (test-fs-write-stream.js does `fs.WriteStream(file)`). Plain ES classes
