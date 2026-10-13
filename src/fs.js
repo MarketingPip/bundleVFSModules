@@ -6823,6 +6823,9 @@ function buildSingleton() {
   // memfs's createFsFromVolume attaches its own Dirent class; the shim must
   // expose ours (Dirent instances from readdir/opendir/glob are ours).
   fs.Dirent = Dirent;
+  // memfs also attaches its own Stats; expose our PublicStats (14-arg,
+  // DEP0180-emitting) instead.
+  fs.Stats = PublicStats;
   // Real Node exposes F_OK/R_OK/W_OK/X_OK on the fs namespace as getter-only,
   // NON-enumerable properties (memfs's createFsFromVolume copies them as
   // writable enumerable data props); assignment must throw TypeError in
