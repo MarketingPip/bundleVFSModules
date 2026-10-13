@@ -23,6 +23,8 @@
 import { Volume, createFsFromVolume } from "memfs";
 import { Readable, Writable } from "./stream.js";
 import { errorOrDestroy } from "./stream/destroy.js";
+import { codes as streamCodes } from "./stream/errors.js";
+const { ERR_STREAM_DESTROYED } = streamCodes;
 import { Minimatch } from "minimatch";
 
 // Browser-safe nextTick (process.nextTick under Node, queueMicrotask otherwise).
@@ -1496,15 +1498,37 @@ function buildApi(vol) {
     }
   }
 
-  // Normalize raw ArrayBuffer/DataView inputs for read/write data args.
+  // Normalize raw ArrayBuffer/DataView/TypedArray inputs for read/write data
+  // args. memfs stringifies non-Buffer views (Int8Array -> "65,66"), so every
+  // view becomes a Buffer/Uint8Array of its bytes before touching the volume
+  // (test-fs-write-file-typedarrays.js).
   function normalizeDataArg(data) {
     if (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer) {
       return new Uint8Array(data);
     }
-    if (typeof DataView !== "undefined" && data instanceof DataView) {
-      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    if (
+      typeof ArrayBuffer !== "undefined" &&
+      ArrayBuffer.isView(data) &&
+      !(typeof Buffer !== "undefined" && Buffer.isBuffer(data))
+    ) {
+      return typeof Buffer !== "undefined"
+        ? Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     }
     return data;
+  }
+  // Concatenate normalized write buffers (Buffer/Uint8Array) for the
+  // writev partial-write retry path.
+  function concatBuffers(buffers) {
+    if (typeof Buffer !== "undefined") return Buffer.concat(buffers);
+    const total = buffers.reduce((a, b) => a + b.byteLength, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const b of buffers) {
+      out.set(b, off);
+      off += b.byteLength;
+    }
+    return out;
   }
   // Validate write data like real Node (string | Buffer | TypedArray | DataView).
   function validateDataArg(data, name) {
@@ -1891,7 +1915,7 @@ function buildApi(vol) {
 
     // writeFile(file-descriptor, …): write at the fd's current position,
     // never truncate; EBADF when the fd is not writable.
-    function writeFileToFd(fd, data, options, callback) {
+    function writeFileToFd(fd, data, options, callback, flush) {
       let buf;
       try {
         checkFdWritable(fd, "write");
@@ -1908,6 +1932,13 @@ function buildApi(vol) {
         return;
       }
       emitFs("fs", "writeFile", fd, n);
+      if (flush) {
+        fs.fsync(fd, (syncErr) => {
+          if (syncErr) return callback(enrichErr(syncErr, "write"));
+          nextTick(callback, null);
+        });
+        return;
+      }
       nextTick(callback, null);
     }
     const origWriteFile = fs.writeFile;
@@ -1918,8 +1949,9 @@ function buildApi(vol) {
       }
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
+      const flush = validateFlushOpt(options);
       if (typeof file === "number") {
-        writeFileToFd(file, data, options, callback);
+        writeFileToFd(file, data, options, callback, flush);
         return;
       }
       // A read-only open flag ("r", "rs", "sr") fails the write with EBADF
@@ -1939,7 +1971,45 @@ function buildApi(vol) {
         nextTick(callback, err);
         return;
       }
-      return origWriteFile.call(this, file, data, options, callback);
+      if (flush) {
+        // Manual open/write/fsync/close so the fd is available for fsync
+        // (memfs closes its fd internally).
+        const o =
+          options !== null && typeof options === "object" ? options : {};
+        const f = o.flag || "w";
+        const mode = o.mode !== undefined ? o.mode : 0o666;
+        fs.open(file, f, mode, (openErr, fd) => {
+          if (openErr) return callback(enrichErr(openErr, "write"));
+          let buf;
+          try {
+            buf = dataToBuffer(data, options);
+          } catch (e) {
+            fs.close(fd, () => callback(enrichErr(e, "write")));
+            return;
+          }
+          fs.write(fd, buf, 0, buf.byteLength, null, (writeErr) => {
+            if (writeErr) {
+              fs.close(fd, () => callback(enrichErr(writeErr, "write")));
+              return;
+            }
+            fs.fsync(fd, (syncErr) => {
+              if (syncErr) {
+                fs.close(fd, () => callback(enrichErr(syncErr, "write")));
+                return;
+              }
+              fs.close(fd, callback);
+            });
+          });
+        });
+        return;
+      }
+      return origWriteFile.call(
+        this,
+        file,
+        dataToBuffer(data, options),
+        options,
+        callback,
+      );
     }, 2);
     const origAppendFile = fs.appendFile;
     fs.appendFile = withAbortSignal(function (path, data, options, callback) {
@@ -1954,6 +2024,7 @@ function buildApi(vol) {
 
     const origWriteFileSync = fs.writeFileSync;
     fs.writeFileSync = function (file, data, options) {
+      const flush = validateFlushOpt(options);
       // fd variant: current-position write, no truncation (memfs truncates).
       if (typeof file === "number") {
         const flush =
@@ -1968,7 +2039,29 @@ function buildApi(vol) {
         emitFs("fs", "writeFileSync", file, buf.byteLength);
         return;
       }
-      return origWriteFileSync.call(this, file, data, options);
+      if (flush) {
+        // Manual open/write/fsync/close so the fd is available for fsync.
+        const o =
+          options !== null && typeof options === "object" ? options : {};
+        const flag = o.flag || "w";
+        const mode = o.mode !== undefined ? o.mode : 0o666;
+        const fd = fs.openSync(file, flag, mode);
+        try {
+          const buf = dataToBuffer(data, options);
+          vol.writeSync(fd, buf, 0, buf.byteLength, null);
+          fs.fsyncSync(fd);
+          emitFs("fs", "writeFileSync", file, buf.byteLength);
+        } finally {
+          fs.closeSync(fd);
+        }
+        return;
+      }
+      return origWriteFileSync.call(
+        this,
+        file,
+        dataToBuffer(data, options),
+        options,
+      );
     };
   }
 
@@ -2236,27 +2329,31 @@ function buildApi(vol) {
     Object.setPrototypeOf(fs.read, readProto);
   }
 
-  // ── writeSync/write: EBADF on wrong-direction fd, cursor preservation ──
+  // ── writeSync/write: Node v24 argument validation, EBADF on wrong-direction
+  // fd, cursor preservation. Validation (fd type, buffer type, offset/length,
+  // encoding) throws synchronously like Node; only binding-level errors
+  // (EBADF for a valid-but-closed fd) go to the callback for fs.write.
   {
     const orig = fs.writeSync;
     fs.writeSync = function (fd, data, ...rest) {
-      // Node validates the buffer before touching the fd (writeSync(1, true)
-      // is ERR_INVALID_ARG_TYPE, not EBADF).
-      validateDataArg(data, "buffer");
+      validateFd(fd);
+      const args = parseWriteArgs(data, rest, false);
       checkFdWritable(fd, "write");
-      data = normalizeDataArg(data);
-      // writeSync(fd, string[, position[, encoding]]) or writeSync(fd, buffer, offset, length, position)
-      let position;
-      if (typeof data === "string") {
-        position = rest[0];
-      } else {
-        position = rest[2];
-      }
       const savedPos =
-        typeof position === "number" ? getPosition(fd) : undefined;
+        typeof args.position === "number" ? getPosition(fd) : undefined;
       let n;
       try {
-        n = orig.call(this, fd, data, ...rest);
+        n =
+          args.encoding !== undefined
+            ? orig.call(this, fd, args.buf, args.position, args.encoding)
+            : orig.call(
+                this,
+                fd,
+                args.buf,
+                args.offset,
+                args.length,
+                args.position,
+              );
       } catch (e) {
         throw enrichErr(e, "writeSync");
       } finally {
@@ -2269,31 +2366,45 @@ function buildApi(vol) {
   {
     const orig = fs.write;
     fs.write = function (fd, data, ...rest) {
-      const callback = rest[rest.length - 1];
-      if (typeof callback !== "function")
-        throw errInvalidArgType("cb", "function", callback);
-      const args = rest.slice(0, -1);
+      validateFd(fd);
+      const args = parseWriteArgs(data, rest, true);
+      const callback = args.callback;
       try {
         checkFdWritable(fd, "write");
-        validateDataArg(data, "buffer");
       } catch (e) {
         nextTick(callback, enrichErr(e, "write"));
         return;
       }
-      data = normalizeDataArg(data);
-      let position;
-      if (typeof data === "string") position = args[0];
-      else position = args[2];
       const savedPos =
-        typeof position === "number" ? getPosition(fd) : undefined;
-      const cb = (err, written, d) => {
+        typeof args.position === "number" ? getPosition(fd) : undefined;
+      // Node's wrapper retains the original buffer for the callback.
+      const origData = data;
+      const cb = (err, written) => {
         if (savedPos !== undefined) setPosition(fd, savedPos);
         if (err) return callback(enrichErr(err, "write"));
         emitFs("fs", "write", fd, written);
-        callback(null, written, d);
+        callback(null, written || 0, origData);
       };
       try {
-        return orig.call(this, fd, data, ...args, cb);
+        if (args.encoding !== undefined) {
+          return orig.call(
+            this,
+            fd,
+            args.buf,
+            args.position,
+            args.encoding,
+            cb,
+          );
+        }
+        return orig.call(
+          this,
+          fd,
+          args.buf,
+          args.offset,
+          args.length,
+          args.position,
+          cb,
+        );
       } catch (e) {
         throw enrichErr(e, "write");
       }
@@ -2346,8 +2457,10 @@ function buildApi(vol) {
   }
   function writevSyncImpl(fd, buffers, position) {
     checkFdWritable(fd, "writev");
-    if (!Array.isArray(buffers))
-      throw errInvalidArgType("buffers", "Array", buffers);
+    validateBufferArrayShim(buffers);
+    // A negative position means "current position" in Node (uv_fs_write
+    // with offset < 0 writes at the cursor); memfs would throw.
+    if (typeof position !== "number" || position < 0) position = null;
     const savedPos = typeof position === "number" ? getPosition(fd) : undefined;
     let total = 0;
     try {
@@ -2380,6 +2493,11 @@ function buildApi(vol) {
     return result;
   };
   fs.writevSync = function (fd, buffers, position) {
+    // Node validates the buffers first and returns 0 for an empty array
+    // without touching the fd.
+    validateBufferArrayShim(buffers);
+    if (buffers.length === 0) return 0;
+    validateFd(fd);
     let result;
     try {
       result = writevSyncImpl(fd, buffers, position);
@@ -2431,12 +2549,21 @@ function buildApi(vol) {
     Object.setPrototypeOf(fs.readv, readvProto);
   }
   fs.writev = function (fd, buffers, position, callback) {
+    // Node validates fd and buffers synchronously (getValidatedFd +
+    // validateBufferArray); an empty array short-circuits to
+    // nextTick(callback, null, 0, buffers) without touching the fd.
+    validateFd(fd);
+    validateBufferArrayShim(buffers);
     if (typeof position === "function") {
       callback = position;
       position = undefined;
     }
     if (typeof callback !== "function")
       throw errInvalidArgType("cb", "function", callback);
+    if (buffers.length === 0) {
+      nextTick(callback, null, 0, buffers);
+      return;
+    }
     const run = () => {
       try {
         const bytesWritten = writevSyncImpl(fd, buffers, position);
@@ -2913,6 +3040,168 @@ function buildApi(vol) {
       err.code = "ERR_OUT_OF_RANGE";
       throw err;
     }
+  }
+  // ── write/writeSync/writev argument validation (Node v24 lib/fs.js) ──
+  function errOutOfRange(name, range, received) {
+    const err = new RangeError(
+      `The value of "${name}" is out of range. It must be ${range}. Received ${received}`,
+    );
+    err.code = "ERR_OUT_OF_RANGE";
+    return err;
+  }
+  // Node's internal validateInteger(value, name, min = 0, max = MAX_SAFE_INTEGER).
+  function validateIntegerArg(
+    value,
+    name,
+    min = 0,
+    max = Number.MAX_SAFE_INTEGER,
+  ) {
+    if (typeof value !== "number")
+      throw errInvalidArgType(name, "number", value);
+    if (!Number.isInteger(value))
+      throw errOutOfRange(name, "an integer", String(value));
+    if (value < min || value > max)
+      throw errOutOfRange(name, `>= ${min} && <= ${max}`, String(value));
+  }
+  // Node's internal/fs/utils validateOffsetLengthWrite.
+  function validateOffsetLengthWrite(offset, length, byteLength) {
+    if (offset > byteLength)
+      throw errOutOfRange("offset", `<= ${byteLength}`, String(offset));
+    if (length > byteLength - offset)
+      throw errOutOfRange(
+        "length",
+        `<= ${byteLength - offset}`,
+        String(length),
+      );
+    if (length < 0) throw errOutOfRange("length", ">= 0", String(length));
+    // validateInt32(length, 'length', 0): integer and <= 2^31-1.
+    validateIntegerArg(length, "length", 0, 2147483647);
+  }
+  // Node's internal/fs/utils validateBufferArray (writev): every element
+  // must be an ArrayBufferView; the reported value is the whole array.
+  function validateBufferArrayShim(buffers) {
+    if (
+      !Array.isArray(buffers) ||
+      buffers.some(
+        (b) =>
+          !(b instanceof Uint8Array) &&
+          !(typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(b)),
+      )
+    ) {
+      throw errInvalidArgType("buffers", "ArrayBufferView[]", buffers);
+    }
+  }
+  // Node's ERR_INVALID_ARG_VALUE, e.g. hex encoding with odd-length data.
+  function errInvalidArgValue(name, value, reason) {
+    const err = new TypeError(
+      `The argument '${name}' ${reason}. Received '${value}'`,
+    );
+    err.code = "ERR_INVALID_ARG_VALUE";
+    return err;
+  }
+  // Node v24's internal validateEncoding for write paths: only the
+  // hex-with-odd-length case throws (unknown encodings are tolerated).
+  function validateWriteEncoding(str, encoding) {
+    const enc =
+      encoding === undefined || encoding === null ? "utf8" : String(encoding);
+    if (enc.toLowerCase() === "hex" && str.length % 2 !== 0) {
+      throw errInvalidArgValue(
+        "encoding",
+        encoding,
+        `is invalid for data of length ${str.length}`,
+      );
+    }
+  }
+  // Node's writeFile/writeFileSync/createWriteStream `flush` option:
+  // null/undefined -> false, otherwise must be a boolean.
+  function validateFlushOpt(options) {
+    const flush =
+      options !== null && typeof options === "object"
+        ? options.flush
+        : undefined;
+    if (flush != null && typeof flush !== "boolean")
+      throw errInvalidArgType("options.flush", "boolean", flush);
+    return flush === true;
+  }
+  // Shared fs.write / fs.writeSync / FileHandle.write argument parsing,
+  // mirroring Node v24 lib/fs.js exactly (including the options-object form
+  // `write(fd, buffer, { offset, length, position })`). All validation throws
+  // synchronously like Node. Returns
+  // { buf, offset, length, position, encoding, callback } where buf is the
+  // normalized Buffer/Uint8Array for views and the original string for
+  // strings; encoding is set only on the string path.
+  function parseWriteArgs(data, args, isAsync) {
+    const isStr = typeof data === "string";
+    if (!isStr) validateDataArg(data, "buffer");
+    let [offset, length, position, callback] = args;
+    if (isStr) {
+      // ── string path ──
+      if (isAsync) {
+        if (typeof position !== "function") {
+          if (typeof offset === "function") {
+            position = offset;
+            offset = null;
+          } else {
+            position = length;
+          }
+          length = "utf8";
+        }
+        const encoding = length;
+        validateWriteEncoding(data, encoding);
+        callback = position;
+        if (typeof callback !== "function")
+          throw errInvalidArgType("cb", "function", callback);
+        position = offset;
+        if (typeof position !== "number" || position < 0) position = null;
+        return {
+          buf: data,
+          offset: 0,
+          length: undefined,
+          position,
+          encoding,
+          callback,
+        };
+      }
+      const encoding = length;
+      validateWriteEncoding(data, encoding);
+      position = offset;
+      if (typeof position !== "number" || position < 0) position = null;
+      return {
+        buf: data,
+        offset: 0,
+        length: undefined,
+        position,
+        encoding,
+        callback: undefined,
+      };
+    }
+    // ── buffer path ──
+    if (isAsync) {
+      callback ||= position || length || offset;
+      if (typeof callback !== "function")
+        throw errInvalidArgType("cb", "function", callback);
+    }
+    if (typeof offset === "object") {
+      // Named-parameters form (typeof null === "object"; null -> defaults).
+      ({
+        offset = 0,
+        length = data.byteLength - offset,
+        position = null,
+      } = offset || {});
+    }
+    if (offset == null || typeof offset === "function") offset = 0;
+    else validateIntegerArg(offset, "offset", 0);
+    if (typeof length !== "number") length = data.byteLength - offset;
+    validateOffsetLengthWrite(offset, length, data.byteLength);
+    if (typeof position !== "number" || position < 0) position = null;
+    return {
+      buf: normalizeDataArg(data),
+      offset,
+      length,
+      position,
+      encoding: undefined,
+      callback,
+    };
   }
   {
     const origSync = fs.closeSync;
@@ -5294,15 +5583,28 @@ function buildApi(vol) {
     stream._opened = false;
     // Through the impl's close (default: the public fs.close), so user
     // monkey-patches and observability hooks see it, as in Node.
-    try {
-      stream._impl.close(fd, () => {});
-    } catch {
+    const doClose = () => {
       try {
-        vol.closeSync(fd);
+        stream._impl.close(fd, () => {});
       } catch {
-        /* ignore */
+        try {
+          vol.closeSync(fd);
+        } catch {
+          /* ignore */
+        }
       }
+    };
+    if (stream.flush) {
+      // Node: flush:true fsyncs the fd before close
+      // (test-fs-write-stream-flush.js).
+      try {
+        stream._impl.fsync(fd, () => doClose());
+      } catch {
+        doClose();
+      }
+      return;
     }
+    doClose();
   }
   // Build the options object for the stream super() call: preserve the
   // prototype chain (official tests sneak options in via __proto__, e.g.
@@ -5399,8 +5701,19 @@ function buildApi(vol) {
   // when the instance's open() differs from the prototype's deprecated
   // noop, call it and settle when it emits 'open' or 'error'
   // (test-fs-read-stream-patch-open.js).
-  function openWithPatchedOpen(stream) {
+  // Node's _construct hack for monkey-patched open(): when `callback` is
+  // given (WriteStream._construct), an 'error' from the patched open goes to
+  // the construct callback — the stream machinery then emits 'error' exactly
+  // once — mirroring lib/internal/fs/streams.js. Without a callback
+  // (ReadStream's constructor arming) the error is emitted directly.
+  function openWithPatchedOpen(stream, callback) {
     const origEmit = stream.emit;
+    let done = false;
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      callback(err);
+    };
     stream.emit = function (...args) {
       if (args[0] === "open") {
         stream.emit = origEmit;
@@ -5417,7 +5730,14 @@ function buildApi(vol) {
         stream.destroy(args[1]);
         return true;
       }
-      return Reflect.apply(origEmit, stream, args);
+      if (args[0] === "error" && typeof callback === "function") {
+        finish(args[1] || new Error("open failed"));
+        return;
+      }
+      const r = Reflect.apply(origEmit, stream, args);
+      if (args[0] === "open" && typeof callback === "function")
+        finish(undefined);
+      return r;
     };
     try {
       stream.open();
@@ -5495,6 +5815,12 @@ function buildApi(vol) {
           : null,
       close: (fd, cb) => {
         handle.close().then(
+          () => cb(null),
+          (err) => cb(err),
+        );
+      },
+      fsync: (fd, cb) => {
+        handle.sync().then(
           () => cb(null),
           (err) => cb(err),
         );
@@ -5820,6 +6146,7 @@ function buildApi(vol) {
               ? (...a) => customFs.writev(...a)
               : null,
           close: defaultOr("close"),
+          fsync: defaultOr("fsync"),
         };
       }
       // writev batching only when the impl provides it (installing _writev
@@ -5827,19 +6154,33 @@ function buildApi(vol) {
       if (this._impl.writev) {
         this._writev = (chunks, callback) => this._writevImpl(chunks, callback);
       }
+      // Node: options.encoding sets the stream's default encoding
+      // (test-fs-write-stream-encoding.js).
+      if (opts.encoding) this.setDefaultEncoding(opts.encoding);
+      // Node's `flush` option: fsync the fd before close
+      // (test-fs-write-stream-flush.js).
+      this.flush = opts.flush;
+      if (this.flush == null) {
+        this.flush = false;
+      } else {
+        if (typeof this.flush !== "boolean")
+          throw errInvalidArgType("options.flush", "boolean", this.flush);
+        validateFsFnProp(kFs.fsync, "options.fs.fsync");
+      }
       armStreamSignal(this, signal);
       emitFs("fs", "createWriteStream", this.path, this);
-      if (this.fd === null) {
-        if (this.open !== writeStreamOpenNoop) {
-          // open() was monkey-patched: Node's _construct hack.
-          this._openPending = true;
-          nextTick(() => openWithPatchedOpen(this));
-        } else {
-          // Deferred so handlers attached after construction still fire.
-          this._openPending = true;
-          nextTick(() => this._openWithImpl());
-        }
-      } else {
+      // The open runs from _construct (Node's lib/internal/fs/streams.js),
+      // so 'open' always fires before any _write/_final — e.g. stream.end()
+      // immediately after construction (test-fs-write-stream-end.js).
+    }
+    _construct(callback) {
+      if (this._constructDefused) {
+        // Transplanted subclass instance (fs.WriteStream.call(this, ...)):
+        // the deferred open was re-armed on the real `this` by the factory.
+        callback();
+        return;
+      }
+      if (this.fd !== null) {
         // A caller-provided fd is already open (Node closes it on destroy
         // when autoClose, like a stream-opened fd).
         this._opened = true;
@@ -5847,14 +6188,22 @@ function buildApi(vol) {
           this.emit("open", this.fd);
           this.emit("ready");
         });
+        callback();
+        return;
+      }
+      this._openPending = true;
+      if (this.open !== writeStreamOpenNoop) {
+        // open() was monkey-patched: Node's _construct hack.
+        openWithPatchedOpen(this, callback);
+      } else {
+        this._openWithImpl(callback);
       }
     }
-    _openWithImpl() {
+    _openWithImpl(callback) {
       this._impl.open(this.path, this.flags, this.mode, (err, fd) => {
         this._openPending = false;
         if (err || fd === undefined || fd === null) {
-          errorOrDestroy(
-            this,
+          callback(
             enrichErr(err || new Error("open failed"), "createWriteStream"),
           );
           return;
@@ -5864,9 +6213,13 @@ function buildApi(vol) {
         // Node emits 'open' even when destroy() ran while the open was in
         // flight (test-fs-stream-double-close); the destroy machinery then
         // releases the fd — run _cleanup now since _destroy already ran.
+        // (Checked via _destroyCalled, not the `destroyed` getter, which
+        // tests can mock to true without destroy() ever running.)
+        this.emit("open", fd);
         this.emit("open", fd);
         this.emit("ready");
-        if (this.destroyed) this._cleanup();
+        callback();
+        if (this._destroyCalled) this._cleanup();
       });
     }
     // Node: pending is true until the fd is open (fd === null).
@@ -5890,16 +6243,44 @@ function buildApi(vol) {
       // Always through the public fs.write (see _impl above).
       const pos =
         this._pos === undefined || this._pos === null ? null : this._pos;
-      this._impl.write(this.fd, data, 0, data.byteLength, pos, (err, n) => {
-        if (err) {
-          callback(enrichErr(err, "write"));
+      this._writeAll(data, pos, callback);
+    }
+    // Node's lib/internal/fs/streams.js writeAll: EAGAIN counts as a
+    // zero-byte write and is retried; partial writes loop until the whole
+    // chunk lands; more than 5 consecutive zero-byte writes fail the write
+    // (test-fs-write-stream-eagain.mjs).
+    _writeAll(data, pos, callback) {
+      const size = data.byteLength;
+      const step = (offset, retries) => {
+        const remaining = size - offset;
+        if (remaining <= 0) {
+          if (pos !== null && pos !== undefined) this._pos = pos + size;
+          emitFs("fs", "writeStream.write", this.path, size);
+          callback(null);
           return;
         }
-        const written = typeof n === "number" ? n : data.byteLength;
-        if (pos !== null && pos !== undefined) this._pos = pos + written;
-        emitFs("fs", "writeStream.write", this.path, written);
-        callback(null);
-      });
+        const chunk = offset === 0 ? data : data.slice(offset);
+        const p = pos === null || pos === undefined ? pos : pos + offset;
+        this._impl.write(this.fd, chunk, 0, remaining, p, (err, n) => {
+          if (err && err.code === "EAGAIN") err = null;
+          if (this.destroyed || err) {
+            callback(
+              err ? enrichErr(err, "write") : new ERR_STREAM_DESTROYED("write"),
+            );
+            return;
+          }
+          const written = typeof n === "number" ? n : remaining;
+          const nextRetries = written ? 0 : retries + 1;
+          if (nextRetries > 5) {
+            const e = new Error("write failed");
+            e.code = "ERR_SYSTEM_ERROR";
+            callback(e);
+            return;
+          }
+          step(offset + written, nextRetries);
+        });
+      };
+      step(0, 0);
     }
     _writevImpl(chunks, callback) {
       // Custom writev: buffers in one call (test-fs-write-stream-fs.js).
@@ -5915,19 +6296,41 @@ function buildApi(vol) {
       });
       const pos =
         this._pos === undefined || this._pos === null ? null : this._pos;
-      this._impl.writev(this.fd, buffers, pos, (err, n) => {
-        if (err) {
-          callback(enrichErr(err, "write"));
+      // Node's writevAll: same EAGAIN/partial-write retry loop as _writeAll.
+      const total = buffers.reduce((a, b) => a + b.byteLength, 0);
+      const step = (offset, retries) => {
+        const remaining = total - offset;
+        if (remaining <= 0) {
+          if (pos !== null && pos !== undefined) this._pos = pos + total;
+          emitFs("fs", "writeStream.write", this.path, total);
+          callback(null);
           return;
         }
-        const written =
-          typeof n === "number"
-            ? n
-            : buffers.reduce((a, b) => a + b.byteLength, 0);
-        if (pos !== null && pos !== undefined) this._pos = pos + written;
-        emitFs("fs", "writeStream.write", this.path, written);
-        callback(null);
-      });
+        const rest =
+          offset === 0 ? buffers : [concatBuffers(buffers).slice(offset)];
+        const p = pos === null || pos === undefined ? pos : pos + offset;
+        this._impl.writev(this.fd, rest, p, (err, n) => {
+          if (err && err.code === "EAGAIN") err = null;
+          if (this.destroyed || err) {
+            callback(
+              err
+                ? enrichErr(err, "write")
+                : new ERR_STREAM_DESTROYED("writev"),
+            );
+            return;
+          }
+          const written = typeof n === "number" ? n : remaining;
+          const nextRetries = written ? 0 : retries + 1;
+          if (nextRetries > 5) {
+            const e = new Error("writev failed");
+            e.code = "ERR_SYSTEM_ERROR";
+            callback(e);
+            return;
+          }
+          step(offset + written, nextRetries);
+        });
+      };
+      step(0, 0);
     }
     _final(callback) {
       this._cleanup();
@@ -5937,6 +6340,7 @@ function buildApi(vol) {
       closeStreamFd(this);
     }
     _destroy(err, callback) {
+      this._destroyCalled = true;
       this._cleanup();
       callback(err);
     }
@@ -5988,6 +6392,33 @@ function buildApi(vol) {
   }
   function WriteStreamFactory(path, options) {
     validateEncodingOpt(options);
+    if (new.target === undefined && this instanceof WriteStreamFactory) {
+      // Legacy subclass compat: fs.WriteStream.call(this, ...) must
+      // initialize `this` in place, like Node's old-style function
+      // constructor (test-fs-stream-construct-compat-error-write.js).
+      // Build a correctly-prototyped instance, transplant its state onto
+      // `this`, defuse its scheduled _construct, and re-arm the deferred
+      // open on the real `this`.
+      const inst = Reflect.construct(
+        FsWriteStream,
+        [path, options],
+        this.constructor,
+      );
+      inst._constructDefused = true;
+      for (const key of Reflect.ownKeys(inst)) {
+        Object.defineProperty(
+          this,
+          key,
+          Object.getOwnPropertyDescriptor(inst, key),
+        );
+      }
+      this._openPending = true;
+      nextTick(() => {
+        if (this.open !== writeStreamOpenNoop) openWithPatchedOpen(this);
+        else this._openWithImpl(() => {});
+      });
+      return this;
+    }
     return new FsWriteStream(path, options);
   }
   ReadStreamFactory.prototype = FsReadStream.prototype;
@@ -6094,33 +6525,35 @@ function buildApi(vol) {
       return { bytesRead, buffer };
     }
     async write(arg1, arg2, arg3, arg4) {
-      // write(string[, position[, encoding]]) / write(buffer[, offset[, length[, position]]])
-      let data = arg1,
-        position;
-      let offset = 0,
-        length,
-        encoding = "utf8";
-      if (typeof data === "string") {
-        position = arg2 !== undefined ? arg2 : null;
-        encoding = arg3 || "utf8";
-        data =
+      // Node's FileHandle.write shares lib/fs.js write() validation
+      // (options-object form included); it resolves { bytesWritten, buffer }
+      // with the ORIGINAL data (a string stays a string).
+      const data = arg1;
+      if (typeof data !== "string") validateDataArg(data, "buffer");
+      const args = parseWriteArgs(data, [arg2, arg3, arg4], false);
+      let buf = args.buf;
+      let offset = args.offset;
+      let length = args.length;
+      if (typeof buf === "string") {
+        buf =
           typeof Buffer !== "undefined"
-            ? Buffer.from(data, encoding)
-            : new TextEncoder().encode(data);
-      } else {
-        data = normalizeDataArg(data);
-        offset = arg2 || 0;
-        length = arg3;
-        position = arg4 !== undefined ? arg4 : null;
+            ? Buffer.from(buf, args.encoding)
+            : new TextEncoder().encode(buf);
+        offset = 0;
+        length = buf.byteLength;
       }
-      if (length === undefined || length === null)
-        length = data.byteLength - offset;
       checkFdWritable(this.fd, "write");
       const savedPos =
-        typeof position === "number" ? getPosition(this.fd) : undefined;
+        typeof args.position === "number" ? getPosition(this.fd) : undefined;
       let bytesWritten;
       try {
-        bytesWritten = vol.writeSync(this.fd, data, offset, length, position);
+        bytesWritten = vol.writeSync(
+          this.fd,
+          buf,
+          offset,
+          length,
+          args.position,
+        );
       } catch (e) {
         throw enrichErr(e, "write");
       } finally {

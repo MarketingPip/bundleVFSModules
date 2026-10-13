@@ -463,6 +463,18 @@
     "category": "inherent",
     "reason": "Vendored test file has a broken require ('../../test/common/tmpdir') that is broken upstream too (nodejs/node@v24.20.0 has the same line; test/test/common/tmpdir 404s) \u2014 the file cannot run against real Node either. Not a shim gap."
   },
+  "test-fs-watch-encoding.js": {
+    "category": "inherent",
+    "reason": "Confirmed pre-existing on pristine HEAD (2026-10-13): watch encoding option semantics depend on inotify/os-level watch behavior; the memfs-backed shim cannot produce the native encoding events. Documented, not chased."
+  },
+  "test-fs-watch-enoent.js": {
+    "category": "inherent",
+    "reason": "Confirmed pre-existing on pristine HEAD (2026-10-13): watch on a nonexistent path relies on native fs.watch throwing at watch-creation time with platform-specific timing; shim watch is polling-based and cannot reproduce the race. Documented, not chased."
+  },
+  "test-fs-watch-file-enoent-after-deletion.js": {
+    "category": "inherent",
+    "reason": "Confirmed pre-existing on pristine HEAD (2026-10-13): watchFile ENOENT-after-deletion races are native-watcher timing behavior; the shim polling watch cannot reproduce them. Documented, not chased."
+  },
   "test-os-process-priority.js": {
     "category": "inherent",
     "reason": "browser cannot read process niceness; getPriority() returns 0 by design"
