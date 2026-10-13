@@ -21,6 +21,16 @@ function polyfillURL(specifier) {
   if (name.startsWith(".") || path.isAbsolute(name)) return null;
   const parts = name.split("/");
   if (target && parts[0] !== target) return null;
+  // Harness-only tmpdir sync for fs parity (parity/fs-harness.mjs).
+  if (target === "fs" && name === "fs") {
+    return pathToFileURL(path.join(repoRoot, "parity", "fs-harness.mjs")).href;
+  }
+  // node:fs/promises → the promises wrapper (same sync + timer restore).
+  if (target === "fs" && name === "fs/promises") {
+    return pathToFileURL(
+      path.join(repoRoot, "parity", "fs-promises-harness.mjs"),
+    ).href;
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   if (!fs.existsSync(candidate)) return null;
   return pathToFileURL(candidate).href;
