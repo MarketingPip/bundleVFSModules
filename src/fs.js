@@ -5316,7 +5316,11 @@ function buildApi(vol) {
       if (vp !== null) {
         try {
           const st = vol.lstatSync(vp);
-          d = new Dirent(gBasename(absPath), gDirname(absPath), st.mode);
+          d = new Dirent(
+            gBasename(absPath),
+            modeToDirentType(st.mode),
+            gDirname(absPath),
+          );
         } catch {
           d = null;
         }
@@ -5337,7 +5341,7 @@ function buildApi(vol) {
             let d = null;
             try {
               const st = vol.lstatSync(fp);
-              d = new Dirent(name, absPath, st.mode);
+              d = new Dirent(name, modeToDirentType(st.mode), absPath);
             } catch {
               d = null;
             }
