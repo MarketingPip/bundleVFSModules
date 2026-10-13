@@ -270,6 +270,212 @@ function errInvalidArgTypeProp(name, expected, received) {
   return err;
 }
 
+// ── Node v24-exact ERR_INVALID_ARG_TYPE builder ───────────────────────────
+// Mirrors lib/internal/errors.js determineSpecificType + the type/instance
+// list formatting: kTypes entries ('number', 'Object', 'Function', …) are
+// lowercased to "of type X"; ClassName entries use "an instance of X";
+// functions render as `function ${name}` (not `type function (...)`).
+function _fmtTypeList(list, orWord) {
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} ${orWord} ${list[1]}`;
+  return `${list.slice(0, -1).join(", ")}, ${orWord} ${list[list.length - 1]}`;
+}
+function _specificType(value) {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  const t = typeof value;
+  if (t === "function") return `function ${value.name || ""}`;
+  if (t === "object") {
+    if (value.constructor && "name" in value.constructor)
+      return `an instance of ${value.constructor.name}`;
+    return "an instance of Object";
+  }
+  if (t === "bigint") return `type bigint (${value}n)`;
+  if (t === "number") {
+    if (Object.is(value, -0)) return "type number (-0)";
+    if (Number.isNaN(value)) return "type number (NaN)";
+    if (value === Infinity) return "type number (Infinity)";
+    if (value === -Infinity) return "type number (-Infinity)";
+    return `type number (${value})`;
+  }
+  if (t === "boolean") return `type boolean (${value})`;
+  if (t === "symbol") return `type symbol (${String(value)})`;
+  // string
+  let s = value;
+  if (s.length > 28) s = `${s.slice(0, 25)}...`;
+  if (!s.includes("'")) return `type string ('${s}')`;
+  return `type string (${JSON.stringify(s)})`;
+}
+function errArgType(name, expected, received) {
+  const list = Array.isArray(expected) ? expected : [expected];
+  const types = [];
+  const instances = [];
+  for (const e of list) {
+    if (/^[A-Z][a-zA-Z0-9]*$/.test(e)) instances.push(e);
+    else types.push(e.toLowerCase());
+  }
+  const kind = name.includes(".") ? "property" : "argument";
+  let msg = `The "${name}" ${kind} must be `;
+  const parts = [];
+  if (types.length > 0)
+    parts.push(`${types.length > 1 ? "one of type" : "of type"} ${_fmtTypeList(types, "or")}`);
+  if (instances.length > 0)
+    parts.push(`an instance of ${_fmtTypeList(instances, "or")}`);
+  msg += parts.join(" or ");
+  msg += `. Received ${_specificType(received)}`;
+  const err = new TypeError(msg);
+  err.code = "ERR_INVALID_ARG_TYPE";
+  return err;
+}
+
+// Node's addNumericalSeparator for ERR_OUT_OF_RANGE received values.
+function _numSep(s) {
+  return s.replace(/\B(?=(\d{3})+(?!\d))/g, "_");
+}
+function _outOfRangeReceived(value) {
+  if (typeof value === "bigint") {
+    const neg = value < 0;
+    let s = String(neg ? -value : value);
+    if (value > 2n ** 32n || value < -(2n ** 32n)) s = _numSep(s);
+    return (neg ? "-" : "") + s + "n";
+  }
+  if (typeof value === "number") {
+    if (Object.is(value, -0)) return "-0";
+    if (Number.isInteger(value) && Math.abs(value) > 2 ** 32)
+      return _numSep(String(value));
+    return String(value);
+  }
+  return _specificType(value);
+}
+function errOutOfRangeFmt(name, expected, received) {
+  const err = new RangeError(
+    `The value of "${name}" is out of range. It must be ${expected}. Received ${_outOfRangeReceived(received)}`,
+  );
+  err.code = "ERR_OUT_OF_RANGE";
+  return err;
+}
+
+// Mirrors Node's internal validateInteger (default max = MAX_SAFE_INTEGER).
+function validateInteger(value, name, min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER) {
+  if (typeof value !== "number") throw errArgType(name, "number", value);
+  if (!Number.isInteger(value))
+    throw errOutOfRangeFmt(name, "an integer", value);
+  if (value < min || value > max)
+    throw errOutOfRangeFmt(name, `>= ${min} && <= ${max}`, value);
+  return value;
+}
+
+// Mirrors Node's internal validateBuffer.
+function validateBuffer(buffer, name = "buffer") {
+  if (!ArrayBuffer.isView(buffer))
+    throw errArgType(name, ["Buffer", "TypedArray", "DataView"], buffer);
+}
+
+// Mirrors lib/internal/fs/utils.js validatePosition(position, name, length).
+function validatePosition(position, name, length) {
+  if (typeof position === "number") {
+    validateInteger(position, name, -1);
+  } else if (typeof position === "bigint") {
+    const maxPosition = 2n ** 63n - 1n - BigInt(length);
+    if (!(position >= -1n && position <= maxPosition)) {
+      throw errOutOfRangeFmt(name, `>= -1 && <= ${maxPosition}`, position);
+    }
+  } else {
+    throw errArgType(name, ["bigint", "integer"], position);
+  }
+  return position;
+}
+
+// Mirrors lib/internal/fs/utils.js validateOffsetLengthRead.
+function validateOffsetLengthRead(offset, length, bufferLength) {
+  if (offset < 0) throw errOutOfRangeFmt("offset", ">= 0", offset);
+  if (length < 0) throw errOutOfRangeFmt("length", ">= 0", length);
+  if (offset + length > bufferLength)
+    throw errOutOfRangeFmt("length", `<= ${bufferLength - offset}`, length);
+}
+
+// Mirrors Node's internal validateObject with kValidateObjectAllowNullable.
+function validateOptionsObject(value, name) {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value) || typeof value !== "object")
+    throw errArgType(name, "Object", value);
+}
+
+// Mirrors Node's internal validateBoolean.
+function validateBoolean(value, name) {
+  if (typeof value !== "boolean") throw errArgType(name, "boolean", value);
+}
+
+// Mirrors lib/internal/fs/utils.js getValidatedFd (type/range only; the
+// EBADF existence/readability check stays in checkFdReadable).
+function getValidatedFd(fd, name = "fd") {
+  if (Object.is(fd, -0)) return 0;
+  validateInteger(fd, name, 0, 2147483647);
+  return fd;
+}
+
+// util.inspect rendering of an empty ArrayBufferView, for the
+// ERR_INVALID_ARG_VALUE 'buffer is empty' message.
+function _inspectEmptyView(view) {
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(view)) return "<Buffer >";
+  const ctor = view && view.constructor ? view.constructor.name : "Uint8Array";
+  return `${ctor}(${view ? view.byteLength : 0}) []`;
+}
+function errBufferEmpty(name = "buffer", buffer) {
+  const err = new TypeError(
+    `The argument '${name}' is empty and cannot be written. Received ${_inspectEmptyView(buffer)}`,
+  );
+  err.code = "ERR_INVALID_ARG_VALUE";
+  return err;
+}
+
+// ── readFile `buffer` option (Node v24 lib/internal/fs/utils.js) ──────────
+function validateReadFileBufferOptions(options) {
+  const buffer = options ? options.buffer : undefined;
+  if (
+    buffer !== undefined &&
+    typeof buffer !== "function" &&
+    !ArrayBuffer.isView(buffer)
+  ) {
+    throw errArgType(
+      "options.buffer",
+      ["Buffer", "TypedArray", "DataView", "Function"],
+      buffer,
+    );
+  }
+}
+function getReadFileBufferByteLengthName(options) {
+  return typeof options.buffer === "function"
+    ? "options.buffer().byteLength"
+    : "options.buffer.byteLength";
+}
+function getReadFileBuffer(options, size) {
+  let buffer = options.buffer;
+  if (typeof buffer === "function") {
+    buffer = options.buffer(size);
+    validateBuffer(buffer, "options.buffer()");
+  }
+  if (buffer === undefined) return undefined;
+  if (typeof Buffer !== "undefined" && !Buffer.isBuffer(buffer)) {
+    buffer = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  }
+  if (size > buffer.byteLength) {
+    const err = new TypeError(
+      `The argument '${getReadFileBufferByteLengthName(options)}' is smaller than the file size of ${size} bytes. Received ${buffer.byteLength}`,
+    );
+    err.code = "ERR_INVALID_ARG_VALUE";
+    throw err;
+  }
+  return buffer;
+}
+function readFileBufferTooSmallError(name, byteLength) {
+  const err = new TypeError(
+    `The argument '${name}' is too small to contain the entire file. Received ${byteLength}`,
+  );
+  err.code = "ERR_INVALID_ARG_VALUE";
+  return err;
+}
+
 // ── New-streams (stream/iter) batch helpers for FileHandle.pull/pullSync/
 // writer (Node v24 --experimental-stream-iter). Batches are Uint8Array[].
 // ──────────────────────────────────────────────────────────────────────────
@@ -829,10 +1035,12 @@ function validateMode(mode, def = 0o666) {
 }
 function validatePath(p, name = "path") {
   if (typeof p !== "string" && !isUint8ArrayLike(p) && !isURLLike(p)) {
-    // Match Node's exact message format.
+    // Match Node's exact message format (lib/internal/errors.js
+    // determineSpecificType): functions render as `function ${name}`.
     let received;
     if (p === null) received = "null";
     else if (p === undefined) received = "undefined";
+    else if (typeof p === "function") received = `function ${p.name || ""}`;
     else if (typeof p === "object") {
       received = `an instance of ${p.constructor ? p.constructor.name : "Object"}`;
     } else {
@@ -1820,122 +2028,180 @@ function buildApi(vol) {
     };
   }
 
-  // ── readSync/read: EBADF on wrong-direction fd, cursor preservation ──
-  function parseReadArgs(args) {
-    // readSync(fd, buffer, offset, length, position) or readSync(fd, options)
-    const [fd, bufferOrOptions, offset, length, position] = args;
-    if (
-      bufferOrOptions &&
-      typeof bufferOrOptions === "object" &&
-      !(bufferOrOptions instanceof Uint8Array) &&
-      !ArrayBuffer.isView(bufferOrOptions)
-    ) {
-      const o = bufferOrOptions;
-      return {
-        fd,
-        buffer: o.buffer,
-        offset: o.offset || 0,
-        length: o.length,
-        position: o.position,
-        opts: true,
-      };
+  // ── readSync/read: Node v24 arg parsing + validation (lib/fs.js) ──────
+  // Position -1/null/undefined means "current position" (the fd cursor
+  // advances); an explicit position leaves the cursor alone (memfs moves it,
+  // so save/restore). memfs cannot address -1 or huge positions (its
+  // Buffer.copy throws ERR_OUT_OF_RANGE "sourceStart"), so normalize first:
+  // -1 -> null (cursor), huge (>= file size) -> 0 bytes like real Node.
+  function allocReadBuffer(length) {
+    return typeof Buffer !== "undefined"
+      ? Buffer.alloc(length)
+      : new Uint8Array(length);
+  }
+  // Shared memfs read core. `position` is -1 (current) or a validated
+  // explicit number/bigint. Returns bytesRead.
+  function readMemfs(fd, buf, off, len, position, syscall) {
+    const atCursor = position === -1 || position === -1n;
+    const savedPos = atCursor ? undefined : getPosition(fd);
+    let posArg;
+    if (atCursor) {
+      posArg = null;
+    } else {
+      const num = typeof position === "bigint" ? Number(position) : position;
+      let size = -1;
+      try {
+        size = vol.fstatSync(fd).size;
+      } catch {}
+      if (size >= 0 && num >= size) {
+        if (savedPos !== undefined) setPosition(fd, savedPos);
+        return 0;
+      }
+      posArg = num;
     }
-    return { fd, buffer: bufferOrOptions, offset, length, position };
+    let n;
+    try {
+      n = vol.readSync(fd, buf, off, len, posArg);
+    } catch (e) {
+      throw enrichErr(e, syscall);
+    } finally {
+      if (savedPos !== undefined) setPosition(fd, savedPos);
+    }
+    return n;
   }
   {
-    const orig = fs.readSync;
     fs.readSync = function (...args) {
-      const { fd, buffer, offset, length, position } = parseReadArgs(args);
+      // readSync(fd, buffer, offset, length, position) or
+      // readSync(fd, buffer, options)
+      let [fd, buffer, offsetOrOptions, length, position] = args;
+      getValidatedFd(fd);
+      validateBuffer(buffer);
+      let offset = offsetOrOptions;
+      if (
+        args.length <= 3 ||
+        (offsetOrOptions !== null && typeof offsetOrOptions === "object")
+      ) {
+        if (offsetOrOptions !== undefined)
+          validateOptionsObject(offsetOrOptions, "options");
+        ({ offset = 0, length = buffer.byteLength - offset, position = null } =
+          offsetOrOptions ?? {});
+      }
+      if (offset === undefined) {
+        offset = 0;
+      } else {
+        validateInteger(offset, "offset", 0);
+      }
+      length |= 0;
+      if (position == null) {
+        position = -1;
+      } else {
+        validatePosition(position, "position", length);
+      }
+      if (length === 0) return 0;
+      if (buffer.byteLength === 0) throw errBufferEmpty("buffer", buffer);
+      validateOffsetLengthRead(offset, length, buffer.byteLength);
       checkFdReadable(fd, "read");
-      let buf = buffer;
-      if (!(buf instanceof Uint8Array) && !ArrayBuffer.isView(buf)) {
-        // allocate like Node does when buffer is omitted
-        const len = typeof length === "number" ? length : 16384;
-        buf =
-          typeof Buffer !== "undefined"
-            ? Buffer.alloc(len)
-            : new Uint8Array(len);
-      }
-      const off = offset || 0;
-      const len =
-        length === undefined || length === null ? buf.byteLength - off : length;
-      const savedPos =
-        typeof position === "number" ? getPosition(fd) : undefined;
-      let n;
-      try {
-        n = orig.call(
-          this,
-          fd,
-          buf,
-          off,
-          len,
-          position === undefined ? null : position,
-        );
-      } catch (e) {
-        throw enrichErr(e, "readSync");
-      } finally {
-        if (savedPos !== undefined) setPosition(fd, savedPos);
-      }
-      const result =
-        args.length === 2 ||
-        (args[1] &&
-          typeof args[1] === "object" &&
-          !(args[1] instanceof Uint8Array) &&
-          !ArrayBuffer.isView(args[1]))
-          ? { bytesRead: n, buffer: buf }
-          : n;
-      emitFs("fs", "readSync", fd, result);
-      return result;
+      const n = readMemfs(fd, buffer, offset, length, position, "readSync");
+      emitFs("fs", "readSync", fd, n);
+      return n;
     };
   }
   {
-    const orig = fs.read;
     fs.read = function (...args) {
-      const callback = args[args.length - 1];
+      // read(fd, buffer, offset, length, position, callback),
+      // read(fd, buffer, options, callback), read(fd, options, callback),
+      // read(fd, callback) — see lib/fs.js read().
+      let [fd, buffer, offsetOrOptions, length, position, callback] = args;
+      getValidatedFd(fd);
+      let offset = offsetOrOptions;
+      let params = null;
+      if (args.length <= 4) {
+        if (args.length === 4) {
+          // read(fd, buffer, options, callback)
+          validateOptionsObject(offsetOrOptions, "options");
+          callback = length;
+          params = offsetOrOptions;
+        } else if (args.length === 3) {
+          // read(fd, bufferOrParams, callback)
+          if (!ArrayBuffer.isView(buffer)) {
+            // read(fd, params, callback)
+            params = buffer;
+            ({ buffer = allocReadBuffer(16384) } = params ?? {});
+          }
+          callback = offsetOrOptions;
+        } else {
+          // read(fd, callback)
+          callback = buffer;
+          buffer = allocReadBuffer(16384);
+        }
+        if (params !== undefined) validateOptionsObject(params, "options");
+        ({
+          offset = 0,
+          length = buffer?.byteLength - offset,
+          position = null,
+        } = params ?? {});
+      }
+      validateBuffer(buffer);
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
-      const { fd, buffer, offset, length, position } = parseReadArgs(
-        args.slice(0, -1),
-      );
-      let buf = buffer;
-      if (!(buf instanceof Uint8Array) && !ArrayBuffer.isView(buf)) {
-        const len = typeof length === "number" ? length : 16384;
-        buf =
-          typeof Buffer !== "undefined"
-            ? Buffer.alloc(len)
-            : new Uint8Array(len);
+      if (offset == null) {
+        offset = 0;
+      } else {
+        validateInteger(offset, "offset", 0);
       }
-      const off = offset || 0;
-      const len =
-        length === undefined || length === null ? buf.byteLength - off : length;
+      length |= 0;
+      if (position == null) {
+        position = -1;
+      } else {
+        validatePosition(position, "position", length);
+      }
+      if (length === 0) {
+        nextTick(callback, null, 0, buffer);
+        return;
+      }
+      if (buffer.byteLength === 0) throw errBufferEmpty("buffer", buffer);
+      validateOffsetLengthRead(offset, length, buffer.byteLength);
       try {
         checkFdReadable(fd, "read");
       } catch (e) {
         nextTick(callback, enrichErr(e, "read"));
         return;
       }
-      const savedPos =
-        typeof position === "number" ? getPosition(fd) : undefined;
-      const cb = (err, bytesRead, b) => {
-        if (savedPos !== undefined) setPosition(fd, savedPos);
-        if (err) return callback(enrichErr(err, "read"));
+      const buf = buffer,
+        off = offset,
+        len = length,
+        pos = position;
+      const run = () => {
+        let bytesRead;
+        try {
+          bytesRead = readMemfs(fd, buf, off, len, pos, "read");
+        } catch (e) {
+          nextTick(callback, e);
+          return;
+        }
         emitFs("fs", "read", fd, bytesRead);
-        callback(null, bytesRead, b || buf);
+        nextTick(callback, null, bytesRead, buf);
       };
-      try {
-        return orig.call(
-          this,
-          fd,
-          buf,
-          off,
-          len,
-          position === undefined ? null : position,
-          cb,
-        );
-      } catch (e) {
-        throw enrichErr(e, "read");
-      }
+      nextTick(run);
     };
+    // util.promisify(fs.read) resolves { bytesRead, buffer } (Node's
+    // kCustomPromisifyArgsSymbol). The symbol is module-local in Node, so use
+    // the public util.promisify.custom (global registry). It lives on the
+    // function's prototype chain so the harness's in-place wrapFn (which
+    // copies only string keys) still exposes it.
+    const kPromisifyCustom = Symbol.for("nodejs.util.promisify.custom");
+    const readProto = Object.create(Function.prototype);
+    Object.defineProperty(readProto, kPromisifyCustom, {
+      value: function (...args) {
+        return new Promise((resolve, reject) => {
+          fs.read(...args, (err, bytesRead, buffer) =>
+            err ? reject(err) : resolve({ bytesRead, buffer }),
+          );
+        });
+      },
+      configurable: true,
+    });
+    Object.setPrototypeOf(fs.read, readProto);
   }
 
   // ── writeSync/write: EBADF on wrong-direction fd, cursor preservation ──
@@ -2003,26 +2269,40 @@ function buildApi(vol) {
   }
 
   // ── readv/writev (+Sync) ──
+  // Mirrors Node's internal validateBufferArray.
+  function validateBufferArray(buffers, name = "buffers") {
+    if (!Array.isArray(buffers))
+      throw errArgType(name, "ArrayBufferView[]", buffers);
+    for (const b of buffers) {
+      if (!ArrayBuffer.isView(b))
+        throw errArgType(name, "ArrayBufferView[]", buffers);
+    }
+  }
   function readvSyncImpl(fd, buffers, position) {
     checkFdReadable(fd, "readv");
-    if (!Array.isArray(buffers))
-      throw errInvalidArgType("buffers", "Array", buffers);
-    const savedPos = typeof position === "number" ? getPosition(fd) : undefined;
+    validateBufferArray(buffers);
+    if (buffers.length === 0)
+      throw makeFsError("EINVAL", "read", undefined, "invalid argument");
+    if (typeof position !== "number") position = null;
+    if (position !== null) {
+      // memfs cannot address huge positions (see readMemfs); real Node
+      // reads 0 bytes at/after EOF.
+      let size = -1;
+      try {
+        size = vol.fstatSync(fd).size;
+      } catch {}
+      if (size >= 0 && position >= size) return 0;
+    }
+    const savedPos = position !== null ? getPosition(fd) : undefined;
     let total = 0;
     try {
-      for (const b of buffers) {
-        const buf =
-          b instanceof Uint8Array || ArrayBuffer.isView(b)
-            ? b
-            : typeof Buffer !== "undefined"
-              ? Buffer.alloc(0)
-              : new Uint8Array(0);
+      for (const buf of buffers) {
         const n = vol.readSync(
           fd,
           buf,
           0,
           buf.byteLength,
-          typeof position === "number" ? position + total : null,
+          position !== null ? position + total : null,
         );
         total += n;
         if (n < buf.byteLength) break;
@@ -2059,6 +2339,7 @@ function buildApi(vol) {
   fs.readvSync = function (fd, buffers, position) {
     let result;
     try {
+      getValidatedFd(fd);
       result = readvSyncImpl(fd, buffers, position);
     } catch (e) {
       throw enrichErr(e, "readvSync");
@@ -2081,6 +2362,12 @@ function buildApi(vol) {
       callback = position;
       position = undefined;
     }
+    try {
+      getValidatedFd(fd);
+      validateBufferArray(buffers);
+    } catch (e) {
+      throw enrichErr(e, "readv");
+    }
     if (typeof callback !== "function")
       throw errInvalidArgType("cb", "function", callback);
     const run = () => {
@@ -2094,6 +2381,23 @@ function buildApi(vol) {
     };
     nextTick(run);
   };
+  // util.promisify(fs.readv) resolves { bytesRead, buffers } — see the
+  // fs.read note above for why the symbol lives on the prototype chain.
+  {
+    const kPromisifyCustom = Symbol.for("nodejs.util.promisify.custom");
+    const readvProto = Object.create(Function.prototype);
+    Object.defineProperty(readvProto, kPromisifyCustom, {
+      value: function (...args) {
+        return new Promise((resolve, reject) => {
+          fs.readv(...args, (err, bytesRead, buffers) =>
+            err ? reject(err) : resolve({ bytesRead, buffers }),
+          );
+        });
+      },
+      configurable: true,
+    });
+    Object.setPrototypeOf(fs.readv, readvProto);
+  }
   fs.writev = function (fd, buffers, position, callback) {
     if (typeof position === "function") {
       callback = position;
@@ -4670,47 +4974,56 @@ function buildApi(vol) {
       }
     }
     async read(arg1, arg2, arg3, arg4) {
-      // read([buffer[, offset[, length[, position]]]]) / read(options)
-      let buffer,
-        offset = 0,
-        length,
-        position = null;
-      if (
-        arg1 &&
-        typeof arg1 === "object" &&
-        !(arg1 instanceof Uint8Array) &&
-        !ArrayBuffer.isView(arg1)
-      ) {
-        buffer = arg1.buffer;
-        offset = arg1.offset || 0;
-        length = arg1.length;
-        position = arg1.position !== undefined ? arg1.position : null;
-      } else {
-        buffer = arg1;
-        offset = arg2 || 0;
-        length = arg3;
-        position = arg4 !== undefined ? arg4 : null;
+      // filehandle.read(buffer[, offset[, length[, position]]]) /
+      // filehandle.read(options) / filehandle.read(buffer, options) —
+      // see lib/internal/fs/promises.js read().
+      let buffer = arg1;
+      let offset = arg2;
+      let length = arg3;
+      let position = arg4;
+      if (!ArrayBuffer.isView(buffer)) {
+        // read(params)
+        if (buffer !== undefined) validateOptionsObject(buffer, "options");
+        ({
+          buffer = allocReadBuffer(16384),
+          offset = 0,
+          length = buffer.byteLength - offset,
+          position = null,
+        } = buffer ?? {});
+        validateBuffer(buffer);
       }
-      if (!(buffer instanceof Uint8Array) && !ArrayBuffer.isView(buffer)) {
-        const len = typeof length === "number" ? length : 16384;
-        buffer =
-          typeof Buffer !== "undefined"
-            ? Buffer.alloc(len)
-            : new Uint8Array(len);
+      if (offset !== null && typeof offset === "object") {
+        // read(buffer, options)
+        ({
+          offset = 0,
+          length = buffer.byteLength - offset,
+          position = null,
+        } = offset);
+      }
+      if (offset == null) {
+        offset = 0;
+      } else {
+        validateInteger(offset, "offset", 0);
       }
       if (length === undefined || length === null)
         length = buffer.byteLength - offset;
-      checkFdReadable(this.fd, "read");
-      const savedPos =
-        typeof position === "number" ? getPosition(this.fd) : undefined;
-      let bytesRead;
-      try {
-        bytesRead = vol.readSync(this.fd, buffer, offset, length, position);
-      } catch (e) {
-        throw enrichErr(e, "read");
-      } finally {
-        if (savedPos !== undefined) setPosition(this.fd, savedPos);
+      if (position == null) {
+        position = -1;
+      } else {
+        validatePosition(position, "position", length);
       }
+      if (length === 0) return { bytesRead: 0, buffer };
+      if (buffer.byteLength === 0) throw errBufferEmpty("buffer", buffer);
+      validateOffsetLengthRead(offset, length, buffer.byteLength);
+      checkFdReadable(this.fd, "read");
+      const bytesRead = readMemfs(
+        this.fd,
+        buffer,
+        offset,
+        length,
+        position,
+        "read",
+      );
       emitFs("fs", "promises.read", this.fd, bytesRead);
       return { bytesRead, buffer };
     }
