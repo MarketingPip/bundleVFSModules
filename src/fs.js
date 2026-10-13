@@ -832,11 +832,11 @@ function buildApi(vol) {
         if (fdFirst) validateFd(args[0]);
         if (validatePathFirst) validatePath(args[0]);
         // Two-path ops: the destination is a path too (null-byte check etc.).
-        if (destIdx !== undefined) validatePath(args[destIdx], "dest");
+        if (destIdx != null) validatePath(args[destIdx], "dest");
         if (needsUidGid) validateUidGid(args[1], args[2]);
         result = (impl || orig).apply(this, args);
       } catch (e) {
-        throw destIdx !== undefined
+        throw destIdx != null
           ? enrichDestErr(e, name, args[0], args[destIdx])
           : enrichErr(e, name);
       }
@@ -905,7 +905,7 @@ function buildApi(vol) {
       args[args.length - 1] = function (err, ...rest) {
         if (err)
           err =
-            destIdx !== undefined
+            destIdx != null
               ? enrichDestErr(err, name, args[0], args[destIdx])
               : enrichErr(err, name);
         const trimmed = arity !== undefined ? rest.slice(0, arity) : rest;
@@ -915,11 +915,11 @@ function buildApi(vol) {
       try {
         if (validatePathFirst) validatePath(args[0]);
         // Two-path ops: the destination is a path too (null-byte check etc.).
-        if (destIdx !== undefined) validatePath(args[destIdx], "dest");
+        if (destIdx != null) validatePath(args[destIdx], "dest");
         if (needsUidGid) validateUidGid(args[1], args[2]);
         return (impl || orig).apply(this, args);
       } catch (e) {
-        throw destIdx !== undefined
+        throw destIdx != null
           ? enrichDestErr(e, name, args[0], args[destIdx])
           : enrichErr(e, name);
       }
