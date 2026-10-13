@@ -369,6 +369,15 @@ function validatePath(p, name = "path") {
   }
   // Node.js fs accepts file: URL objects; non-file schemes are rejected.
   if (isURLLike(p)) fileURLToPathString(p);
+  // Null bytes are rejected with ERR_INVALID_ARG_VALUE (test-fs-null-bytes).
+  const ps = toPathString(p);
+  if (ps.includes("\0")) {
+    const err = new TypeError(
+      `The argument '${name}' must be a string, Uint8Array, or URL without null bytes. Received '${ps.replace(/\0/g, "\\x00")}'`,
+    );
+    err.code = "ERR_INVALID_ARG_VALUE";
+    throw err;
+  }
 }
 function toPathString(p) {
   if (typeof p === "string") return p;
@@ -820,6 +829,8 @@ function buildApi(vol) {
       let result;
       try {
         if (validatePathFirst) validatePath(args[0]);
+        // Two-path ops: the destination is a path too (null-byte check etc.).
+        if (destIdx !== undefined) validatePath(args[destIdx], "dest");
         if (needsUidGid) validateUidGid(args[1], args[2]);
         result = (impl || orig).apply(this, args);
       } catch (e) {
@@ -899,6 +910,8 @@ function buildApi(vol) {
       };
       try {
         if (validatePathFirst) validatePath(args[0]);
+        // Two-path ops: the destination is a path too (null-byte check etc.).
+        if (destIdx !== undefined) validatePath(args[destIdx], "dest");
         if (needsUidGid) validateUidGid(args[1], args[2]);
         return (impl || orig).apply(this, args);
       } catch (e) {
@@ -1411,6 +1424,8 @@ function buildApi(vol) {
     }
     if (typeof callback !== "function")
       throw errInvalidArgType("cb", "function", callback);
+    // Path validation is synchronous in Node (throws before any async work).
+    validatePath(path);
     nextTick(() => {
       try {
         accessCheck(path, mode);
@@ -2197,13 +2212,8 @@ function buildApi(vol) {
         validateDataArg(args[0], "data");
         args[0] = normalizeDataArg(args[0]);
       }
-      let fp;
-      try {
-        fp = fileArg(p);
-      } catch (e) {
-        nextTick(callback, enrichErr(e, cbName));
-        return;
-      }
+      // Path validation (incl. null bytes) also throws synchronously in Node.
+      const fp = fileArg(p);
       origCb.call(this, fp, ...args, (err, result) => {
         if (err) return callback(enrichErr(err, cbName));
         emitFs("fs", cbName, p, result);
