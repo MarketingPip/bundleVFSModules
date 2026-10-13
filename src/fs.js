@@ -272,6 +272,212 @@ function errInvalidArgTypeProp(name, expected, received) {
   return err;
 }
 
+// ── Node v24-exact ERR_INVALID_ARG_TYPE builder ───────────────────────────
+// Mirrors lib/internal/errors.js determineSpecificType + the type/instance
+// list formatting: kTypes entries ('number', 'Object', 'Function', …) are
+// lowercased to "of type X"; ClassName entries use "an instance of X";
+// functions render as `function ${name}` (not `type function (...)`).
+function _fmtTypeList(list, orWord) {
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} ${orWord} ${list[1]}`;
+  return `${list.slice(0, -1).join(", ")}, ${orWord} ${list[list.length - 1]}`;
+}
+function _specificType(value) {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  const t = typeof value;
+  if (t === "function") return `function ${value.name || ""}`;
+  if (t === "object") {
+    if (value.constructor && "name" in value.constructor)
+      return `an instance of ${value.constructor.name}`;
+    return "an instance of Object";
+  }
+  if (t === "bigint") return `type bigint (${value}n)`;
+  if (t === "number") {
+    if (Object.is(value, -0)) return "type number (-0)";
+    if (Number.isNaN(value)) return "type number (NaN)";
+    if (value === Infinity) return "type number (Infinity)";
+    if (value === -Infinity) return "type number (-Infinity)";
+    return `type number (${value})`;
+  }
+  if (t === "boolean") return `type boolean (${value})`;
+  if (t === "symbol") return `type symbol (${String(value)})`;
+  // string
+  let s = value;
+  if (s.length > 28) s = `${s.slice(0, 25)}...`;
+  if (!s.includes("'")) return `type string ('${s}')`;
+  return `type string (${JSON.stringify(s)})`;
+}
+function errArgType(name, expected, received) {
+  const list = Array.isArray(expected) ? expected : [expected];
+  const types = [];
+  const instances = [];
+  for (const e of list) {
+    if (/^[A-Z][a-zA-Z0-9]*$/.test(e)) instances.push(e);
+    else types.push(e.toLowerCase());
+  }
+  const kind = name.includes(".") ? "property" : "argument";
+  let msg = `The "${name}" ${kind} must be `;
+  const parts = [];
+  if (types.length > 0)
+    parts.push(`${types.length > 1 ? "one of type" : "of type"} ${_fmtTypeList(types, "or")}`);
+  if (instances.length > 0)
+    parts.push(`an instance of ${_fmtTypeList(instances, "or")}`);
+  msg += parts.join(" or ");
+  msg += `. Received ${_specificType(received)}`;
+  const err = new TypeError(msg);
+  err.code = "ERR_INVALID_ARG_TYPE";
+  return err;
+}
+
+// Node's addNumericalSeparator for ERR_OUT_OF_RANGE received values.
+function _numSep(s) {
+  return s.replace(/\B(?=(\d{3})+(?!\d))/g, "_");
+}
+function _outOfRangeReceived(value) {
+  if (typeof value === "bigint") {
+    const neg = value < 0;
+    let s = String(neg ? -value : value);
+    if (value > 2n ** 32n || value < -(2n ** 32n)) s = _numSep(s);
+    return (neg ? "-" : "") + s + "n";
+  }
+  if (typeof value === "number") {
+    if (Object.is(value, -0)) return "-0";
+    if (Number.isInteger(value) && Math.abs(value) > 2 ** 32)
+      return _numSep(String(value));
+    return String(value);
+  }
+  return _specificType(value);
+}
+function errOutOfRangeFmt(name, expected, received) {
+  const err = new RangeError(
+    `The value of "${name}" is out of range. It must be ${expected}. Received ${_outOfRangeReceived(received)}`,
+  );
+  err.code = "ERR_OUT_OF_RANGE";
+  return err;
+}
+
+// Mirrors Node's internal validateInteger (default max = MAX_SAFE_INTEGER).
+function validateInteger(value, name, min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER) {
+  if (typeof value !== "number") throw errArgType(name, "number", value);
+  if (!Number.isInteger(value))
+    throw errOutOfRangeFmt(name, "an integer", value);
+  if (value < min || value > max)
+    throw errOutOfRangeFmt(name, `>= ${min} && <= ${max}`, value);
+  return value;
+}
+
+// Mirrors Node's internal validateBuffer.
+function validateBuffer(buffer, name = "buffer") {
+  if (!ArrayBuffer.isView(buffer))
+    throw errArgType(name, ["Buffer", "TypedArray", "DataView"], buffer);
+}
+
+// Mirrors lib/internal/fs/utils.js validatePosition(position, name, length).
+function validatePosition(position, name, length) {
+  if (typeof position === "number") {
+    validateInteger(position, name, -1);
+  } else if (typeof position === "bigint") {
+    const maxPosition = 2n ** 63n - 1n - BigInt(length);
+    if (!(position >= -1n && position <= maxPosition)) {
+      throw errOutOfRangeFmt(name, `>= -1 && <= ${maxPosition}`, position);
+    }
+  } else {
+    throw errArgType(name, ["bigint", "integer"], position);
+  }
+  return position;
+}
+
+// Mirrors lib/internal/fs/utils.js validateOffsetLengthRead.
+function validateOffsetLengthRead(offset, length, bufferLength) {
+  if (offset < 0) throw errOutOfRangeFmt("offset", ">= 0", offset);
+  if (length < 0) throw errOutOfRangeFmt("length", ">= 0", length);
+  if (offset + length > bufferLength)
+    throw errOutOfRangeFmt("length", `<= ${bufferLength - offset}`, length);
+}
+
+// Mirrors Node's internal validateObject with kValidateObjectAllowNullable.
+function validateOptionsObject(value, name) {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value) || typeof value !== "object")
+    throw errArgType(name, "Object", value);
+}
+
+// Mirrors Node's internal validateBoolean.
+function validateBoolean(value, name) {
+  if (typeof value !== "boolean") throw errArgType(name, "boolean", value);
+}
+
+// Mirrors lib/internal/fs/utils.js getValidatedFd (type/range only; the
+// EBADF existence/readability check stays in checkFdReadable).
+function getValidatedFd(fd, name = "fd") {
+  if (Object.is(fd, -0)) return 0;
+  validateInteger(fd, name, 0, 2147483647);
+  return fd;
+}
+
+// util.inspect rendering of an empty ArrayBufferView, for the
+// ERR_INVALID_ARG_VALUE 'buffer is empty' message.
+function _inspectEmptyView(view) {
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(view)) return "<Buffer >";
+  const ctor = view && view.constructor ? view.constructor.name : "Uint8Array";
+  return `${ctor}(${view ? view.byteLength : 0}) []`;
+}
+function errBufferEmpty(name = "buffer", buffer) {
+  const err = new TypeError(
+    `The argument '${name}' is empty and cannot be written. Received ${_inspectEmptyView(buffer)}`,
+  );
+  err.code = "ERR_INVALID_ARG_VALUE";
+  return err;
+}
+
+// ── readFile `buffer` option (Node v24 lib/internal/fs/utils.js) ──────────
+function validateReadFileBufferOptions(options) {
+  const buffer = options ? options.buffer : undefined;
+  if (
+    buffer !== undefined &&
+    typeof buffer !== "function" &&
+    !ArrayBuffer.isView(buffer)
+  ) {
+    throw errArgType(
+      "options.buffer",
+      ["Buffer", "TypedArray", "DataView", "Function"],
+      buffer,
+    );
+  }
+}
+function getReadFileBufferByteLengthName(options) {
+  return typeof options.buffer === "function"
+    ? "options.buffer().byteLength"
+    : "options.buffer.byteLength";
+}
+function getReadFileBuffer(options, size) {
+  let buffer = options.buffer;
+  if (typeof buffer === "function") {
+    buffer = options.buffer(size);
+    validateBuffer(buffer, "options.buffer()");
+  }
+  if (buffer === undefined) return undefined;
+  if (typeof Buffer !== "undefined" && !Buffer.isBuffer(buffer)) {
+    buffer = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  }
+  if (size > buffer.byteLength) {
+    const err = new TypeError(
+      `The argument '${getReadFileBufferByteLengthName(options)}' is smaller than the file size of ${size} bytes. Received ${buffer.byteLength}`,
+    );
+    err.code = "ERR_INVALID_ARG_VALUE";
+    throw err;
+  }
+  return buffer;
+}
+function readFileBufferTooSmallError(name, byteLength) {
+  const err = new TypeError(
+    `The argument '${name}' is too small to contain the entire file. Received ${byteLength}`,
+  );
+  err.code = "ERR_INVALID_ARG_VALUE";
+  return err;
+}
+
 // ── New-streams (stream/iter) batch helpers for FileHandle.pull/pullSync/
 // writer (Node v24 --experimental-stream-iter). Batches are Uint8Array[].
 // ──────────────────────────────────────────────────────────────────────────
@@ -831,10 +1037,12 @@ function validateMode(mode, def = 0o666) {
 }
 function validatePath(p, name = "path") {
   if (typeof p !== "string" && !isUint8ArrayLike(p) && !isURLLike(p)) {
-    // Match Node's exact message format.
+    // Match Node's exact message format (lib/internal/errors.js
+    // determineSpecificType): functions render as `function ${name}`.
     let received;
     if (p === null) received = "null";
     else if (p === undefined) received = "undefined";
+    else if (typeof p === "function") received = `function ${p.name || ""}`;
     else if (typeof p === "object") {
       received = `an instance of ${p.constructor ? p.constructor.name : "Object"}`;
     } else {
@@ -1000,6 +1208,28 @@ const S_IFMT = 0o170000,
   S_IFIFO = 0o010000,
   S_IFSOCK = 0o140000;
 
+// UV_DIRENT_* type constants (stable ABI, mirror src/constants.js).
+const UV_DIRENT_UNKNOWN = 0,
+  UV_DIRENT_FILE = 1,
+  UV_DIRENT_DIR = 2,
+  UV_DIRENT_LINK = 3,
+  UV_DIRENT_FIFO = 4,
+  UV_DIRENT_SOCKET = 5,
+  UV_DIRENT_CHAR = 6,
+  UV_DIRENT_BLOCK = 7;
+
+function modeToDirentType(mode) {
+  const fmt = mode & S_IFMT;
+  if (fmt === S_IFREG) return UV_DIRENT_FILE;
+  if (fmt === S_IFDIR) return UV_DIRENT_DIR;
+  if (fmt === S_IFLNK) return UV_DIRENT_LINK;
+  if (fmt === S_IFIFO) return UV_DIRENT_FIFO;
+  if (fmt === S_IFSOCK) return UV_DIRENT_SOCKET;
+  if (fmt === S_IFCHR) return UV_DIRENT_CHAR;
+  if (fmt === S_IFBLK) return UV_DIRENT_BLOCK;
+  return UV_DIRENT_UNKNOWN;
+}
+
 class Stats {
   constructor(m, bigint = false) {
     const asNum = (v) => (typeof v === "bigint" ? Number(v) : Number(v));
@@ -1095,32 +1325,34 @@ function toStats(m, options) {
 // ── 6. Node-shaped Dirent ───────────────────────────────────────────────────
 // Enumerable own keys: name, parentPath only.
 class Dirent {
-  constructor(name, parentPath, mode) {
+  // Real Node signature: new Dirent(name, type, parentPath) where type is
+  // a UV_DIRENT_* constant.
+  constructor(name, type, parentPath) {
     this.name = name;
     this.parentPath = parentPath;
     // Non-enumerable: real Node Dirent exposes only name/parentPath.
-    Object.defineProperty(this, "_mode", { value: mode, enumerable: false });
+    Object.defineProperty(this, "_type", { value: type, enumerable: false });
   }
   isFile() {
-    return (this._mode & S_IFMT) === S_IFREG;
+    return this._type === UV_DIRENT_FILE;
   }
   isDirectory() {
-    return (this._mode & S_IFMT) === S_IFDIR;
+    return this._type === UV_DIRENT_DIR;
   }
   isSymbolicLink() {
-    return (this._mode & S_IFMT) === S_IFLNK;
+    return this._type === UV_DIRENT_LINK;
   }
   isBlockDevice() {
-    return (this._mode & S_IFMT) === S_IFBLK;
+    return this._type === UV_DIRENT_BLOCK;
   }
   isCharacterDevice() {
-    return (this._mode & S_IFMT) === S_IFCHR;
+    return this._type === UV_DIRENT_CHAR;
   }
   isFIFO() {
-    return (this._mode & S_IFMT) === S_IFIFO;
+    return this._type === UV_DIRENT_FIFO;
   }
   isSocket() {
-    return (this._mode & S_IFMT) === S_IFSOCK;
+    return this._type === UV_DIRENT_SOCKET;
   }
 }
 
@@ -1724,9 +1956,15 @@ function buildApi(vol) {
     fs.writeFileSync = function (file, data, options) {
       // fd variant: current-position write, no truncation (memfs truncates).
       if (typeof file === "number") {
+        const flush =
+          options !== null && typeof options === "object"
+            ? (options.flush ?? false)
+            : false;
+        validateBoolean(flush, "options.flush");
         checkFdWritable(file, "write");
         const buf = dataToBuffer(data, options);
         vol.writeSync(file, buf, 0, buf.byteLength, null);
+        if (flush) fs.fsyncSync(file);
         emitFs("fs", "writeFileSync", file, buf.byteLength);
         return;
       }
@@ -1749,7 +1987,7 @@ function buildApi(vol) {
           } catch {
             continue;
           }
-          if (wantDirent) out.push(new Dirent(name, dir, st.mode));
+          if (wantDirent) out.push(new Dirent(name, modeToDirentType(st.mode), dir));
           else out.push(rp);
           if (st.isDirectory()) walk(full, rp);
         }
@@ -1765,7 +2003,7 @@ function buildApi(vol) {
         } catch {
           /* ignore */
         }
-        return new Dirent(name, p, mode);
+        return new Dirent(name, modeToDirentType(mode), p);
       });
     }
     return names;
@@ -1822,122 +2060,180 @@ function buildApi(vol) {
     };
   }
 
-  // ── readSync/read: EBADF on wrong-direction fd, cursor preservation ──
-  function parseReadArgs(args) {
-    // readSync(fd, buffer, offset, length, position) or readSync(fd, options)
-    const [fd, bufferOrOptions, offset, length, position] = args;
-    if (
-      bufferOrOptions &&
-      typeof bufferOrOptions === "object" &&
-      !(bufferOrOptions instanceof Uint8Array) &&
-      !ArrayBuffer.isView(bufferOrOptions)
-    ) {
-      const o = bufferOrOptions;
-      return {
-        fd,
-        buffer: o.buffer,
-        offset: o.offset || 0,
-        length: o.length,
-        position: o.position,
-        opts: true,
-      };
+  // ── readSync/read: Node v24 arg parsing + validation (lib/fs.js) ──────
+  // Position -1/null/undefined means "current position" (the fd cursor
+  // advances); an explicit position leaves the cursor alone (memfs moves it,
+  // so save/restore). memfs cannot address -1 or huge positions (its
+  // Buffer.copy throws ERR_OUT_OF_RANGE "sourceStart"), so normalize first:
+  // -1 -> null (cursor), huge (>= file size) -> 0 bytes like real Node.
+  function allocReadBuffer(length) {
+    return typeof Buffer !== "undefined"
+      ? Buffer.alloc(length)
+      : new Uint8Array(length);
+  }
+  // Shared memfs read core. `position` is -1 (current) or a validated
+  // explicit number/bigint. Returns bytesRead.
+  function readMemfs(fd, buf, off, len, position, syscall) {
+    const atCursor = position === -1 || position === -1n;
+    const savedPos = atCursor ? undefined : getPosition(fd);
+    let posArg;
+    if (atCursor) {
+      posArg = null;
+    } else {
+      const num = typeof position === "bigint" ? Number(position) : position;
+      let size = -1;
+      try {
+        size = vol.fstatSync(fd).size;
+      } catch {}
+      if (size >= 0 && num >= size) {
+        if (savedPos !== undefined) setPosition(fd, savedPos);
+        return 0;
+      }
+      posArg = num;
     }
-    return { fd, buffer: bufferOrOptions, offset, length, position };
+    let n;
+    try {
+      n = vol.readSync(fd, buf, off, len, posArg);
+    } catch (e) {
+      throw enrichErr(e, syscall);
+    } finally {
+      if (savedPos !== undefined) setPosition(fd, savedPos);
+    }
+    return n;
   }
   {
-    const orig = fs.readSync;
     fs.readSync = function (...args) {
-      const { fd, buffer, offset, length, position } = parseReadArgs(args);
+      // readSync(fd, buffer, offset, length, position) or
+      // readSync(fd, buffer, options)
+      let [fd, buffer, offsetOrOptions, length, position] = args;
+      getValidatedFd(fd);
+      validateBuffer(buffer);
+      let offset = offsetOrOptions;
+      if (
+        args.length <= 3 ||
+        (offsetOrOptions !== null && typeof offsetOrOptions === "object")
+      ) {
+        if (offsetOrOptions !== undefined)
+          validateOptionsObject(offsetOrOptions, "options");
+        ({ offset = 0, length = buffer.byteLength - offset, position = null } =
+          offsetOrOptions ?? {});
+      }
+      if (offset === undefined) {
+        offset = 0;
+      } else {
+        validateInteger(offset, "offset", 0);
+      }
+      length |= 0;
+      if (position == null) {
+        position = -1;
+      } else {
+        validatePosition(position, "position", length);
+      }
+      if (length === 0) return 0;
+      if (buffer.byteLength === 0) throw errBufferEmpty("buffer", buffer);
+      validateOffsetLengthRead(offset, length, buffer.byteLength);
       checkFdReadable(fd, "read");
-      let buf = buffer;
-      if (!(buf instanceof Uint8Array) && !ArrayBuffer.isView(buf)) {
-        // allocate like Node does when buffer is omitted
-        const len = typeof length === "number" ? length : 16384;
-        buf =
-          typeof Buffer !== "undefined"
-            ? Buffer.alloc(len)
-            : new Uint8Array(len);
-      }
-      const off = offset || 0;
-      const len =
-        length === undefined || length === null ? buf.byteLength - off : length;
-      const savedPos =
-        typeof position === "number" ? getPosition(fd) : undefined;
-      let n;
-      try {
-        n = orig.call(
-          this,
-          fd,
-          buf,
-          off,
-          len,
-          position === undefined ? null : position,
-        );
-      } catch (e) {
-        throw enrichErr(e, "readSync");
-      } finally {
-        if (savedPos !== undefined) setPosition(fd, savedPos);
-      }
-      const result =
-        args.length === 2 ||
-        (args[1] &&
-          typeof args[1] === "object" &&
-          !(args[1] instanceof Uint8Array) &&
-          !ArrayBuffer.isView(args[1]))
-          ? { bytesRead: n, buffer: buf }
-          : n;
-      emitFs("fs", "readSync", fd, result);
-      return result;
+      const n = readMemfs(fd, buffer, offset, length, position, "readSync");
+      emitFs("fs", "readSync", fd, n);
+      return n;
     };
   }
   {
-    const orig = fs.read;
     fs.read = function (...args) {
-      const callback = args[args.length - 1];
+      // read(fd, buffer, offset, length, position, callback),
+      // read(fd, buffer, options, callback), read(fd, options, callback),
+      // read(fd, callback) — see lib/fs.js read().
+      let [fd, buffer, offsetOrOptions, length, position, callback] = args;
+      getValidatedFd(fd);
+      let offset = offsetOrOptions;
+      let params = null;
+      if (args.length <= 4) {
+        if (args.length === 4) {
+          // read(fd, buffer, options, callback)
+          validateOptionsObject(offsetOrOptions, "options");
+          callback = length;
+          params = offsetOrOptions;
+        } else if (args.length === 3) {
+          // read(fd, bufferOrParams, callback)
+          if (!ArrayBuffer.isView(buffer)) {
+            // read(fd, params, callback)
+            params = buffer;
+            ({ buffer = allocReadBuffer(16384) } = params ?? {});
+          }
+          callback = offsetOrOptions;
+        } else {
+          // read(fd, callback)
+          callback = buffer;
+          buffer = allocReadBuffer(16384);
+        }
+        if (params !== undefined) validateOptionsObject(params, "options");
+        ({
+          offset = 0,
+          length = buffer?.byteLength - offset,
+          position = null,
+        } = params ?? {});
+      }
+      validateBuffer(buffer);
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
-      const { fd, buffer, offset, length, position } = parseReadArgs(
-        args.slice(0, -1),
-      );
-      let buf = buffer;
-      if (!(buf instanceof Uint8Array) && !ArrayBuffer.isView(buf)) {
-        const len = typeof length === "number" ? length : 16384;
-        buf =
-          typeof Buffer !== "undefined"
-            ? Buffer.alloc(len)
-            : new Uint8Array(len);
+      if (offset == null) {
+        offset = 0;
+      } else {
+        validateInteger(offset, "offset", 0);
       }
-      const off = offset || 0;
-      const len =
-        length === undefined || length === null ? buf.byteLength - off : length;
+      length |= 0;
+      if (position == null) {
+        position = -1;
+      } else {
+        validatePosition(position, "position", length);
+      }
+      if (length === 0) {
+        nextTick(callback, null, 0, buffer);
+        return;
+      }
+      if (buffer.byteLength === 0) throw errBufferEmpty("buffer", buffer);
+      validateOffsetLengthRead(offset, length, buffer.byteLength);
       try {
         checkFdReadable(fd, "read");
       } catch (e) {
         nextTick(callback, enrichErr(e, "read"));
         return;
       }
-      const savedPos =
-        typeof position === "number" ? getPosition(fd) : undefined;
-      const cb = (err, bytesRead, b) => {
-        if (savedPos !== undefined) setPosition(fd, savedPos);
-        if (err) return callback(enrichErr(err, "read"));
+      const buf = buffer,
+        off = offset,
+        len = length,
+        pos = position;
+      const run = () => {
+        let bytesRead;
+        try {
+          bytesRead = readMemfs(fd, buf, off, len, pos, "read");
+        } catch (e) {
+          nextTick(callback, e);
+          return;
+        }
         emitFs("fs", "read", fd, bytesRead);
-        callback(null, bytesRead, b || buf);
+        nextTick(callback, null, bytesRead, buf);
       };
-      try {
-        return orig.call(
-          this,
-          fd,
-          buf,
-          off,
-          len,
-          position === undefined ? null : position,
-          cb,
-        );
-      } catch (e) {
-        throw enrichErr(e, "read");
-      }
+      nextTick(run);
     };
+    // util.promisify(fs.read) resolves { bytesRead, buffer } (Node's
+    // kCustomPromisifyArgsSymbol). The symbol is module-local in Node, so use
+    // the public util.promisify.custom (global registry). It lives on the
+    // function's prototype chain so the harness's in-place wrapFn (which
+    // copies only string keys) still exposes it.
+    const kPromisifyCustom = Symbol.for("nodejs.util.promisify.custom");
+    const readProto = Object.create(Function.prototype);
+    Object.defineProperty(readProto, kPromisifyCustom, {
+      value: function (...args) {
+        return new Promise((resolve, reject) => {
+          fs.read(...args, (err, bytesRead, buffer) =>
+            err ? reject(err) : resolve({ bytesRead, buffer }),
+          );
+        });
+      },
+      configurable: true,
+    });
+    Object.setPrototypeOf(fs.read, readProto);
   }
 
   // ── writeSync/write: EBADF on wrong-direction fd, cursor preservation ──
@@ -2005,26 +2301,40 @@ function buildApi(vol) {
   }
 
   // ── readv/writev (+Sync) ──
+  // Mirrors Node's internal validateBufferArray.
+  function validateBufferArray(buffers, name = "buffers") {
+    if (!Array.isArray(buffers))
+      throw errArgType(name, "ArrayBufferView[]", buffers);
+    for (const b of buffers) {
+      if (!ArrayBuffer.isView(b))
+        throw errArgType(name, "ArrayBufferView[]", buffers);
+    }
+  }
   function readvSyncImpl(fd, buffers, position) {
     checkFdReadable(fd, "readv");
-    if (!Array.isArray(buffers))
-      throw errInvalidArgType("buffers", "Array", buffers);
-    const savedPos = typeof position === "number" ? getPosition(fd) : undefined;
+    validateBufferArray(buffers);
+    if (buffers.length === 0)
+      throw makeFsError("EINVAL", "read", undefined, "invalid argument");
+    if (typeof position !== "number") position = null;
+    if (position !== null) {
+      // memfs cannot address huge positions (see readMemfs); real Node
+      // reads 0 bytes at/after EOF.
+      let size = -1;
+      try {
+        size = vol.fstatSync(fd).size;
+      } catch {}
+      if (size >= 0 && position >= size) return 0;
+    }
+    const savedPos = position !== null ? getPosition(fd) : undefined;
     let total = 0;
     try {
-      for (const b of buffers) {
-        const buf =
-          b instanceof Uint8Array || ArrayBuffer.isView(b)
-            ? b
-            : typeof Buffer !== "undefined"
-              ? Buffer.alloc(0)
-              : new Uint8Array(0);
+      for (const buf of buffers) {
         const n = vol.readSync(
           fd,
           buf,
           0,
           buf.byteLength,
-          typeof position === "number" ? position + total : null,
+          position !== null ? position + total : null,
         );
         total += n;
         if (n < buf.byteLength) break;
@@ -2061,6 +2371,7 @@ function buildApi(vol) {
   fs.readvSync = function (fd, buffers, position) {
     let result;
     try {
+      getValidatedFd(fd);
       result = readvSyncImpl(fd, buffers, position);
     } catch (e) {
       throw enrichErr(e, "readvSync");
@@ -2083,6 +2394,12 @@ function buildApi(vol) {
       callback = position;
       position = undefined;
     }
+    try {
+      getValidatedFd(fd);
+      validateBufferArray(buffers);
+    } catch (e) {
+      throw enrichErr(e, "readv");
+    }
     if (typeof callback !== "function")
       throw errInvalidArgType("cb", "function", callback);
     const run = () => {
@@ -2096,6 +2413,23 @@ function buildApi(vol) {
     };
     nextTick(run);
   };
+  // util.promisify(fs.readv) resolves { bytesRead, buffers } — see the
+  // fs.read note above for why the symbol lives on the prototype chain.
+  {
+    const kPromisifyCustom = Symbol.for("nodejs.util.promisify.custom");
+    const readvProto = Object.create(Function.prototype);
+    Object.defineProperty(readvProto, kPromisifyCustom, {
+      value: function (...args) {
+        return new Promise((resolve, reject) => {
+          fs.readv(...args, (err, bytesRead, buffers) =>
+            err ? reject(err) : resolve({ bytesRead, buffers }),
+          );
+        });
+      },
+      configurable: true,
+    });
+    Object.setPrototypeOf(fs.readv, readvProto);
+  }
   fs.writev = function (fd, buffers, position, callback) {
     if (typeof position === "function") {
       callback = position;
@@ -3626,11 +3960,151 @@ function buildApi(vol) {
     }
   }
 
+  // writeFileSync/appendFileSync with { flush: true }: open, write, fsync
+  // (through the fs object so spies observe it), close. `existed` mirrors
+  // the umask fix-up in the shared wrapper.
+  function writeFileSyncWithFlush(fp, data, options, syncName, existed) {
+    const isUserFd = typeof fp === "number";
+    const opts = options !== null && typeof options === "object" ? options : {};
+    const flag =
+      syncName === "appendFileSync" ? "a" : opts.flag || "w";
+    const fd = isUserFd ? fp : vol.openSync(fp, flag, opts.mode || 0o666);
+    try {
+      if (isUserFd && syncName === "appendFileSync") {
+        const st = vol.fstatSync(fd);
+        vol.writeSync(fd, data, 0, data.byteLength, st.size);
+      } else {
+        vol.writeSync(fd, data, 0, data.byteLength, null);
+      }
+      fs.fsyncSync(fd);
+    } finally {
+      if (!isUserFd) {
+        try {
+          vol.closeSync(fd);
+        } catch {}
+      }
+    }
+    if (!existed && !isUserFd && opts.mode === undefined) {
+      try {
+        vol.chmodSync(fp, applyUmask(0o666));
+      } catch {}
+    }
+  }
   // ── readFile/writeFile/appendFile: accept fd-or-path ──
   function fileArg(p) {
     if (typeof p === "number") return p;
     validatePath(p);
     return toPathString(p);
+  }
+  function hasReadFileBufferOpt(options) {
+    return (
+      options !== null &&
+      typeof options === "object" &&
+      options.buffer !== undefined
+    );
+  }
+  function normalizeReadFileOptions(options) {
+    if (options === undefined || options === null) return {};
+    if (typeof options === "string") return { encoding: options };
+    return options;
+  }
+  // Manual readFile core: fd (reads from the CURRENT position, unlike
+  // memfs's position-0 read) or path, with Node v24's `buffer` option
+  // (Buffer or (size) => Buffer). `fp` is a validated fd or path string.
+  function readFileSyncManual(fp, options) {
+    options = normalizeReadFileOptions(options);
+    validateReadFileBufferOptions(options);
+    const isUserFd = typeof fp === "number";
+    const fd = isUserFd ? fp : vol.openSync(fp, options.flag || "r");
+    try {
+      checkFdReadable(fd, "read");
+      const st = vol.fstatSync(fd);
+      if (st.size > 2 ** 31 - 1) {
+        const err = new RangeError(
+          `File size (${st.size}) is greater than 2 GiB`,
+        );
+        err.code = "ERR_FS_FILE_TOO_LARGE";
+        throw err;
+      }
+      const size = st.isFile() ? st.size : 0;
+      const hasUserBuffer = options.buffer !== undefined;
+      let buffer;
+      let buffers;
+      if (hasUserBuffer) {
+        buffer = getReadFileBuffer(options, size);
+      } else if (size === 0) {
+        buffers = [];
+      } else {
+        buffer = allocReadBuffer(size);
+      }
+      let pos = 0;
+      let bytesRead;
+      if (hasUserBuffer) {
+        if (size !== 0) {
+          do {
+            bytesRead = readMemfs(fd, buffer, pos, size - pos, -1, "read");
+            pos += bytesRead;
+          } while (bytesRead !== 0 && pos < size);
+        } else {
+          // Unknown size (pipes, fstat tricks): fill the user buffer,
+          // then probe one extra byte for the too-small error.
+          while (pos < buffer.byteLength) {
+            bytesRead = readMemfs(
+              fd,
+              buffer,
+              pos,
+              buffer.byteLength - pos,
+              -1,
+              "read",
+            );
+            pos += bytesRead;
+            if (bytesRead === 0) break;
+          }
+          const extra = allocReadBuffer(1);
+          bytesRead = readMemfs(fd, extra, 0, 1, -1, "read");
+          if (bytesRead !== 0) {
+            throw readFileBufferTooSmallError(
+              getReadFileBufferByteLengthName(options),
+              buffer.byteLength,
+            );
+          }
+        }
+      } else if (size !== 0) {
+        do {
+          bytesRead = readMemfs(fd, buffer, pos, size - pos, -1, "read");
+          pos += bytesRead;
+        } while (bytesRead !== 0 && pos < size);
+      } else {
+        do {
+          buffer = allocReadBuffer(8192);
+          bytesRead = readMemfs(fd, buffer, 0, 8192, -1, "read");
+          if (bytesRead !== 0) buffers.push(buffer.subarray(0, bytesRead));
+          pos += bytesRead;
+        } while (bytesRead !== 0);
+      }
+      let result;
+      if (hasUserBuffer) result = buffer.subarray(0, pos);
+      else if (size === 0) {
+        result =
+          typeof Buffer !== "undefined"
+            ? Buffer.concat(buffers, pos)
+            : buffers.reduce((acc, b) => {
+                const out = new Uint8Array(acc.length + b.length);
+                out.set(acc, 0);
+                out.set(b, acc.length);
+                return out;
+              }, new Uint8Array(0));
+      } else if (pos < size) result = buffer.subarray(0, pos);
+      else result = buffer;
+      if (options.encoding) result = result.toString(options.encoding);
+      return result;
+    } finally {
+      if (!isUserFd) {
+        try {
+          vol.closeSync(fd);
+        } catch {}
+      }
+    }
   }
   for (const [syncName, cbName] of [
     ["readFileSync", "readFile"],
@@ -3648,6 +4122,24 @@ function buildApi(vol) {
         data = normalizeDataArg(data);
       }
       const fp = fileArg(p);
+      if (syncName === "readFileSync" && typeof fp === "number") {
+        getValidatedFd(fp);
+      }
+      if (
+        syncName === "readFileSync" &&
+        (typeof fp === "number" || hasReadFileBufferOpt(rest[0]))
+      ) {
+        // fd reads from the current position (memfs reads from 0); the
+        // `buffer` option needs the manual path too.
+        let result;
+        try {
+          result = readFileSyncManual(fp, rest[0]);
+        } catch (e) {
+          throw enrichErr(e, syncName);
+        }
+        emitFs("fs", syncName, p, result);
+        return result;
+      }
       // memfs doesn't apply the umask on file creation; fix the mode if we
       // created the file and no explicit mode was given.
       let existed = true;
@@ -3656,9 +4148,24 @@ function buildApi(vol) {
       } catch {
         existed = false;
       }
+      // writeFile/appendFile `flush` option (Node v22+): validate the flag,
+      // then write + fsync through the fs object (so spies observe it).
+      let flush = false;
+      if (syncName === "writeFileSync" || syncName === "appendFileSync") {
+        const options = rest[1];
+        flush =
+          options !== null && typeof options === "object"
+            ? (options.flush ?? false)
+            : false;
+        validateBoolean(flush, "options.flush");
+      }
       let result;
       try {
-        result = origSync.call(this, fp, data, ...rest.slice(1));
+        if (flush) {
+          writeFileSyncWithFlush(fp, data, rest[1], syncName, existed);
+        } else {
+          result = origSync.call(this, fp, data, ...rest.slice(1));
+        }
       } catch (e) {
         throw enrichErr(e, syncName);
       }
@@ -3691,6 +4198,40 @@ function buildApi(vol) {
       validateEncodingOpt(cbName === "readFile" ? args[0] : args[1]);
       // Path validation (incl. null bytes) also throws synchronously in Node.
       const fp = fileArg(p);
+      if (
+        cbName === "readFile" &&
+        (typeof fp === "number" || hasReadFileBufferOpt(args[0]))
+      ) {
+        // fd reads from the current position; the `buffer` option needs
+        // the manual path too. Async via nextTick (memfs is synchronous).
+        nextTick(() => {
+          let result;
+          try {
+            if (typeof fp === "number") getValidatedFd(fp);
+            result = readFileSyncManual(fp, args[0]);
+          } catch (e) {
+            callback(enrichErr(e, cbName));
+            return;
+          }
+          emitFs("fs", cbName, p, result);
+          callback(null, result);
+        });
+        return;
+      }
+      if (cbName === "writeFile" || cbName === "appendFile") {
+        // `flush` validated synchronously (Node's getOptions order); the
+        // manual dance runs async.
+        const options = args[1];
+        const flush =
+          options !== null && typeof options === "object"
+            ? (options.flush ?? false)
+            : false;
+        validateBoolean(flush, "options.flush");
+        if (flush) {
+          writeFileWithFlushAsync(fp, args[0], options, cbName, callback, p);
+          return;
+        }
+      }
       origCb.call(this, fp, ...args, (err, result) => {
         if (err) return callback(enrichErr(err, cbName));
         emitFs("fs", cbName, p, result);
@@ -3700,6 +4241,53 @@ function buildApi(vol) {
         else callback(null);
       });
     };
+  }
+
+  // writeFile/appendFile with { flush: true } (async): open, write, fsync
+  // via the fs object (so spies observe fs.fsync), close.
+  function writeFileWithFlushAsync(fp, data, options, cbName, callback, p) {
+    const isUserFd = typeof fp === "number";
+    const opts =
+      options !== null && typeof options === "object" ? options : {};
+    const flag = cbName === "appendFile" ? "a" : opts.flag || "w";
+    let fd;
+    try {
+      fd = isUserFd ? fp : vol.openSync(fp, flag, opts.mode || 0o666);
+    } catch (e) {
+      nextTick(callback, enrichErr(e, cbName));
+      return;
+    }
+    const done = (err) => {
+      if (!isUserFd) {
+        try {
+          vol.closeSync(fd);
+        } catch {}
+      }
+      if (err) {
+        callback(enrichErr(err, cbName));
+        return;
+      }
+      emitFs("fs", cbName, p, undefined);
+      callback(null);
+    };
+    nextTick(() => {
+      try {
+        if (isUserFd && cbName === "appendFile") {
+          const st = vol.fstatSync(fd);
+          vol.writeSync(fd, data, 0, data.byteLength, st.size);
+        } else {
+          vol.writeSync(fd, data, 0, data.byteLength, null);
+        }
+      } catch (e) {
+        done(e);
+        return;
+      }
+      try {
+        fs.fsync(fd, (syncErr) => done(syncErr));
+      } catch (e) {
+        done(e);
+      }
+    });
   }
 
   // ── opendir/opendirSync + Dir (auto-close after for-await) ──
@@ -3730,7 +4318,7 @@ function buildApi(vol) {
           } catch {
             /* ignore */
           }
-          return new Dirent(name, this.path, mode);
+          return new Dirent(name, modeToDirentType(mode), this.path);
         });
         this._index = 0;
       }
@@ -3926,9 +4514,9 @@ function buildApi(vol) {
           results.push(
             new Dirent(
               full.slice(full.lastIndexOf("/") + 1),
+              modeToDirentType(mode),
               full.slice(0, full.lastIndexOf("/") + 1).replace(/\/$/, "") ||
                 "/",
-              mode,
             ),
           );
         } else {
@@ -4814,10 +5402,20 @@ function buildApi(vol) {
   function openWithPatchedOpen(stream) {
     const origEmit = stream.emit;
     stream.emit = function (...args) {
-      if (args[0] === "open" || args[0] === "error") {
+      if (args[0] === "open") {
         stream.emit = origEmit;
         stream._openPending = false;
-        if (args[0] === "open") stream._opened = true;
+        stream._opened = true;
+        return Reflect.apply(origEmit, stream, args);
+      }
+      if (args[0] === "error") {
+        stream.emit = origEmit;
+        stream._openPending = false;
+        // An 'error' from the patched open destroys the stream (real Node
+        // routes it through destroy: destroyed===true and 'close' fires).
+        // destroy() re-emits 'error' async for the user's handler.
+        stream.destroy(args[1]);
+        return true;
       }
       return Reflect.apply(origEmit, stream, args);
     };
@@ -4923,9 +5521,15 @@ function buildApi(vol) {
   class FsReadStream extends Readable {
     constructor(path, options) {
       validateStreamOptions(options);
-      const opts = options || {};
-      super(streamOpts(opts));
+      super(streamOpts(options || {}));
+      this._initReadStream(path, options);
+    }
+    // Initialization factored out so ReadStreamFactory can run it on an
+    // existing `this` for the fs.ReadStream.call(this, ...) subclass
+    // compat pattern (test-fs-stream-construct-compat-error-read.js).
+    _initReadStream(path, options) {
       // options.signal validated for every stream (invalid type throws).
+      const opts = options || {};
       const signal = validateAbortSignal(opts.signal);
       const fdValidated = validateStreamFd(opts.fd);
       const handle =
@@ -5011,7 +5615,10 @@ function buildApi(vol) {
         // A caller-provided fd is already open (Node closes it on destroy
         // when autoClose, like a stream-opened fd).
         this._opened = true;
-        nextTick(() => this.emit("open", this.fd));
+        nextTick(() => {
+          this.emit("open", this.fd);
+          this.emit("ready");
+        });
       }
     }
     _openWithImpl() {
@@ -5030,8 +5637,13 @@ function buildApi(vol) {
         // flight (test-fs-stream-double-close); the destroy machinery then
         // releases the fd — run _cleanup now since _destroy already ran.
         this.emit("open", fd);
+        this.emit("ready");
         if (this.destroyed) this._cleanup();
       });
+    }
+    // Node: pending is true until the fd is open (fd === null).
+    get pending() {
+      return this.fd === null;
     }
     _read(size) {
       const doRead = () => {
@@ -5071,7 +5683,18 @@ function buildApi(vol) {
       }
       this._pos += n;
       this.bytesRead += n;
-      this.push(buf.slice(0, n));
+      let chunk = buf;
+      if (n !== buf.length) {
+        // Shrink to fit: copy into an exact-size, unpooled ArrayBuffer
+        // instead of slice()ing, so the small chunk doesn't retain the
+        // large backing store (Node uses allocUnsafeSlow for the same
+        // reason; test-fs-read-stream-concurrent-reads asserts this).
+        const ab = new ArrayBuffer(n);
+        new Uint8Array(ab).set(buf.subarray(0, n));
+        chunk =
+          typeof Buffer !== "undefined" ? Buffer.from(ab) : new Uint8Array(ab);
+      }
+      this.push(chunk);
     }
     _cleanup() {
       closeStreamFd(this);
@@ -5220,7 +5843,10 @@ function buildApi(vol) {
         // A caller-provided fd is already open (Node closes it on destroy
         // when autoClose, like a stream-opened fd).
         this._opened = true;
-        nextTick(() => this.emit("open", this.fd));
+        nextTick(() => {
+          this.emit("open", this.fd);
+          this.emit("ready");
+        });
       }
     }
     _openWithImpl() {
@@ -5239,8 +5865,13 @@ function buildApi(vol) {
         // flight (test-fs-stream-double-close); the destroy machinery then
         // releases the fd — run _cleanup now since _destroy already ran.
         this.emit("open", fd);
+        this.emit("ready");
         if (this.destroyed) this._cleanup();
       });
+    }
+    // Node: pending is true until the fd is open (fd === null).
+    get pending() {
+      return this.fd === null;
     }
     _write(chunk, encoding, callback) {
       if (this._openPending) {
@@ -5343,6 +5974,16 @@ function buildApi(vol) {
   // checks hold in both directions.
   function ReadStreamFactory(path, options) {
     validateEncodingOpt(options);
+    if (new.target === undefined && this instanceof FsReadStream) {
+      // Subclass compat: fs.ReadStream.call(this, ...) must initialize
+      // `this` in place (test-fs-stream-construct-compat-error-read.js).
+      // Readable is a plain function, so it can run on the existing `this`;
+      // the rest of the constructor is factored as _initReadStream.
+      validateStreamOptions(options);
+      Readable.call(this, streamOpts(options || {}));
+      this._initReadStream(path, options);
+      return this;
+    }
     return new FsReadStream(path, options);
   }
   function WriteStreamFactory(path, options) {
@@ -5399,47 +6040,56 @@ function buildApi(vol) {
       }
     }
     async read(arg1, arg2, arg3, arg4) {
-      // read([buffer[, offset[, length[, position]]]]) / read(options)
-      let buffer,
-        offset = 0,
-        length,
-        position = null;
-      if (
-        arg1 &&
-        typeof arg1 === "object" &&
-        !(arg1 instanceof Uint8Array) &&
-        !ArrayBuffer.isView(arg1)
-      ) {
-        buffer = arg1.buffer;
-        offset = arg1.offset || 0;
-        length = arg1.length;
-        position = arg1.position !== undefined ? arg1.position : null;
-      } else {
-        buffer = arg1;
-        offset = arg2 || 0;
-        length = arg3;
-        position = arg4 !== undefined ? arg4 : null;
+      // filehandle.read(buffer[, offset[, length[, position]]]) /
+      // filehandle.read(options) / filehandle.read(buffer, options) —
+      // see lib/internal/fs/promises.js read().
+      let buffer = arg1;
+      let offset = arg2;
+      let length = arg3;
+      let position = arg4;
+      if (!ArrayBuffer.isView(buffer)) {
+        // read(params)
+        if (buffer !== undefined) validateOptionsObject(buffer, "options");
+        ({
+          buffer = allocReadBuffer(16384),
+          offset = 0,
+          length = buffer.byteLength - offset,
+          position = null,
+        } = buffer ?? {});
+        validateBuffer(buffer);
       }
-      if (!(buffer instanceof Uint8Array) && !ArrayBuffer.isView(buffer)) {
-        const len = typeof length === "number" ? length : 16384;
-        buffer =
-          typeof Buffer !== "undefined"
-            ? Buffer.alloc(len)
-            : new Uint8Array(len);
+      if (offset !== null && typeof offset === "object") {
+        // read(buffer, options)
+        ({
+          offset = 0,
+          length = buffer.byteLength - offset,
+          position = null,
+        } = offset);
+      }
+      if (offset == null) {
+        offset = 0;
+      } else {
+        validateInteger(offset, "offset", 0);
       }
       if (length === undefined || length === null)
         length = buffer.byteLength - offset;
-      checkFdReadable(this.fd, "read");
-      const savedPos =
-        typeof position === "number" ? getPosition(this.fd) : undefined;
-      let bytesRead;
-      try {
-        bytesRead = vol.readSync(this.fd, buffer, offset, length, position);
-      } catch (e) {
-        throw enrichErr(e, "read");
-      } finally {
-        if (savedPos !== undefined) setPosition(this.fd, savedPos);
+      if (position == null) {
+        position = -1;
+      } else {
+        validatePosition(position, "position", length);
       }
+      if (length === 0) return { bytesRead: 0, buffer };
+      if (buffer.byteLength === 0) throw errBufferEmpty("buffer", buffer);
+      validateOffsetLengthRead(offset, length, buffer.byteLength);
+      checkFdReadable(this.fd, "read");
+      const bytesRead = readMemfs(
+        this.fd,
+        buffer,
+        offset,
+        length,
+        position,
+        "read",
+      );
       emitFs("fs", "promises.read", this.fd, bytesRead);
       return { bytesRead, buffer };
     }
@@ -5513,17 +6163,11 @@ function buildApi(vol) {
           ? validateAbortSignal(options.signal)
           : undefined;
       await throwIfAborted(signal);
+      validateEncodingOpt(options);
       try {
-        // Node refuses reads past 2 GiB - 1 (kIoMaxLength).
-        const st = vol.fstatSync(this.fd);
-        if (st.size > 2 ** 31 - 1) {
-          const err = new RangeError(
-            `File size (${st.size}) is greater than 2 GiB`,
-          );
-          err.code = "ERR_FS_FILE_TOO_LARGE";
-          throw err;
-        }
-        const data = vol.readFileSync(this.fd, options);
+        // Reads from the fd's current position (memfs reads from 0) and
+        // honors the `buffer` option — see readFileSyncManual.
+        const data = readFileSyncManual(this.fd, options);
         emitFs("fs", "promises.readFile", this.fd, data);
         return data;
       } catch (e) {
@@ -6662,6 +7306,9 @@ function buildSingleton() {
   if (rt && rt.__FS__) return rt.__FS__;
   const vol = createVolume();
   const fs = buildApi(vol);
+  // readdirImpl builds the module-scope Dirent class; expose that same
+  // class as fs.Dirent so `dirent instanceof fs.Dirent` holds.
+  fs.Dirent = Dirent;
   fs._vol = vol;
   fs.constants = nodeConstants;
   fs.promises.constants = nodeConstants;
