@@ -377,7 +377,9 @@ function errArgType(name, expected, received) {
   let msg = `The "${name}" ${kind} must be `;
   const parts = [];
   if (types.length > 0)
-    parts.push(`${types.length > 1 ? "one of type" : "of type"} ${_fmtTypeList(types, "or")}`);
+    parts.push(
+      `${types.length > 1 ? "one of type" : "of type"} ${_fmtTypeList(types, "or")}`,
+    );
   if (instances.length > 0)
     parts.push(`an instance of ${_fmtTypeList(instances, "or")}`);
   msg += parts.join(" or ");
@@ -415,7 +417,12 @@ function errOutOfRangeFmt(name, expected, received) {
 }
 
 // Mirrors Node's internal validateInteger (default max = MAX_SAFE_INTEGER).
-function validateInteger(value, name, min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER) {
+function validateInteger(
+  value,
+  name,
+  min = Number.MIN_SAFE_INTEGER,
+  max = Number.MAX_SAFE_INTEGER,
+) {
   if (typeof value !== "number") throw errArgType(name, "number", value);
   if (!Number.isInteger(value))
     throw errOutOfRangeFmt(name, "an integer", value);
@@ -476,7 +483,8 @@ function getValidatedFd(fd, name = "fd") {
 // util.inspect rendering of an empty ArrayBufferView, for the
 // ERR_INVALID_ARG_VALUE 'buffer is empty' message.
 function _inspectEmptyView(view) {
-  if (typeof Buffer !== "undefined" && Buffer.isBuffer(view)) return "<Buffer >";
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(view))
+    return "<Buffer >";
   const ctor = view && view.constructor ? view.constructor.name : "Uint8Array";
   return `${ctor}(${view ? view.byteLength : 0}) []`;
 }
@@ -1011,100 +1019,18 @@ function fileURLToPathString(url) {
   return pathname;
 }
 function validateUidGid(uid, gid) {
-  // Mirrors Node's validateInteger(uid, 'uid', -1, 4294967295): non-number ->
-  // ERR_INVALID_ARG_TYPE; non-integer -> ERR_OUT_OF_RANGE ("an integer");
-  // out of [-1, 2**32-1] -> ERR_OUT_OF_RANGE (range message).
   for (const [name, value] of [
     ["uid", uid],
     ["gid", gid],
   ]) {
-    if (typeof value !== "number")
-      throw errInvalidArgType(name, "number", value);
-    if (!Number.isInteger(value)) {
-      const err = new RangeError(
-        `The value of "${name}" is out of range. It must be an integer. Received ${value}`,
+    if (!Number.isInteger(value) || value < -1 || value > 0xffffffff) {
+      const err = new TypeError(
+        `The "${name}" argument must be of type number. Received ${String(value)}`,
       );
-      err.code = "ERR_OUT_OF_RANGE";
-      throw err;
-    }
-    if (value < -1 || value > 4294967295) {
-      const err = new RangeError(
-        `The value of "${name}" is out of range. It must be >= -1 && <= 4294967295. Received ${value}`,
-      );
-      err.code = "ERR_OUT_OF_RANGE";
+      err.code = "ERR_INVALID_ARG_TYPE";
       throw err;
     }
   }
-}
-// Minimal util.inspect for validation error messages (enough for the
-// shapes the official tests assert: code + name, message best-effort).
-function inspectValue(v) {
-  if (typeof v === "string") return `'${v}'`;
-  try {
-    const j = JSON.stringify(v);
-    return j === undefined ? String(v) : j;
-  } catch {
-    return String(v);
-  }
-}
-// Node's open() flag validation (lib/fs.js), probed against v24.20.0:
-// undefined/null -> 'r'; numbers pass through (O_* constants); known flag
-// strings pass; everything else throws ERR_INVALID_ARG_VALUE.
-const OPEN_FLAG_STRINGS = new Set([
-  "r",
-  "r+",
-  "rs",
-  "rs+",
-  "w",
-  "wx",
-  "w+",
-  "wx+",
-  "a",
-  "ax",
-  "a+",
-  "ax+",
-]);
-function validateFlags(flags) {
-  if (flags === undefined || flags === null) return "r";
-  if (typeof flags === "number") return flags;
-  if (typeof flags === "string" && OPEN_FLAG_STRINGS.has(flags)) return flags;
-  const err = new TypeError(
-    `The argument 'flags' is invalid. Received ${inspectValue(flags)}`,
-  );
-  err.code = "ERR_INVALID_ARG_VALUE";
-  throw err;
-}
-// Node's open() mode validation, probed against v24.20.0:
-// undefined/null -> default; octal strings parsed; numbers must be
-// 32-bit unsigned integers; other types -> ERR_INVALID_ARG_TYPE.
-function validateMode(mode, def = 0o666) {
-  if (mode === undefined || mode === null) return def;
-  if (typeof mode === "string") {
-    if (/^[0-7]+$/.test(mode)) return parseInt(mode, 8);
-    const err = new TypeError(
-      "The argument 'mode' must be a 32-bit unsigned integer or an octal " +
-        `string. Received ${inspectValue(mode)}`,
-    );
-    err.code = "ERR_INVALID_ARG_VALUE";
-    throw err;
-  }
-  if (typeof mode !== "number") throw errInvalidArgType("mode", "number", mode);
-  if (!Number.isInteger(mode)) {
-    const err = new RangeError(
-      `The value of "mode" is out of range. It must be an integer. Received ${mode}`,
-    );
-    err.code = "ERR_OUT_OF_RANGE";
-    throw err;
-  }
-  if (mode < 0 || mode > 0xffffffff) {
-    const err = new RangeError(
-      'The value of "mode" is out of range. It must be >= 0 && <= 4294967295. ' +
-        `Received ${mode}`,
-    );
-    err.code = "ERR_OUT_OF_RANGE";
-    throw err;
-  }
-  return mode;
 }
 function validatePath(p, name = "path") {
   if (typeof p !== "string" && !isUint8ArrayLike(p) && !isURLLike(p)) {
@@ -1696,8 +1622,6 @@ function buildApi(vol) {
         // fd-based ops validate the fd first (test-fs-fchmod).
         if (fdFirst) validateFd(args[0]);
         if (validatePathFirst) validatePath(args[0]);
-        // Two-path ops: the destination is a path too (null-byte check etc.).
-        if (destIdx != null) validatePath(args[destIdx], "dest");
         if (needsUidGid) validateUidGid(args[1], args[2]);
         result = (impl || orig).apply(this, args);
       } catch (e) {
@@ -1779,8 +1703,6 @@ function buildApi(vol) {
       };
       try {
         if (validatePathFirst) validatePath(args[0]);
-        // Two-path ops: the destination is a path too (null-byte check etc.).
-        if (destIdx != null) validatePath(args[destIdx], "dest");
         if (needsUidGid) validateUidGid(args[1], args[2]);
         return (impl || orig).apply(this, args);
       } catch (e) {
@@ -2220,7 +2142,8 @@ function buildApi(vol) {
           } catch {
             continue;
           }
-          if (wantDirent) out.push(new Dirent(name, modeToDirentType(st.mode), dir));
+          if (wantDirent)
+            out.push(new Dirent(name, modeToDirentType(st.mode), dir));
           else out.push(rp);
           if (st.isDirectory()) walk(full, rp);
         }
@@ -2348,8 +2271,11 @@ function buildApi(vol) {
       ) {
         if (offsetOrOptions !== undefined)
           validateOptionsObject(offsetOrOptions, "options");
-        ({ offset = 0, length = buffer.byteLength - offset, position = null } =
-          offsetOrOptions ?? {});
+        ({
+          offset = 0,
+          length = buffer.byteLength - offset,
+          position = null,
+        } = offsetOrOptions ?? {});
       }
       if (offset === undefined) {
         offset = 0;
@@ -3893,12 +3819,7 @@ function buildApi(vol) {
     const ps = toPathString(p);
     for (const part of ps.split("/")) {
       if (part.length > 255) {
-        throw makeFsError(
-          "ENAMETOOLONG",
-          syscall,
-          ps,
-          "file name too long",
-        );
+        throw makeFsError("ENAMETOOLONG", syscall, ps, "file name too long");
       }
     }
     if (ps.length > 4096) {
@@ -3938,9 +3859,7 @@ function buildApi(vol) {
       : deref
         ? (p) => vol.lstatSync(p)
         : (p) => vol.statSync(p);
-    const destStatFn = deref
-      ? (p) => vol.statSync(p)
-      : (p) => vol.lstatSync(p);
+    const destStatFn = deref ? (p) => vol.statSync(p) : (p) => vol.lstatSync(p);
     let srcStat;
     try {
       srcStat = srcStatFn(s);
@@ -4322,12 +4241,7 @@ function buildApi(vol) {
       return;
     }
     if (typeof srcStat.isSocket === "function" && srcStat.isSocket()) {
-      throw cpErr(
-        "ERR_FS_CP_SOCKET",
-        d,
-        `cannot copy a socket file: ${d}`,
-        22,
-      );
+      throw cpErr("ERR_FS_CP_SOCKET", d, `cannot copy a socket file: ${d}`, 22);
     }
     if (typeof srcStat.isFIFO === "function" && srcStat.isFIFO()) {
       throw cpErr(
@@ -4597,8 +4511,7 @@ function buildApi(vol) {
   function writeFileSyncWithFlush(fp, data, options, syncName, existed) {
     const isUserFd = typeof fp === "number";
     const opts = options !== null && typeof options === "object" ? options : {};
-    const flag =
-      syncName === "appendFileSync" ? "a" : opts.flag || "w";
+    const flag = syncName === "appendFileSync" ? "a" : opts.flag || "w";
     const fd = isUserFd ? fp : vol.openSync(fp, flag, opts.mode || 0o666);
     try {
       if (isUserFd && syncName === "appendFileSync") {
@@ -4896,8 +4809,7 @@ function buildApi(vol) {
   // via the fs object (so spies observe fs.fsync), close.
   function writeFileWithFlushAsync(fp, data, options, cbName, callback, p) {
     const isUserFd = typeof fp === "number";
-    const opts =
-      options !== null && typeof options === "object" ? options : {};
+    const opts = options !== null && typeof options === "object" ? options : {};
     const flag = cbName === "appendFile" ? "a" : opts.flag || "w";
     let fd;
     try {
@@ -4959,7 +4871,7 @@ function buildApi(vol) {
         err.code = "ERR_MISSING_ARGS";
         throw err;
       }
-      this._path = path;
+      this.path = path;
       this._closed = false;
       this._entries = null;
       this._readInFlight = false;
@@ -5265,8 +5177,7 @@ function buildApi(vol) {
     const follow = followSymlinks === true;
     const withTypes = !!withFileTypes;
 
-    let root =
-      cwd === undefined || cwd === null ? "/" : toPathString(cwd);
+    let root = cwd === undefined || cwd === null ? "/" : toPathString(cwd);
     root = root.startsWith("/") ? gNormalize(root) : gNormalize("/" + root);
 
     const mmOpts = {
@@ -5287,8 +5198,7 @@ function buildApi(vol) {
       excludeFn = exclude;
     }
     const isExcludedPath = (absPath) =>
-      excludeMatchers !== null &&
-      excludeMatchers.some((m) => m.match(absPath));
+      excludeMatchers !== null && excludeMatchers.some((m) => m.match(absPath));
 
     // — per-run caches (lstat Dirents, readdir, realpath, follow-stat, seen) —
     const statCache = new Map();
@@ -5572,8 +5482,10 @@ function buildApi(vol) {
             const isDot = entryName[0] === ".";
             const nextMatches = pattern.test(nextIndex, entryName);
             let nextNonGlobIndex = nextIndex;
-            while (pattern.at(nextNonGlobIndex) === GLOBSTAR) nextNonGlobIndex++;
-            const matchesDot = isDot && pattern.test(nextNonGlobIndex, entryName);
+            while (pattern.at(nextNonGlobIndex) === GLOBSTAR)
+              nextNonGlobIndex++;
+            const matchesDot =
+              isDot && pattern.test(nextNonGlobIndex, entryName);
             if (
               (isDot && !matchesDot) ||
               (excludeFn && excludeFn(withTypes ? entry : entryName))
@@ -5669,7 +5581,10 @@ function buildApi(vol) {
         }
         if (subSet.size > 0) {
           // If there are potential patterns, add to queue
-          addSubpattern(entryPath, pattern.child(subSet, nSymlinks, nextRealpaths));
+          addSubpattern(
+            entryPath,
+            pattern.child(subSet, nSymlinks, nextRealpaths),
+          );
         }
       }
     }
@@ -5685,7 +5600,8 @@ function buildApi(vol) {
     while (queue.length > 0) {
       const item = queue.pop();
       for (const p of item.patterns) addSubpatterns(item.path, p);
-      for (const [p, arr] of subpatterns) queue.push({ path: p, patterns: arr });
+      for (const [p, arr] of subpatterns)
+        queue.push({ path: p, patterns: arr });
       subpatterns.clear();
     }
 
@@ -6097,7 +6013,9 @@ function buildApi(vol) {
   }
   function applyReadlinkEncoding(literal, options) {
     const enc =
-      typeof options === "string" ? options : (options && options.encoding) || "utf8";
+      typeof options === "string"
+        ? options
+        : (options && options.encoding) || "utf8";
     if (typeof Buffer !== "undefined") {
       const b = Buffer.from(literal, "utf8");
       return enc === "buffer" ? b : b.toString(enc);
@@ -6121,8 +6039,7 @@ function buildApi(vol) {
       type !== "file" &&
       type !== "junction"
     ) {
-      const received =
-        typeof type === "string" ? `'${type}'` : String(type);
+      const received = typeof type === "string" ? `'${type}'` : String(type);
       const err = new TypeError(
         "The argument 'type' must be one of: 'dir', 'file', 'junction', " +
           `null, undefined. Received ${received}`,
@@ -6146,12 +6063,7 @@ function buildApi(vol) {
       validateSymlinkType(type);
       validatePath(target, "target");
       validatePath(p, "path");
-      return innerSync.call(
-        this,
-        absolutizeSymlinkTarget(target, p),
-        p,
-        type,
-      );
+      return innerSync.call(this, absolutizeSymlinkTarget(target, p), p, type);
     };
     fs.symlink = function (target, p, type, callback) {
       if (typeof type === "function") {
@@ -6503,7 +6415,9 @@ function buildApi(vol) {
     const watchedRoot = w._filename;
     const relName = (absPath) => {
       if (absPath === watchedRoot) return "";
-      const prefix = watchedRoot.endsWith("/") ? watchedRoot : watchedRoot + "/";
+      const prefix = watchedRoot.endsWith("/")
+        ? watchedRoot
+        : watchedRoot + "/";
       if (absPath.startsWith(prefix)) return absPath.slice(prefix.length);
       const a = watchedRoot.split("/").filter(Boolean);
       const b = absPath.split("/").filter(Boolean);
@@ -8556,10 +8470,27 @@ function buildApi(vol) {
   // Real Node rejects FileHandle method calls on non-FileHandle receivers:
   // ERR_INTERNAL_ASSERTION "handle must be an instance of FileHandle".
   for (const m of [
-    "stat", "read", "write", "readv", "writev", "readFile", "writeFile",
-    "appendFile", "truncate", "chmod", "chown", "utimes", "datasync", "sync",
-    "close", "readableWebStream", "createReadStream", "createWriteStream",
-    "readLines", "pull", "pullSync",
+    "stat",
+    "read",
+    "write",
+    "readv",
+    "writev",
+    "readFile",
+    "writeFile",
+    "appendFile",
+    "truncate",
+    "chmod",
+    "chown",
+    "utimes",
+    "datasync",
+    "sync",
+    "close",
+    "readableWebStream",
+    "createReadStream",
+    "createWriteStream",
+    "readLines",
+    "pull",
+    "pullSync",
   ]) {
     const orig = FileHandle.prototype[m];
     if (typeof orig !== "function") continue;
@@ -8575,7 +8506,6 @@ function buildApi(vol) {
       return orig.apply(this, args);
     };
   }
-
 
   // Node's FileHandle is an EventEmitter (emits 'close'). Mixin the
   // instance methods; the constructor already ran _FsEventEmitter.call.
@@ -8859,17 +8789,14 @@ function buildApi(vol) {
         fs.lutimes(p, atime, mtime, (err) => (err ? reject(err) : resolve()));
       }),
   );
-  definePromise(
-    "cp",
-    (src, dest, options) => {
-      // promises.cp validates options directly (no callback shifting):
-      // a function options is ERR_INVALID_ARG_TYPE, not a callback.
-      validateCpOptions(options);
-      return new Promise((resolve, reject) => {
-        fs.cp(src, dest, options, (err) => (err ? reject(err) : resolve()));
-      });
-    },
-  );
+  definePromise("cp", (src, dest, options) => {
+    // promises.cp validates options directly (no callback shifting):
+    // a function options is ERR_INVALID_ARG_TYPE, not a callback.
+    validateCpOptions(options);
+    return new Promise((resolve, reject) => {
+      fs.cp(src, dest, options, (err) => (err ? reject(err) : resolve()));
+    });
+  });
   definePromise(
     "statfs",
     (p, options) =>

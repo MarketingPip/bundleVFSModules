@@ -43,36 +43,12 @@ const tmpdir = realPath.join(
 );
 const fixturesDir = realPath.join(testRoot, "fixtures");
 // Sync roots: real-disk trees the official tests treat as readable. tmpdir
-// is scratch (cleaned per test process); fixtures is read-only test data;
-// the parallel dir holds the test files themselves (__filename); the
-// hostname pseudo-file is read by the readfile hostname tests.
-// The repo-root `test` symlink (test -> parity/node-test) exists so tests
-// using Node-repo-relative paths like `./test/fixtures/...` resolve on disk;
-// include it so those paths sync into memfs.
-const syncRoots = [
-  tmpdir,
-  fixturesDir,
-  realPath.join(testRoot, "parallel"),
-  "/proc/sys/kernel/hostname",
-  realPath.join(repoRoot, "test"),
-];
+// is scratch (cleaned per test process); fixtures is read-only test data.
+const syncRoots = [tmpdir, fixturesDir];
 
 // Raw shim methods for the sync itself — never the wrapped versions below,
-// or syncPath would recurse into itself. wrapObj() below wraps IN PLACE
-// (so test monkey-patches hit the same object the stream internals use),
-// so snapshot the unwrapped methods FIRST — after wrapping, `raw` would be
-// the wrapped versions and syncPath would recurse forever.
-const raw = {};
-for (const k of Object.keys(shimFs)) {
-  if (typeof shimFs[k] === "function") raw[k] = shimFs[k];
-}
-if (shimFs.promises) {
-  raw.promises = {};
-  for (const k of Object.keys(shimFs.promises)) {
-    if (typeof shimFs.promises[k] === "function")
-      raw.promises[k] = shimFs.promises[k];
-  }
-}
+// or syncPath would recurse into itself.
+const raw = shimFs;
 
 // Hermetic tmpdir per test process (mirrors common.refresh()): stale files
 // from earlier runs must not leak into memfs via the sync below.
@@ -146,31 +122,18 @@ function syncPath(p) {
 }
 
 function syncArgs(args) {
-  // test-fs-writesync-crash.js poisons Object.prototype.errno with a
-  // throwing setter to verify error propagation. Our sync machinery creates
-  // and inspects Error objects internally; running it under the poison
-  // would throw the test's error from inside the harness. Detect the poison
-  // and skip syncing for this call — the tmpdir is already synced.
-  const poison = Object.getOwnPropertyDescriptor(Object.prototype, "errno");
-  if (poison && (typeof poison.set === "function" || typeof poison.get === "function")) {
-    return;
-  }
   for (const a of args) {
     let p = null;
     if (typeof a === "string") p = a;
-    else if (typeof Buffer !== "undefined" && Buffer.isBuffer(a)) {
-      // Buffers are data, not paths — except when used as path args (small).
-      // test-fs-write-buffer-large.js passes a 2GB data buffer to fs.write;
-      // calling .toString() on it would OOM. Only treat small buffers as
-      // potential paths.
-      if (a.length < 1024) p = a.toString();
-    }
+    else if (typeof Buffer !== "undefined" && Buffer.isBuffer(a))
+      p = a.toString();
     else if (a instanceof URL && a.protocol === "file:") p = fileURLToPath(a);
     if (p && underSyncRoot(p)) {
-      // Sync real-disk content into memfs. (syncPath mkdirs parent chains
-      // itself before copying; we must NOT pre-create parents here — that
-      // would mask ENOENT for genuinely missing paths, e.g. mkdtemp with a
-      // nonexistent prefix.)
+      // The test may create this path through the shim (it won't exist on
+      // real disk): make sure its parent chain exists in memfs first.
+      try {
+        raw.mkdirSync(realPath.dirname(p), { recursive: true });
+      } catch {}
       syncPath(p);
     }
   }
@@ -187,29 +150,15 @@ function wrapFn(fn) {
   }
   Object.setPrototypeOf(wrapped, Object.getPrototypeOf(fn));
   if (fn.prototype) wrapped.prototype = fn.prototype;
-  // Preserve own function props (fs.realpath.native / realpathSync.native
-  // are distinct functions in src/fs.js; wrap them too). Include symbol
-  // keys: util.promisify.custom is a symbol that must survive wrapping
-  // (test-fs-promisified.js).
-  for (const k of [...Object.keys(fn), ...Object.getOwnPropertySymbols(fn)]) {
-    if (k === "length" || k === "name" || k === "prototype") continue;
-    try {
-      const v = fn[k];
-      wrapped[k] = v === fn ? wrapped : typeof v === "function" ? wrapFn(v) : v;
-    } catch {}
-  }
   return wrapped;
 }
 
 function wrapObj(obj) {
-  // Wrap IN PLACE (not a copy): the tests monkey-patch the required fs
-  // object (e.g. test-fs-write-stream.js replaces fs.close and asserts the
-  // stream calls it), and the stream internals in src/fs.js call fs.close
-  // on that same object. A copy would hide the patch from the internals.
-  for (const k of Object.keys(obj)) {
-    if (typeof obj[k] === "function") obj[k] = wrapFn(obj[k]);
+  const out = { ...obj };
+  for (const k of Object.keys(out)) {
+    if (typeof out[k] === "function") out[k] = wrapFn(out[k]);
   }
-  return obj;
+  return out;
 }
 
 const wrapped = wrapObj(shimFs);
