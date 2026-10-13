@@ -222,6 +222,303 @@ function validateAbortSignal(signal, name = "options.signal") {
   return signal;
 }
 
+// Node v24's ERR_INVALID_STATE for FileHandle pull/pullSync/writer state
+// errors (closed/locked). Probed against v24.20.0: plain Error (not
+// TypeError), message "Invalid state: <msg>", code ERR_INVALID_STATE.
+function errInvalidState(message) {
+  const err = new Error(`Invalid state: ${message}`);
+  err.code = "ERR_INVALID_STATE";
+  return err;
+}
+// The writer's post-close write/writev/end path uses the TypeError variant
+// (probed: name "TypeError", same code and message).
+function errInvalidStateTypeError(message) {
+  const err = new TypeError(`Invalid state: ${message}`);
+  err.code = "ERR_INVALID_STATE";
+  return err;
+}
+function errOutOfRange(name, expected, received) {
+  const err = new RangeError(
+    `The value of "${name}" is out of range. It must be ${expected}. Received ${received}`,
+  );
+  err.code = "ERR_OUT_OF_RANGE";
+  return err;
+}
+// Options-property variant of errInvalidArgType: Node reports
+// `The "options.autoClose" property must be of type boolean.` for option
+// props (vs "argument" for positional args).
+function errInvalidArgTypeProp(name, expected, received) {
+  let what;
+  if (received === undefined) what = "undefined";
+  else if (received === null) what = "null";
+  else if (typeof received === "object") {
+    what = `an instance of ${
+      received.constructor ? received.constructor.name : "Object"
+    }`;
+  } else {
+    const inspected =
+      typeof received === "string"
+        ? `'${received.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
+        : String(received);
+    what = `type ${typeof received} (${inspected})`;
+  }
+  const err = new TypeError(
+    `The "${name}" property must be of type ${expected}. Received ${what}`,
+  );
+  err.code = "ERR_INVALID_ARG_TYPE";
+  return err;
+}
+
+// ── New-streams (stream/iter) batch helpers for FileHandle.pull/pullSync/
+// writer (Node v24 --experimental-stream-iter). Batches are Uint8Array[].
+// ──────────────────────────────────────────────────────────────────────────
+const kIterDefaultChunkSize = 131072;
+
+function iterToUint8Array(chunk) {
+  if (typeof chunk === "string") {
+    return typeof Buffer !== "undefined"
+      ? Buffer.from(chunk, "utf8")
+      : new TextEncoder().encode(chunk);
+  }
+  if (chunk instanceof Uint8Array) return chunk;
+  throw errInvalidArgType("chunk", "string or Uint8Array", chunk);
+}
+function iterConvertChunks(chunks) {
+  if (!Array.isArray(chunks))
+    throw errInvalidArgType("chunks", "Array", chunks);
+  return chunks.map(iterToUint8Array);
+}
+function isIterPullOptions(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !("transform" in value) &&
+    !("write" in value)
+  );
+}
+function isIterTransform(value) {
+  return (
+    typeof value === "function" ||
+    (value !== null &&
+      typeof value === "object" &&
+      typeof value.transform === "function")
+  );
+}
+// Variadic (transform..., options?) parsing, mirroring Node's
+// internal/streams/iter/utils parsePullArgs.
+function parseIterPullArgs(args) {
+  let transforms;
+  let options;
+  if (args.length === 0) {
+    transforms = [];
+    options = undefined;
+  } else {
+    const last = args[args.length - 1];
+    if (isIterPullOptions(last)) {
+      transforms = args.slice(0, -1);
+      options = last;
+    } else {
+      transforms = args.slice();
+      options = undefined;
+    }
+  }
+  for (let i = 0; i < transforms.length; i++) {
+    if (!isIterTransform(transforms[i])) {
+      throw errInvalidArgType(
+        `transforms[${i}]`,
+        "Function or Object with transform()",
+        transforms[i],
+      );
+    }
+  }
+  return { transforms, options };
+}
+// Validate one integer pull/writer option: non-number -> ERR_INVALID_ARG_TYPE,
+// non-integer or below min -> ERR_OUT_OF_RANGE (matches Node's validateInteger).
+function validateIterIntOption(opts, key, min) {
+  const value = opts[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "number")
+    throw errInvalidArgType(`options.${key}`, "number", value);
+  if (!Number.isSafeInteger(value))
+    throw errOutOfRange(`options.${key}`, "an integer", value);
+  if (value < min) throw errOutOfRange(`options.${key}`, `>= ${min}`, value);
+  return value;
+}
+function validateIterAutoClose(opts) {
+  const value = opts.autoClose;
+  if (value === undefined) return false;
+  if (typeof value !== "boolean")
+    throw errInvalidArgTypeProp("options.autoClose", "boolean", value);
+  return value;
+}
+// Normalize one transform result to a Uint8Array[] batch (or null to skip).
+function normalizeIterBatch(item) {
+  if (item === null || item === undefined) return null;
+  if (Array.isArray(item)) {
+    if (item.length === 0) return null;
+    let allBytes = true;
+    for (const c of item) {
+      if (!(c instanceof Uint8Array)) {
+        allBytes = false;
+        break;
+      }
+    }
+    if (allBytes) return item;
+    const out = [];
+    for (const c of item) {
+      const b = normalizeIterBatch(c);
+      if (b) out.push(...b);
+    }
+    return out.length > 0 ? out : null;
+  }
+  if (item instanceof Uint8Array) return [item];
+  if (typeof item === "string") return [iterToUint8Array(item)];
+  if (typeof ArrayBuffer !== "undefined" && item instanceof ArrayBuffer)
+    return [new Uint8Array(item)];
+  if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(item))
+    return [
+      new Uint8Array(item.buffer, item.byteOffset, item.byteLength).slice(),
+    ];
+  if (typeof item[Symbol.iterator] === "function") {
+    const out = [];
+    for (const c of item) {
+      const b = normalizeIterBatch(c);
+      if (b) out.push(...b);
+    }
+    return out.length > 0 ? out : null;
+  }
+  return null;
+}
+function appendIterBatch(list, result) {
+  const batch = normalizeIterBatch(result);
+  if (batch) list.push(batch);
+}
+// Stateless function transforms, fused per batch, with a null flush at the
+// end (mirrors Node's applyFusedStatelessAsyncTransforms).
+async function* applyFusedStatelessAsync(source, run, signal) {
+  for await (const chunks of source) {
+    let current = chunks;
+    for (const fn of run) {
+      let result = fn(current, { __proto__: null, signal });
+      if (result !== null && typeof result?.then === "function")
+        result = await result;
+      if (result === null) {
+        current = null;
+        break;
+      }
+      current = result;
+    }
+    if (current === null) continue;
+    const batch = normalizeIterBatch(current);
+    if (batch && batch.length > 0) yield batch;
+  }
+  // Flush: earlier flush output feeds later transforms, like Node.
+  let pending = [];
+  for (const fn of run) {
+    const next = [];
+    for (const p of pending)
+      appendIterBatch(next, await fn(p, { __proto__: null, signal }));
+    appendIterBatch(next, await fn(null, { __proto__: null, signal }));
+    pending = next;
+  }
+  for (const b of pending) yield b;
+}
+// Stateful transform object: transform(source, options) is a (async)
+// generator; a trailing null batch is the flush signal (mirrors Node's
+// withFlushAsync + applyStatefulAsyncTransform; validated zlib transforms
+// treat the null batch as their flush signal and won't double-finalize).
+async function* withFlushAsyncGen(source) {
+  yield* source;
+  yield null;
+}
+async function* applyStatefulAsync(source, transformFn, signal) {
+  const output = transformFn(withFlushAsyncGen(source), {
+    __proto__: null,
+    signal,
+  });
+  for await (const item of output) {
+    if (item === null) continue;
+    const batch = normalizeIterBatch(item);
+    if (batch && batch.length > 0) yield batch;
+  }
+}
+async function* applyIterTransformsAsync(source, transforms, signal) {
+  // Node's pipeline always hands transforms a live AbortSignal (from its
+  // internal controller); zlib's transforms call signal.addEventListener
+  // unconditionally, so synthesize one when the caller passed none.
+  const sig = signal ?? new AbortController().signal;
+  let current = source;
+  let run = [];
+  for (const t of transforms) {
+    if (typeof t === "function") {
+      run.push(t);
+      continue;
+    }
+    if (run.length > 0) {
+      current = applyFusedStatelessAsync(current, run, sig);
+      run = [];
+    }
+    current = applyStatefulAsync(current, t.transform, sig);
+  }
+  if (run.length > 0) current = applyFusedStatelessAsync(current, run, sig);
+  yield* current;
+}
+// Sync counterparts for pullSync.
+function* withFlushSyncGen(source) {
+  yield* source;
+  yield null;
+}
+function* applyFusedStatelessSync(source, run) {
+  for (const chunks of source) {
+    let current = chunks;
+    for (const fn of run) {
+      const result = fn(current);
+      if (result === null) {
+        current = null;
+        break;
+      }
+      current = result;
+    }
+    if (current === null) continue;
+    const batch = normalizeIterBatch(current);
+    if (batch && batch.length > 0) yield batch;
+  }
+  let pending = [];
+  for (const fn of run) {
+    const next = [];
+    for (const p of pending) appendIterBatch(next, fn(p));
+    appendIterBatch(next, fn(null));
+    pending = next;
+  }
+  for (const b of pending) yield b;
+}
+function* applyStatefulSync(source, transformFn) {
+  const output = transformFn(withFlushSyncGen(source));
+  for (const item of output) {
+    if (item === null) continue;
+    const batch = normalizeIterBatch(item);
+    if (batch && batch.length > 0) yield batch;
+  }
+}
+function* applyIterTransformsSync(source, transforms) {
+  let current = source;
+  let run = [];
+  for (const t of transforms) {
+    if (typeof t === "function") {
+      run.push(t);
+      continue;
+    }
+    if (run.length > 0) {
+      current = applyFusedStatelessSync(current, run);
+      run = [];
+    }
+    current = applyStatefulSync(current, t.transform);
+  }
+  if (run.length > 0) current = applyFusedStatelessSync(current, run);
+  yield* current;
+}
+
 // Wrap a (…, callback) fs function with AbortSignal support. The options
 // object sits at args[optionsIndex] (a string options value, e.g. an
 // encoding, carries no signal). Semantics match Node: an invalid signal
@@ -389,9 +686,18 @@ function inspectValue(v) {
 // undefined/null -> 'r'; numbers pass through (O_* constants); known flag
 // strings pass; everything else throws ERR_INVALID_ARG_VALUE.
 const OPEN_FLAG_STRINGS = new Set([
-  "r", "r+", "rs", "rs+",
-  "w", "wx", "w+", "wx+",
-  "a", "ax", "a+", "ax+",
+  "r",
+  "r+",
+  "rs",
+  "rs+",
+  "w",
+  "wx",
+  "w+",
+  "wx+",
+  "a",
+  "ax",
+  "a+",
+  "ax+",
 ]);
 function validateFlags(flags) {
   if (flags === undefined || flags === null) return "r";
@@ -913,8 +1219,7 @@ function buildApi(vol) {
         const tail = `'${srcStr}'`;
         if (err.message.endsWith(tail)) {
           err.message =
-            err.message.slice(0, -tail.length) +
-            `'${srcStr}' -> '${destStr}'`;
+            err.message.slice(0, -tail.length) + `'${srcStr}' -> '${destStr}'`;
         }
       }
     } catch {}
@@ -1185,7 +1490,14 @@ function buildApi(vol) {
     }
     throw errInvalidArgType(
       "data",
-      ["string", "Buffer", "TypedArray", "DataView", "Iterable", "AsyncIterable"],
+      [
+        "string",
+        "Buffer",
+        "TypedArray",
+        "DataView",
+        "Iterable",
+        "AsyncIterable",
+      ],
       chunk,
     );
   }
@@ -1219,19 +1531,23 @@ function buildApi(vol) {
       }
       return typeof Buffer !== "undefined"
         ? Buffer.concat(chunks)
-        : chunks.reduce(
-            (acc, c) => {
-              const out = new Uint8Array(acc.length + c.length);
-              out.set(acc);
-              out.set(c, acc.length);
-              return out;
-            },
-            new Uint8Array(0),
-          );
+        : chunks.reduce((acc, c) => {
+            const out = new Uint8Array(acc.length + c.length);
+            out.set(acc);
+            out.set(c, acc.length);
+            return out;
+          }, new Uint8Array(0));
     }
     throw errInvalidArgType(
       "data",
-      ["string", "Buffer", "TypedArray", "DataView", "Iterable", "AsyncIterable"],
+      [
+        "string",
+        "Buffer",
+        "TypedArray",
+        "DataView",
+        "Iterable",
+        "AsyncIterable",
+      ],
       data,
     );
   }
@@ -1293,7 +1609,12 @@ function buildApi(vol) {
           ? options.flag
           : undefined;
       if (typeof flag === "string" && /^(rs?|sr)$/.test(flag)) {
-        const err = makeFsError("EBADF", "write", undefined, "bad file descriptor");
+        const err = makeFsError(
+          "EBADF",
+          "write",
+          undefined,
+          "bad file descriptor",
+        );
         err.errno = -9;
         nextTick(callback, err);
         return;
@@ -3770,7 +4091,9 @@ function buildApi(vol) {
         // Node: FileHandle is not supported with custom fs operations.
         for (const k of ["open", "read", "write", "writev", "close"]) {
           if (typeof customFs[k] === "function") {
-            const err = new Error("The FileHandle with fs method is not implemented");
+            const err = new Error(
+              "The FileHandle with fs method is not implemented",
+            );
             err.code = "ERR_METHOD_NOT_IMPLEMENTED";
             throw err;
           }
@@ -3782,10 +4105,12 @@ function buildApi(vol) {
         if (typeof handle.on === "function")
           handle.on("close", () => this.close());
       } else {
-        const defaultOr = (name) => (...a) =>
-          typeof customFs[name] === "function"
-            ? customFs[name](...a)
-            : fs[name](...a);
+        const defaultOr =
+          (name) =>
+          (...a) =>
+            typeof customFs[name] === "function"
+              ? customFs[name](...a)
+              : fs[name](...a);
         this._impl = {
           open: defaultOr("open"),
           read: defaultOr("read"),
@@ -3918,7 +4243,9 @@ function buildApi(vol) {
         // Node: FileHandle is not supported with custom fs operations.
         for (const k of ["open", "read", "write", "writev", "close"]) {
           if (typeof customFs[k] === "function") {
-            const err = new Error("The FileHandle with fs method is not implemented");
+            const err = new Error(
+              "The FileHandle with fs method is not implemented",
+            );
             err.code = "ERR_METHOD_NOT_IMPLEMENTED";
             throw err;
           }
@@ -3930,10 +4257,12 @@ function buildApi(vol) {
         if (typeof handle.on === "function")
           handle.on("close", () => this.close());
       } else {
-        const defaultOr = (name) => (...a) =>
-          typeof customFs[name] === "function"
-            ? customFs[name](...a)
-            : fs[name](...a);
+        const defaultOr =
+          (name) =>
+          (...a) =>
+            typeof customFs[name] === "function"
+              ? customFs[name](...a)
+              : fs[name](...a);
         this._impl = {
           open: defaultOr("open"),
           read: defaultOr("read"),
@@ -4253,7 +4582,8 @@ function buildApi(vol) {
     async writeFile(data, options) {
       const signal = promiseSignal(options);
       await throwIfAborted(signal);
-      const encoding = typeof options === "string" ? options : options?.encoding;
+      const encoding =
+        typeof options === "string" ? options : options?.encoding;
       // Node writes at the fd's current position without truncating
       // (memfs's writeFileSync-on-fd truncates at 0).
       const buf = await coerceWriteData(data, encoding, signal);
@@ -4268,7 +4598,8 @@ function buildApi(vol) {
     async appendFile(data, options) {
       const signal = promiseSignal(options);
       await throwIfAborted(signal);
-      const encoding = typeof options === "string" ? options : options?.encoding;
+      const encoding =
+        typeof options === "string" ? options : options?.encoding;
       const buf = await coerceWriteData(data, encoding, signal);
       const chunks = buf instanceof Uint8Array ? buf : normalizeDataArg(buf);
       try {
@@ -4329,9 +4660,9 @@ function buildApi(vol) {
         throw enrichErr(e, "sync");
       }
     }
-    async close() {
-      // Node: fd becomes -1, 'close' is emitted once, and a second close()
-      // is a silent no-op (probed against real Node v24.20.0).
+    _closeSync() {
+      // Synchronous close core. close() delegates; pullSync autoClose and
+      // writer fail()/endSync() need the sync form (Node's kCloseSync).
       if (this._closed) return;
       this._closed = true;
       const fd = this.fd;
@@ -4343,6 +4674,11 @@ function buildApi(vol) {
       }
       this.fd = -1;
       this.emit("close");
+    }
+    async close() {
+      // Node: fd becomes -1, 'close' is emitted once, and a second close()
+      // is a silent no-op (probed against real Node v24.20.0).
+      this._closeSync();
     }
     // Explicit resource management: `using h = await open(...)`.
     [Symbol.dispose]() {
@@ -4405,6 +4741,497 @@ function buildApi(vol) {
         }
         if (leftover) yield leftover;
       })();
+    }
+    // ── New-streams pull/pullSync/writer (Node v24 --experimental-stream-iter)
+    // Probed semantics against v24.20.0 (lib/internal/fs/promises.js):
+    // pull() yields Uint8Array[] batches via an AsyncIterable; pullSync() the
+    // sync counterpart; writer() returns a {write,writev,writeSync,
+    // writevSync,end,endSync,fail} object. One of pull/pullSync/writer holds
+    // the handle lock (_iterLocked) at a time; it releases when the stream
+    // is fully consumed / writer ends or fails.
+    _checkIterUsable() {
+      if (this.fd === -1) throw errInvalidState("The FileHandle is closed");
+      if (this._iterLocked) throw errInvalidState("The FileHandle is locked");
+    }
+    // Read one chunk for pull/pullSync: explicit position reads must not
+    // disturb the fd cursor (memfs moves it — save/restore).
+    _iterRead(fd, length, position) {
+      const buf =
+        typeof Buffer !== "undefined"
+          ? Buffer.allocUnsafe(length)
+          : new Uint8Array(length);
+      const explicit = position >= 0;
+      const savedPos = explicit ? getPosition(fd) : undefined;
+      let bytesRead;
+      try {
+        bytesRead = vol.readSync(
+          fd,
+          buf,
+          0,
+          length,
+          explicit ? position : null,
+        );
+      } catch (e) {
+        throw enrichErr(e, "read");
+      } finally {
+        if (savedPos !== undefined) setPosition(fd, savedPos);
+      }
+      return bytesRead === 0
+        ? null
+        : bytesRead < length
+          ? buf.subarray(0, bytesRead)
+          : buf;
+    }
+    pull(...args) {
+      this._checkIterUsable();
+      const { transforms, options } = parseIterPullArgs(args);
+      const opts = options || {};
+      const autoClose = validateIterAutoClose(opts);
+      let pos = validateIterIntOption(opts, "start", 0);
+      if (pos === undefined) pos = -1;
+      let remaining = validateIterIntOption(opts, "limit", 1);
+      if (remaining === undefined) remaining = -1;
+      let readSize = validateIterIntOption(opts, "chunkSize", 1);
+      if (readSize === undefined) readSize = kIterDefaultChunkSize;
+      const signal =
+        opts.signal === undefined
+          ? undefined
+          : validateAbortSignal(opts.signal, "options.signal");
+      checkFdReadable(this.fd, "read");
+
+      const handle = this;
+      const fd = this.fd;
+      this._iterLocked = true;
+
+      const source = {
+        async *[Symbol.asyncIterator]() {
+          try {
+            while (remaining !== 0) {
+              if (signal?.aborted)
+                throw signal.reason ?? makeAbortError(signal);
+              const toRead =
+                remaining > 0 ? Math.min(readSize, remaining) : readSize;
+              const chunk = handle._iterRead(fd, toRead, pos);
+              if (chunk === null) break;
+              if (pos >= 0) pos += chunk.byteLength;
+              if (remaining > 0) remaining -= chunk.byteLength;
+              yield [chunk];
+            }
+          } finally {
+            handle._iterLocked = false;
+            if (autoClose) await handle.close();
+          }
+        },
+      };
+      if (transforms.length > 0)
+        return applyIterTransformsAsync(source, transforms, signal);
+      return source;
+    }
+    pullSync(...args) {
+      this._checkIterUsable();
+      const { transforms, options } = parseIterPullArgs(args);
+      const opts = options || {};
+      const autoClose = validateIterAutoClose(opts);
+      let pos = validateIterIntOption(opts, "start", 0);
+      if (pos === undefined) pos = -1;
+      let remaining = validateIterIntOption(opts, "limit", 1);
+      if (remaining === undefined) remaining = -1;
+      let readSize = validateIterIntOption(opts, "chunkSize", 1);
+      if (readSize === undefined) readSize = kIterDefaultChunkSize;
+      checkFdReadable(this.fd, "read");
+
+      const handle = this;
+      const fd = this.fd;
+      this._iterLocked = true;
+
+      function cleanup() {
+        handle._iterLocked = false;
+        if (autoClose) handle._closeSync();
+      }
+      const source = {
+        [Symbol.iterator]() {
+          let done = false;
+          return {
+            next() {
+              if (done || remaining === 0) {
+                if (!done) {
+                  done = true;
+                  cleanup();
+                }
+                return { value: undefined, done: true };
+              }
+              const toRead =
+                remaining > 0 ? Math.min(readSize, remaining) : readSize;
+              let chunk;
+              try {
+                chunk = handle._iterRead(fd, toRead, pos);
+              } catch (err) {
+                done = true;
+                cleanup();
+                throw err;
+              }
+              if (chunk === null) {
+                done = true;
+                cleanup();
+                return { value: undefined, done: true };
+              }
+              if (pos >= 0) pos += chunk.byteLength;
+              if (remaining > 0) remaining -= chunk.byteLength;
+              return { value: [chunk], done: false };
+            },
+            return() {
+              if (!done) {
+                done = true;
+                cleanup();
+              }
+              return { value: undefined, done: true };
+            },
+          };
+        },
+      };
+      if (transforms.length > 0)
+        return applyIterTransformsSync(source, transforms);
+      return source;
+    }
+    writer(options = undefined) {
+      this._checkIterUsable();
+      if (options === undefined || options === null) options = {};
+      if (typeof options !== "object")
+        throw errInvalidArgType("options", "Object", options);
+      const autoClose = validateIterAutoClose(options);
+      let pos = validateIterIntOption(options, "start", 0);
+      if (pos === undefined) pos = -1;
+      let bytesRemaining = validateIterIntOption(options, "limit", 1);
+      if (bytesRemaining === undefined) bytesRemaining = -1;
+      let syncWriteThreshold = validateIterIntOption(options, "chunkSize", 1);
+      if (syncWriteThreshold === undefined)
+        syncWriteThreshold = kIterDefaultChunkSize;
+
+      const handle = this;
+      const fd = this.fd;
+      let totalBytesWritten = 0;
+      let closed = false;
+      let closing = false;
+      let pendingEndPromise = null;
+      let error = null;
+      let asyncPending = false;
+      this._iterLocked = true;
+
+      // Single writeSync with the fd cursor preserved for explicit
+      // positions (memfs moves it — save/restore like _iterRead).
+      function writeOneSync(buf, offset, length, position) {
+        const explicit = position >= 0;
+        const savedPos = explicit ? getPosition(fd) : undefined;
+        try {
+          return vol.writeSync(
+            fd,
+            buf,
+            offset,
+            length,
+            explicit ? position : null,
+          );
+        } finally {
+          if (savedPos !== undefined) setPosition(fd, savedPos);
+        }
+      }
+      // Full async write with EAGAIN-style retry (memfs never partial-writes;
+      // the loop is a safety net matching Node's writeAll shape).
+      async function writeAll(buf, offset, length, position, signal) {
+        asyncPending = true;
+        // Yield once so asyncPending is observably true until the write
+        // actually completes (Node's binding.writeBuffer always defers to
+        // the threadpool; memfs writes are synchronous, so without this the
+        // flag would clear before write() even returns its promise).
+        await Promise.resolve();
+        try {
+          let retries = 0;
+          while (length > 0) {
+            let bytesWritten;
+            try {
+              bytesWritten = writeOneSync(buf, offset, length, position);
+            } catch (e) {
+              throw enrichErr(e, "write");
+            }
+            signal?.throwIfAborted();
+            if (bytesWritten === 0) {
+              if (++retries > 5)
+                throw errOutOfRange("write", "a successful write", 0);
+            } else {
+              retries = 0;
+            }
+            totalBytesWritten += bytesWritten;
+            offset += bytesWritten;
+            length -= bytesWritten;
+            if (position >= 0) position += bytesWritten;
+          }
+        } finally {
+          asyncPending = false;
+        }
+      }
+      async function writevAll(buffers, position, signal) {
+        asyncPending = true;
+        await Promise.resolve();
+        try {
+          let totalSize = 0;
+          for (const b of buffers) totalSize += b.byteLength;
+          let retries = 0;
+          while (totalSize > 0) {
+            // memfs has no single-syscall writev; write buffers in order.
+            let bytesWritten = 0;
+            try {
+              for (const b of buffers) {
+                if (b.byteLength === 0) continue;
+                const n = writeOneSync(
+                  b,
+                  0,
+                  b.byteLength,
+                  position >= 0 ? position + bytesWritten : -1,
+                );
+                bytesWritten += n;
+                if (n < b.byteLength) break;
+              }
+            } catch (e) {
+              throw enrichErr(e, "writev");
+            }
+            signal?.throwIfAborted();
+            if (bytesWritten === 0) {
+              if (++retries > 5)
+                throw errOutOfRange("writev", "a successful write", 0);
+            } else {
+              retries = 0;
+            }
+            totalBytesWritten += bytesWritten;
+            totalSize -= bytesWritten;
+            if (position >= 0) position += bytesWritten;
+            if (totalSize > 0) {
+              // Partial write: continue with the remaining tail.
+              let skip = bytesWritten;
+              const rest = [];
+              for (const b of buffers) {
+                if (skip >= b.byteLength) {
+                  skip -= b.byteLength;
+                  continue;
+                }
+                rest.push(skip === 0 ? b : b.subarray(skip, b.byteLength));
+                skip = 0;
+              }
+              buffers = rest;
+            }
+          }
+        } finally {
+          asyncPending = false;
+        }
+      }
+      // Complete a partial sync write (cannot return false: the bytes are
+      // already on disk, and pipeTo would re-send them).
+      function writeSyncAll(buf, offset, length, position) {
+        let retries = 0;
+        while (length > 0) {
+          let bytesWritten;
+          try {
+            bytesWritten = writeOneSync(buf, offset, length, position);
+          } catch (e) {
+            throw enrichErr(e, "write");
+          }
+          if (bytesWritten === 0) {
+            if (++retries > 5)
+              throw errOutOfRange("write", "a successful write", 0);
+          } else {
+            retries = 0;
+          }
+          totalBytesWritten += bytesWritten;
+          offset += bytesWritten;
+          length -= bytesWritten;
+          if (position >= 0) position += bytesWritten;
+        }
+      }
+      async function cleanup() {
+        if (closed) return;
+        closed = true;
+        handle._iterLocked = false;
+        if (autoClose) await handle.close();
+      }
+      // Node validates write/writev/end options synchronously (throw, not
+      // reject); only a pre-aborted signal rejects.
+      function validateWriteOptions(opts) {
+        if (opts === undefined) return undefined;
+        if (opts === null || typeof opts !== "object")
+          throw errInvalidArgType("options", "Object", opts);
+        if (opts.signal !== undefined)
+          validateAbortSignal(opts.signal, "options.signal");
+        return opts.signal;
+      }
+
+      return {
+        __proto__: null,
+        write(chunk, options = undefined) {
+          if (error) return Promise.reject(error);
+          if (closed)
+            return Promise.reject(
+              errInvalidStateTypeError("The writer is closed"),
+            );
+          const signal = validateWriteOptions(options);
+          if (signal?.aborted) return Promise.reject(signal.reason);
+          chunk = iterToUint8Array(chunk);
+          if (bytesRemaining >= 0 && chunk.byteLength > bytesRemaining) {
+            return Promise.reject(
+              errOutOfRange(
+                "write",
+                `<= ${bytesRemaining} bytes`,
+                chunk.byteLength,
+              ),
+            );
+          }
+          if (bytesRemaining > 0) bytesRemaining -= chunk.byteLength;
+          const position = pos;
+          if (pos >= 0) pos += chunk.byteLength;
+          return writeAll(chunk, 0, chunk.byteLength, position, signal);
+        },
+        writev(chunks, options = undefined) {
+          if (error) return Promise.reject(error);
+          if (closed)
+            return Promise.reject(
+              errInvalidStateTypeError("The writer is closed"),
+            );
+          const signal = validateWriteOptions(options);
+          if (signal?.aborted) return Promise.reject(signal.reason);
+          chunks = iterConvertChunks(chunks);
+          let totalSize = 0;
+          for (const b of chunks) totalSize += b.byteLength;
+          if (bytesRemaining >= 0 && totalSize > bytesRemaining) {
+            return Promise.reject(
+              errOutOfRange("writev", `<= ${bytesRemaining} bytes`, totalSize),
+            );
+          }
+          if (bytesRemaining > 0) bytesRemaining -= totalSize;
+          const position = pos;
+          if (pos >= 0) pos += totalSize;
+          return writevAll(chunks, position, signal);
+        },
+        writeSync(chunk) {
+          if (error || closed || asyncPending) return false;
+          chunk = iterToUint8Array(chunk);
+          const length = chunk.byteLength;
+          if (length > syncWriteThreshold) return false;
+          if (length === 0) return true;
+          if (bytesRemaining >= 0 && length > bytesRemaining) return false;
+          const position = pos;
+          let bytesWritten;
+          try {
+            bytesWritten = writeOneSync(chunk, 0, length, position);
+          } catch {
+            return false;
+          }
+          totalBytesWritten += bytesWritten;
+          if (position >= 0) pos = position + bytesWritten;
+          if (bytesWritten === length) {
+            if (bytesRemaining > 0) bytesRemaining -= length;
+            return true;
+          }
+          // Partial write — bytes are on disk; must complete or throw.
+          writeSyncAll(
+            chunk,
+            bytesWritten,
+            length - bytesWritten,
+            position >= 0 ? position + bytesWritten : -1,
+          );
+          if (bytesRemaining > 0) bytesRemaining -= length;
+          return true;
+        },
+        writevSync(chunks) {
+          if (error || closed || asyncPending) return false;
+          chunks = iterConvertChunks(chunks);
+          let totalSize = 0;
+          for (const b of chunks) totalSize += b.byteLength;
+          if (totalSize > syncWriteThreshold) return false;
+          if (totalSize === 0) return true;
+          if (bytesRemaining >= 0 && totalSize > bytesRemaining) return false;
+          const position = pos;
+          let bytesWritten = 0;
+          try {
+            for (const b of chunks) {
+              if (b.byteLength === 0) continue;
+              const n = writeOneSync(
+                b,
+                0,
+                b.byteLength,
+                position >= 0 ? position + bytesWritten : -1,
+              );
+              bytesWritten += n;
+              if (n < b.byteLength) break;
+            }
+          } catch {
+            return false;
+          }
+          totalBytesWritten += bytesWritten;
+          if (position >= 0) pos = position + bytesWritten;
+          if (bytesWritten === totalSize) {
+            if (bytesRemaining > 0) bytesRemaining -= totalSize;
+            return true;
+          }
+          // Partial writev — complete the tail synchronously or throw.
+          let skip = bytesWritten;
+          const rest = [];
+          for (const b of chunks) {
+            if (skip >= b.byteLength) {
+              skip -= b.byteLength;
+              continue;
+            }
+            rest.push(skip === 0 ? b : b.subarray(skip));
+            skip = 0;
+          }
+          const tail = Buffer.concat
+            ? Buffer.concat(rest.map((b) => Buffer.from(b)))
+            : rest.reduce((acc, b) => {
+                const n = new Uint8Array(acc.length + b.length);
+                n.set(acc, 0);
+                n.set(b, acc.length);
+                return n;
+              }, new Uint8Array(0));
+          writeSyncAll(
+            tail,
+            0,
+            tail.byteLength,
+            position >= 0 ? position + bytesWritten : -1,
+          );
+          if (bytesRemaining > 0) bytesRemaining -= totalSize;
+          return true;
+        },
+        end(options = undefined) {
+          if (error) return Promise.reject(error);
+          if (closed) return Promise.resolve(totalBytesWritten);
+          if (closing) return pendingEndPromise;
+          const signal = validateWriteOptions(options);
+          if (signal?.aborted) return Promise.reject(signal.reason);
+          closing = true;
+          pendingEndPromise = cleanup().then(() => totalBytesWritten);
+          return pendingEndPromise;
+        },
+        endSync() {
+          if (error) return -1;
+          if (closed) return totalBytesWritten;
+          if (asyncPending) return -1;
+          closed = true;
+          handle._iterLocked = false;
+          if (autoClose) handle._closeSync();
+          return totalBytesWritten;
+        },
+        fail(reason) {
+          if (closed || error) return;
+          error = reason ?? errInvalidState("Failed");
+          closed = true;
+          handle._iterLocked = false;
+          if (autoClose) handle._closeSync();
+        },
+        [Symbol.asyncDispose]() {
+          if (closing) return pendingEndPromise ?? Promise.resolve();
+          if (!closed && !error) this.fail();
+          return Promise.resolve();
+        },
+        [Symbol.dispose]() {
+          this.fail();
+        },
+      };
     }
   }
 
