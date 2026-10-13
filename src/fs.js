@@ -1364,6 +1364,7 @@ function buildApi(vol) {
   {
     const orig = fs.readdirSync;
     fs.readdirSync = function (p, options) {
+      validateEncodingOpt(options);
       validatePath(p);
       const ps = toPathString(p);
       let result;
@@ -1389,6 +1390,7 @@ function buildApi(vol) {
       }
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
+      validateEncodingOpt(options);
       validatePath(p);
       const ps = toPathString(p);
       const done = (err, result) => {
@@ -1533,8 +1535,10 @@ function buildApi(vol) {
   {
     const orig = fs.writeSync;
     fs.writeSync = function (fd, data, ...rest) {
-      checkFdWritable(fd, "write");
+      // Node validates the buffer before touching the fd (writeSync(1, true)
+      // is ERR_INVALID_ARG_TYPE, not EBADF).
       validateDataArg(data, "buffer");
+      checkFdWritable(fd, "write");
       data = normalizeDataArg(data);
       // writeSync(fd, string[, position[, encoding]]) or writeSync(fd, buffer, offset, length, position)
       let position;
@@ -2526,6 +2530,35 @@ function buildApi(vol) {
     });
   };
 
+  // Node validates the encoding (string options, or options.encoding) via
+  // getOptions BEFORE the path: an unknown encoding is a synchronous
+  // ERR_INVALID_ARG_VALUE TypeError (test-fs-assert-encoding-error.js).
+  function validateEncodingOpt(options) {
+    const enc =
+      typeof options === "string"
+        ? options
+        : options !== null && typeof options === "object"
+          ? options.encoding
+          : undefined;
+    if (enc === undefined || enc === null) return;
+    let ok = false;
+    if (typeof enc === "string") {
+      ok =
+        typeof Buffer !== "undefined" && Buffer.isEncoding
+          ? Buffer.isEncoding(enc)
+          : /^(utf-?8|ascii|latin1|binary|base64|base64url|hex|ucs-?2|utf-?16le)$/i.test(
+              enc,
+            );
+    }
+    if (!ok) {
+      const err = new TypeError(
+        `The argument 'encoding' is invalid encoding. Received '${String(enc)}'`,
+      );
+      err.code = "ERR_INVALID_ARG_VALUE";
+      throw err;
+    }
+  }
+
   // ── readFile/writeFile/appendFile: accept fd-or-path ──
   function fileArg(p) {
     if (typeof p === "number") return p;
@@ -2540,6 +2573,8 @@ function buildApi(vol) {
     const origSync = fs[syncName],
       origCb = fs[cbName];
     fs[syncName] = function (p, ...rest) {
+      // Encoding validated before the path (Node's getOptions order).
+      validateEncodingOpt(syncName === "readFileSync" ? rest[0] : rest[1]);
       let data = rest[0];
       if (syncName !== "readFileSync") {
         validateDataArg(data, "data");
@@ -2585,6 +2620,8 @@ function buildApi(vol) {
         validateDataArg(args[0], "data");
         args[0] = normalizeDataArg(args[0]);
       }
+      // Encoding validated before the path (Node's getOptions order).
+      validateEncodingOpt(cbName === "readFile" ? args[0] : args[1]);
       // Path validation (incl. null bytes) also throws synchronously in Node.
       const fp = fileArg(p);
       origCb.call(this, fp, ...args, (err, result) => {
@@ -3013,6 +3050,7 @@ function buildApi(vol) {
     );
   }
   fs.mkdtempSync = function (prefix, options) {
+    validateEncodingOpt(options);
     validatePath(prefix, "prefix");
     let result;
     try {
@@ -3030,6 +3068,7 @@ function buildApi(vol) {
     }
     if (typeof callback !== "function")
       throw errInvalidArgType("cb", "function", callback);
+    validateEncodingOpt(options);
     validatePath(prefix, "prefix");
     nextTick(() => {
       try {
@@ -3127,6 +3166,7 @@ function buildApi(vol) {
   }
   function makeRealpathSync(native) {
     return function (p, options) {
+      validateEncodingOpt(options);
       validatePath(p);
       let result;
       try {
@@ -3148,6 +3188,7 @@ function buildApi(vol) {
       }
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
+      validateEncodingOpt(options);
       validatePath(p);
       nextTick(() => {
         try {
@@ -3174,6 +3215,23 @@ function buildApi(vol) {
   wrapCb("symlink", null, true, 1);
   wrapSync("readlinkSync", null, true);
   wrapCb("readlink", null, true);
+  // readlink validates the encoding before the path (getOptions order).
+  {
+    const oS = fs.readlinkSync,
+      oC = fs.readlink;
+    fs.readlinkSync = function (p, options) {
+      validateEncodingOpt(options);
+      return oS.call(this, p, options);
+    };
+    fs.readlink = function (p, options, callback) {
+      if (typeof options === "function") {
+        callback = options;
+        options = undefined;
+      }
+      validateEncodingOpt(options);
+      return oC.call(this, p, options, callback);
+    };
+  }
   wrapSync("chmodSync", null, true);
   wrapCb("chmod", null, true);
   // ── fchmod/fchmodSync: fd, then mode, then callback (test-fs-fchmod) ──
@@ -3382,6 +3440,7 @@ function buildApi(vol) {
         options !== null && typeof options === "object"
           ? validateAbortSignal(options.signal)
           : undefined;
+      validateEncodingOpt(options);
       validatePath(p);
       const ps = toPathString(p);
       let w;
@@ -4002,9 +4061,11 @@ function buildApi(vol) {
     }
   }
   fs.createReadStream = function (p, options) {
+    validateEncodingOpt(options);
     return new FsReadStream(p, options);
   };
   fs.createWriteStream = function (p, options) {
+    validateEncodingOpt(options);
     return new FsWriteStream(p, options);
   };
   const readStreamOpenNoop = deprecateStreamOpen(
@@ -4023,9 +4084,11 @@ function buildApi(vol) {
   // `new fs.WriteStream()` and `fs.WriteStream()` work and instanceof
   // checks hold in both directions.
   function ReadStreamFactory(path, options) {
+    validateEncodingOpt(options);
     return new FsReadStream(path, options);
   }
   function WriteStreamFactory(path, options) {
+    validateEncodingOpt(options);
     return new FsWriteStream(path, options);
   }
   ReadStreamFactory.prototype = FsReadStream.prototype;
