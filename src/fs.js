@@ -22,6 +22,7 @@
 
 import { Volume, createFsFromVolume } from "memfs";
 import { Readable, Writable } from "./stream.js";
+import { errorOrDestroy } from "./stream/destroy.js";
 
 // Browser-safe nextTick (process.nextTick under Node, queueMicrotask otherwise).
 function nextTick(fn, ...args) {
@@ -2644,33 +2645,108 @@ function buildApi(vol) {
   };
 
   // ── createReadStream/createWriteStream (project's local stream impl) ──
+  // Node's fs streams close their fd through the PUBLIC fs.close (not the
+  // internal volume), so user monkey-patches and observability hooks see it
+  // (test-fs-write-stream.js replaces fs.close and asserts it is called).
+  function closeStreamFd(stream) {
+    // A FileHandle-owned fd (or autoClose:false) is never closed by us.
+    if (!stream.autoClose || !stream._opened || stream.fd === null) return;
+    const fd = stream.fd;
+    stream.fd = null;
+    stream._opened = false;
+    // A custom fs implementation (options.fs) owns the close; otherwise the
+    // public fs.close (so user monkey-patches see it, as in Node).
+    const impl = stream._impl;
+    const closeFn =
+      impl && typeof impl.close === "function"
+        ? (f, cb) => impl.close(f, cb)
+        : (f, cb) => fs.close(f, cb);
+    try {
+      closeFn(fd, () => {});
+    } catch {
+      try {
+        vol.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
   class FsReadStream extends Readable {
     constructor(path, options) {
-      super(options);
       const opts = options || {};
+      // Node: options.autoDestroy = options.autoClose === undefined ? true
+      // : options.autoClose. fs streams manage their own lifecycle via
+      // close(), so after 'end' with autoClose:false the stream is neither
+      // closed nor destroyed (test-fs-read-stream.js).
+      const autoDestroy =
+        opts.autoClose === undefined ? true : opts.autoClose;
+      super({ ...opts, autoDestroy });
       this.path = toPathString(path);
       this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
       this.flags = opts.flags || "r";
       this.mode = opts.mode || 0o666;
       this.start = opts.start;
       this.end = opts.end;
+      // Node throws ERR_OUT_OF_RANGE when start > end (test-fs-read-stream).
+      if (
+        this.start !== undefined &&
+        this.end !== undefined &&
+        this.start > this.end
+      ) {
+        const err = new RangeError(
+          `The value of "start" is out of range. It must be <= "end" (here: ${this.end}). Received ${this.start}`,
+        );
+        err.code = "ERR_OUT_OF_RANGE";
+        throw err;
+      }
       this.autoClose = opts.autoClose !== false;
       this._pos = this.start || 0;
       this._opened = false;
+      this.bytesRead = 0;
+      // Custom fs implementation (options.fs): { open, read, close } replace
+      // the volume calls (test-fs-read-stream.js, test-fs-write-stream-fs.js).
+      this._impl = opts.fs || null;
       emitFs("fs", "createReadStream", this.path, this);
       if (this.fd === null) {
-        try {
-          this.fd = vol.openSync(this.path, this.flags, this.mode);
-          this._opened = true;
-        } catch (e) {
-          nextTick(() => this.destroy(enrichErr(e, "createReadStream")));
+        if (this._impl && typeof this._impl.open === "function") {
+          // Custom open is callback-style (async); _read waits for 'open'.
+          // Deferred so handlers attached after construction still fire.
+          nextTick(() => this._openWithImpl());
+        } else {
+          try {
+            this.fd = vol.openSync(this.path, this.flags, this.mode);
+            this._opened = true;
+          } catch (e) {
+            nextTick(() => errorOrDestroy(this, enrichErr(e, "createReadStream")));
+            return;
+          }
+          nextTick(() => this.emit("open", this.fd));
+        }
+      } else {
+        nextTick(() => this.emit("open", this.fd));
+      }
+    }
+    _openWithImpl() {
+      this._impl.open(this.path, this.flags, this.mode, (err, fd) => {
+        if (err || fd === undefined || fd === null) {
+          errorOrDestroy(
+            this,
+            enrichErr(err || new Error("open failed"), "createReadStream"),
+          );
           return;
         }
-      }
-      nextTick(() => this.emit("open", this.fd));
+        this.fd = fd;
+        this._opened = true;
+        this.emit("open", fd);
+      });
     }
     _read(size) {
       const doRead = () => {
+        if (this._impl && (this.fd === null || !this._opened)) {
+          // Custom open hasn't completed; retry once it fires.
+          this.once("open", doRead);
+          return;
+        }
         let toRead = size || 16384;
         if (this.end !== undefined)
           toRead = Math.min(toRead, this.end - this._pos + 1);
@@ -2683,32 +2759,40 @@ function buildApi(vol) {
           typeof Buffer !== "undefined"
             ? Buffer.alloc(toRead)
             : new Uint8Array(toRead);
+        const impl = this._impl;
+        if (impl && typeof impl.read === "function") {
+          impl.read(this.fd, buf, 0, toRead, this._pos, (err, n) => {
+            if (err) {
+              errorOrDestroy(this, enrichErr(err, "read"));
+              return;
+            }
+            this._finishRead(n, buf);
+          });
+          return;
+        }
         let n;
         try {
           n = vol.readSync(this.fd, buf, 0, toRead, this._pos);
         } catch (e) {
-          this.destroy(enrichErr(e, "read"));
+          errorOrDestroy(this, enrichErr(e, "read"));
           return;
         }
-        if (n === 0) {
-          this.push(null);
-          this._cleanup();
-          return;
-        }
-        this._pos += n;
-        this.push(buf.slice(0, n));
+        this._finishRead(n, buf);
       };
       nextTick(doRead);
     }
-    _cleanup() {
-      if (this.autoClose && this._opened && this.fd !== null) {
-        try {
-          vol.closeSync(this.fd);
-        } catch {
-          /* ignore */
-        }
-        this.fd = null;
+    _finishRead(n, buf) {
+      if (n === 0) {
+        this.push(null);
+        this._cleanup();
+        return;
       }
+      this._pos += n;
+      this.bytesRead += n;
+      this.push(buf.slice(0, n));
+    }
+    _cleanup() {
+      closeStreamFd(this);
     }
     _destroy(err, callback) {
       this._cleanup();
@@ -2717,8 +2801,11 @@ function buildApi(vol) {
   }
   class FsWriteStream extends Writable {
     constructor(path, options) {
-      super(options);
       const opts = options || {};
+      // Same autoDestroy rule as FsReadStream above.
+      const autoDestroy =
+        opts.autoClose === undefined ? true : opts.autoClose;
+      super({ ...opts, autoDestroy });
       this.path = toPathString(path);
       this.fd = opts.fd === undefined || opts.fd === null ? null : opts.fd;
       this.flags = opts.flags || "w";
@@ -2727,19 +2814,52 @@ function buildApi(vol) {
       this.autoClose = opts.autoClose !== false;
       this._pos = this.start;
       this._opened = false;
+      // Custom fs implementation (options.fs): { open, write, writev, close }.
+      this._impl = opts.fs || null;
+      // writev batching only when the custom impl provides it (installing
+      // _writev unconditionally would change batching for the default path).
+      if (this._impl && typeof this._impl.writev === "function") {
+        this._writev = (chunks, callback) => this._writevImpl(chunks, callback);
+      }
       emitFs("fs", "createWriteStream", this.path, this);
       if (this.fd === null) {
-        try {
-          this.fd = vol.openSync(this.path, this.flags, this.mode);
-          this._opened = true;
-        } catch (e) {
-          nextTick(() => this.destroy(enrichErr(e, "createWriteStream")));
+        if (this._impl && typeof this._impl.open === "function") {
+          // Custom open is callback-style (async); _write waits for 'open'.
+          nextTick(() => this._openWithImpl());
+        } else {
+          try {
+            this.fd = vol.openSync(this.path, this.flags, this.mode);
+            this._opened = true;
+          } catch (e) {
+            nextTick(() => errorOrDestroy(this, enrichErr(e, "createWriteStream")));
+            return;
+          }
+          nextTick(() => this.emit("open", this.fd));
+        }
+      } else {
+        nextTick(() => this.emit("open", this.fd));
+      }
+    }
+    _openWithImpl() {
+      this._impl.open(this.path, this.flags, this.mode, (err, fd) => {
+        if (err || fd === undefined || fd === null) {
+          errorOrDestroy(
+            this,
+            enrichErr(err || new Error("open failed"), "createWriteStream"),
+          );
           return;
         }
-      }
-      nextTick(() => this.emit("open", this.fd));
+        this.fd = fd;
+        this._opened = true;
+        this.emit("open", fd);
+      });
     }
     _write(chunk, encoding, callback) {
+      if (this._impl && (this.fd === null || !this._opened)) {
+        // Custom open hasn't completed; retry once it fires.
+        this.once("open", () => this._write(chunk, encoding, callback));
+        return;
+      }
       let data = chunk;
       if (typeof data === "string") {
         data =
@@ -2748,6 +2868,22 @@ function buildApi(vol) {
             : new TextEncoder().encode(data);
       }
       data = normalizeDataArg(data);
+      const impl = this._impl;
+      if (impl && typeof impl.write === "function") {
+        const pos =
+          this._pos === undefined || this._pos === null ? null : this._pos;
+        impl.write(this.fd, data, 0, data.byteLength, pos, (err, n) => {
+          if (err) {
+            callback(enrichErr(err, "write"));
+            return;
+          }
+          const written = typeof n === "number" ? n : data.byteLength;
+          if (pos !== null && pos !== undefined) this._pos = pos + written;
+          emitFs("fs", "writeStream.write", this.path, written);
+          callback(null);
+        });
+        return;
+      }
       try {
         const pos =
           this._pos === undefined || this._pos === null ? null : this._pos;
@@ -2759,20 +2895,40 @@ function buildApi(vol) {
         callback(enrichErr(e, "write"));
       }
     }
+    _writevImpl(chunks, callback) {
+      // Custom writev: buffers in one call (test-fs-write-stream-fs.js).
+      const buffers = chunks.map((c) => {
+        let data = c.chunk;
+        if (typeof data === "string") {
+          data =
+            typeof Buffer !== "undefined"
+              ? Buffer.from(data, c.encoding)
+              : new TextEncoder().encode(data);
+        }
+        return normalizeDataArg(data);
+      });
+      const pos =
+        this._pos === undefined || this._pos === null ? null : this._pos;
+      this._impl.writev(this.fd, buffers, pos, (err, n) => {
+        if (err) {
+          callback(enrichErr(err, "write"));
+          return;
+        }
+        const written =
+          typeof n === "number"
+            ? n
+            : buffers.reduce((a, b) => a + b.byteLength, 0);
+        if (pos !== null && pos !== undefined) this._pos = pos + written;
+        emitFs("fs", "writeStream.write", this.path, written);
+        callback(null);
+      });
+    }
     _final(callback) {
       this._cleanup();
       callback(null);
     }
     _cleanup() {
-      // A FileHandle-owned fd (or autoClose:false) is never closed by us.
-      if (this.autoClose && this._opened && this.fd !== null) {
-        try {
-          vol.closeSync(this.fd);
-        } catch {
-          /* ignore */
-        }
-        this.fd = null;
-      }
+      closeStreamFd(this);
     }
     _destroy(err, callback) {
       this._cleanup();
@@ -2785,10 +2941,25 @@ function buildApi(vol) {
   fs.createWriteStream = function (p, options) {
     return new FsWriteStream(p, options);
   };
-  fs.ReadStream = FsReadStream;
-  fs.WriteStream = FsWriteStream;
-  fs.FileReadStream = FsReadStream;
-  fs.FileWriteStream = FsWriteStream;
+  // Node's fs.ReadStream/fs.WriteStream are old-style functions with an
+  // `instanceof` guard, so calling them WITHOUT `new` returns an instance
+  // (test-fs-write-stream.js does `fs.WriteStream(file)`). Plain ES classes
+  // throw "Class constructor ... cannot be invoked without 'new'". Export
+  // new-safe factory functions that share the class prototype, so both
+  // `new fs.WriteStream()` and `fs.WriteStream()` work and instanceof
+  // checks hold in both directions.
+  function ReadStreamFactory(path, options) {
+    return new FsReadStream(path, options);
+  }
+  function WriteStreamFactory(path, options) {
+    return new FsWriteStream(path, options);
+  }
+  ReadStreamFactory.prototype = FsReadStream.prototype;
+  WriteStreamFactory.prototype = FsWriteStream.prototype;
+  fs.ReadStream = ReadStreamFactory;
+  fs.WriteStream = WriteStreamFactory;
+  fs.FileReadStream = ReadStreamFactory;
+  fs.FileWriteStream = WriteStreamFactory;
 
   // ── FileHandle (internal; never exposed publicly) ──
   const MemFileHandle = fs.promises.FileHandle;

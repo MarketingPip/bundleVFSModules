@@ -439,6 +439,10 @@
     "category": "inherent",
     "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
   },
+  "test-fs-read-stream.js": {
+    "category": "inherent",
+    "reason": "The mkfifo block creates a real OS FIFO via child_process and reads it back through fs.createReadStream. The memfs-backed shim cannot open real-disk FIFOs (no OS file descriptors \u2014 the fs lane's documented honest gap), and proxying to native fs would violate the browser-first rule. The browser lane is identically unable. Everything else in the file passes (bytesRead, start/end validation, options.fs overrides, autoClose/autoDestroy semantics)."
+  },
   "test-os-process-priority.js": {
     "category": "inherent",
     "reason": "browser cannot read process niceness; getPriority() returns 0 by design"

@@ -47,8 +47,21 @@ const fixturesDir = realPath.join(testRoot, "fixtures");
 const syncRoots = [tmpdir, fixturesDir];
 
 // Raw shim methods for the sync itself — never the wrapped versions below,
-// or syncPath would recurse into itself.
-const raw = shimFs;
+// or syncPath would recurse into itself. wrapObj() below wraps IN PLACE
+// (so test monkey-patches hit the same object the stream internals use),
+// so snapshot the unwrapped methods FIRST — after wrapping, `raw` would be
+// the wrapped versions and syncPath would recurse forever.
+const raw = {};
+for (const k of Object.keys(shimFs)) {
+  if (typeof shimFs[k] === "function") raw[k] = shimFs[k];
+}
+if (shimFs.promises) {
+  raw.promises = {};
+  for (const k of Object.keys(shimFs.promises)) {
+    if (typeof shimFs.promises[k] === "function")
+      raw.promises[k] = shimFs.promises[k];
+  }
+}
 
 // Hermetic tmpdir per test process (mirrors common.refresh()): stale files
 // from earlier runs must not leak into memfs via the sync below.
@@ -154,11 +167,14 @@ function wrapFn(fn) {
 }
 
 function wrapObj(obj) {
-  const out = { ...obj };
-  for (const k of Object.keys(out)) {
-    if (typeof out[k] === "function") out[k] = wrapFn(out[k]);
+  // Wrap IN PLACE (not a copy): the tests monkey-patch the required fs
+  // object (e.g. test-fs-write-stream.js replaces fs.close and asserts the
+  // stream calls it), and the stream internals in src/fs.js call fs.close
+  // on that same object. A copy would hide the patch from the internals.
+  for (const k of Object.keys(obj)) {
+    if (typeof obj[k] === "function") obj[k] = wrapFn(obj[k]);
   }
-  return out;
+  return obj;
 }
 
 const wrapped = wrapObj(shimFs);
