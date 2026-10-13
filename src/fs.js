@@ -2224,11 +2224,32 @@ function buildApi(vol) {
         validateDataArg(data, "data");
         data = normalizeDataArg(data);
       }
+      const fp = fileArg(p);
+      // memfs doesn't apply the umask on file creation; fix the mode if we
+      // created the file and no explicit mode was given.
+      let existed = true;
+      try {
+        vol.statSync(fp);
+      } catch {
+        existed = false;
+      }
       let result;
       try {
-        result = origSync.call(this, fileArg(p), data, ...rest.slice(1));
+        result = origSync.call(this, fp, data, ...rest.slice(1));
       } catch (e) {
         throw enrichErr(e, syncName);
+      }
+      if (!existed) {
+        // File was created: apply umask if no explicit mode was given.
+        // (For readFileSync, options is rest[0]; for write/append, rest[1].)
+        const options = syncName === "readFileSync" ? rest[0] : rest[1];
+        const optMode =
+          options && typeof options === "object" ? options.mode : undefined;
+        if (optMode === undefined) {
+          try {
+            vol.chmodSync(fp, applyUmask(0o666));
+          } catch {}
+        }
       }
       emitFs("fs", syncName, p, result);
       return result;
