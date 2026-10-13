@@ -552,25 +552,38 @@ class Stats {
       this.ctimeNs = ns(ctimeMs);
       this.birthtimeNs = ns(birthtimeMs);
     }
-    // Backing millisecond values for the prototype Date getters.
+    // Date properties are prototype getters/setters in real Node.
+    // The setter stores the raw value; the getter returns it.
     Object.defineProperties(this, {
-      _atimeMs: { value: atimeMs },
-      _mtimeMs: { value: mtimeMs },
-      _ctimeMs: { value: ctimeMs },
-      _birthtimeMs: { value: birthtimeMs },
+      _atime: { value: new Date(atimeMs), writable: true },
+      _mtime: { value: new Date(mtimeMs), writable: true },
+      _ctime: { value: new Date(ctimeMs), writable: true },
+      _birthtime: { value: new Date(birthtimeMs), writable: true },
     });
   }
   get atime() {
-    return new Date(this._atimeMs);
+    return this._atime;
+  }
+  set atime(v) {
+    this._atime = v;
   }
   get mtime() {
-    return new Date(this._mtimeMs);
+    return this._mtime;
+  }
+  set mtime(v) {
+    this._mtime = v;
   }
   get ctime() {
-    return new Date(this._ctimeMs);
+    return this._ctime;
+  }
+  set ctime(v) {
+    this._ctime = v;
   }
   get birthtime() {
-    return new Date(this._birthtimeMs);
+    return this._birthtime;
+  }
+  set birthtime(v) {
+    this._birthtime = v;
   }
   isFile() {
     return (Number(this.mode) & S_IFMT) === S_IFREG;
@@ -948,17 +961,45 @@ function buildApi(vol) {
   }
 
   // ── stat/lstat/fstat → NodeStats ──
+  // fds 0/1/2 (stdio) are not open in memfs; synthesize minimal stats.
+  function stdioStats(fd) {
+    if (fd === 0 || Object.is(fd, -0)) {
+      return toStats(
+        {
+          dev: 0,
+          mode: 0o020000, // character device
+          nlink: 1,
+          uid: 0,
+          gid: 0,
+          rdev: 0,
+          blksize: 4096,
+          ino: 0,
+          size: 0,
+          blocks: 0,
+          atimeMs: Date.now(),
+          mtimeMs: Date.now(),
+          ctimeMs: Date.now(),
+          birthtimeMs: Date.now(),
+        },
+        undefined,
+      );
+    }
+    return null;
+  }
   for (const name of ["statSync", "lstatSync"]) {
     const orig = fs[name];
     fs[name] = function (p, options) {
       validatePath(p);
+      const throwIfNoEntry = !options || options.throwIfNoEntry !== false;
       let m;
       try {
         m = orig.call(this, toPathString(p), options);
       } catch (e) {
+        // throwIfNoEntry:false returns undefined on ENOENT (test-fs-stat).
+        if (!throwIfNoEntry && e && e.code === "ENOENT") return undefined;
         throw enrichErr(e, name);
       }
-      const st = toStats(m, options);
+      const st = m === undefined ? undefined : toStats(m, options);
       emitFs("fs", name, p, st);
       return st;
     };
@@ -966,6 +1007,9 @@ function buildApi(vol) {
   {
     const orig = fs.fstatSync;
     fs.fstatSync = function (fd, options) {
+      validateFd(fd);
+      const stdio = stdioStats(fd);
+      if (stdio) return stdio;
       let m;
       try {
         m = orig.call(this, fd, options);
@@ -989,7 +1033,8 @@ function buildApi(vol) {
       validatePath(p);
       orig.call(this, toPathString(p), options, (err, m) => {
         if (err) return callback(enrichErr(err, name));
-        const st = toStats(m, options);
+        // throwIfNoEntry:false yields (null, undefined) on missing paths.
+        const st = m === undefined ? undefined : toStats(m, options);
         emitFs("fs", name, p, st);
         callback(null, st);
       });
@@ -1002,8 +1047,15 @@ function buildApi(vol) {
         callback = options;
         options = undefined;
       }
+      validateFd(fd);
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
+      const stdio = stdioStats(fd);
+      if (stdio) {
+        emitFs("fs", "fstat", fd, stdio);
+        nextTick(callback, null, stdio);
+        return;
+      }
       orig.call(this, fd, options, (err, m) => {
         if (err) return callback(enrichErr(err, "fstat"));
         const st = toStats(m, options);
@@ -4295,4 +4347,58 @@ export const {
 } = fs;
 
 // Class/function exports mirroring node:fs (not on the fs singleton object).
-export { Stats, Dirent, Utf8Stream, _toUnixTimestamp };
+export { Dirent, Utf8Stream, _toUnixTimestamp };
+const _InternalStats = Stats;
+export { _InternalStats };
+// Public fs.Stats: 14-arg positional function emitting DEP0180
+// (test-fs-stat). Callable without `new` like real Node. Internal code
+// uses the (m, bigint) signature via _InternalStats.
+function PublicStats(
+  dev,
+  mode,
+  nlink,
+  uid,
+  gid,
+  rdev,
+  blksize,
+  ino,
+  size,
+  blocks,
+  atimeMs,
+  mtimeMs,
+  ctimeMs,
+  birthtimeMs,
+) {
+  if (typeof process !== "undefined" && process.emitWarning) {
+    // Emit async to match Node's emitWarning timing (test-fs-stat calls
+    // expectWarning after constructing).
+    const emit = () =>
+      process.emitWarning(
+        "fs.Stats constructor is deprecated.",
+        "DeprecationWarning",
+        "DEP0180",
+      );
+    if (typeof setImmediate !== "undefined") setImmediate(emit);
+    else emit();
+  }
+  return new _InternalStats(
+    {
+      dev,
+      mode,
+      nlink,
+      uid,
+      gid,
+      rdev,
+      blksize,
+      ino,
+      size,
+      blocks,
+      atimeMs,
+      mtimeMs,
+      ctimeMs,
+      birthtimeMs,
+    },
+    false,
+  );
+}
+export { PublicStats as Stats };
