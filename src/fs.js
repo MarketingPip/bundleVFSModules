@@ -195,6 +195,34 @@ function errInvalidArgType(name, expected, received) {
   });
   return err;
 }
+// Property variant: `The "options.recursive" property must be of type ...`.
+function errInvalidPropType(prop, expected, received) {
+  const err = errInvalidArgType(prop, expected, received);
+  err.message = err.message.replace(
+    `The "${prop}" argument must be of type`,
+    `The "${prop}" property must be of type`,
+  );
+  return err;
+}
+// Real Node rejects odd-length hex string writes:
+// `The argument 'encoding' is invalid for data of length 3. Received 'hex'`.
+function validateHexWrite(data, encoding) {
+  if (encoding === "hex" && data.length % 2 !== 0) {
+    const err = new TypeError(
+      `The argument 'encoding' is invalid for data of length ${data.length}. Received 'hex'`,
+    );
+    err.code = "ERR_INVALID_ARG_VALUE";
+    Object.defineProperty(err, "toString", {
+      value: function () {
+        return `${this.name} [${this.code}]: ${this.message}`;
+      },
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    throw err;
+  }
+}
 
 // JS-level validation errors carry no syscall/errno in real Node.
 const NO_ENRICH_CODES = new Set([
@@ -1990,6 +2018,7 @@ function buildApi(vol) {
       let position;
       if (typeof data === "string") {
         position = rest[0];
+        validateHexWrite(data, rest[1] || "utf8");
       } else {
         position = rest[2];
       }
@@ -2014,6 +2043,8 @@ function buildApi(vol) {
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
       const args = rest.slice(0, -1);
+      // Real Node validates hex encoding synchronously (throws, not via cb).
+      if (typeof data === "string") validateHexWrite(data, args[1] || "utf8");
       try {
         checkFdWritable(fd, "write");
         validateDataArg(data, "buffer");
@@ -2156,10 +2187,23 @@ function buildApi(vol) {
   function accessCheck(path, mode) {
     validatePath(path);
     if (mode === undefined || mode === null) mode = fs.constants.F_OK;
-    if (typeof mode !== "number" || !Number.isInteger(mode)) {
+    if (typeof mode !== "number") {
       // Real Node's message for a bad access mode.
       const err = new Error("mode must be int32 or null/undefined");
       err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+    // Real Node: NaN/Infinity -> "mode is out of range"; outside [0,7] ->
+    // "mode is out of range: >= 0 && <= 7". Non-integers inside range pass
+    // (truncated by the bitwise checks below).
+    if (Number.isNaN(mode) || !Number.isFinite(mode)) {
+      const err = new RangeError("mode is out of range");
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    if (mode < 0 || mode > 7) {
+      const err = new RangeError("mode is out of range: >= 0 && <= 7");
+      err.code = "ERR_OUT_OF_RANGE";
       throw err;
     }
     const p = toPathString(path);
@@ -2219,6 +2263,12 @@ function buildApi(vol) {
       }
       opts = { mode: m };
     } else opts = options || {};
+    if (
+      opts.recursive !== undefined &&
+      typeof opts.recursive !== "boolean"
+    ) {
+      throw errInvalidPropType("options.recursive", "boolean", opts.recursive);
+    }
     if (opts.mode !== undefined) opts.mode = applyUmask(opts.mode);
     if (opts.recursive) {
       // Real Node: recursive mkdir on an existing *file* reports EEXIST.
@@ -2365,7 +2415,10 @@ function buildApi(vol) {
     const ps = toPathString(p);
     let st = null;
     try {
-      st = vol.statSync(ps);
+      // lstat: a symlink to a directory is unlinkable (real Node removes the
+      // link); only a real directory is EISDIR. statSync would follow the
+      // link and misreport.
+      st = vol.lstatSync(ps);
     } catch {
       /* ignore */
     }
@@ -2390,7 +2443,15 @@ function buildApi(vol) {
     } catch {
       /* ignore */
     }
-    if (st && st.isDirectory() && !opts.recursive && !opts.force) {
+    // rmdir expects a directory; only rm rejects non-recursive directory
+    // removal with ERR_FS_EISDIR.
+    if (
+      syscallName !== "rmdir" &&
+      st &&
+      st.isDirectory() &&
+      !opts.recursive &&
+      !opts.force
+    ) {
       // Real Node message shape (no code prefix, no quotes, no syscall).
       const err = new Error(
         `Path is a directory: rm returned EISDIR (is a directory) ${ps}`,
@@ -3949,29 +4010,31 @@ function buildApi(vol) {
   };
 
   // ── statfs/statfsSync (memfs lacks these) ──
-  function statfsImpl(p) {
+  function statfsImpl(p, options) {
     const ps = toPathString(p);
     try {
       vol.statSync(ps);
     } catch (e) {
       throw e;
     }
+    const bigint = !!(options && options.bigint);
+    const n = (v) => (bigint ? BigInt(v) : v);
     return {
-      type: 0x65735546, // FUSE_SUPER_MAGIC-ish placeholder
-      bsize: 4096,
-      frsize: 4096,
-      blocks: 1024 * 1024,
-      bfree: 512 * 1024,
-      bavail: 512 * 1024,
-      files: 1024 * 1024,
-      ffree: 512 * 1024,
+      type: n(0x65735546), // FUSE_SUPER_MAGIC-ish placeholder
+      bsize: n(4096),
+      frsize: n(4096),
+      blocks: n(1024 * 1024),
+      bfree: n(512 * 1024),
+      bavail: n(512 * 1024),
+      files: n(1024 * 1024),
+      ffree: n(512 * 1024),
     };
   }
   fs.statfsSync = function (p, options) {
     validatePath(p);
     let result;
     try {
-      result = statfsImpl(p);
+      result = statfsImpl(p, options);
     } catch (e) {
       throw enrichErr(e, "statfsSync");
     }
@@ -3988,7 +4051,7 @@ function buildApi(vol) {
     validatePath(p);
     nextTick(() => {
       try {
-        const result = statfsImpl(p);
+        const result = statfsImpl(p, options);
         emitFs("fs", "statfs", p, result);
         callback(null, result);
       } catch (e) {
@@ -5351,28 +5414,31 @@ function buildApi(vol) {
         offset = 0,
         length,
         position = null;
-      if (
-        arg1 &&
-        typeof arg1 === "object" &&
-        !(arg1 instanceof Uint8Array) &&
-        !ArrayBuffer.isView(arg1)
-      ) {
+      if (ArrayBuffer.isView(arg1)) {
+        buffer = arg1;
+        offset = arg2 || 0;
+        length = arg3;
+        position = arg4 !== undefined ? arg4 : null;
+      } else if (arg1 === null || arg1 === undefined) {
+        buffer = null;
+        offset = arg2 || 0;
+        length = arg3;
+        position = arg4 !== undefined ? arg4 : null;
+      } else if (typeof arg1 === "object") {
         buffer = arg1.buffer;
         offset = arg1.offset || 0;
         length = arg1.length;
         position = arg1.position !== undefined ? arg1.position : null;
       } else {
-        buffer = arg1;
-        offset = arg2 || 0;
-        length = arg3;
-        position = arg4 !== undefined ? arg4 : null;
+        throw errInvalidArgType("options", "object", arg1);
       }
       if (!(buffer instanceof Uint8Array) && !ArrayBuffer.isView(buffer)) {
-        const len = typeof length === "number" ? length : 16384;
+        // Real Node allocates a 16384-byte fallback buffer when none is
+        // given, regardless of the requested length.
         buffer =
           typeof Buffer !== "undefined"
-            ? Buffer.alloc(len)
-            : new Uint8Array(len);
+            ? Buffer.alloc(16384)
+            : new Uint8Array(16384);
       }
       if (length === undefined || length === null)
         length = buffer.byteLength - offset;
@@ -5400,6 +5466,7 @@ function buildApi(vol) {
       if (typeof data === "string") {
         position = arg2 !== undefined ? arg2 : null;
         encoding = arg3 || "utf8";
+        validateHexWrite(data, encoding);
         data =
           typeof Buffer !== "undefined"
             ? Buffer.from(data, encoding)
@@ -5526,6 +5593,7 @@ function buildApi(vol) {
     }
     async chown(uid, gid) {
       try {
+        validateUidGid(uid, gid);
         vol.fchownSync(this.fd, uid, gid);
         emitFs("fs", "promises.chown", this.fd, undefined);
       } catch (e) {
@@ -6132,6 +6200,29 @@ function buildApi(vol) {
       };
     }
   }
+  // Real Node rejects FileHandle method calls on non-FileHandle receivers:
+  // ERR_INTERNAL_ASSERTION "handle must be an instance of FileHandle".
+  for (const m of [
+    "stat", "read", "write", "readv", "writev", "readFile", "writeFile",
+    "appendFile", "truncate", "chmod", "chown", "utimes", "datasync", "sync",
+    "close", "readableWebStream", "createReadStream", "createWriteStream",
+    "readLines", "pull", "pullSync",
+  ]) {
+    const orig = FileHandle.prototype[m];
+    if (typeof orig !== "function") continue;
+    const isAsync = orig.constructor.name === "AsyncFunction";
+    FileHandle.prototype[m] = function (...args) {
+      if (!(this instanceof FileHandle)) {
+        const err = new Error("handle must be an instance of FileHandle");
+        err.code = "ERR_INTERNAL_ASSERTION";
+        // Async methods reject; sync methods throw (matches real Node).
+        if (isAsync) return Promise.reject(err);
+        throw err;
+      }
+      return orig.apply(this, args);
+    };
+  }
+
 
   // Node's FileHandle is an EventEmitter (emits 'close'). Mixin the
   // instance methods; the constructor already ran _FsEventEmitter.call.
@@ -6151,7 +6242,7 @@ function buildApi(vol) {
       try {
         result = fn.apply(this, args);
       } catch (e) {
-        return Promise.reject(enrichErr(e, name));
+        return Promise.reject(restackAtBoundary(enrichErr(e, name)));
       }
       return Promise.resolve(result).then(
         (val) => {
@@ -6160,11 +6251,26 @@ function buildApi(vol) {
         },
         (err) => {
           emitFs("fs", `promises.${name}`, ...args, undefined);
-          throw enrichErr(err, name);
+          throw restackAtBoundary(enrichErr(err, name));
         },
       );
     };
   };
+  // Node hides its internal frames (hideStackFrames); without this, promise
+  // rejections carry memfs/vol stack frames that real Node never shows
+  // (e.g. test-fs-promises.js asserts the stack contains the test's async
+  // frame, not Volume.statBase). Re-capture the stack at the public
+  // boundary; V8 async stack traces link it to the caller's await.
+  function restackAtBoundary(err) {
+    if (!err || typeof err !== "object" || typeof err.stack !== "string")
+      return err;
+    const frames = String(new Error().stack);
+    const nl = frames.indexOf("\n");
+    try {
+      err.stack = err.toString() + (nl < 0 ? "" : frames.slice(nl));
+    } catch {}
+    return err;
+  }
 
   definePromise(
     "access",
@@ -6590,7 +6696,7 @@ function buildApi(vol) {
   };
   // lchmod on Linux: present and rejects with ERR_METHOD_NOT_IMPLEMENTED.
   promises.lchmod = function (p, mode) {
-    const err = new Error("Method not implemented");
+    const err = new Error("The lchmod() method is not implemented");
     err.code = "ERR_METHOD_NOT_IMPLEMENTED";
     return Promise.reject(err);
   };
