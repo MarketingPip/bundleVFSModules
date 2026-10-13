@@ -4204,8 +4204,10 @@ function buildApi(vol) {
           ? fdValidated
           : null;
       this.fd = typeof fdValidated === "number" ? fdValidated : null;
-      // Node leaves .path unset (undefined) when fd is specified.
-      if (this.fd === null) {
+      // Node leaves .path unset (undefined) when fd is specified. Path
+      // validation only applies in path mode (fdValidated === null) — a
+      // FileHandle fd also lands this.fd at null mid-construction.
+      if (fdValidated === null) {
         validatePath(path);
         this.path = toPathString(path);
       }
@@ -4224,23 +4226,22 @@ function buildApi(vol) {
       // operations (test-fs-read-stream.js, test-fs-write-stream-fs.js).
       // Looked up lazily so patches apply at call time.
       const customFs = opts.fs || {};
+      if (handle && opts.fs) {
+        // Node: FileHandle is not supported with custom fs operations
+        // (importFd throws before any function validation).
+        const err = new Error(
+          "The FileHandle with fs method is not implemented",
+        );
+        err.code = "ERR_METHOD_NOT_IMPLEMENTED";
+        throw err;
+      }
       // Node validates the effective fs object's function props at
       // construction (lib/internal/fs/streams.js).
       const kFs = opts.fs || fs;
-      if (this.fd === null) validateFsFnProp(kFs.open, "options.fs.open");
+      if (fdValidated === null) validateFsFnProp(kFs.open, "options.fs.open");
       validateFsFnProp(kFs.read, "options.fs.read");
       if (this.autoClose) validateFsFnProp(kFs.close, "options.fs.close");
       if (handle) {
-        // Node: FileHandle is not supported with custom fs operations.
-        for (const k of ["open", "read", "write", "writev", "close"]) {
-          if (typeof customFs[k] === "function") {
-            const err = new Error(
-              "The FileHandle with fs method is not implemented",
-            );
-            err.code = "ERR_METHOD_NOT_IMPLEMENTED";
-            throw err;
-          }
-        }
         this.fd = typeof handle.fd === "number" ? handle.fd : null;
         this._fileHandle = handle;
         this._impl = handleStreamImpl(handle);
@@ -4405,8 +4406,10 @@ function buildApi(vol) {
           ? fdValidated
           : null;
       this.fd = typeof fdValidated === "number" ? fdValidated : null;
-      // Node leaves .path unset (undefined) when fd is specified.
-      if (this.fd === null) {
+      // Node leaves .path unset (undefined) when fd is specified. Path
+      // validation only applies in path mode (fdValidated === null) — a
+      // FileHandle fd also lands this.fd at null mid-construction.
+      if (fdValidated === null) {
         validatePath(path);
         this.path = toPathString(path);
       }
@@ -4424,26 +4427,25 @@ function buildApi(vol) {
       // individual operations. Looked up lazily so patches apply at call
       // time.
       const customFs = opts.fs || {};
+      if (handle && opts.fs) {
+        // Node: FileHandle is not supported with custom fs operations
+        // (importFd throws before any function validation).
+        const err = new Error(
+          "The FileHandle with fs method is not implemented",
+        );
+        err.code = "ERR_METHOD_NOT_IMPLEMENTED";
+        throw err;
+      }
       // Node validates the effective fs object's function props at
       // construction (lib/internal/fs/streams.js).
       const kFs = opts.fs || fs;
-      if (this.fd === null) validateFsFnProp(kFs.open, "options.fs.open");
+      if (fdValidated === null) validateFsFnProp(kFs.open, "options.fs.open");
       if (!kFs.write && !kFs.writev)
         throw errInvalidArgTypeProp("options.fs.write", "function", kFs.write);
       if (kFs.write) validateFsFnProp(kFs.write, "options.fs.write");
       if (kFs.writev) validateFsFnProp(kFs.writev, "options.fs.writev");
       if (this.autoClose) validateFsFnProp(kFs.close, "options.fs.close");
       if (handle) {
-        // Node: FileHandle is not supported with custom fs operations.
-        for (const k of ["open", "read", "write", "writev", "close"]) {
-          if (typeof customFs[k] === "function") {
-            const err = new Error(
-              "The FileHandle with fs method is not implemented",
-            );
-            err.code = "ERR_METHOD_NOT_IMPLEMENTED";
-            throw err;
-          }
-        }
         this.fd = typeof handle.fd === "number" ? handle.fd : null;
         this._fileHandle = handle;
         this._impl = handleStreamImpl(handle);
