@@ -5397,13 +5397,21 @@ function buildApi(vol) {
   // ── watch/watchFile: add ref()/unref(), emit events ──
   function patchWatcher(w, path) {
     if (w && typeof w === "object") {
+      // memfs's FSWatcher keeps the event loop alive via a 1e6ms ref'd
+      // `this._timer` (started when persistent is true). Node's FSWatcher
+      // ref()/unref() control that hold; make ours do the same instead of
+      // no-ops, otherwise unref()'d watchers keep the process alive forever
+      // (test-fs-watch-ref-unref.js).
       if (typeof w.ref !== "function") {
         w.ref = function () {
+          if (w._timer && typeof w._timer.ref === "function") w._timer.ref();
           return w;
         };
       }
       if (typeof w.unref !== "function") {
         w.unref = function () {
+          if (w._timer && typeof w._timer.unref === "function")
+            w._timer.unref();
           return w;
         };
       }
@@ -5431,6 +5439,139 @@ function buildApi(vol) {
       }
     }
     return w;
+  }
+  // Fixed replacement for memfs's per-link recursive-watch handlers.
+  // See the call site in the fs.watch wrapper for the rationale.
+  function hardenRecursiveWatcher(w) {
+    const rootLink = w && w._link;
+    if (!rootLink) return;
+    const watchedRoot = w._filename;
+    const relName = (absPath) => {
+      if (absPath === watchedRoot) return "";
+      const prefix = watchedRoot.endsWith("/") ? watchedRoot : watchedRoot + "/";
+      if (absPath.startsWith(prefix)) return absPath.slice(prefix.length);
+      const a = watchedRoot.split("/").filter(Boolean);
+      const b = absPath.split("/").filter(Boolean);
+      let i = 0;
+      while (i < a.length && i < b.length && a[i] === b[i]) i++;
+      return [...Array(a.length - i).fill(".."), ...b.slice(i)].join("/");
+    };
+    // Mirror of memfs's watchLinkNodeChanged (already applied to existing
+    // links during start(); used here for links added after watch began).
+    const attachNodeWatch = (link) => {
+      let node;
+      try {
+        node = link.getNode();
+      } catch {
+        return;
+      }
+      const filepath = link.getPath();
+      const onNodeChange = () => {
+        let filename = relName(filepath);
+        if (!filename) filename = w._getName();
+        w.emit("change", "change", filename);
+      };
+      node.on("change", onNodeChange);
+      const removers = w._listenerRemovers.get(node.ino) || [];
+      removers.push(() => {
+        node.removeListener("change", onNodeChange);
+      });
+      w._listenerRemovers.set(node.ino, removers);
+    };
+    // memfs's removeLinkNodeListeners without the '.'/'..' cycle.
+    const cleanSubtree = (link) => {
+      const seen = new Set();
+      const clean = (cur) => {
+        if (!cur || seen.has(cur)) return;
+        seen.add(cur);
+        let ino;
+        try {
+          ino = cur.getNode().ino;
+        } catch {
+          return;
+        }
+        const removers = w._listenerRemovers.get(ino);
+        if (removers) {
+          for (const r of removers) {
+            try {
+              r();
+            } catch {
+              /* ignore */
+            }
+          }
+          w._listenerRemovers.delete(ino);
+        }
+        const children = cur.children || {};
+        for (const name of Object.keys(children)) {
+          if (name === "." || name === "..") continue;
+          clean(children[name]);
+        }
+      };
+      clean(link);
+    };
+    const fixLink = (link) => {
+      if (!link || typeof link.on !== "function") return;
+      let fixups = link.__fsWatchFixups;
+      if (!fixups) {
+        fixups = [];
+        try {
+          Object.defineProperty(link, "__fsWatchFixups", {
+            value: fixups,
+            writable: true,
+            configurable: true,
+          });
+        } catch {
+          link.__fsWatchFixups = fixups;
+        }
+      }
+      if (fixups.some((f) => f.w === w)) return;
+      const onAdd = (added) => {
+        // Synchronous attach: memfs defers a tick and misses files created
+        // in the same tick as the new directory. The node 'change' watcher
+        // stays deferred (memfs parity: no 'change' for the initial write).
+        fixLink(added);
+        setTimeout(() => attachNodeWatch(added), 0);
+        w.emit("change", "rename", relName(added.getPath()));
+      };
+      const onDelete = (deleted) => {
+        cleanSubtree(deleted);
+        w.emit("change", "rename", relName(deleted.getPath()));
+      };
+      // Drop memfs's handlers (its delete handler stack-overflows) and
+      // re-add other live watchers' fixups so overlapping recursive
+      // watches on one directory coexist.
+      link.removeAllListeners("child:add");
+      link.removeAllListeners("child:delete");
+      for (const f of fixups) {
+        link.on("child:add", f.onAdd);
+        link.on("child:delete", f.onDelete);
+      }
+      link.on("child:add", onAdd);
+      link.on("child:delete", onDelete);
+      fixups.push({ w, onAdd, onDelete });
+      let ino;
+      try {
+        ino = link.getNode().ino;
+      } catch {
+        ino = -1;
+      }
+      const removers = w._listenerRemovers.get(ino) || [];
+      removers.push(() => {
+        link.removeListener("child:add", onAdd);
+        link.removeListener("child:delete", onDelete);
+        const i = fixups.findIndex((f) => f.w === w);
+        if (i >= 0) fixups.splice(i, 1);
+      });
+      w._listenerRemovers.set(ino, removers);
+      // Existing children already have memfs's node watchers; only the
+      // child add/delete handlers need replacing.
+      const children = link.children || {};
+      for (const name of Object.keys(children)) {
+        if (name === "." || name === "..") continue;
+        fixLink(children[name]);
+      }
+    };
+    fixLink(rootLink);
   }
   {
     const orig = fs.watch;
@@ -5460,6 +5601,15 @@ function buildApi(vol) {
           : undefined;
       validateIgnoreOption(ignore);
       validateEncodingOpt(options);
+      // On platforms without a native recursive watcher (Linux: libuv has
+      // none, Node uses internal/fs/recursive_watch), truthy non-boolean
+      // `recursive` throws ERR_INVALID_ARG_TYPE (validateBoolean).
+      const recursive =
+        options !== null && typeof options === "object"
+          ? options.recursive
+          : undefined;
+      if (recursive && typeof recursive !== "boolean")
+        throw errInvalidArgType("options.recursive", "boolean", recursive);
       validatePath(p);
       const ps = toPathString(p);
       let w;
@@ -5481,6 +5631,22 @@ function buildApi(vol) {
           return origEmit(event, ...args);
         };
       }
+      // ── memfs recursive-watch hardening ──
+      // memfs's recursive FSWatcher has two defects we must work around:
+      // 1. Deleting a watched subtree throws RangeError (its
+      //    removeLinkNodeListeners recurses through the '.'/'..' links).
+      // 2. Its re-attach after a 'child:add' is deferred a tick, so a file
+      //    created in the same tick as a new directory is never reported.
+      // Replace memfs's per-link 'child:add'/'child:delete' handlers with
+      // fixed versions (node 'change' watchers memfs attached during
+      // start() are fine and are left alone).
+      const recursiveOpt =
+        options !== null && typeof options === "object"
+          ? options.recursive
+          : undefined;
+      if (recursiveOpt && w && w._link) {
+        hardenRecursiveWatcher(w);
+      }
       if (signal) {
         // Aborting closes the watcher (its 'close' event fires as usual).
         if (signal.aborted) nextTick(() => w.close());
@@ -5490,70 +5656,138 @@ function buildApi(vol) {
       return w;
     };
   }
-  // watchFile: poll-based, safe replacement.
-  const _watchFileTimers = new Map();
-  fs.watchFile = function (p, options, listener) {
-    if (typeof options === "function") {
-      listener = options;
-      options = undefined;
+  // watchFile: poll-based StatWatcher, mirroring Node's semantics:
+  // one shared EventEmitter per resolved filename, 'change'/'stop' events,
+  // stop() emits 'stop' asynchronously, ref()/unref() control the poll
+  // timer's hold on the event loop.
+  function resolveWatchFileKey(ps) {
+    // Minimal POSIX path.resolve for the per-filename watcher key.
+    let p = ps;
+    const cwd =
+      typeof process !== "undefined" &&
+      process &&
+      typeof process.cwd === "function"
+        ? process.cwd()
+        : "/";
+    if (!p.startsWith("/")) p = cwd + "/" + p;
+    const parts = [];
+    for (const seg of p.split("/")) {
+      if (!seg || seg === ".") continue;
+      if (seg === "..") parts.pop();
+      else parts.push(seg);
     }
-    if (typeof listener !== "function")
-      throw errInvalidArgType("listener", "function", listener);
-    validatePath(p);
-    const ps = toPathString(p);
-    const interval = (options && options.interval) || 5007;
-    let prev = null;
-    try {
-      prev = toStats(vol.statSync(ps));
-    } catch {
-      /* ignore */
+    return "/" + parts.join("/");
+  }
+  function validateWatchFileInterval(interval) {
+    // Node's validateUint32(interval, 'interval').
+    if (typeof interval !== "number")
+      throw errInvalidArgType("interval", "number", interval);
+    if (!Number.isInteger(interval))
+      throw errOutOfRange("interval", "an integer", interval);
+    if (interval < 0 || interval > 4294967295)
+      throw errOutOfRange("interval", ">= 0 && <= 4294967295", interval);
+  }
+  class StatWatcher extends _FsEventEmitter {
+    constructor() {
+      super();
+      this._timer = null;
+      this._stopped = false;
     }
-    const timer = setInterval(() => {
-      let curr = null;
+    _start(ps, persistent, interval, bigint) {
+      let prev = null;
       try {
-        curr = toStats(vol.statSync(ps));
+        prev = toStats(vol.statSync(ps), { bigint });
       } catch {
-        /* ignore */
+        /* missing file: prev stays null */
       }
-      const changed =
-        (!prev && curr) ||
-        (prev && !curr) ||
-        (prev &&
-          curr &&
-          (prev.mtimeMs !== curr.mtimeMs || prev.size !== curr.size));
-      if (changed) {
+      let first = true;
+      const tick = () => {
+        let curr = null;
         try {
-          listener(curr || prev, prev);
+          curr = toStats(vol.statSync(ps), { bigint });
         } catch {
           /* ignore */
         }
-      }
-      prev = curr;
-    }, interval);
-    if (timer.unref) timer.unref();
-    const key = ps + "\x00" + interval;
-    if (!_watchFileTimers.has(key)) _watchFileTimers.set(key, new Set());
-    _watchFileTimers.get(key).add(timer);
-    const statWatcher = {
-      ref() {
-        if (timer.ref) timer.ref();
-        return statWatcher;
-      },
-      unref() {
-        if (timer.unref) timer.unref();
-        return statWatcher;
-      },
-    };
-    emitFs("fs", "watchFile", p, statWatcher);
-    return statWatcher;
+        const changed =
+          // Node's first poll reports only when the file is missing
+          // (uv_fs_poll's initial callback with zero stats); an existing
+          // file produces no event until it actually changes.
+          (first && !prev) ||
+          (!prev && curr) ||
+          (prev && !curr) ||
+          (prev &&
+            curr &&
+            (prev.mtimeMs !== curr.mtimeMs || prev.size !== curr.size));
+        if (changed) {
+          const zero = () => toStats({}, { bigint });
+          // No try/catch: like Node's EventEmitter, listener exceptions
+          // propagate (uncaught) instead of stalling the watcher silently.
+          this.emit("change", curr || zero(), prev || zero());
+        }
+        first = false;
+        prev = curr;
+      };
+      this._timer = setInterval(tick, interval);
+      if (!persistent && this._timer.unref) this._timer.unref();
+    }
+    // Node: noop when the watcher was never started / already stopped.
+    // Emits 'stop' asynchronously, exactly once per stop() of a live watcher.
+    stop() {
+      if (this._timer === null || this._stopped) return;
+      this._stopped = true;
+      clearInterval(this._timer);
+      this._timer = null;
+      // Like Node's emitStop: listener exceptions propagate via nextTick.
+      nextTick(() => this.emit("stop"));
+    }
+    ref() {
+      if (this._timer && this._timer.ref) this._timer.ref();
+      return this;
+    }
+    unref() {
+      if (this._timer && this._timer.unref) this._timer.unref();
+      return this;
+    }
+  }
+  const _statWatchers = new Map(); // resolved filename -> StatWatcher
+  fs.watchFile = function (p, options, listener) {
+    // Node validates the path before the listener, and shifts non-object
+    // options (including null) into the listener slot.
+    validatePath(p);
+    const ps = toPathString(p);
+    if (options === null || typeof options !== "object") {
+      listener = options;
+      options = null;
+    }
+    const opts = { interval: 5007, persistent: true, ...(options || {}) };
+    if (typeof listener !== "function")
+      throw errInvalidArgType("listener", "function", listener);
+    const key = resolveWatchFileKey(ps);
+    let watcher = _statWatchers.get(key);
+    if (!watcher) {
+      validateWatchFileInterval(opts.interval);
+      watcher = new StatWatcher();
+      watcher._start(ps, !!opts.persistent, opts.interval, !!opts.bigint);
+      _statWatchers.set(key, watcher);
+    }
+    watcher.on("change", listener);
+    emitFs("fs", "watchFile", p, watcher);
+    return watcher;
   };
   fs.unwatchFile = function (p, listener) {
     validatePath(p);
     const ps = toPathString(p);
-    for (const [key, timers] of _watchFileTimers) {
-      if (key.startsWith(ps + "\x00")) {
-        for (const t of timers) clearInterval(t);
-        _watchFileTimers.delete(key);
+    const key = resolveWatchFileKey(ps);
+    const watcher = _statWatchers.get(key);
+    if (watcher !== undefined) {
+      if (typeof listener === "function") {
+        watcher.removeListener("change", listener);
+      } else {
+        watcher.removeAllListeners("change");
+      }
+      if (watcher.listenerCount("change") === 0) {
+        watcher.stop();
+        _statWatchers.delete(key);
       }
     }
     emitFs("fs", "unwatchFile", p, undefined);
@@ -7743,6 +7977,12 @@ function buildSingleton() {
   // class as fs.Dirent so `dirent instanceof fs.Dirent` holds.
   fs.Dirent = Dirent;
   fs._vol = vol;
+  // Public fs.Stats: the 14-arg positional constructor with DEP0180
+  // (PublicStats, defined below — function declarations hoist). buildApi
+  // starts from memfs's object, whose Stats is an empty stub class; without
+  // this, `new fs.Stats(...)` builds empty objects and the deprecation
+  // warning never fires (test-fs-stat.js, test-fs-watchfile.js).
+  fs.Stats = PublicStats;
   fs.constants = nodeConstants;
   fs.promises.constants = nodeConstants;
   if (rt) rt.__FS__ = fs;
