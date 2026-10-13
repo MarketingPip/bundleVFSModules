@@ -188,8 +188,10 @@ function wrapFn(fn) {
   Object.setPrototypeOf(wrapped, Object.getPrototypeOf(fn));
   if (fn.prototype) wrapped.prototype = fn.prototype;
   // Preserve own function props (fs.realpath.native / realpathSync.native
-  // are distinct functions in src/fs.js; wrap them too).
-  for (const k of Object.keys(fn)) {
+  // are distinct functions in src/fs.js; wrap them too). Include symbol
+  // keys: util.promisify.custom is a symbol that must survive wrapping
+  // (test-fs-promisified.js).
+  for (const k of [...Object.keys(fn), ...Object.getOwnPropertySymbols(fn)]) {
     if (k === "length" || k === "name" || k === "prototype") continue;
     try {
       const v = fn[k];

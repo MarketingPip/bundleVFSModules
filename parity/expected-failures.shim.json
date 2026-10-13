@@ -491,10 +491,6 @@
     "category": "inherent",
     "reason": "validateZeroByteLiar subtest monkey-patches Node's internal C++ fs binding (internalBinding('fs').fstat) to lie about file size. The shim never calls the internal binding, so the mock cannot take effect. All other subtests (abort before/during, invalid signal, /proc hostname) pass."
   },
-  "test-fs-promisified.js": {
-    "category": "inherent",
-    "reason": "Needs util.promisify.custom on fs.read/fs.write/fs.exists (resolving {bytesRead,buffer}/{bytesWritten,buffer}/boolean). src/fs.js defines them, but the parity harness's wrapFn copies only string-keyed props (Object.keys), dropping the symbol. Unfixable from src/fs.js without harness edits. Fails identically at pristine base 1a89d258."
-  },
   "test-fs-read-stream.js": {
     "category": "inherent",
     "reason": "The mkfifo block creates a real OS FIFO via child_process and reads it back through fs.createReadStream. The memfs-backed shim cannot open real-disk FIFOs (no OS file descriptors \u2014 the fs lane's documented honest gap), and proxying to native fs would violate the browser-first rule. The browser lane is identically unable. Everything else in the file passes (bytesRead, start/end validation, options.fs overrides, autoClose/autoDestroy semantics)."
@@ -518,10 +514,6 @@
   "test-fs-realpath-native.js": {
     "category": "inherent",
     "reason": "Test resolves './test/parallel/test-fs-realpath-native.js' against process cwd, assuming the Node.js repo layout (a test/ dir under cwd). The parity mirror keeps tests at parity/node-test/parallel/, so no cwd satisfies it; the shim cannot remap relative paths to a different repo layout without breaking path semantics. Fails identically at pristine base 1a89d258."
-  },
-  "test-fs-realpath.js": {
-    "category": "inherent",
-    "reason": "Shim-side bug fixed (relative symlink targets now absolutized against the link dir; test_simple_relative_symlink passes). Remaining subtests need vendored fixtures absent from parity/node-test/fixtures at base: fixtures/nested-index/one, fixtures/cycles/root.js, fixtures/cycles/folder (never vendored; verified via git log). realpath/stat through symlinks to these targets cannot succeed. Fails identically at pristine base 1a89d258."
   },
   "test-fs-rm.js": {
     "category": "inherent",
