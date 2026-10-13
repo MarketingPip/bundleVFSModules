@@ -193,6 +193,8 @@ const NO_ENRICH_CODES = new Set([
   "ERR_DIR_CLOSED",
   "ERR_INVALID_ARG_VALUE",
   "ERR_INVALID_OPT_VALUE",
+  "ERR_INCOMPATIBLE_OPTION_PAIR",
+  "ERR_INVALID_RETURN_VALUE",
   "ABORT_ERR",
   "ERR_FS_FILE_TOO_LARGE",
 ]);
@@ -2290,6 +2292,7 @@ function buildApi(vol) {
       try {
         checkRename(oldPath, newPath);
         origSync.call(this, toPathString(oldPath), toPathString(newPath));
+        moveSymlinkTarget(oldPath, newPath);
       } catch (e) {
         throw enrichDestErr(e, "renameSync", oldPath, newPath);
       }
@@ -2310,6 +2313,7 @@ function buildApi(vol) {
             (err) => {
               if (err)
                 return callback(enrichDestErr(err, "rename", oldPath, newPath));
+              moveSymlinkTarget(oldPath, newPath);
               emitFs("fs", "rename", oldPath, undefined);
               callback(null);
             },
@@ -2671,11 +2675,15 @@ function buildApi(vol) {
   {
     const origSync = fs.copyFileSync;
     fs.copyFileSync = function (src, dest, mode) {
-      validatePath(src);
+      validatePath(src, "src");
       validatePath(dest, "dest");
       const m = validateCopyFileMode(mode);
       try {
         const r = origSync.call(this, toPathString(src), toPathString(dest), m);
+        // Node's copyfile copies the source file's mode onto dest
+        // (libuv fchmod(dst, src_st_mode)). memfs's copyFileSync leaves
+        // dest at its default mode, so set it explicitly.
+        fs.chmodSync(toPathString(dest), fs.statSync(toPathString(src)).mode);
         emitFs("fs", "copyFileSync", src, r);
         return r;
       } catch (e) {
@@ -2692,7 +2700,7 @@ function buildApi(vol) {
       }
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
-      validatePath(src);
+      validatePath(src, "src");
       validatePath(dest, "dest");
       const m = validateCopyFileMode(mode);
       const userCb = callback;
@@ -2704,6 +2712,17 @@ function buildApi(vol) {
           m,
           (err) => {
             if (err) return userCb(enrichDestErr(err, "copyFile", src, dest));
+            // Node's copyfile copies the source file's mode onto dest
+            // (libuv fchmod(dst, src_st_mode)). memfs's copyFile leaves
+            // dest at its default mode, so set it explicitly.
+            try {
+              fs.chmodSync(
+                toPathString(dest),
+                fs.statSync(toPathString(src)).mode,
+              );
+            } catch (e) {
+              return userCb(enrichDestErr(e, "copyFile", src, dest));
+            }
             emitFs("fs", "copyFile", src, undefined);
             userCb(null);
           },
@@ -2715,203 +2734,841 @@ function buildApi(vol) {
   }
 
   // ── cp/cpSync ──
-  function cpCheckRange(options) {
-    const mode = options && options.mode;
-    if (mode !== undefined && mode !== null) {
-      const m = Number(mode);
-      if (!Number.isInteger(m) || m < 0 || m > 7) {
-        const err = new RangeError(
-          `The value of "mode" is out of range. It must be >= 0 && <= 7. Received ${mode}`,
-        );
-        err.code = "ERR_OUT_OF_RANGE";
-        throw err;
+  // Faithful port of Node v24's cp (lib/internal/fs/cp/cp.js, cp-sync.js and
+  // the C++ CpSyncCheckPaths / CpSyncCopyDir / CpSyncOverrideFile), probed
+  // against v24.20.0. The async and sync variants genuinely differ:
+  //  - filter: cp awaits it; cpSync throws ERR_INVALID_RETURN_VALUE when it
+  //    returns a promise.
+  //  - top-level src stat for the checks: sync stats lstat when dereference
+  //    is set and stat otherwise (inverted vs the async version, which
+  //    honors dereference); a symlink src therefore counts as a directory
+  //    for the sync checks and needs recursive.
+  //  - sync dir copies without a filter run the C++ fast-path semantics:
+  //    symlink children are re-created as absolute-resolved symlinks even
+  //    with dereference:true; a dest symlink is FOLLOWED (not replaced)
+  //    when overwriting with a regular file. With a filter (or async),
+  //    symlinks are dereferenced and dest symlinks are unlinked first.
+  //  - a new dest dir gets the src mode in async / sync-with-filter, but
+  //    not in the sync fast path.
+  //  - options are validated synchronously, before the paths (Node order:
+  //    callback, options, src, dest).
+
+  function errIncompatibleOptionPair(opt1, opt2) {
+    const err = new TypeError(
+      `Option "${opt1}" cannot be used in combination with option "${opt2}"`,
+    );
+    err.code = "ERR_INCOMPATIBLE_OPTION_PAIR";
+    return err;
+  }
+  function errInvalidReturnValue(expected, name, value) {
+    let got;
+    if (value && value.constructor && value.constructor.name)
+      got = `instance of ${value.constructor.name}`;
+    else got = `type ${typeof value}`;
+    const err = new TypeError(
+      `Expected ${expected} to be returned from the "${name}" function but got ${got}.`,
+    );
+    err.code = "ERR_INVALID_RETURN_VALUE";
+    return err;
+  }
+  function cpIsPromise(v) {
+    if (v instanceof Promise) return true;
+    return (
+      v !== null &&
+      (typeof v === "object" || typeof v === "function") &&
+      typeof v.then === "function" &&
+      v[Symbol.toStringTag] === "Promise"
+    );
+  }
+
+  const defaultCpOptions = {
+    dereference: false,
+    errorOnExist: false,
+    filter: undefined,
+    force: true,
+    preserveTimestamps: false,
+    recursive: false,
+    verbatimSymlinks: false,
+  };
+  function validateCpMode(mode) {
+    if (mode === undefined || mode === null) return 0;
+    if (typeof mode !== "number")
+      throw errInvalidArgType("mode", "number", mode);
+    if (!Number.isInteger(mode) || mode < 0 || mode > 7)
+      throw errOutOfRange("mode", ">= 0 && <= 7", mode);
+    return mode;
+  }
+  // Mirrors Node's validateCpOptions (lib/internal/fs/utils.js): defaults,
+  // boolean checks per option, mode range, the dereference/verbatimSymlinks
+  // pair check, filter-is-function. Never mutates the caller's object
+  // (tests wrap it in a mutation-detecting proxy).
+  function validateCpOptions(options) {
+    if (options === undefined) return { ...defaultCpOptions, mode: 0 };
+    if (options === null || typeof options !== "object")
+      throw errInvalidArgType("options", "object", options);
+    const opts = { ...defaultCpOptions, ...options };
+    for (const k of [
+      "dereference",
+      "errorOnExist",
+      "force",
+      "preserveTimestamps",
+      "recursive",
+      "verbatimSymlinks",
+    ]) {
+      if (typeof opts[k] !== "boolean")
+        throw errInvalidArgTypeProp(`options.${k}`, "boolean", opts[k]);
+    }
+    opts.mode = validateCpMode(options.mode);
+    if (opts.dereference && opts.verbatimSymlinks)
+      throw errIncompatibleOptionPair("dereference", "verbatimSymlinks");
+    if (opts.filter !== undefined && typeof opts.filter !== "function")
+      throw errInvalidArgType("options.filter", "function", opts.filter);
+    return opts;
+  }
+
+  // ── symlink target fidelity ──
+  // memfs resolves relative symlink targets against process.cwd() at
+  // creation and readlink replays the resolved path; Node stores the target
+  // verbatim. Pre-resolve relative targets against the link's own directory
+  // (so following the link resolves correctly) and remember the raw target
+  // for verbatim readlink — cp's verbatimSymlinks depends on it.
+  const symlinkRawTargets = new Map();
+  function symlinkMapKey(p) {
+    return cpAbsPath(toPathString(p));
+  }
+  function rememberSymlinkTarget(linkPath, rawTarget) {
+    const k = symlinkMapKey(linkPath);
+    if (typeof rawTarget === "string") symlinkRawTargets.set(k, rawTarget);
+    else symlinkRawTargets.delete(k);
+  }
+  function forgetSymlinkTargetsUnder(p) {
+    const k = symlinkMapKey(p);
+    symlinkRawTargets.delete(k);
+    const prefix = k.endsWith("/") ? k : k + "/";
+    for (const key of [...symlinkRawTargets.keys()]) {
+      if (key.startsWith(prefix)) symlinkRawTargets.delete(key);
+    }
+  }
+  function moveSymlinkTarget(oldP, newP) {
+    const o = symlinkMapKey(oldP),
+      n = symlinkMapKey(newP);
+    const oprefix = o.endsWith("/") ? o : o + "/";
+    for (const [key, val] of [...symlinkRawTargets.entries()]) {
+      if (key === o || key.startsWith(oprefix)) {
+        symlinkRawTargets.delete(key);
+        symlinkRawTargets.set(key === o ? n : n + key.slice(o.length), val);
       }
     }
   }
-  function cpImpl(src, dest, options) {
-    const opts = options || {};
-    cpCheckRange(opts);
-    const s = toPathString(src),
-      d = toPathString(dest);
-    let srcLstat = null;
+  // Resolve a raw link target the way the filesystem does: relative targets
+  // are relative to the link's own directory.
+  function cpResolveLinkTarget(linkPathStr, rawTarget) {
+    const lp = toPathString(linkPathStr);
+    return rawTarget.startsWith("/")
+      ? cpPosixNormalize(rawTarget)
+      : cpPosixNormalize(cpPosixDirname(lp) + "/" + rawTarget);
+  }
+  // memfs's traversal restarts from root with node.symlink steps, so the
+  // node must hold link-dir-resolved absolute steps even when the raw
+  // target is relative.
+  function cpFixupSymlinkNode(linkPath, rawTarget) {
     try {
-      srcLstat = vol.lstatSync(s);
+      const lp = toPathString(linkPath);
+      const link = vol.getLink(lp.split("/").filter(Boolean));
+      if (!link) return;
+      link.getNode().symlink = cpResolveLinkTarget(lp, rawTarget)
+        .split("/")
+        .filter(Boolean);
+    } catch {}
+  }
+  function cpReadlinkRaw(p) {
+    const raw = symlinkRawTargets.get(symlinkMapKey(p));
+    if (raw !== undefined) return raw;
+    return vol.readlinkSync(p);
+  }
+  // readlink returning the verbatim target; self-healing against stale
+  // entries (unlink/rm reach vol directly, bypassing the wrapper).
+  function readlinkRaw(p) {
+    const ps = toPathString(p);
+    let lst;
+    try {
+      lst = vol.lstatSync(ps);
     } catch (e) {
-      throw enrichErr(e, "cp");
+      throw e;
     }
-    const deref = !!opts.dereference;
-    const srcIsDir =
-      srcLstat.isSymbolicLink() && !deref
-        ? false
-        : (() => {
-            try {
-              return vol.statSync(s).isDirectory();
-            } catch {
-              return srcLstat.isDirectory();
-            }
-          })();
-    let destSt = null;
+    if (!lst.isSymbolicLink()) {
+      symlinkRawTargets.delete(symlinkMapKey(ps));
+      return vol.readlinkSync(ps); // throws EINVAL like Node
+    }
+    return cpReadlinkRaw(ps);
+  }
+
+  // ── cp path helpers (posix; memfs paths are posix) ──
+  function shimCwd() {
     try {
-      // With dereference:false, lstat the dest so a symlink-to-dir is not
-      // mistaken for a directory (test-fs-cp-sync-dereference).
-      destSt = deref ? vol.statSync(d) : vol.lstatSync(d);
-    } catch {
-      /* ignore */
+      if (
+        typeof process !== "undefined" &&
+        process &&
+        typeof process.cwd === "function"
+      )
+        return process.cwd();
+    } catch {}
+    return "/";
+  }
+  function cpPosixNormalize(p) {
+    const abs = p.startsWith("/");
+    const out = [];
+    for (const part of p.split("/")) {
+      if (part === "" || part === ".") continue;
+      if (part === "..") {
+        out.pop();
+        continue;
+      }
+      out.push(part);
     }
+    const r = (abs ? "/" : "") + out.join("/");
+    return r || (abs ? "/" : ".");
+  }
+  function cpAbsPath(p) {
+    const ps = toPathString(p);
+    return cpPosixNormalize(ps.startsWith("/") ? ps : shimCwd() + "/" + ps);
+  }
+  function cpPosixDirname(p) {
+    const ap = cpAbsPath(p);
+    const i = ap.lastIndexOf("/");
+    if (i <= 0) return "/";
+    return ap.slice(0, i);
+  }
+  // Node's isSrcSubdir: both paths resolved, dest starts with src.
+  function cpIsSrcSubdir(s, d) {
+    const sArr = cpAbsPath(s).split("/").filter(Boolean);
+    const dArr = cpAbsPath(d).split("/").filter(Boolean);
+    if (sArr.length > dArr.length) return false;
+    return sArr.every((part, i) => dArr[i] === part);
+  }
+  // The OS reports ENAMETOOLONG for absurd names; memfs just says ENOENT.
+  function cpCheckNameLength(p, syscall) {
+    const ps = toPathString(p);
+    for (const part of ps.split("/")) {
+      if (part.length > 255) {
+        throw makeFsError(
+          "ENAMETOOLONG",
+          syscall,
+          ps,
+          "file name too long",
+        );
+      }
+    }
+    if (ps.length > 4096) {
+      throw makeFsError("ENAMETOOLONG", syscall, ps, "file name too long");
+    }
+  }
+  // Single-volume equivalent of Node's areIdentical (ino+dev): memfs dev is
+  // always 0, but ino uniquely identifies a node in the volume.
+  function cpAreIdentical(a, b) {
+    return !!(a && b && a.ino && b.ino && a.ino === b.ino);
+  }
+  function cpErr(code, path, message, errno) {
+    const err = makeFsError(code, "cp", path, message);
+    // Keep enrichErr from rewriting the syscall to the probed "lstat".
+    err._syscallOverride = "cp";
+    if (errno !== undefined) err.errno = errno;
+    return err;
+  }
 
-    if (s === d) {
-      const err = makeFsError(
-        "ERR_FS_CP_EINVAL",
-        "cp",
-        s,
-        "Invalid src or dest: cp returned EINVAL",
-      );
-      err.errno = 22;
-      throw err;
+  // Top-level src/dest checks. isAsync=false reproduces the C++
+  // CpSyncCheckPaths (note the inverted src stat vs the async version).
+  function cpCheckPaths(s, d, opts, isAsync) {
+    const deref = opts.dereference;
+    const srcSyscall = isAsync
+      ? deref
+        ? "stat"
+        : "lstat"
+      : deref
+        ? "lstat"
+        : "stat";
+    cpCheckNameLength(s, srcSyscall);
+    cpCheckNameLength(d, deref ? "stat" : "lstat");
+    const srcStatFn = isAsync
+      ? deref
+        ? (p) => vol.statSync(p)
+        : (p) => vol.lstatSync(p)
+      : deref
+        ? (p) => vol.lstatSync(p)
+        : (p) => vol.statSync(p);
+    const destStatFn = deref
+      ? (p) => vol.statSync(p)
+      : (p) => vol.lstatSync(p);
+    let srcStat;
+    try {
+      srcStat = srcStatFn(s);
+    } catch (e) {
+      throw e;
     }
-    if (srcIsDir) {
-      if (!opts.recursive) {
-        const err = makeFsError(
-          "ERR_FS_EISDIR",
-          "cp",
-          s,
-          "Path is a directory: cp returned EISDIR",
-        );
-        err.errno = 21;
-        throw err;
-      }
-      if (destSt && !destSt.isDirectory()) {
-        const err = makeFsError(
-          "ERR_FS_CP_DIR_TO_NON_DIR",
-          "cp",
-          s,
-          "Invalid src or dest: cp returned EINVAL",
-        );
-        err.errno = 22;
-        throw err;
-      }
-      // dest inside src?
-      if (d === s || d.startsWith(s + "/")) {
-        const err = makeFsError(
+    let destStat = null;
+    try {
+      destStat = destStatFn(d);
+    } catch (e) {
+      if (!e || e.code !== "ENOENT") throw e;
+    }
+    const srcIsDir = isAsync
+      ? srcStat.isDirectory()
+      : srcStat.isDirectory() || (deref && srcStat.isSymbolicLink());
+    if (destStat) {
+      if (cpIdenticalCheck(s, d, srcStat, destStat, isAsync)) {
+        throw cpErr(
           "ERR_FS_CP_EINVAL",
-          "cp",
-          s,
-          "Invalid src or dest: cp returned EINVAL",
+          d,
+          "src and dest cannot be the same",
+          22,
         );
-        err.errno = 22;
-        throw err;
       }
-    } else if (destSt && destSt.isDirectory()) {
-      const err = makeFsError(
-        "ERR_FS_CP_NON_DIR_TO_DIR",
-        "cp",
-        s,
-        "Invalid src or dest: cp returned EINVAL",
-      );
-      err.errno = 22;
-      throw err;
+      const destIsDir = destStat.isDirectory();
+      if (srcIsDir && !destIsDir) {
+        throw cpErr(
+          "ERR_FS_CP_DIR_TO_NON_DIR",
+          d,
+          `cannot overwrite non-directory ${d} with directory ${s}`,
+          21,
+        );
+      }
+      if (!srcIsDir && destIsDir) {
+        throw cpErr(
+          "ERR_FS_CP_NON_DIR_TO_DIR",
+          d,
+          `cannot overwrite directory ${d} with non-directory ${s}`,
+          20,
+        );
+      }
     }
+    if (srcIsDir && cpIsSrcSubdir(s, d)) {
+      throw cpErr(
+        "ERR_FS_CP_EINVAL",
+        d,
+        `cannot copy ${s} to a subdirectory of self ${d}`,
+        22,
+      );
+    }
+    return { srcStat, destStat, srcIsDir };
+  }
+  function cpIdenticalCheck(s, d, srcStat, destStat, isAsync) {
+    if (isAsync) return cpAreIdentical(srcStat, destStat);
+    // C++ equivalent(): follows symlinks on both sides.
+    let a = null,
+      b = null;
+    try {
+      a = vol.statSync(s);
+    } catch {}
+    try {
+      b = vol.statSync(d);
+    } catch {}
+    if (!a || !b) return false;
+    return cpAreIdentical(a, b);
+  }
+  // Node's checkParentPaths (async) / the C++ equivalent() parent walk
+  // (sync): walk dest's parents following symlinks, comparing against src.
+  // compareStat: async → checkPaths' srcStat; sync → following stat of src
+  // (null when that stat fails, matching the C++ early break).
+  function cpCheckParentPaths(s, d, compareStat, isAsync) {
+    if (!compareStat) return;
+    const srcParent = cpPosixDirname(s);
+    let destParent = cpPosixDirname(d);
+    let guard = 0;
+    while (destParent !== srcParent && destParent !== "/" && guard++ < 512) {
+      let st = null;
+      try {
+        st = vol.statSync(destParent);
+      } catch (e) {
+        // async: only ENOENT stops the walk; sync (C++): any stat error.
+        if (isAsync && (!e || e.code !== "ENOENT")) throw e;
+        return;
+      }
+      if (cpAreIdentical(compareStat, st)) {
+        throw cpErr(
+          "ERR_FS_CP_EINVAL",
+          d,
+          `cannot copy ${s} to a subdirectory of self ${d}`,
+          22,
+        );
+      }
+      const next = cpPosixDirname(destParent);
+      if (next === destParent) return;
+      destParent = next;
+    }
+  }
+  function cpMkdirParent(d) {
+    const parent = cpPosixDirname(d);
+    try {
+      vol.mkdirSync(parent, { recursive: true });
+    } catch (e) {
+      if (!e || e.code !== "EEXIST") throw e;
+    }
+  }
+  function cpFilterCheckSync(filter, from, to) {
+    const r = filter(from, to);
+    if (cpIsPromise(r)) throw errInvalidReturnValue("boolean", "filter", r);
+    return !!r;
+  }
 
-    const filter = opts.filter;
-    const doCopy = (from, to) => {
-      if (filter && !filter(from, to)) return;
+  // Set times with ms precision. memfs's utimesSync round-trips through
+  // float seconds (new Date(sec * 1000)) and loses milliseconds, so write
+  // the node times directly (same technique as lutimesImpl).
+  function cpSetTimesExact(d, s) {
+    let st;
+    try {
+      st = vol.statSync(s);
+    } catch {
+      return;
+    }
+    try {
+      const link = vol.getLink(toPathString(d).split("/").filter(Boolean));
+      if (!link) return;
+      const node = link.getNode();
+      node.atime = new Date(st.atimeMs);
+      node.mtime = new Date(st.mtimeMs);
+    } catch {}
+  }
+  function cpHandleTimestamps(srcMode, s, d) {
+    // Node makes the dest writable before utimes (EPERM otherwise on
+    // readonly files), then sets times, then restores the src mode.
+    // Order note: memfs's chmod touches mtime (real chmod only touches
+    // ctime), so the exact times must be written LAST.
+    if ((srcMode & 0o200) === 0) {
+      try {
+        vol.chmodSync(d, srcMode | 0o200);
+      } catch {}
+    }
+    try {
+      vol.chmodSync(d, srcMode);
+    } catch {}
+    cpSetTimesExact(d, s);
+  }
+  function cpCopyFile(s, d, srcStat, opts) {
+    vol.copyFileSync(s, d, opts.mode);
+    // Node's copy leaves dest with the src mode exactly (probed: 0o666
+    // survives a 007 umask); memfs does not preserve it.
+    try {
+      vol.chmodSync(d, srcStat.mode);
+    } catch {}
+    if (opts.preserveTimestamps) cpHandleTimestamps(srcStat.mode, s, d);
+  }
+  // Top-level / JS-path file copy: Node unlinks dest first (async
+  // mayCopyFile / C++ CpSyncOverrideFile), so a dest symlink is replaced
+  // rather than followed.
+  function cpOnFile(s, d, srcStat, destStat, opts) {
+    if (!destStat) {
+      cpCopyFile(s, d, srcStat, opts);
+      return;
+    }
+    if (opts.force) {
+      try {
+        vol.unlinkSync(d);
+      } catch (e) {
+        if (!e || e.code !== "ENOENT") throw e;
+      }
+      cpCopyFile(s, d, srcStat, opts);
+      return;
+    }
+    if (opts.errorOnExist) {
+      throw cpErr("ERR_FS_CP_EEXIST", d, `${d} already exists`, 17);
+    }
+    // !force && !errorOnExist: skip silently.
+  }
+  function cpSymlinkStore(target, d) {
+    // target is what readlink(dest) must return (resolved absolute for the
+    // default mode, raw for verbatim). memfs resolves relative targets
+    // against process.cwd() at creation, so pre-resolve against the link's
+    // dir for the stored node and fix up traversal steps.
+    const store = target.startsWith("/")
+      ? target
+      : cpAbsPath(cpPosixDirname(d) + "/" + target);
+    vol.symlinkSync(store, d);
+    rememberSymlinkTarget(d, target);
+    cpFixupSymlinkNode(d, target);
+  }
+  // Shared JS onLink (async cp.js and sync cp-sync.js are identical here).
+  function cpOnLink(s, d, destStat, opts) {
+    const rawSrc = readlinkRaw(s);
+    let resolvedSrc = rawSrc;
+    if (!opts.verbatimSymlinks && !resolvedSrc.startsWith("/")) {
+      resolvedSrc = cpAbsPath(cpPosixDirname(s) + "/" + resolvedSrc);
+    }
+    if (!destStat) {
+      cpSymlinkStore(resolvedSrc, d);
+      return;
+    }
+    let resolvedDest;
+    try {
+      resolvedDest = readlinkRaw(d);
+    } catch (e) {
+      if (e && (e.code === "EINVAL" || e.code === "UNKNOWN")) {
+        // Dest exists and is not a symlink: symlink() throws EEXIST.
+        cpSymlinkStore(resolvedSrc, d);
+        return;
+      }
+      throw e;
+    }
+    if (!resolvedDest.startsWith("/")) {
+      resolvedDest = cpAbsPath(cpPosixDirname(d) + "/" + resolvedDest);
+    }
+    let srcIsDir = false;
+    try {
+      srcIsDir = vol.statSync(s).isDirectory();
+    } catch {}
+    if (srcIsDir && cpIsSrcSubdir(resolvedSrc, resolvedDest)) {
+      throw cpErr(
+        "ERR_FS_CP_EINVAL",
+        d,
+        `cannot copy ${resolvedSrc} to a subdirectory of self ${resolvedDest}`,
+        22,
+      );
+    }
+    let destIsDir = false;
+    try {
+      destIsDir = vol.statSync(d).isDirectory();
+    } catch {}
+    if (destIsDir && cpIsSrcSubdir(resolvedDest, resolvedSrc)) {
+      throw cpErr(
+        "ERR_FS_CP_SYMLINK_TO_SUBDIRECTORY",
+        d,
+        `cannot overwrite ${resolvedDest} with ${resolvedSrc}`,
+        22,
+      );
+    }
+    try {
+      vol.unlinkSync(d);
+    } catch (e) {
+      if (!e || e.code !== "ENOENT") throw e;
+    }
+    cpSymlinkStore(resolvedSrc, d);
+  }
+  function cpOnDir(s, d, srcStat, destStat, opts, isAsync) {
+    const useJsPath = isAsync || !!opts.filter;
+    const doChmod = () => {
+      try {
+        vol.chmodSync(d, srcStat.mode);
+      } catch {}
+    };
+    if (!destStat) {
+      if (useJsPath) {
+        // async mkDirAndCopy / sync-with-filter copyDir(mkDir): mkdir,
+        // copy, then chmod the new dir to the src mode.
+        vol.mkdirSync(d);
+        if (isAsync) return cpCopyDir(s, d, opts, isAsync).then(doChmod);
+        cpCopyDir(s, d, opts, isAsync);
+        doChmod();
+        return;
+      }
+      // sync fast path (C++ CpSyncCopyDir): no chmod of the new dir.
+      cpCopyDirFast(s, d, opts);
+      return;
+    }
+    if (isAsync && opts.errorOnExist && !opts.force) {
+      throw cpErr("ERR_FS_CP_EEXIST", d, `${d} already exists`, 17);
+    }
+    if (useJsPath) {
+      if (isAsync) return cpCopyDir(s, d, opts, isAsync);
+      cpCopyDir(s, d, opts, isAsync);
+      return;
+    }
+    cpCopyDirFast(s, d, opts);
+  }
+  function cpCopyDir(s, d, opts, isAsync) {
+    if (isAsync) return cpCopyDirAsync(s, d, opts);
+    return cpCopyDirSyncFiltered(s, d, opts);
+  }
+  async function cpCopyDirAsync(s, d, opts) {
+    const sp = cpDirPhys(s, opts);
+    const names = vol.readdirSync(sp);
+    for (const name of names) {
+      const si = s + "/" + name;
+      const di = d + "/" + name;
+      // async checkPaths: filter (awaited) + full checks, no parent walk.
+      if (opts.filter && !(await opts.filter(si, di))) continue;
+      const { srcStat, destStat } = cpCheckPaths(si, di, opts, true);
+      await cpGetStatsForCopy(si, di, srcStat, destStat, opts, true);
+    }
+  }
+  function cpCopyDirSyncFiltered(s, d, opts) {
+    const sp = cpDirPhys(s, opts);
+    const names = vol.readdirSync(sp);
+    const statFn = opts.dereference
+      ? (p) => vol.statSync(p)
+      : (p) => vol.lstatSync(p);
+    for (const name of names) {
+      const si = s + "/" + name;
+      const di = d + "/" + name;
+      if (!cpFilterCheckSync(opts.filter, si, di)) continue;
+      // Node's sync-with-filter getStats: stat-only dispatch, no checkPaths.
+      let srcStat;
+      try {
+        srcStat = statFn(si);
+      } catch (e) {
+        throw e;
+      }
+      let destStat = null;
+      try {
+        destStat = statFn(di);
+      } catch (e) {
+        if (!e || e.code !== "ENOENT") throw e;
+      }
+      cpGetStatsForCopy(si, di, srcStat, destStat, opts, false);
+    }
+  }
+  // Resolve symlink components for memfs traversal: memfs's lstatSync
+  // cannot traverse a symlinked dir, and its realpath mishandles
+  // link/child. Only needed with dereference (otherwise symlinked dirs
+  // are copied as links, never traversed).
+  function cpDirPhys(s, opts) {
+    if (!opts.dereference) return s;
+    let cur = s;
+    for (let i = 0; i < 40; i++) {
       let lst;
       try {
-        lst = vol.lstatSync(from);
+        lst = vol.lstatSync(cur);
       } catch {
-        return;
+        return cur;
       }
-      if (lst.isSymbolicLink() && !deref) {
-        const target = vol.readlinkSync(from);
-        const linkTarget = opts.verbatimSymlinks
-          ? target
-          : target.startsWith("/")
-            ? target
-            : posixResolve(posixDirname(from), target);
+      if (!lst.isSymbolicLink()) return cur;
+      const raw = readlinkRaw(cur);
+      cur = raw.startsWith("/")
+        ? raw
+        : cpAbsPath(cpPosixDirname(cur) + "/" + raw);
+    }
+    return cur;
+  }
+  function cpGetStatsForCopy(s, d, srcStat, destStat, opts, isAsync) {
+    if (srcStat.isDirectory() && opts.recursive) {
+      return cpOnDir(s, d, srcStat, destStat, opts, isAsync);
+    }
+    if (srcStat.isDirectory()) {
+      throw cpErr(
+        "ERR_FS_EISDIR",
+        s,
+        isAsync
+          ? `${s} is a directory (not copied)`
+          : `Recursive option not enabled, cannot copy a directory: ${s}`,
+        21,
+      );
+    }
+    if (srcStat.isFile()) {
+      cpOnFile(s, d, srcStat, destStat, opts);
+      return;
+    }
+    if (srcStat.isSymbolicLink()) {
+      cpOnLink(s, d, destStat, opts);
+      return;
+    }
+    if (typeof srcStat.isSocket === "function" && srcStat.isSocket()) {
+      throw cpErr(
+        "ERR_FS_CP_SOCKET",
+        d,
+        `cannot copy a socket file: ${d}`,
+        22,
+      );
+    }
+    if (typeof srcStat.isFIFO === "function" && srcStat.isFIFO()) {
+      throw cpErr(
+        "ERR_FS_CP_FIFO_PIPE",
+        d,
+        `cannot copy a FIFO pipe: ${d}`,
+        22,
+      );
+    }
+    throw cpErr(
+      "ERR_FS_CP_UNKNOWN",
+      d,
+      `cannot copy an unknown file type: ${d}`,
+      22,
+    );
+  }
+  // Sync fast path (C++ CpSyncCopyDir) for filter-less dir copies.
+  function cpCopyDirFast(s, d, opts) {
+    const sp = cpDirPhys(s, opts);
+    try {
+      vol.mkdirSync(d, { recursive: true });
+    } catch (e) {
+      if (!e || e.code !== "EEXIST") throw e;
+    }
+    const names = vol.readdirSync(sp);
+    for (const name of names) {
+      const spi = sp + "/" + name;
+      const di = d + "/" + name;
+      const lst = vol.lstatSync(spi);
+      if (lst.isSymbolicLink()) {
+        let childIsDir = false;
         try {
-          vol.symlinkSync(linkTarget, to);
+          childIsDir = vol.statSync(spi).isDirectory();
+        } catch {}
+        cpFastLink(spi, di, opts, childIsDir);
+      } else if (lst.isDirectory()) {
+        try {
+          vol.mkdirSync(di);
         } catch (e) {
-          if (opts.force !== false) {
-            try {
-              vol.unlinkSync(to);
-            } catch {}
-            vol.symlinkSync(linkTarget, to);
-          } else throw e;
+          if (!e || e.code !== "EEXIST") throw e;
         }
-        return;
-      }
-      const st = vol.statSync(from);
-      if (st.isDirectory()) {
-        try {
-          vol.mkdirSync(to, { recursive: true });
-        } catch {
-          /* ignore */
-        }
-        for (const name of vol.readdirSync(from)) {
-          doCopy(from + "/" + name, to + "/" + name);
-        }
-        // timestamps
-        try {
-          vol.utimesSync(to, st.atime, st.mtime);
-        } catch {}
+        cpCopyDirFast(spi, di, opts);
       } else {
-        const existsDest = (() => {
-          try {
-            vol.statSync(to);
-            return true;
-          } catch {
-            return false;
-          }
-        })();
-        if (existsDest && opts.force === false && !opts.errorOnExist) return;
-        if (existsDest && opts.errorOnExist) {
-          throw enrichErr(
-            makeFsError("EEXIST", "cp", to, "file already exists"),
-            "cp",
-          );
-        }
-        // With dereference:false, a dest symlink must be replaced, not
-        // followed (memfs's copyFileSync follows it into EISDIR).
-        if (!deref) {
-          try {
-            if (vol.lstatSync(to).isSymbolicLink()) vol.unlinkSync(to);
-          } catch {}
-        }
-        vol.copyFileSync(from, to);
-        const srcStat = vol.statSync(from);
-        try {
-          vol.utimesSync(to, srcStat.atime, srcStat.mtime);
-        } catch {}
-        if (opts.preserveTimestamps) {
-          try {
-            vol.utimesSync(to, srcStat.atime, srcStat.mtime);
-            vol.chmodSync(to, srcStat.mode);
-          } catch {}
-        }
+        cpFastFile(spi, di, opts);
       }
-    };
-
-    const finalDest = srcIsDir || (destSt && destSt.isDirectory()) ? d : d;
-    if (srcIsDir) {
-      try {
-        vol.mkdirSync(finalDest, { recursive: true });
-      } catch {}
-      for (const name of vol.readdirSync(s)) {
-        doCopy(s + "/" + name, finalDest + "/" + name);
-      }
-    } else {
-      const target =
-        destSt && destSt.isDirectory()
-          ? finalDest + "/" + s.slice(s.lastIndexOf("/") + 1)
-          : finalDest;
-      doCopy(s, target);
     }
   }
+  function cpFastFile(s, d, opts) {
+    // C++ file_copy_opts: force → overwrite_existing; errorOnExist &&
+    // !force → EEXIST; else skip_existing.
+    let destStat = null;
+    try {
+      destStat = vol.lstatSync(d);
+    } catch (e) {
+      if (!e || e.code !== "ENOENT") throw e;
+    }
+    if (destStat) {
+      if (!opts.force) {
+        if (opts.errorOnExist) {
+          throw cpErr("ERR_FS_CP_EEXIST", d, `${d} already exists`, 17);
+        }
+        return;
+      }
+      // force: C++ overwrites in place — a dest symlink is FOLLOWED, not
+      // replaced (memfs copyFileSync follows dest symlinks too).
+    }
+    const srcStat = vol.statSync(s);
+    vol.copyFileSync(s, d, opts.mode);
+    try {
+      vol.chmodSync(d, srcStat.mode);
+    } catch {}
+    if (opts.preserveTimestamps) cpHandleTimestamps(srcStat.mode, s, d);
+  }
+  function cpFastLink(s, d, opts, childIsDir) {
+    const rawTarget = readlinkRaw(s);
+    if (opts.verbatimSymlinks) {
+      let exists = false;
+      try {
+        vol.lstatSync(d);
+        exists = true;
+      } catch {}
+      if (exists) {
+        throw cpErr("EEXIST", d, "file already exists");
+      }
+      cpSymlinkStore(rawTarget, d);
+      return;
+    }
+    const targetAbs = rawTarget.startsWith("/")
+      ? rawTarget
+      : cpAbsPath(cpPosixDirname(s) + "/" + rawTarget);
+    let destStat = null;
+    try {
+      destStat = vol.lstatSync(d);
+    } catch (e) {
+      if (!e || e.code !== "ENOENT") throw e;
+    }
+    if (destStat) {
+      if (destStat.isSymbolicLink()) {
+        const rawDest = readlinkRaw(d);
+        const destTargetAbs = rawDest.startsWith("/")
+          ? rawDest
+          : cpAbsPath(cpPosixDirname(d) + "/" + rawDest);
+        if (
+          !opts.dereference &&
+          childIsDir &&
+          cpIsSrcSubdir(targetAbs, destTargetAbs)
+        ) {
+          throw cpErr(
+            "ERR_FS_CP_EINVAL",
+            d,
+            `cannot copy ${targetAbs} to a subdirectory of self ${destTargetAbs}`,
+            22,
+          );
+        }
+        let destIsDir = false;
+        try {
+          destIsDir = vol.statSync(d).isDirectory();
+        } catch {}
+        if (destIsDir && cpIsSrcSubdir(destTargetAbs, targetAbs)) {
+          throw cpErr(
+            "ERR_FS_CP_SYMLINK_TO_SUBDIRECTORY",
+            d,
+            `cannot overwrite ${destTargetAbs} with ${targetAbs}`,
+            22,
+          );
+        }
+        try {
+          vol.unlinkSync(d);
+        } catch (e) {
+          if (!e || e.code !== "ENOENT") throw e;
+        }
+      } else {
+        // Regular file or dir: EEXIST (C++ throws, or the OS-level
+        // create_symlink fails over an existing path).
+        throw cpErr("EEXIST", d, "file already exists");
+      }
+    }
+    vol.symlinkSync(targetAbs, d);
+    forgetSymlinkTargetsUnder(d);
+  }
+  function cpCheckFileType(srcStat, d) {
+    if (srcStat.isDirectory() || srcStat.isFile() || srcStat.isSymbolicLink())
+      return;
+    if (typeof srcStat.isSocket === "function" && srcStat.isSocket()) {
+      throw cpErr("ERR_FS_CP_SOCKET", d, `cannot copy a socket file: ${d}`, 22);
+    }
+    if (typeof srcStat.isFIFO === "function" && srcStat.isFIFO()) {
+      throw cpErr(
+        "ERR_FS_CP_FIFO_PIPE",
+        d,
+        `cannot copy a FIFO pipe: ${d}`,
+        22,
+      );
+    }
+    throw cpErr(
+      "ERR_FS_CP_UNKNOWN",
+      d,
+      `cannot copy an unknown file type: ${d}`,
+      22,
+    );
+  }
+  function cpDispatch(s, d, destStat, opts, isAsync) {
+    const statFn = opts.dereference
+      ? (p) => vol.statSync(p)
+      : (p) => vol.lstatSync(p);
+    return cpGetStatsForCopy(s, d, statFn(s), destStat, opts, isAsync);
+  }
+  function cpSyncTop(s, d, opts) {
+    if (opts.filter && !cpFilterCheckSync(opts.filter, s, d)) return;
+    const { srcStat, destStat, srcIsDir } = cpCheckPaths(s, d, opts, false);
+    // C++ parent walk uses a following stat of src (null → skip, like the
+    // C++ early break on error).
+    let compareStat = null;
+    try {
+      compareStat = vol.statSync(s);
+    } catch {}
+    cpCheckParentPaths(s, d, compareStat, false);
+    if (srcIsDir && !opts.recursive) {
+      throw cpErr(
+        "ERR_FS_EISDIR",
+        s,
+        `Recursive option not enabled, cannot copy a directory: ${s}`,
+        21,
+      );
+    }
+    // C++ type switch (socket/fifo/unknown) runs before dest parent setup.
+    cpCheckFileType(srcStat, d);
+    cpMkdirParent(d);
+    cpDispatch(s, d, destStat, opts, false);
+  }
+  async function cpAsyncTop(s, d, opts) {
+    if (opts.filter && !(await opts.filter(s, d))) return;
+    const { srcStat, destStat } = cpCheckPaths(s, d, opts, true);
+    cpCheckParentPaths(s, d, srcStat, true);
+    cpMkdirParent(d);
+    await cpDispatch(s, d, destStat, opts, true);
+  }
   fs.cpSync = function (src, dest, options) {
+    const opts = validateCpOptions(options);
     validatePath(src);
     validatePath(dest, "dest");
     try {
-      cpImpl(src, dest, options);
+      cpSyncTop(toPathString(src), toPathString(dest), opts);
     } catch (e) {
       throw enrichErr(e, "cpSync");
     }
@@ -2924,16 +3581,19 @@ function buildApi(vol) {
     }
     if (typeof callback !== "function")
       throw errInvalidArgType("cb", "function", callback);
+    const opts = validateCpOptions(options);
     validatePath(src);
     validatePath(dest, "dest");
+    const s = toPathString(src),
+      d = toPathString(dest);
     nextTick(() => {
-      try {
-        cpImpl(src, dest, options);
-        emitFs("fs", "cp", src, undefined);
-        callback(null);
-      } catch (e) {
-        callback(enrichErr(e, "cp"));
-      }
+      cpAsyncTop(s, d, opts).then(
+        () => {
+          emitFs("fs", "cp", src, undefined);
+          callback(null);
+        },
+        (e) => callback(enrichErr(e, "cp")),
+      );
     });
   };
 
@@ -3637,6 +4297,75 @@ function buildApi(vol) {
       }
       validateEncodingOpt(options);
       return oC.call(this, p, options, callback);
+    };
+  }
+  // ── Symlink target fidelity (cp parity) ──
+  // Real Node stores the symlink target verbatim: readlinkSync returns
+  // exactly the string passed to symlinkSync, even when relative (probed
+  // v24.20.0: readlinkSync -> "foo.js", not cwd-resolved). The raw-target
+  // map and node fixup helpers live in the cp section above
+  // (rememberSymlinkTarget, cpFixupSymlinkNode); the wrappers here just
+  // hook creation and readlink.
+  {
+    const oSymlinkSync = fs.symlinkSync,
+      oSymlink = fs.symlink;
+    fs.symlinkSync = function (target, newPath, type) {
+      const raw = toPathString(target);
+      const r = oSymlinkSync.call(this, target, newPath, type);
+      rememberSymlinkTarget(newPath, raw);
+      cpFixupSymlinkNode(newPath, raw);
+      return r;
+    };
+    fs.symlink = function (target, newPath, type, callback) {
+      if (typeof type === "function") {
+        callback = type;
+        type = undefined;
+      }
+      const raw = toPathString(target);
+      rememberSymlinkTarget(newPath, raw);
+      return oSymlink.call(this, target, newPath, type, (err) => {
+        if (!err) cpFixupSymlinkNode(newPath, raw);
+        if (typeof callback === "function") callback(err);
+      });
+    };
+    const oReadlinkSync = fs.readlinkSync,
+      oReadlink = fs.readlink;
+    const rawEncoding = (options) => {
+      const enc =
+        typeof options === "string"
+          ? options
+          : options && options.encoding
+            ? options.encoding
+            : "utf8";
+      return enc;
+    };
+    const rememberedRaw = (p) => {
+      try {
+        return symlinkRawTargets.get(symlinkMapKey(p));
+      } catch {
+        return undefined;
+      }
+    };
+    fs.readlinkSync = function (p, options) {
+      validateEncodingOpt(options);
+      const raw = rememberedRaw(p);
+      if (raw !== undefined)
+        return rawEncoding(options) === "buffer" ? Buffer.from(raw) : raw;
+      return oReadlinkSync.call(this, p, options);
+    };
+    fs.readlink = function (p, options, callback) {
+      if (typeof options === "function") {
+        callback = options;
+        options = undefined;
+      }
+      validateEncodingOpt(options);
+      const raw = rememberedRaw(p);
+      if (raw !== undefined) {
+        const out = rawEncoding(options) === "buffer" ? Buffer.from(raw) : raw;
+        if (typeof callback === "function") nextTick(() => callback(null, out));
+        return;
+      }
+      return oReadlink.call(this, p, options, callback);
     };
   }
   wrapSync("chmodSync", null, true);
@@ -5721,10 +6450,14 @@ function buildApi(vol) {
   );
   definePromise(
     "cp",
-    (src, dest, options) =>
-      new Promise((resolve, reject) => {
+    (src, dest, options) => {
+      // promises.cp validates options directly (no callback shifting):
+      // a function options is ERR_INVALID_ARG_TYPE, not a callback.
+      validateCpOptions(options);
+      return new Promise((resolve, reject) => {
         fs.cp(src, dest, options, (err) => (err ? reject(err) : resolve()));
-      }),
+      });
+    },
   );
   definePromise(
     "statfs",
