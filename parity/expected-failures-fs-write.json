@@ -1,0 +1,14 @@
+{
+  "test-fs-syncwritestream.js": {
+    "category": "inherent",
+    "reason": "Test passes a memfs virtual fd (e.g. 2147483647) as stdio to a REAL child_process.spawn; the OS rejects it with 'Error: spawn EBADF'. A browser-shim fd can never be a real OS fd, and the failure occurs in spawn before any shim code runs. Verified identical on pristine base 1a89d258."
+  },
+  "test-fs-write-buffer-large.js": {
+    "category": "inherent",
+    "reason": "Test passes a 2GB buffer to fs.write expecting a synchronous ERR_OUT_OF_RANGE throw, but the parity harness's syncArgs() (parity/fs-harness.mjs) calls Buffer.toString() on every Buffer argument while scanning for tmpdir paths; toString() on the 2GB buffer throws ERR_STRING_TOO_LONG before the shim's validation runs, so assert.throws sees the wrong error. Verified identical on pristine base 1a89d258."
+  },
+  "test-fs-writesync-crash.js": {
+    "category": "inherent",
+    "reason": "Test installs a throwing setter on Object.prototype.errno, then the parity harness's syncPath() calls realFs.lstatSync which triggers the setter during error construction -> V8 FATAL ERROR 'v8::FromJust Maybe value is Nothing' (process abort, exit 134). The crash is in the harness's real-fs sync path, not the shim. Verified identical on pristine base 1a89d258."
+  }
+}
