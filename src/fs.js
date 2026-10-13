@@ -5060,7 +5060,7 @@ function buildApi(vol) {
       }
       armStreamSignal(this, signal);
       emitFs("fs", "createReadStream", this.path, this);
-      if (this.fd === null) {
+      if (this.fd === null && !opts._skipOpenSchedule) {
         if (this.open !== readStreamOpenNoop) {
           // open() was monkey-patched: Node's _construct hack.
           this._openPending = true;
@@ -5070,7 +5070,7 @@ function buildApi(vol) {
           this._openPending = true;
           nextTick(() => this._openWithImpl());
         }
-      } else {
+      } else if (this.fd !== null) {
         // A caller-provided fd is already open (Node closes it on destroy
         // when autoClose, like a stream-opened fd).
         this._opened = true;
@@ -5269,7 +5269,7 @@ function buildApi(vol) {
       }
       armStreamSignal(this, signal);
       emitFs("fs", "createWriteStream", this.path, this);
-      if (this.fd === null) {
+      if (this.fd === null && !opts._skipOpenSchedule) {
         if (this.open !== writeStreamOpenNoop) {
           // open() was monkey-patched: Node's _construct hack.
           this._openPending = true;
@@ -5279,7 +5279,7 @@ function buildApi(vol) {
           this._openPending = true;
           nextTick(() => this._openWithImpl());
         }
-      } else {
+      } else if (this.fd !== null) {
         // A caller-provided fd is already open (Node closes it on destroy
         // when autoClose, like a stream-opened fd).
         this._opened = true;
@@ -5406,10 +5406,86 @@ function buildApi(vol) {
   // checks hold in both directions.
   function ReadStreamFactory(path, options) {
     validateEncodingOpt(options);
+    // Old-Node/graceful-fs compat: fs.ReadStream.call(subclassThis, ...).
+    // Transplant a real instance's state onto the caller's `this` so
+    // subclass prototype overrides (open) are honored.
+    if (
+      new.target === undefined &&
+      this !== undefined &&
+      this !== null &&
+      typeof this === "object" &&
+      this._readableState === undefined
+    ) {
+      const opts =
+        options && typeof options === "object"
+          ? { ...options, _skipOpenSchedule: true }
+          : { _skipOpenSchedule: true };
+      const inst = new FsReadStream(path, opts);
+      for (const k of Object.getOwnPropertyNames(inst)) {
+        try {
+          this[k] = inst[k];
+        } catch {}
+      }
+      for (const s of Object.getOwnPropertySymbols(inst)) {
+        try {
+          this[s] = inst[s];
+        } catch {}
+      }
+      // Schedule open on `this` (sees the subclass's open override).
+      if (this.fd === null) {
+        if (this.open !== readStreamOpenNoop) {
+          this._openPending = true;
+          nextTick(() => openWithPatchedOpen(this));
+        } else {
+          this._openPending = true;
+          nextTick(() => this._openWithImpl());
+        }
+      } else {
+        this._opened = true;
+        nextTick(() => this.emit("open", this.fd));
+      }
+      return this;
+    }
     return new FsReadStream(path, options);
   }
   function WriteStreamFactory(path, options) {
     validateEncodingOpt(options);
+    if (
+      new.target === undefined &&
+      this !== undefined &&
+      this !== null &&
+      typeof this === "object" &&
+      this._writableState === undefined
+    ) {
+      const opts =
+        options && typeof options === "object"
+          ? { ...options, _skipOpenSchedule: true }
+          : { _skipOpenSchedule: true };
+      const inst = new FsWriteStream(path, opts);
+      for (const k of Object.getOwnPropertyNames(inst)) {
+        try {
+          this[k] = inst[k];
+        } catch {}
+      }
+      for (const s of Object.getOwnPropertySymbols(inst)) {
+        try {
+          this[s] = inst[s];
+        } catch {}
+      }
+      if (this.fd === null) {
+        if (this.open !== writeStreamOpenNoop) {
+          this._openPending = true;
+          nextTick(() => openWithPatchedOpen(this));
+        } else {
+          this._openPending = true;
+          nextTick(() => this._openWithImpl());
+        }
+      } else if (this.fd !== null) {
+        this._opened = true;
+        nextTick(() => this.emit("open", this.fd));
+      }
+      return this;
+    }
     return new FsWriteStream(path, options);
   }
   ReadStreamFactory.prototype = FsReadStream.prototype;
