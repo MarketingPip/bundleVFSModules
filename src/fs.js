@@ -1105,26 +1105,39 @@ class Stats {
       _birthtime: { value: new Date(birthtimeMs), writable: true },
     });
   }
+  // Real Node lazily defines own enumerable date properties on first
+  // access (test-fs-stat-date.mjs asserts Object.keys includes them after
+  // .getTime() is read).
+  _lazyDate(prop, key) {
+    const v = this[key];
+    Object.defineProperty(this, prop, {
+      value: v,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    return v;
+  }
   get atime() {
-    return this._atime;
+    return this._lazyDate("atime", "_atime");
   }
   set atime(v) {
     this._atime = v;
   }
   get mtime() {
-    return this._mtime;
+    return this._lazyDate("mtime", "_mtime");
   }
   set mtime(v) {
     this._mtime = v;
   }
   get ctime() {
-    return this._ctime;
+    return this._lazyDate("ctime", "_ctime");
   }
   set ctime(v) {
     this._ctime = v;
   }
   get birthtime() {
-    return this._birthtime;
+    return this._lazyDate("birthtime", "_birthtime");
   }
   set birthtime(v) {
     this._birthtime = v;
@@ -1258,9 +1271,17 @@ function _toUnixTimestamp(time, name = "time") {
     // Convert to 123.456 UNIX timestamp
     return time.getTime() / 1000;
   }
-  throw new TypeError(
-    `The "${name}" argument must be of type Date or time in seconds. Received ${time}`,
+  // Real Node's template here is `must be an instance of ...` (no "of type").
+  const err = errInvalidArgType(
+    name,
+    "an instance of Date or an Time in seconds",
+    time,
   );
+  err.message = err.message.replace(
+    "must be of type an instance of",
+    "must be an instance of",
+  );
+  throw err;
 }
 
 // ── 7. API builder ──────────────────────────────────────────────────────────
@@ -6826,6 +6847,9 @@ function buildSingleton() {
   // memfs also attaches its own Stats; expose our PublicStats (14-arg,
   // DEP0180-emitting) instead.
   fs.Stats = PublicStats;
+  // memfs's createFsFromVolume copies Node's internal toUnixTimestamp;
+  // expose our validating _toUnixTimestamp instead.
+  fs._toUnixTimestamp = _toUnixTimestamp;
   // Real Node exposes F_OK/R_OK/W_OK/X_OK on the fs namespace as getter-only,
   // NON-enumerable properties (memfs's createFsFromVolume copies them as
   // writable enumerable data props); assignment must throw TypeError in
