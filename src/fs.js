@@ -183,6 +183,16 @@ function errInvalidArgType(name, expected, received) {
     `The "${name}" argument must be of type ${expected}. Received ${what}`,
   );
   err.code = "ERR_INVALID_ARG_TYPE";
+  // Real Node stringifies coded validation errors as
+  // `TypeError [ERR_INVALID_ARG_TYPE]: ...`.
+  Object.defineProperty(err, "toString", {
+    value: function () {
+      return `${this.name} [${this.code}]: ${this.message}`;
+    },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
   return err;
 }
 
@@ -3077,6 +3087,13 @@ function buildApi(vol) {
     err.code = "ERR_DIR_CLOSED";
     return err;
   }
+  function dirConcurrentError() {
+    const err = new Error(
+      "Cannot do synchronous work on directory handle with concurrent asynchronous operations",
+    );
+    err.code = "ERR_DIR_CONCURRENT_OPERATION";
+    return err;
+  }
   class Dir {
     constructor(path) {
       if (arguments.length === 0) {
@@ -3084,27 +3101,29 @@ function buildApi(vol) {
         err.code = "ERR_MISSING_ARGS";
         throw err;
       }
-      this.path = path;
+      this._path = path;
       this._closed = false;
       this._entries = null;
+      this._readInFlight = false;
     }
     _ensure() {
       if (this._closed) throw dirClosedError();
       if (!this._entries) {
-        const names = vol.readdirSync(this.path);
+        const names = vol.readdirSync(this._path);
         this._entries = names.map((name) => {
           let mode = 0;
           try {
-            mode = vol.lstatSync(this.path + "/" + name).mode;
+            mode = vol.lstatSync(this._path + "/" + name).mode;
           } catch {
             /* ignore */
           }
-          return new Dirent(name, this.path, mode);
+          return new Dirent(name, this._path, mode);
         });
         this._index = 0;
       }
     }
     readSync() {
+      if (this._readInFlight) throw dirConcurrentError();
       this._ensure();
       if (this._index >= this._entries.length) return null;
       return this._entries[this._index++];
@@ -3112,7 +3131,9 @@ function buildApi(vol) {
     read(callback) {
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
+      this._readInFlight = true;
       nextTick(() => {
+        this._readInFlight = false;
         try {
           callback(null, this.readSync());
         } catch (e) {
@@ -3121,13 +3142,16 @@ function buildApi(vol) {
       });
     }
     closeSync() {
+      if (this._readInFlight) throw dirConcurrentError();
       if (this._closed) throw dirClosedError();
       this._closed = true;
-      emitFs("fs", "Dir.closeSync", this.path, undefined);
+      emitFs("fs", "Dir.closeSync", this._path, undefined);
     }
     close(callback) {
-      if (typeof callback !== "function")
+      if (callback === undefined)
         return Promise.resolve().then(() => this.closeSync());
+      if (typeof callback !== "function")
+        throw errInvalidArgType("callback", "function", callback);
       nextTick(() => {
         try {
           this.closeSync();
@@ -3159,9 +3183,62 @@ function buildApi(vol) {
       }
     }
   }
+  // Real Node exposes Dir#path as a prototype getter that throws
+  // ERR_INVALID_THIS when accessed on anything but a Dir instance.
+  Object.defineProperty(Dir.prototype, "path", {
+    enumerable: false,
+    configurable: true,
+    get() {
+      if (!(this instanceof Dir)) {
+        const err = new TypeError('Value of "this" must be of type Dir');
+        err.code = "ERR_INVALID_THIS";
+        throw err;
+      }
+      return this._path;
+    },
+  });
   fs.Dir = Dir;
+  // Mirrors Node's opendir options validation: encoding via assertEncoding,
+  // bufferSize must be a number in [1, 4294967295] (integer).
+  function validateOpendirOptions(options) {
+    validateEncodingOpt(options);
+    const bufferSize =
+      options !== null && typeof options === "object"
+        ? options.bufferSize
+        : undefined;
+    if (bufferSize === undefined) return;
+    if (typeof bufferSize !== "number") {
+      // Same "property" phrasing Node uses for options.bufferSize.
+      const what =
+        bufferSize === null
+          ? "null"
+          : typeof bufferSize === "object"
+            ? `an instance of ${bufferSize.constructor ? bufferSize.constructor.name : "Object"}`
+            : `type ${typeof bufferSize} (${typeof bufferSize === "string" ? `'${bufferSize}'` : String(bufferSize)})`;
+      const err = new TypeError(
+        `The "options.bufferSize" property must be of type number. Received ${what}`,
+      );
+      err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+    if (!Number.isInteger(bufferSize)) {
+      const err = new RangeError(
+        `The value of "options.bufferSize" is out of range. It must be an integer. Received ${bufferSize}`,
+      );
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    if (bufferSize < 1 || bufferSize > 4294967295) {
+      const err = new RangeError(
+        `The value of "options.bufferSize" is out of range. It must be >= 1 && <= 4294967295. Received ${bufferSize}`,
+      );
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+  }
   fs.opendirSync = function (p, options) {
     validatePath(p);
+    validateOpendirOptions(options);
     const ps = toPathString(p);
     let dir;
     try {
@@ -3184,9 +3261,11 @@ function buildApi(vol) {
       callback = options;
       options = undefined;
     }
-    if (typeof callback !== "function")
-      throw errInvalidArgType("cb", "function", callback);
+    // Node order: path, options (encoding/bufferSize), callback.
     validatePath(p);
+    validateOpendirOptions(options);
+    if (typeof callback !== "function")
+      throw errInvalidArgType("callback", "function", callback);
     nextTick(() => {
       try {
         const dir = fs.opendirSync(p, options);
@@ -6190,7 +6269,9 @@ function buildApi(vol) {
           // Promise-flavoured Dir: read()/close() return promises.
           dir.read = () =>
             new Promise((res, rej) => {
+              dir._readInFlight = true;
               nextTick(() => {
+                dir._readInFlight = false;
                 try {
                   res(dir.readSync());
                 } catch (e) {
@@ -6200,17 +6281,20 @@ function buildApi(vol) {
             });
           const origClose = dir.close.bind(dir);
           dir.close = (cb) => {
-            if (typeof cb === "function") return origClose(cb);
-            return new Promise((res, rej) => {
-              nextTick(() => {
-                try {
-                  dir.closeSync();
-                  res();
-                } catch (e) {
-                  rej(enrichErr(e, "opendir"));
-                }
+            if (cb === undefined) {
+              return new Promise((res, rej) => {
+                nextTick(() => {
+                  try {
+                    dir.closeSync();
+                    res();
+                  } catch (e) {
+                    rej(enrichErr(e, "opendir"));
+                  }
+                });
               });
-            });
+            }
+            // Non-function callback throws ERR_INVALID_ARG_TYPE (via Dir#close).
+            return origClose(cb);
           };
           resolve(dir);
         });
@@ -6598,15 +6682,20 @@ function buildSingleton() {
   fs._vol = vol;
   fs.constants = buildFsConstants();
   fs.promises.constants = fs.constants;
-  // Real Node exposes F_OK/R_OK/W_OK/X_OK on the fs namespace as getter-only
-  // properties (memfs's createFsFromVolume copies them as writable data
-  // props); assignment must throw TypeError in strict mode. Reading any of
-  // them emits DEP0176 — once per process, shared across all four keys.
+  // memfs's createFsFromVolume attaches its own Dirent class; the shim must
+  // expose ours (Dirent instances from readdir/opendir/glob are ours).
+  fs.Dirent = Dirent;
+  // Real Node exposes F_OK/R_OK/W_OK/X_OK on the fs namespace as getter-only,
+  // NON-enumerable properties (memfs's createFsFromVolume copies them as
+  // writable enumerable data props); assignment must throw TypeError in
+  // strict mode. Reading any of them emits DEP0176 — once per process,
+  // shared across all four keys.
   let dep0176Warned = false;
   for (const k of ["F_OK", "R_OK", "W_OK", "X_OK"]) {
     const v = fs[k];
     Object.defineProperty(fs, k, {
-      enumerable: true,
+      enumerable: false,
+      configurable: true,
       get: () => {
         if (!dep0176Warned) {
           dep0176Warned = true;
