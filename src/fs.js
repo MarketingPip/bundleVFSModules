@@ -2029,7 +2029,9 @@ function buildApi(vol) {
           })();
     let destSt = null;
     try {
-      destSt = vol.statSync(d);
+      // With dereference:false, lstat the dest so a symlink-to-dir is not
+      // mistaken for a directory (test-fs-cp-sync-dereference).
+      destSt = deref ? vol.statSync(d) : vol.lstatSync(d);
     } catch {
       /* ignore */
     }
@@ -2144,6 +2146,13 @@ function buildApi(vol) {
             makeFsError("EEXIST", "cp", to, "file already exists"),
             "cp",
           );
+        }
+        // With dereference:false, a dest symlink must be replaced, not
+        // followed (memfs's copyFileSync follows it into EISDIR).
+        if (!deref) {
+          try {
+            if (vol.lstatSync(to).isSymbolicLink()) vol.unlinkSync(to);
+          } catch {}
         }
         vol.copyFileSync(from, to);
         const srcStat = vol.statSync(from);
