@@ -3276,6 +3276,116 @@ function buildApi(vol) {
     validatePath(p);
     return toPathString(p);
   }
+  function hasReadFileBufferOpt(options) {
+    return (
+      options !== null &&
+      typeof options === "object" &&
+      options.buffer !== undefined
+    );
+  }
+  function normalizeReadFileOptions(options) {
+    if (options === undefined || options === null) return {};
+    if (typeof options === "string") return { encoding: options };
+    return options;
+  }
+  // Manual readFile core: fd (reads from the CURRENT position, unlike
+  // memfs's position-0 read) or path, with Node v24's `buffer` option
+  // (Buffer or (size) => Buffer). `fp` is a validated fd or path string.
+  function readFileSyncManual(fp, options) {
+    options = normalizeReadFileOptions(options);
+    validateReadFileBufferOptions(options);
+    const isUserFd = typeof fp === "number";
+    const fd = isUserFd ? fp : vol.openSync(fp, options.flag || "r");
+    try {
+      checkFdReadable(fd, "read");
+      const st = vol.fstatSync(fd);
+      if (st.size > 2 ** 31 - 1) {
+        const err = new RangeError(
+          `File size (${st.size}) is greater than 2 GiB`,
+        );
+        err.code = "ERR_FS_FILE_TOO_LARGE";
+        throw err;
+      }
+      const size = st.isFile() ? st.size : 0;
+      const hasUserBuffer = options.buffer !== undefined;
+      let buffer;
+      let buffers;
+      if (hasUserBuffer) {
+        buffer = getReadFileBuffer(options, size);
+      } else if (size === 0) {
+        buffers = [];
+      } else {
+        buffer = allocReadBuffer(size);
+      }
+      let pos = 0;
+      let bytesRead;
+      if (hasUserBuffer) {
+        if (size !== 0) {
+          do {
+            bytesRead = readMemfs(fd, buffer, pos, size - pos, -1, "read");
+            pos += bytesRead;
+          } while (bytesRead !== 0 && pos < size);
+        } else {
+          // Unknown size (pipes, fstat tricks): fill the user buffer,
+          // then probe one extra byte for the too-small error.
+          while (pos < buffer.byteLength) {
+            bytesRead = readMemfs(
+              fd,
+              buffer,
+              pos,
+              buffer.byteLength - pos,
+              -1,
+              "read",
+            );
+            pos += bytesRead;
+            if (bytesRead === 0) break;
+          }
+          const extra = allocReadBuffer(1);
+          bytesRead = readMemfs(fd, extra, 0, 1, -1, "read");
+          if (bytesRead !== 0) {
+            throw readFileBufferTooSmallError(
+              getReadFileBufferByteLengthName(options),
+              buffer.byteLength,
+            );
+          }
+        }
+      } else if (size !== 0) {
+        do {
+          bytesRead = readMemfs(fd, buffer, pos, size - pos, -1, "read");
+          pos += bytesRead;
+        } while (bytesRead !== 0 && pos < size);
+      } else {
+        do {
+          buffer = allocReadBuffer(8192);
+          bytesRead = readMemfs(fd, buffer, 0, 8192, -1, "read");
+          if (bytesRead !== 0) buffers.push(buffer.subarray(0, bytesRead));
+          pos += bytesRead;
+        } while (bytesRead !== 0);
+      }
+      let result;
+      if (hasUserBuffer) result = buffer.subarray(0, pos);
+      else if (size === 0) {
+        result =
+          typeof Buffer !== "undefined"
+            ? Buffer.concat(buffers, pos)
+            : buffers.reduce((acc, b) => {
+                const out = new Uint8Array(acc.length + b.length);
+                out.set(acc, 0);
+                out.set(b, acc.length);
+                return out;
+              }, new Uint8Array(0));
+      } else if (pos < size) result = buffer.subarray(0, pos);
+      else result = buffer;
+      if (options.encoding) result = result.toString(options.encoding);
+      return result;
+    } finally {
+      if (!isUserFd) {
+        try {
+          vol.closeSync(fd);
+        } catch {}
+      }
+    }
+  }
   for (const [syncName, cbName] of [
     ["readFileSync", "readFile"],
     ["writeFileSync", "writeFile"],
@@ -3292,6 +3402,24 @@ function buildApi(vol) {
         data = normalizeDataArg(data);
       }
       const fp = fileArg(p);
+      if (syncName === "readFileSync" && typeof fp === "number") {
+        getValidatedFd(fp);
+      }
+      if (
+        syncName === "readFileSync" &&
+        (typeof fp === "number" || hasReadFileBufferOpt(rest[0]))
+      ) {
+        // fd reads from the current position (memfs reads from 0); the
+        // `buffer` option needs the manual path too.
+        let result;
+        try {
+          result = readFileSyncManual(fp, rest[0]);
+        } catch (e) {
+          throw enrichErr(e, syncName);
+        }
+        emitFs("fs", syncName, p, result);
+        return result;
+      }
       // memfs doesn't apply the umask on file creation; fix the mode if we
       // created the file and no explicit mode was given.
       let existed = true;
@@ -3335,6 +3463,26 @@ function buildApi(vol) {
       validateEncodingOpt(cbName === "readFile" ? args[0] : args[1]);
       // Path validation (incl. null bytes) also throws synchronously in Node.
       const fp = fileArg(p);
+      if (
+        cbName === "readFile" &&
+        (typeof fp === "number" || hasReadFileBufferOpt(args[0]))
+      ) {
+        // fd reads from the current position; the `buffer` option needs
+        // the manual path too. Async via nextTick (memfs is synchronous).
+        nextTick(() => {
+          let result;
+          try {
+            if (typeof fp === "number") getValidatedFd(fp);
+            result = readFileSyncManual(fp, args[0]);
+          } catch (e) {
+            callback(enrichErr(e, cbName));
+            return;
+          }
+          emitFs("fs", cbName, p, result);
+          callback(null, result);
+        });
+        return;
+      }
       origCb.call(this, fp, ...args, (err, result) => {
         if (err) return callback(enrichErr(err, cbName));
         emitFs("fs", cbName, p, result);
@@ -4646,7 +4794,18 @@ function buildApi(vol) {
       }
       this._pos += n;
       this.bytesRead += n;
-      this.push(buf.slice(0, n));
+      let chunk = buf;
+      if (n !== buf.length) {
+        // Shrink to fit: copy into an exact-size, unpooled ArrayBuffer
+        // instead of slice()ing, so the small chunk doesn't retain the
+        // large backing store (Node uses allocUnsafeSlow for the same
+        // reason; test-fs-read-stream-concurrent-reads asserts this).
+        const ab = new ArrayBuffer(n);
+        new Uint8Array(ab).set(buf.subarray(0, n));
+        chunk =
+          typeof Buffer !== "undefined" ? Buffer.from(ab) : new Uint8Array(ab);
+      }
+      this.push(chunk);
     }
     _cleanup() {
       closeStreamFd(this);
@@ -5097,17 +5256,11 @@ function buildApi(vol) {
           ? validateAbortSignal(options.signal)
           : undefined;
       await throwIfAborted(signal);
+      validateEncodingOpt(options);
       try {
-        // Node refuses reads past 2 GiB - 1 (kIoMaxLength).
-        const st = vol.fstatSync(this.fd);
-        if (st.size > 2 ** 31 - 1) {
-          const err = new RangeError(
-            `File size (${st.size}) is greater than 2 GiB`,
-          );
-          err.code = "ERR_FS_FILE_TOO_LARGE";
-          throw err;
-        }
-        const data = vol.readFileSync(this.fd, options);
+        // Reads from the fd's current position (memfs reads from 0) and
+        // honors the `buffer` option — see readFileSyncManual.
+        const data = readFileSyncManual(this.fd, options);
         emitFs("fs", "promises.readFile", this.fd, data);
         return data;
       } catch (e) {
