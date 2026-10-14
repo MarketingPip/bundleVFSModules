@@ -554,18 +554,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // Stream parity branch: timer-globals harness fix (no src/ changes).
+    // On main (after push), origin/main...HEAD is empty — no unpushed work.
     // (Prior branches merged; their files are on main.)
-    // Note: this structural test is branch-specific; update the allowlist
-    // when the branch footprint changes.
-    expect(files.sort()).toEqual(
-      [
-        "parity/HITLIST.md",
-        "parity/hooks.mjs",
-        "parity/preload.mjs",
-        "parity/stream-harness.mjs",
-      ].sort(),
-    );
+    // Note: this structural test is branch-specific and obsolete;
+    // it guards against stray unpushed files on main.
+    expect(files.sort()).toEqual([].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
