@@ -975,5 +975,17 @@
   "test-zlib.js": {
     "category": "needs-investigation",
     "reason": "Main test: needs investigation of specific assertion"
+  },
+  "test-module-parent-deprecation.js": {
+    "category": "inherent",
+    "reason": "Harness limitation: the parity runner uses `--import` to load the preload, which causes Node's native main module to have `parent === undefined` instead of `null`. The test asserts `module.parent === null` on the native module object (not the shim). Not a shim bug."
+  },
+  "test-module-strip-types.js": {
+    "category": "inherent",
+    "reason": "Deliberate documented gap (src/module.js header): `stripTypeScriptTypes()` validates arguments like Node but returns code unchanged. Real type-stripping needs the amaro TS parser which cannot be dependency-free. Browser-first: honest noop over fake."
+  },
+  "test-module-create-require.js": {
+    "category": "inherent",
+    "reason": "Deliberate browser-platform divergence (documented in src/module.js and tests/module.test.js): createRequire accepts non-file URL bases (data:/blob:/https:) because Vite's import.meta.url is never a file: URL in the browser. Node throws ERR_INVALID_ARG_VALUE. The repo's own tests verify the relaxed behavior."
   }
 }

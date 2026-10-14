@@ -62,7 +62,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | perf_hooks | 12 | 15 | 80.0% |
 | os | 5 | 6 | 83.3% |
 | process | 81 | 97 | 83.5% |
-| module | 28 | 32 | 87.5% |
+| module | 29 | 32 | 90.6% | +1 (28→29): HITLIST was stale. 3 inherent documented: createRequire non-file URL bases = deliberate browser divergence (Vite import.meta.url; repo tests verify), --import harness artifact (module.parent undefined), stripTypeScriptTypes deliberate noop (no amaro). |
 | trace_events | 28 | 29 | 96.6% | +2 (26→28): HITLIST was stale; actual shim-lane is 28/29. The 1 failure (get-category-enabled-buffer) is inherent: test uses --expose-internals + internalBinding('trace_events').getCategoryEnabledBuffer(), a Node C++ internal API the shim explicitly documents as unavailable. Documented in expected-failures.shim.json. |
 | worker_threads | 134 | 141 | 95.0% | Shim delegates to native via process.getBuiltinModule under Node; browser impl uses Web Workers. 7 failures documented in expected-failures.shim.json, all harness limitations (not shim bugs): 3 thread-ID offset from preload register() consuming ID 1 (event, messaging, name), 3 inspector/v8 debugging APIs (debug, exit-heapsnapshot, message-port-inspect), 1 timer-globals leak detector artifact dependent on parent process type (process-env). |
 | console | 22 | 22 | 100% | +2 (20→22): real shim bugs fixed — dirxml/groupCollapsed are now separate named functions (not aliases), matching Node where they are distinct function objects; formatTime port corrected (Node never outputs µs, uses e.g. `0.006ms`). Harness: preload.mjs sets globalThis.console to the shim when require('console') is called (require('console') === globalThis.console reference equality). |
