@@ -83,9 +83,19 @@ const systemFiles = [
   process.execPath,
 ].filter((p, i, a) => p && a.indexOf(p) === i);
 
-// Raw shim methods for the sync itself — never the wrapped versions below,
-// or syncPath would recurse into itself.
-const raw = shimFs;
+// Raw shim methods for the sync itself — a SNAPSHOT of the pristine functions,
+// never the wrapped versions below, or syncPath would recurse into itself.
+// (The harness wraps shimFs in place further down so test monkey-patches land
+// on the same object the shim's streams look up at call time; `raw` must keep
+// pointing at the originals.)
+const raw = {};
+for (const k of Object.keys(shimFs)) raw[k] = shimFs[k];
+for (const s of Object.getOwnPropertySymbols(shimFs)) raw[s] = shimFs[s];
+raw.promises = {};
+for (const k of Object.keys(shimFs.promises))
+  raw.promises[k] = shimFs.promises[k];
+for (const s of Object.getOwnPropertySymbols(shimFs.promises))
+  raw.promises[s] = shimFs.promises[s];
 
 // Hermetic tmpdir per test process (mirrors common.refresh()): stale files
 // from earlier runs must not leak into memfs via the sync below.
@@ -157,10 +167,14 @@ function syncPath(p) {
     } catch {}
     // Never clobber something the test wrote through the shim after the
     // real file appeared: copy only when memfs lacks it or disk is newer.
+    // Preserve the real-disk mtimes so tests that compare link vs target
+    // mtimes (test-fs-symlink-buffer-path.js) see the real age gap, not
+    // two files both stamped "now".
     if (!cur || st.mtimeMs > cur.mtimeMs) {
       try {
         raw.mkdirSync(realPath.dirname(p), { recursive: true });
         raw.writeFileSync(p, realFs.readFileSync(srcPath));
+        raw.utimesSync(p, st.atime, st.mtime);
       } catch {}
     }
   }
@@ -168,7 +182,18 @@ function syncPath(p) {
 }
 
 function syncArgs(args, methodName) {
-  for (const a of args) {
+  // For link/symlink, args[0] is the TARGET: its parent chain must not be
+  // eagerly created (the target's parent may itself be a symlink the test
+  // creates later — test-fs-realpath.js test_deep_symlink_mix). The dedicated
+  // target sync in wrapFn handles targets; syncArgs only prepares link paths.
+  const skipTarget =
+    methodName === "symlink" ||
+    methodName === "symlinkSync" ||
+    methodName === "link" ||
+    methodName === "linkSync";
+  for (let i = 0; i < args.length; i++) {
+    if (skipTarget && i === 0) continue;
+    const a = args[i];
     let p = null;
     if (typeof a === "string") p = a;
     else if (typeof Buffer !== "undefined" && Buffer.isBuffer(a))
@@ -233,6 +258,30 @@ function wrapFn(fn, methodName) {
       }
     }
     syncArgs(args, methodName);
+    // Symlink/hardlink targets: a test may link to an absolute path under a
+    // sync root (e.g. fixtures.path("cycles", "root.js")) that exists on real
+    // disk but was never passed to an fs call itself. Resolve the target the
+    // way the filesystem does (relative to the link's directory) and sync it
+    // so the shim's memfs can resolve through the link
+    // (test-fs-realpath.js deep-relative symlinks,
+    // test-fs-symlink-buffer-path.js Buffer target).
+    if (
+      methodName === "symlink" ||
+      methodName === "symlinkSync" ||
+      methodName === "link" ||
+      methodName === "linkSync"
+    ) {
+      let target = args[0];
+      let linkPath = args[1];
+      if (typeof Buffer !== "undefined" && Buffer.isBuffer(target))
+        target = target.toString();
+      if (typeof Buffer !== "undefined" && Buffer.isBuffer(linkPath))
+        linkPath = linkPath.toString();
+      if (typeof target === "string" && typeof linkPath === "string") {
+        const absTarget = realPath.resolve(realPath.dirname(linkPath), target);
+        if (underSyncRoot(absTarget)) syncPath(absTarget);
+      }
+    }
     if (new.target) return Reflect.construct(fn, args, new.target);
     return Reflect.apply(fn, this, args);
   }
@@ -265,136 +314,128 @@ function wrapFn(fn, methodName) {
   return wrapped;
 }
 
-function wrapObj(obj) {
-  const out = { ...obj };
-  for (const k of Object.keys(out)) {
-    if (typeof out[k] === "function") out[k] = wrapFn(out[k], k);
+// Wrap the shim's methods IN PLACE (not on a copy). Node's contract is that
+// streams look up fs methods on the fs module object at call time, so a test
+// monkey-patch (fs.close = ..., t.mock.method(fs, "fsync")) must land on the
+// SAME object the shim closes over — otherwise the patch is invisible to
+// already-created streams (test-fs-write-stream.js, test-fs-write-stream-err.js,
+// test-fs-*-flush.js). The sync engine keeps using `raw` (snapshot above).
+function wrapInPlace(obj) {
+  for (const k of Object.keys(obj)) {
+    if (typeof obj[k] === "function") obj[k] = wrapFn(obj[k], k);
   }
   // Symbol keys (e.g. util.promisify.custom) must survive the wrap.
   for (const s of Object.getOwnPropertySymbols(obj)) {
-    if (typeof obj[s] === "function") out[s] = wrapFn(obj[s], s.toString());
+    if (typeof obj[s] === "function") obj[s] = wrapFn(obj[s], s.toString());
   }
-  // Non-enumerable getter-only props (F_OK/R_OK/W_OK/X_OK) must survive:
-  // spread skips them, but tests assert assignment throws TypeError.
-  for (const k of ["F_OK", "R_OK", "W_OK", "X_OK"]) {
-    const d = Object.getOwnPropertyDescriptor(obj, k);
-    if (d && !Object.getOwnPropertyDescriptor(out, k)) {
-      Object.defineProperty(out, k, d);
-    }
-  }
-  // constants is non-enumerable in some builds; ensure it's present.
-  if (!("constants" in out) && "constants" in obj) {
-    out.constants = obj.constants;
-  }
-  return out;
 }
 
-const wrapped = wrapObj(shimFs);
-wrapped.promises = wrapObj(shimFs.promises);
+wrapInPlace(shimFs);
+wrapInPlace(shimFs.promises);
 
-export default wrapped;
+export default shimFs;
 
 // src/fs.js's non-function named exports (classes / utils): re-export raw.
 export { Stats, Dirent, Utf8Stream, _toUnixTimestamp } from "../src/fs.js";
 
 // Named function exports, wrapped (list generated from src/fs.js).
-export const access = wrapped.access;
-export const accessSync = wrapped.accessSync;
-export const appendFile = wrapped.appendFile;
-export const appendFileSync = wrapped.appendFileSync;
-export const chmod = wrapped.chmod;
-export const chmodSync = wrapped.chmodSync;
-export const chown = wrapped.chown;
-export const chownSync = wrapped.chownSync;
-export const close = wrapped.close;
-export const closeSync = wrapped.closeSync;
-export const copyFile = wrapped.copyFile;
-export const copyFileSync = wrapped.copyFileSync;
-export const cp = wrapped.cp;
-export const cpSync = wrapped.cpSync;
-export const createReadStream = wrapped.createReadStream;
-export const createWriteStream = wrapped.createWriteStream;
-export const exists = wrapped.exists;
-export const existsSync = wrapped.existsSync;
-export const fchmod = wrapped.fchmod;
-export const fchmodSync = wrapped.fchmodSync;
-export const fchown = wrapped.fchown;
-export const fchownSync = wrapped.fchownSync;
-export const fdatasync = wrapped.fdatasync;
-export const fdatasyncSync = wrapped.fdatasyncSync;
-export const fstat = wrapped.fstat;
-export const fstatSync = wrapped.fstatSync;
-export const fsync = wrapped.fsync;
-export const fsyncSync = wrapped.fsyncSync;
-export const ftruncate = wrapped.ftruncate;
-export const ftruncateSync = wrapped.ftruncateSync;
-export const futimes = wrapped.futimes;
-export const futimesSync = wrapped.futimesSync;
-export const glob = wrapped.glob;
-export const globSync = wrapped.globSync;
-export const lchmod = wrapped.lchmod;
-export const lchmodSync = wrapped.lchmodSync;
-export const lchown = wrapped.lchown;
-export const lchownSync = wrapped.lchownSync;
-export const link = wrapped.link;
-export const linkSync = wrapped.linkSync;
-export const lstat = wrapped.lstat;
-export const lstatSync = wrapped.lstatSync;
-export const lutimes = wrapped.lutimes;
-export const lutimesSync = wrapped.lutimesSync;
-export const mkdir = wrapped.mkdir;
-export const mkdirSync = wrapped.mkdirSync;
-export const mkdtemp = wrapped.mkdtemp;
-export const mkdtempSync = wrapped.mkdtempSync;
-export const mkdtempDisposableSync = wrapped.mkdtempDisposableSync;
-export const open = wrapped.open;
-export const openSync = wrapped.openSync;
-export const openAsBlob = wrapped.openAsBlob;
-export const opendir = wrapped.opendir;
-export const opendirSync = wrapped.opendirSync;
-export const read = wrapped.read;
-export const readSync = wrapped.readSync;
-export const readdir = wrapped.readdir;
-export const readdirSync = wrapped.readdirSync;
-export const readFile = wrapped.readFile;
-export const readFileSync = wrapped.readFileSync;
-export const readlink = wrapped.readlink;
-export const readlinkSync = wrapped.readlinkSync;
-export const readv = wrapped.readv;
-export const readvSync = wrapped.readvSync;
-export const realpath = wrapped.realpath;
-export const realpathSync = wrapped.realpathSync;
-export const rename = wrapped.rename;
-export const renameSync = wrapped.renameSync;
-export const rm = wrapped.rm;
-export const rmSync = wrapped.rmSync;
-export const rmdir = wrapped.rmdir;
-export const rmdirSync = wrapped.rmdirSync;
-export const stat = wrapped.stat;
-export const statSync = wrapped.statSync;
-export const statfs = wrapped.statfs;
-export const statfsSync = wrapped.statfsSync;
-export const symlink = wrapped.symlink;
-export const symlinkSync = wrapped.symlinkSync;
-export const truncate = wrapped.truncate;
-export const truncateSync = wrapped.truncateSync;
-export const unlink = wrapped.unlink;
-export const unlinkSync = wrapped.unlinkSync;
-export const utimes = wrapped.utimes;
-export const utimesSync = wrapped.utimesSync;
-export const watch = wrapped.watch;
-export const watchFile = wrapped.watchFile;
-export const unwatchFile = wrapped.unwatchFile;
-export const write = wrapped.write;
-export const writeSync = wrapped.writeSync;
-export const writeFile = wrapped.writeFile;
-export const writeFileSync = wrapped.writeFileSync;
-export const writev = wrapped.writev;
-export const writevSync = wrapped.writevSync;
-export const Dir = wrapped.Dir;
-export const ReadStream = wrapped.ReadStream;
-export const WriteStream = wrapped.WriteStream;
-export const FileReadStream = wrapped.FileReadStream;
-export const FileWriteStream = wrapped.FileWriteStream;
-export const promises = wrapped.promises;
-export const constants = wrapped.constants;
+export const access = shimFs.access;
+export const accessSync = shimFs.accessSync;
+export const appendFile = shimFs.appendFile;
+export const appendFileSync = shimFs.appendFileSync;
+export const chmod = shimFs.chmod;
+export const chmodSync = shimFs.chmodSync;
+export const chown = shimFs.chown;
+export const chownSync = shimFs.chownSync;
+export const close = shimFs.close;
+export const closeSync = shimFs.closeSync;
+export const copyFile = shimFs.copyFile;
+export const copyFileSync = shimFs.copyFileSync;
+export const cp = shimFs.cp;
+export const cpSync = shimFs.cpSync;
+export const createReadStream = shimFs.createReadStream;
+export const createWriteStream = shimFs.createWriteStream;
+export const exists = shimFs.exists;
+export const existsSync = shimFs.existsSync;
+export const fchmod = shimFs.fchmod;
+export const fchmodSync = shimFs.fchmodSync;
+export const fchown = shimFs.fchown;
+export const fchownSync = shimFs.fchownSync;
+export const fdatasync = shimFs.fdatasync;
+export const fdatasyncSync = shimFs.fdatasyncSync;
+export const fstat = shimFs.fstat;
+export const fstatSync = shimFs.fstatSync;
+export const fsync = shimFs.fsync;
+export const fsyncSync = shimFs.fsyncSync;
+export const ftruncate = shimFs.ftruncate;
+export const ftruncateSync = shimFs.ftruncateSync;
+export const futimes = shimFs.futimes;
+export const futimesSync = shimFs.futimesSync;
+export const glob = shimFs.glob;
+export const globSync = shimFs.globSync;
+export const lchmod = shimFs.lchmod;
+export const lchmodSync = shimFs.lchmodSync;
+export const lchown = shimFs.lchown;
+export const lchownSync = shimFs.lchownSync;
+export const link = shimFs.link;
+export const linkSync = shimFs.linkSync;
+export const lstat = shimFs.lstat;
+export const lstatSync = shimFs.lstatSync;
+export const lutimes = shimFs.lutimes;
+export const lutimesSync = shimFs.lutimesSync;
+export const mkdir = shimFs.mkdir;
+export const mkdirSync = shimFs.mkdirSync;
+export const mkdtemp = shimFs.mkdtemp;
+export const mkdtempSync = shimFs.mkdtempSync;
+export const mkdtempDisposableSync = shimFs.mkdtempDisposableSync;
+export const open = shimFs.open;
+export const openSync = shimFs.openSync;
+export const openAsBlob = shimFs.openAsBlob;
+export const opendir = shimFs.opendir;
+export const opendirSync = shimFs.opendirSync;
+export const read = shimFs.read;
+export const readSync = shimFs.readSync;
+export const readdir = shimFs.readdir;
+export const readdirSync = shimFs.readdirSync;
+export const readFile = shimFs.readFile;
+export const readFileSync = shimFs.readFileSync;
+export const readlink = shimFs.readlink;
+export const readlinkSync = shimFs.readlinkSync;
+export const readv = shimFs.readv;
+export const readvSync = shimFs.readvSync;
+export const realpath = shimFs.realpath;
+export const realpathSync = shimFs.realpathSync;
+export const rename = shimFs.rename;
+export const renameSync = shimFs.renameSync;
+export const rm = shimFs.rm;
+export const rmSync = shimFs.rmSync;
+export const rmdir = shimFs.rmdir;
+export const rmdirSync = shimFs.rmdirSync;
+export const stat = shimFs.stat;
+export const statSync = shimFs.statSync;
+export const statfs = shimFs.statfs;
+export const statfsSync = shimFs.statfsSync;
+export const symlink = shimFs.symlink;
+export const symlinkSync = shimFs.symlinkSync;
+export const truncate = shimFs.truncate;
+export const truncateSync = shimFs.truncateSync;
+export const unlink = shimFs.unlink;
+export const unlinkSync = shimFs.unlinkSync;
+export const utimes = shimFs.utimes;
+export const utimesSync = shimFs.utimesSync;
+export const watch = shimFs.watch;
+export const watchFile = shimFs.watchFile;
+export const unwatchFile = shimFs.unwatchFile;
+export const write = shimFs.write;
+export const writeSync = shimFs.writeSync;
+export const writeFile = shimFs.writeFile;
+export const writeFileSync = shimFs.writeFileSync;
+export const writev = shimFs.writev;
+export const writevSync = shimFs.writevSync;
+export const Dir = shimFs.Dir;
+export const ReadStream = shimFs.ReadStream;
+export const WriteStream = shimFs.WriteStream;
+export const FileReadStream = shimFs.FileReadStream;
+export const FileWriteStream = shimFs.FileWriteStream;
+export const promises = shimFs.promises;
+export const constants = shimFs.constants;
