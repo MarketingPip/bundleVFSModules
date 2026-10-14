@@ -31,6 +31,13 @@ function polyfillURL(specifier) {
       path.join(repoRoot, "parity", "fs-promises-harness.mjs"),
     ).href;
   }
+  // Harness-only timer-globals restore for stream parity
+  // (parity/stream-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs.
+  if (target === "stream" && name === "stream") {
+    return pathToFileURL(path.join(repoRoot, "parity", "stream-harness.mjs"))
+      .href;
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   if (!fs.existsSync(candidate)) return null;
   return pathToFileURL(candidate).href;
