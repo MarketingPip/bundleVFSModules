@@ -64,7 +64,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | process | 81 | 97 | 83.5% |
 | module | 28 | 32 | 87.5% |
 | trace_events | 26 | 29 | 89.7% |
-| worker_threads | 134 | 142 | 94.4% |
+| worker_threads | 134 | 141 | 95.0% | Shim delegates to native via process.getBuiltinModule under Node; browser impl uses Web Workers. 7 failures documented in expected-failures.shim.json, all harness limitations (not shim bugs): 3 thread-ID offset from preload register() consuming ID 1 (event, messaging, name), 3 inspector/v8 debugging APIs (debug, exit-heapsnapshot, message-port-inspect), 1 timer-globals leak detector artifact dependent on parent process type (process-env). |
 | console | 20 | 21 | 95.2% |
 | buffer | 60 | 62 | 96.8% |
 | timers | 43 | 44 | 97.7% |
