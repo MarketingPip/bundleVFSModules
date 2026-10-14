@@ -1,4 +1,184 @@
 {
+  "inspector:test-inspector-already-activated-cli.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-async-call-stack.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-async-context-brk.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-async-hook-after-done.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-bindings.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-break-when-eval.js": {
+    "category": "inherent",
+    "reason": "Inherent: Hangs waiting for inspector WebSocket connection that never establishes (no DevTools backend)"
+  },
+  "inspector:test-inspector-close-worker.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires inspector.url() to return a ws:// URL; shim honestly returns undefined (no DevTools backend in browser)"
+  },
+  "inspector:test-inspector-connect-main-thread.js": {
+    "category": "inherent",
+    "reason": "Inherent: Hangs waiting for inspector WebSocket connection that never establishes (no DevTools backend)"
+  },
+  "inspector:test-inspector-console-top-frame.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-contexts.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-dom-storage.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-emit-protocol-event-errors.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-emit-protocol-event.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-esm.js": {
+    "category": "inherent",
+    "reason": "Inherent: Hangs waiting for inspector WebSocket connection that never establishes (no DevTools backend)"
+  },
+  "inspector:test-inspector-exception.js": {
+    "category": "inherent",
+    "reason": "Inherent: Hangs waiting for inspector WebSocket connection that never establishes (no DevTools backend)"
+  },
+  "inspector:test-inspector-exit-worker-in-wait-for-connection.js": {
+    "category": "inherent",
+    "reason": "Inherent: Hangs waiting for inspector WebSocket connection that never establishes (no DevTools backend)"
+  },
+  "inspector:test-inspector-has-idle.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-heap-allocation-tracker.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 heap snapshots / CPU profiles; no V8 inspector backend in browser"
+  },
+  "inspector:test-inspector-heapdump.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 heap snapshots / CPU profiles; no V8 inspector backend in browser"
+  },
+  "inspector:test-inspector-host-warning.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires inspector.url() to return a ws:// URL; shim honestly returns undefined (no DevTools backend in browser)"
+  },
+  "inspector:test-inspector-ip-detection.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires inspector.url() to return a ws:// URL; shim honestly returns undefined (no DevTools backend in browser)"
+  },
+  "inspector:test-inspector-module.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-multisession-js.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-network-arbitrary-data.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-network-content-type.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-network-data-received.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-network-data-sent.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-network-fetch.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-network-http.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-network-http2.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-network-websocket.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-open-coverage.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires inspector.url() to return a ws:// URL; shim honestly returns undefined (no DevTools backend in browser)"
+  },
+  "inspector:test-inspector-open-port-integer-overflow.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires inspector.url() to return a ws:// URL; shim honestly returns undefined (no DevTools backend in browser)"
+  },
+  "inspector:test-inspector-open.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires inspector.url() to return a ws:// URL; shim honestly returns undefined (no DevTools backend in browser)"
+  },
+  "inspector:test-inspector-overwrite-config.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires inspector.url() to return a ws:// URL; shim honestly returns undefined (no DevTools backend in browser)"
+  },
+  "inspector:test-inspector-promises.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 heap snapshots / CPU profiles; no V8 inspector backend in browser"
+  },
+  "inspector:test-inspector-resource-name-to-url.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires inspector.url() to return a ws:// URL; shim honestly returns undefined (no DevTools backend in browser)"
+  },
+  "inspector:test-inspector-runtime-evaluate-with-timeout.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-strip-types.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-tracing-domain.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires real CDP protocol session with actual domain data; shim Session.post() is a documented noop returning {}"
+  },
+  "inspector:test-inspector-vm-global-accessors-getter-sideeffect.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-vm-global-accessors-sideeffects.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
+  "inspector:test-inspector-wait-for-connection.js": {
+    "category": "inherent",
+    "reason": "Inherent: Hangs waiting for inspector WebSocket connection that never establishes (no DevTools backend)"
+  },
+  "inspector:test-inspector-worker-target.js": {
+    "category": "inherent",
+    "reason": "Inherent: Hangs waiting for inspector WebSocket connection that never establishes (no DevTools backend)"
+  },
+  "inspector:test-inspector.js": {
+    "category": "inherent",
+    "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
+  },
   "test-async-hooks-correctly-switch-promise-hook.js": {
     "category": "inherent",
     "reason": "Asserts exact promise-hook event sequence; als-browser (imported by src/async_hooks.js for the browser lane) creates async resources during module evaluation, shifting the event sequence. Harness limitation: cannot avoid the import under Node without breaking CJS require() (TLA incompatible with preload's synchronous Module._load)."
