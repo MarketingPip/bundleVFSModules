@@ -1681,9 +1681,9 @@ function makeZlibClass(mode, validate) {
   }
   function Factory(opts) {
     // Support old-style inheritance: DeflateRaw.call(this, opts)
-    // When called via .call() with an existing `this`, initialize it
+    // When called via .call() (new.target undefined), initialize `this`
     // by copying fields from a fresh instance.
-    if (this instanceof Factory) {
+    if (!new.target) {
       const fresh = new Z(opts);
       // Copy all own properties (including _ev Map, etc.)
       for (const key of Object.getOwnPropertyNames(fresh)) {
