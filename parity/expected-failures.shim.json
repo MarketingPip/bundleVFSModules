@@ -651,14 +651,6 @@
     "category": "inherent",
     "reason": "Test installs a throwing setter on Object.prototype.errno, then the parity harness's syncPath() calls realFs.lstatSync which triggers the setter during error construction -> V8 FATAL ERROR 'v8::FromJust Maybe value is Nothing' (process abort, exit 134). The crash is in the harness's real-fs sync path, not the shim. Verified identical on pristine base 1a89d258."
   },
-  "test-os-process-priority.js": {
-    "category": "inherent",
-    "reason": "browser cannot read process niceness; getPriority() returns 0 by design"
-  },
-  "test-os.js": {
-    "category": "inherent",
-    "reason": "browser cannot read loadavg/uptime/freemem; fallbacks return 0 by design"
-  },
   "test-trace-events-get-category-enabled-buffer.js": {
     "category": "inherent",
     "reason": "Test uses --expose-internals and internalBinding('trace_events').getCategoryEnabledBuffer() which is a Node C++ internal API. The shim explicitly documents this as unavailable (src/trace_events.js header: 'The internal internalBinding('trace_events') API is unavailable'). Testing V8/C++ trace pipeline internals, not the JS API surface."

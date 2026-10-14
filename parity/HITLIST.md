@@ -60,7 +60,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | repl | 71 | 101 | 70.3% |
 | util | 23 | 30 | 76.7% |
 | perf_hooks | 12 | 15 | 80.0% |
-| os | 5 | 6 | 83.3% |
+| os | 7 | 7 | 100% | getPriority/setPriority round-trip via stored values (SystemError for negative pids); uptime() floored min 1; userInfo shell "" |
 | process | 81 | 97 | 83.5% | 16 inherent documented: 6 fixture gaps (versions, dlopen, env-allowed-flags, load-env-file, redirect-warnings x2), 2 permission-model (--permission flags), 2 getactiveresources harness handle counts, 1 uncaught-exception-monitor (fails natively), 1 warnings.mjs CLI flags, 2 reference-equality (default, get-builtin: shim separate from Node global under harness), 1 external-stdio-close (child_process noop), 1 finalization (V8 internals). |
 | module | 29 | 32 | 90.6% | +1 (28→29): HITLIST was stale. 3 inherent documented: createRequire non-file URL bases = deliberate browser divergence (Vite import.meta.url; repo tests verify), --import harness artifact (module.parent undefined), stripTypeScriptTypes deliberate noop (no amaro). |
 | trace_events | 28 | 29 | 96.6% | +2 (26→28): HITLIST was stale; actual shim-lane is 28/29. The 1 failure (get-category-enabled-buffer) is inherent: test uses --expose-internals + internalBinding('trace_events').getCategoryEnabledBuffer(), a Node C++ internal API the shim explicitly documents as unavailable. Documented in expected-failures.shim.json. |

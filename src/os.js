@@ -32,7 +32,10 @@
  *    `loadavg()` is `[0, 0, 0]`; `cpus()` stubs `times` as zeros;
  *    `networkInterfaces()` is loopback-only; `uptime()` counts from
  *    `performance.now()`; `userInfo()` returns a stub (uid/gid `-1`,
- *    like Node on Windows); `getPriority`/`setPriority` are no-ops.
+ *    like Node on Windows; `shell` is `""` — no shell in browsers);
+ *    `getPriority`/`setPriority` validate args
+ *    exactly and round-trip the stored value (no real OS scheduling
+ *    in browsers).
  */
 
 // ---------------------------------------------------------------------------
@@ -70,6 +73,14 @@ class ERR_OUT_OF_RANGE extends RangeError {
         `Received ${_inspectArg(actual)}`,
     );
     this.code = "ERR_OUT_OF_RANGE";
+  }
+}
+
+class SystemError extends Error {
+  constructor(syscall, message) {
+    super(`A system error occurred: ${syscall} returned ${message}`);
+    this.name = "SystemError";
+    this.code = "ERR_SYSTEM_ERROR";
   }
 }
 
@@ -444,11 +455,12 @@ homedir[Symbol.toPrimitive] = () => homedir();
 /**
  * System uptime in seconds. Browsers approximate seconds since page load
  * via `performance.now()` (floored, matching the historical shim).
+ * Floored to a minimum of 1 so the value is always positive.
  */
 export function uptime() {
   if (_nativeOs) return _nativeOs.uptime();
   return typeof performance !== "undefined"
-    ? Math.floor(performance.now() / 1000)
+    ? Math.max(1, Math.floor(performance.now() / 1000))
     : 0;
 }
 uptime[Symbol.toPrimitive] = () => uptime();
@@ -546,15 +558,20 @@ export function networkInterfaces() {
  * the native binding under Node and is a no-op stub (returning 0) in
  * browsers.
  */
+const _priorityStore = new Map();
 export function getPriority(pid) {
   if (pid === undefined) pid = 0;
   else validateInt32(pid, "pid");
   if (_nativeOs) return _nativeOs.getPriority(pid);
-  return 0;
+  // Negative pids are never valid — match Node's SystemError.
+  if (pid < 0)
+    throw new SystemError("uv_os_getpriority", "ESRCH (no such process)");
+  return _priorityStore.has(pid) ? _priorityStore.get(pid) : 0;
 }
 
 /**
- * Set scheduling priority. No-op where the OS is unreachable (browsers).
+ * Set scheduling priority. No-op where the OS is unreachable (browsers) —
+ * the value is stored so getPriority() round-trips consistently.
  */
 export function setPriority(pid, priority) {
   if (priority === undefined) {
@@ -564,6 +581,7 @@ export function setPriority(pid, priority) {
   validateInt32(pid, "pid");
   validateInt32(priority, "priority", -20, 19);
   if (_nativeOs) _nativeOs.setPriority(pid, priority);
+  else _priorityStore.set(pid, priority);
 }
 
 /** OS name as `uname(3)` would report it. */
@@ -605,7 +623,7 @@ export function userInfo(options) {
     username: "user",
     uid: -1,
     gid: -1,
-    shell: null,
+    shell: "",
     homedir: homedir(),
   };
 }
