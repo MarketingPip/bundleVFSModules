@@ -1,4 +1,32 @@
 {
+  "test-async-hooks-correctly-switch-promise-hook.js": {
+    "category": "inherent",
+    "reason": "Asserts exact promise-hook event sequence; als-browser (imported by src/async_hooks.js for the browser lane) creates async resources during module evaluation, shifting the event sequence. Harness limitation: cannot avoid the import under Node without breaking CJS require() (TLA incompatible with preload's synchronous Module._load)."
+  },
+  "test-async-hooks-disable-during-promise.js": {
+    "category": "inherent",
+    "reason": "Asserts hook enable/disable timing around promises; als-browser's module-eval side effects shift async IDs. Harness limitation (see test-async-hooks-correctly-switch-promise-hook.js)."
+  },
+  "test-async-hooks-enable-before-promise-resolve.js": {
+    "category": "inherent",
+    "reason": "Asserts specific async IDs; als-browser import shifts the ID space. Harness limitation (see test-async-hooks-correctly-switch-promise-hook.js)."
+  },
+  "test-async-hooks-enable-recursive.js": {
+    "category": "inherent",
+    "reason": "Asserts recursive hook enable behavior with specific IDs; als-browser's module-eval side effects shift IDs. Harness limitation (see test-async-hooks-correctly-switch-promise-hook.js)."
+  },
+  "test-async-hooks-promise-triggerid.js": {
+    "category": "inherent",
+    "reason": "Asserts triggerAsyncId === 1 (0 !== 1); als-browser creates async resources during import, consuming ID 1. Harness limitation: the browser-lane dependency cannot be lazily imported under Node without TLA breaking CJS require()."
+  },
+  "test-async-hooks-promise.js": {
+    "category": "inherent",
+    "reason": "Asserts asyncId === 15 (14 !== 15); als-browser's module-eval shifts IDs by 1. Harness limitation (see test-async-hooks-promise-triggerid.js)."
+  },
+  "test-async-hooks-top-level-clearimmediate.js": {
+    "category": "inherent",
+    "reason": "Asserts asyncId === 1 for top-level setImmediate (0 !== 1); als-browser patches setImmediate at import and its wrapper creates an async resource. Harness limitation (see test-async-hooks-promise-triggerid.js)."
+  },
   "test-buffer-inspect.js": {
     "category": "inherent",
     "reason": "Test sets shim buffer.INSPECT_MAX_BYTES but uses global Buffer (Node native) for the value. In the browser sandbox, global Buffer IS the shim, so this works. Harness limitation: cannot replace Node global Buffer."
@@ -631,6 +659,10 @@
     "category": "inherent",
     "reason": "browser cannot read loadavg/uptime/freemem; fallbacks return 0 by design"
   },
+  "test-trace-events-get-category-enabled-buffer.js": {
+    "category": "inherent",
+    "reason": "Test uses --expose-internals and internalBinding('trace_events').getCategoryEnabledBuffer() which is a Node C++ internal API. The shim explicitly documents this as unavailable (src/trace_events.js header: 'The internal internalBinding('trace_events') API is unavailable'). Testing V8/C++ trace pipeline internals, not the JS API surface."
+  },
   "test-vm-basic.js": {
     "category": "inherent",
     "reason": "V8 SyntaxError message wording differs by engine; shim uses host engine messages"
@@ -943,33 +975,5 @@
   "test-zlib.js": {
     "category": "needs-investigation",
     "reason": "Main test: needs investigation of specific assertion"
-  },
-  "test-async-hooks-correctly-switch-promise-hook.js": {
-    "category": "inherent",
-    "reason": "Asserts exact promise-hook event sequence; als-browser (imported by src/async_hooks.js for the browser lane) creates async resources during module evaluation, shifting the event sequence. Harness limitation: cannot avoid the import under Node without breaking CJS require() (TLA incompatible with preload's synchronous Module._load)."
-  },
-  "test-async-hooks-disable-during-promise.js": {
-    "category": "inherent",
-    "reason": "Asserts hook enable/disable timing around promises; als-browser's module-eval side effects shift async IDs. Harness limitation (see test-async-hooks-correctly-switch-promise-hook.js)."
-  },
-  "test-async-hooks-enable-before-promise-resolve.js": {
-    "category": "inherent",
-    "reason": "Asserts specific async IDs; als-browser import shifts the ID space. Harness limitation (see test-async-hooks-correctly-switch-promise-hook.js)."
-  },
-  "test-async-hooks-enable-recursive.js": {
-    "category": "inherent",
-    "reason": "Asserts recursive hook enable behavior with specific IDs; als-browser's module-eval side effects shift IDs. Harness limitation (see test-async-hooks-correctly-switch-promise-hook.js)."
-  },
-  "test-async-hooks-promise-triggerid.js": {
-    "category": "inherent",
-    "reason": "Asserts triggerAsyncId === 1 (0 !== 1); als-browser creates async resources during import, consuming ID 1. Harness limitation: the browser-lane dependency cannot be lazily imported under Node without TLA breaking CJS require()."
-  },
-  "test-async-hooks-promise.js": {
-    "category": "inherent",
-    "reason": "Asserts asyncId === 15 (14 !== 15); als-browser's module-eval shifts IDs by 1. Harness limitation (see test-async-hooks-promise-triggerid.js)."
-  },
-  "test-async-hooks-top-level-clearimmediate.js": {
-    "category": "inherent",
-    "reason": "Asserts asyncId === 1 for top-level setImmediate (0 !== 1); als-browser patches setImmediate at import and its wrapper creates an async resource. Harness limitation (see test-async-hooks-promise-triggerid.js)."
   }
 }
