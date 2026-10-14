@@ -447,10 +447,6 @@
     "category": "inherent",
     "reason": "Harness-blocked: same as async-socket \u2014 net.listen() cannot bind into memfs-only dirs (EACCES/ENOENT at setup, before cpSync runs). Unfixable in src/fs.js. Fails identically on pristine base 1a89d258."
   },
-  "test-fs-filehandle-use-after-close.js": {
-    "category": "inherent",
-    "reason": "Opens process.execPath (the real 90MB Node binary) to test fd-number reuse after close. Same class as test-fs-negative-zero.js: outside the harness sync roots, no browser equivalent. The fd-reuse semantics it guards (fd -> -1 on close, EBADF use-after-close) are implemented and probed directly."
-  },
   "test-fs-mkdir.js": {
     "category": "shim-bug",
     "reason": "chdir portion FIXED via harness virtual cwd (process.chdir/cwd patched to track memfs). Remaining failure is error message format: errInvalidArgTypeProp says 'Received type function' vs Node's 'Received function' (line 277). Separate shim bug, not chdir-related."
