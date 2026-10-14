@@ -1023,11 +1023,18 @@ function validateUidGid(uid, gid) {
     ["uid", uid],
     ["gid", gid],
   ]) {
-    if (!Number.isInteger(value) || value < -1 || value > 0xffffffff) {
+    if (typeof value !== "number") {
       const err = new TypeError(
         `The "${name}" argument must be of type number. Received ${String(value)}`,
       );
       err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+    if (!Number.isInteger(value) || value < -1 || value > 0xffffffff) {
+      const err = new RangeError(
+        `The value of "${name}" is out of range. It must be an integer. Received ${value}`,
+      );
+      err.code = "ERR_OUT_OF_RANGE";
       throw err;
     }
   }
@@ -1081,6 +1088,13 @@ function validateMode(mode, def = undefined) {
     if (!Number.isInteger(mode)) {
       const err = new RangeError(
         `The value of "mode" is out of range. It must be an integer. Received ${mode}`,
+      );
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    if (mode < 0 || mode > 4294967295) {
+      const err = new RangeError(
+        `The value of "mode" is out of range. It must be >= 0 && <= 4294967295. Received ${mode}`,
       );
       err.code = "ERR_OUT_OF_RANGE";
       throw err;
