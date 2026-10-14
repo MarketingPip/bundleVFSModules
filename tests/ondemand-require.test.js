@@ -554,21 +554,16 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // Build-fix branch: fs parity fixes + _InternalStats export removal.
+    // Stream parity branch: timer-globals harness fix (no src/ changes).
     // (Prior branches merged; their files are on main.)
+    // Note: this structural test is branch-specific; update the allowlist
+    // when the branch footprint changes.
     expect(files.sort()).toEqual(
       [
-        "dist/fs.js",
-        "dist/fs_promises.js",
-        "dist/repl.js",
-        "dist/vfs.js",
         "parity/HITLIST.md",
-        "parity/expected-failures.shim.json",
-        "parity/fs-harness.mjs",
-        "parity/node-test/fixtures/nested-index/one/.gitkeep",
-        "parity/node-test/fixtures/nested-index/two/.gitkeep",
+        "parity/hooks.mjs",
         "parity/preload.mjs",
-        "src/fs.js",
+        "parity/stream-harness.mjs",
       ].sort(),
     );
   });
