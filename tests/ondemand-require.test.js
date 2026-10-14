@@ -554,11 +554,23 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // On main (after push), origin/main...HEAD is empty — no unpushed work.
+    // Build-fix branch: fs parity fixes + _InternalStats export removal.
     // (Prior branches merged; their files are on main.)
-    // Note: this test was written for feat/demo-fake-shell and is now
-    // obsolete on main; it guards against stray unpushed files.
-    expect(files.sort()).toEqual([].sort());
+    expect(files.sort()).toEqual(
+      [
+        "dist/fs.js",
+        "dist/fs_promises.js",
+        "dist/repl.js",
+        "dist/vfs.js",
+        "parity/HITLIST.md",
+        "parity/expected-failures.shim.json",
+        "parity/fs-harness.mjs",
+        "parity/node-test/fixtures/nested-index/one/.gitkeep",
+        "parity/node-test/fixtures/nested-index/two/.gitkeep",
+        "parity/preload.mjs",
+        "src/fs.js",
+      ].sort(),
+    );
   });
 
   test("no new function declarations added by the branch diff", () => {
