@@ -74,6 +74,18 @@ function validateObject(value, name) {
   }
 }
 
+// Like validateObject but allows arrays: vm.createContext([]) is legal in
+// Node (the sandbox may be any object, arrays included).
+function validateSandbox(value, name) {
+  if (typeof value !== "object" || value === null) {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" ${argOrProp(name)} must be of type object. ${receivedText(value)}`,
+    );
+  }
+}
+
 function validateString(value, name) {
   if (typeof value !== "string") {
     throw codedError(
@@ -204,8 +216,7 @@ function markContext(obj) {
 }
 
 export function isContext(object) {
-  if (typeof object !== "object" || object === null || Array.isArray(object)) {
-    if (Array.isArray(object)) return false;
+  if (typeof object !== "object" || object === null) {
     throw codedError(
       TypeError,
       "ERR_INVALID_ARG_TYPE",
@@ -239,7 +250,7 @@ export function createContext(contextObject = {}, options = {}) {
     return markContext({});
   }
   if (contextified.has(contextObject)) return contextObject;
-  validateObject(contextObject, "sandbox");
+  validateSandbox(contextObject, "sandbox");
   validateObject(options, "options");
   const {
     name = `VM Context ${++contextNameIndex}`,
@@ -1133,7 +1144,13 @@ function scanScript(code) {
 // 7. Scope proxy: the `with` statement's object
 // ---------------------------------------------------------------------------
 
-function makeScope(target) {
+// Sentinel for sloppy-mode silent assignment failure on non-writable
+// properties. The Proxy `set` trap cannot return true for a non-configurable
+// non-writable target property (invariant violation), so we throw this and
+// the runner swallows it when not in strict mode.
+class SloppyAssignSilent extends Error {}
+
+function makeScope(target, strict = false) {
   const globals = standardGlobals();
   return new Proxy(target, {
     has(t, prop) {
@@ -1163,7 +1180,20 @@ function makeScope(target) {
       if (typeof prop === "symbol") return Reflect.set(t, prop, value);
       // `has` already returned true: the name is either on the target or a
       // standard global. Standard globals shadow onto the sandbox global.
-      return Reflect.set(t, prop, value);
+      const ok = Reflect.set(t, prop, value);
+      if (!ok) {
+        // In strict mode, throw Node's "Cannot assign to read only property"
+        // message. In sloppy mode, V8 silently fails — but the Proxy
+        // invariant forbids returning true here, so throw a sentinel that
+        // the runner swallows.
+        if (strict) {
+          throw new TypeError(
+            `Cannot assign to read only property '${String(prop)}' of object '${Object.prototype.toString.call(t)}'`,
+          );
+        }
+        throw new SloppyAssignSilent(String(prop));
+      }
+      return true;
     },
     defineProperty(t, prop, desc) {
       if (prop === "__proto__") return false;
@@ -1292,7 +1322,7 @@ function runWithContext(code, target, opts) {
   // completion value as the return value. `eval` resolves through the scope
   // proxy to the intrinsic, so this stays a direct eval.
   const factoryBody = "with(__vm_p__){\nreturn eval(__vm_c__);\n}";
-  const scope = makeScope(target);
+  const scope = makeScope(target, strict);
   let runner;
   try {
     runner = new Function("__vm_p__", "__vm_c__", factoryBody);
@@ -1302,6 +1332,7 @@ function runWithContext(code, target, opts) {
   try {
     return runner.call(target, scope, evalCode);
   } catch (e) {
+    if (e instanceof SloppyAssignSilent) return undefined; // sloppy silent fail
     if (e instanceof SyntaxError) throw e; // nothing position-mappable
     throw enrichScriptError(e, {
       filename: opts.filename,
@@ -1444,6 +1475,11 @@ function synthesizeCachedData(source) {
   bytes[10] = (len >>> 8) & 0xff;
   bytes[11] = len & 0xff;
   for (let k = 12; k < 16; k++) bytes[k] = (h >>> ((k % 4) * 8)) & 0xff;
+  // Node's createCachedData() returns a Buffer; use it when available
+  // (parity harness under Node), falling back to Uint8Array in browsers.
+  if (typeof globalThis.Buffer === "function") {
+    return globalThis.Buffer.from(bytes);
+  }
   return bytes;
 }
 
@@ -1518,6 +1554,11 @@ export class Script {
       ? synthesizeCachedData(code)
       : undefined;
 
+    // Extract //# sourceMappingURL= magic comment from the end of the source.
+    let sourceMapURL;
+    const smMatch = /\/\/# sourceMappingURL=(\S+)\s*$/.exec(code);
+    if (smMatch) sourceMapURL = smMatch[1];
+
     Object.defineProperties(this, {
       sourceURL: {
         value: undefined,
@@ -1526,7 +1567,7 @@ export class Script {
         configurable: true,
       },
       sourceMapURL: {
-        value: undefined,
+        value: sourceMapURL,
         writable: true,
         enumerable: true,
         configurable: true,
@@ -1545,9 +1586,18 @@ export class Script {
   }
 
   createCachedData() {
-    return this.#cachedData !== undefined
-      ? this.#cachedData.slice()
-      : new Uint8Array(0);
+    if (this.#cachedData === undefined) {
+      this.#cachedData = synthesizeCachedData(this.#code);
+    }
+    const out = this.#cachedData.slice();
+    // Node returns a Buffer; preserve that when available.
+    if (
+      typeof globalThis.Buffer === "function" &&
+      !(out instanceof globalThis.Buffer)
+    ) {
+      return globalThis.Buffer.from(out);
+    }
+    return out;
   }
 
   #runOptions(options) {

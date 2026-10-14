@@ -547,6 +547,170 @@
     "category": "inherent",
     "reason": "browser cannot read loadavg/uptime/freemem; fallbacks return 0 by design"
   },
+  "test-vm-basic.js": {
+    "category": "inherent",
+    "reason": "V8 SyntaxError message wording differs by engine; shim uses host engine messages"
+  },
+  "test-vm-cached-data.js": {
+    "category": "inherent",
+    "reason": "Cross-process cached data test spawns child with real V8; synthetic cached data never matches"
+  },
+  "test-vm-codegen.js": {
+    "category": "inherent",
+    "reason": "codeGeneration enforcement requires intercepting eval/Function which breaks the shim's own with/eval factory"
+  },
+  "test-vm-context-dont-contextify.js": {
+    "category": "inherent",
+    "reason": "DONT_CONTEXTIFY context global identity edge cases require real V8 context"
+  },
+  "test-vm-dynamic-import-callback-missing-flag.js": {
+    "category": "inherent",
+    "reason": "Dynamic import requires ESM module loader; browser has no V8 isolate"
+  },
+  "test-vm-function-declaration.js": {
+    "category": "inherent",
+    "reason": "Nested sloppy function 'this' is host globalThis, not sandbox global; documented Proxy/with limitation"
+  },
+  "test-vm-global-setter.js": {
+    "category": "inherent",
+    "reason": "V8 'Cannot redefine property' vs 'Cannot assign to read only property' depends on caller strictness; Proxy trap cannot distinguish outside strict-mode from inside sloppy-mode assignment"
+  },
+  "test-vm-harmony-symbols.js": {
+    "category": "inherent",
+    "reason": "Requires separate V8 intrinsics per context; Proxy-based shim shares host intrinsics"
+  },
+  "test-vm-measure-memory-lazy.js": {
+    "category": "inherent",
+    "reason": "vm.measureMemory requires V8 heap introspection; browser shim returns synthetic shape"
+  },
+  "test-vm-measure-memory-multi-context.js": {
+    "category": "inherent",
+    "reason": "vm.measureMemory requires V8 heap introspection; browser shim returns synthetic shape"
+  },
+  "test-vm-measure-memory.js": {
+    "category": "inherent",
+    "reason": "vm.measureMemory requires V8 heap introspection; browser shim returns synthetic shape"
+  },
+  "test-vm-module-after-evaluate.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-basic.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-cached-data.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-dynamic-import-promise.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-dynamic-import.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-dynamic-namespace.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-errors.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-evaluate-source-text-module.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-evaluate-synthethic-module-rejection.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-evaluate-synthethic-module.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-evaluate-while-evaluating.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-hasasyncgraph.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-hastoplevelawait.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-import-meta.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-instantiate.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-link-shared-deps.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-link.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-linkmodulerequests-circular.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-linkmodulerequests-deep.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-linkmodulerequests.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-modulerequests.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-reevaluate.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-referrer-realm.mjs": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-module-synthetic.js": {
+    "category": "inherent",
+    "reason": "ESM vm.Module requires a real V8 module loader; browser has no V8 isolate"
+  },
+  "test-vm-no-dynamic-import-callback.js": {
+    "category": "inherent",
+    "reason": "Dynamic import requires ESM module loader; browser has no V8 isolate"
+  },
+  "test-vm-not-strict.js": {
+    "category": "inherent",
+    "reason": "runInThisContext var configurability (Node bug 43129) requires real V8 global semantics"
+  },
+  "test-vm-timeout-escape-promise-2.js": {
+    "category": "inherent",
+    "reason": "Script timeout requires preempting synchronous JS execution; impossible in browser without real V8 isolate"
+  },
+  "test-vm-timeout-escape-promise-module.js": {
+    "category": "inherent",
+    "reason": "Script timeout requires preempting synchronous JS execution; impossible in browser without real V8 isolate"
+  },
+  "test-vm-timeout-escape-promise.js": {
+    "category": "inherent",
+    "reason": "Script timeout requires preempting synchronous JS execution; impossible in browser without real V8 isolate"
+  },
+  "test-vm-timeout.js": {
+    "category": "inherent",
+    "reason": "Script timeout requires preempting synchronous JS execution; impossible in browser without real V8 isolate"
+  },
   "test-worker-debug.js": {
     "reason": "Uses require('inspector') Session API with common.skipIfInspectorDisabled(). Inspector debugging sessions cannot attach under the parity harness (no debugger, session connect fails). Inherent to harness environment, not a shim bug \u2014 the shim correctly delegates Worker to native."
   },
