@@ -1075,9 +1075,29 @@ function validateFlags(flags) {
   throw err;
 }
 // Validate open() mode: number or octal string (or undefined for default).
-function validateMode(mode) {
-  if (mode === undefined || mode === null) return undefined;
-  if (typeof mode === "number" || typeof mode === "string") return mode;
+function validateMode(mode, def = undefined) {
+  if (mode === undefined || mode === null) return def;
+  if (typeof mode === "number") {
+    if (!Number.isInteger(mode)) {
+      const err = new RangeError(
+        `The value of "mode" is out of range. It must be an integer. Received ${mode}`,
+      );
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    return mode;
+  }
+  if (typeof mode === "string") {
+    // Must be a valid octal string (e.g. "0o666", "666").
+    if (!/^(0o)?[0-7]+$/.test(mode)) {
+      const err = new TypeError(
+        `The argument 'mode' must be a valid octal string or number. Received '${mode}'`,
+      );
+      err.code = "ERR_INVALID_ARG_VALUE";
+      throw err;
+    }
+    return mode;
+  }
   const err = new TypeError(
     `The "mode" argument must be of type number or string. Received type ${typeof mode}`,
   );
@@ -4892,7 +4912,7 @@ function buildApi(vol) {
         err.code = "ERR_MISSING_ARGS";
         throw err;
       }
-      this.path = path;
+      this._path = path;
       this._closed = false;
       this._entries = null;
       this._readInFlight = false;

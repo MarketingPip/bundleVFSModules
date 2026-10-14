@@ -72,7 +72,8 @@ const tmpdir = realPath.join(
 const fixturesDir = realPath.join(testRoot, "fixtures");
 // Sync roots: real-disk trees the official tests treat as readable. tmpdir
 // is scratch (cleaned per test process); fixtures is read-only test data.
-const syncRoots = [tmpdir, fixturesDir];
+// testRoot covers the test files themselves (tests open __filename).
+const syncRoots = [tmpdir, fixturesDir, testRoot];
 
 // Raw shim methods for the sync itself — never the wrapped versions below,
 // or syncPath would recurse into itself.
@@ -213,6 +214,21 @@ function wrapFn(fn, methodName) {
   }
   Object.setPrototypeOf(wrapped, Object.getPrototypeOf(fn));
   if (fn.prototype) wrapped.prototype = fn.prototype;
+  // Preserve .native (realpath.native, realpathSync.native) and other
+  // own function properties that tests access.
+  for (const k of Object.getOwnPropertyNames(fn)) {
+    if (
+      k !== "length" &&
+      k !== "name" &&
+      k !== "prototype" &&
+      !(k in wrapped)
+    ) {
+      try {
+        const d = Object.getOwnPropertyDescriptor(fn, k);
+        if (d) Object.defineProperty(wrapped, k, d);
+      } catch {}
+    }
+  }
   return wrapped;
 }
 
@@ -224,6 +240,18 @@ function wrapObj(obj) {
   // Symbol keys (e.g. util.promisify.custom) must survive the wrap.
   for (const s of Object.getOwnPropertySymbols(obj)) {
     if (typeof obj[s] === "function") out[s] = wrapFn(obj[s], s.toString());
+  }
+  // Non-enumerable getter-only props (F_OK/R_OK/W_OK/X_OK) must survive:
+  // spread skips them, but tests assert assignment throws TypeError.
+  for (const k of ["F_OK", "R_OK", "W_OK", "X_OK"]) {
+    const d = Object.getOwnPropertyDescriptor(obj, k);
+    if (d && !Object.getOwnPropertyDescriptor(out, k)) {
+      Object.defineProperty(out, k, d);
+    }
+  }
+  // constants is non-enumerable in some builds; ensure it's present.
+  if (!("constants" in out) && "constants" in obj) {
+    out.constants = obj.constants;
   }
   return out;
 }
