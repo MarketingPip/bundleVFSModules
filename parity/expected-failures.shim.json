@@ -987,5 +987,69 @@
   "test-module-create-require.js": {
     "category": "inherent",
     "reason": "Deliberate browser-platform divergence (documented in src/module.js and tests/module.test.js): createRequire accepts non-file URL bases (data:/blob:/https:) because Vite's import.meta.url is never a file: URL in the browser. Node throws ERR_INVALID_ARG_VALUE. The repo's own tests verify the relaxed behavior."
+  },
+  "test-process-default.js": {
+    "category": "inherent",
+    "reason": "Expects import('node:process').default === globalThis.process (Node invariant). The shim creates a separate process2 object; in the browser runtime the host installs it as the global, but under the parity harness Node's real process remains the global. Replacing globalThis.process would break Node internals."
+  },
+  "test-process-versions.js": {
+    "category": "inherent",
+    "reason": "Requires fixture ../../deps/acorn/acorn/package.json from Node source tree, not present in parity mirror."
+  },
+  "test-process-dlopen-error-message-crash.js": {
+    "category": "inherent",
+    "reason": "Requires fixture test/addons/not-a-binding, not present in parity mirror."
+  },
+  "test-process-env-allowed-flags-are-documented.js": {
+    "category": "inherent",
+    "reason": "Requires fixture parity/doc/api/cli.md, not present in parity mirror."
+  },
+  "test-process-execve-permission-fail.js": {
+    "category": "inherent",
+    "reason": "Tests Node's --permission model (--permission --allow-fs-read). The browser has no permission model; permission APIs are honest noops."
+  },
+  "test-process-execve-permission-granted.js": {
+    "category": "inherent",
+    "reason": "Tests Node's --permission model. The browser has no permission model; permission APIs are honest noops."
+  },
+  "test-process-external-stdio-close.js": {
+    "category": "inherent",
+    "reason": "Tests real child_process stdio close behavior with exit code assertions. Child process spawning is a noop by design in the browser (no OS processes)."
+  },
+  "test-process-finalization.mjs": {
+    "category": "inherent",
+    "reason": "Tests process.finalization (V8 finalization registry integration). The shim documents this as unavailable; finalization requires V8 internals."
+  },
+  "test-process-get-builtin.mjs": {
+    "category": "inherent",
+    "reason": "Expects process.getBuiltinModule(id) === require(id) reference equality. Under the harness, getBuiltinModule is called on Node's real global process while require() is redirected to shims, breaking identity. Same root cause as test-process-default.js."
+  },
+  "test-process-getactiveresources-track-active-requests.js": {
+    "category": "inherent",
+    "reason": "Asserts exact active request count (12). The parity ESM loader hook spawns a worker thread, adding 2 extra handles (expects 12, gets 14). Harness-induced, same pattern as worker_threads thread-ID offset."
+  },
+  "test-process-getactiveresources.js": {
+    "category": "inherent",
+    "reason": "Asserts exact active handle types. The parity preload adds extra PipeWrap handles not present in a bare Node process. Harness-induced."
+  },
+  "test-process-load-env-file.js": {
+    "category": "inherent",
+    "reason": "Requires fixtures parity/node-test/fixtures/dotenv/*.env, not present in parity mirror. The shim's loadEnvFile is an honest noop (no .env file concept in browser)."
+  },
+  "test-process-redirect-warnings-env.js": {
+    "category": "inherent",
+    "reason": "Requires fixture parity/node-test/fixtures/warnings.js, not present in parity mirror."
+  },
+  "test-process-redirect-warnings.js": {
+    "category": "inherent",
+    "reason": "Requires fixture parity/node-test/fixtures/warnings.js, not present in parity mirror."
+  },
+  "test-process-uncaught-exception-monitor.js": {
+    "category": "inherent",
+    "reason": "Fails natively (without preload) with a different assertion error (mustCall count 1 !== 7), indicating an environment/timing issue unrelated to the shim. The shim is not involved (test uses global process)."
+  },
+  "test-process-warnings.mjs": {
+    "category": "inherent",
+    "reason": "Tests CLI warning flags (--no-warnings, --no-deprecation, --disable-warning) via child processes. CLI flag behavior is a Node runtime concern, not a shim API."
   }
 }
