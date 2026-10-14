@@ -54,7 +54,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | async_hooks | 9 | 36 | 25.0% |
 | dns | 9 | 30 | 30.0% |
 | inspector | 29 | 74 | 39.2% |
-| vm | 41 | 97 | 42.3% |
+| vm | 48 | 97 | 49.5% | +7 (41→48): real shim bugs fixed — validateSandbox() allows arrays in createContext; isContext() consults contextified WeakSet for arrays; synthesizeCachedData() returns Buffer when available; scope proxy set trap throws Node-style TypeError in strict mode (sloppy swallows via sentinel); Script extracts //# sourceMappingURL= magic comment. 41 inherent documented (24 ESM vm.Module, 4 script timeout, 3 measureMemory, 10 V8-isolate semantics). |
 | zlib | 33 | 65 | 50.8% | +2 (31→33): real shim bugs fixed — toBytes() throws ERR_OUT_OF_RANGE (not bare RangeError) for spoofed ArrayBufferView lengths; ERR_STREAM_DESTROYED with Node's message on write-after-destroy; makeZlibClass Factory supports old-style DeflateRaw.call(this) inheritance. 16 inherent documented (15 Brotli/Zstd honest stubs + 1 missing fixture). 16 need deeper investigation (stream lifecycle, data integrity, validation). |
 | tty | 3 | 5 | 60.0% |
 | repl | 71 | 101 | 70.3% |
