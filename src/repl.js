@@ -158,7 +158,7 @@ writer.options = { ...inspect.defaultOptions, showProxy: true, colors: false };
 // REPLServer
 // ---------------------------------------------------------------------------
 
-export class REPLServer extends Interface {
+export class REPLServerImpl extends Interface {
   constructor(prompt, stream, eval_, useGlobal, ignoreUndefined, replMode) {
     // ── Normalise options ────────────────────────────────────────────────
     let options;
@@ -222,6 +222,23 @@ export class REPLServer extends Interface {
     this.lastError = undefined;
     this.lines = [];
     this.lines.level = [];
+
+    // ── Domain for error handling (Node compatibility) ──────────────────
+    // Node's REPLServer has a _domain property (from the deprecated domain
+    // module). Tests access testMe._domain.on("error", ...). Provide a
+    // minimal EventEmitter-compatible domain (plain object, no imports to
+    // avoid side effects).
+    this._domain = {
+      _events: Object.create(null),
+      on(event, listener) {
+        (this._events[event] ??= []).push(listener);
+        return this;
+      },
+      emit(event, ...args) {
+        for (const l of this._events[event] ?? []) l(...args);
+        return this;
+      },
+    };
 
     if (this.writer === writer) writer.options.colors = this.useColors;
 
@@ -790,6 +807,53 @@ export class REPLServer extends Interface {
       this.lines.level.push({ line: this.lines.length - 1, depth });
     else if (depth < 0 && this.lines.level.length) this.lines.level.pop();
   }
+
+  // ── Deprecated stream aliases (Node compatibility) ───────────────────
+  // Node: repl.inputStream and repl.outputStream are deprecated (DEP0141).
+  // Use repl.input and repl.output instead.
+  get inputStream() {
+    return this.input;
+  }
+  get outputStream() {
+    return this.output;
+  }
+
+  // ── Tab completion (Node compatibility) ──────────────────────────────
+  // Node: replServer.complete(line, callback) provides tab-completion.
+  // Basic implementation: completes identifiers from the context object.
+  complete(line, callback) {
+    try {
+      // Extract the last identifier fragment to complete
+      const match = line.match(/[a-zA-Z_$][a-zA-Z0-9_$]*$/);
+      const filter = match ? match[0] : "";
+      const prefix = line.slice(0, line.length - filter.length);
+
+      // Gather completion candidates from the context
+      const candidates = new Set();
+      if (this.context && typeof this.context === "object") {
+        for (const key of Object.getOwnPropertyNames(this.context)) {
+          if (key.startsWith(filter)) candidates.add(prefix + key);
+        }
+        // Also check prototype chain
+        let proto = Object.getPrototypeOf(this.context);
+        while (proto && proto !== Object.prototype) {
+          for (const key of Object.getOwnPropertyNames(proto)) {
+            if (key.startsWith(filter)) candidates.add(prefix + key);
+          }
+          proto = Object.getPrototypeOf(proto);
+        }
+      }
+      // Add global names
+      for (const key of Object.getOwnPropertyNames(globalThis)) {
+        if (key.startsWith(filter)) candidates.add(prefix + key);
+      }
+
+      const completions = [...candidates].sort();
+      callback(null, [completions, filter]);
+    } catch (err) {
+      callback(err);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -872,6 +936,14 @@ export function isValidSyntax(src) {
     return false;
   }
 }
+
+// ── REPLServer callable without new (Node compatibility) ───────────────
+// Node: repl.REPLServer() works with or without 'new'. Wrap the class.
+export function REPLServer(...args) {
+  return new REPLServerImpl(...args);
+}
+Object.setPrototypeOf(REPLServer, REPLServerImpl);
+REPLServer.prototype = REPLServerImpl.prototype;
 
 export default {
   start,

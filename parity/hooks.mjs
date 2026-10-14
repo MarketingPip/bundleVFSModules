@@ -68,5 +68,28 @@ export async function resolve(specifier, context, nextResolve) {
     const url = polyfillURL(specifier);
     if (url) return { url, shortCircuit: true };
   }
+  // Shims in src/ use relative imports (e.g. src/repl.js imports "./readline").
+  // Node ESM doesn't resolve directory imports, so map "./readline" to the
+  // actual src/readline.js file. This applies when the parent is a shim file
+  // loaded via the parity harness.
+  const srcDir = path.join(repoRoot, "src") + path.sep;
+  if (
+    parentPath.startsWith(srcDir) &&
+    (specifier.startsWith("./") || specifier.startsWith("../"))
+  ) {
+    const resolved = path.resolve(path.dirname(parentPath), specifier);
+    // Try with .js extension (directory imports like "./readline" -> "./readline.js")
+    const candidates = [resolved + ".js", resolved];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return { url: pathToFileURL(candidate).href, shortCircuit: true };
+      }
+    }
+    // Also try index.js for directory imports
+    const indexCandidate = path.join(resolved, "index.js");
+    if (fs.existsSync(indexCandidate)) {
+      return { url: pathToFileURL(indexCandidate).href, shortCircuit: true };
+    }
+  }
   return nextResolve(specifier, context);
 }
