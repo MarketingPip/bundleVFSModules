@@ -207,6 +207,37 @@ Module._load = function (request, parent, isMain) {
       if (target === "console" && bare === "console") {
         globalThis.console = def;
       }
+      // perf_hooks: performance.timerify === require('perf_hooks').timerify
+      // and performance.eventLoopUtilization ===
+      // require('perf_hooks').eventLoopUtilization (reference equality, per
+      // test-perf-hooks-timerify-basic.js and
+      // test-perf-hooks-eventlooputilization.js).
+      // src/perf_hooks.js patches globalThis.performance.timerify at load,
+      // but the testsDir branch returns ns.default while other loaders get
+      // the namespace — different module instances mean the patch may not
+      // cover the instance the test file receives. Install the same
+      // functions the test file gets, mirroring the console fix above.
+      if (target === "perf_hooks" && bare === "perf_hooks") {
+        try {
+          for (const key of ["timerify", "eventLoopUtilization"]) {
+            if (
+              globalThis.performance &&
+              typeof def[key] === "function" &&
+              globalThis.performance[key] !== def[key]
+            ) {
+              Object.defineProperty(globalThis.performance, key, {
+                value: def[key],
+                writable: true,
+                enumerable: true,
+                configurable: true,
+              });
+            }
+          }
+        } catch {
+          // If the global cannot be patched, the alias test fails; the
+          // rest of the shim still works.
+        }
+      }
       return def;
     }
     const poly = polyfillPath(request);

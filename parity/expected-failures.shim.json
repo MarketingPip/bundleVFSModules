@@ -1043,5 +1043,13 @@
   "test-process-warnings.mjs": {
     "category": "inherent",
     "reason": "Tests CLI warning flags (--no-warnings, --no-deprecation, --disable-warning) via child processes. CLI flag behavior is a Node runtime concern, not a shim API."
+  },
+  "test-perf-hooks-histogram.js": {
+    "category": "inherent",
+    "reason": "Pure-JS histograms cannot be structured-cloned with live shared state via MessageChannel postMessage (requires native shared memory). The shim header documents this: Pure JS cannot hook the structured serializer, so the native histograms are used when available; the parity lane forces pure-JS via _RUNTIME_."
+  },
+  "test-perf-hooks-eventlooputilization.js": {
+    "category": "inherent",
+    "reason": "Pure-JS eventLoopUtilization always returns {idle: 0, active: 0, utilization: 0} (needs libuv idle/active loop counters, documented in shim header). The test spins waiting for idle > 0, which never occurs, exceeding the runner timeout."
   }
 }
