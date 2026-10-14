@@ -180,7 +180,8 @@ Module._load = function (request, parent, isMain) {
         bare === `${target}/strict` ||
         (target === "fs" && bare === "fs/promises") ||
         (target === "dns" && bare === "dns/promises") ||
-        (target === "timers" && bare === "timers/promises"))
+        (target === "timers" && bare === "timers/promises") ||
+        (target === "util" && bare === "util/types"))
     ) {
       const ns = origLoad.call(this, polyfillPath(target), parent, isMain);
       if (bare === `${target}/posix`) return ns.posix;
@@ -198,6 +199,9 @@ Module._load = function (request, parent, isMain) {
       // (reference equality, per test-timers-promises.js).
       if (target === "timers" && bare === "timers/promises")
         return def.promises;
+      // util/types: require('util/types') === require('util').types
+      // (reference equality, per test-util-types-exists.js).
+      if (target === "util" && bare === "util/types") return def.types;
       // console: require('console') === globalThis.console (reference equality,
       // per test-console-instance.js). src/console.js installs itself as
       // globalThis.console, but only when globalThis._RUNTIME_ is undefined —
