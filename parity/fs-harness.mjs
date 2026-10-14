@@ -157,6 +157,9 @@ function syncArgs(args) {
     else if (typeof Buffer !== "undefined" && Buffer.isBuffer(a))
       p = a.toString();
     else if (a instanceof URL && a.protocol === "file:") p = fileURLToPath(a);
+    // Skip null-byte paths: they're invalid (ERR_INVALID_ARG_VALUE), let the
+    // shim's validatePath throw instead of syncing garbage.
+    if (p && p.includes("\0")) continue;
     if (p && underSyncRoot(p)) {
       // The test may create this path through the shim (it won't exist on
       // real disk): make sure its parent chain exists in memfs first.
