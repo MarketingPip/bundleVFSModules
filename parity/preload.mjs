@@ -198,6 +198,15 @@ Module._load = function (request, parent, isMain) {
       // (reference equality, per test-timers-promises.js).
       if (target === "timers" && bare === "timers/promises")
         return def.promises;
+      // console: require('console') === globalThis.console (reference equality,
+      // per test-console-instance.js). src/console.js installs itself as
+      // globalThis.console, but only when globalThis._RUNTIME_ is undefined —
+      // and the preload defines _RUNTIME_ before any shim loads (to force the
+      // shim lane). So install the same object require() returns.
+      // src/console.js itself is untouched.
+      if (target === "console" && bare === "console") {
+        globalThis.console = def;
+      }
       return def;
     }
     const poly = polyfillPath(request);

@@ -462,30 +462,40 @@ function emitWarning(warning) {
 /* ------------------------------------------------------------------------ */
 
 function formatTime(ms) {
-  let subMilliseconds = Math.floor(ms * 1000);
-  let milliseconds = Math.floor(ms);
-  let seconds = Math.floor(milliseconds / 1000);
-  let minutes = Math.floor(seconds / 60);
-  let hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
+  // Port of Node's lib/internal/util/debuglog.js formatTime.
+  const kSecond = 1000;
+  const kMinute = 60 * kSecond;
+  const kHour = 60 * kMinute;
 
-  hours %= 24;
-  minutes %= 60;
-  seconds %= 60;
-  milliseconds %= 1000;
-  subMilliseconds %= 1000;
+  let hours = 0;
+  let minutes = 0;
+  let seconds = 0;
 
-  const padTime = (num, len) => String(num).padStart(len, "0");
+  if (ms >= kSecond) {
+    if (ms >= kMinute) {
+      if (ms >= kHour) {
+        hours = Math.floor(ms / kHour);
+        ms = ms % kHour;
+      }
+      minutes = Math.floor(ms / kMinute);
+      ms = ms % kMinute;
+    }
+    seconds = ms / kSecond;
+  }
 
-  if (days > 0)
-    return `${days}d ${padTime(hours, 2)}h ${padTime(minutes, 2)}m ${padTime(seconds, 2)}s`;
-  if (hours > 0)
-    return `${padTime(hours, 2)}h ${padTime(minutes, 2)}m ${padTime(seconds, 2)}s`;
-  if (minutes > 0) return `${padTime(minutes, 2)}m ${padTime(seconds, 2)}s`;
-  if (seconds > 0) return `${padTime(seconds, 2)}.${padTime(milliseconds, 3)}s`;
-  if (milliseconds > 0)
-    return `${padTime(milliseconds, 3)}.${padTime(subMilliseconds, 3)}ms`;
-  return `${padTime(subMilliseconds, 3)}µs`;
+  const pad = (n) => String(n).padStart(2, "0");
+
+  if (hours !== 0 || minutes !== 0) {
+    const [secPart, msPart] = seconds.toFixed(3).split(".", 2);
+    const res = hours !== 0 ? `${hours}:${pad(minutes)}` : `${minutes}`;
+    return `${res}:${pad(secPart)}.${msPart} (${hours !== 0 ? "h:m" : ""}m:ss.mmm)`;
+  }
+
+  if (seconds !== 0) {
+    return `${seconds.toFixed(3)}s`;
+  }
+
+  return `${Number(ms.toFixed(3))}ms`;
 }
 
 // Shared by console.timeLog() and console.timeEnd().
@@ -1396,8 +1406,12 @@ const iterKey = "(iteration index)";
 for (const method of ReflectOwnKeys(consoleMethods))
   Console.prototype[method] = consoleMethods[method];
 
-Console.prototype.dirxml = Console.prototype.log;
-Console.prototype.groupCollapsed = Console.prototype.group;
+Console.prototype.dirxml = function dirxml(...args) {
+  return ReflectApply(Console.prototype.log, this, args);
+};
+Console.prototype.groupCollapsed = function groupCollapsed(...args) {
+  return ReflectApply(Console.prototype.group, this, args);
+};
 
 function timeLogImpl(consoleRef, label, formatted, args) {
   if (args.length === 0) {
