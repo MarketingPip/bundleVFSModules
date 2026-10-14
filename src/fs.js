@@ -1677,6 +1677,9 @@ function buildApi(vol) {
         // fd-based ops validate the fd first (test-fs-fchmod).
         if (fdFirst) validateFd(args[0]);
         if (validatePathFirst) validatePath(args[0]);
+        // Two-path ops (linkSync, symlinkSync, etc.): validate the dest path too.
+        if (destIdx != null && destIdx !== 0)
+          validatePath(args[destIdx], "dest");
         if (needsUidGid) validateUidGid(args[1], args[2]);
         result = (impl || orig).apply(this, args);
       } catch (e) {
