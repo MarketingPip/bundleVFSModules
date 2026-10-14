@@ -76,6 +76,14 @@ function polyfillPath(request) {
   if (target === "fs" && name === "fs") {
     return path.join(repoRoot, "parity", "fs-harness.mjs");
   }
+  // Harness-only timer-globals restore for stream parity
+  // (parity/stream-harness.mjs): the stream shim (via async_hooks → events)
+  // replaces timer globals on import, tripping Node's global-leak detector.
+  // The harness restores the originals snapshotted in preload.mjs.
+  // src/stream.js itself is untouched.
+  if (target === "stream" && name === "stream") {
+    return path.join(repoRoot, "parity", "stream-harness.mjs");
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   return fs.existsSync(candidate) ? candidate : null;
 }

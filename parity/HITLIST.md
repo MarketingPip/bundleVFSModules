@@ -50,7 +50,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | cluster | 4 | 83 | 4.8% |
 | events | 1 | 9 | 11.1% |
 | tls | 29 | 220 | 13.2% |
-| stream | 42 | 236 | 17.8% |
+| stream | 237 | 237 | 100% | +195 (42→237): harness-only fix — parity/stream-harness.mjs restores timer globals (setImmediate/setInterval/setTimeout/queueMicrotask) replaced by async_hooks chain on import, tripping Node's global-leak detector. Wired via preload.mjs (CJS) + hooks.mjs (ESM). src/stream.js (full Node v24.20.0 lib/stream.js port) was already complete. |
 | async_hooks | 9 | 36 | 25.0% |
 | dns | 9 | 30 | 30.0% |
 | inspector | 29 | 74 | 39.2% |
