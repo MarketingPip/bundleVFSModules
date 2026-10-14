@@ -84,6 +84,14 @@ function polyfillPath(request) {
   if (target === "stream" && name === "stream") {
     return path.join(repoRoot, "parity", "stream-harness.mjs");
   }
+  // Harness-only timer-globals restore for async_hooks parity
+  // (parity/async-hooks-harness.mjs): the async_hooks shim (als-browser)
+  // replaces timer globals on import, tripping Node's global-leak detector.
+  // The harness restores the originals snapshotted in preload.mjs.
+  // src/async_hooks.js itself is untouched.
+  if (target === "async_hooks" && name === "async_hooks") {
+    return path.join(repoRoot, "parity", "async-hooks-harness.mjs");
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   return fs.existsSync(candidate) ? candidate : null;
 }

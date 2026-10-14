@@ -38,6 +38,14 @@ function polyfillURL(specifier) {
     return pathToFileURL(path.join(repoRoot, "parity", "stream-harness.mjs"))
       .href;
   }
+  // Harness-only timer-globals restore for async_hooks parity
+  // (parity/async-hooks-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs.
+  if (target === "async_hooks" && name === "async_hooks") {
+    return pathToFileURL(
+      path.join(repoRoot, "parity", "async-hooks-harness.mjs"),
+    ).href;
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   if (!fs.existsSync(candidate)) return null;
   return pathToFileURL(candidate).href;
