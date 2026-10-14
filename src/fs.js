@@ -1758,6 +1758,9 @@ function buildApi(vol) {
       };
       try {
         if (validatePathFirst) validatePath(args[0]);
+        // Two-path ops (link, symlink, etc.): validate the dest path too.
+        if (destIdx != null && destIdx !== 0)
+          validatePath(args[destIdx], "dest");
         if (needsUidGid) validateUidGid(args[1], args[2]);
         return (impl || orig).apply(this, args);
       } catch (e) {
