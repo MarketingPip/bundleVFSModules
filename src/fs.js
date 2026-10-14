@@ -5983,8 +5983,56 @@ function buildApi(vol) {
   // Node's JS realpath resolves by lstat()ing each path component, so a
   // missing path surfaces as an lstat ENOENT; realpath.native goes to the
   // binding and surfaces a realpath ENOENT (test-fs-error-messages).
+  // memfs throws ENOENT (not ELOOP) for symlink cycles; detect cycles here
+  // and throw ELOOP like Node (test-fs-realpath.js cyclic_link_protection).
+  function detectSymlinkCycle(absPath) {
+    // Walk symlinks manually; if we revisit a canonical path, it's a cycle.
+    const visited = new Set();
+    // Seed with the starting path so a cycle back to it is detected.
+    visited.add(absPath);
+    let current = absPath;
+    // Node's SYMLOOP_MAX is 40; use the same bound.
+    for (let i = 0; i < 40; i++) {
+      let target;
+      try {
+        const st = vol.lstatSync(current);
+        if (!st.isSymbolicLink()) return false;
+        target = vol.readlinkSync(current);
+      } catch {
+        return false; // Not a symlink or unreadable — no cycle via this path.
+      }
+      // Resolve relative targets against the symlink's directory.
+      const resolved = target.startsWith("/")
+        ? target
+        : current.slice(0, current.lastIndexOf("/")) + "/" + target;
+      // Normalize ./ and ../ segments.
+      const parts = resolved.split("/").filter((x) => x && x !== ".");
+      const norm = [];
+      for (const part of parts) {
+        if (part === "..") norm.pop();
+        else norm.push(part);
+      }
+      const canon = "/" + norm.join("/");
+      if (visited.has(canon)) return true;
+      visited.add(canon);
+      current = canon;
+    }
+    return true; // Exceeded SYMLOOP_MAX — treat as a loop.
+  }
   function realpathImpl(p, options, native) {
     const ps = toPathString(p);
+    const absPs = ps.startsWith("/") ? ps : "/" + ps;
+    // memfs hangs (infinite loop) on symlink cycles instead of throwing
+    // ELOOP; detect cycles first via our own walk (test-fs-realpath.js).
+    if (detectSymlinkCycle(absPs)) {
+      const loop = new Error(
+        `ELOOP: too many symbolic links encountered, realpath '${ps}'`,
+      );
+      loop.code = "ELOOP";
+      loop.syscall = "realpath";
+      loop.path = ps;
+      throw loop;
+    }
     let resolved;
     try {
       resolved = vol.realpathSync(ps);

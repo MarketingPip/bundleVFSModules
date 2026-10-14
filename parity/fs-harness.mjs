@@ -74,6 +74,14 @@ const fixturesDir = realPath.join(testRoot, "fixtures");
 // is scratch (cleaned per test process); fixtures is read-only test data.
 // testRoot covers the test files themselves (tests open __filename).
 const syncRoots = [tmpdir, fixturesDir, testRoot];
+// System files the official tests read directly (not under syncRoots).
+// These exist on real disk in the harness (Node) but not in memfs;
+// sync them on demand so the shim can read them (e.g. /proc files on Linux).
+const systemFiles = [
+  "/proc/sys/kernel/hostname",
+  "/usr/bin/node",
+  process.execPath,
+].filter((p, i, a) => p && a.indexOf(p) === i);
 
 // Raw shim methods for the sync itself — never the wrapped versions below,
 // or syncPath would recurse into itself.
@@ -94,13 +102,22 @@ try {
 } catch {}
 
 const underSyncRoot = (p) =>
-  syncRoots.some((r) => p === r || p.startsWith(r + realPath.sep));
+  syncRoots.some((r) => p === r || p.startsWith(r + realPath.sep)) ||
+  systemFiles.includes(p) ||
+  p.startsWith(repoRoot + realPath.sep + "test" + realPath.sep);
 const syncedDirs = new Map(); // real dir path -> real mtimeMs at sync time
 
 function syncPath(p) {
+  // Redirect Node.js repo-layout paths (test/...) to the parity mirror
+  // (parity/node-test/...). Official tests assume the Node.js repo root.
+  const repoTestPrefix = repoRoot + realPath.sep + "test" + realPath.sep;
+  let srcPath = p;
+  if (p.startsWith(repoTestPrefix)) {
+    srcPath = realPath.join(testRoot, p.slice(repoTestPrefix.length));
+  }
   let st;
   try {
-    st = realFs.lstatSync(p);
+    st = realFs.lstatSync(srcPath);
   } catch {
     return; // nothing on disk: the shim's own ENOENT stands
   }
@@ -113,20 +130,20 @@ function syncPath(p) {
     if (!cur) {
       try {
         raw.mkdirSync(realPath.dirname(p), { recursive: true });
-        raw.symlinkSync(realFs.readlinkSync(p), p);
+        raw.symlinkSync(realFs.readlinkSync(srcPath), p);
       } catch {}
     }
     return;
   }
   if (st.isDirectory()) {
-    if (syncedDirs.get(p) === st.mtimeMs) return;
-    syncedDirs.set(p, st.mtimeMs);
+    if (syncedDirs.get(srcPath) === st.mtimeMs) return;
+    syncedDirs.set(srcPath, st.mtimeMs);
     try {
       raw.mkdirSync(p, { recursive: true });
     } catch {}
     let names;
     try {
-      names = realFs.readdirSync(p);
+      names = realFs.readdirSync(srcPath);
     } catch {
       return;
     }
@@ -143,7 +160,7 @@ function syncPath(p) {
     if (!cur || st.mtimeMs > cur.mtimeMs) {
       try {
         raw.mkdirSync(realPath.dirname(p), { recursive: true });
-        raw.writeFileSync(p, realFs.readFileSync(p));
+        raw.writeFileSync(p, realFs.readFileSync(srcPath));
       } catch {}
     }
   }
@@ -229,6 +246,15 @@ function wrapFn(fn, methodName) {
       try {
         const d = Object.getOwnPropertyDescriptor(fn, k);
         if (d) Object.defineProperty(wrapped, k, d);
+      } catch {}
+    }
+  }
+  // Preserve symbol-keyed own properties (e.g. util.promisify.custom).
+  for (const s of Object.getOwnPropertySymbols(fn)) {
+    if (!(s in wrapped)) {
+      try {
+        const d = Object.getOwnPropertyDescriptor(fn, s);
+        if (d) Object.defineProperty(wrapped, s, d);
       } catch {}
     }
   }
