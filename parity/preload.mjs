@@ -113,6 +113,14 @@ function polyfillPath(request) {
   if (target === "async_hooks" && name === "async_hooks") {
     return path.join(repoRoot, "parity", "async-hooks-harness.mjs");
   }
+  // Harness-only timer-globals restore for tty parity
+  // (parity/tty-harness.mjs): the tty shim imports ./stream.js (via
+  // async_hooks → events → stream), which replaces timer globals on import,
+  // tripping Node's global-leak detector. The harness restores the
+  // originals snapshotted in preload.mjs. src/tty.js itself is untouched.
+  if (target === "tty" && name === "tty") {
+    return path.join(repoRoot, "parity", "tty-harness.mjs");
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   return fs.existsSync(candidate) ? candidate : null;
 }
