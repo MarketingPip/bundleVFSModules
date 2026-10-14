@@ -1258,7 +1258,9 @@ function createVolume() {
 // umask. Wrap open/openSync/mkdir/mkdirSync so modes respect the umask.
 function applyUmask(mode) {
   if (mode === undefined || mode === null) return mode;
-  const m = Number(mode);
+  // Node parses string modes as OCTAL (parseInt(mode, 8)); Number(mode)
+  // would misread "10644" as decimal 10644 (test-fs-open-mode-mask.js).
+  const m = typeof mode === "string" ? parseInt(mode, 8) : Number(mode);
   if (!Number.isInteger(m)) return mode;
   return m & ~getUmask();
 }
@@ -6089,17 +6091,19 @@ function buildApi(vol) {
       validateEncodingOpt(options, true);
       validatePath(p);
       nextTick(() => {
+        // The callback invocations stay OUTSIDE the try: if the user's
+        // callback throws (it may synchronously run more test code), the
+        // throw must propagate, not be caught and re-delivered as a second
+        // callback invocation (test-fs-realpath.js double-fire).
+        let result;
         try {
-          const result = realpathImpl(
-            p,
-            normalizeRealpathOptions(options),
-            native,
-          );
-          emitFs("fs", "realpath", p, result);
-          callback(null, result);
+          result = realpathImpl(p, normalizeRealpathOptions(options), native);
         } catch (e) {
           callback(enrichErr(e, "realpath"));
+          return;
         }
+        emitFs("fs", "realpath", p, result);
+        callback(null, result);
       });
     };
   }

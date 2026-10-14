@@ -451,10 +451,6 @@
     "category": "shim-bug",
     "reason": "chdir portion FIXED via harness virtual cwd (process.chdir/cwd patched to track memfs). Remaining failure is error message format: errInvalidArgTypeProp says 'Received type function' vs Node's 'Received function' (line 277). Separate shim bug, not chdir-related."
   },
-  "test-fs-negative-zero.js": {
-    "category": "inherent",
-    "reason": "Opens process.execPath (the real Node binary at /usr/bin/node) to test -0 flag/mode handling. That path is outside the harness sync roots and has no browser equivalent; the -0 handling itself is verified working on synced files (openSync/readFile accept -0 as 0)."
-  },
   "test-fs-promises-file-handle-aggregate-errors.js": {
     "category": "inherent",
     "reason": "Requires --expose-internals: monkey-patches real Node's internal FileHandle.prototype.fd (via require('internal/fs/promises')) to inject op/close failures. The shim's FileHandle is a separate memfs-backed class, so the patch never fires; the AggregateError path is unreachable in this lane. Fails identically at pristine base 1a89d258."

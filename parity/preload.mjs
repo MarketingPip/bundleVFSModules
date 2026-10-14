@@ -87,8 +87,14 @@ Module._load = function (request, parent, isMain) {
   // needs the shim: it reads the cp dest out of memfs.
   const isFsHelper =
     target === "fs" &&
-    parentFile ===
-      path.join(repoRoot, "parity", "node-test", "common", "fs.js");
+    (parentFile ===
+      path.join(repoRoot, "parity", "node-test", "common", "fs.js") ||
+      // tmpdir.refresh() must run against the shim's memfs, not real disk:
+      // otherwise its rmSync/mkdirSync clear real-disk .tmp.0 while the
+      // test's memfs .tmp.0 keeps stale entries (test-fs-realpath.js
+      // test_up_multiple EEXIST).
+      parentFile ===
+        path.join(repoRoot, "parity", "node-test", "common", "tmpdir.js"));
   if (parentFile.startsWith(testsDir) || isFsHelper) {
     // Mirror real CJS builtins: require('path') is module.exports (the
     // default export), and require('path/posix') / require('path/win32')
