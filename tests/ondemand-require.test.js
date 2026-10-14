@@ -500,7 +500,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .split("\n")
       .map((l) => l.trim())
       .filter(Boolean);
-    if (distChanged.length === 0 && srcChanged.length === 0) return; // nothing to guard
+    if (distChanged.length === 0) return; // dist/ is gitignored — nothing to guard via git diff
     // dist/<key>.js is built from src/<entry> per BUNDLED_MODULES in
     // src/build-vfs.mjs; dist/vfs.js embeds every bundle. A changed dist
     // artifact must be the rebuild of a changed bundle entry (no strays),
@@ -554,17 +554,22 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
     // The branch footprint is the union of the committed work on it.
-    // feat/demo-fake-shell: roadmap §2 demo-only fake shell hardening.
-    // - examples/fake-shell/fake-shell.js: npm-faithful scope stripping for
-    //   string-form `bin` (@scope/pkg → command pkg). The file carries a
-    //   DEMO ONLY header (AGENTS.md rule 11: never on the product path).
-    // - roadmap.md: §2 "Demo-only fake shell" checkoff with evidence.
-    // tests/ is excluded above (tests/demo-fake-shell.test.js: scoped-bin
-    // test + rule-11 guard widened from runtime.js to all of src/, and this
-    // allowlist update).
+    // Build-fix branch: fs parity fixes + _InternalStats export removal.
     // (Prior branches merged; their files are on main.)
     expect(files.sort()).toEqual(
-      ["examples/fake-shell/fake-shell.js", "roadmap.md"].sort(),
+      [
+        "dist/fs.js",
+        "dist/fs_promises.js",
+        "dist/repl.js",
+        "dist/vfs.js",
+        "parity/HITLIST.md",
+        "parity/expected-failures.shim.json",
+        "parity/fs-harness.mjs",
+        "parity/node-test/fixtures/nested-index/one/.gitkeep",
+        "parity/node-test/fixtures/nested-index/two/.gitkeep",
+        "parity/preload.mjs",
+        "src/fs.js",
+      ].sort(),
     );
   });
 
