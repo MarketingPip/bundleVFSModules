@@ -68,7 +68,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | console | 20 | 21 | 95.2% |
 | buffer | 60 | 62 | 96.8% |
 | timers | 43 | 44 | 97.7% |
-| crypto | 126 | 128 | 98.4% |
+| crypto | 129 | 129 | 100% |
 | assert | 18 | 18 | 100% |
 | diagnostics_channel | 26 | 26 | 100% |
 | path | 16 | 16 | 100% |
