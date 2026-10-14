@@ -167,7 +167,7 @@ function syncPath(p) {
   // sockets, fifos, etc: leave to the shim
 }
 
-function syncArgs(args) {
+function syncArgs(args, methodName) {
   for (const a of args) {
     let p = null;
     if (typeof a === "string") p = a;
@@ -180,9 +180,13 @@ function syncArgs(args) {
     if (p && underSyncRoot(p)) {
       // The test may create this path through the shim (it won't exist on
       // real disk): make sure its parent chain exists in memfs first.
-      try {
-        raw.mkdirSync(realPath.dirname(p), { recursive: true });
-      } catch {}
+      // Exception: mkdtemp/mkdtempSync must fail with ENOENT when the parent
+      // doesn't exist — don't create it for them (test-fs-error-messages).
+      if (methodName !== "mkdtemp" && methodName !== "mkdtempSync") {
+        try {
+          raw.mkdirSync(realPath.dirname(p), { recursive: true });
+        } catch {}
+      }
       syncPath(p);
     }
   }
@@ -228,7 +232,7 @@ function wrapFn(fn, methodName) {
         }
       }
     }
-    syncArgs(args);
+    syncArgs(args, methodName);
     if (new.target) return Reflect.construct(fn, args, new.target);
     return Reflect.apply(fn, this, args);
   }
