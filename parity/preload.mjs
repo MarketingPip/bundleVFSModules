@@ -12,7 +12,7 @@ import Module from "node:module";
 import { register } from "node:module";
 import path from "node:path";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -64,6 +64,27 @@ Object.defineProperty(globalThis, "__PARITY_ORIG_TIMERS__", {
   enumerable: false,
 });
 
+// Harness-only global Buffer install for buffer parity: most official
+// buffer tests exercise the *global* Buffer and never require('buffer'),
+// so `SlowBuffer(4) instanceof Buffer` and `buffer.INSPECT_MAX_BYTES`
+// (set via require('buffer')) must see the same Buffer class. Installs
+// the polyfill as globalThis.Buffer, the way Node's own bootstrap
+// installs the real Buffer. src/buffer.js itself is untouched.
+// Harness-only global Buffer install for buffer parity: most official
+// buffer tests exercise the *global* Buffer and never require('buffer'),
+// so `SlowBuffer(4) instanceof Buffer` and `buffer.INSPECT_MAX_BYTES`
+// (set via require('buffer')) must see the same Buffer class. Installs
+// the polyfill as globalThis.Buffer, the way Node's own bootstrap
+// installs the real Buffer. src/buffer.js itself is untouched.
+let bufferPoly = null;
+if (target === "buffer") {
+  const polyfillURL = pathToFileURL(
+    path.join(repoRoot, "src", "buffer.js"),
+  ).href;
+  bufferPoly = await import(polyfillURL);
+  globalThis.Buffer = bufferPoly.Buffer;
+}
+
 function polyfillPath(request) {
   const name = request.startsWith("node:") ? request.slice(5) : request;
   if (name.startsWith(".") || path.isAbsolute(name)) return null;
@@ -97,8 +118,41 @@ function polyfillPath(request) {
 }
 
 const origLoad = Module._load;
+// Wrap of require('crypto') for buffer parity: randomBytes must return the
+// polyfill Buffer, not a native one, or deepStrictEqual(polyResult,
+// nativeInput) in the concat tests fails on prototype identity (a harness
+// artifact: in real Node, and in any real polyfill deployment, there is
+// only one Buffer).
+let wrappedCrypto = null;
+function getWrappedCrypto(request, parent, isMain) {
+  if (wrappedCrypto) return wrappedCrypto;
+  const nativeCrypto = origLoad.call(this, request, parent, isMain);
+  wrappedCrypto = new Proxy(nativeCrypto, {
+    get(target, prop, receiver) {
+      if (prop === "randomBytes") {
+        return (size, callback) => {
+          const buf = bufferPoly.Buffer.from(target.randomBytes(size));
+          if (typeof callback === "function") {
+            process.nextTick(() => callback(null, buf));
+          }
+          return buf;
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+  return wrappedCrypto;
+}
 Module._load = function (request, parent, isMain) {
   const parentFile = parent?.filename ?? "";
+  // Buffer target: redirect require('crypto') from the vendored test tree
+  // to the wrapped version so randomBytes returns polyfill Buffers.
+  if (target === "buffer" && bufferPoly) {
+    const bareCrypto = request.startsWith("node:") ? request.slice(5) : request;
+    if (bareCrypto === "crypto" && parentFile.startsWith(testsDir)) {
+      return getWrappedCrypto.call(this, request, parent, isMain);
+    }
+  }
   // For the fs target, common/fs.js (directory-comparison helpers) also
   // needs the shim: it reads the cp dest out of memfs.
   const isFsHelper =
