@@ -28,7 +28,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | 4 | https | 1 | 67 | 1.5% | TLS-over-virtual-socket stack incomplete; real TLS client has no byte transport in browser (roadmap 2026-10-05 verdict: honest stub until transport exists) — mostly inherent |
 | 5 | http2 | 7 | 277 | 2.5% | HTTP/2 framing/session multiplexing largely unimplemented; large surface (277 tests) |
 | 6 | child_process | 4 | 112 | 3.6% | Real process spawning is a noop by design; 100 failures already documented in `expected-failures.shim.json` as inherent (harness global-leak detector vs ALS timer patching) |
-| 7 | fs | 282 | 349 | 80.8% | Harness virtual cwd (process.chdir/cwd patched) fixed 3 chdir tests. Merge artifact fixed: added missing validateFlags/validateMode. Score dip from 322 due to merge-introduced ReferenceError; 40 tests need triage. Remaining: error message format bugs, stream edges |
+| 7 | fs | 308 | 349 | 88.3% | Reclaimed 26 merge-artifact tests (282→308): Dir._path fix, validateMode range/octal validation, validateUidGid error codes, harness syncRoots (testRoot), F_OK/R_OK/W_OK/X_OK preservation, .native preservation, dest path validation in wrapCb/wrapSync, null-byte skip in syncArgs. Remaining 14: 5 write-stream edge cases, realpath symlink cycles, mode-mask memfs issue, flush timing tests |
 | 8 | domain | 2 | 50 | 4.0% | Deprecated Node API; low value — deprioritize unless cheap wins |
 | 9 | cluster | 4 | 83 | 4.8% | Multi-process clustering is a noop in browser (single worker); mostly inherent |
 | 10 | events | 1 | 9 | 11.1% | Misleading: 8 of 9 failures documented as inherent in `expected-failures.shim.json` (harness limitations); effective parity higher |
