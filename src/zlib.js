@@ -265,8 +265,15 @@ for (let n = 0; n < 256; n++) {
 function toBytes(data) {
   if (typeof data === "string") return Buffer.from(data);
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  if (isArrayBufferView(data))
-    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  if (isArrayBufferView(data)) {
+    try {
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    } catch {
+      // Spoofed byteLength/length (e.g. getter returning out-of-bounds value).
+      // Node throws ERR_OUT_OF_RANGE for this case.
+      throw new ERR_OUT_OF_RANGE("buffer", "is out of bounds", data.byteLength);
+    }
+  }
   return null;
 }
 
@@ -342,6 +349,12 @@ class ERR_BUFFER_TOO_LARGE extends Error {
   constructor(max) {
     super(`Cannot create a Buffer larger than ${max} bytes`);
     this.code = "ERR_BUFFER_TOO_LARGE";
+  }
+}
+class ERR_STREAM_DESTROYED extends Error {
+  constructor() {
+    super("Cannot call write after a stream was destroyed");
+    this.code = "ERR_STREAM_DESTROYED";
   }
 }
 class ERR_ZLIB_INITIALIZATION_FAILED extends Error {
@@ -1166,7 +1179,8 @@ class MiniTransform extends MiniEmitter {
       encoding = undefined;
     }
     if (this._destroyed) {
-      if (cb) queueMicrotask(() => cb(new Error("write after destroy")));
+      if (cb) queueMicrotask(() => cb(new ERR_STREAM_DESTROYED()));
+      else queueMicrotask(() => this.emit("error", new ERR_STREAM_DESTROYED()));
       return false;
     }
     if (this._wended) {
@@ -1666,6 +1680,17 @@ function makeZlibClass(mode, validate) {
     }
   }
   function Factory(opts) {
+    // Support old-style inheritance: DeflateRaw.call(this, opts)
+    // When called via .call() with an existing `this`, initialize it
+    // by copying fields from a fresh instance.
+    if (this instanceof Factory) {
+      const fresh = new Z(opts);
+      // Copy all own properties (including _ev Map, etc.)
+      for (const key of Object.getOwnPropertyNames(fresh)) {
+        this[key] = fresh[key];
+      }
+      return this;
+    }
     return new Z(opts);
   }
   Factory.prototype = Z.prototype;

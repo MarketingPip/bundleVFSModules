@@ -567,5 +567,69 @@
   },
   "test-worker-process-env.js": {
     "reason": "Timer globals leak detector fires ('Unexpected global(s) found: setImmediate...') when the test process is spawned from a Node parent process, but passes when spawned from bash and passes natively without preload. The shim does not replace timers (verified: setTimeout unchanged after require). Environment/harness artifact, not a shim bug."
+  },
+  "test-zlib-brotli-16GB.js": {
+    "category": "inherent",
+    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
+  },
+  "test-zlib-brotli-dictionary.js": {
+    "category": "inherent",
+    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
+  },
+  "test-zlib-brotli-flush-invalid-kind.js": {
+    "category": "inherent",
+    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
+  },
+  "test-zlib-brotli-flush.js": {
+    "category": "inherent",
+    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
+  },
+  "test-zlib-brotli-from-brotli.js": {
+    "category": "inherent",
+    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
+  },
+  "test-zlib-brotli-from-string.js": {
+    "category": "inherent",
+    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
+  },
+  "test-zlib-brotli-kmaxlength-rangeerror.js": {
+    "category": "inherent",
+    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
+  },
+  "test-zlib-brotli.js": {
+    "category": "inherent",
+    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
+  },
+  "test-zlib-from-concatenated-gzip.js": {
+    "category": "inherent",
+    "reason": "Missing test fixture pseudo-multimember-gzip.z/.gz (not in parity mirror). The fixture contains specific pseudo-multimember gzip data with magic bytes mid-stream. Harness gap, not a shim bug."
+  },
+  "test-zlib-zstd-dictionary.js": {
+    "category": "inherent",
+    "reason": "Zstd is an honest stub in src/zlib.js (documented in header): no actual Zstd coding is performed. Real Zstd would require a WASM codec."
+  },
+  "test-zlib-zstd-flush.js": {
+    "category": "inherent",
+    "reason": "Zstd is an honest stub in src/zlib.js (documented in header): no actual Zstd coding is performed. Real Zstd would require a WASM codec."
+  },
+  "test-zlib-zstd-from-string.js": {
+    "category": "inherent",
+    "reason": "Zstd is an honest stub in src/zlib.js (documented in header): no actual Zstd coding is performed. Real Zstd would require a WASM codec."
+  },
+  "test-zlib-zstd-from-zstd.js": {
+    "category": "inherent",
+    "reason": "Zstd is an honest stub in src/zlib.js (documented in header): no actual Zstd coding is performed. Real Zstd would require a WASM codec."
+  },
+  "test-zlib-zstd-kmaxlength-rangeerror.js": {
+    "category": "inherent",
+    "reason": "Zstd is an honest stub in src/zlib.js (documented in header): no actual Zstd coding is performed. Real Zstd would require a WASM codec."
+  },
+  "test-zlib-zstd-pledged-src-size.js": {
+    "category": "inherent",
+    "reason": "Zstd is an honest stub in src/zlib.js (documented in header): no actual Zstd coding is performed. Real Zstd would require a WASM codec."
+  },
+  "test-zlib-zstd.js": {
+    "category": "inherent",
+    "reason": "Zstd is an honest stub in src/zlib.js (documented in header): no actual Zstd coding is performed. Real Zstd would require a WASM codec."
   }
 }
