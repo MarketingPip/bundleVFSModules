@@ -1030,7 +1030,14 @@ function validateUidGid(uid, gid) {
       err.code = "ERR_INVALID_ARG_TYPE";
       throw err;
     }
-    if (!Number.isInteger(value) || value < -1 || value > 0xffffffff) {
+    if (!Number.isInteger(value)) {
+      const err = new RangeError(
+        `The value of "${name}" is out of range. It must be an integer. Received ${value}`,
+      );
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    if (value < -1 || value > 0xffffffff) {
       const err = new RangeError(
         `The value of "${name}" is out of range. It must be >= -1 && <= 4294967295. Received ${value}`,
       );
