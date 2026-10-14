@@ -143,7 +143,12 @@ export function lookup(hostname, options) {
 export function lookupService(address, port) {
   // The promises API names only "address" and "port" in its missing-args
   // error, and it throws synchronously — unlike the callback API.
-  _validateLookupServiceArgs(address, port, undefined, ["address", "port"]);
+  // Node names ALL expected args when any are omitted. Explicit `undefined`
+  // flows to validatePort → ERR_SOCKET_BAD_PORT (not missing).
+  if (arguments.length < 2) {
+    throw _internal("missingArgs")(["address", "port"]);
+  }
+  _validateLookupServiceArgs(address, port, undefined, []);
   return asPromise(lookupServiceCb, [address, port], ([hostname, service]) => ({
     hostname,
     service,

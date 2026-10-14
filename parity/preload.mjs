@@ -116,7 +116,8 @@ Module._load = function (request, parent, isMain) {
         bare === `${target}/posix` ||
         bare === `${target}/win32` ||
         bare === `${target}/strict` ||
-        (target === "fs" && bare === "fs/promises"))
+        (target === "fs" && bare === "fs/promises") ||
+        (target === "dns" && bare === "dns/promises"))
     ) {
       const ns = origLoad.call(this, polyfillPath(target), parent, isMain);
       if (bare === `${target}/posix`) return ns.posix;
@@ -127,6 +128,9 @@ Module._load = function (request, parent, isMain) {
       // fs/promises goes through the harness wrapper too (timer-globals
       // restore + tmpdir sync); the wrapper's .promises is the wrapped API.
       if (target === "fs" && bare === "fs/promises") return def.promises;
+      // dns/promises: require('dns/promises') === require('dns').promises
+      // (reference equality, per test-dns-promises-exists.js).
+      if (target === "dns" && bare === "dns/promises") return def.promises;
       return def;
     }
     const poly = polyfillPath(request);

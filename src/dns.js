@@ -1176,25 +1176,28 @@ const WELL_KNOWN_PORTS = {
 function validateLookupServiceArgs(address, port, callback, missingNames) {
   // Missing-argument shape mirrors Node exactly: the callback API names all
   // three arguments, the promises API names only address and port.
-  if (
-    port === undefined ||
-    (missingNames.length === 3 && callback === undefined)
-  ) {
+  // Note: explicit `undefined` is NOT "missing" — Node throws
+  // ERR_SOCKET_BAD_PORT for lookupService("0.0.0.0", undefined). Only
+  // truly omitted arguments (fewer than expected) trigger ERR_MISSING_ARGS.
+  // Callers must pre-filter missingNames by arguments.length.
+  if (missingNames.length > 0) {
     throw missingArgs(missingNames);
   }
   validateString(address, "address");
   if (!isIPv4(address) && !isIPv6(address))
     throw invalidArgValue("address", address);
   validatePort(port);
-  if (missingNames.length === 3) validateFunction(callback, "callback");
+  if (callback !== undefined) validateFunction(callback, "callback");
 }
 
 export function lookupService(address, port, callback) {
-  validateLookupServiceArgs(address, port, callback, [
-    "address",
-    "port",
-    "callback",
-  ]);
+  // Node names ALL arguments in the missing-args error when any are
+  // omitted (not just the missing ones). Explicit `undefined` is NOT
+  // "missing" — it flows to validatePort → ERR_SOCKET_BAD_PORT.
+  if (arguments.length < 3) {
+    throw missingArgs(["address", "port", "callback"]);
+  }
+  validateLookupServiceArgs(address, port, callback, []);
   asyncTracked(defaultState, callback, async (done) => {
     try {
       // Loopback addresses resolve via the hosts table in Node; DoH has no
@@ -1773,6 +1776,7 @@ export default {
   ALL,
   // Internal helpers shared with dns/promises (not public node:dns API).
   invalidArgType,
+  missingArgs,
   validateLookupServiceArgs,
   PromisesResolver,
 };
