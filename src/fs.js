@@ -9352,7 +9352,6 @@ export const {
 // Class/function exports mirroring node:fs (not on the fs singleton object).
 export { Dirent, Utf8Stream, _toUnixTimestamp };
 const _InternalStats = Stats;
-export { _InternalStats };
 // Public fs.Stats: 14-arg positional function emitting DEP0180
 // (test-fs-stat). Callable without `new` like real Node. Internal code
 // uses the (m, bigint) signature via _InternalStats.
