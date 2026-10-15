@@ -42,10 +42,13 @@ const expectedPath = path.join(
 const filePrefix = `test-${target.replace(/_/g, "-")}`;
 const files = fs
   .readdirSync(testsDir)
-  .filter(
-    (f) =>
-      f.startsWith(filePrefix) && (f.endsWith(".js") || f.endsWith(".mjs")),
-  )
+  .filter((f) => {
+    if (!(f.endsWith(".js") || f.endsWith(".mjs"))) return false;
+    // Exact module matching: `test-http.js` or `test-http-*.js`, but NOT
+    // `test-http2-*.js` or `test-https-*.js` (different modules).
+    const base = f.slice(0, -path.extname(f).length);
+    return base === filePrefix || base.startsWith(`${filePrefix}-`);
+  })
   .sort();
 
 if (files.length === 0) {

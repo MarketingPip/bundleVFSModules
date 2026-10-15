@@ -14,9 +14,9 @@ Method: each `test-<module>-*` file run via `parity/preload.mjs` with
 `PARITY_TARGET=<module>` (30s timeout per file). Pass rates are **raw** —
 they do not subtract `parity/expected-failures.shim.json` entries.
 
-> Note: the stock `parity/run.mjs` matches files with `startsWith("test-http")`,
-> which also catches `test-http2-*`/`test-https-*` (those then run against real
-> Node — false passes). This sweep used exact prefix matching instead.
+> Note (2026-10-14): `parity/run.mjs` now uses exact module matching
+> (`test-<mod>.js` or `test-<mod>-*.js`). Previously `startsWith("test-http")`
+> also caught `test-http2-*`/`test-https-*` (743 files instead of 399 for http).
 
 ## Bottom 10 — biggest parity gaps (port Node's `lib/*.js` here first)
 
@@ -81,7 +81,13 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 
 ## Not swept
 
-- **http** (398 test files): sweep hung past 35 min at 0% CPU — noted per task instructions, needs investigation separately (likely a test that deadlocks the runner rather than hitting the 30s spawn timeout).
+- **http** (399 test files, exact match): Hang diagnosed 2026-10-14. NOT a single
+  deadlock — it's death by a thousand timeouts. ~30% of http tests (abort,
+  destroyed-socket, keep-alive, agent lifecycle) hang the full 30s spawn timeout
+  because the shim leaks socket handles in abort/destroy scenarios (event loop
+  never drains). 399 files × 30% × 30s ≈ 60 min. Root cause: product bug in
+  src/http.js / src/net.js socket lifecycle, not harness. Also fixed: run.mjs
+  was matching 743 files (http+http2+https) via startsWith — now exact.
 - **constants, punycode, sys**: zero official test files — "no official tests".
 - Internal shims with no test target (`_http_*`, `_stream_*`, `_tls_*`, `node_globals`, `fetch-patch`, `browser-builds`, etc.): not applicable.
 
