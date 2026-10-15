@@ -26,7 +26,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | 2 | sqlite | 0 | 17 | 0.0% | Partial API surface (defensive mode, authz, backup, aggregate fns missing); the wa-sqlite WASM path (AGENTS.md rule 8) is the intended implementation |
 | 3 | dgram | 1 | 80 | 1.3% | UDP sockets are honest noops by design (no raw UDP in browser); `socket.address()` returns null — document as inherent, don't chase |
 | 4 | https | 1 | 67 | 1.5% | TLS-over-virtual-socket stack incomplete; real TLS client has no byte transport in browser (roadmap 2026-10-05 verdict: honest stub until transport exists) — mostly inherent |
-| 5 | http2 | 7 | 277 | 2.5% | HTTP/2 framing/session multiplexing largely unimplemented; large surface (277 tests) |
+| 5 | http2 | 35 | 277 | 12.6% | 7→35 (+28): stream-compat methods (resume/pause/setEncoding/pipe/etc.) on Http2Stream/Request/Response; custom Request/Response classes via createServer options; validation (setLocalWindowSize, statusCode, altsvc); Symbol.asyncDispose; timer-globals harness. Remaining 242: inherent (no real HTTP/2 framing/HPACK/TLS/flow-control/multiplexing in browser) |
 | 6 | child_process | 4 | 112 | 3.6% | Real process spawning is a noop by design; 100 failures already documented in `expected-failures.shim.json` as inherent (harness global-leak detector vs ALS timer patching) |
 | 7 | fs | 324 | 349 | 92.8% | +9 (315→324): real shim bug — applyUmask parsed string modes as decimal not octal (mode-mask memfs getResolvedLink crash); real shim bug — makeRealpath double-invoked callback when user callback threw (realpath). Harness: in-place wrapping so test monkey-patches (fs.close/fs.write/t.mock.method fsync) land on the same object streams look up (7 stream/flush tests); symlink/hardlink target sync incl. Buffer targets + mtime preservation (realpath deep symlinks, symlink-buffer-path); syncArgs skips link-target parent creation; preload intercepts common/tmpdir.js so refresh() clears memfs. Housekeeping: removed stale test-fs-negative-zero expected-failure. Remaining 25: documented inherent (sockets, FIFOs, --expose-internals, pipe-large, watch, etc.) |
 | 8 | domain | 2 | 50 | 4.0% | Deprecated Node API; low value — deprioritize unless cheap wins |
@@ -43,7 +43,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | sqlite | 0 | 17 | 0.0% |
 | dgram | 1 | 80 | 1.3% |
 | https | 1 | 67 | 1.5% |
-| http2 | 7 | 277 | 2.5% |
+| http2 | 35 | 277 | 12.6% |
 | child_process | 4 | 112 | 3.6% |
 | fs | 99 | 349 | 28.4% |
 | domain | 2 | 50 | 4.0% |
