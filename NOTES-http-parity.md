@@ -67,3 +67,26 @@
 
 This is a significant architectural change to `src/http.js`.
 
+### Implementation progress
+
+**Commit b7c86c93** (pushed as 978a3b83):
+- `ClientRequest.destroy()` destroys `this.socket` (fixes loop-keeper leak)
+- `ServerResponse._destroy()` destroys its socket (client sees ECONNRESET)
+- `ServerResponse` streams: `_flushHeaders()`, `_write()` override, `write()` override trigger flush
+- `_finishSocketResponse` handles `_headerFlushed` case (writes terminating chunk)
+- `_socketHttpRoundTrip` accepts `onHeaders`/`onBody` callbacks for streaming
+- `_performVirtualRequest` emits 'response' on headers, streams body
+- `parity/http-harness.mjs` created (timer-globals restore)
+- `parity/preload.mjs` routes http target through harness
+- **Result:** `test-http-abort-client.js` PASSES (was hanging)
+
+**Commit bf25fd5b** (not yet pushed):
+- Handle abort-before-socket-creation race in `_performVirtualRequest`
+- If `this._aborted` after `netConnect`, destroy socket immediately + emit ECONNRESET
+
+**Still hanging:** `test-http-abort-queued.js`, `test-http-aborted.js`, `test-http-after-connect.js`
+- These involve `http.Agent` socket pooling semantics
+- The virtual path doesn't integrate with Agent pooling (creates socket per request)
+- Need to investigate whether the hang is from leaked sockets or Agent semantics
+
+
