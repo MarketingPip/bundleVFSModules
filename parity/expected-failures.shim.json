@@ -415,10 +415,6 @@
     "category": "inherent",
     "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
   },
-  "test-child-process-fork3.js": {
-    "category": "inherent",
-    "reason": "fork fixture modules are not vendored under parity/node-test/fixtures"
-  },
   "test-child-process-http-socket-leak.js": {
     "category": "inherent",
     "reason": "async spawn/exec never resolve without a parent-frame host; the harness 30s timeout kills the test process"
@@ -606,10 +602,6 @@
   "test-child-process-stdout-ipc.js": {
     "category": "inherent",
     "reason": "async spawn/exec/execFile delegate to the parent frame via window; the harness has no window (ERR_NO_WINDOW). In the real sandbox the host implements the protocol"
-  },
-  "test-child-process-uid-gid.js": {
-    "category": "inherent",
-    "reason": "als-browser patches timer globals for AsyncLocalStorage context propagation (intended shim behavior); Node test/common leak detector flags the wrapped functions as unexpected globals"
   },
   "test-child-process-windows-hide.js": {
     "category": "inherent",

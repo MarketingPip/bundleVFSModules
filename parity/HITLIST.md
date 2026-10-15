@@ -27,7 +27,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | 3 | dgram | 1 | 80 | 1.3% | UDP sockets are honest noops by design (no raw UDP in browser); `socket.address()` returns null — document as inherent, don't chase |
 | 4 | https | 20 | 67 | 29.9% | 1/67 -> 20/67: signal handling in ClientRequest, ALPNProtocols/ALPNCallback storage, timer-globals harness. 47 remaining: TLS handshake/session/SNI/keylog/pfx (inherent, no TLS in browser), Agent signal wiring gaps, https virtual-server dispatch gaps, server close/timeout hangs |
 | 5 | http2 | 35 | 277 | 12.6% | 7→35 (+28): stream-compat methods (resume/pause/setEncoding/pipe/etc.) on Http2Stream/Request/Response; custom Request/Response classes via createServer options; validation (setLocalWindowSize, statusCode, altsvc); Symbol.asyncDispose; timer-globals harness. Remaining 242: inherent (no real HTTP/2 framing/HPACK/TLS/flow-control/multiplexing in browser) |
-| 6 | child_process | 4 | 112 | 3.6% | Real process spawning is a noop by design; 100 failures already documented in `expected-failures.shim.json` as inherent (harness global-leak detector vs ALS timer patching) |
+| 6 | child_process | 6 | 112 | 5.4% | +2 (4→6): timer-globals harness (parity/child_process-harness.mjs) fixed fork3 + uid-gid; fixed sync throw on missing shell (now async 'error') + pid undefined on failed spawn (was fake pid). 106 inherent: no real process spawning in browser (100 documented in expected-failures.shim.json) |
 | 7 | fs | 324 | 349 | 92.8% | +9 (315→324): real shim bug — applyUmask parsed string modes as decimal not octal (mode-mask memfs getResolvedLink crash); real shim bug — makeRealpath double-invoked callback when user callback threw (realpath). Harness: in-place wrapping so test monkey-patches (fs.close/fs.write/t.mock.method fsync) land on the same object streams look up (7 stream/flush tests); symlink/hardlink target sync incl. Buffer targets + mtime preservation (realpath deep symlinks, symlink-buffer-path); syncArgs skips link-target parent creation; preload intercepts common/tmpdir.js so refresh() clears memfs. Housekeeping: removed stale test-fs-negative-zero expected-failure. Remaining 25: documented inherent (sockets, FIFOs, --expose-internals, pipe-large, watch, etc.) |
 | 8 | domain | 2 | 50 | 4.0% | Deprecated Node API; low value — deprioritize unless cheap wins |
 | 9 | cluster | 4 | 83 | 4.8% | Multi-process clustering is a noop in browser (single worker); mostly inherent |
@@ -44,7 +44,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | dgram | 1 | 80 | 1.3% |
 | https | 20 | 67 | 29.9% |
 | http2 | 35 | 277 | 12.6% |
-| child_process | 4 | 112 | 3.6% |
+| child_process | 6 | 112 | 5.4% |
 | fs | 99 | 349 | 28.4% |
 | http | 108 | 399 | 27.1% | Baseline 2026-10-14 on feat/http-parity (unmerged) after socket-leak fix (ClientRequest.destroy / ServerResponse._destroy now destroy sockets; streaming for virtual server responses + client 'response' on headers): 108/399. 103 tests still hit the 30s spawn timeout (SIGTERM) — mostly Agent/keep-alive/timeout lifecycle; 8 agent-pooling tests need Agent socket pooling (not yet implemented); 17 fast failures need triage. |
 | domain | 2 | 50 | 4.0% |

@@ -146,6 +146,15 @@ function polyfillPath(request) {
   if (target === "https" && name === "https") {
     return path.join(repoRoot, "parity", "https-harness.mjs");
   }
+  // Harness-only timer-globals restore for child_process parity
+  // (parity/child_process-harness.mjs): the child_process shim imports
+  // ./events.js and ./stream.js (which pull in async_hooks → als-browser),
+  // replacing timer globals on import and tripping Node's global-leak
+  // detector. The harness restores the originals snapshotted in preload.mjs.
+  // src/child_process.js itself is untouched.
+  if (target === "child_process" && name === "child_process") {
+    return path.join(repoRoot, "parity", "child_process-harness.mjs");
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   return fs.existsSync(candidate) ? candidate : null;
 }
