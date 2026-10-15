@@ -1769,6 +1769,17 @@ export class ClientRequest extends OutgoingMessage {
     // is server._port. If they differ, re-key the socket tracking.
     const agent = this.agent;
 
+    // If the agent has keepAlive enabled, ensure the Connection header is set
+    // so the server keeps the socket open for reuse (Node behavior).
+    if (agent && agent.keepAlive) {
+      const hasConnection = Object.keys(headers || {}).some(
+        (k) => k.toLowerCase() === "connection",
+      );
+      if (!hasConnection) {
+        headers = { ...(headers || {}), connection: "keep-alive" };
+      }
+    }
+
     const sock = await new Promise((resolve, reject) => {
       // If the socket was already assigned (synchronous free-socket reuse),
       // use it immediately.
@@ -3082,6 +3093,10 @@ class AgentBase extends EventEmitter {
       }
       return null;
     }
+    // Disable autoDestroy: the agent manages the socket lifecycle explicitly.
+    // Otherwise the socket destroys itself when the writable side finishes,
+    // breaking keep-alive reuse.
+    socket.autoDestroy = false;
     (this.sockets[name] ??= []).push(socket);
     this.totalSocketCount++;
     // Track the agent name on the socket for removal on destroy.
