@@ -794,7 +794,18 @@ class Http2Session extends EventEmitter {
   }
 
   setLocalWindowSize(windowSize) {
-    // Noop: no WINDOW_UPDATE frame is sent.
+    // Noop: no WINDOW_UPDATE frame is sent. But validate like Node.
+    if (
+      !Number.isInteger(windowSize) ||
+      windowSize < 0 ||
+      windowSize > 2147483647
+    ) {
+      throw http2Error(
+        "ERR_OUT_OF_RANGE",
+        `The value of "windowSize" is out of range. It must be an integer between 0 and 2147483647. Received ${windowSize}`,
+        RangeError,
+      );
+    }
     void windowSize;
   }
 
@@ -803,6 +814,39 @@ class Http2Session extends EventEmitter {
       throw http2Error("ERR_HTTP2_INVALID_STREAM", `Invalid stream id: ${id}`);
     }
     this._nextStreamID = id;
+  }
+
+  altsvc(alt, originOrStream) {
+    // Noop: no ALTSVC frame is sent in the emulation. But validate like Node.
+    if (typeof alt !== "string") {
+      throw http2Error(
+        "ERR_INVALID_ARG_TYPE",
+        `The "alt" argument must be of type string.${invalidArgTypeHelper(alt)}`,
+        TypeError,
+      );
+    }
+    if (typeof originOrStream === "number") {
+      // Numeric stream ID: must be > 0 && < 2^32. Non-existent streams
+      // don't error, but out-of-range IDs do.
+      if (
+        !Number.isInteger(originOrStream) ||
+        originOrStream <= 0 ||
+        originOrStream >= 4294967296
+      ) {
+        throw http2Error(
+          "ERR_OUT_OF_RANGE",
+          `The value of "originOrStream" is out of range. It must be > 0 && < 4294967296. Received ${originOrStream}`,
+          RangeError,
+        );
+      }
+    }
+    void alt;
+    void originOrStream;
+  }
+
+  origin(...args) {
+    // Noop: no ORIGIN frame is sent in the emulation.
+    void args;
   }
 }
 
@@ -1076,6 +1120,61 @@ class Http2Stream extends EventEmitter {
     return this;
   }
 
+  // -- Readable-side stream compatibility ---------------------------------
+  // Http2Stream is an EventEmitter, not a real Duplex. These methods exist
+  // so code written against the stream API doesn't crash. Data flows via
+  // 'data'/'end' events from _deliverResponse() regardless of paused state,
+  // so resume() is honest (not a fake): it just ensures flowing mode.
+  setEncoding(encoding) {
+    this._encoding = encoding || null;
+    return this;
+  }
+
+  resume() {
+    // Data is delivered via _deliverResponse() when the virtual server
+    // responds; resume() ensures the stream is in flowing mode.
+    return this;
+  }
+
+  pause() {
+    // Noop: the virtual loop delivers the whole body as one chunk anyway.
+    return this;
+  }
+
+  isPaused() {
+    return false;
+  }
+
+  read(size) {
+    // No buffered read API; data arrives via 'data' events.
+    void size;
+    return null;
+  }
+
+  pipe(dest, options) {
+    const doEnd = !options || options.end !== false;
+    this.on("data", (chunk) => dest.write(chunk));
+    this.on("end", () => {
+      if (doEnd && typeof dest.end === "function") dest.end();
+    });
+    return dest;
+  }
+
+  unpipe(dest) {
+    void dest;
+    return this;
+  }
+
+  unshift(chunk) {
+    void chunk;
+    return this;
+  }
+
+  wrap(stream) {
+    void stream;
+    return this;
+  }
+
   // -- server side (used by Http2ServerResponse): response body -----------
   _writeResponse(chunk, encoding) {
     const buf =
@@ -1098,7 +1197,9 @@ class Http2Stream extends EventEmitter {
     const body = Buffer.concat(this._responseChunks);
     // Client-side observable events, in real order.
     this.emit("response", { ...headers }, 0);
-    if (body.length > 0 && !this.headRequest) this.emit("data", body);
+    if (body.length > 0 && !this.headRequest) {
+      this.emit("data", this._encoding ? body.toString(this._encoding) : body);
+    }
     if (this._sentTrailers) this.emit("trailers", { ...this._sentTrailers }, 0);
     this.emit("end");
     this._closed = true;
@@ -1144,17 +1245,107 @@ export class Http2ServerRequest extends EventEmitter {
   get complete() {
     return this.stream ? this.stream._requestEnded : true;
   }
+
+  // -- Readable-side stream compatibility ---------------------------------
+  // Http2ServerRequest is an EventEmitter, not a real Readable. The request
+  // body is captured at construction (the virtual loop dispatches after the
+  // client ends the request). resume() delivers it as 'data' + 'end'.
+  setEncoding(encoding) {
+    this._encoding = encoding || null;
+    return this;
+  }
+
+  resume() {
+    if (!this._resumed) {
+      this._resumed = true;
+      const body = this._body && this._body.length ? this._body : null;
+      queueMicrotask(() => {
+        if (body) {
+          this.emit(
+            "data",
+            this._encoding ? body.toString(this._encoding) : body,
+          );
+        }
+        this.emit("end");
+      });
+    }
+    return this;
+  }
+
+  pause() {
+    return this;
+  }
+
+  isPaused() {
+    return false;
+  }
+
+  read(size) {
+    void size;
+    return null;
+  }
+
+  pipe(dest, options) {
+    const doEnd = !options || options.end !== false;
+    const body = this._body && this._body.length ? this._body : null;
+    queueMicrotask(() => {
+      if (body && typeof dest.write === "function") dest.write(body);
+      if (doEnd && typeof dest.end === "function") dest.end();
+    });
+    return dest;
+  }
+
+  unpipe(dest) {
+    void dest;
+    return this;
+  }
+
+  unshift(chunk) {
+    void chunk;
+    return this;
+  }
+
+  setTimeout(msecs, callback) {
+    // Noop: no real sockets; documented gap.
+    void msecs;
+    if (typeof callback === "function") this.once("timeout", callback);
+    return this;
+  }
 }
 
 export class Http2ServerResponse extends EventEmitter {
   constructor(stream) {
     super();
     this.stream = stream;
-    this.statusCode = 200;
+    this._statusCode = 200;
     this.statusMessage = undefined;
     this._headers = {};
     this._headersSent = false;
     this.sendDate = true;
+  }
+
+  get statusCode() {
+    return this._statusCode;
+  }
+
+  set statusCode(code) {
+    // Validate like Node: 1xx via statusCode setter is not allowed (use
+    // writeHead for informational), out-of-range throws.
+    if (!Number.isInteger(code) || code < 100 || code > 599) {
+      throw http2Error(
+        "ERR_HTTP2_STATUS_INVALID",
+        `Invalid status code: ${code}`,
+        RangeError,
+      );
+    }
+    if (code >= 100 && code < 200) {
+      throw http2Error(
+        "ERR_HTTP2_INFO_STATUS_NOT_ALLOWED",
+        `Informational status code ${code} not allowed via statusCode setter`,
+        RangeError,
+      );
+    }
+    this._statusCode = code;
   }
 
   setHeader(name, value) {
@@ -1183,7 +1374,16 @@ export class Http2ServerResponse extends EventEmitter {
       headers = statusMessage;
       statusMessage = undefined;
     }
-    this.statusCode = statusCode;
+    // writeHead allows 1xx (informational); the statusCode setter does not.
+    // Validate range only.
+    if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 599) {
+      throw http2Error(
+        "ERR_HTTP2_STATUS_INVALID",
+        `Invalid status code: ${statusCode}`,
+        RangeError,
+      );
+    }
+    this._statusCode = statusCode;
     if (statusMessage !== undefined) this.statusMessage = statusMessage;
     if (headers) {
       for (const [k, v] of Object.entries(headers)) this.setHeader(k, v);
@@ -1219,6 +1419,98 @@ export class Http2ServerResponse extends EventEmitter {
     this.stream._endResponse(data, encoding);
     this.emit("finish");
     if (callback) setTimeout(callback, 0);
+    return this;
+  }
+
+  // -- Writable-side compatibility ----------------------------------------
+  writeEarlyHints(hints, callback) {
+    // Noop: 103 Early Hints are not transmitted in the emulation, but the
+    // callback contract is honored asynchronously.
+    void hints;
+    if (typeof callback === "function") setTimeout(callback, 0);
+    return this;
+  }
+
+  writeContinue() {
+    // Noop: 100 Continue is not transmitted; the virtual loop delivers the
+    // request body regardless.
+    this.emit("continue");
+    return this;
+  }
+
+  writeInformation(info, headers) {
+    // Noop: 1xx informational responses are recorded locally only.
+    void info;
+    void headers;
+    return this;
+  }
+
+  addTrailers(headers) {
+    // Compat alias for sendTrailers on the underlying stream.
+    if (this.stream && typeof this.stream.sendTrailers === "function") {
+      this.stream.sendTrailers(headers);
+    }
+    return this;
+  }
+
+  setTrailer(name, value) {
+    // http1-style singular trailer setter; validates like Node.
+    if (typeof name !== "string" || name.length === 0) {
+      throw http2Error(
+        "ERR_HTTP2_INVALID_HEADER_VALUE",
+        `Invalid trailer name: ${String(name)}`,
+        TypeError,
+      );
+    }
+    if (value === undefined || value === null) {
+      throw http2Error(
+        "ERR_HTTP2_INVALID_HEADER_VALUE",
+        `Invalid trailer value for "${name}"`,
+        TypeError,
+      );
+    }
+    if (this.stream && typeof this.stream.sendTrailers === "function") {
+      // Merge with any existing trailers.
+      const current = this.stream._sentTrailers || {};
+      this.stream.sendTrailers({ ...current, [name]: value });
+    }
+    return this;
+  }
+
+  getTrailer(name) {
+    const trailers = this.stream ? this.stream._sentTrailers : null;
+    return trailers ? trailers[name] : undefined;
+  }
+
+  hasTrailer(name) {
+    const trailers = this.stream ? this.stream._sentTrailers : null;
+    return !!trailers && name in trailers;
+  }
+
+  removeTrailer(name) {
+    if (this.stream && this.stream._sentTrailers) {
+      delete this.stream._sentTrailers[name];
+    }
+  }
+
+  cork() {
+    return this;
+  }
+
+  uncork() {
+    return this;
+  }
+
+  setTimeout(msecs, callback) {
+    // Noop: no real sockets; documented gap.
+    void msecs;
+    if (typeof callback === "function") this.once("timeout", callback);
+    return this;
+  }
+
+  destroy(error) {
+    if (error) this.emit("error", error);
+    this.emit("close");
     return this;
   }
 }
@@ -1266,6 +1558,11 @@ class Http2Server extends EventEmitter {
       options = {};
     }
     this._options = { ...(options || {}) };
+    // Custom request/response classes (Node supports overriding via
+    // options.Http2ServerRequest / options.Http2ServerResponse).
+    this._RequestClass = this._options.Http2ServerRequest || Http2ServerRequest;
+    this._ResponseClass =
+      this._options.Http2ServerResponse || Http2ServerResponse;
     this.timeout = 0;
     this._listening = false;
     this._port = null;
@@ -1335,6 +1632,12 @@ class Http2Server extends EventEmitter {
     return this;
   }
 
+  // Support `await using server = http2.createServer()` (explicit resource
+  // management): close the server and resolve when done.
+  async [Symbol.asyncDispose]() {
+    await new Promise((resolve) => this.close(resolve));
+  }
+
   ref() {
     return this;
   }
@@ -1369,8 +1672,8 @@ class Http2Server extends EventEmitter {
         this.listenerCount("request") > 0 ||
         this.listenerCount("checkContinue") > 0
       ) {
-        const req = new Http2ServerRequest(stream, headers);
-        const res = new Http2ServerResponse(stream);
+        const req = new this._RequestClass(stream, headers);
+        const res = new this._ResponseClass(stream);
         if (
           this.listenerCount("checkContinue") > 0 &&
           headers.expect === "100-continue"
