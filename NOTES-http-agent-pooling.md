@@ -2,14 +2,14 @@
 
 ## Problem
 8 http parity tests hang (30s timeout, silent — no output):
-1. test-http-abort-queued.js
-2. test-http-aborted.js
-3. test-http-after-connect.js
-4. test-http-client-abort-keep-alive-queued-tcp-socket.js
-5. test-http-agent-maxsockets-respected.js
-6. test-http-agent-reuse-drained-socket-only.js
-7. test-http-agent-timeout.js
-8. test-http-client-abort-keep-alive-destroy-res.js
+1. test-http-abort-queued.js ✅ PASSES now
+2. test-http-aborted.js ⏳ still hangs
+3. test-http-after-connect.js ⏳ still hangs
+4. test-http-client-abort-keep-alive-queued-tcp-socket.js ❌ fails fast (not hang)
+5. test-http-agent-maxsockets-respected.js ⏳ still hangs
+6. test-http-agent-reuse-drained-socket-only.js ❌ fails fast (not hang)
+7. test-http-agent-timeout.js ⏳ still hangs
+8. test-http-client-abort-keep-alive-destroy-res.js ⏳ still hangs
 
 ## Root cause
 The virtual HTTP path (`_performVirtualRequest`) creates a fresh socket via
@@ -25,35 +25,58 @@ Tests assert on `agent.sockets[name].length`, `agent.requests[name].length`,
 the try/catch in `_socketHttpRoundTrip`'s `onHeaders` ("listener errors are not
 fatal"), so tests hang silently instead of failing fast.
 
-## Node's Agent behavior (from training data)
-- `addRequest(req, options)`:
-  - Compute `name = getName(options)` → `"host:port:localAddress"`
-  - If free socket exists for name → reuse (LIFO or FIFO per `scheduling`)
-  - Else if `sockets[name].length < maxSockets` → `createSocket()`
-  - Else → queue in `requests[name]`
-- When response completes: socket moves from `sockets[name]` to
-  `freeSockets[name]` (if keepAlive), emits 'free', queued requests are processed
-- `req.reusedSocket` = true when socket came from free pool
-- `totalSocketCount` tracks all sockets (active + free)
+## What was implemented
 
-## Implementation plan (minimal)
-1. `AgentBase.addRequest(req, options)` — real: try free socket, else create if
-   under maxSockets, else queue in `requests[name]`
-2. `AgentBase.createSocket(req, options, cb)` — for virtual path, use
-   `netConnect(port)`; track in `sockets[name]`, increment `totalSocketCount`
-3. `AgentBase.reuseSocket(socket, req)` — assign via `req.onSocket(socket)`
-4. `AgentBase.removeSocket(socket, name)` — untrack, decrement count
-5. `ClientRequest.onSocket(socket)` — new method: assign socket, resolve
-   pending promise in `_performVirtualRequest`
-6. `_performVirtualRequest` — wait for agent socket assignment instead of
-   direct `netConnect()`; on completion, release socket to agent free pool
-   (if keepAlive) or destroy
-7. `ClientRequest.reusedSocket` property — set by agent
+### AgentBase (src/http.js)
+- `addRequest(req, options)`: real implementation
+  - Try free socket from `freeSockets[name]` (LIFO/FIFO per `scheduling`)
+  - Else create new via `createSocket` if under `maxSockets`/`maxTotalSockets`
+  - Else queue in `requests[name]`
+- `createSocket(req, options, cb)`: uses `netConnect(port)` for virtual path
+  (was FakeSocket); tracks in `sockets[name]`; sets `autoDestroy=false`
+- `releaseSocket(socket, name)`: move to `freeSockets` if keepAlive, else destroy;
+  calls `_processQueue`
+- `_processQueue(name)`: dequeues next non-aborted request, re-runs addRequest
+- `removeSocket(socket, name)`: untrack from sockets/freeSockets
+- `reuseSocket(socket, req)`: marks `_agentReused`, calls `req.onSocket`
 
-## Key design decisions
-- The agent drives socket creation via `createSocket`, but for the virtual path
-  the ClientRequest knows the server port. Pass `{ host, port }` through
-  `addRequest` options.
-- Socket reuse: virtual sockets are stateful net.js sockets; reuse means not
-  destroying after response and reusing for next request to same origin.
-- Keep the fetch() path (non-virtual) as-is — agent is metadata-only there.
+### ClientRequest (src/http.js)
+- Constructor calls `agent.addRequest(this, ...)` synchronously (Node parity)
+- New `onSocket(socket)`: assigns socket, resolves waiting promise
+- New `onSocketError(err)`: rejects waiting promise or emits error
+- New `_releaseAgentSocket()`: returns socket to agent pool (or destroys)
+- `_performVirtualRequest`: waits for agent socket assignment instead of
+  direct `netConnect()`; releases socket via `_releaseAgentSocket()` on completion
+- `destroy()`: rejects pending socket promise with ECONNRESET; removes socket
+  from agent tracking
+- Auto-adds `Connection: keep-alive` header when `agent.keepAlive` is true
+
+### _socketHttpRoundTrip
+- No longer destroys socket on settle; caller owns lifecycle
+- Handles already-connected sockets (queueMicrotask instead of waiting for
+  'connect' event that already fired)
+
+## Remaining gaps (5 tests still hang)
+The remaining hangs involve server-side keep-alive socket lifecycle:
+- When the server ends a response, the virtual socket gets destroyed even
+  though `Connection: keep-alive` was sent
+- `info.shouldKeepAlive` is computed correctly by the parser, but the socket
+  is destroyed by stream autoDestroy before the agent can reuse it
+- Setting `socket.autoDestroy = false` didn't prevent it — the destroy comes
+  from `stream/writable.js` finish handler
+
+These require deeper changes to the server-side socket lifecycle (ServerResponse
++ net.js virtual socket interaction), beyond minimal agent pooling.
+
+## Test results
+- test-http-abort-queued.js: PASS (was hanging)
+- test-http-client-abort-keep-alive-queued-tcp-socket.js: FAIL fast (was hanging)
+  - Unexpected 'error' event with ECONNRESET (test has mustNotCall on error)
+- test-http-agent-reuse-drained-socket-only.js: FAIL fast (was hanging)
+  - ECONNREFUSED — socket reuse not working due to server-side destroy
+- 5 others: still hang (server-side keep-alive socket lifecycle)
+
+## Branch
+- `feat/http-agent-pooling` (from main b627e6ce)
+- Commits: 81c8e3b0, 63760f19, 58f49742
+- Pushed to GitHub via git-push-api.py
