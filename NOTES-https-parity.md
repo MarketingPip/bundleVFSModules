@@ -52,3 +52,38 @@ expects the Agent to wire abort signals on created sockets. This is Agent-level,
 not https-level, and most agent tests are TLS-inherent anyway. Document as gap.
 
 **Next:** ALPNProtocols storage in https.js Server.
+
+## 2026-10-15 01:30 EDT — final score: 20/67 (29.9%)
+
+**Fixed (3 tests):**
+1. ✅ test-https-abortcontroller.js — wired `options.signal` in http.js ClientRequest
+2. ✅ test-https-argument-of-creating.js — ALPNProtocols Buffer storage + ALPNCallback in https.js
+3. ✅ 17 more via parity/https-harness.mjs (timer-globals restore unblocked tests
+   failing on "Unexpected global(s)" rather than product bugs)
+
+**Passing (20):** abortcontroller, agent-constructor, agent-servername,
+agent-session-eviction, agent-sockets-leak, agent-unref-socket, agent,
+argument-of-creating, byteswritten, client-get-url, close, connecting-to-http,
+foafssl, request-arguments, server-connections-checking-leak,
+server-headers-timeout, server-options-server-response, server-request-timeout,
+socket-options, truncate
+
+**Failing (47) — all documented as inherent:**
+1. **TLS handshake (~20)**: session reuse/resumption, SNI, keylog, pfx,
+   client certs, renegotiation — need real TLS. Inherent (no TLS in browser).
+2. **Agent TLS (~8)**: checkserveridentity, sni, session-injection — Agent
+   TLS options. Inherent.
+3. **Virtual server gaps (~7)**: host-headers, simple, drain — https virtual
+   server request dispatch doesn't invoke handler (http works, https doesn't).
+   Needs deeper http.js virtual-server investigation. Documented as gap.
+4. **Timeouts (~7)**: server-close-all, server-close-idle, set-timeout-server,
+   strict, unix-socket — hang on server close/timeout. Same class as http
+   agent-pooling hangs. Documented as gap.
+5. **Option validation (~3)**: options-boolean-check (key/cert type validation
+   too Node-internals-specific), client-reject, autoselectfamily. Documented.
+6. **Agent signal (~2)**: agent-abort-controller, agent-create-connection —
+   Agent.createConnection doesn't wire signal. Agent-level gap.
+
+**Attempted but reverted:** key/cert ERR_INVALID_ARG_TYPE validation — test
+expects Node's exact BoringSSL-filtered error messages, too internals-specific
+for a browser shim. Documented as inherent.
