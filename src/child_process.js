@@ -1037,7 +1037,10 @@ export class ChildProcess extends EventEmitter {
   constructor() {
     super();
 
-    this.pid = makeFakePid();
+    // Node leaves pid undefined until the process actually spawns; if spawn
+    // fails, pid stays undefined. Assign the fake pid only on successful
+    // spawn (see ChildProcess.prototype.spawn).
+    this.pid = undefined;
 
     this.connected = false;
     this.killed = false;
@@ -1311,9 +1314,30 @@ export class ChildProcess extends EventEmitter {
 
     const child = this;
 
-    // BYO shell: route to the developer's shell function. getShell() throws
-    // if none configured (loud config error per Jared 2026-10-03).
-    const shell = getShell();
+    // BYO shell: route to the developer's shell function. If none configured,
+    // emit an async 'error' (never a synchronous throw): Node returns a child
+    // with pid undefined and emits 'error' when spawn fails.
+    const rt = getRuntime();
+    const shell = rt && rt.__SHELL__;
+    if (typeof shell !== "function") {
+      queueMicrotask(() => {
+        if (!child._finalised) {
+          const err = new Error(
+            "CodeSandbox: no shell configured. " +
+              "Pass a `shell` function in CodeSandbox options to enable child_process.",
+          );
+          err.code = "ERR_NO_SHELL";
+          child.emit("error", err);
+          child._finalise("", "", 1, null);
+        }
+      });
+      // Return early: child.pid stays undefined, matching Node's failed-spawn
+      // behavior. The async error above finalizes the child.
+      return child;
+    }
+
+    // Spawn succeeded: assign a fake pid (Node would have a real one).
+    child.pid = makeFakePid();
 
     child.spawnfile = options.file;
     child.spawnargs = options.spawnargs ?? [
@@ -1995,18 +2019,21 @@ function execCore(command, options, callback) {
   };
 
   if (timeoutMs > 0) {
-    timeoutTid = setTimeout(() => {
-      if (child._finalised) return;
-      child.killed = true;
-      child.signalCode = "SIGTERM";
-      const err = Object.assign(new Error("Process timed out"), {
-        code: "ETIMEDOUT",
-        signal: "SIGTERM",
-      });
-      child.emit("error", err);
-      if (typeof callback === "function") callback(err, "", "");
-      child._finalise("", "", null, "SIGTERM");
-    }, Math.max(0, Number(timeoutMs) || 0));
+    timeoutTid = setTimeout(
+      () => {
+        if (child._finalised) return;
+        child.killed = true;
+        child.signalCode = "SIGTERM";
+        const err = Object.assign(new Error("Process timed out"), {
+          code: "ETIMEDOUT",
+          signal: "SIGTERM",
+        });
+        child.emit("error", err);
+        if (typeof callback === "function") callback(err, "", "");
+        child._finalise("", "", null, "SIGTERM");
+      },
+      Math.max(0, Number(timeoutMs) || 0),
+    );
   }
 
   Promise.resolve()
@@ -2038,9 +2065,10 @@ function execCore(command, options, callback) {
         child.killed = true;
         child.signalCode = "SIGTERM";
         child.emit("error", err);
-        const truncated = which === "stdout"
-          ? stdout.slice(0, maxBuffer)
-          : stderr.slice(0, maxBuffer);
+        const truncated =
+          which === "stdout"
+            ? stdout.slice(0, maxBuffer)
+            : stderr.slice(0, maxBuffer);
         if (typeof callback === "function") {
           callback(
             err,
