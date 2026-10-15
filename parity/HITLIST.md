@@ -46,6 +46,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | http2 | 7 | 277 | 2.5% |
 | child_process | 4 | 112 | 3.6% |
 | fs | 99 | 349 | 28.4% |
+| http | 108 | 399 | 27.1% | Baseline 2026-10-14 on feat/http-parity (unmerged) after socket-leak fix (ClientRequest.destroy / ServerResponse._destroy now destroy sockets; streaming for virtual server responses + client 'response' on headers): 108/399. 103 tests still hit the 30s spawn timeout (SIGTERM) — mostly Agent/keep-alive/timeout lifecycle; 8 agent-pooling tests need Agent socket pooling (not yet implemented); 17 fast failures need triage. |
 | domain | 2 | 50 | 4.0% |
 | cluster | 4 | 83 | 4.8% |
 | events | 1 | 9 | 11.1% |
