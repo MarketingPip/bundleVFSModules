@@ -1410,11 +1410,36 @@ export class ClientRequest extends OutgoingMessage {
       clearTimeout(this._timeoutId);
       this._timeoutId = null;
     }
+    // If the request was queued in the agent (waiting for a socket), remove
+    // it from the queue so it doesn't hang forever.
+    const agent = this.agent;
+    if (agent && this._agentQueueName) {
+      const queue = agent.requests[this._agentQueueName];
+      if (queue) {
+        const idx = queue.indexOf(this);
+        if (idx !== -1) queue.splice(idx, 1);
+        if (queue.length === 0) delete agent.requests[this._agentQueueName];
+      }
+      delete this._agentQueueName;
+    }
+    // Cancel a pending socket assignment.
+    if (this._onSocketAssigned) {
+      this._onSocketAssigned = null;
+      this._onSocketRejected = null;
+    }
     // Destroy the socket: in the virtual-server path this is a real net.js
     // socket with a loop-keeping timer. If we don't destroy it here, the
     // event loop never drains and the process hangs (http parity hang).
+    // Also remove it from the agent's tracking so counts stay accurate.
     const sock = this.socket;
     if (sock && typeof sock.destroy === "function" && !sock.destroyed) {
+      if (agent && !(sock instanceof FakeSocket) && sock._agentName) {
+        try {
+          agent.removeSocket(sock, sock._agentName);
+        } catch {
+          /* best effort */
+        }
+      }
       try {
         sock.destroy();
       } catch {
@@ -1670,23 +1695,114 @@ export class ClientRequest extends OutgoingMessage {
    * HTTP/1.1 bytes and the response parsed from bytes, so req.socket on
    * both ends is genuine and byte counts are real.
    */
+  /**
+   * Called by the Agent when a socket is assigned to this request
+   * (either a fresh socket or a reused keep-alive socket).
+   */
+  onSocket(socket) {
+    this.socket = socket;
+    this.connection = socket;
+    if (this._onSocketAssigned) {
+      const resolve = this._onSocketAssigned;
+      this._onSocketAssigned = null;
+      resolve(socket);
+    }
+  }
+
+  /**
+   * Called by the Agent when socket creation fails.
+   */
+  onSocketError(err) {
+    if (this._onSocketAssigned) {
+      const reject = this._onSocketRejected;
+      this._onSocketAssigned = null;
+      this._onSocketRejected = null;
+      if (reject) reject(err);
+      return;
+    }
+    this.emit("error", err instanceof Error ? err : new Error(String(err)));
+  }
+
+  /**
+   * Release the socket back to the agent's pool (keep-alive) or destroy it.
+   * Called when the response completes or the request is done with the socket.
+   */
+  _releaseAgentSocket() {
+    const agent = this.agent;
+    const sock = this.socket;
+    if (!agent || !sock || sock instanceof FakeSocket) return;
+    const name =
+      sock._agentName ||
+      agent.getName({ host: this.host, port: Number(this.port) || 80 });
+    // Only release once.
+    if (sock._releasedToAgent) return;
+    sock._releasedToAgent = true;
+    try {
+      agent.releaseSocket(sock, name);
+    } catch {
+      /* best effort */
+    }
+  }
+
   async _performVirtualRequest(server, headers, body) {
-    // The real connected socket replaces the synthetic one for virtual
-    // requests. Created up front so timeout/abort can destroy it.
-    const sock = netConnect(server._port);
-    this.socket = sock;
-    this.connection = sock;
-    // Race: abort() may have been called synchronously after end(), before
-    // this async method ran. If so, destroy the socket immediately and emit
-    // ECONNRESET (Node behavior for aborted requests). The destroy() call
-    // already ran and only saw the FakeSocket.
+    // Get a socket from the agent's pool (or wait for one). The agent tracks
+    // the socket in agent.sockets[name] and reuses keep-alive sockets from
+    // agent.freeSockets[name].
+    const agent = this.agent;
+    const agentOptions = {
+      host: this.host,
+      hostname: this.host,
+      port: server._port,
+      localAddress: undefined,
+    };
+    // Stash options so the agent can re-run addRequest for queued requests.
+    this._agentOptions = agentOptions;
+
+    const sock = await new Promise((resolve, reject) => {
+      // Race: abort() may have been called synchronously after end(), before
+      // this async method ran. If so, don't even ask the agent for a socket.
+      if (this._aborted) {
+        const err = new Error("socket hang up");
+        err.code = "ECONNRESET";
+        reject(err);
+        return;
+      }
+      this._onSocketAssigned = resolve;
+      this._onSocketRejected = reject;
+      try {
+        agent.addRequest(this, agentOptions);
+      } catch (err) {
+        this._onSocketAssigned = null;
+        this._onSocketRejected = null;
+        reject(err);
+      }
+    }).catch((err) => {
+      // Aborted while waiting for a socket: emit ECONNRESET like Node.
+      if (this._aborted || err?.code === "ECONNRESET") {
+        queueMicrotask(() => {
+          if (this.listenerCount("error") > 0) {
+            const e = new Error("socket hang up");
+            e.code = "ECONNRESET";
+            this.emit("error", e);
+          }
+        });
+        return null;
+      }
+      throw err;
+    });
+    if (!sock) return;
+    // If aborted while waiting, destroy the socket and bail.
     if (this._aborted) {
+      try {
+        agent.removeSocket(sock, sock._agentName);
+      } catch {
+        /* best effort */
+      }
       try {
         sock.destroy();
       } catch {
         /* best effort */
       }
-      // Emit ECONNRESET like Node does for aborted requests.
       queueMicrotask(() => {
         if (this.listenerCount("error") > 0) {
           const err = new Error("socket hang up");
@@ -1696,9 +1812,19 @@ export class ClientRequest extends OutgoingMessage {
       });
       return;
     }
-    sock.on("connect", () => {
-      if (!this._aborted) this.emit("socket", sock);
-    });
+    // The agent assigned the socket; onSocket() already set this.socket.
+    // Emit 'socket' like Node does on connect (or immediately if already
+    // connected, e.g. reused sockets or sockets whose 'connect' already fired
+    // before the agent callback ran).
+    if (!this._aborted) {
+      if (sock.connecting) {
+        sock.on("connect", () => {
+          if (!this._aborted) this.emit("socket", sock);
+        });
+      } else {
+        this.emit("socket", sock);
+      }
+    }
     const onSocketError = (err) => {
       if (this._timeoutId) {
         clearTimeout(this._timeoutId);
@@ -1814,14 +1940,9 @@ export class ClientRequest extends OutgoingMessage {
     // Streaming case: message already emitted; just finish the body.
     if (streamedMsg) {
       streamedMsg._finishBody();
-      // The socket stays open for keep-alive; the response 'close' will
-      // fire when the socket closes. For now, destroy it since we don't
-      // pool virtual sockets (prevents loop-keeper leak).
-      try {
-        sock.destroy();
-      } catch {
-        /* best effort */
-      }
+      // Release the socket to the agent's pool for keep-alive reuse.
+      // (If not keepAlive, _releaseAgentSocket destroys it.)
+      this._releaseAgentSocket();
       return;
     }
 
@@ -1840,6 +1961,8 @@ export class ClientRequest extends OutgoingMessage {
     msg.socket = this.socket;
     msg.connection = this.socket;
     msg._setBody(result.body);
+    // Release the socket to the agent's pool for keep-alive reuse.
+    this._releaseAgentSocket();
     this.emit("response", msg);
   }
 
@@ -2355,15 +2478,9 @@ function _socketHttpRoundTrip(
     const settle = (fn) => (value) => {
       if (settled) return;
       settled = true;
-      // Don't destroy the socket if we're streaming — the caller owns it now.
-      // (The caller destroys it via ClientRequest.destroy or when done.)
-      if (!onHeaders) {
-        try {
-          sock.destroy();
-        } catch {
-          /* best effort */
-        }
-      }
+      // The caller owns the socket in all cases now (streaming or not).
+      // It releases it to the agent pool via _releaseAgentSocket() or
+      // destroys it via ClientRequest.destroy().
       fn(value);
     };
     const ok = settle(resolve);
@@ -2407,7 +2524,7 @@ function _socketHttpRoundTrip(
     };
     parser.onError = (err) => fail(err);
 
-    sock.on("connect", () => {
+    const doConnect = () => {
       if (typeof onSocket === "function") {
         try {
           onSocket(sock);
@@ -2420,7 +2537,14 @@ function _socketHttpRoundTrip(
       } catch (err) {
         fail(err);
       }
-    });
+    };
+    // If the socket is already connected (e.g. reused from the agent pool),
+    // write the request immediately; otherwise wait for 'connect'.
+    if (sock.connecting) {
+      sock.on("connect", doConnect);
+    } else {
+      queueMicrotask(doConnect);
+    }
     sock.on("data", (chunk) => {
       try {
         parser.execute(chunk);
@@ -2921,8 +3045,28 @@ class AgentBase extends EventEmitter {
 
   createSocket(req, options, callback) {
     const name = this.getName(options);
-    const socket = this.createConnection(options, callback);
+    // For the virtual-server path, create a real virtual socket via net.js.
+    // The port comes from the request options.
+    const port = options.port || this.defaultPort || 80;
+    let socket;
+    try {
+      socket = netConnect(port);
+    } catch (err) {
+      if (typeof callback === "function") {
+        queueMicrotask(() => callback(err));
+      }
+      return null;
+    }
     (this.sockets[name] ??= []).push(socket);
+    this.totalSocketCount++;
+    // Track the agent name on the socket for removal on destroy.
+    socket._agentName = name;
+    socket._agent = this;
+    if (typeof callback === "function") {
+      // netConnect emits 'connect' asynchronously; invoke callback then.
+      socket.once("connect", () => callback(null, socket));
+      socket.once("error", (err) => callback(err));
+    }
     return socket;
   }
 
@@ -2932,15 +3076,125 @@ class AgentBase extends EventEmitter {
     return `${host}:${port}:${options.localAddress || ""}`;
   }
 
-  addRequest(_req, _options) {
-    // Browsers pool connections natively; fetch() is issued directly.
+  addRequest(req, options) {
+    const name = this.getName(options);
+    // 1. Try to reuse a free (keep-alive) socket.
+    const free = this.freeSockets[name];
+    if (free && free.length > 0) {
+      const socket =
+        this.scheduling === "fifo" ? free.shift() : free.pop();
+      if (free.length === 0) delete this.freeSockets[name];
+      (this.sockets[name] ??= []).push(socket);
+      req.reusedSocket = true;
+      this.reuseSocket(socket, req);
+      return;
+    }
+    // 2. Create a new socket if under the per-origin and total limits.
+    const active = this.sockets[name] || [];
+    if (
+      active.length < this.maxSockets &&
+      this.totalSocketCount < this.maxTotalSockets
+    ) {
+      req.reusedSocket = false;
+      this.createSocket(req, options, (err, socket) => {
+        if (err) {
+          // Socket creation failed: remove from tracking, error the request.
+          this.removeSocket(socket, name);
+          if (typeof req.onSocketError === "function") {
+            req.onSocketError(err);
+          } else {
+            req.emit("error", err);
+          }
+          return;
+        }
+        req.onSocket(socket);
+      });
+      return;
+    }
+    // 3. At maxSockets: queue the request until a socket frees up.
+    (this.requests[name] ??= []).push(req);
+    req._agentQueueName = name;
   }
 
-  removeSocket(_socket, _options) {}
+  removeSocket(socket, nameOrOptions) {
+    const name =
+      typeof nameOrOptions === "string"
+        ? nameOrOptions
+        : this.getName(nameOrOptions || {});
+    const active = this.sockets[name];
+    if (active) {
+      const idx = active.indexOf(socket);
+      if (idx !== -1) {
+        active.splice(idx, 1);
+        this.totalSocketCount--;
+        if (active.length === 0) delete this.sockets[name];
+      }
+    }
+    const free = this.freeSockets[name];
+    if (free) {
+      const idx = free.indexOf(socket);
+      if (idx !== -1) {
+        free.splice(idx, 1);
+        if (free.length === 0) delete this.freeSockets[name];
+      }
+    }
+  }
+
+  /**
+   * Return a socket to the free pool after a response completes, and process
+   * any queued requests waiting for a socket to this origin.
+   */
+  releaseSocket(socket, name) {
+    // Remove from active.
+    const active = this.sockets[name];
+    if (active) {
+      const idx = active.indexOf(socket);
+      if (idx !== -1) {
+        active.splice(idx, 1);
+        if (active.length === 0) delete this.sockets[name];
+      }
+    }
+    if (this.keepAlive && !socket.destroyed) {
+      // Keep-alive: park in the free pool (bounded by maxFreeSockets).
+      let free = this.freeSockets[name];
+      if (!free) {
+        free = [];
+        this.freeSockets[name] = free;
+      }
+      if (free.length < this.maxFreeSockets) {
+        free.push(socket);
+        socket.emit("free");
+      } else {
+        socket.destroy();
+        this.totalSocketCount--;
+      }
+    } else {
+      socket.destroy();
+      this.totalSocketCount--;
+    }
+    // Wake a queued request, if any.
+    this._processQueue(name);
+  }
+
+  _processQueue(name) {
+    const queue = this.requests[name];
+    if (!queue || queue.length === 0) return;
+    // A socket just freed up (or was destroyed); try the next queued request.
+    const req = queue.shift();
+    if (queue.length === 0) delete this.requests[name];
+    delete req._agentQueueName;
+    // Re-run addRequest: it will find the free socket or create a new one.
+    this.addRequest(req, req._agentOptions || {});
+  }
+
   keepSocketAlive(_socket) {
     return true;
   }
-  reuseSocket(_socket, _req) {}
+
+  reuseSocket(socket, req) {
+    socket._agentReused = true;
+    req.onSocket(socket);
+  }
 
   destroy() {
     this.sockets = { __proto__: null };
