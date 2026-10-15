@@ -89,4 +89,24 @@ This is a significant architectural change to `src/http.js`.
 - The virtual path doesn't integrate with Agent pooling (creates socket per request)
 - Need to investigate whether the hang is from leaked sockets or Agent semantics
 
+## Status at handoff (2026-10-15 ~01:05 EDT)
+
+**Commits pushed to feat/http-parity (remote 89115505):**
+1. `b7c86c93` → `978a3b83`: socket destroy on abort/destroy + streaming + http-harness
+2. `bf25fd5b`: abort-before-socket-creation race fix
+3. `401d558d`: working notes
+
+**Verified:**
+- `test-http-abort-client.js`: PASS (was hanging 30s)
+- Socket leak root cause fixed (ClientRequest.destroy + ServerResponse._destroy)
+- Streaming implemented both directions
+
+**Remaining:**
+- 8 agent-pooling tests hang (test-http-agent-*.js): need Agent socket pooling for virtual sockets, or document as future work
+- ~17 fast failures in sample need triage (e.g., test-http-1.0.js has net.js ::1 ECONNREFUSED — may be pre-existing)
+- Full 399-test baseline not completed (30s timeout × many hangs = hours)
+
+**Key architectural finding:** The virtual server path was fully buffered (no streaming). Implemented minimal streaming: ServerResponse flushes headers+chunks on write(), client emits 'response' on headers. This unblocks abort/destroy tests but Agent pooling remains a gap.
+
+
 
