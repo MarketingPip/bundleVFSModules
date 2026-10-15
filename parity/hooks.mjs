@@ -52,13 +52,6 @@ function polyfillURL(specifier) {
   if (target === "tty" && name === "tty") {
     return pathToFileURL(path.join(repoRoot, "parity", "tty-harness.mjs")).href;
   }
-  // Harness-only timer-globals restore for http2 parity
-  // (parity/http2-harness.mjs). ESM import path; CJS require path is in
-  // preload.mjs.
-  if (target === "http2" && name === "http2") {
-    return pathToFileURL(path.join(repoRoot, "parity", "http2-harness.mjs"))
-      .href;
-  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   if (!fs.existsSync(candidate)) return null;
   return pathToFileURL(candidate).href;
