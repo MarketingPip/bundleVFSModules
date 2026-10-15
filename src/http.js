@@ -1335,6 +1335,19 @@ export class ClientRequest extends OutgoingMessage {
       this.once("response", cb);
     }
 
+    // Wire up AbortSignal: Node's http.ClientRequest listens for abort on
+    // options.signal and destroys the request with an AbortError.
+    const signal = options.signal;
+    if (signal) {
+      if (signal.aborted) {
+        queueMicrotask(() => this._onAbortSignal());
+      } else {
+        signal.addEventListener("abort", () => this._onAbortSignal(), {
+          once: true,
+        });
+      }
+    }
+
     if (
       method === "GET" ||
       method === "HEAD" ||
@@ -1369,6 +1382,18 @@ export class ClientRequest extends OutgoingMessage {
     this._aborted = true;
     queueMicrotask(() => this.emit("abort"));
     this.destroy();
+  }
+
+  _onAbortSignal() {
+    if (this.aborted || this._aborted) return;
+    this.aborted = true;
+    this._aborted = true;
+    const err = new Error("The operation was aborted");
+    err.name = "AbortError";
+    err.code = "ABORT_ERR";
+    // Match Node: emit 'abort' then destroy with the AbortError.
+    queueMicrotask(() => this.emit("abort"));
+    this.destroy(err);
   }
 
   // Node 24: abort() is the legacy spelling; destroy() is canonical.

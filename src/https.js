@@ -23,13 +23,51 @@ class HttpsServerBase extends http.Server {
     // options may carry key/cert/ca/etc.; the virtual server ignores them.
     super(options, requestListener);
     this._tlsOptions = options && typeof options === "object" ? options : {};
+    // Store ALPNProtocols as a Buffer like Node's tls.convertALPNProtocols.
+    // This is just option storage — no TLS handshake happens in the browser.
+    // Node's rule: if ALPNProtocols is set, convert it; else if ALPNCallback
+    // is set, leave undefined (callback handles ALPN); else default to
+    // ["http/1.1"].
+    const alpnOpt = this._tlsOptions.ALPNProtocols;
+    if (alpnOpt !== undefined) {
+      this.ALPNProtocols = _convertALPNProtocols(alpnOpt);
+    } else if (this._tlsOptions.ALPNCallback === undefined) {
+      this.ALPNProtocols = _convertALPNProtocols(["http/1.1"]);
+    } else {
+      this.ALPNProtocols = undefined;
+    }
+    // Store ALPNCallback if given (test expects server.ALPNCallback).
+    if (this._tlsOptions.ALPNCallback !== undefined) {
+      this.ALPNCallback = this._tlsOptions.ALPNCallback;
+    }
   }
 
   setSecureContext(options) {
     if (options && typeof options === "object") {
       this._tlsOptions = { ...this._tlsOptions, ...options };
+      if (options.ALPNProtocols !== undefined) {
+        this.ALPNProtocols = _convertALPNProtocols(options.ALPNProtocols);
+      }
     }
   }
+}
+
+/**
+ * Convert ALPNProtocols option to a Buffer (length-prefixed wire format),
+ * mirroring Node's tls.convertALPNProtocols. Accepts string, Buffer,
+ * or array of strings/Buffers.
+ */
+function _convertALPNProtocols(protocols) {
+  const list = Array.isArray(protocols) ? protocols : [protocols];
+  const parts = [];
+  for (const p of list) {
+    const buf = Buffer.isBuffer(p) ? p : Buffer.from(String(p));
+    if (buf.length === 0 || buf.length > 255) {
+      throw new Error("ALPN protocol must be 1-255 bytes");
+    }
+    parts.push(Buffer.from([buf.length]), buf);
+  }
+  return Buffer.concat(parts);
 }
 
 /**
