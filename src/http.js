@@ -1302,6 +1302,24 @@ export class ClientRequest extends OutgoingMessage {
     this._timeoutId = null;
     this._abortController = null;
 
+    // Register with the agent synchronously (Node behavior): the agent
+    // assigns a socket (or queues the request if at maxSockets). The socket
+    // is delivered via onSocket(), which _performVirtualRequest waits for.
+    // Stash the options for queued-request reprocessing.
+    this._agentOptions = {
+      host,
+      hostname: host,
+      port: Number(port) || 80,
+    };
+    if (agent) {
+      try {
+        agent.addRequest(this, this._agentOptions);
+        this._agentAddRequestCalled = true;
+      } catch {
+        /* agent bookkeeping must not break construction */
+      }
+    }
+
     // Synthetic socket: browsers have no raw TCP.
     this.socket = new FakeSocket();
     this.connection = this.socket;
@@ -1410,22 +1428,22 @@ export class ClientRequest extends OutgoingMessage {
       clearTimeout(this._timeoutId);
       this._timeoutId = null;
     }
-    // If the request was queued in the agent (waiting for a socket), remove
-    // it from the queue so it doesn't hang forever.
+    // If the request was queued in the agent (waiting for a socket), don't
+    // remove it synchronously — Node keeps aborted queued requests in
+    // agent.requests until the queue is processed. Just mark it aborted;
+    // _processQueue will skip it.
     const agent = this.agent;
-    if (agent && this._agentQueueName) {
-      const queue = agent.requests[this._agentQueueName];
-      if (queue) {
-        const idx = queue.indexOf(this);
-        if (idx !== -1) queue.splice(idx, 1);
-        if (queue.length === 0) delete agent.requests[this._agentQueueName];
-      }
-      delete this._agentQueueName;
-    }
     // Cancel a pending socket assignment.
     if (this._onSocketAssigned) {
       this._onSocketAssigned = null;
+      const reject = this._onSocketRejected;
       this._onSocketRejected = null;
+      // Reject the waiting _performVirtualRequest promise so it doesn't hang.
+      if (reject) {
+        const err = new Error("socket hang up");
+        err.code = "ECONNRESET";
+        queueMicrotask(() => reject(err));
+      }
     }
     // Destroy the socket: in the virtual-server path this is a real net.js
     // socket with a loop-keeping timer. If we don't destroy it here, the
@@ -1745,36 +1763,43 @@ export class ClientRequest extends OutgoingMessage {
   }
 
   async _performVirtualRequest(server, headers, body) {
-    // Get a socket from the agent's pool (or wait for one). The agent tracks
-    // the socket in agent.sockets[name] and reuses keep-alive sockets from
-    // agent.freeSockets[name].
+    // The agent was already notified in the constructor (synchronous
+    // addRequest). Wait for the socket assignment via onSocket().
+    // Note: the agent used this.port; for virtual servers the actual port
+    // is server._port. If they differ, re-key the socket tracking.
     const agent = this.agent;
-    const agentOptions = {
-      host: this.host,
-      hostname: this.host,
-      port: server._port,
-      localAddress: undefined,
-    };
-    // Stash options so the agent can re-run addRequest for queued requests.
-    this._agentOptions = agentOptions;
 
     const sock = await new Promise((resolve, reject) => {
+      // If the socket was already assigned (synchronous free-socket reuse),
+      // use it immediately.
+      if (this.socket && !(this.socket instanceof FakeSocket)) {
+        resolve(this.socket);
+        return;
+      }
       // Race: abort() may have been called synchronously after end(), before
-      // this async method ran. If so, don't even ask the agent for a socket.
+      // this async method ran. If so, don't wait for a socket.
       if (this._aborted) {
         const err = new Error("socket hang up");
         err.code = "ECONNRESET";
         reject(err);
         return;
       }
+      // If the request was queued (at maxSockets), wait for the agent to
+      // assign a socket via onSocket().
       this._onSocketAssigned = resolve;
       this._onSocketRejected = reject;
-      try {
-        agent.addRequest(this, agentOptions);
-      } catch (err) {
-        this._onSocketAssigned = null;
-        this._onSocketRejected = null;
-        reject(err);
+      // If addRequest already ran in the constructor but the socket isn't
+      // assigned yet (async createSocket), the promise will resolve via
+      // onSocket(). If for some reason addRequest wasn't called, call it now.
+      if (!this._agentAddRequestCalled) {
+        this._agentAddRequestCalled = true;
+        try {
+          agent.addRequest(this, this._agentOptions);
+        } catch (err) {
+          this._onSocketAssigned = null;
+          this._onSocketRejected = null;
+          reject(err);
+        }
       }
     }).catch((err) => {
       // Aborted while waiting for a socket: emit ECONNRESET like Node.
@@ -3180,8 +3205,19 @@ class AgentBase extends EventEmitter {
     const queue = this.requests[name];
     if (!queue || queue.length === 0) return;
     // A socket just freed up (or was destroyed); try the next queued request.
-    const req = queue.shift();
+    // Skip aborted requests (they stay in the queue until processed).
+    let req;
+    while (queue.length > 0) {
+      const candidate = queue.shift();
+      if (candidate._aborted || candidate.aborted) {
+        // Aborted while queued: drop it, don't assign a socket.
+        continue;
+      }
+      req = candidate;
+      break;
+    }
     if (queue.length === 0) delete this.requests[name];
+    if (!req) return;
     delete req._agentQueueName;
     // Re-run addRequest: it will find the free socket or create a new one.
     this.addRequest(req, req._agentOptions || {});
