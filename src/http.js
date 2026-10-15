@@ -855,10 +855,97 @@ export class ServerResponse extends OutgoingMessage {
     // statusMessage stays undefined until writeHead (Node: prototype default).
     this.sendDate = true;
     this._resolve = null;
+    // Streaming state: once headers are flushed to the socket, writes go
+    // directly instead of buffering (needed for abort/destroy tests where
+    // the client must see the response before res.end()).
+    this._headerFlushed = false;
   }
 
   _implicitHeader() {
     this.writeHead(this.statusCode);
+  }
+
+  /**
+   * Flush buffered headers + body to the socket for streaming.
+   * Uses chunked encoding when Content-Length isn't set (like Node).
+   */
+  _flushHeaders() {
+    if (this._headerFlushed || !this._header) return;
+    const sock = this.socket;
+    // Only stream to real sockets, not the FakeSocket (used for non-virtual paths).
+    if (!sock || sock.constructor.name === "FakeSocket") return;
+    if (sock.destroyed) return;
+
+    let header = this._header;
+    const hasCL = this.hasHeader("content-length");
+    const hasTE = this.hasHeader("transfer-encoding");
+    if (!hasCL && !hasTE && this._hasBody !== false) {
+      // Node defaults to chunked when length is unknown and we're streaming.
+      header = header.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
+      this._chunkedStreaming = true;
+    }
+    try {
+      sock.write(header);
+      // Flush any data buffered before the first write().
+      for (const entry of this.outputData) {
+        const chunk = entry.data;
+        if (this._chunkedStreaming && chunk.length > 0) {
+          sock.write(chunk.length.toString(16) + "\r\n");
+          sock.write(chunk);
+          sock.write("\r\n");
+        } else if (chunk.length > 0) {
+          sock.write(chunk);
+        }
+      }
+      this.outputData = [];
+      this.outputSize = 0;
+      this._headerFlushed = true;
+    } catch {
+      /* socket write failed; ignore */
+    }
+  }
+
+  /**
+   * Override _write to stream directly to the socket once headers are flushed.
+   * Before the first flush, buffer normally (so end()-only responses can
+   * still compute Content-Length).
+   */
+  _write(chunk, encoding, callback) {
+    // If headers are already flushed, stream the chunk directly.
+    if (this._headerFlushed) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const sock = this.socket;
+      if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
+        try {
+          if (this._chunkedStreaming && buf.length > 0) {
+            sock.write(buf.length.toString(16) + "\r\n");
+            sock.write(buf);
+            sock.write("\r\n");
+          } else if (buf.length > 0) {
+            sock.write(buf);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      callback();
+      return;
+    }
+    // Buffer normally; flush happens on first write() call (below) or end().
+    super._write(chunk, encoding, callback);
+  }
+
+  /**
+   * Override write to trigger header flush on first explicit write.
+   * This makes res.writeHead(); res.write() stream to the client immediately,
+   * matching Node behavior for abort/destroy tests.
+   */
+  write(chunk, encoding, callback) {
+    if (!this._headerFlushed && this._header) {
+      // Flush headers + any data buffered so far, then stream.
+      this._flushHeaders();
+    }
+    return super.write(chunk, encoding, callback);
   }
 
   writeHead(statusCode, reason, obj) {
@@ -960,6 +1047,21 @@ export class ServerResponse extends OutgoingMessage {
   _setResolver(resolve) {
     this._resolve = resolve;
     if (this.finished) this._deliver();
+  }
+
+  // Destroying the response destroys the socket (Node behavior): the client
+  // sees the connection reset. Without this, the virtual socket's loop-keeping
+  // timer survives and the process hangs (http parity hang).
+  _destroy(err, cb) {
+    const sock = this.socket;
+    if (sock && typeof sock.destroy === "function" && !sock.destroyed) {
+      try {
+        sock.destroy();
+      } catch {
+        /* best effort */
+      }
+    }
+    super._destroy(err, cb);
   }
 
   _deliver() {
@@ -1283,6 +1385,17 @@ export class ClientRequest extends OutgoingMessage {
       clearTimeout(this._timeoutId);
       this._timeoutId = null;
     }
+    // Destroy the socket: in the virtual-server path this is a real net.js
+    // socket with a loop-keeping timer. If we don't destroy it here, the
+    // event loop never drains and the process hangs (http parity hang).
+    const sock = this.socket;
+    if (sock && typeof sock.destroy === "function" && !sock.destroyed) {
+      try {
+        sock.destroy();
+      } catch {
+        /* best effort */
+      }
+    }
     super.destroy(err);
     return this;
   }
@@ -1573,6 +1686,7 @@ export class ClientRequest extends OutgoingMessage {
     }
 
     let result;
+    let streamedMsg = null;
     try {
       result = await _socketHttpRoundTrip(server._port, {
         method: this.method,
@@ -1580,11 +1694,68 @@ export class ClientRequest extends OutgoingMessage {
         headers,
         body: body && body.length > 0 ? body : null,
         socket: sock,
+        // Streaming: emit 'response' as soon as headers arrive, push body
+        // chunks as they come. This matches Node for abort/destroy tests
+        // where the client must see the response before res.end().
+        onHeaders: (info) => {
+          if (this._aborted) return;
+          const msg = new IncomingMessage();
+          msg.statusCode = info.statusCode;
+          msg.statusMessage =
+            info.statusMessage || STATUS_CODES[info.statusCode] || "";
+          msg.httpVersion = "1.1";
+          msg.httpVersionMajor = 1;
+          msg.httpVersionMinor = 1;
+          const pairs = [];
+          for (let i = 0; i < info.rawHeaders.length; i += 2) {
+            pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
+          }
+          IncomingMessage._applyRawHeaders(msg, pairs);
+          msg.socket = this.socket;
+          msg.connection = this.socket;
+          streamedMsg = msg;
+          this.emit("response", msg);
+        },
+        onBody: (chunk) => {
+          if (streamedMsg && !this._aborted) {
+            streamedMsg._pushBody(chunk);
+          }
+        },
       });
     } catch (err) {
       if (this._timeoutId) {
         clearTimeout(this._timeoutId);
         this._timeoutId = null;
+      }
+      if (streamedMsg) {
+        // Streaming: the response was already emitted; propagate the error
+        // to it (e.g., ECONNRESET when the server destroys the response).
+        const isAbort = this._aborted;
+        if (!isAbort) {
+          streamedMsg._aborted = true;
+          streamedMsg.emit("aborted");
+        }
+        // Destroy the socket to release the loop keeper.
+        try {
+          sock.destroy();
+        } catch {
+          /* best effort */
+        }
+        if (!isAbort) {
+          // Map socket-closed errors to ECONNRESET (Node behavior when the
+          // server destroys the response mid-stream).
+          const e = err instanceof Error ? err : new Error(String(err));
+          e.code = "ECONNRESET";
+          streamedMsg.emit("error", e);
+        }
+        // Don't call _finishBody() — 'end' must NOT fire on abort.
+        // Destroy the message which emits 'close'.
+        try {
+          streamedMsg.destroy();
+        } catch {
+          /* best effort */
+        }
+        return;
       }
       if (this._aborted) return;
       throw err;
@@ -1594,6 +1765,20 @@ export class ClientRequest extends OutgoingMessage {
       this._timeoutId = null;
     }
     if (this._aborted) return;
+
+    // Streaming case: message already emitted; just finish the body.
+    if (streamedMsg) {
+      streamedMsg._finishBody();
+      // The socket stays open for keep-alive; the response 'close' will
+      // fire when the socket closes. For now, destroy it since we don't
+      // pool virtual sockets (prevents loop-keeper leak).
+      try {
+        sock.destroy();
+      } catch {
+        /* best effort */
+      }
+      return;
+    }
 
     const msg = new IncomingMessage();
     msg.statusCode = result.statusCode;
@@ -2117,7 +2302,7 @@ function _serializeRequestHead(method, path, headers, body) {
  */
 function _socketHttpRoundTrip(
   port,
-  { method, path, headers, body, socket, onSocket },
+  { method, path, headers, body, socket, onSocket, onHeaders, onBody },
 ) {
   return new Promise((resolve, reject) => {
     const sock = socket || netConnect(port);
@@ -2125,10 +2310,14 @@ function _socketHttpRoundTrip(
     const settle = (fn) => (value) => {
       if (settled) return;
       settled = true;
-      try {
-        sock.destroy();
-      } catch {
-        /* best effort */
+      // Don't destroy the socket if we're streaming — the caller owns it now.
+      // (The caller destroys it via ClientRequest.destroy or when done.)
+      if (!onHeaders) {
+        try {
+          sock.destroy();
+        } catch {
+          /* best effort */
+        }
       }
       fn(value);
     };
@@ -2142,8 +2331,27 @@ function _socketHttpRoundTrip(
     let info = null;
     parser.onHeadersComplete = (i) => {
       info = i;
+      // Streaming: notify the caller immediately so it can emit 'response'.
+      if (typeof onHeaders === "function") {
+        try {
+          onHeaders(i);
+        } catch {
+          /* listener errors are not fatal */
+        }
+      }
     };
-    parser.onBody = (chunk) => chunks.push(Buffer.from(chunk));
+    parser.onBody = (chunk) => {
+      const buf = Buffer.from(chunk);
+      chunks.push(buf);
+      // Streaming: push body chunks to the caller as they arrive.
+      if (typeof onBody === "function") {
+        try {
+          onBody(buf);
+        } catch {
+          /* listener errors are not fatal */
+        }
+      }
+    };
     parser.onMessageComplete = () => {
       ok({
         statusCode: info.statusCode,
@@ -2484,7 +2692,17 @@ class ServerBase extends EventEmitter {
    * bytes, then either resume parsing (keep-alive) or close the connection.
    */
   _finishSocketResponse(socket, info, state, req, res, reqNo) {
-    if (!socket.destroyed) {
+    // Streaming case: headers + body were already flushed via write().
+    // Just terminate the chunked stream (if used) and handle keep-alive.
+    if (res._headerFlushed) {
+      if (!socket.destroyed && res._chunkedStreaming) {
+        try {
+          socket.write("0\r\n\r\n");
+        } catch {
+          /* ignore */
+        }
+      }
+    } else if (!socket.destroyed) {
       const head = res._header || "HTTP/1.1 200 OK\r\n\r\n";
       const body = res._getBody();
       const noBodyStatus = res._hasBody === false;
