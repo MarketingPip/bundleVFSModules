@@ -1651,6 +1651,26 @@ export class ClientRequest extends OutgoingMessage {
     const sock = netConnect(server._port);
     this.socket = sock;
     this.connection = sock;
+    // Race: abort() may have been called synchronously after end(), before
+    // this async method ran. If so, destroy the socket immediately and emit
+    // ECONNRESET (Node behavior for aborted requests). The destroy() call
+    // already ran and only saw the FakeSocket.
+    if (this._aborted) {
+      try {
+        sock.destroy();
+      } catch {
+        /* best effort */
+      }
+      // Emit ECONNRESET like Node does for aborted requests.
+      queueMicrotask(() => {
+        if (this.listenerCount("error") > 0) {
+          const err = new Error("socket hang up");
+          err.code = "ECONNRESET";
+          this.emit("error", err);
+        }
+      });
+      return;
+    }
     sock.on("connect", () => {
       if (!this._aborted) this.emit("socket", sock);
     });
