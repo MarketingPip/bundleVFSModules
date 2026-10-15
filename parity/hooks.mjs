@@ -59,6 +59,13 @@ function polyfillURL(specifier) {
     return pathToFileURL(path.join(repoRoot, "parity", "http2-harness.mjs"))
       .href;
   }
+  // Harness-only timer-globals restore for https parity
+  // (parity/https-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs.
+  if (target === "https" && name === "https") {
+    return pathToFileURL(path.join(repoRoot, "parity", "https-harness.mjs"))
+      .href;
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   if (!fs.existsSync(candidate)) return null;
   return pathToFileURL(candidate).href;

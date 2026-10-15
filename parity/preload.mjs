@@ -138,6 +138,14 @@ function polyfillPath(request) {
   if (target === "http2" && name === "http2") {
     return path.join(repoRoot, "parity", "http2-harness.mjs");
   }
+  // Harness-only timer-globals restore for https parity
+  // (parity/https-harness.mjs): the https shim imports ./http.js (which
+  // pulls in async_hooks → als-browser via stream), replacing timer globals
+  // on import and tripping Node's global-leak detector. The harness restores
+  // the originals snapshotted in preload.mjs. src/https.js itself is untouched.
+  if (target === "https" && name === "https") {
+    return path.join(repoRoot, "parity", "https-harness.mjs");
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   return fs.existsSync(candidate) ? candidate : null;
 }
