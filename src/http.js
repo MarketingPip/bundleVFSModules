@@ -859,6 +859,9 @@ export class ServerResponse extends OutgoingMessage {
     // directly instead of buffering (needed for abort/destroy tests where
     // the client must see the response before res.end()).
     this._headerFlushed = false;
+    // HTTP version from the request (for 1.0 vs 1.1 response semantics).
+    // HTTP/1.0 does not support chunked transfer encoding.
+    this._reqHttpVersion = req?.httpVersion || "1.1";
   }
 
   _implicitHeader() {
@@ -879,7 +882,10 @@ export class ServerResponse extends OutgoingMessage {
     let header = this._header;
     const hasCL = this.hasHeader("content-length");
     const hasTE = this.hasHeader("transfer-encoding");
-    if (!hasCL && !hasTE && this._hasBody !== false) {
+    // HTTP/1.0 does not support chunked transfer encoding — the connection
+    // closes after the response instead (Node behavior).
+    const isHttp10 = this._reqHttpVersion === "1.0";
+    if (!hasCL && !hasTE && this._hasBody !== false && !isHttp10) {
       // Node defaults to chunked when length is unknown and we're streaming.
       header = header.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
       this._chunkedStreaming = true;
@@ -3140,8 +3146,15 @@ class AgentBase extends EventEmitter {
 
   getName(options = {}) {
     const host = options.host || options.hostname || "localhost";
-    const port = options.port || this.defaultPort || 80;
-    return `${host}:${port}:${options.localAddress || ""}`;
+    // Node does NOT default the port in getName() — empty string if unspecified.
+    // (test-http-agent-getname expects 'localhost::' not 'localhost:80:')
+    const port = options.port ?? "";
+    let name = `${host}:${port}:${options.localAddress || ""}`;
+    // Unix socket path and IP family are appended (Node behavior).
+    if (options.socketPath) name += `:${options.socketPath}`;
+    else if (options.family === 4 || options.family === 6)
+      name += `:${options.family}`;
+    return name;
   }
 
   addRequest(req, options) {
