@@ -1220,6 +1220,8 @@ Socket.prototype.connect = function connect(...args) {
     const d = Number(options.keepAliveInitialDelay);
     this._keepAliveInitialDelay = d < 0 ? 0 : Math.floor(d);
   }
+  // BlockList for connection filtering (checked in _doConnect).
+  if (options.blockList !== undefined) this.blockList = options.blockList;
 
   const path = options.path;
   const pipe = !!path;
