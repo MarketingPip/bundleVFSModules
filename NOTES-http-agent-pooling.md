@@ -2,16 +2,16 @@
 
 ## Problem
 8 http parity tests hang (30s timeout, silent — no output):
-1. test-http-abort-queued.js ✅ PASSES now
-2. test-http-aborted.js ⏳ still hangs
-3. test-http-after-connect.js ⏳ still hangs
-4. test-http-client-abort-keep-alive-queued-tcp-socket.js ❌ fails fast (not hang)
-5. test-http-agent-maxsockets-respected.js ⏳ still hangs
-6. test-http-agent-reuse-drained-socket-only.js ❌ fails fast (not hang)
-7. test-http-agent-timeout.js ⏳ still hangs
-8. test-http-client-abort-keep-alive-destroy-res.js ⏳ still hangs
+1. test-http-abort-queued.js ✅ PASSES
+2. test-http-aborted.js ✅ PASSES (fixed by server-side keep-alive)
+3. test-http-after-connect.js ✅ PASSES (fixed by server-side keep-alive)
+4. test-http-client-abort-keep-alive-queued-tcp-socket.js ❌ fails fast (assertion: unexpected ECONNRESET error event)
+5. test-http-agent-maxsockets-respected.js ✅ PASSES (fixed by server-side keep-alive)
+6. test-http-agent-reuse-drained-socket-only.js ✅ PASSES (fixed by server-side keep-alive)
+7. test-http-agent-timeout.js ✅ PASSES (fixed by server-side keep-alive)
+8. test-http-client-abort-keep-alive-destroy-res.js ✅ PASSES (fixed by server-side keep-alive)
 
-## Root cause
+## Root cause (client side — fixed in PR #227)
 The virtual HTTP path (`_performVirtualRequest`) creates a fresh socket via
 `netConnect()` for every request and destroys it when done. It never integrates
 with `http.Agent`:
@@ -25,9 +25,30 @@ Tests assert on `agent.sockets[name].length`, `agent.requests[name].length`,
 the try/catch in `_socketHttpRoundTrip`'s `onHeaders` ("listener errors are not
 fatal"), so tests hang silently instead of failing fast.
 
+## Root cause (server side — fixed in this lane)
+Even with client-side pooling, the server destroyed every socket on response
+end, so the agent's free pool never populated:
+
+1. **`ServerResponse._destroy` kills the socket unconditionally.** The Writable
+   stream machinery auto-destroys the response after 'finish' (autoDestroy
+   defaults to true), which calls `ServerResponse._destroy` → `socket.destroy()`.
+   This happens even for keep-alive connections where the socket must stay open.
+   Traced via monkey-patched `Socket.prototype.destroy`:
+   `ServerResponse._destroy (http.js:1059)` ← `node:internal/streams/destroy` ←
+   `Writable.destroy` ← `finish`.
+
+2. **Constructor clobbers synchronously-assigned sockets.** `AgentBase.addRequest`
+   can assign a free socket synchronously via `reuseSocket` → `req.onSocket()`,
+   but the `ClientRequest` constructor then overwrote `this.socket` with a
+   `FakeSocket`, losing the pooled socket.
+
+3. **`_releasedToAgent` never cleared on reuse.** After a socket was released to
+   the free pool once, reusing it for a second request and completing would hit
+   the early-return in `_releaseAgentSocket`, never re-parking it.
+
 ## What was implemented
 
-### AgentBase (src/http.js)
+### AgentBase (src/http.js) — PR #227
 - `addRequest(req, options)`: real implementation
   - Try free socket from `freeSockets[name]` (LIFO/FIFO per `scheduling`)
   - Else create new via `createSocket` if under `maxSockets`/`maxTotalSockets`
@@ -38,10 +59,12 @@ fatal"), so tests hang silently instead of failing fast.
   calls `_processQueue`
 - `_processQueue(name)`: dequeues next non-aborted request, re-runs addRequest
 - `removeSocket(socket, name)`: untrack from sockets/freeSockets
-- `reuseSocket(socket, req)`: marks `_agentReused`, calls `req.onSocket`
+- `reuseSocket(socket, req)`: marks `_agentReused`, clears `_releasedToAgent`,
+  calls `req.onSocket`
 
-### ClientRequest (src/http.js)
+### ClientRequest (src/http.js) — PR #227 + this lane
 - Constructor calls `agent.addRequest(this, ...)` synchronously (Node parity)
+- Constructor no longer clobbers a synchronously-assigned socket with FakeSocket
 - New `onSocket(socket)`: assigns socket, resolves waiting promise
 - New `onSocketError(err)`: rejects waiting promise or emits error
 - New `_releaseAgentSocket()`: returns socket to agent pool (or destroys)
@@ -51,32 +74,41 @@ fatal"), so tests hang silently instead of failing fast.
   from agent tracking
 - Auto-adds `Connection: keep-alive` header when `agent.keepAlive` is true
 
+### ServerResponse (src/http.js) — this lane
+- `_destroy` now skips socket destruction when `this._keepAliveSocket` is set
+  (and no error) — the socket is preserved for reuse instead of being killed
+  by stream autoDestroy after normal finish. Explicit destroy with an error
+  (abort) still destroys the socket.
+- `_finishSocketResponse` sets `res._keepAliveSocket = true` when it decides
+  keep-alive (was already computing `keepAlive` correctly but the socket died
+  in autoDestroy anyway).
+
 ### _socketHttpRoundTrip
 - No longer destroys socket on settle; caller owns lifecycle
 - Handles already-connected sockets (queueMicrotask instead of waiting for
   'connect' event that already fired)
 
-## Remaining gaps (5 tests still hang)
-The remaining hangs involve server-side keep-alive socket lifecycle:
-- When the server ends a response, the virtual socket gets destroyed even
-  though `Connection: keep-alive` was sent
-- `info.shouldKeepAlive` is computed correctly by the parser, but the socket
-  is destroyed by stream autoDestroy before the agent can reuse it
-- Setting `socket.autoDestroy = false` didn't prevent it — the destroy comes
-  from `stream/writable.js` finish handler
-
-These require deeper changes to the server-side socket lifecycle (ServerResponse
-+ net.js virtual socket interaction), beyond minimal agent pooling.
-
 ## Test results
-- test-http-abort-queued.js: PASS (was hanging)
+- test-http-abort-queued.js: PASS
+- test-http-aborted.js: PASS (was hanging)
+- test-http-after-connect.js: PASS (was hanging)
+- test-http-agent-maxsockets-respected.js: PASS (was hanging)
+- test-http-agent-timeout.js: PASS (was hanging)
+- test-http-client-abort-keep-alive-destroy-res.js: PASS (was hanging)
+- test-http-agent-reuse-drained-socket-only.js: PASS (was failing fast)
 - test-http-client-abort-keep-alive-queued-tcp-socket.js: FAIL fast (was hanging)
-  - Unexpected 'error' event with ECONNRESET (test has mustNotCall on error)
-- test-http-agent-reuse-drained-socket-only.js: FAIL fast (was hanging)
-  - ECONNREFUSED — socket reuse not working due to server-side destroy
-- 5 others: still hang (server-side keep-alive socket lifecycle)
+  - Unexpected 'error' event with ECONNRESET (test has mustNotCall on error).
+    The abort-during-queue path emits ECONNRESET; test expects silence.
+- test-http-abort-client.js (previously fixed in PR #223): still PASS (no regression)
+
+## Remaining gap
+One test still fails (not hangs):
+- test-http-client-abort-keep-alive-queued-tcp-socket.js: the queued-request
+  abort path emits an 'error' with ECONNRESET, but the test asserts no error
+  event. Needs investigation of Node's exact abort-during-queue semantics —
+  whether the error should be swallowed or the abort handled differently.
 
 ## Branch
 - `feat/http-agent-pooling` (from main b627e6ce)
-- Commits: 81c8e3b0, 63760f19, 58f49742
-- Pushed to GitHub via git-push-api.py
+- PR #227: https://github.com/MarketingPip/bundleVFSModules/pull/227
+- Commits: 81c8e3b0, 63760f19, 58f49742 (PR #227) + c10c5090 (this lane)
