@@ -68,6 +68,34 @@ The following are likely inherent to the browser environment:
 - Tests requiring raw socket access
 - Tests for HTTP/2-specific behavior (covered in http2 module)
 
+## Error Event Investigation (2026-10-16)
+
+### Root Cause Analysis
+
+The 15 "unhandled 'error' event" tests fall into three categories, NOT one common root cause:
+
+**1. Fixed: Aborted requests emitting 'error' (1 test)**
+- **test-http-client-abort-event.js** ✅ FIXED
+- **Bug:** `ClientRequest.onSocketError` emitted 'error' even when the request was aborted. Node only emits 'abort' for `abort()`, not 'error'.
+- **Fix:** Check `_aborted || _abortGraceful` in `onSocketError` before emitting. (commit 5cd4ed47)
+
+**2. Harness limitations: Tests using real `net` (7 tests)**
+- test-http-1.0-keep-alive, test-http-1.0, test-http-agent-uninitialized, test-http-blank-header, test-http-chunk-extensions-limit, test-http-chunked-304, test-http-chunked-smuggling
+- **Issue:** These tests `require('net')` directly and use `net.createConnection()` to talk to the virtual HTTP server. The parity harness only redirects `http`, not `net`, so the real `net` tries to connect to a real TCP port → ECONNREFUSED.
+- **Action:** Harness limitation, not a shim bug. Would require the harness to also shim `net` for http tests, or the tests to be marked as expected failures.
+
+**3. Agent edge cases: Manual socket manipulation (7 tests)**
+- test-http-agent-domain-reused-gc, test-http-agent-error-on-idle, test-http-agent-keepalive-delay, test-http-agent-keepalive, test-http-agent-reuse-drained-socket-only, test-http-agent-uninitialized-with-handle
+- **Issue:** These tests manually manipulate `agent.freeSockets` and call `agent.addRequest(req, {})` with empty options, testing agent internals.
+- **Partial fix:** `AgentBase.createSocket` now falls back to `req.port`/`req.host` when options are empty (was defaulting to port 80). (commit 5cd4ed47)
+- **Remaining:** Deeper issues with manual socket lifecycle (server refusing connections, socket state mismatches). These test agent internals in ways that require more careful emulation.
+
+### Summary
+- **Fixed:** 1 test (test-http-client-abort-event.js)
+- **Harness limitations:** 7 tests (need `net` shimming in harness)
+- **Needs deeper work:** 7 tests (agent edge cases)
+- **Not one root cause** — the triage assumption was incorrect.
+
 ## Next Steps
 1. Fix test-http-agent-false (basic functionality, high impact)
 2. Investigate unhandled 'error' event pattern (15 tests, likely common root cause)

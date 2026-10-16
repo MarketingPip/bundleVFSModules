@@ -3121,14 +3121,11 @@ class AgentBase extends EventEmitter {
   createSocket(req, options, callback) {
     const name = this.getName(options);
     // For the virtual-server path, create a real virtual socket via net.js.
-    // The port comes from the request options, falling back to the request
-    // itself (addRequest may be called with empty options, e.g. when the
-    // test manually manages freeSockets).
-    const port = options.port || req?.port || this.defaultPort || 80;
-    const host = options.host || options.hostname || req?.host || "localhost";
+    // The port comes from the request options.
+    const port = options.port || this.defaultPort || 80;
     let socket;
     try {
-      socket = netConnect({ port, host });
+      socket = netConnect(port);
     } catch (err) {
       if (typeof callback === "function") {
         queueMicrotask(() => callback(err));
