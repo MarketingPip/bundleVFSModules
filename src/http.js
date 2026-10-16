@@ -1414,6 +1414,10 @@ export class ClientRequest extends OutgoingMessage {
     if (this.aborted) return;
     this.aborted = true;
     this._aborted = true;
+    // Mark graceful abort: if the request is still queued (waiting for a
+    // socket), Node emits 'abort' but NOT 'error'. This flag is only checked
+    // in the socket-waiting promise path; active requests are unaffected.
+    this._abortGraceful = true;
     queueMicrotask(() => this.emit("abort"));
     this.destroy();
   }
@@ -1829,15 +1833,18 @@ export class ClientRequest extends OutgoingMessage {
         }
       }
     }).catch((err) => {
-      // Aborted while waiting for a socket: emit ECONNRESET like Node.
+      // Aborted while waiting for a socket. Node emits ECONNRESET 'error'
+      // for destroy(), but NOT for graceful abort() (which only emits 'abort').
       if (this._aborted || err?.code === "ECONNRESET") {
-        queueMicrotask(() => {
-          if (this.listenerCount("error") > 0) {
-            const e = new Error("socket hang up");
-            e.code = "ECONNRESET";
-            this.emit("error", e);
-          }
-        });
+        if (!this._abortGraceful) {
+          queueMicrotask(() => {
+            if (this.listenerCount("error") > 0) {
+              const e = new Error("socket hang up");
+              e.code = "ECONNRESET";
+              this.emit("error", e);
+            }
+          });
+        }
         return null;
       }
       throw err;
