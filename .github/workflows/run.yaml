@@ -9,6 +9,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Fail-fast: the "Run Tests" step can hang on unresolved tests (e.g. http
+    # agent-pooling). Without a job timeout, a hung run burns the 6h cap.
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repo
@@ -70,6 +73,7 @@ jobs:
   parity:
     name: Parity (Node official tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repo
