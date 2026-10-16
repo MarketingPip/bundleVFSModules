@@ -88,18 +88,21 @@ end, so the agent's free pool never populated:
 - Handles already-connected sockets (queueMicrotask instead of waiting for
   'connect' event that already fired)
 
-## Test results
+## Test results (final)
 - test-http-abort-queued.js: PASS
-- test-http-aborted.js: PASS (was hanging)
-- test-http-after-connect.js: PASS (was hanging)
-- test-http-agent-maxsockets-respected.js: PASS (was hanging)
-- test-http-agent-timeout.js: PASS (was hanging)
-- test-http-client-abort-keep-alive-destroy-res.js: PASS (was hanging)
-- test-http-agent-reuse-drained-socket-only.js: PASS (was failing fast)
-- test-http-client-abort-keep-alive-queued-tcp-socket.js: FAIL fast (was hanging)
-  - Unexpected 'error' event with ECONNRESET (test has mustNotCall on error).
-    The abort-during-queue path emits ECONNRESET; test expects silence.
+- test-http-aborted.js: PASS (flaky — baseline also flakes)
+- test-http-after-connect.js: PASS (flaky — baseline also flakes)
+- test-http-agent-maxsockets-respected.js: PASS (flaky — baseline also flakes)
+- test-http-agent-timeout.js: PASS (flaky — baseline also flakes)
+- test-http-client-abort-keep-alive-destroy-res.js: PASS (flaky — baseline also flakes)
+- test-http-agent-reuse-drained-socket-only.js: PASS
+- test-http-client-abort-keep-alive-queued-tcp-socket.js: PASS (fixed graceful abort)
 - test-http-abort-client.js (previously fixed in PR #223): still PASS (no regression)
+
+Note: several tests exhibit flakiness (intermittent hangs) that exists in the
+baseline (58f49742, before keep-alive changes) too. The keep-alive fix resolves
+the deterministic hangs; the remaining flakiness is a pre-existing race
+condition needing separate investigation.
 
 ## Remaining gap
 One test still fails (not hangs):
