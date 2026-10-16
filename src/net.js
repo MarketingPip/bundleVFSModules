@@ -770,6 +770,34 @@ function byteLengthOf(chunk) {
 }
 
 // ---------------------------------------------------------------------------
+// VirtualHandle — stands in for Node's TCPWrap handle.
+//
+// Real Node sockets have a `_handle` (TCPWrap) while connected, set to null
+// after destroy. Tests mock `_handle.setKeepAlive`/`setNoDelay` to verify
+// socket options are applied. The virtual handle accepts these calls as
+// no-ops (no real TCP in the browser) but exists as a mockable object so
+// `socket._handle !== null` while connected, matching Node's observable
+// behavior.
+// ---------------------------------------------------------------------------
+
+function VirtualHandle() {
+  this._keepAlive = false;
+  this._keepAliveDelay = 0;
+  this._noDelay = true;
+}
+VirtualHandle.prototype.setKeepAlive = function setKeepAlive(enable, delay) {
+  this._keepAlive = Boolean(enable);
+  this._keepAliveDelay = delay | 0;
+};
+VirtualHandle.prototype.setNoDelay = function setNoDelay(enable) {
+  this._noDelay = Boolean(enable);
+};
+// Methods tests may call; honest no-ops for the virtual transport.
+VirtualHandle.prototype.ref = function ref() {};
+VirtualHandle.prototype.unref = function unref() {};
+VirtualHandle.prototype.close = function close() {};
+
+// ---------------------------------------------------------------------------
 // Socket — port of the virtual-transport half of lib/net.js Socket.
 // Extends our own ./stream.js Duplex (NOT stream-browserify).
 // ---------------------------------------------------------------------------
@@ -854,8 +882,10 @@ function Socket(options = {}) {
 }
 Object.setPrototypeOf(Socket.prototype, Duplex.prototype);
 Socket.prototype.constructor = Socket;
-// The virtual transport has no OS handle; expose _handle as null like a
-// closed real socket does (tests assert `socket._handle === null`).
+// Virtual transport: _handle is a VirtualHandle while connected, null after
+// destroy (mirrors Node where _handle is a TCPWrap while connected, null
+// after close). Tests assert `socket._handle === null` for closed sockets
+// and mock `_handle.setKeepAlive`/`setNoDelay` on connected ones.
 Socket.prototype._handle = null;
 
 function onwrite(stream, er) {
@@ -1102,6 +1132,8 @@ Socket.prototype.setNoDelay = function setNoDelay(enable) {
   // Backwards compatibility: assume true when `enable` is omitted.
   enable = Boolean(enable === undefined ? true : enable);
   this._noDelay = enable;
+  // Mirrors lib/net.js: delegate to the handle when connected.
+  if (this._handle) this._handle.setNoDelay(enable);
   return this;
 };
 
@@ -1111,6 +1143,8 @@ Socket.prototype.setKeepAlive = function setKeepAlive(
 ) {
   this._keepAlive = Boolean(enable);
   this._keepAliveInitialDelay = initialDelayMsecs;
+  // Mirrors lib/net.js: delegate to the handle when connected.
+  if (this._handle) this._handle.setKeepAlive(enable, initialDelayMsecs);
   return this;
 };
 
@@ -1177,6 +1211,18 @@ Socket.prototype.connect = function connect(...args) {
   this._finSent = false;
   this._localPortEphemeral = 0;
 
+  // Mirrors lib/net.js: connect options set socket properties applied on
+  // successful connection (via _handle.setKeepAlive/setNoDelay).
+  if (options.noDelay !== undefined) this._noDelay = Boolean(options.noDelay);
+  if (options.keepAlive !== undefined)
+    this._keepAlive = Boolean(options.keepAlive);
+  if (options.keepAliveInitialDelay !== undefined) {
+    const d = Number(options.keepAliveInitialDelay);
+    this._keepAliveInitialDelay = d < 0 ? 0 : Math.floor(d);
+  }
+  // BlockList for connection filtering (checked in _doConnect).
+  if (options.blockList !== undefined) this.blockList = options.blockList;
+
   const path = options.path;
   const pipe = !!path;
   if (pipe) {
@@ -1226,6 +1272,9 @@ Socket.prototype.connect = function connect(...args) {
   this.connecting = true;
   this._refreshTimeout();
   this._keepLoopAlive();
+  // Mirrors Node: the handle exists from connect() onward (tests mock
+  // _handle.setKeepAlive immediately after net.connect() returns).
+  if (!this._handle) this._handle = new VirtualHandle();
   // Deferred to a macrotask: a virtual handshake takes event-loop turns like
   // real TCP, so handlers attached after an `await` still catch 'connect'.
   defer(() => this._doConnect(options, pipe));
@@ -1434,6 +1483,9 @@ Socket.prototype._destroy = function _destroy(exception, cb) {
   this.connecting = false;
   this._clearIdleTimer();
   this._releaseLoop();
+  // Mirrors Node: _handle becomes null after destroy (tests assert
+  // `socket._handle === null` for closed sockets).
+  this._handle = null;
 
   const peer = this._peer;
   this._peer = null;
@@ -1843,6 +1895,21 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
   client.connecting = false;
   client._flushPendingWrites();
   client._refreshTimeout();
+  // Mirrors lib/net.js: apply socket options to the handle on connect.
+  // The handle may have been mocked by tests (e.g. test-net-connect-keepalive
+  // replaces _handle.setKeepAlive to verify it's called).
+  // Node's C++ TCPWrap takes keepalive delay in SECONDS; the JS API takes
+  // milliseconds — convert here (tests assert the converted value).
+  if (client._handle) {
+    if (client._noDelay) client._handle.setNoDelay(true);
+    if (client._keepAlive)
+      client._handle.setKeepAlive(
+        true,
+        Math.floor(client._keepAliveInitialDelay / 1000),
+      );
+  }
+  // Server-side socket gets a handle too (Node creates TCPWrap on accept).
+  if (!serverSocket._handle) serverSocket._handle = new VirtualHandle();
   client.emit("connect");
   // Mirrors lib/net.js: start the first read after connect, unless paused.
   // A paused socket never activates its read watcher (inactive handle).

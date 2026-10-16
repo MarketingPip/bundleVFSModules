@@ -155,6 +155,15 @@ function polyfillPath(request) {
   if (target === "child_process" && name === "child_process") {
     return path.join(repoRoot, "parity", "child_process-harness.mjs");
   }
+  // Harness-only timer-globals restore for net parity
+  // (parity/net-harness.mjs): the net shim imports ./stream.js (for Socket
+  // via Duplex, which pulls in async_hooks → als-browser), replacing timer
+  // globals on import and tripping Node's global-leak detector. The harness
+  // restores the originals snapshotted in preload.mjs. src/net.js itself is
+  // untouched.
+  if (target === "net" && name === "net") {
+    return path.join(repoRoot, "parity", "net-harness.mjs");
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   return fs.existsSync(candidate) ? candidate : null;
 }

@@ -859,6 +859,9 @@ export class ServerResponse extends OutgoingMessage {
     // directly instead of buffering (needed for abort/destroy tests where
     // the client must see the response before res.end()).
     this._headerFlushed = false;
+    // HTTP version from the request (for 1.0 vs 1.1 response semantics).
+    // HTTP/1.0 does not support chunked transfer encoding.
+    this._reqHttpVersion = req?.httpVersion || "1.1";
   }
 
   _implicitHeader() {
@@ -879,7 +882,10 @@ export class ServerResponse extends OutgoingMessage {
     let header = this._header;
     const hasCL = this.hasHeader("content-length");
     const hasTE = this.hasHeader("transfer-encoding");
-    if (!hasCL && !hasTE && this._hasBody !== false) {
+    // HTTP/1.0 does not support chunked transfer encoding — the connection
+    // closes after the response instead (Node behavior).
+    const isHttp10 = this._reqHttpVersion === "1.0";
+    if (!hasCL && !hasTE && this._hasBody !== false && !isHttp10) {
       // Node defaults to chunked when length is unknown and we're streaming.
       header = header.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
       this._chunkedStreaming = true;
@@ -1758,6 +1764,11 @@ export class ClientRequest extends OutgoingMessage {
       if (reject) reject(err);
       return;
     }
+    // Don't emit 'error' for aborted requests — Node only emits 'abort'
+    // for abort(), and destroy() already emitted its error (if any).
+    // Emitting here would cause "unhandled 'error' event" for tests that
+    // abort requests without an error listener.
+    if (this._aborted || this._abortGraceful) return;
     this.emit("error", err instanceof Error ? err : new Error(String(err)));
   }
 
@@ -1890,6 +1901,10 @@ export class ClientRequest extends OutgoingMessage {
         this._timeoutId = null;
       }
       if (this._aborted) return;
+      // If the socket is idle in the agent's free pool, the agent handles
+      // the error (removes from pool, destroys). Don't propagate to this
+      // (possibly completed) request — that would be an unhandled 'error'.
+      if (sock._inFreePool) return;
       this._aborted = true;
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
     };
@@ -3132,16 +3147,30 @@ class AgentBase extends EventEmitter {
     socket._agent = this;
     if (typeof callback === "function") {
       // netConnect emits 'connect' asynchronously; invoke callback then.
-      socket.once("connect", () => callback(null, socket));
-      socket.once("error", (err) => callback(err));
+      const onError = (err) => callback(err);
+      socket.once("connect", () => {
+        // Connection succeeded: remove the error listener so later
+        // errors on the (possibly pooled) socket don't hit this stale
+        // callback.
+        socket.removeListener("error", onError);
+        callback(null, socket);
+      });
+      socket.once("error", onError);
     }
     return socket;
   }
 
   getName(options = {}) {
     const host = options.host || options.hostname || "localhost";
-    const port = options.port || this.defaultPort || 80;
-    return `${host}:${port}:${options.localAddress || ""}`;
+    // Node does NOT default the port in getName() — empty string if unspecified.
+    // (test-http-agent-getname expects 'localhost::' not 'localhost:80:')
+    const port = options.port ?? "";
+    let name = `${host}:${port}:${options.localAddress || ""}`;
+    // Unix socket path and IP family are appended (Node behavior).
+    if (options.socketPath) name += `:${options.socketPath}`;
+    else if (options.family === 4 || options.family === 6)
+      name += `:${options.family}`;
+    return name;
   }
 
   addRequest(req, options) {
@@ -3230,6 +3259,23 @@ class AgentBase extends EventEmitter {
       }
       if (free.length < this.maxFreeSockets) {
         free.push(socket);
+        // Mark as idle: the request's socket error handler will skip
+        // errors on free-pool sockets (agent handles them below).
+        socket._inFreePool = true;
+        // Agent owns error handling for idle sockets: remove from pool
+        // and destroy, don't propagate to any (completed) request.
+        const onIdleError = () => {
+          this.removeSocket(socket, name);
+          try {
+            socket.destroy();
+          } catch {
+            /* best effort */
+          }
+          this.totalSocketCount--;
+        };
+        socket.once("error", onIdleError);
+        // Store for cleanup on reuse (avoid listener leak).
+        socket._idleErrorHandler = onIdleError;
         socket.emit("free");
       } else {
         socket.destroy();
@@ -3274,6 +3320,13 @@ class AgentBase extends EventEmitter {
     // The socket is checked out of the free pool for a new request; clear the
     // released flag so _releaseAgentSocket can park it again on completion.
     socket._releasedToAgent = false;
+    // Clear the idle flag: the new request's error handler should now fire.
+    socket._inFreePool = false;
+    // Remove the idle error handler (was once(), but may not have fired).
+    if (socket._idleErrorHandler) {
+      socket.removeListener("error", socket._idleErrorHandler);
+      socket._idleErrorHandler = null;
+    }
     req.onSocket(socket);
   }
 

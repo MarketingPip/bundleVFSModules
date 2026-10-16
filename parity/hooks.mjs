@@ -74,6 +74,13 @@ function polyfillURL(specifier) {
       path.join(repoRoot, "parity", "child_process-harness.mjs"),
     ).href;
   }
+  // Harness-only timer-globals restore for net parity
+  // (parity/net-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs.
+  if (target === "net" && name === "net") {
+    return pathToFileURL(path.join(repoRoot, "parity", "net-harness.mjs"))
+      .href;
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   if (!fs.existsSync(candidate)) return null;
   return pathToFileURL(candidate).href;
