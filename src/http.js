@@ -1764,6 +1764,11 @@ export class ClientRequest extends OutgoingMessage {
       if (reject) reject(err);
       return;
     }
+    // Don't emit 'error' for aborted requests — Node only emits 'abort'
+    // for abort(), and destroy() already emitted its error (if any).
+    // Emitting here would cause "unhandled 'error' event" for tests that
+    // abort requests without an error listener.
+    if (this._aborted || this._abortGraceful) return;
     this.emit("error", err instanceof Error ? err : new Error(String(err)));
   }
 
@@ -3116,11 +3121,14 @@ class AgentBase extends EventEmitter {
   createSocket(req, options, callback) {
     const name = this.getName(options);
     // For the virtual-server path, create a real virtual socket via net.js.
-    // The port comes from the request options.
-    const port = options.port || this.defaultPort || 80;
+    // The port comes from the request options, falling back to the request
+    // itself (addRequest may be called with empty options, e.g. when the
+    // test manually manages freeSockets).
+    const port = options.port || req?.port || this.defaultPort || 80;
+    const host = options.host || options.hostname || req?.host || "localhost";
     let socket;
     try {
-      socket = netConnect(port);
+      socket = netConnect({ port, host });
     } catch (err) {
       if (typeof callback === "function") {
         queueMicrotask(() => callback(err));
