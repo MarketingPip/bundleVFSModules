@@ -234,8 +234,10 @@ Module._load = function (request, parent, isMain) {
     const bare = request.startsWith("node:") ? request.slice(5) : request;
     // Extra redirect: the http target also redirects net (isExtraRedirect):
     // http tests use net.createConnection() against the virtual server.
+    // Match on the base name so subpaths (path/posix) still redirect.
+    const base = bare.split("/")[0];
     const redirectName =
-      bare === target ? target : isExtraRedirect(bare) ? bare : null;
+      base === target ? target : isExtraRedirect(base) ? base : null;
     if (
       redirectName &&
       (bare === redirectName ||
