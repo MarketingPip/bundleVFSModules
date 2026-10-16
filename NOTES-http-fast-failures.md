@@ -101,3 +101,36 @@ The 15 "unhandled 'error' event" tests fall into three categories, NOT one commo
 2. Investigate unhandled 'error' event pattern (15 tests, likely common root cause)
 3. Triage remaining 349 tests (only sampled 50)
 4. Document inherent failures in expected-failures.shim.json
+
+## Agent Lifecycle Investigation (2026-10-16)
+
+### The 7 Agent Edge Case Tests
+
+**Harness limitations (5 tests) — NOT FIXABLE:**
+These tests require `_http_agent` or `net` directly, bypassing our shim:
+- test-http-agent-keepalive-delay.js — requires `_http_agent`
+- test-http-agent-keepalive.js — requires `_http_agent`
+- test-http-agent-reuse-drained-socket-only.js — requires `net` (uses `net.createServer`)
+- test-http-agent-uninitialized-with-handle.js — requires `_http_agent`/`net`
+- test-http-agent-uninitialized.js — requires `_http_agent`/`net`
+
+All fail with ECONNREFUSED because they try real network connections.
+
+**Node internals (1 test) — NOT FIXABLE:**
+- test-http-agent-domain-reused-gc.js — uses `internal/js_stream_socket`, `domain` module, `ReusedHandle` (Node C++ internals), and async_hooks GC behavior. Cannot be emulated in browser.
+
+**Real shim bug (1 test) — FIXED:**
+- test-http-agent-error-on-idle.js ✅
+- **Bug:** When a socket in the agent's free pool emitted an error (test manually emits on idle socket), the error propagated to the completed ClientRequest via the stale socket error listener, causing "unhandled 'error' event".
+- **Fix (branch feat/http-agent-lifecycle, commit 4f87e57c):**
+  - Add `_inFreePool` flag to track idle sockets
+  - Request's socket error handler skips errors on idle sockets
+  - Agent attaches cleanup handler in `releaseSocket` to remove errored idle sockets from pool and destroy them
+  - Fix `createSocket` to remove error listener after successful connect (prevents stale callback)
+  - `reuseSocket` clears the idle flag and removes the idle handler
+- **Result:** Unhandled error no longer occurs. The agent properly cleans up errored idle sockets.
+
+### Summary
+- **Fixed:** 1 test (test-http-agent-error-on-idle.js — unhandled error eliminated)
+- **Not fixable:** 6 tests (5 harness limitations + 1 Node internals)
+- **No regressions:** 7/8 PR #227 tests still pass (test-http-agent-reuse-drained-socket-only was already failing before these changes due to harness limitation)
