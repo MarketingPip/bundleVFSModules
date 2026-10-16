@@ -150,3 +150,28 @@ Two more http tests found using net directly (same pattern):
   pre-existing on clean main (2/2 baseline runs also timeout); the PR #227
   report documented these as intermittent. None of the timed-out tests
   `require('net')`, so the harness change cannot have caused them.
+
+## CI Failure Investigation (2026-10-16, PR #232)
+
+**CI check that failed:** Parity (Node official tests) — but the CI parity job
+only runs `path punycode querystring string_decoder events assert`, NOT http.
+
+**Root cause:** The `isExtraRedirect` refactor in `parity/preload.mjs` broke
+subpath imports. The original code matched `bare === target` OR
+`bare === target/posix` etc. The refactored `redirectName` only matched exact
+`bare === target`, so `require('path/posix')` no longer redirected to the shim
+→ `test-path-posix-exists.js` became a NEW FAILURE.
+
+**Fix (commit 3c724648):** Match on the base name:
+```js
+const base = bare.split("/")[0];
+const redirectName =
+  base === target ? target : isExtraRedirect(base) ? base : null;
+```
+
+**Verification:** All 6 CI modules pass with "No new failures. Parity steady":
+- path: 17/17, punycode: 1/1, querystring: 4/4
+- string_decoder: 3/3, events: 1/9, assert: 19/19
+
+The http+net redirect itself was verified working (net.createConnection
+resolves to the shim under PARITY_TARGET=http).
