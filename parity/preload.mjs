@@ -85,11 +85,22 @@ if (target === "buffer") {
   globalThis.Buffer = bufferPoly.Buffer;
 }
 
+// Extra redirects: modules that must follow the target's shim because the
+// target's tests depend on them sharing the shim's virtual state.
+// Currently: when PARITY_TARGET=http, `net` is also redirected. Http tests
+// use net.createConnection() to speak raw HTTP bytes to the virtual server,
+// and real net cannot see the http shim's virtual registry (ECONNREFUSED).
+// The net shim shares one virtual registry per realm with the http shim
+// (same src/net.js module instance), so the connection reaches the server.
+function isExtraRedirect(name) {
+  return target === "http" && name === "net";
+}
+
 function polyfillPath(request) {
   const name = request.startsWith("node:") ? request.slice(5) : request;
   if (name.startsWith(".") || path.isAbsolute(name)) return null;
   const parts = name.split("/");
-  if (target && parts[0] !== target) return null;
+  if (target && parts[0] !== target && !isExtraRedirect(parts[0])) return null;
   // Harness-only tmpdir sync for fs parity (parity/fs-harness.mjs): the
   // official tests stage fixtures on real disk, which the memfs-backed shim
   // cannot see. The wrapper syncs real-disk tmpdir state into memfs on
@@ -129,6 +140,13 @@ function polyfillPath(request) {
   // src/http.js itself is untouched.
   if (target === "http" && name === "http") {
     return path.join(repoRoot, "parity", "http-harness.mjs");
+  }
+  // Harness-only timer-globals restore for net under the http target
+  // (parity/net-harness.mjs): http tests that require('net') get the shim
+  // so net.createConnection() reaches the http shim's virtual server.
+  // src/net.js itself is untouched.
+  if (target === "http" && name === "net") {
+    return path.join(repoRoot, "parity", "net-harness.mjs");
   }
   // Harness-only timer-globals restore for http2 parity
   // (parity/http2-harness.mjs): the http2 shim imports ./events.js (via
@@ -214,36 +232,46 @@ Module._load = function (request, parent, isMain) {
     // (require() of an ESM file would otherwise hand back the module
     // namespace object, breaking reference equality.)
     const bare = request.startsWith("node:") ? request.slice(5) : request;
+    // Extra redirect: the http target also redirects net (isExtraRedirect):
+    // http tests use net.createConnection() against the virtual server.
+    const redirectName =
+      bare === target ? target : isExtraRedirect(bare) ? bare : null;
     if (
-      target &&
-      (bare === target ||
-        bare === `${target}/posix` ||
-        bare === `${target}/win32` ||
-        bare === `${target}/strict` ||
-        (target === "fs" && bare === "fs/promises") ||
-        (target === "dns" && bare === "dns/promises") ||
-        (target === "timers" && bare === "timers/promises") ||
-        (target === "util" && bare === "util/types"))
+      redirectName &&
+      (bare === redirectName ||
+        bare === `${redirectName}/posix` ||
+        bare === `${redirectName}/win32` ||
+        bare === `${redirectName}/strict` ||
+        (redirectName === "fs" && bare === "fs/promises") ||
+        (redirectName === "dns" && bare === "dns/promises") ||
+        (redirectName === "timers" && bare === "timers/promises") ||
+        (redirectName === "util" && bare === "util/types"))
     ) {
-      const ns = origLoad.call(this, polyfillPath(target), parent, isMain);
-      if (bare === `${target}/posix`) return ns.posix;
-      if (bare === `${target}/win32`) return ns.win32;
+      const ns = origLoad.call(
+        this,
+        polyfillPath(redirectName),
+        parent,
+        isMain,
+      );
+      if (bare === `${redirectName}/posix`) return ns.posix;
+      if (bare === `${redirectName}/win32`) return ns.win32;
       const def = ns.default ?? ns;
       // Node: require('assert/strict') === require('assert').strict.
-      if (bare === `${target}/strict`) return def.strict;
+      if (bare === `${redirectName}/strict`) return def.strict;
       // fs/promises goes through the harness wrapper too (timer-globals
       // restore + tmpdir sync); the wrapper's .promises is the wrapped API.
-      if (target === "fs" && bare === "fs/promises") return def.promises;
+      if (redirectName === "fs" && bare === "fs/promises") return def.promises;
       // dns/promises: require('dns/promises') === require('dns').promises
       // (reference equality, per test-dns-promises-exists.js).
-      if (target === "dns" && bare === "dns/promises") return def.promises;
+      if (redirectName === "dns" && bare === "dns/promises")
+        return def.promises;
       // timers/promises: require('timers/promises') === require('timers').promises
       // (reference equality, per test-timers-promises.js).
-      if (target === "timers" && bare === "timers/promises")
+      if (redirectName === "timers" && bare === "timers/promises")
         return def.promises;
       // util/types: require('util/types') === require('util').types
       // (reference equality, per test-util-types-exists.js).
-      if (target === "util" && bare === "util/types") return def.types;
+      if (redirectName === "util" && bare === "util/types") return def.types;
       // console: require('console') === globalThis.console (reference equality,
       // per test-console-instance.js). src/console.js installs itself as
       // globalThis.console, but only when globalThis._RUNTIME_ is undefined —
