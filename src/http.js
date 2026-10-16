@@ -1052,9 +1052,21 @@ export class ServerResponse extends OutgoingMessage {
   // Destroying the response destroys the socket (Node behavior): the client
   // sees the connection reset. Without this, the virtual socket's loop-keeping
   // timer survives and the process hangs (http parity hang).
+  // Exception: when the server finished the response normally on a keep-alive
+  // connection, the socket is preserved for reuse (flagged by
+  // _finishSocketResponse). Stream autoDestroy must not kill it — the socket
+  // lifecycle is owned by the server (next pipelined request) and the
+  // client's agent pool. An explicit destroy with an error (abort) still
+  // destroys the socket.
   _destroy(err, cb) {
     const sock = this.socket;
-    if (sock && typeof sock.destroy === "function" && !sock.destroyed) {
+    const preserved = this._keepAliveSocket && !err;
+    if (
+      !preserved &&
+      sock &&
+      typeof sock.destroy === "function" &&
+      !sock.destroyed
+    ) {
       try {
         sock.destroy();
       } catch {
@@ -1320,8 +1332,12 @@ export class ClientRequest extends OutgoingMessage {
       }
     }
 
-    // Synthetic socket: browsers have no raw TCP.
-    this.socket = new FakeSocket();
+    // Synthetic socket: browsers have no raw TCP. If the agent synchronously
+    // assigned a real socket from the free pool (keep-alive reuse), keep it
+    // instead of clobbering it with the FakeSocket.
+    if (!this.socket) {
+      this.socket = new FakeSocket();
+    }
     this.connection = this.socket;
 
     // Default headers (Host, Authorization), mirroring Node.
@@ -2943,6 +2959,11 @@ class ServerBase extends EventEmitter {
     if (keepAlive) {
       state.busy = false;
       state.awaitingBody = false;
+      // Preserve the socket for keep-alive reuse: flag the response so the
+      // stream autoDestroy in ServerResponse._destroy doesn't kill it. The
+      // socket stays open for the next pipelined request (server side) and
+      // the client's agent free pool (client side).
+      res._keepAliveSocket = true;
       // Resume the parser (it may hold a fully-buffered pipelined request),
       // then feed bytes that arrived while the response was in flight.
       const parser = state.parser;
@@ -3121,8 +3142,7 @@ class AgentBase extends EventEmitter {
     // 1. Try to reuse a free (keep-alive) socket.
     const free = this.freeSockets[name];
     if (free && free.length > 0) {
-      const socket =
-        this.scheduling === "fifo" ? free.shift() : free.pop();
+      const socket = this.scheduling === "fifo" ? free.shift() : free.pop();
       if (free.length === 0) delete this.freeSockets[name];
       (this.sockets[name] ??= []).push(socket);
       req.reusedSocket = true;
@@ -3244,6 +3264,9 @@ class AgentBase extends EventEmitter {
 
   reuseSocket(socket, req) {
     socket._agentReused = true;
+    // The socket is checked out of the free pool for a new request; clear the
+    // released flag so _releaseAgentSocket can park it again on completion.
+    socket._releasedToAgent = false;
     req.onSocket(socket);
   }
 
