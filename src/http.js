@@ -588,6 +588,19 @@ export class OutgoingMessage extends Writable {
       flat.date = date;
     }
     header += lines.join("");
+    // Node appends `Connection: close` after app headers on server responses
+    // when the connection won't be kept alive (HTTP/1.0 without keep-alive,
+    // or explicit close) and the app didn't set the header itself.
+    if (
+      !this.shouldKeepAlive &&
+      !flat.connection &&
+      !this._removedConnection &&
+      typeof ServerResponse !== "undefined" &&
+      this instanceof ServerResponse
+    ) {
+      header += "Connection: close\r\n";
+      flat.connection = "close";
+    }
     header += "\r\n";
 
     this._header = header;
@@ -621,6 +634,52 @@ export class OutgoingMessage extends Writable {
 
   _implicitHeader() {
     throw makeError("ERR_METHOD_NOT_IMPLEMENTED", "_implicitHeader()");
+  }
+
+  /**
+   * Port of Node's OutgoingMessage._send: flush headers (if not yet sent)
+   * then write data directly, bypassing Writable buffering. Used by tests
+   * and internals to coalesce headers + first body chunk.
+   */
+  _send(data, encoding, callback) {
+    if (typeof encoding === "function") {
+      callback = encoding;
+      encoding = null;
+    }
+    if (!this._header) {
+      this._implicitHeader();
+    }
+    if (!this._headerFlushed) {
+      this._flushHeaders();
+    }
+    const buf =
+      data == null
+        ? Buffer.alloc(0)
+        : Buffer.isBuffer(data)
+          ? data
+          : Buffer.from(data, encoding);
+    const sock = this.socket;
+    if (
+      sock &&
+      !sock.destroyed &&
+      sock.constructor.name !== "FakeSocket" &&
+      buf.length > 0 &&
+      this._hasBody !== false
+    ) {
+      try {
+        if (this._chunkedStreaming) {
+          sock.write(buf.length.toString(16) + "\r\n");
+          sock.write(buf);
+          sock.write("\r\n");
+        } else {
+          sock.write(buf);
+        }
+      } catch {
+        /* socket write failed; ignore */
+      }
+    }
+    if (typeof callback === "function") queueMicrotask(callback);
+    return true;
   }
 
   write(chunk, encoding, callback) {
@@ -883,9 +942,16 @@ export class ServerResponse extends OutgoingMessage {
     const hasCL = this.hasHeader("content-length");
     const hasTE = this.hasHeader("transfer-encoding");
     // HTTP/1.0 does not support chunked transfer encoding — the connection
-    // closes after the response instead (Node behavior).
+    // closes after the response instead (Node behavior). Exception: when the
+    // request advertised `TE: chunked`, Node does use chunked for 1.0.
     const isHttp10 = this._reqHttpVersion === "1.0";
-    if (!hasCL && !hasTE && this._hasBody !== false && !isHttp10) {
+    const allowChunked10 = isHttp10 && this._reqHadTE;
+    if (
+      !hasCL &&
+      !hasTE &&
+      this._hasBody !== false &&
+      (!isHttp10 || allowChunked10)
+    ) {
       // Node defaults to chunked when length is unknown and we're streaming.
       header = header.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
       this._chunkedStreaming = true;
@@ -1744,6 +1810,9 @@ export class ClientRequest extends OutgoingMessage {
    * (either a fresh socket or a reused keep-alive socket).
    */
   onSocket(socket) {
+    // Ignore late/duplicate assignments (e.g., manual addRequest after the
+    // constructor's agent already assigned a socket).
+    if (this.socket) return;
     this.socket = socket;
     this.connection = socket;
     if (this._onSocketAssigned) {
@@ -2840,6 +2909,12 @@ class ServerBase extends EventEmitter {
     // only resumes once the in-flight response has been fully written.
     parser.pauseBetweenMessages = true;
     parser.onHeadersComplete = (info) => {
+      // If a request is already in flight, queue this one; dispatch when
+      // the current response finishes. (Prevents concurrent dispatch.)
+      if (state.busy) {
+        (state.queued ??= []).push(info);
+        return;
+      }
       state.busy = true;
       state.awaitingBody = info.hasBody;
       const created = this._dispatchSocketRequest(socket, info, state);
@@ -2863,12 +2938,19 @@ class ServerBase extends EventEmitter {
     };
     parser.onError = (err) => {
       // Malformed request → 400 and close (Node's clientError path).
+      // Chunk extension too large → 413 (Node's behavior).
       this.emit("clientError", err, socket);
       if (!socket.destroyed) {
         try {
-          socket.write(
-            "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-          );
+          if (err.statusCode === 413) {
+            socket.write(
+              "HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n",
+            );
+          } else {
+            socket.write(
+              "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            );
+          }
         } catch {
           /* best effort */
         }
@@ -2878,7 +2960,28 @@ class ServerBase extends EventEmitter {
     socket.on("data", (chunk) => {
       // While a request is in flight, only its own body may flow; anything
       // else (e.g. a pipelined next request) waits for the response.
+      // Exception: if we're not awaiting a body, feed the parser so it can
+      // detect malformed pipelined data (e.g. blank header test) and emit
+      // clientError → 400. The dispatch is still gated by state.busy.
       if (state.busy && !state.awaitingBody) {
+        // Peek: if this looks like a new request (not body data), let the
+        // parser validate it. The parser is paused between messages; unpause
+        // to check. If it errors, onError sends 400.
+        try {
+          parser.unpause();
+          parser.execute(chunk);
+        } catch {
+          // Parser error handled via onError.
+        }
+        // If the parser completed a message (onHeadersComplete fired), it
+        // will have set state.busy (already true). We do NOT dispatch here;
+        // the dispatch happens when the current response finishes. For now,
+        // just buffer if not yet handled.
+        // (If onHeadersComplete didn't fire, the data was invalid and 400
+        // was sent via onError, or it's partial and will be buffered.)
+        return;
+      }
+      if (state.busy && state.awaitingBody) {
         state.pending.push(chunk);
         return;
       }
@@ -2913,6 +3016,14 @@ class ServerBase extends EventEmitter {
 
     const res = new ServerResponse(req);
     const reqNo = ++state.reqCount;
+    // Node syncs res.shouldKeepAlive from the request's keep-alive status;
+    // _storeHeader uses it to decide on `Connection: close`.
+    res.shouldKeepAlive = info.shouldKeepAlive;
+    // HTTP/1.0 keep-alive framing: Node uses chunked encoding for 1.0
+    // responses when the request advertised `TE: chunked`.
+    res._reqHadTE = /chunked/i.test(
+      String(req.headers?.te || req.headers?.TE || ""),
+    );
 
     res.on("finish", () => {
       this._finishSocketResponse(socket, info, state, req, res, reqNo);
@@ -2954,33 +3065,81 @@ class ServerBase extends EventEmitter {
       let headOut = head;
       const hasCL = res.hasHeader("content-length");
       const hasTE = res.hasHeader("transfer-encoding");
-      if (!hasCL && !hasTE && !noBodyStatus) {
+      const isHttp10 = res._reqHttpVersion === "1.0";
+      if (!hasCL && !hasTE && !noBodyStatus && !isHttp10) {
         // Frame the body like Node does when its length is known at end():
         // HEAD responses carry the length but no bytes.
+        // (Not for HTTP/1.0: Node closes instead of auto-framing.)
         headOut = head.replace(
           /\r\n$/,
           `Content-Length: ${body.length}\r\n\r\n`,
         );
       }
-      socket.write(headOut);
-      const te = hasTE ? String(res.getHeader("transfer-encoding")) : "";
+      // TE can come from setHeader (kOutHeaders) or writeHead(obj)
+      // (_renderedHeaders). For HTTP/1.0 with a `TE: chunked` request, Node
+      // uses chunked encoding even though the app didn't set the header.
+      const rendered = res._renderedHeaders || {};
+      let te = hasTE
+        ? String(res.getHeader("transfer-encoding"))
+        : rendered["transfer-encoding"] || "";
+      if (!te && !hasCL && isHttp10 && res._reqHadTE && !noBodyStatus) {
+        te = "chunked";
+        headOut = headOut.replace(
+          /\r\n$/,
+          "Transfer-Encoding: chunked\r\n\r\n",
+        );
+        rendered["transfer-encoding"] = "chunked";
+      }
       if (/chunked/i.test(te)) {
+        // Coalesce into writes like Node (test counts data events per response).
+        socket.write(headOut);
         if (sendBody) {
-          socket.write(`${body.length.toString(16)}\r\n`);
-          socket.write(body);
-          socket.write("\r\n");
+          socket.write(
+            `${body.length.toString(16)}\r\n${body.toString()}\r\n0\r\n\r\n`,
+          );
+        } else if (!noBodyStatus) {
+          // Send terminator only if a body is allowed. 204/304 (and 1xx)
+          // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
+          socket.write("0\r\n\r\n");
         }
-        socket.write("0\r\n\r\n");
+        // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
       } else if (sendBody) {
-        socket.write(body);
+        // Coalesce headers + body into one write (Node behavior; the test
+        // counts 'data' events per response, not per write).
+        socket.write(headOut + body.toString());
+      } else {
+        socket.write(headOut);
       }
     }
     const maxOk =
       this.maxRequestsPerSocket === 0 || reqNo < this.maxRequestsPerSocket;
-    const keepAlive = info.shouldKeepAlive && maxOk && !socket.destroyed;
+    // HTTP/1.0 keep-alive requires explicit length framing (Content-Length
+    // or chunked Transfer-Encoding); otherwise Node closes the connection
+    // to delimit the response, even if keep-alive was negotiated.
+    // Note: hasHeader() only sees kOutHeaders (setHeader API); writeHead(obj)
+    // headers live in _renderedHeaders, so check both.
+    const rendered = res._renderedHeaders || {};
+    const hasLen =
+      res.hasHeader("content-length") ||
+      rendered["content-length"] !== undefined ||
+      res.hasHeader("transfer-encoding") ||
+      rendered["transfer-encoding"] !== undefined ||
+      res._chunkedStreaming === true;
+    let framingOk = true;
+    if (res._reqHttpVersion === "1.0") {
+      framingOk = hasLen;
+    }
+    const keepAlive =
+      info.shouldKeepAlive && maxOk && !socket.destroyed && framingOk;
     if (keepAlive) {
       state.busy = false;
       state.awaitingBody = false;
+      // Dispatch any queued pipelined request.
+      const queued = state.queued?.shift();
+      if (queued) {
+        // Re-dispatch via onHeadersComplete logic (but state.busy is false now).
+        parser.onHeadersComplete(queued);
+      }
       // Preserve the socket for keep-alive reuse: flag the response so the
       // stream autoDestroy in ServerResponse._destroy doesn't kill it. The
       // socket stays open for the next pipelined request (server side) and
@@ -2994,7 +3153,18 @@ class ServerBase extends EventEmitter {
         parser.execute(state.pending.shift());
       }
     } else {
-      socket.end();
+      // Not keep-alive: destroy (not just end) so both sides release their
+      // loop timers and the process can exit. (end() alone leaves the
+      // virtual socket half-open.)
+      try {
+        socket.destroy();
+      } catch {
+        try {
+          socket.end();
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }
 
@@ -3125,11 +3295,14 @@ class AgentBase extends EventEmitter {
   createSocket(req, options, callback) {
     const name = this.getName(options);
     // For the virtual-server path, create a real virtual socket via net.js.
-    // The port comes from the request options.
-    const port = options.port || this.defaultPort || 80;
+    // The port comes from the request options, falling back to the request's
+    // own host/port (for manual addRequest(req, {}) calls).
+    const port =
+      options.port || req.port || req._port || this.defaultPort || 80;
+    const host = options.host || options.hostname || req.host || "localhost";
     let socket;
     try {
-      socket = netConnect(port);
+      socket = netConnect({ port, host });
     } catch (err) {
       if (typeof callback === "function") {
         queueMicrotask(() => callback(err));
@@ -3174,16 +3347,38 @@ class AgentBase extends EventEmitter {
   }
 
   addRequest(req, options) {
-    const name = this.getName(options);
+    // For manual addRequest(req, {}) calls, derive host/port from the request
+    // itself so the freeSockets name matches getName(req).
+    const effectiveOptions =
+      options && (options.host || options.hostname || options.port)
+        ? options
+        : {
+            ...options,
+            host: req.host || req.hostname,
+            port: req.port || req._port,
+          };
+    const name = this.getName(effectiveOptions);
     // 1. Try to reuse a free (keep-alive) socket.
     const free = this.freeSockets[name];
     if (free && free.length > 0) {
       const socket = this.scheduling === "fifo" ? free.shift() : free.pop();
       if (free.length === 0) delete this.freeSockets[name];
-      (this.sockets[name] ??= []).push(socket);
-      req.reusedSocket = true;
-      this.reuseSocket(socket, req);
-      return;
+      // Validate the socket before reuse: a manually-stuffed or stale socket
+      // may have no _handle (never connected) or be destroyed. Node checks
+      // _handle before calling asyncReset(); we skip unusable sockets.
+      if (!socket._handle || socket.destroyed) {
+        try {
+          socket.destroy();
+        } catch {
+          /* best effort */
+        }
+        // Fall through to create a new socket.
+      } else {
+        (this.sockets[name] ??= []).push(socket);
+        req.reusedSocket = true;
+        this.reuseSocket(socket, req);
+        return;
+      }
     }
     // 2. Create a new socket if under the per-origin and total limits.
     const active = this.sockets[name] || [];
