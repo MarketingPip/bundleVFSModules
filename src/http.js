@@ -3316,7 +3316,7 @@ Agent.prototype = AgentBase.prototype;
 
 /** The default agent used when none is supplied. */
 export const globalAgent = new Agent({
-  keepAlive: false,
+  keepAlive: true,
   scheduling: "lifo",
   timeout: 5000,
 });
