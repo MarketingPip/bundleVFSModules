@@ -865,9 +865,13 @@ describe("promisify.custom", () => {
 // the missing shell function: getShell() throws a loud config error.
 
 describe("BYO shell configuration", () => {
-  test("spawn without a configured shell throws the config error", () => {
+  test("spawn without a configured shell emits the config error", async () => {
     delete globalThis._RUNTIME_.__SHELL__;
-    expect(() => cp.spawn("echo")).toThrow(/no shell configured/);
+    const childErr = await new Promise((resolve) => {
+      const child = cp.spawn("echo");
+      child.on("error", (e) => resolve(e));
+    });
+    expect(childErr.message).toMatch(/no shell configured/);
   });
 
   test("exec without a configured shell emits the config error", async () => {

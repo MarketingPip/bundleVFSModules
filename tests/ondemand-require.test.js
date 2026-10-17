@@ -558,14 +558,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (Prior branches merged; their files are on main.)
     // Note: this structural test is branch-specific; update the allowlist
     // when the branch footprint changes.
-    expect(files.sort()).toEqual(
-      [
-        "parity/HITLIST.md",
-        "parity/hooks.mjs",
-        "parity/preload.mjs",
-        "parity/stream-harness.mjs",
-      ].sort(),
-    );
+    // fix/jest-force-exit branch: CI workflow fix (--forceExit).
+    expect(files.sort()).toEqual([".github/workflows/run.yaml"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
