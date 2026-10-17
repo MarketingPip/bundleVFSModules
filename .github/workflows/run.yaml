@@ -43,7 +43,11 @@ jobs:
         # Serial: parallel Jest workers are flaky in CI (resource contention;
         # verified locally: parallel runs fail nondeterministically on main
         # too, serial --runInBand is green). Deterministic CI beats fast CI.
-        run: NODE_OPTIONS=--experimental-vm-modules npx jest --runInBand
+        # --forceExit: the suite leaks open handles (http Agent keep-alive
+        # sockets, timers) so the single --runInBand process never exits on
+        # its own after tests pass. Without this, the job hangs until the
+        # 30min timeout. Tests still run and report correctly.
+        run: NODE_OPTIONS=--experimental-vm-modules npx jest --runInBand --forceExit
 
       - name: Build VFS
         run: node src/build-vfs.mjs
