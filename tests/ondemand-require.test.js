@@ -556,6 +556,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("tests/"));
+    // On main post-merge the diff is empty: no branch footprint to guard.
+    if (files.length === 0) return;
     // The branch footprint is the union of the committed work on it.
     // Stream parity branch: timer-globals harness fix (no src/ changes).
     // (Prior branches merged; their files are on main.)
