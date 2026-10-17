@@ -16,11 +16,22 @@ const testsDir =
   path.join(repoRoot, "parity", "node-test", "parallel") + path.sep;
 const target = process.env.PARITY_TARGET; // e.g. "path" — only redirect this module
 
+// Extra redirects: modules that must follow the target's shim because the
+// target's tests depend on them sharing the shim's virtual state.
+// Currently: when PARITY_TARGET=http, `net` is also redirected. Http tests
+// use net.createConnection() to speak raw HTTP bytes to the virtual server,
+// and real net cannot see the http shim's virtual registry (ECONNREFUSED).
+// The net shim shares one virtual registry per realm with the http shim
+// (same src/net.js module instance), so the connection reaches the server.
+function isExtraRedirect(name) {
+  return target === "http" && name === "net";
+}
+
 function polyfillURL(specifier) {
   const name = specifier.startsWith("node:") ? specifier.slice(5) : specifier;
   if (name.startsWith(".") || path.isAbsolute(name)) return null;
   const parts = name.split("/");
-  if (target && parts[0] !== target) return null;
+  if (target && parts[0] !== target && !isExtraRedirect(parts[0])) return null;
   // Harness-only tmpdir sync for fs parity (parity/fs-harness.mjs).
   if (target === "fs" && name === "fs") {
     return pathToFileURL(path.join(repoRoot, "parity", "fs-harness.mjs")).href;
@@ -73,6 +84,13 @@ function polyfillURL(specifier) {
     return pathToFileURL(
       path.join(repoRoot, "parity", "child_process-harness.mjs"),
     ).href;
+  }
+  // Harness-only timer-globals restore for net under the http target
+  // (parity/net-harness.mjs): http tests that import 'net' get the shim so
+  // net.createConnection() reaches the http shim's virtual server.
+  // src/net.js itself is untouched.
+  if (target === "http" && name === "net") {
+    return pathToFileURL(path.join(repoRoot, "parity", "net-harness.mjs")).href;
   }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   if (!fs.existsSync(candidate)) return null;

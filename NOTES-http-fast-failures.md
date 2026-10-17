@@ -101,3 +101,77 @@ The 15 "unhandled 'error' event" tests fall into three categories, NOT one commo
 2. Investigate unhandled 'error' event pattern (15 tests, likely common root cause)
 3. Triage remaining 349 tests (only sampled 50)
 4. Document inherent failures in expected-failures.shim.json
+
+---
+
+# HTTP fast failures — net harness redirect (feat/http-net-harness)
+
+## Change
+
+`parity/preload.mjs` + `parity/hooks.mjs`: when `PARITY_TARGET=http`, `net` /
+`node:net` are now also redirected to the shim (via new
+`parity/net-harness.mjs`, standard timer-globals-restore boilerplate).
+
+Rationale: http tests use `net.createConnection()` to speak raw HTTP bytes
+to the virtual server, but real net cannot see the http shim's virtual
+registry → `ECONNREFUSED`. The net shim shares one virtual registry per
+realm with the http shim (same `src/net.js` module instance), so the
+connection now reaches the server. `src/` untouched — harness only.
+
+The redirect is gated on `target === "http"`; all other targets behave
+exactly as before (verified: stream target sanity passes).
+
+## Results (7 tests that used net directly)
+
+Before: all 7 failed fast with `ECONNREFUSED` (harness artifact).
+After: 0 pass yet — but all 7 now exercise real shim behavior. Remaining
+failures are shim bugs for follow-up http work, not harness issues.
+
+| Test | Before | After | Root cause (shim, not harness) |
+|---|---|---|---|
+| test-http-1.0 | ECONNREFUSED | FAIL (assertion) | HTTP/1.0 response still uses chunked encoding; partial fix exists on `feat/http-fast-failures` (PR #228) |
+| test-http-1.0-keep-alive | ECONNREFUSED | TIMEOUT | 1.0 keep-alive response completion gap |
+| test-http-agent-uninitialized | ECONNREFUSED | FAIL (ECONNREFUSED from shim) | Manual `freeSockets` stuffing + `addRequest(req, {})`; agent lifecycle gap |
+| test-http-blank-header | ECONNREFUSED | TIMEOUT | Blank `Cookie:` header not rejected with 400; parser gap |
+| test-http-chunk-extensions-limit | ECONNREFUSED | FAIL (assertion) | Parser doesn't enforce chunk-extensions limit; expected `413 Payload Too Large`, got empty |
+| test-http-chunked-304 | ECONNREFUSED | TIMEOUT | 304 + chunked response completion gap |
+| test-http-chunked-smuggling | ECONNREFUSED | FAIL (assertion) | Parser accepts smuggled 2nd request; expected 1 handler call, got 2 |
+
+Two more http tests found using net directly (same pattern):
+- test-http-server: ECONNREFUSED → TIMEOUT
+- test-http-response-splitting: ECONNREFUSED → TIMEOUT
+
+## Regression check
+
+- test-http-client-timeout: PASS (unchanged)
+- test-http-abort-client: PASS (unchanged)
+- stream target (`test-stream-readable-readable`): PASS — other targets unaffected
+- test-http-after-connect / test-http-agent / etc. timeouts: verified
+  pre-existing on clean main (2/2 baseline runs also timeout); the PR #227
+  report documented these as intermittent. None of the timed-out tests
+  `require('net')`, so the harness change cannot have caused them.
+
+## CI Failure Investigation (2026-10-16, PR #232)
+
+**CI check that failed:** Parity (Node official tests) — but the CI parity job
+only runs `path punycode querystring string_decoder events assert`, NOT http.
+
+**Root cause:** The `isExtraRedirect` refactor in `parity/preload.mjs` broke
+subpath imports. The original code matched `bare === target` OR
+`bare === target/posix` etc. The refactored `redirectName` only matched exact
+`bare === target`, so `require('path/posix')` no longer redirected to the shim
+→ `test-path-posix-exists.js` became a NEW FAILURE.
+
+**Fix (commit 3c724648):** Match on the base name:
+```js
+const base = bare.split("/")[0];
+const redirectName =
+  base === target ? target : isExtraRedirect(base) ? base : null;
+```
+
+**Verification:** All 6 CI modules pass with "No new failures. Parity steady":
+- path: 17/17, punycode: 1/1, querystring: 4/4
+- string_decoder: 3/3, events: 1/9, assert: 19/19
+
+The http+net redirect itself was verified working (net.createConnection
+resolves to the shim under PARITY_TARGET=http).
