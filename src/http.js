@@ -2909,12 +2909,6 @@ class ServerBase extends EventEmitter {
     // only resumes once the in-flight response has been fully written.
     parser.pauseBetweenMessages = true;
     parser.onHeadersComplete = (info) => {
-      // If a request is already in flight, queue this one; dispatch when
-      // the current response finishes. (Prevents concurrent dispatch.)
-      if (state.busy) {
-        (state.queued ??= []).push(info);
-        return;
-      }
       state.busy = true;
       state.awaitingBody = info.hasBody;
       const created = this._dispatchSocketRequest(socket, info, state);
@@ -3134,12 +3128,6 @@ class ServerBase extends EventEmitter {
     if (keepAlive) {
       state.busy = false;
       state.awaitingBody = false;
-      // Dispatch any queued pipelined request.
-      const queued = state.queued?.shift();
-      if (queued) {
-        // Re-dispatch via onHeadersComplete logic (but state.busy is false now).
-        parser.onHeadersComplete(queued);
-      }
       // Preserve the socket for keep-alive reuse: flag the response so the
       // stream autoDestroy in ServerResponse._destroy doesn't kill it. The
       // socket stays open for the next pipelined request (server side) and
