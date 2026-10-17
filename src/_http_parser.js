@@ -191,7 +191,7 @@ export class HTTPParser {
   // -- internals ----------------------------------------------------------
 
   /** Find the next CRLF-terminated line; null when incomplete. */
-  _findLine() {
+  _findLine(skipSizeCheck = false) {
     const buf = this._buf;
     for (let i = this._off; i + 1 < buf.length; i++) {
       if (buf[i] === CR && buf[i + 1] === LF) {
@@ -200,7 +200,7 @@ export class HTTPParser {
         return { text, next };
       }
     }
-    if (buf.length - this._headStart > this.maxHeaderSize) {
+    if (!skipSizeCheck && buf.length - this._headStart > this.maxHeaderSize) {
       throw parseError(
         "HPE_HEADER_OVERFLOW",
         `header block exceeds maxHeaderSize of ${this.maxHeaderSize} bytes`,
@@ -382,6 +382,8 @@ export class HTTPParser {
         info.hasBody = true;
         this._chunkState = "size";
         this._state = "body-chunked";
+        // Reset header size tracking; chunk data has its own limits.
+        this._headStart = this._off;
       } else if (contentLength !== null && Number(contentLength) > 0) {
         info.hasBody = true;
         this._remaining = Number(contentLength);
@@ -434,10 +436,21 @@ export class HTTPParser {
 
   _parseChunkedBody() {
     if (this._chunkState === "size") {
-      const found = this._findLine();
+      // Skip the header size check for chunk lines; the 16k chunk extension
+      // limit is enforced separately below.
+      const found = this._findLine(true);
       if (!found) return false;
       const line = found.text;
       this._off = found.next;
+      // Reject bare LF/CR in the chunk size line (smuggling attack). The
+      // line must be terminated by CRLF; an embedded LF indicates a malformed
+      // request (e.g., "2;\n" instead of "2;\r\n").
+      if (line.includes("\n") || line.includes("\r")) {
+        throw parseError(
+          "HPE_INVALID_CHUNK_SIZE",
+          `invalid character in chunk size line: ${JSON.stringify(line.slice(0, 50))}`,
+        );
+      }
       const semi = line.indexOf(";");
       const hex = (semi < 0 ? line : line.slice(0, semi)).trim();
       if (!HEX_RE.test(hex)) {
@@ -445,6 +458,15 @@ export class HTTPParser {
           "HPE_INVALID_CHUNK_SIZE",
           `invalid chunk size: ${line}`,
         );
+      }
+      // Node limits chunk extensions to 16KB; larger → 413 Payload Too Large.
+      if (semi >= 0 && line.length - semi - 1 > 16384) {
+        const err = parseError(
+          "HPE_CHUNK_EXT_TOO_LARGE",
+          `chunk extension too large: ${line.length - semi - 1} bytes`,
+        );
+        err.statusCode = 413;
+        throw err;
       }
       const size = parseInt(hex, 16);
       if (size === 0) {
