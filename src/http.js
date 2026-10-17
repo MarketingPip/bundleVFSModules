@@ -3331,6 +3331,27 @@ class AgentBase extends EventEmitter {
   }
 
   destroy() {
+    // Node: destroy any sockets currently in use by the agent, both
+    // active and idle (free pool). Merely dropping the bookkeeping
+    // leaves the sockets' loop keepers alive and the process never exits.
+    for (const name of Object.keys(this.sockets)) {
+      for (const socket of this.sockets[name] || []) {
+        try {
+          socket.destroy();
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+    for (const name of Object.keys(this.freeSockets)) {
+      for (const socket of this.freeSockets[name] || []) {
+        try {
+          socket.destroy();
+        } catch {
+          /* best effort */
+        }
+      }
+    }
     this.sockets = { __proto__: null };
     this.freeSockets = { __proto__: null };
     this.requests = { __proto__: null };
