@@ -35,13 +35,16 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 
 > readline graduated 2026-10-12: 3/22 → 22/22 (full Node v24.20.0 port restored).
 
-## Full ranking (39/40 swept)
+## Full ranking (40/40 swept)
+
+> Updated 2026-10-17: net 0/0 → 72/156 (PR #231) — 156 official tests vendored; previously unswept.
 
 | Module | Passed | Total | Rate |
 |--------|--------|-------|------|
 | sea | 0 | 2 | 0.0% |
 | sqlite | 0 | 17 | 0.0% |
 | dgram | 1 | 80 | 1.3% |
+| net | 72 | 156 | 46.2% | 1/156 → 72/156: vendored 156 official tests (previously zero); harness — parity/net-harness.mjs restores timer globals replaced by the stream chain on import, wired via preload.mjs (CJS) + hooks.mjs (ESM) for PARITY_TARGET=net; VirtualHandle _handle lifecycle (mockable while connected, null after destroy); keepAlive/noDelay delegation; blockList option on Socket.connect(). Remaining 84: 8 autoselectfamily (real DNS/CLI flags), internal bindings, worker transfer (DataCloneError), agent/socket lifecycle gaps. |
 | https | 20 | 67 | 29.9% |
 | http2 | 35 | 277 | 12.6% |
 | child_process | 6 | 112 | 5.4% |
