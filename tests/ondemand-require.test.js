@@ -561,12 +561,14 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (Prior branches merged; their files are on main.)
     // Note: this structural test is branch-specific; update the allowlist
     // when the branch footprint changes.
-    // fix/jest-force-exit branch: CI workflow fix (--forceExit).
+    // feat/http-agent-lifecycle branch: idle-socket error handling fix.
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check.
     const nonDist = files.filter((f) => !f.startsWith("dist/"));
-    expect(nonDist.sort()).toEqual([".github/workflows/run.yaml"].sort());
+    expect(nonDist.sort()).toEqual(
+      ["NOTES-http-fast-failures.md", "src/http.js"].sort(),
+    );
   });
 
   test("no new function declarations added by the branch diff", () => {

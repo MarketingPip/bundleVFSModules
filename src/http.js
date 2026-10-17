@@ -1901,6 +1901,10 @@ export class ClientRequest extends OutgoingMessage {
         this._timeoutId = null;
       }
       if (this._aborted) return;
+      // If the socket is idle in the agent's free pool, the agent handles
+      // the error (removes from pool, destroys). Don't propagate to this
+      // (possibly completed) request — that would be an unhandled 'error'.
+      if (sock._inFreePool) return;
       this._aborted = true;
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
     };
@@ -3143,8 +3147,15 @@ class AgentBase extends EventEmitter {
     socket._agent = this;
     if (typeof callback === "function") {
       // netConnect emits 'connect' asynchronously; invoke callback then.
-      socket.once("connect", () => callback(null, socket));
-      socket.once("error", (err) => callback(err));
+      const onError = (err) => callback(err);
+      socket.once("connect", () => {
+        // Connection succeeded: remove the error listener so later
+        // errors on the (possibly pooled) socket don't hit this stale
+        // callback.
+        socket.removeListener("error", onError);
+        callback(null, socket);
+      });
+      socket.once("error", onError);
     }
     return socket;
   }
@@ -3248,6 +3259,23 @@ class AgentBase extends EventEmitter {
       }
       if (free.length < this.maxFreeSockets) {
         free.push(socket);
+        // Mark as idle: the request's socket error handler will skip
+        // errors on free-pool sockets (agent handles them below).
+        socket._inFreePool = true;
+        // Agent owns error handling for idle sockets: remove from pool
+        // and destroy, don't propagate to any (completed) request.
+        const onIdleError = () => {
+          this.removeSocket(socket, name);
+          try {
+            socket.destroy();
+          } catch {
+            /* best effort */
+          }
+          this.totalSocketCount--;
+        };
+        socket.once("error", onIdleError);
+        // Store for cleanup on reuse (avoid listener leak).
+        socket._idleErrorHandler = onIdleError;
         socket.emit("free");
       } else {
         socket.destroy();
@@ -3292,10 +3320,38 @@ class AgentBase extends EventEmitter {
     // The socket is checked out of the free pool for a new request; clear the
     // released flag so _releaseAgentSocket can park it again on completion.
     socket._releasedToAgent = false;
+    // Clear the idle flag: the new request's error handler should now fire.
+    socket._inFreePool = false;
+    // Remove the idle error handler (was once(), but may not have fired).
+    if (socket._idleErrorHandler) {
+      socket.removeListener("error", socket._idleErrorHandler);
+      socket._idleErrorHandler = null;
+    }
     req.onSocket(socket);
   }
 
   destroy() {
+    // Node: destroy any sockets currently in use by the agent, both
+    // active and idle (free pool). Merely dropping the bookkeeping
+    // leaves the sockets' loop keepers alive and the process never exits.
+    for (const name of Object.keys(this.sockets)) {
+      for (const socket of this.sockets[name] || []) {
+        try {
+          socket.destroy();
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+    for (const name of Object.keys(this.freeSockets)) {
+      for (const socket of this.freeSockets[name] || []) {
+        try {
+          socket.destroy();
+        } catch {
+          /* best effort */
+        }
+      }
+    }
     this.sockets = { __proto__: null };
     this.freeSockets = { __proto__: null };
     this.requests = { __proto__: null };
