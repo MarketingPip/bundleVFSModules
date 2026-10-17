@@ -563,13 +563,22 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (Prior branches merged; their files are on main.)
     // Note: this structural test is branch-specific; update the allowlist
     // when the branch footprint changes.
-    // feat/http-agent-lifecycle branch: idle-socket error handling fix.
+    // feat/net-parity branch: net parity (vendored tests + harness + fixes).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
-    // test above, so they are excluded from the footprint check.
-    const nonDist = files.filter((f) => !f.startsWith("dist/"));
+    // test above, so they are excluded from the footprint check. So are the
+    // vendored official tests under parity/node-test/.
+    const nonDist = files.filter(
+      (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
+    );
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-fast-failures.md", "src/http.js"].sort(),
+      [
+        "NOTES-net-parity.md",
+        "parity/HITLIST.md",
+        "parity/hooks.mjs",
+        "parity/preload.mjs",
+        "src/net.js",
+      ].sort(),
     );
   });
 
