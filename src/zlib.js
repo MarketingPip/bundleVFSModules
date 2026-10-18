@@ -368,7 +368,7 @@ class ERR_ZLIB_INITIALIZATION_FAILED extends Error {
     this.code = "ERR_ZLIB_INITIALIZATION_FAILED";
   }
 }
-class ERR_TRAILING_JUNK_AFTER_STREAM_END extends Error {
+class ERR_TRAILING_JUNK_AFTER_STREAM_END extends TypeError {
   constructor() {
     super("Trailing junk after stream end");
     this.code = "ERR_TRAILING_JUNK_AFTER_STREAM_END";
@@ -639,11 +639,12 @@ function pakoStatusName(status) {
 // ---------------------------------------------------------------------------
 
 class PakoInflateEngine {
-  constructor({ windowBits, dictionary, wrapper }) {
+  constructor({ windowBits, dictionary, wrapper, rejectGarbageAfterEnd }) {
     // wrapper: 'zlib' | 'raw' | 'gzip' | 'unzip'
     this.wrapper = wrapper;
     this.windowBits = windowBits >>> 0;
     this.dictionary = dictionary ? toBytes(dictionary) : null;
+    this._rejectGarbageAfterEnd = !!rejectGarbageAfterEnd;
     this.reset();
   }
 
@@ -712,6 +713,59 @@ class PakoInflateEngine {
       bytes[0] === 0x1f && (bytes.length < 2 || bytes[1] === 0x8b);
   }
 
+  _gzipHeaderLength(bytes) {
+    // Parse gzip header, return header length or -1 if invalid/incomplete.
+    // RFC 1952: 10-byte fixed header + optional fields.
+    if (bytes.length < 10) return -1;
+    if (bytes[0] !== 0x1f || bytes[1] !== 0x8b || bytes[2] !== 8) return -1;
+    const flg = bytes[3];
+    let pos = 10;
+    if (flg & 0x04) {
+      // FEXTRA
+      if (bytes.length < pos + 2) return -1;
+      const xlen = bytes[pos] | (bytes[pos + 1] << 8);
+      pos += 2 + xlen;
+    }
+    if (flg & 0x08) {
+      // FNAME: null-terminated
+      while (pos < bytes.length && bytes[pos] !== 0) pos++;
+      pos++; // skip null
+    }
+    if (flg & 0x10) {
+      // FCOMMENT: null-terminated
+      while (pos < bytes.length && bytes[pos] !== 0) pos++;
+      pos++; // skip null
+    }
+    if (flg & 0x02) {
+      // FHCRC: 2 bytes
+      pos += 2;
+    }
+    return pos <= bytes.length ? pos : -1;
+  }
+
+  _hasTrailingGzipMember(bytes) {
+    // Check if gzip input contains data beyond the first member's trailer.
+    // Returns true if there's a second member or trailing junk.
+    if (bytes.length < 18) return false; // min: 10 header + 0 deflate + 8 trailer
+    const headerLen = this._gzipHeaderLength(bytes);
+    if (headerLen < 0) return false;
+    // Use raw inflate to find where the first member's deflate stream ends.
+    const body = bytes.subarray(headerLen);
+    const inf = new PakoInflate({ raw: true, chunkSize: PAKO_CHUNK_SIZE });
+    inf._collected = [];
+    inf.onData = () => {};
+    try {
+      inf.push(body, true);
+    } catch {
+      return false;
+    }
+    if (inf.err) return false;
+    const remaining = inf.strm ? inf.strm.avail_in : 0;
+    // 8 bytes is the first member's trailer (CRC32 + ISIZE).
+    // More than 8 means there's another member or trailing junk.
+    return remaining > 8;
+  }
+
   write(chunk, flushFlag) {
     if (this.error) throw this.error;
     // pako's Inflate only emits decoded output when pushed with a real flush
@@ -750,6 +804,17 @@ class PakoInflateEngine {
       const startNew =
         this.wrapper === "gzip" || (this.wrapper === "unzip" && wasGzip);
       if (startNew) {
+        if (this._rejectGarbageAfterEnd) {
+          // With rejectGarbageAfterEnd, a second member is trailing garbage.
+          this.finished = true;
+          this.trailingGarbage = true;
+          return {
+            output: PAKO_EMPTY,
+            finished: true,
+            consumed: bytes.length,
+            trailing: true,
+          };
+        }
         this._inf = this._newInflator();
         this.finished = false;
         this.trailingGarbage = false;
@@ -780,6 +845,17 @@ class PakoInflateEngine {
         // A previous stream completed on an earlier write; start the next
         // one. (Members completed within a single push are already chained
         // internally by pako.)
+        if (this._rejectGarbageAfterEnd) {
+          // With rejectGarbageAfterEnd, data after stream end is trailing
+          // garbage, never a new member.
+          this.trailingGarbage = true;
+          return {
+            output: PAKO_EMPTY,
+            finished: true,
+            consumed: bytes.length,
+            trailing: true,
+          };
+        }
         this._inf = this._newInflator();
         this.finished = false;
         this.trailingGarbage = false;
@@ -798,6 +874,25 @@ class PakoInflateEngine {
 
     const inf = this._inf;
     this._sniffMember(bytes);
+    // For gzip/unzip with rejectGarbageAfterEnd, detect if the input contains
+    // a second member (pako chains them internally in a single push).
+    // If so, mark trailingGarbage; the normal processing still runs but the
+    // caller will throw/report the error.
+    if (
+      this._rejectGarbageAfterEnd &&
+      (this.wrapper === "gzip" ||
+        (this.wrapper === "unzip" && this._memberWasGzip !== false)) &&
+      bytes.length > 0 &&
+      !this._memberEnded &&
+      !this.finished
+    ) {
+      const isGzipInput =
+        this.wrapper === "gzip" ||
+        (bytes[0] === 0x1f && bytes.length > 1 && bytes[1] === 0x8b);
+      if (isGzipInput && this._hasTrailingGzipMember(bytes)) {
+        this.trailingGarbage = true;
+      }
+    }
     const ok = inf.push(bytes, mode);
     const output = this._drain();
 
@@ -807,6 +902,11 @@ class PakoInflateEngine {
       if (inf.strm.state === null) {
         if (this.wrapper === "zlib" || this.wrapper === "raw") {
           this.finished = true;
+          // Check for trailing data (e.g., second zlib stream).
+          const remaining = inf.strm ? inf.strm.avail_in : 0;
+          if (remaining > 0) {
+            this.trailingGarbage = true;
+          }
         } else {
           this._memberEnded = true;
         }
@@ -1500,24 +1600,28 @@ class ZlibBase extends MiniTransform {
           wrapper: "zlib",
           windowBits: zopts.windowBits,
           dictionary: zopts.dictionary,
+          rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
       case MODE_INFLATERAW:
         return new PakoInflateEngine({
           wrapper: "raw",
           windowBits: zopts.windowBits,
           dictionary: zopts.dictionary,
+          rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
       case MODE_GUNZIP:
         return new PakoInflateEngine({
           wrapper: "gzip",
           windowBits: zopts.windowBits,
           dictionary: zopts.dictionary,
+          rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
       case MODE_UNZIP:
         return new PakoInflateEngine({
           wrapper: "unzip",
           windowBits: zopts.windowBits,
           dictionary: zopts.dictionary,
+          rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
       default:
         // Brotli / Zstd: honest pass-through fallback (no codec available).
