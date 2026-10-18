@@ -1080,6 +1080,40 @@ export class ServerResponse extends OutgoingMessage {
     ) {
       // RFC 2616: these responses MUST NOT include a message body.
       this._hasBody = false;
+      // If Transfer-Encoding is explicitly set on a no-body response,
+      // Node closes the connection (the framing is a protocol error).
+      // This ensures `Connection: close` is sent and the socket is
+      // destroyed in _finishSocketResponse. (test-http-chunked-304)
+      let hasTE = false;
+      if (headers) {
+        if (Array.isArray(headers)) {
+          for (let n = 0; n < headers.length; n += 2) {
+            if (String(headers[n]).toLowerCase() === "transfer-encoding") {
+              hasTE = true;
+              break;
+            }
+          }
+        } else if (typeof headers === "object") {
+          for (const k of Object.keys(headers)) {
+            if (k.toLowerCase() === "transfer-encoding") {
+              hasTE = true;
+              break;
+            }
+          }
+        }
+      }
+      // Also check kOutHeaders (set via setHeader before writeHead)
+      if (!hasTE && this[kOutHeaders]) {
+        for (const k of Object.keys(this[kOutHeaders])) {
+          if (k.toLowerCase() === "transfer-encoding") {
+            hasTE = true;
+            break;
+          }
+        }
+      }
+      if (hasTE) {
+        this.shouldKeepAlive = false;
+      }
     }
 
     this._storeHeader(statusLine, headers);
@@ -3126,8 +3160,21 @@ class ServerBase extends EventEmitter {
     if (res._reqHttpVersion === "1.0") {
       framingOk = hasLen;
     }
+    // 204/304/1xx responses MUST NOT have a body (RFC 2616 10.2.5). If the
+    // app explicitly sets Transfer-Encoding (e.g. chunked) on such a
+    // response, Node closes the connection rather than keeping it alive —
+    // the framing is a protocol error and can't delimit a body that must
+    // not exist. (test-http-chunked-304 expects Connection: close.)
+    const noBodyWithTE =
+      res._hasBody === false &&
+      (res.hasHeader("transfer-encoding") ||
+        (res._renderedHeaders || {})["transfer-encoding"] !== undefined);
     const keepAlive =
-      info.shouldKeepAlive && maxOk && !socket.destroyed && framingOk;
+      info.shouldKeepAlive &&
+      maxOk &&
+      !socket.destroyed &&
+      framingOk &&
+      !noBodyWithTE;
     if (keepAlive) {
       state.busy = false;
       state.awaitingBody = false;
