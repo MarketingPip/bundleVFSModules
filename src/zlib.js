@@ -322,9 +322,14 @@ class ERR_INVALID_ARG_TYPE extends TypeError {
     let received;
     if (actual === undefined) received = "Received undefined";
     else if (actual === null) received = "Received null";
-    else if (typeof actual === "object")
-      received = `Received ${Object.prototype.toString.call(actual)}`;
-    else received = `Received type ${typeof actual} ('${actual}')`;
+    else if (typeof actual === "object") {
+      const proto = Object.getPrototypeOf(actual);
+      const name =
+        proto && proto.constructor ? proto.constructor.name : "Object";
+      received = `Received an instance of ${name}`;
+    } else if (typeof actual === "string")
+      received = `Received type ${typeof actual} ('${actual}')`;
+    else received = `Received type ${typeof actual} (${actual})`;
     super(`The "${name}" ${kind} must be of type ${expected}. ${received}`);
     this.code = "ERR_INVALID_ARG_TYPE";
   }
@@ -1765,6 +1770,13 @@ function zlibBuffer(Engine, buffer, options, callback) {
     options: opts,
     callback: cb,
   } = normalizeBufferArgs(buffer, options, callback);
+  if (bytes === null) {
+    throw new ERR_INVALID_ARG_TYPE(
+      "buffer",
+      "string or an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+      buffer,
+    );
+  }
   if (typeof cb !== "function") {
     throw new ERR_INVALID_ARG_TYPE("callback", "function", cb);
   }
@@ -1792,6 +1804,13 @@ function zlibBuffer(Engine, buffer, options, callback) {
 
 function zlibBufferSync(Engine, buffer, options) {
   const bytes = toBytes(buffer);
+  if (bytes === null) {
+    throw new ERR_INVALID_ARG_TYPE(
+      "buffer",
+      "string or an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+      buffer,
+    );
+  }
   const stream = new Engine(options);
   const out = stream._processChunkSync(bytes, stream._finishFlushFlag);
   if (options && options.info) return { buffer: out, engine: stream };
