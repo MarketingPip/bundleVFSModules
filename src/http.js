@@ -3085,18 +3085,21 @@ class ServerBase extends EventEmitter {
         rendered["transfer-encoding"] = "chunked";
       }
       if (/chunked/i.test(te)) {
-        // Coalesce into writes like Node (test counts data events per response).
-        socket.write(headOut);
+        // Coalesce headers + body + terminator into one write like Node
+        // (test counts data events per response, not per write). Two
+        // separate writes split the response into two 'data' events,
+        // which breaks clients that increment a counter per event
+        // (e.g. test-http-1.0-keep-alive).
+        let out = headOut;
         if (sendBody) {
-          socket.write(
-            `${body.length.toString(16)}\r\n${body.toString()}\r\n0\r\n\r\n`,
-          );
+          out += `${body.length.toString(16)}\r\n${body.toString()}\r\n0\r\n\r\n`;
         } else if (!noBodyStatus) {
           // Send terminator only if a body is allowed. 204/304 (and 1xx)
           // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
-          socket.write("0\r\n\r\n");
+          out += "0\r\n\r\n";
         }
         // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
+        socket.write(out);
       } else if (sendBody) {
         // Coalesce headers + body into one write (Node behavior; the test
         // counts 'data' events per response, not per write).
