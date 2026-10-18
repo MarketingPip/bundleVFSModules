@@ -1813,6 +1813,11 @@ function zlibBufferSync(Engine, buffer, options) {
   }
   const stream = new Engine(options);
   const out = stream._processChunkSync(bytes, stream._finishFlushFlag);
+  // Check for trailing garbage (e.g., concatenated gzip members with
+  // rejectGarbageAfterEnd: true).
+  if (stream._engine.trailingGarbage && stream._rejectGarbageAfterEnd) {
+    throw new ERR_TRAILING_JUNK_AFTER_STREAM_END();
+  }
   if (options && options.info) return { buffer: out, engine: stream };
   return out;
 }
