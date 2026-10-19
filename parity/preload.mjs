@@ -93,7 +93,10 @@ if (target === "buffer") {
 // The net shim shares one virtual registry per realm with the http shim
 // (same src/net.js module instance), so the connection reaches the server.
 function isExtraRedirect(name) {
-  return target === "http" && name === "net";
+  if (target === "http" && name === "net") return true;
+  // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
+  // zlib must read the same cell (mirrors Node's load-time capture).
+  return target === "zlib" && name === "buffer";
 }
 
 function polyfillPath(request) {

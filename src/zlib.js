@@ -23,6 +23,13 @@
 //   implementation (no node:stream import, so this stays browser-loadable).
 
 import { Deflate as PakoDeflate, Inflate as PakoInflate } from "pako";
+import bufferExports from "./buffer.js";
+
+// Node captures buffer.kMaxLength at load (const { kMaxLength } =
+// require('buffer')) and uses it as the default maxOutputLength. Read the
+// live exports object so a test mutating require('buffer').kMaxLength before
+// requiring zlib is honored, exactly like Node.
+const kMaxLength = bufferExports.kMaxLength;
 
 // ---------------------------------------------------------------------------
 // Constants (verbatim from Node v24)
@@ -322,9 +329,14 @@ class ERR_INVALID_ARG_TYPE extends TypeError {
     let received;
     if (actual === undefined) received = "Received undefined";
     else if (actual === null) received = "Received null";
-    else if (typeof actual === "object")
-      received = `Received ${Object.prototype.toString.call(actual)}`;
-    else received = `Received type ${typeof actual} ('${actual}')`;
+    else if (typeof actual === "object") {
+      const proto = Object.getPrototypeOf(actual);
+      const name =
+        proto && proto.constructor ? proto.constructor.name : "Object";
+      received = `Received an instance of ${name}`;
+    } else if (typeof actual === "string")
+      received = `Received type ${typeof actual} ('${actual}')`;
+    else received = `Received type ${typeof actual} (${actual})`;
     super(`The "${name}" ${kind} must be of type ${expected}. ${received}`);
     this.code = "ERR_INVALID_ARG_TYPE";
   }
@@ -345,7 +357,7 @@ class ERR_INVALID_ARG_VALUE extends TypeError {
     this.code = "ERR_INVALID_ARG_VALUE";
   }
 }
-class ERR_BUFFER_TOO_LARGE extends Error {
+class ERR_BUFFER_TOO_LARGE extends RangeError {
   constructor(max) {
     super(`Cannot create a Buffer larger than ${max} bytes`);
     this.code = "ERR_BUFFER_TOO_LARGE";
@@ -363,7 +375,7 @@ class ERR_ZLIB_INITIALIZATION_FAILED extends Error {
     this.code = "ERR_ZLIB_INITIALIZATION_FAILED";
   }
 }
-class ERR_TRAILING_JUNK_AFTER_STREAM_END extends Error {
+class ERR_TRAILING_JUNK_AFTER_STREAM_END extends TypeError {
   constructor() {
     super("Trailing junk after stream end");
     this.code = "ERR_TRAILING_JUNK_AFTER_STREAM_END";
@@ -506,7 +518,8 @@ function normalizeBaseOptions(opts, mode, defaults) {
   let flush = defaults.flush;
   let finishFlush = defaults.finishFlush;
   let fullFlush = defaults.fullFlush;
-  let maxOutputLength = Infinity;
+  // Node defaults maxOutputLength to the load-time buffer.kMaxLength.
+  let maxOutputLength = kMaxLength;
   let rejectGarbageAfterEnd = false;
   let info = false;
 
@@ -554,7 +567,7 @@ function normalizeBaseOptions(opts, mode, defaults) {
       opts.maxOutputLength,
       "options.maxOutputLength",
       1,
-      Number.MAX_SAFE_INTEGER,
+      kMaxLength,
       maxOutputLength,
     );
     if (
@@ -587,6 +600,27 @@ const zlibDefaultOpts = {
   finishFlush: Z_FINISH,
   fullFlush: Z_FULL_FLUSH,
 };
+
+// Per-mode defaults mirror Node's lib/zlib.js (brotliDefaultOpts,
+// zstdDefaultOpts): flush() with no kind must stay inside the mode's
+// flush bound.
+const brotliDefaultOpts = {
+  flush: constants.BROTLI_OPERATION_PROCESS,
+  finishFlush: constants.BROTLI_OPERATION_FINISH,
+  fullFlush: constants.BROTLI_OPERATION_FLUSH,
+};
+const zstdDefaultOpts = {
+  flush: constants.ZSTD_e_continue,
+  finishFlush: constants.ZSTD_e_end,
+  fullFlush: constants.ZSTD_e_flush,
+};
+function defaultOptsFor(mode) {
+  if (mode === MODE_BROTLI_ENCODE || mode === MODE_BROTLI_DECODE)
+    return brotliDefaultOpts;
+  if (mode === MODE_ZSTD_COMPRESS || mode === MODE_ZSTD_DECOMPRESS)
+    return zstdDefaultOpts;
+  return zlibDefaultOpts;
+}
 
 // ---------------------------------------------------------------------------
 // DEFLATE / inflate engines backed by the maintained `pako` package
@@ -634,11 +668,12 @@ function pakoStatusName(status) {
 // ---------------------------------------------------------------------------
 
 class PakoInflateEngine {
-  constructor({ windowBits, dictionary, wrapper }) {
+  constructor({ windowBits, dictionary, wrapper, rejectGarbageAfterEnd }) {
     // wrapper: 'zlib' | 'raw' | 'gzip' | 'unzip'
     this.wrapper = wrapper;
     this.windowBits = windowBits >>> 0;
     this.dictionary = dictionary ? toBytes(dictionary) : null;
+    this._rejectGarbageAfterEnd = !!rejectGarbageAfterEnd;
     this.reset();
   }
 
@@ -707,6 +742,59 @@ class PakoInflateEngine {
       bytes[0] === 0x1f && (bytes.length < 2 || bytes[1] === 0x8b);
   }
 
+  _gzipHeaderLength(bytes) {
+    // Parse gzip header, return header length or -1 if invalid/incomplete.
+    // RFC 1952: 10-byte fixed header + optional fields.
+    if (bytes.length < 10) return -1;
+    if (bytes[0] !== 0x1f || bytes[1] !== 0x8b || bytes[2] !== 8) return -1;
+    const flg = bytes[3];
+    let pos = 10;
+    if (flg & 0x04) {
+      // FEXTRA
+      if (bytes.length < pos + 2) return -1;
+      const xlen = bytes[pos] | (bytes[pos + 1] << 8);
+      pos += 2 + xlen;
+    }
+    if (flg & 0x08) {
+      // FNAME: null-terminated
+      while (pos < bytes.length && bytes[pos] !== 0) pos++;
+      pos++; // skip null
+    }
+    if (flg & 0x10) {
+      // FCOMMENT: null-terminated
+      while (pos < bytes.length && bytes[pos] !== 0) pos++;
+      pos++; // skip null
+    }
+    if (flg & 0x02) {
+      // FHCRC: 2 bytes
+      pos += 2;
+    }
+    return pos <= bytes.length ? pos : -1;
+  }
+
+  _hasTrailingGzipMember(bytes) {
+    // Check if gzip input contains data beyond the first member's trailer.
+    // Returns true if there's a second member or trailing junk.
+    if (bytes.length < 18) return false; // min: 10 header + 0 deflate + 8 trailer
+    const headerLen = this._gzipHeaderLength(bytes);
+    if (headerLen < 0) return false;
+    // Use raw inflate to find where the first member's deflate stream ends.
+    const body = bytes.subarray(headerLen);
+    const inf = new PakoInflate({ raw: true, chunkSize: PAKO_CHUNK_SIZE });
+    inf._collected = [];
+    inf.onData = () => {};
+    try {
+      inf.push(body, true);
+    } catch {
+      return false;
+    }
+    if (inf.err) return false;
+    const remaining = inf.strm ? inf.strm.avail_in : 0;
+    // 8 bytes is the first member's trailer (CRC32 + ISIZE).
+    // More than 8 means there's another member or trailing junk.
+    return remaining > 8;
+  }
+
   write(chunk, flushFlag) {
     if (this.error) throw this.error;
     // pako's Inflate only emits decoded output when pushed with a real flush
@@ -745,6 +833,19 @@ class PakoInflateEngine {
       const startNew =
         this.wrapper === "gzip" || (this.wrapper === "unzip" && wasGzip);
       if (startNew) {
+        if (this._rejectGarbageAfterEnd) {
+          // With rejectGarbageAfterEnd, a second member is trailing garbage.
+          this.finished = true;
+          this.trailingGarbage = true;
+          return {
+            output: PAKO_EMPTY,
+            finished: true,
+            // Trailing garbage is not consumed by the codec (Node's
+            // bytesWritten ignores it).
+            consumed: 0,
+            trailing: true,
+          };
+        }
         this._inf = this._newInflator();
         this.finished = false;
         this.trailingGarbage = false;
@@ -756,7 +857,9 @@ class PakoInflateEngine {
         return {
           output: PAKO_EMPTY,
           finished: true,
-          consumed: bytes.length,
+          // Trailing garbage is not consumed by the codec (Node's
+          // bytesWritten ignores it).
+          consumed: 0,
           trailing: true,
         };
       }
@@ -775,6 +878,19 @@ class PakoInflateEngine {
         // A previous stream completed on an earlier write; start the next
         // one. (Members completed within a single push are already chained
         // internally by pako.)
+        if (this._rejectGarbageAfterEnd) {
+          // With rejectGarbageAfterEnd, data after stream end is trailing
+          // garbage, never a new member.
+          this.trailingGarbage = true;
+          return {
+            output: PAKO_EMPTY,
+            finished: true,
+            // Trailing garbage is not consumed by the codec (Node's
+            // bytesWritten ignores it).
+            consumed: 0,
+            trailing: true,
+          };
+        }
         this._inf = this._newInflator();
         this.finished = false;
         this.trailingGarbage = false;
@@ -785,7 +901,9 @@ class PakoInflateEngine {
         return {
           output: PAKO_EMPTY,
           finished: true,
-          consumed: bytes.length,
+          // Trailing garbage is not consumed by the codec (Node's
+          // bytesWritten ignores it).
+          consumed: 0,
           trailing: true,
         };
       }
@@ -793,6 +911,25 @@ class PakoInflateEngine {
 
     const inf = this._inf;
     this._sniffMember(bytes);
+    // For gzip/unzip with rejectGarbageAfterEnd, detect if the input contains
+    // a second member (pako chains them internally in a single push).
+    // If so, mark trailingGarbage; the normal processing still runs but the
+    // caller will throw/report the error.
+    if (
+      this._rejectGarbageAfterEnd &&
+      (this.wrapper === "gzip" ||
+        (this.wrapper === "unzip" && this._memberWasGzip !== false)) &&
+      bytes.length > 0 &&
+      !this._memberEnded &&
+      !this.finished
+    ) {
+      const isGzipInput =
+        this.wrapper === "gzip" ||
+        (bytes[0] === 0x1f && bytes.length > 1 && bytes[1] === 0x8b);
+      if (isGzipInput && this._hasTrailingGzipMember(bytes)) {
+        this.trailingGarbage = true;
+      }
+    }
     const ok = inf.push(bytes, mode);
     const output = this._drain();
 
@@ -802,14 +939,22 @@ class PakoInflateEngine {
       if (inf.strm.state === null) {
         if (this.wrapper === "zlib" || this.wrapper === "raw") {
           this.finished = true;
+          // Check for trailing data (e.g., second zlib stream).
+          const remaining = inf.strm ? inf.strm.avail_in : 0;
+          if (remaining > 0) {
+            this.trailingGarbage = true;
+          }
         } else {
           this._memberEnded = true;
         }
       }
+      // Node's bytesWritten counts only bytes the codec consumed;
+      // trailing bytes after stream end don't count.
+      const consumed = bytes.length - (inf.strm ? inf.strm.avail_in : 0);
       return {
         output,
         finished: this.finished,
-        consumed: bytes.length,
+        consumed,
         trailing: false,
       };
     }
@@ -837,7 +982,12 @@ class PakoInflateEngine {
       this.trailingGarbage = true;
       trailing = true;
     }
-    return { output, finished: true, consumed: bytes.length, trailing };
+    return {
+      output,
+      finished: true,
+      consumed: bytes.length - remaining,
+      trailing,
+    };
   }
 }
 
@@ -1137,7 +1287,18 @@ class MiniTransform extends MiniEmitter {
     this._endEmitted = false;
     this._encoding = null;
     this._destroyed = false;
+    this._closeEmitted = false;
     this.bytesWritten = 0;
+    // Writable-side backpressure accounting (mirrors WritableState).
+    this._wHighWaterMark = 16384;
+    this._wQueuedBytes = 0;
+    this._needDrain = false;
+    const self = this;
+    this._writableState = {};
+    Object.defineProperty(this._writableState, "needDrain", {
+      enumerable: true,
+      get: () => self._needDrain,
+    });
     this._onNewListener = (ev) => {
       if (ev === "data" && !this._flowing) {
         this._flowing = true;
@@ -1147,6 +1308,14 @@ class MiniTransform extends MiniEmitter {
   }
   get writableEnded() {
     return this._wended;
+  }
+  // Legacy Stream.pipe gates writes on `dest.writable`; without it piped
+  // data is silently dropped.
+  get writable() {
+    return !this._destroyed && !this._wended;
+  }
+  get readable() {
+    return !this._destroyed;
   }
   get writableFinished() {
     return this._wfinished;
@@ -1190,20 +1359,19 @@ class MiniTransform extends MiniEmitter {
       else queueMicrotask(() => this.emit("error", err));
       return false;
     }
-    let buf;
-    try {
-      buf = this._normalizeChunk(chunk, encoding);
-    } catch (err) {
-      if (cb) queueMicrotask(() => cb(err));
-      else queueMicrotask(() => this.emit("error", err));
-      return false;
-    }
+    // Node validates the chunk type synchronously: an invalid chunk throws
+    // ERR_INVALID_ARG_TYPE out of write() (even in objectMode for zlib).
+    const buf = this._normalizeChunk(chunk, encoding);
     // Preserve flush-flagged buffers.
     if (chunk && chunk[kFlushFlag] !== undefined)
       buf[kFlushFlag] = chunk[kFlushFlag];
     this._wqueue.push({ chunk: buf, cb: cb || null, encoding });
+    this._wQueuedBytes += buf.length;
+    // Node: write() returns false (and arms needDrain) once the buffered
+    // write bytes reach the writable highWaterMark.
+    this._needDrain = this._wQueuedBytes >= this._wHighWaterMark;
     queueMicrotask(() => this._pumpWrites());
-    return this._rlen < 16384;
+    return !this._needDrain;
   }
 
   end(chunk, encoding, cb) {
@@ -1226,6 +1394,13 @@ class MiniTransform extends MiniEmitter {
     if (this._wprocessing || this._destroyed) return;
     const item = this._wqueue.shift();
     if (!item) {
+      // Write buffer drained after a false return: emit 'drain' like Node.
+      if (this._needDrain) {
+        this._needDrain = false;
+        queueMicrotask(() => {
+          if (!this._destroyed) this.emit("drain");
+        });
+      }
       if (this._wended && !this._wfinished) {
         this._wfinished = true;
         this._wprocessing = true;
@@ -1258,6 +1433,7 @@ class MiniTransform extends MiniEmitter {
       return;
     }
     this._wprocessing = true;
+    this._wQueuedBytes = Math.max(0, this._wQueuedBytes - item.chunk.length);
     // A queued chunk is always written with a non-finishing flush; the
     // Z_FINISH happens in the _flush() branch below after the queue drains.
     const isLast = false;
@@ -1329,9 +1505,18 @@ class MiniTransform extends MiniEmitter {
     ) {
       this._endEmitted = true;
       queueMicrotask(() => {
-        if (!this._destroyed) this.emit("end");
+        if (this._destroyed) return;
+        this.emit("end");
+        // Node emits 'close' after a natural 'end' (emitClose defaults true).
+        this._emitClose();
       });
     }
+  }
+
+  _emitClose() {
+    if (this._closeEmitted) return;
+    this._closeEmitted = true;
+    queueMicrotask(() => this.emit("close"));
   }
 
   read(n) {
@@ -1399,14 +1584,20 @@ class MiniTransform extends MiniEmitter {
     if (this._destroyed) return this;
     this._destroyed = true;
     this._wqueue = [];
+    this._wQueuedBytes = 0;
+    this._needDrain = false;
     this._rbuf = [];
     if (err) queueMicrotask(() => this.emit("error", err));
-    queueMicrotask(() => this.emit("close"));
+    this._emitClose();
     return this;
   }
 
   close(cb) {
-    if (cb) this.once("close", cb);
+    if (cb) {
+      // Node calls the close callback even when already closed/destroyed.
+      if (this._destroyed) queueMicrotask(cb);
+      else this.once("close", cb);
+    }
     this.destroy();
     return this;
   }
@@ -1446,8 +1637,18 @@ class ZlibBase extends MiniTransform {
     super();
     const isBrotli = mode === MODE_BROTLI_ENCODE || mode === MODE_BROTLI_DECODE;
     const isZstd = mode === MODE_ZSTD_COMPRESS || mode === MODE_ZSTD_DECOMPRESS;
-    const base = normalizeBaseOptions(opts, mode, zlibDefaultOpts);
+    const base = normalizeBaseOptions(opts, mode, defaultOptsFor(mode));
     this._chunkSize = base.chunkSize;
+    // Writable highWaterMark feeds MiniTransform backpressure/needDrain.
+    if (
+      opts &&
+      opts.highWaterMark !== undefined &&
+      typeof opts.highWaterMark === "number" &&
+      Number.isFinite(opts.highWaterMark) &&
+      opts.highWaterMark >= 0
+    ) {
+      this._wHighWaterMark = Math.trunc(opts.highWaterMark);
+    }
     this._outOffset = 0;
     this._defaultFlushFlag = base.flush;
     this._finishFlushFlag = base.finishFlush;
@@ -1495,24 +1696,28 @@ class ZlibBase extends MiniTransform {
           wrapper: "zlib",
           windowBits: zopts.windowBits,
           dictionary: zopts.dictionary,
+          rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
       case MODE_INFLATERAW:
         return new PakoInflateEngine({
           wrapper: "raw",
           windowBits: zopts.windowBits,
           dictionary: zopts.dictionary,
+          rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
       case MODE_GUNZIP:
         return new PakoInflateEngine({
           wrapper: "gzip",
           windowBits: zopts.windowBits,
           dictionary: zopts.dictionary,
+          rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
       case MODE_UNZIP:
         return new PakoInflateEngine({
           wrapper: "unzip",
           windowBits: zopts.windowBits,
           dictionary: zopts.dictionary,
+          rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
       default:
         // Brotli / Zstd: honest pass-through fallback (no codec available).
@@ -1546,7 +1751,12 @@ class ZlibBase extends MiniTransform {
           cb(err);
           return;
         }
-        if (out && out.length > 0) this.push(out);
+        // Emit output in chunkSize pieces like the native binding does, so
+        // large single transforms still produce multiple 'data' events.
+        if (out && out.length > 0) {
+          for (let off = 0; off < out.length; off += this._chunkSize)
+            this.push(out.subarray(off, off + this._chunkSize));
+        }
         if (this._engine.trailingGarbage && !this._destroyed) {
           if (this._rejectGarbageAfterEnd) {
             cb(new ERR_TRAILING_JUNK_AFTER_STREAM_END());
@@ -1594,10 +1804,19 @@ class ZlibBase extends MiniTransform {
       this._flushBound[1],
       this._defaultFullFlushFlag,
     );
+    this._flushInner(kind, cb);
+  }
+
+  // Internal flush body; re-entered directly (not via the public flush) so
+  // a userland flush wrapper is only invoked once per flush() call.
+  _flushInner(kind, cb) {
     if (this.writableFinished) {
       if (cb) queueMicrotask(() => cb());
     } else if (this.writableEnded) {
       if (cb) this.once("end", cb);
+    } else if (this._needDrain) {
+      // Node defers flush until the write buffer drains.
+      this.once("drain", () => this._flushInner(kind, cb));
     } else {
       this.write(kFlushBuffers[kind], cb);
     }
@@ -1672,7 +1891,7 @@ function validateBrotliOptions(options) {
   }
 }
 
-function makeZlibClass(mode, validate) {
+function makeZlibClass(mode, validate, className) {
   class Z extends ZlibBase {
     constructor(opts) {
       if (validate) validate(opts);
@@ -1693,6 +1912,18 @@ function makeZlibClass(mode, validate) {
       }
       return this;
     }
+    if (!new.target) {
+      // Node emits DEP0184 when a zlib class is called without `new`.
+      const proc =
+        typeof globalThis.process !== "undefined" ? globalThis.process : null;
+      if (proc && typeof proc.emitWarning === "function") {
+        proc.emitWarning(
+          `Instantiating ${className} without the 'new' keyword has been deprecated.`,
+          "DeprecationWarning",
+          "DEP0184",
+        );
+      }
+    }
     return new Z(opts);
   }
   Factory.prototype = Z.prototype;
@@ -1700,20 +1931,33 @@ function makeZlibClass(mode, validate) {
   return Factory;
 }
 
-const Deflate = makeZlibClass(MODE_DEFLATE);
-const Inflate = makeZlibClass(MODE_INFLATE);
-const Gzip = makeZlibClass(MODE_GZIP);
-const Gunzip = makeZlibClass(MODE_GUNZIP);
-const DeflateRaw = makeZlibClass(MODE_DEFLATERAW);
-const InflateRaw = makeZlibClass(MODE_INFLATERAW);
-const Unzip = makeZlibClass(MODE_UNZIP);
-const BrotliCompress = makeZlibClass(MODE_BROTLI_ENCODE, validateBrotliOptions);
+const Deflate = makeZlibClass(MODE_DEFLATE, undefined, "Deflate");
+const Inflate = makeZlibClass(MODE_INFLATE, undefined, "Inflate");
+const Gzip = makeZlibClass(MODE_GZIP, undefined, "Gzip");
+const Gunzip = makeZlibClass(MODE_GUNZIP, undefined, "Gunzip");
+const DeflateRaw = makeZlibClass(MODE_DEFLATERAW, undefined, "DeflateRaw");
+const InflateRaw = makeZlibClass(MODE_INFLATERAW, undefined, "InflateRaw");
+const Unzip = makeZlibClass(MODE_UNZIP, undefined, "Unzip");
+const BrotliCompress = makeZlibClass(
+  MODE_BROTLI_ENCODE,
+  validateBrotliOptions,
+  "BrotliCompress",
+);
 const BrotliDecompress = makeZlibClass(
   MODE_BROTLI_DECODE,
   validateBrotliOptions,
+  "BrotliDecompress",
 );
-const ZstdCompress = makeZlibClass(MODE_ZSTD_COMPRESS);
-const ZstdDecompress = makeZlibClass(MODE_ZSTD_DECOMPRESS);
+const ZstdCompress = makeZlibClass(
+  MODE_ZSTD_COMPRESS,
+  undefined,
+  "ZstdCompress",
+);
+const ZstdDecompress = makeZlibClass(
+  MODE_ZSTD_DECOMPRESS,
+  undefined,
+  "ZstdDecompress",
+);
 
 function createDeflate(opts) {
   return new Deflate(opts);
@@ -1765,6 +2009,13 @@ function zlibBuffer(Engine, buffer, options, callback) {
     options: opts,
     callback: cb,
   } = normalizeBufferArgs(buffer, options, callback);
+  if (bytes === null) {
+    throw new ERR_INVALID_ARG_TYPE(
+      "buffer",
+      "string or an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+      buffer,
+    );
+  }
   if (typeof cb !== "function") {
     throw new ERR_INVALID_ARG_TYPE("callback", "function", cb);
   }
@@ -1792,8 +2043,20 @@ function zlibBuffer(Engine, buffer, options, callback) {
 
 function zlibBufferSync(Engine, buffer, options) {
   const bytes = toBytes(buffer);
+  if (bytes === null) {
+    throw new ERR_INVALID_ARG_TYPE(
+      "buffer",
+      "string or an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+      buffer,
+    );
+  }
   const stream = new Engine(options);
   const out = stream._processChunkSync(bytes, stream._finishFlushFlag);
+  // Check for trailing garbage (e.g., concatenated gzip members with
+  // rejectGarbageAfterEnd: true).
+  if (stream._engine.trailingGarbage && stream._rejectGarbageAfterEnd) {
+    throw new ERR_TRAILING_JUNK_AFTER_STREAM_END();
+  }
   if (options && options.info) return { buffer: out, engine: stream };
   return out;
 }

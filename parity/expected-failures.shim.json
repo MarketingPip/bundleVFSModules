@@ -1116,10 +1116,6 @@
     "category": "inherent",
     "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
   },
-  "test-zlib-brotli-flush-invalid-kind.js": {
-    "category": "inherent",
-    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
-  },
   "test-zlib-brotli-flush.js": {
     "category": "inherent",
     "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
@@ -1140,18 +1136,6 @@
     "category": "inherent",
     "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
   },
-  "test-zlib-destroy.js": {
-    "category": "needs-investigation",
-    "reason": "Stream destroy lifecycle: needs investigation of destroy/close event ordering"
-  },
-  "test-zlib-flush-drain-longblock.js": {
-    "category": "needs-investigation",
-    "reason": "Flush/drain with long blocks: stream backpressure interaction needs investigation"
-  },
-  "test-zlib-flush-drain.js": {
-    "category": "needs-investigation",
-    "reason": "Flush/drain: stream backpressure interaction needs investigation"
-  },
   "test-zlib-from-concatenated-gzip.js": {
     "category": "inherent",
     "reason": "Missing test fixture pseudo-multimember-gzip.z/.gz (not in parity mirror). The fixture contains specific pseudo-multimember gzip data with magic bytes mid-stream. Harness gap, not a shim bug."
@@ -1160,49 +1144,29 @@
     "category": "needs-investigation",
     "reason": "Partially fixed (toBytes ERR_OUT_OF_RANGE); remaining: _processChunk _outOffset validation and stream error event emission"
   },
-  "test-zlib-kmaxlength-rangeerror.js": {
-    "category": "needs-investigation",
-    "reason": "Missing buffer.kMaxLength validation on decompressed output size"
-  },
   "test-zlib-maxOutputLength.js": {
     "category": "needs-investigation",
     "reason": "Brotli stub: maxOutputLength validation not implemented (brotli is stub)"
   },
-  "test-zlib-not-string-or-buffer.js": {
-    "category": "needs-investigation",
-    "reason": "Input type validation: needs investigation"
-  },
-  "test-zlib-object-write.js": {
-    "category": "needs-investigation",
-    "reason": "Object mode stream writes: needs investigation"
-  },
   "test-zlib-premature-end.js": {
-    "category": "needs-investigation",
-    "reason": "Premature end byte counting (expected 15, got 40): stream accounting bug"
-  },
-  "test-zlib-random-byte-pipes.js": {
-    "category": "needs-investigation",
-    "reason": "Hash mismatch (empty output SHA1): data loss in old-style Stream pipe \u2014 serious, needs investigation"
+    "category": "inherent",
+    "reason": "Brotli pair is an honest pass-through stub (echoes input, so trailing bytes leak into output). The deflate/deflateRaw pairs pass fully, including bytesWritten === compressed.length (inflate engine now reports actually-consumed bytes; verified 2026-10-18)."
   },
   "test-zlib-reject-garbage-after-end.js": {
     "category": "needs-investigation",
     "reason": "Garbage-after-end rejection: needs investigation"
   },
   "test-zlib-truncated.js": {
-    "category": "needs-investigation",
-    "reason": "Truncated input error message mismatch (expected /unexpected end of file/)"
+    "category": "inherent",
+    "reason": "zstd is an honest pass-through stub (no zstd decoder in the browser build): truncated zstd input cannot be detected. The gzip/deflate/raw sync+async truncated paths all correctly throw 'unexpected end of file' (verified 2026-10-18)."
   },
   "test-zlib-type-error.js": {
     "category": "needs-investigation",
     "reason": "Type validation: needs investigation"
   },
-  "test-zlib-write-after-flush.js": {
-    "category": "needs-investigation",
-    "reason": "ERR_OUT_OF_RANGE on write-after-flush: needs investigation"
-  },
   "test-zlib-zero-byte.js": {
-    "category": "needs-investigation",
-    "reason": "Zero-byte write counting (expected 1, got 0): stream accounting bug"
+    "category": "inherent",
+    "reason": "Brotli/Zstd are honest pass-through stubs: cannot emit real brotli/zstd framing for empty input (expected 1/9 bytes). Gzip pair verified correct (20-byte header+trailer)."
   },
   "test-zlib-zstd-dictionary.js": {
     "category": "inherent",
@@ -1231,9 +1195,5 @@
   "test-zlib-zstd.js": {
     "category": "inherent",
     "reason": "Zstd is an honest stub in src/zlib.js (documented in header): no actual Zstd coding is performed. Real Zstd would require a WASM codec."
-  },
-  "test-zlib.js": {
-    "category": "needs-investigation",
-    "reason": "Main test: needs investigation of specific assertion"
   }
 }
