@@ -23,6 +23,13 @@
 //   implementation (no node:stream import, so this stays browser-loadable).
 
 import { Deflate as PakoDeflate, Inflate as PakoInflate } from "pako";
+import bufferExports from "./buffer.js";
+
+// Node captures buffer.kMaxLength at load (const { kMaxLength } =
+// require('buffer')) and uses it as the default maxOutputLength. Read the
+// live exports object so a test mutating require('buffer').kMaxLength before
+// requiring zlib is honored, exactly like Node.
+const kMaxLength = bufferExports.kMaxLength;
 
 // ---------------------------------------------------------------------------
 // Constants (verbatim from Node v24)
@@ -350,7 +357,7 @@ class ERR_INVALID_ARG_VALUE extends TypeError {
     this.code = "ERR_INVALID_ARG_VALUE";
   }
 }
-class ERR_BUFFER_TOO_LARGE extends Error {
+class ERR_BUFFER_TOO_LARGE extends RangeError {
   constructor(max) {
     super(`Cannot create a Buffer larger than ${max} bytes`);
     this.code = "ERR_BUFFER_TOO_LARGE";
@@ -511,7 +518,8 @@ function normalizeBaseOptions(opts, mode, defaults) {
   let flush = defaults.flush;
   let finishFlush = defaults.finishFlush;
   let fullFlush = defaults.fullFlush;
-  let maxOutputLength = Infinity;
+  // Node defaults maxOutputLength to the load-time buffer.kMaxLength.
+  let maxOutputLength = kMaxLength;
   let rejectGarbageAfterEnd = false;
   let info = false;
 
@@ -559,7 +567,7 @@ function normalizeBaseOptions(opts, mode, defaults) {
       opts.maxOutputLength,
       "options.maxOutputLength",
       1,
-      Number.MAX_SAFE_INTEGER,
+      kMaxLength,
       maxOutputLength,
     );
     if (

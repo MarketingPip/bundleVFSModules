@@ -1144,10 +1144,6 @@
     "category": "needs-investigation",
     "reason": "Partially fixed (toBytes ERR_OUT_OF_RANGE); remaining: _processChunk _outOffset validation and stream error event emission"
   },
-  "test-zlib-kmaxlength-rangeerror.js": {
-    "category": "needs-investigation",
-    "reason": "Missing buffer.kMaxLength validation on decompressed output size"
-  },
   "test-zlib-maxOutputLength.js": {
     "category": "needs-investigation",
     "reason": "Brotli stub: maxOutputLength validation not implemented (brotli is stub)"
