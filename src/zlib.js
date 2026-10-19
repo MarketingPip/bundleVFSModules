@@ -1243,6 +1243,16 @@ class MiniTransform extends MiniEmitter {
     this._encoding = null;
     this._destroyed = false;
     this.bytesWritten = 0;
+    // Writable-side backpressure accounting (mirrors WritableState).
+    this._wHighWaterMark = 16384;
+    this._wQueuedBytes = 0;
+    this._needDrain = false;
+    const self = this;
+    this._writableState = {};
+    Object.defineProperty(this._writableState, "needDrain", {
+      enumerable: true,
+      get: () => self._needDrain,
+    });
     this._onNewListener = (ev) => {
       if (ev === "data" && !this._flowing) {
         this._flowing = true;
@@ -1307,8 +1317,12 @@ class MiniTransform extends MiniEmitter {
     if (chunk && chunk[kFlushFlag] !== undefined)
       buf[kFlushFlag] = chunk[kFlushFlag];
     this._wqueue.push({ chunk: buf, cb: cb || null, encoding });
+    this._wQueuedBytes += buf.length;
+    // Node: write() returns false (and arms needDrain) once the buffered
+    // write bytes reach the writable highWaterMark.
+    this._needDrain = this._wQueuedBytes >= this._wHighWaterMark;
     queueMicrotask(() => this._pumpWrites());
-    return this._rlen < 16384;
+    return !this._needDrain;
   }
 
   end(chunk, encoding, cb) {
@@ -1331,6 +1345,13 @@ class MiniTransform extends MiniEmitter {
     if (this._wprocessing || this._destroyed) return;
     const item = this._wqueue.shift();
     if (!item) {
+      // Write buffer drained after a false return: emit 'drain' like Node.
+      if (this._needDrain) {
+        this._needDrain = false;
+        queueMicrotask(() => {
+          if (!this._destroyed) this.emit("drain");
+        });
+      }
       if (this._wended && !this._wfinished) {
         this._wfinished = true;
         this._wprocessing = true;
@@ -1363,6 +1384,7 @@ class MiniTransform extends MiniEmitter {
       return;
     }
     this._wprocessing = true;
+    this._wQueuedBytes = Math.max(0, this._wQueuedBytes - item.chunk.length);
     // A queued chunk is always written with a non-finishing flush; the
     // Z_FINISH happens in the _flush() branch below after the queue drains.
     const isLast = false;
@@ -1504,6 +1526,8 @@ class MiniTransform extends MiniEmitter {
     if (this._destroyed) return this;
     this._destroyed = true;
     this._wqueue = [];
+    this._wQueuedBytes = 0;
+    this._needDrain = false;
     this._rbuf = [];
     if (err) queueMicrotask(() => this.emit("error", err));
     queueMicrotask(() => this.emit("close"));
@@ -1511,7 +1535,11 @@ class MiniTransform extends MiniEmitter {
   }
 
   close(cb) {
-    if (cb) this.once("close", cb);
+    if (cb) {
+      // Node calls the close callback even when already closed/destroyed.
+      if (this._destroyed) queueMicrotask(cb);
+      else this.once("close", cb);
+    }
     this.destroy();
     return this;
   }
@@ -1553,6 +1581,16 @@ class ZlibBase extends MiniTransform {
     const isZstd = mode === MODE_ZSTD_COMPRESS || mode === MODE_ZSTD_DECOMPRESS;
     const base = normalizeBaseOptions(opts, mode, zlibDefaultOpts);
     this._chunkSize = base.chunkSize;
+    // Writable highWaterMark feeds MiniTransform backpressure/needDrain.
+    if (
+      opts &&
+      opts.highWaterMark !== undefined &&
+      typeof opts.highWaterMark === "number" &&
+      Number.isFinite(opts.highWaterMark) &&
+      opts.highWaterMark >= 0
+    ) {
+      this._wHighWaterMark = Math.trunc(opts.highWaterMark);
+    }
     this._outOffset = 0;
     this._defaultFlushFlag = base.flush;
     this._finishFlushFlag = base.finishFlush;
@@ -1655,7 +1693,12 @@ class ZlibBase extends MiniTransform {
           cb(err);
           return;
         }
-        if (out && out.length > 0) this.push(out);
+        // Emit output in chunkSize pieces like the native binding does, so
+        // large single transforms still produce multiple 'data' events.
+        if (out && out.length > 0) {
+          for (let off = 0; off < out.length; off += this._chunkSize)
+            this.push(out.subarray(off, off + this._chunkSize));
+        }
         if (this._engine.trailingGarbage && !this._destroyed) {
           if (this._rejectGarbageAfterEnd) {
             cb(new ERR_TRAILING_JUNK_AFTER_STREAM_END());
@@ -1703,10 +1746,19 @@ class ZlibBase extends MiniTransform {
       this._flushBound[1],
       this._defaultFullFlushFlag,
     );
+    this._flushInner(kind, cb);
+  }
+
+  // Internal flush body; re-entered directly (not via the public flush) so
+  // a userland flush wrapper is only invoked once per flush() call.
+  _flushInner(kind, cb) {
     if (this.writableFinished) {
       if (cb) queueMicrotask(() => cb());
     } else if (this.writableEnded) {
       if (cb) this.once("end", cb);
+    } else if (this._needDrain) {
+      // Node defers flush until the write buffer drains.
+      this.once("drain", () => this._flushInner(kind, cb));
     } else {
       this.write(kFlushBuffers[kind], cb);
     }
