@@ -1287,6 +1287,7 @@ class MiniTransform extends MiniEmitter {
     this._endEmitted = false;
     this._encoding = null;
     this._destroyed = false;
+    this._closeEmitted = false;
     this.bytesWritten = 0;
     // Writable-side backpressure accounting (mirrors WritableState).
     this._wHighWaterMark = 16384;
@@ -1504,9 +1505,18 @@ class MiniTransform extends MiniEmitter {
     ) {
       this._endEmitted = true;
       queueMicrotask(() => {
-        if (!this._destroyed) this.emit("end");
+        if (this._destroyed) return;
+        this.emit("end");
+        // Node emits 'close' after a natural 'end' (emitClose defaults true).
+        this._emitClose();
       });
     }
+  }
+
+  _emitClose() {
+    if (this._closeEmitted) return;
+    this._closeEmitted = true;
+    queueMicrotask(() => this.emit("close"));
   }
 
   read(n) {
@@ -1578,7 +1588,7 @@ class MiniTransform extends MiniEmitter {
     this._needDrain = false;
     this._rbuf = [];
     if (err) queueMicrotask(() => this.emit("error", err));
-    queueMicrotask(() => this.emit("close"));
+    this._emitClose();
     return this;
   }
 
@@ -1881,7 +1891,7 @@ function validateBrotliOptions(options) {
   }
 }
 
-function makeZlibClass(mode, validate) {
+function makeZlibClass(mode, validate, className) {
   class Z extends ZlibBase {
     constructor(opts) {
       if (validate) validate(opts);
@@ -1902,6 +1912,18 @@ function makeZlibClass(mode, validate) {
       }
       return this;
     }
+    if (!new.target) {
+      // Node emits DEP0184 when a zlib class is called without `new`.
+      const proc =
+        typeof globalThis.process !== "undefined" ? globalThis.process : null;
+      if (proc && typeof proc.emitWarning === "function") {
+        proc.emitWarning(
+          `Instantiating ${className} without the 'new' keyword has been deprecated.`,
+          "DeprecationWarning",
+          "DEP0184",
+        );
+      }
+    }
     return new Z(opts);
   }
   Factory.prototype = Z.prototype;
@@ -1909,20 +1931,33 @@ function makeZlibClass(mode, validate) {
   return Factory;
 }
 
-const Deflate = makeZlibClass(MODE_DEFLATE);
-const Inflate = makeZlibClass(MODE_INFLATE);
-const Gzip = makeZlibClass(MODE_GZIP);
-const Gunzip = makeZlibClass(MODE_GUNZIP);
-const DeflateRaw = makeZlibClass(MODE_DEFLATERAW);
-const InflateRaw = makeZlibClass(MODE_INFLATERAW);
-const Unzip = makeZlibClass(MODE_UNZIP);
-const BrotliCompress = makeZlibClass(MODE_BROTLI_ENCODE, validateBrotliOptions);
+const Deflate = makeZlibClass(MODE_DEFLATE, undefined, "Deflate");
+const Inflate = makeZlibClass(MODE_INFLATE, undefined, "Inflate");
+const Gzip = makeZlibClass(MODE_GZIP, undefined, "Gzip");
+const Gunzip = makeZlibClass(MODE_GUNZIP, undefined, "Gunzip");
+const DeflateRaw = makeZlibClass(MODE_DEFLATERAW, undefined, "DeflateRaw");
+const InflateRaw = makeZlibClass(MODE_INFLATERAW, undefined, "InflateRaw");
+const Unzip = makeZlibClass(MODE_UNZIP, undefined, "Unzip");
+const BrotliCompress = makeZlibClass(
+  MODE_BROTLI_ENCODE,
+  validateBrotliOptions,
+  "BrotliCompress",
+);
 const BrotliDecompress = makeZlibClass(
   MODE_BROTLI_DECODE,
   validateBrotliOptions,
+  "BrotliDecompress",
 );
-const ZstdCompress = makeZlibClass(MODE_ZSTD_COMPRESS);
-const ZstdDecompress = makeZlibClass(MODE_ZSTD_DECOMPRESS);
+const ZstdCompress = makeZlibClass(
+  MODE_ZSTD_COMPRESS,
+  undefined,
+  "ZstdCompress",
+);
+const ZstdDecompress = makeZlibClass(
+  MODE_ZSTD_DECOMPRESS,
+  undefined,
+  "ZstdDecompress",
+);
 
 function createDeflate(opts) {
   return new Deflate(opts);

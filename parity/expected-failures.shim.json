@@ -1165,8 +1165,8 @@
     "reason": "Type validation: needs investigation"
   },
   "test-zlib-zero-byte.js": {
-    "category": "needs-investigation",
-    "reason": "Zero-byte write counting (expected 1, got 0): stream accounting bug"
+    "category": "inherent",
+    "reason": "Brotli/Zstd are honest pass-through stubs: cannot emit real brotli/zstd framing for empty input (expected 1/9 bytes). Gzip pair verified correct (20-byte header+trailer)."
   },
   "test-zlib-zstd-dictionary.js": {
     "category": "inherent",
@@ -1195,9 +1195,5 @@
   "test-zlib-zstd.js": {
     "category": "inherent",
     "reason": "Zstd is an honest stub in src/zlib.js (documented in header): no actual Zstd coding is performed. Real Zstd would require a WASM codec."
-  },
-  "test-zlib.js": {
-    "category": "needs-investigation",
-    "reason": "Main test: needs investigation of specific assertion"
   }
 }
