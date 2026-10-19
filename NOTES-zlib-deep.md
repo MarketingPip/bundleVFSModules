@@ -86,3 +86,52 @@ to the honest-stub design; cannot fix without a real brotli/zstd decoder.
 
 **Current score:** 33/48 non-stub tests pass (was 34/65 with stubs counted).
 The gzip rejectGarbageAfterEnd work is the main win.
+
+### 2026-10-18 ~22:30–24:00 EDT — night-shift stream-lifecycle pass (43/65)
+
+Commits (all on feat/zlib-parity):
+- `5bdffb6f` — destroy-close callback, writable backpressure/drain,
+  chunkSize output chunking → test-zlib-destroy, test-zlib-flush-drain,
+  test-zlib-flush-drain-longblock
+- `b89d474a` — inflate engine reports actually-consumed bytes
+  (bytesWritten parity) → test-zlib-premature-end (deflate pairs)
+- `fb0af31b` — sync chunk-type throw, per-mode flush defaults,
+  writable/readable getters → test-zlib-object-write,
+  test-zlib-write-after-flush, test-zlib-random-byte-pipes,
+  test-zlib-brotli-flush-invalid-kind (bonus)
+- `40877370` — kMaxLength integration (default maxOutputLength +
+  validation bound captured at load; ERR_BUFFER_TOO_LARGE now extends
+  RangeError) + zlib→buffer extra redirect in parity harness →
+  test-zlib-kmaxlength-rangeerror
+- `6df7b14a` — 'close' after natural 'end', DEP0184 without-new warning
+  → test-zlib.js
+
+Root causes worth remembering:
+- **Legacy pipe gates on `dest.writable`.** Our MiniTransform lacked it,
+  so `legacyStream.pipe(zlibStream)` silently dropped all data. Fixed
+  with `writable`/`readable` getters (native legacy pipe has the same
+  gate — verified against real Node).
+- **Flush deferral must not re-enter the public method.** Node defers
+  flush() until 'drain' internally; re-calling `this.flush` would hit a
+  userland wrapper twice. Ours goes through private `_flushInner`.
+- **Per-mode flush defaults** (brotli PROCESS/FINISH/FLUSH, zstd
+  e_continue/e_end/e_flush) — copied from Node's lib/zlib.js; the old
+  single Z_FULL_FLUSH default threw ERR_OUT_OF_RANGE for stubs.
+- **Output chunking at chunkSize** in `_processChunk` — the native
+  binding emits output in chunkSize pieces; single transforms of >16KB
+  must still produce multiple 'data' events.
+- **Harness gotcha:** manual `node --import ./parity/preload.mjs <test>`
+  runs with PARITY_TARGET unset → target=undefined → EVERY builtin
+  redirects to shims (incl. stream, which patches timer globals via
+  als-browser and trips the global-leak detector). The real runner sets
+  PARITY_TARGET=zlib. Always run manual probes with
+  `PARITY_TARGET=zlib` to match.
+- **kMaxLength:** Node captures `require('buffer').kMaxLength` at zlib
+  load; the test mutates it pre-require. Needed a zlib→buffer extra
+  redirect (http→net precedent) in parity/preload.mjs + parity/hooks.mjs
+  so the mutation lands on the cell our zlib reads.
+
+Remaining failures are all inherent: 13 brotli/zstd stub tests, missing
+pseudo-multimember-gzip fixture, and stub-only parts of invalid-input /
+maxOutputLength / premature-end / reject-garbage-after-end / truncated /
+type-error / zero-byte.
