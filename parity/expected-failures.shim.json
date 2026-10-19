@@ -1116,10 +1116,6 @@
     "category": "inherent",
     "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
   },
-  "test-zlib-brotli-flush-invalid-kind.js": {
-    "category": "inherent",
-    "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
-  },
   "test-zlib-brotli-flush.js": {
     "category": "inherent",
     "reason": "Brotli is an honest stub in src/zlib.js (documented in header): no actual Brotli coding is performed. The `brotli` npm package was evaluated and rejected \u2014 its encoder silently fails on some inputs. Real Brotli would require a WASM codec."
@@ -1156,17 +1152,9 @@
     "category": "needs-investigation",
     "reason": "Brotli stub: maxOutputLength validation not implemented (brotli is stub)"
   },
-  "test-zlib-object-write.js": {
-    "category": "needs-investigation",
-    "reason": "Object mode stream writes: needs investigation"
-  },
   "test-zlib-premature-end.js": {
     "category": "inherent",
     "reason": "Brotli pair is an honest pass-through stub (echoes input, so trailing bytes leak into output). The deflate/deflateRaw pairs pass fully, including bytesWritten === compressed.length (inflate engine now reports actually-consumed bytes; verified 2026-10-18)."
-  },
-  "test-zlib-random-byte-pipes.js": {
-    "category": "needs-investigation",
-    "reason": "Hash mismatch (empty output SHA1): data loss in old-style Stream pipe \u2014 serious, needs investigation"
   },
   "test-zlib-reject-garbage-after-end.js": {
     "category": "needs-investigation",
@@ -1179,10 +1167,6 @@
   "test-zlib-type-error.js": {
     "category": "needs-investigation",
     "reason": "Type validation: needs investigation"
-  },
-  "test-zlib-write-after-flush.js": {
-    "category": "needs-investigation",
-    "reason": "ERR_OUT_OF_RANGE on write-after-flush: needs investigation"
   },
   "test-zlib-zero-byte.js": {
     "category": "needs-investigation",

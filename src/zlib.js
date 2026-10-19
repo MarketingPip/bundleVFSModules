@@ -593,6 +593,27 @@ const zlibDefaultOpts = {
   fullFlush: Z_FULL_FLUSH,
 };
 
+// Per-mode defaults mirror Node's lib/zlib.js (brotliDefaultOpts,
+// zstdDefaultOpts): flush() with no kind must stay inside the mode's
+// flush bound.
+const brotliDefaultOpts = {
+  flush: constants.BROTLI_OPERATION_PROCESS,
+  finishFlush: constants.BROTLI_OPERATION_FINISH,
+  fullFlush: constants.BROTLI_OPERATION_FLUSH,
+};
+const zstdDefaultOpts = {
+  flush: constants.ZSTD_e_continue,
+  finishFlush: constants.ZSTD_e_end,
+  fullFlush: constants.ZSTD_e_flush,
+};
+function defaultOptsFor(mode) {
+  if (mode === MODE_BROTLI_ENCODE || mode === MODE_BROTLI_DECODE)
+    return brotliDefaultOpts;
+  if (mode === MODE_ZSTD_COMPRESS || mode === MODE_ZSTD_DECOMPRESS)
+    return zstdDefaultOpts;
+  return zlibDefaultOpts;
+}
+
 // ---------------------------------------------------------------------------
 // DEFLATE / inflate engines backed by the maintained `pako` package
 // ---------------------------------------------------------------------------
@@ -1279,6 +1300,14 @@ class MiniTransform extends MiniEmitter {
   get writableEnded() {
     return this._wended;
   }
+  // Legacy Stream.pipe gates writes on `dest.writable`; without it piped
+  // data is silently dropped.
+  get writable() {
+    return !this._destroyed && !this._wended;
+  }
+  get readable() {
+    return !this._destroyed;
+  }
   get writableFinished() {
     return this._wfinished;
   }
@@ -1321,14 +1350,9 @@ class MiniTransform extends MiniEmitter {
       else queueMicrotask(() => this.emit("error", err));
       return false;
     }
-    let buf;
-    try {
-      buf = this._normalizeChunk(chunk, encoding);
-    } catch (err) {
-      if (cb) queueMicrotask(() => cb(err));
-      else queueMicrotask(() => this.emit("error", err));
-      return false;
-    }
+    // Node validates the chunk type synchronously: an invalid chunk throws
+    // ERR_INVALID_ARG_TYPE out of write() (even in objectMode for zlib).
+    const buf = this._normalizeChunk(chunk, encoding);
     // Preserve flush-flagged buffers.
     if (chunk && chunk[kFlushFlag] !== undefined)
       buf[kFlushFlag] = chunk[kFlushFlag];
@@ -1595,7 +1619,7 @@ class ZlibBase extends MiniTransform {
     super();
     const isBrotli = mode === MODE_BROTLI_ENCODE || mode === MODE_BROTLI_DECODE;
     const isZstd = mode === MODE_ZSTD_COMPRESS || mode === MODE_ZSTD_DECOMPRESS;
-    const base = normalizeBaseOptions(opts, mode, zlibDefaultOpts);
+    const base = normalizeBaseOptions(opts, mode, defaultOptsFor(mode));
     this._chunkSize = base.chunkSize;
     // Writable highWaterMark feeds MiniTransform backpressure/needDrain.
     if (
