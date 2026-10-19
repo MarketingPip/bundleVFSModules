@@ -1173,8 +1173,8 @@
     "reason": "Garbage-after-end rejection: needs investigation"
   },
   "test-zlib-truncated.js": {
-    "category": "needs-investigation",
-    "reason": "Truncated input error message mismatch (expected /unexpected end of file/)"
+    "category": "inherent",
+    "reason": "zstd is an honest pass-through stub (no zstd decoder in the browser build): truncated zstd input cannot be detected. The gzip/deflate/raw sync+async truncated paths all correctly throw 'unexpected end of file' (verified 2026-10-18)."
   },
   "test-zlib-type-error.js": {
     "category": "needs-investigation",
