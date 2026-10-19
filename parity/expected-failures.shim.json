@@ -1161,8 +1161,8 @@
     "reason": "Object mode stream writes: needs investigation"
   },
   "test-zlib-premature-end.js": {
-    "category": "needs-investigation",
-    "reason": "Premature end byte counting (expected 15, got 40): stream accounting bug"
+    "category": "inherent",
+    "reason": "Brotli pair is an honest pass-through stub (echoes input, so trailing bytes leak into output). The deflate/deflateRaw pairs pass fully, including bytesWritten === compressed.length (inflate engine now reports actually-consumed bytes; verified 2026-10-18)."
   },
   "test-zlib-random-byte-pipes.js": {
     "category": "needs-investigation",

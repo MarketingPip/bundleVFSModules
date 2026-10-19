@@ -811,7 +811,9 @@ class PakoInflateEngine {
           return {
             output: PAKO_EMPTY,
             finished: true,
-            consumed: bytes.length,
+            // Trailing garbage is not consumed by the codec (Node's
+            // bytesWritten ignores it).
+            consumed: 0,
             trailing: true,
           };
         }
@@ -826,7 +828,9 @@ class PakoInflateEngine {
         return {
           output: PAKO_EMPTY,
           finished: true,
-          consumed: bytes.length,
+          // Trailing garbage is not consumed by the codec (Node's
+          // bytesWritten ignores it).
+          consumed: 0,
           trailing: true,
         };
       }
@@ -852,7 +856,9 @@ class PakoInflateEngine {
           return {
             output: PAKO_EMPTY,
             finished: true,
-            consumed: bytes.length,
+            // Trailing garbage is not consumed by the codec (Node's
+            // bytesWritten ignores it).
+            consumed: 0,
             trailing: true,
           };
         }
@@ -866,7 +872,9 @@ class PakoInflateEngine {
         return {
           output: PAKO_EMPTY,
           finished: true,
-          consumed: bytes.length,
+          // Trailing garbage is not consumed by the codec (Node's
+          // bytesWritten ignores it).
+          consumed: 0,
           trailing: true,
         };
       }
@@ -911,10 +919,13 @@ class PakoInflateEngine {
           this._memberEnded = true;
         }
       }
+      // Node's bytesWritten counts only bytes the codec consumed;
+      // trailing bytes after stream end don't count.
+      const consumed = bytes.length - (inf.strm ? inf.strm.avail_in : 0);
       return {
         output,
         finished: this.finished,
-        consumed: bytes.length,
+        consumed,
         trailing: false,
       };
     }
@@ -942,7 +953,12 @@ class PakoInflateEngine {
       this.trailingGarbage = true;
       trailing = true;
     }
-    return { output, finished: true, consumed: bytes.length, trailing };
+    return {
+      output,
+      finished: true,
+      consumed: bytes.length - remaining,
+      trailing,
+    };
   }
 }
 
