@@ -1850,8 +1850,12 @@ export class ClientRequest extends OutgoingMessage {
    */
   onSocket(socket) {
     // Ignore late/duplicate assignments (e.g., manual addRequest after the
-    // constructor's agent already assigned a socket).
-    if (this.socket) return;
+    // constructor's agent already assigned a socket). Only a REAL socket
+    // counts as an assignment: the constructor installs a FakeSocket
+    // placeholder, and treating it as assigned would swallow every
+    // asynchronous delivery — the waiter in _performVirtualRequest would
+    // never resolve. (test-http-agent-uninitialized)
+    if (this.socket && !(this.socket instanceof FakeSocket)) return;
     this.socket = socket;
     this.connection = socket;
     if (this._onSocketAssigned) {
@@ -3481,10 +3485,31 @@ class AgentBase extends EventEmitter {
         if (err) {
           // Socket creation failed: remove from tracking, error the request.
           this.removeSocket(socket, name);
+          // A request that already obtained a real socket elsewhere (e.g.
+          // a second agent was asked via a manual addRequest, as in
+          // test-http-agent-uninitialized) must not be failed by this
+          // redundant creation attempt erroring afterwards.
+          if (req.socket && !(req.socket instanceof FakeSocket)) return;
           if (typeof req.onSocketError === "function") {
             req.onSocketError(err);
           } else {
             req.emit("error", err);
+          }
+          return;
+        }
+        if (
+          req.socket &&
+          !(req.socket instanceof FakeSocket) &&
+          req.socket !== socket
+        ) {
+          // Redundant socket: the request was already assigned one via
+          // another path. Drop this one instead of leaking an untracked
+          // open connection.
+          this.removeSocket(socket, socket._agentName || name);
+          try {
+            socket.destroy();
+          } catch {
+            /* best effort */
           }
           return;
         }
@@ -3550,6 +3575,11 @@ class AgentBase extends EventEmitter {
         // Agent owns error handling for idle sockets: remove from pool
         // and destroy, don't propagate to any (completed) request.
         const onIdleError = () => {
+          socket._inFreePool = false;
+          if (socket._freeTimeoutId) {
+            clearTimeout(socket._freeTimeoutId);
+            socket._freeTimeoutId = null;
+          }
           this.removeSocket(socket, name);
           try {
             socket.destroy();
@@ -3561,6 +3591,30 @@ class AgentBase extends EventEmitter {
         socket.once("error", onIdleError);
         // Store for cleanup on reuse (avoid listener leak).
         socket._idleErrorHandler = onIdleError;
+        // Idle reaping (Node): a pooled socket is destroyed once the
+        // agent's timeout elapses without reuse. This is what lets a
+        // process on the default keep-alive globalAgent (timeout 5000)
+        // exit — e.g. test-http-agent-uninitialized, where the request
+        // completes on the global agent while a custom agent looks on.
+        const idleTimeout = Number(this.options.timeout) || 0;
+        if (idleTimeout > 0) {
+          socket._freeTimeoutId = setTimeout(() => {
+            socket._freeTimeoutId = null;
+            if (!socket._inFreePool) return;
+            socket._inFreePool = false;
+            const wasPooled = (this.freeSockets[name] || []).includes(socket);
+            this.removeSocket(socket, name);
+            try {
+              socket.destroy();
+            } catch {
+              /* best effort */
+            }
+            if (wasPooled) this.totalSocketCount--;
+          }, idleTimeout);
+          if (typeof socket._freeTimeoutId.unref === "function") {
+            socket._freeTimeoutId.unref();
+          }
+        }
         socket.emit("free");
       } else {
         socket.destroy();
@@ -3607,6 +3661,11 @@ class AgentBase extends EventEmitter {
     socket._releasedToAgent = false;
     // Clear the idle flag: the new request's error handler should now fire.
     socket._inFreePool = false;
+    // Cancel the idle reaper armed when the socket was parked.
+    if (socket._freeTimeoutId) {
+      clearTimeout(socket._freeTimeoutId);
+      socket._freeTimeoutId = null;
+    }
     // Remove the idle error handler (was once(), but may not have fired).
     if (socket._idleErrorHandler) {
       socket.removeListener("error", socket._idleErrorHandler);
