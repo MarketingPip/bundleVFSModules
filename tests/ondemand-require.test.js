@@ -576,6 +576,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
         "NOTES-capability-matrix.md",
         "docs/CAPABILITY_MATRIX.md",
         "docs/capability-matrix.json",
+        "parity/measured-rates.json",
         "scripts/generate-capability-matrix.mjs",
       ].sort(),
     );

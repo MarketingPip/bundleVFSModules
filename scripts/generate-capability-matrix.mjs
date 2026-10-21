@@ -555,9 +555,24 @@ function isUnsupportedThrow(body) {
 // 6. Main
 // ---------------------------------------------------------------------------
 
+// Measured official-test pass rates, curated in
+// parity/measured-rates.json from actual sweep runs (never derived
+// from this matrix). Modules without an entry simply have no
+// measured rate yet.
+function loadMeasuredRates() {
+  const p = path.join(repoRoot, "parity", "measured-rates.json");
+  if (!fs.existsSync(p)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8")).modules || {};
+  } catch {
+    return {};
+  }
+}
+
 async function buildMatrix() {
   const { entries, excluded } = publicModules();
   const mods = entries.map((e) => e.name);
+  const rates = loadMeasuredRates();
   const results = {};
   const failedLoads = [];
   const rows = [];
@@ -674,6 +689,18 @@ async function buildMatrix() {
       proto: protoEntries.length,
       rows: modRows,
       ...(loadError ? { loadError } : {}),
+      ...(rates[mod]
+        ? {
+            parity: {
+              passed: rates[mod].passed,
+              total: rates[mod].total,
+              rate:
+                Math.round((rates[mod].passed / rates[mod].total) * 1000) / 10,
+              date: rates[mod].date,
+              source: rates[mod].source,
+            },
+          }
+        : {}),
     };
   }
 
@@ -805,15 +832,19 @@ function generateMarkdown(mods, results, rows, failedLoads, excluded) {
   md += `Node.js builtins with a shim in \`src/\`. Derivation: real Node\n`;
   md += `\`node:<module>\` exports × shim source-body classification.\n\n`;
   md += `## Summary\n\n`;
-  md += `| Module | APIs | Implemented | Honest-noop | Unsupported | Unknown |\n`;
-  md += `|--------|------|-------------|-------------|-------------|---------|\n`;
+  md += `| Module | APIs | Implemented | Honest-noop | Unsupported | Unknown | Parity (official tests) |\n`;
+  md += `|--------|------|-------------|-------------|-------------|---------|-------------------------|\\n`;
   for (const mod of mods) {
     const r = results[mod];
     const mc = { implemented: 0, "honest-noop": 0, unsupported: 0, unknown: 0 };
     for (const row of r.rows) mc[row.status]++;
-    md += `| \`${mod}\` | ${r.apis} | ${mc.implemented} | ${mc["honest-noop"]} | ${mc.unsupported} | ${mc.unknown} |\n`;
+    const parityCell = r.parity
+      ? `${r.parity.passed}/${r.parity.total} (${r.parity.rate}%) · ${r.parity.date}`
+      : "—";
+    md += `| \`${mod}\` | ${r.apis} | ${mc.implemented} | ${mc["honest-noop"]} | ${mc.unsupported} | ${mc.unknown} | ${parityCell} |\n`;
   }
   md += `\n**Totals:** ${rows.length} rows — ${counts.implemented} implemented, ${counts["honest-noop"]} honest-noop, ${counts.unsupported} unsupported, ${counts.unknown} unknown.\n`;
+  md += `\nParity column: measured official-test pass rates from \`parity/measured-rates.json\` (see NOTES-capability-matrix.md §6); "—" means not yet swept.\n`;
 
   if (failedLoads.length) {
     md += `\n## Load failures\n\n`;
@@ -1008,6 +1039,19 @@ rather than hidden.
   argument first, so the mechanical rule classifies it \`implemented\`.
   This matches the spec's intent: "present, and its body is empty or
   only returns a constant / undefined / this (no other statements)".
+
+### 6. Measured parity rates
+
+The matrix's Parity column (and the JSON's per-module \`parity\`
+object) comes from \`parity/measured-rates.json\`: pass/total counts
+from actual runs of Node's official tests against the shims, with
+the run date and source recorded per module. These numbers are
+measured independently of this generator and are never derived from
+the capability classification — a module can have most APIs
+"implemented" and still fail tests (behavioral gaps), or few APIs
+and pass everything written for it. Entries are updated only when a
+module is re-swept; a module with no entry shows "—" rather than an
+estimate.
 
 ## Verification gates
 
