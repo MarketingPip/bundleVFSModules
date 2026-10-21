@@ -3180,7 +3180,16 @@ class ServerBase extends EventEmitter {
       const sendBody =
         body.length > 0 && req.method !== "HEAD" && !noBodyStatus;
       let headOut = head;
-      const hasCL = res.hasHeader("content-length");
+      // hasHeader() only sees kOutHeaders (the setHeader API);
+      // writeHead(obj) headers live in _renderedHeaders, so
+      // Content-Length must be checked in both stores — with only
+      // hasHeader(), a writeHead content-length was invisible here and
+      // the response was framed chunked ON TOP of the rendered
+      // Content-Length header (test-http-get-pipeline-problem).
+      const rendered = res._renderedHeaders || {};
+      const hasCL =
+        res.hasHeader("content-length") ||
+        rendered["content-length"] !== undefined;
       const hasTE = res.hasHeader("transfer-encoding");
       const isHttp10 = res._reqHttpVersion === "1.0";
       // Node frames with Content-Length only when the header block was
@@ -3201,7 +3210,6 @@ class ServerBase extends EventEmitter {
       // TE can come from setHeader (kOutHeaders) or writeHead(obj)
       // (_renderedHeaders). For HTTP/1.0 with a `TE: chunked` request, Node
       // uses chunked encoding even though the app didn't set the header.
-      const rendered = res._renderedHeaders || {};
       let te = hasTE
         ? String(res.getHeader("transfer-encoding"))
         : rendered["transfer-encoding"] || "";
@@ -3236,20 +3244,35 @@ class ServerBase extends EventEmitter {
         // separate writes split the response into two 'data' events,
         // which breaks clients that increment a counter per event
         // (e.g. test-http-1.0-keep-alive).
-        let out = headOut;
+        // The body is a Buffer of raw bytes: it must reach the wire
+        // byte-exact. Interpolating body.toString() (UTF-8) inflates
+        // or replaces non-ASCII bytes while the chunk-size line still
+        // declares the original byte count, desynchronizing the
+        // client's parser ("expected CRLF after chunk data" on any
+        // binary body — test-http-get-pipeline-problem). Build the
+        // coalesced write as Buffers instead.
+        let out;
         if (sendBody) {
-          out += `${body.length.toString(16)}\r\n${body.toString()}\r\n0\r\n\r\n`;
+          out = Buffer.concat([
+            Buffer.from(headOut, "latin1"),
+            Buffer.from(`${body.length.toString(16)}\r\n`, "latin1"),
+            body,
+            Buffer.from("\r\n0\r\n\r\n", "latin1"),
+          ]);
         } else if (!noBodyStatus) {
           // Send terminator only if a body is allowed. 204/304 (and 1xx)
           // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
-          out += "0\r\n\r\n";
+          out = headOut + "0\r\n\r\n";
+        } else {
+          // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
+          out = headOut;
         }
-        // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
         socket.write(out);
       } else if (sendBody) {
         // Coalesce headers + body into one write (Node behavior; the test
-        // counts 'data' events per response, not per write).
-        socket.write(headOut + body.toString());
+        // counts 'data' events per response, not per write). Buffer
+        // concat, not string concat — the body is raw bytes (see above).
+        socket.write(Buffer.concat([Buffer.from(headOut, "latin1"), body]));
       } else {
         socket.write(headOut);
       }
