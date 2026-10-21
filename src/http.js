@@ -2664,6 +2664,15 @@ function _socketHttpRoundTrip(
     const settle = (fn) => (value) => {
       if (settled) return;
       settled = true;
+      // This round trip is over: detach its socket listeners. The socket
+      // may return to the agent pool and be reused by another request,
+      // whose own round trip attaches fresh listeners — leaving ours in
+      // place would feed the next response to this trip's parser too,
+      // emitting 'response' on the completed request as well.
+      // (test-http-agent-timeout block 1)
+      sock.removeListener("data", onData);
+      sock.removeListener("error", onSockError);
+      sock.removeListener("close", onSockClose);
       // The caller owns the socket in all cases now (streaming or not).
       // It releases it to the agent pool via _releaseAgentSocket() or
       // destroys it via ClientRequest.destroy().
@@ -2727,21 +2736,20 @@ function _socketHttpRoundTrip(
     // If the socket is already connected (e.g. reused from the agent pool),
     // write the request immediately; otherwise wait for 'connect'.
     if (sock.connecting) {
-      sock.on("connect", doConnect);
+      sock.once("connect", doConnect);
     } else {
       queueMicrotask(doConnect);
     }
-    sock.on("data", (chunk) => {
+    const onData = (chunk) => {
       try {
         parser.execute(chunk);
       } catch (err) {
         fail(err);
       }
-    });
-    sock.on("error", (err) =>
-      fail(err instanceof Error ? err : new Error(String(err))),
-    );
-    sock.on("close", () => {
+    };
+    const onSockError = (err) =>
+      fail(err instanceof Error ? err : new Error(String(err)));
+    const onSockClose = () => {
       if (settled) return;
       // A response framed to EOF completes on close; anything else closing
       // early is a truncated response.
@@ -2758,7 +2766,10 @@ function _socketHttpRoundTrip(
           ),
         );
       }
-    });
+    };
+    sock.on("data", onData);
+    sock.on("error", onSockError);
+    sock.on("close", onSockClose);
   });
 }
 
@@ -3586,6 +3597,21 @@ class AgentBase extends EventEmitter {
       }
     }
     if (this.keepAlive && !socket.destroyed) {
+      // Apply the agent's idle timeout to the socket first; the
+      // keepSocketAlive() hook below may override it via
+      // socket.setTimeout() (test-http-agent-timeout block 4: a custom
+      // agent's 60ms must win over the agent option's 50ms).
+      const idleTimeout = Number(this.options.timeout) || 0;
+      if (idleTimeout > 0 && typeof socket.setTimeout === "function") {
+        socket.setTimeout(idleTimeout);
+      }
+      if (!this.keepSocketAlive(socket)) {
+        // The hook vetoed pooling: close the socket instead.
+        socket.destroy();
+        this.totalSocketCount--;
+        this._processQueue(name);
+        return;
+      }
       // Keep-alive: park in the free pool (bounded by maxFreeSockets).
       let free = this.freeSockets[name];
       if (!free) {
@@ -3601,45 +3627,43 @@ class AgentBase extends EventEmitter {
         // and destroy, don't propagate to any (completed) request.
         const onIdleError = () => {
           socket._inFreePool = false;
-          if (socket._freeTimeoutId) {
-            clearTimeout(socket._freeTimeoutId);
-            socket._freeTimeoutId = null;
+          if (socket._pooledTimeoutHandler) {
+            socket.removeListener("timeout", socket._pooledTimeoutHandler);
+            socket._pooledTimeoutHandler = null;
           }
+          const wasPooled = (this.freeSockets[name] || []).includes(socket);
           this.removeSocket(socket, name);
           try {
             socket.destroy();
           } catch {
             /* best effort */
           }
-          this.totalSocketCount--;
+          if (wasPooled) this.totalSocketCount--;
         };
         socket.once("error", onIdleError);
         // Store for cleanup on reuse (avoid listener leak).
         socket._idleErrorHandler = onIdleError;
-        // Idle reaping (Node): a pooled socket is destroyed once the
-        // agent's timeout elapses without reuse. This is what lets a
-        // process on the default keep-alive globalAgent (timeout 5000)
-        // exit — e.g. test-http-agent-uninitialized, where the request
-        // completes on the global agent while a custom agent looks on.
-        const idleTimeout = Number(this.options.timeout) || 0;
-        if (idleTimeout > 0) {
-          socket._freeTimeoutId = setTimeout(() => {
-            socket._freeTimeoutId = null;
-            if (!socket._inFreePool) return;
-            socket._inFreePool = false;
-            const wasPooled = (this.freeSockets[name] || []).includes(socket);
-            this.removeSocket(socket, name);
-            try {
-              socket.destroy();
-            } catch {
-              /* best effort */
-            }
-            if (wasPooled) this.totalSocketCount--;
-          }, idleTimeout);
-          if (typeof socket._freeTimeoutId.unref === "function") {
-            socket._freeTimeoutId.unref();
+        // Idle reaping (Node): a pooled socket that reaches the timeout
+        // set above emits 'timeout' (the socket's own timer); the agent
+        // then removes and destroys it, so timed-out sockets are never
+        // reused and a process on the default keep-alive globalAgent
+        // (timeout 5000) can exit. (test-http-agent-timeout block 2,
+        // test-http-agent-uninitialized)
+        const onPooledTimeout = () => {
+          socket._pooledTimeoutHandler = null;
+          if (!socket._inFreePool) return;
+          socket._inFreePool = false;
+          const wasPooled = (this.freeSockets[name] || []).includes(socket);
+          this.removeSocket(socket, name);
+          try {
+            socket.destroy();
+          } catch {
+            /* best effort */
           }
-        }
+          if (wasPooled) this.totalSocketCount--;
+        };
+        socket.once("timeout", onPooledTimeout);
+        socket._pooledTimeoutHandler = onPooledTimeout;
         socket.emit("free");
       } else {
         socket.destroy();
@@ -3686,10 +3710,14 @@ class AgentBase extends EventEmitter {
     socket._releasedToAgent = false;
     // Clear the idle flag: the new request's error handler should now fire.
     socket._inFreePool = false;
-    // Cancel the idle reaper armed when the socket was parked.
-    if (socket._freeTimeoutId) {
-      clearTimeout(socket._freeTimeoutId);
-      socket._freeTimeoutId = null;
+    // Cancel the pooled-timeout handling armed when the socket was
+    // parked: the request's own timeout semantics take over from here.
+    if (socket._pooledTimeoutHandler) {
+      socket.removeListener("timeout", socket._pooledTimeoutHandler);
+      socket._pooledTimeoutHandler = null;
+    }
+    if (typeof socket.setTimeout === "function") {
+      socket.setTimeout(0);
     }
     // Remove the idle error handler (was once(), but may not have fired).
     if (socket._idleErrorHandler) {
