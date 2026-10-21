@@ -1995,16 +1995,20 @@ export class ClientRequest extends OutgoingMessage {
       return;
     }
     // The agent assigned the socket; onSocket() already set this.socket.
-    // Emit 'socket' like Node does on connect (or immediately if already
-    // connected, e.g. reused sockets or sockets whose 'connect' already fired
-    // before the agent callback ran).
+    // Emit 'socket' at assignment time, like Node. A freshly created
+    // virtual socket has usually already emitted 'connect' by now
+    // (the agent's create callback runs on 'connect'), so listeners
+    // attaching a 'connect' handler inside their 'socket' handler
+    // would miss it; replay 'connect' once for exactly that case.
+    // Reused sockets never replay (their _connectedBeforeAssign flag
+    // is cleared when they are parked and when they are reused).
     if (!this._aborted) {
-      if (sock.connecting) {
-        sock.on("connect", () => {
-          if (!this._aborted) this.emit("socket", sock);
+      this.emit("socket", sock);
+      if (sock._connectedBeforeAssign) {
+        sock._connectedBeforeAssign = false;
+        queueMicrotask(() => {
+          if (!sock.destroyed) sock.emit("connect");
         });
-      } else {
-        this.emit("socket", sock);
       }
     }
     const onSocketError = (err) => {
@@ -2127,8 +2131,25 @@ export class ClientRequest extends OutgoingMessage {
     if (streamedMsg) {
       streamedMsg._finishBody();
       // Release the socket to the agent's pool for keep-alive reuse.
-      // (If not keepAlive, _releaseAgentSocket destroys it.)
-      this._releaseAgentSocket();
+      // The release always happens at message-complete time, consumed
+      // or not (test-http-agent-uninitialized never reads its
+      // response, and its socket must still be released). With a
+      // keep-alive agent the socket is parked — its bookkeeping moves
+      // lists immediately, as in Node. With a non-keep-alive agent the
+      // release destroys the socket and removes it from
+      // agent.sockets; Node removes it when the socket actually
+      // closes, which is after the response's 'end' has been
+      // delivered, so defer that case one turn to reproduce the
+      // ordering (test-http-keep-alive-close-on-header asserts
+      // agent.sockets[name].length === 1 inside its 'end' handler).
+      const agent = this.agent;
+      const sock = this.socket;
+      if (agent && sock && !(sock instanceof FakeSocket) && !agent.keepAlive) {
+        const req = this;
+        setTimeout(() => req._releaseAgentSocket(), 0);
+      } else {
+        this._releaseAgentSocket();
+      }
       return;
     }
 
@@ -3456,6 +3477,14 @@ class AgentBase extends EventEmitter {
         // errors on the (possibly pooled) socket don't hit this stale
         // callback.
         socket.removeListener("error", onError);
+        // The socket connected before it could be assigned to the
+        // request, so the request's 'socket' event necessarily comes
+        // after 'connect'. Remember that: _performVirtualRequest
+        // replays 'connect' after emitting 'socket', restoring the
+        // observable Node order (assignment first, then connect) for
+        // listeners attached in a 'socket' handler
+        // (test-http-keep-alive-close-on-header counts connects).
+        socket._connectedBeforeAssign = true;
         callback(null, socket);
       });
       socket.once("error", onError);
@@ -3704,6 +3733,9 @@ class AgentBase extends EventEmitter {
   }
 
   reuseSocket(socket, req) {
+    // A reused socket connected for an earlier request; never replay
+    // that 'connect' for the new request.
+    socket._connectedBeforeAssign = false;
     socket._agentReused = true;
     // The socket is checked out of the free pool for a new request; clear the
     // released flag so _releaseAgentSocket can park it again on completion.
