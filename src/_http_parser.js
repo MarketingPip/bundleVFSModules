@@ -514,6 +514,11 @@ export class HTTPParser {
    * Resume a parser paused between messages. Parses any buffered bytes;
    * safe to call when not paused.
    */
+  /** True when a completed message left unconsumed bytes in the buffer. */
+  hasBufferedRemainder() {
+    return this._state === "paused" && this._off < this._buf.length;
+  }
+
   unpause() {
     if (this._state === "paused") {
       this._state = "complete";

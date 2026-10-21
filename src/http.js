@@ -2991,14 +2991,36 @@ class ServerBase extends EventEmitter {
               "HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n",
             );
           } else {
+            // Node's default clientError response carries no
+            // Content-Length (test-http-blank-header matches it exactly).
             socket.write(
-              "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+              "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n",
             );
           }
         } catch {
           /* best effort */
         }
         socket.destroy();
+      }
+    };
+    // Malformed pipelined data must surface clientError even when it
+    // arrived in the same chunk as a complete request — no further 'data'
+    // event is guaranteed to arrive and feed the parser's buffered
+    // remainder (test-http-blank-header). Validate the remainder whenever
+    // a message completes and its response is still pending.
+    const validatePipelinedRemainder = () => {
+      while (
+        state.busy &&
+        !state.awaitingBody &&
+        parser.hasBufferedRemainder()
+      ) {
+        try {
+          parser.unpause();
+          parser.execute();
+        } catch {
+          // Parser errors are reported via onError.
+          break;
+        }
       }
     };
     socket.on("data", (chunk) => {
@@ -3023,6 +3045,7 @@ class ServerBase extends EventEmitter {
         // just buffer if not yet handled.
         // (If onHeadersComplete didn't fire, the data was invalid and 400
         // was sent via onError, or it's partial and will be buffered.)
+        validatePipelinedRemainder();
         return;
       }
       if (state.busy && state.awaitingBody) {
@@ -3034,9 +3057,11 @@ class ServerBase extends EventEmitter {
         // _finishSocketResponse unpauses it.
         // (test-http-chunk-extensions-limit block 2)
         parser.execute(chunk);
+        validatePipelinedRemainder();
         return;
       }
       parser.execute(chunk);
+      validatePipelinedRemainder();
     });
     socket.on("error", () => {
       /* 'close' handles cleanup */
