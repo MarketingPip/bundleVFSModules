@@ -122,6 +122,19 @@ rather than hidden.
   This matches the spec's intent: "present, and its body is empty or
   only returns a constant / undefined / this (no other statements)".
 
+### 6. Measured parity rates
+
+The matrix's Parity column (and the JSON's per-module `parity`
+object) comes from `parity/measured-rates.json`: pass/total counts
+from actual runs of Node's official tests against the shims, with
+the run date and source recorded per module. These numbers are
+measured independently of this generator and are never derived from
+the capability classification — a module can have most APIs
+"implemented" and still fail tests (behavioral gaps), or few APIs
+and pass everything written for it. Entries are updated only when a
+module is re-swept; a module with no entry shows "—" rather than an
+estimate.
+
 ## Verification gates
 
 - `unknown` rows must be < 10% of total. The generator fails (exit 1)

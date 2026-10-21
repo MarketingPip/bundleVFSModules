@@ -376,7 +376,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 18,
+        "total": 18,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "async_hooks": {
       "apis": 19,
@@ -477,7 +484,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 29,
+        "total": 36,
+        "rate": 80.6,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "buffer": {
       "apis": 119,
@@ -1078,7 +1092,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 62,
+        "total": 62,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "child_process": {
       "apis": 12,
@@ -1144,7 +1165,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 6,
+        "total": 112,
+        "rate": 5.4,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "cluster": {
       "apis": 19,
@@ -1245,7 +1273,14 @@
           "status": "honest-noop",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 4,
+        "total": 83,
+        "rate": 4.8,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "console": {
       "apis": 44,
@@ -1471,7 +1506,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 22,
+        "total": 22,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "constants": {
       "apis": 236,
@@ -3378,7 +3420,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 129,
+        "total": 129,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "dgram": {
       "apis": 29,
@@ -3529,7 +3578,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 1,
+        "total": 80,
+        "rate": 1.3,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "diagnostics_channel": {
       "apis": 13,
@@ -3600,7 +3656,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 26,
+        "total": 26,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "dns": {
       "apis": 65,
@@ -3931,7 +3994,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 10,
+        "total": 31,
+        "rate": 32.3,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "domain": {
       "apis": 12,
@@ -3997,7 +4067,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 2,
+        "total": 50,
+        "rate": 4,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "events": {
       "apis": 35,
@@ -4178,7 +4255,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 1,
+        "total": 9,
+        "rate": 11.1,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "fs": {
       "apis": 158,
@@ -4974,7 +5058,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 324,
+        "total": 349,
+        "rate": 92.8,
+        "date": "2026-10-17",
+        "source": "parity/HITLIST.md bottom-10 note (+9, 315->324; supersedes the stale 99/349 in its full-ranking table)"
+      }
     },
     "http": {
       "apis": 112,
@@ -5540,7 +5631,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 134,
+        "total": 397,
+        "rate": 33.8,
+        "date": "2026-10-20",
+        "source": "Full sequential sweep 2026-10-20 on main da9859b6 (131/397; raw CSV in the parity-sweep goal workspace) + verified single-test flips in PRs #244, #245, #246"
+      }
     },
     "http2": {
       "apis": 64,
@@ -5866,7 +5964,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 35,
+        "total": 277,
+        "rate": 12.6,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "https": {
       "apis": 13,
@@ -5937,7 +6042,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 20,
+        "total": 67,
+        "rate": 29.9,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "inspector": {
       "apis": 13,
@@ -6008,7 +6120,14 @@
           "status": "honest-noop",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 29,
+        "total": 74,
+        "rate": 39.2,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "module": {
       "apis": 27,
@@ -6149,7 +6268,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 29,
+        "total": 32,
+        "rate": 90.6,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "net": {
       "apis": 91,
@@ -6610,7 +6736,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 72,
+        "total": 156,
+        "rate": 46.2,
+        "date": "2026-10-17",
+        "source": "parity/HITLIST.md update 2026-10-17 (PR #231 vendored the 156 official tests)"
+      }
     },
     "os": {
       "apis": 23,
@@ -6731,7 +6864,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 7,
+        "total": 7,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "path": {
       "apis": 16,
@@ -6817,7 +6957,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 16,
+        "total": 16,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "perf_hooks": {
       "apis": 68,
@@ -7163,7 +7310,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 13,
+        "total": 15,
+        "rate": 86.7,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "process": {
       "apis": 66,
@@ -7499,7 +7653,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 81,
+        "total": 97,
+        "rate": 83.5,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "punycode": {
       "apis": 6,
@@ -7576,7 +7737,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 3,
+        "total": 3,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "readline": {
       "apis": 9,
@@ -7627,7 +7795,14 @@
           "status": "unknown",
           "reason": "export shape not extractable from source (re-export or computed)"
         }
-      ]
+      ],
+      "parity": {
+        "passed": 22,
+        "total": 22,
+        "rate": 100,
+        "date": "2026-10-12",
+        "source": "parity/HITLIST.md update 2026-10-12 (Node v24.20.0 port restored)"
+      }
     },
     "repl": {
       "apis": 17,
@@ -7719,7 +7894,14 @@
           "reason": "not yet implemented"
         }
       ],
-      "loadError": "Directory import '/home/hatch/workspace/bundleVFSModules-vite7/src/readline' is not supported resolving ES modules imported from /home/hatch/workspace/bundleVFSModules-vite7/src/repl.js"
+      "loadError": "Directory import '/home/hatch/workspace/bundleVFSModules-vite7/src/readline' is not supported resolving ES modules imported from /home/hatch/workspace/bundleVFSModules-vite7/src/repl.js",
+      "parity": {
+        "passed": 78,
+        "total": 102,
+        "rate": 76.5,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "sea": {
       "apis": 5,
@@ -7750,7 +7932,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 0,
+        "total": 2,
+        "rate": 0,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "sqlite": {
       "apis": 33,
@@ -7921,7 +8110,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 0,
+        "total": 17,
+        "rate": 0,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "stream": {
       "apis": 100,
@@ -8427,7 +8623,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 237,
+        "total": 237,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "stream/consumers": {
       "apis": 6,
@@ -8505,7 +8708,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 2,
+        "total": 2,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "sys": {
       "apis": 53,
@@ -8908,7 +9118,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 45,
+        "total": 45,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "tls": {
       "apis": 44,
@@ -9134,7 +9351,14 @@
           "status": "honest-noop",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 29,
+        "total": 220,
+        "rate": 13.2,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "trace_events": {
       "apis": 2,
@@ -9150,7 +9374,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 28,
+        "total": 29,
+        "rate": 96.6,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "tty": {
       "apis": 12,
@@ -9216,7 +9447,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 5,
+        "total": 5,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "url": {
       "apis": 57,
@@ -9507,7 +9745,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 16,
+        "total": 16,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "util": {
       "apis": 53,
@@ -9778,7 +10023,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 28,
+        "total": 31,
+        "rate": 90.3,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "v8": {
       "apis": 41,
@@ -9989,7 +10241,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 22,
+        "total": 22,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "vm": {
       "apis": 13,
@@ -10060,7 +10319,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 48,
+        "total": 97,
+        "rate": 49.5,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "wasi": {
       "apis": 5,
@@ -10091,7 +10357,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 2,
+        "total": 2,
+        "rate": 100,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "worker_threads": {
       "apis": 51,
@@ -10352,7 +10625,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 134,
+        "total": 141,
+        "rate": 95,
+        "date": "2026-10-11",
+        "source": "parity/HITLIST.md full-ranking sweep 2026-10-11"
+      }
     },
     "zlib": {
       "apis": 47,
@@ -10593,7 +10873,14 @@
           "status": "implemented",
           "reason": ""
         }
-      ]
+      ],
+      "parity": {
+        "passed": 43,
+        "total": 65,
+        "rate": 66.2,
+        "date": "2026-10-19",
+        "source": "PR #237 (zlib parity); supersedes the 33/65 in parity/HITLIST.md's full-ranking table"
+      }
     }
   }
 }

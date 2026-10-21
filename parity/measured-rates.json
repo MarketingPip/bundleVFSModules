@@ -1,0 +1,251 @@
+{
+  "_about": "Measured official-test pass rates per module, consumed by scripts/generate-capability-matrix.mjs. Entries are added ONLY from actual sweep runs (never derived from the capability matrix itself, never estimated). Update an entry when its module is re-swept, and record the new date and source. Method for all entries unless noted: each test-<module>-* file in parity/node-test/parallel run via parity/preload.mjs with PARITY_TARGET=<module>, 30s timeout per file; counts are raw (entries in parity/expected-failures.shim.json are NOT subtracted).",
+  "modules": {
+    "assert": {
+      "date": "2026-10-11",
+      "passed": 18,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 18
+    },
+    "async_hooks": {
+      "date": "2026-10-11",
+      "passed": 29,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 36
+    },
+    "buffer": {
+      "date": "2026-10-11",
+      "passed": 62,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 62
+    },
+    "child_process": {
+      "date": "2026-10-11",
+      "passed": 6,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 112
+    },
+    "cluster": {
+      "date": "2026-10-11",
+      "passed": 4,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 83
+    },
+    "console": {
+      "date": "2026-10-11",
+      "passed": 22,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 22
+    },
+    "crypto": {
+      "date": "2026-10-11",
+      "passed": 129,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 129
+    },
+    "dgram": {
+      "date": "2026-10-11",
+      "passed": 1,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 80
+    },
+    "diagnostics_channel": {
+      "date": "2026-10-11",
+      "passed": 26,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 26
+    },
+    "dns": {
+      "date": "2026-10-11",
+      "passed": 10,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 31
+    },
+    "domain": {
+      "date": "2026-10-11",
+      "passed": 2,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 50
+    },
+    "events": {
+      "date": "2026-10-11",
+      "passed": 1,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 9
+    },
+    "fs": {
+      "date": "2026-10-17",
+      "passed": 324,
+      "source": "parity/HITLIST.md bottom-10 note (+9, 315->324; supersedes the stale 99/349 in its full-ranking table)",
+      "total": 349
+    },
+    "http": {
+      "date": "2026-10-20",
+      "passed": 134,
+      "source": "Full sequential sweep 2026-10-20 on main da9859b6 (131/397; raw CSV in the parity-sweep goal workspace) + verified single-test flips in PRs #244, #245, #246",
+      "total": 397
+    },
+    "http2": {
+      "date": "2026-10-11",
+      "passed": 35,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 277
+    },
+    "https": {
+      "date": "2026-10-11",
+      "passed": 20,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 67
+    },
+    "inspector": {
+      "date": "2026-10-11",
+      "passed": 29,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 74
+    },
+    "module": {
+      "date": "2026-10-11",
+      "passed": 29,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 32
+    },
+    "net": {
+      "date": "2026-10-17",
+      "passed": 72,
+      "source": "parity/HITLIST.md update 2026-10-17 (PR #231 vendored the 156 official tests)",
+      "total": 156
+    },
+    "os": {
+      "date": "2026-10-11",
+      "passed": 7,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 7
+    },
+    "path": {
+      "date": "2026-10-11",
+      "passed": 16,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 16
+    },
+    "perf_hooks": {
+      "date": "2026-10-11",
+      "passed": 13,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 15
+    },
+    "process": {
+      "date": "2026-10-11",
+      "passed": 81,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 97
+    },
+    "querystring": {
+      "date": "2026-10-11",
+      "passed": 3,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 3
+    },
+    "readline": {
+      "date": "2026-10-12",
+      "passed": 22,
+      "source": "parity/HITLIST.md update 2026-10-12 (Node v24.20.0 port restored)",
+      "total": 22
+    },
+    "repl": {
+      "date": "2026-10-11",
+      "passed": 78,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 102
+    },
+    "sea": {
+      "date": "2026-10-11",
+      "passed": 0,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 2
+    },
+    "sqlite": {
+      "date": "2026-10-11",
+      "passed": 0,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 17
+    },
+    "stream": {
+      "date": "2026-10-11",
+      "passed": 237,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 237
+    },
+    "string_decoder": {
+      "date": "2026-10-11",
+      "passed": 2,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 2
+    },
+    "timers": {
+      "date": "2026-10-11",
+      "passed": 45,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 45
+    },
+    "tls": {
+      "date": "2026-10-11",
+      "passed": 29,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 220
+    },
+    "trace_events": {
+      "date": "2026-10-11",
+      "passed": 28,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 29
+    },
+    "tty": {
+      "date": "2026-10-11",
+      "passed": 5,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 5
+    },
+    "url": {
+      "date": "2026-10-11",
+      "passed": 16,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 16
+    },
+    "util": {
+      "date": "2026-10-11",
+      "passed": 28,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 31
+    },
+    "v8": {
+      "date": "2026-10-11",
+      "passed": 22,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 22
+    },
+    "vm": {
+      "date": "2026-10-11",
+      "passed": 48,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 97
+    },
+    "wasi": {
+      "date": "2026-10-11",
+      "passed": 2,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 2
+    },
+    "worker_threads": {
+      "date": "2026-10-11",
+      "passed": 134,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "total": 141
+    },
+    "zlib": {
+      "date": "2026-10-19",
+      "passed": 43,
+      "source": "PR #237 (zlib parity); supersedes the 33/65 in parity/HITLIST.md's full-ranking table",
+      "total": 65
+    }
+  }
+}
