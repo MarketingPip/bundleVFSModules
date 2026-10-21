@@ -210,8 +210,58 @@ export class HTTPParser {
   }
 
   _parseStartLine() {
-    const found = this._findLine();
+    let found = this._findLine();
     if (!found) return false;
+    // llhttp ignores empty lines preceding the start line (RFC 9112
+    // section 4: a recipient MUST ignore at least one empty line
+    // before the request line). A pipelined request preceded by a
+    // stray CRLF is not a parse error
+    // (test-http-incoming-pipelined-socket-destroy writes one).
+    let skippedEmpty = false;
+    while (found.text === "") {
+      skippedEmpty = true;
+      this._off = found.next;
+      found = this._findLine();
+      if (!found) break;
+    }
+    if (!found) {
+      // No complete line yet. llhttp is a byte-level machine and
+      // rejects an invalid start line eagerly, without waiting for
+      // its CRLF — e.g. the garbage after a blank header block in
+      // test-http-blank-header ("hello world") must produce a 400,
+      // not a wait for bytes that never come. A line-based parser
+      // can only decide this once empty lines were skipped (the
+      // pre-skip path never reaches a new message start), so judge
+      // the partial remainder here: it must still be a viable
+      // start-line prefix, otherwise throw what the complete-line
+      // path would throw.
+      if (skippedEmpty && this._off < this._buf.length) {
+        const partial = this._buf.toString("latin1", this._off);
+        if (this.type === "request") {
+          const sp = partial.indexOf(" ");
+          const token = sp < 0 ? partial : partial.slice(0, sp);
+          const viable =
+            token.length > 0 &&
+            TOKEN_RE.test(token) &&
+            (sp >= 0
+              ? KNOWN_METHODS.has(token)
+              : [...KNOWN_METHODS].some((m) => m.startsWith(token)));
+          if (!viable) {
+            throw parseError("HPE_INVALID_METHOD", `invalid method: ${token}`);
+          }
+        } else if (
+          partial.length > 0 &&
+          !"HTTP/".startsWith(partial.slice(0, 5)) &&
+          !partial.startsWith("HTTP/")
+        ) {
+          throw parseError(
+            "HPE_INVALID_CONSTANT",
+            `invalid response prefix: ${partial.slice(0, 10)}`,
+          );
+        }
+      }
+      return false;
+    }
     const line = found.text;
     this._off = found.next;
     this._headerBytes = (this._headerBytes || 0) + line.length + 2; // +CRLF
