@@ -571,9 +571,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const nonDist = files.filter(
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
-    expect(nonDist.sort()).toEqual(
-      ["NOTES-http-agent-timeout.md", "src/http.js"].sort(),
-    );
+    expect(nonDist.sort()).toEqual(["parity/HITLIST.md"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {

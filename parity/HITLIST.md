@@ -1,6 +1,7 @@
 # Parity Hit List — Node builtin shims ranked by official-test pass rate
 
 Generated 2026-10-11 (sweep of `parity/node-test/parallel`, shim lane).
+Updated 2026-10-20: http re-swept on main (see the http row): 108/399 → 131/397.
 Updated 2026-10-12: readline 0/22 → 3/22 after PR #218.
 Updated 2026-10-12: readline 3/22 → 22/22 — restored the Node v24.20.0 port
 (commit 89b18176 had replaced the 2838-line port with a 642-line hand shim,
@@ -49,7 +50,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | http2 | 35 | 277 | 12.6% |
 | child_process | 6 | 112 | 5.4% |
 | fs | 99 | 349 | 28.4% |
-| http | 108 | 399 | 27.1% | Baseline 2026-10-14 on feat/http-parity (unmerged) after socket-leak fix (ClientRequest.destroy / ServerResponse._destroy now destroy sockets; streaming for virtual server responses + client 'response' on headers): 108/399. 103 tests still hit the 30s spawn timeout (SIGTERM) — mostly Agent/keep-alive/timeout lifecycle; 8 agent-pooling tests need Agent socket pooling (not yet implemented); 17 fast failures need triage. |
+| http | 131 | 397 | 33.0% | Full sequential re-sweep 2026-10-20 on main da9859b6 (30s/file, PARITY_TARGET=http; raw CSV: goals/node-parity-sweep hidden_files/http-sweep-2026-10-20.csv; sample re-runs reproduce exactly). 108/399 → 131/397 after PRs #238–#242 (keep-alive/chunked framing, chunk-extensions EOF ownership, agent onSocket delivery + idle reaping, blank-header pipelined validation, pooled-socket timeouts + keepSocketAlive + round-trip listener detach). Remaining 266: 118 timeouts (clusters: server-* 19, client-* 16) and 148 fast failures (client-* 32, server-* 24, agent-* 13, outgoing-* 11, upgrade-* 7). NONE of the 266 are documented in expected-failures.shim.json — all are unclassified gaps, not documented-inherent. |
 | domain | 2 | 50 | 4.0% |
 | cluster | 4 | 83 | 4.8% |
 | events | 1 | 9 | 11.1% |
