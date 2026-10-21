@@ -573,8 +573,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     );
     expect(nonDist.sort()).toEqual(
       [
-        "NOTES-http-incoming-pipelined-socket-destroy.md",
-        "src/_http_parser.js",
+        "NOTES-capability-matrix.md",
+        "docs/CAPABILITY_MATRIX.md",
+        "docs/capability-matrix.json",
+        "scripts/generate-capability-matrix.mjs",
       ].sort(),
     );
   });
