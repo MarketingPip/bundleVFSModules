@@ -925,6 +925,11 @@ export class ServerResponse extends OutgoingMessage {
 
   _implicitHeader() {
     this.writeHead(this.statusCode);
+    // The header block was rendered by end()/write() itself, not committed
+    // by an explicit writeHead() — _finishSocketResponse may therefore
+    // frame a single buffered body with Content-Length (Node behavior).
+    // An explicit writeHead() leaves this unset and the body is chunked.
+    this._headersImplicit = true;
   }
 
   /**
@@ -2919,12 +2924,19 @@ class ServerBase extends EventEmitter {
    */
   _onSocketConnection(socket) {
     this._connections.add(socket);
+    // Like Node's _http_server, the HTTP layer — not the stream layer —
+    // decides when an EOF'd socket closes: with allowHalfOpen set, a peer
+    // FIN no longer auto-ends the writable side while a response is still
+    // in flight. The 'end' handler below records the EOF (state.peerEnded)
+    // and _finishSocketResponse closes the socket after the response.
+    socket.allowHalfOpen = true;
     const state = {
       busy: false, // a request is being handled; parser input is gated
       awaitingBody: false, // the in-flight request still expects body bytes
       pending: [], // chunks received while busy
       reqCount: 0,
       current: null, // { req, res } for the in-flight request
+      peerEnded: false, // peer sent FIN; close once the response is out
     };
     socket._httpState = state;
     socket.on("close", () => {
@@ -3010,7 +3022,14 @@ class ServerBase extends EventEmitter {
         return;
       }
       if (state.busy && state.awaitingBody) {
-        state.pending.push(chunk);
+        // The parser is mid-message: these bytes are the in-flight
+        // request's body. Feed them — parking them until the response
+        // finishes deadlocks, since the response waits for the body.
+        // Bytes past the end of this message stay buffered inside the
+        // parser (it pauses between messages) and are parsed once
+        // _finishSocketResponse unpauses it.
+        // (test-http-chunk-extensions-limit block 2)
+        parser.execute(chunk);
         return;
       }
       parser.execute(chunk);
@@ -3019,7 +3038,11 @@ class ServerBase extends EventEmitter {
       /* 'close' handles cleanup */
     });
     socket.on("end", () => {
-      // Client half-closed an idle keep-alive connection: close our side.
+      // Client half-closed. If a request is in flight, the response still
+      // has to be written first — record the EOF and let
+      // _finishSocketResponse close the socket afterwards. Only an idle
+      // keep-alive connection is closed immediately.
+      state.peerEnded = true;
       if (!state.busy) socket.end();
     });
     state.parser = parser;
@@ -3057,14 +3080,19 @@ class ServerBase extends EventEmitter {
       this._finishSocketResponse(socket, info, state, req, res, reqNo);
     });
 
-    queueMicrotask(() => {
-      try {
-        this.emit("request", req, res);
-      } catch (err) {
-        this.emit("clientError", err, socket);
-        socket.destroy(err);
-      }
-    });
+    // Dispatch synchronously, like Node's parserOnIncoming: the handler
+    // must attach its req listeners before the parser feeds the body and
+    // before a peer FIN queued behind this chunk is processed. Deferring
+    // to a microtask loses both races — body EOF fires before the handler
+    // attaches, and the socket's EOF handling (nextTick-ordered) runs
+    // before the microtask, closing the socket under the pending response.
+    // (test-http-chunk-extensions-limit)
+    try {
+      this.emit("request", req, res);
+    } catch (err) {
+      this.emit("clientError", err, socket);
+      socket.destroy(err);
+    }
     if (!info.hasBody) req._finishBody();
     return { req, res };
   }
@@ -3094,7 +3122,13 @@ class ServerBase extends EventEmitter {
       const hasCL = res.hasHeader("content-length");
       const hasTE = res.hasHeader("transfer-encoding");
       const isHttp10 = res._reqHttpVersion === "1.0";
-      if (!hasCL && !hasTE && !noBodyStatus && !isHttp10) {
+      // Node frames with Content-Length only when the header block was
+      // rendered implicitly by end() itself, so the length is known before
+      // anything is committed. An explicit writeHead() commits the headers
+      // first; the body that follows is chunked instead.
+      // (test-http-chunk-extensions-limit block 3)
+      const implicitHeader = res._headersImplicit === true;
+      if (!hasCL && !hasTE && !noBodyStatus && !isHttp10 && implicitHeader) {
         // Frame the body like Node does when its length is known at end():
         // HEAD responses carry the length but no bytes.
         // (Not for HTTP/1.0: Node closes instead of auto-framing.)
@@ -3110,6 +3144,23 @@ class ServerBase extends EventEmitter {
       let te = hasTE
         ? String(res.getHeader("transfer-encoding"))
         : rendered["transfer-encoding"] || "";
+      if (
+        !te &&
+        !hasCL &&
+        !noBodyStatus &&
+        !isHttp10 &&
+        !implicitHeader &&
+        req.method !== "HEAD"
+      ) {
+        // Explicit writeHead() committed the headers with no length
+        // framing: the buffered body is sent chunked, like Node.
+        te = "chunked";
+        headOut = headOut.replace(
+          /\r\n$/,
+          "Transfer-Encoding: chunked\r\n\r\n",
+        );
+        rendered["transfer-encoding"] = "chunked";
+      }
       if (!te && !hasCL && isHttp10 && res._reqHadTE && !noBodyStatus) {
         te = "chunked";
         headOut = headOut.replace(
@@ -3174,7 +3225,8 @@ class ServerBase extends EventEmitter {
       maxOk &&
       !socket.destroyed &&
       framingOk &&
-      !noBodyWithTE;
+      !noBodyWithTE &&
+      !state.peerEnded;
     if (keepAlive) {
       state.busy = false;
       state.awaitingBody = false;
