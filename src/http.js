@@ -3470,6 +3470,23 @@ class ServerBase extends EventEmitter {
         }
         socket.parser = null;
       }
+      // Release the real parser's request-capturing callbacks at socket
+      // close, so a finished request can be garbage collected on a clean
+      // keep-alive close (test-http-server-keepalive-req-gc): onBody and
+      // onMessageComplete close over the dispatched { req, res }, and the
+      // client-side socket still links to this socket via _peer after a
+      // graceful FIN (a FIN deliberately does not null the link, so the
+      // peer stays writable). Before #246, the trailing CRLF tripped a
+      // parse error whose socket.destroy() nulled the peer link and freed
+      // req by accident; the clean-close path never released it, so req
+      // stayed reachable forever and the test hung. Clearing here is
+      // safe: a closed socket is never parsed again.
+      parser.onBody = null;
+      parser.onMessageComplete = null;
+      parser.onHeadersComplete = null;
+      parser.onMessageStart = null;
+      parser.onError = null;
+      state.parser = null;
     });
     // Node parity: servers emit 'connection' for every accepted socket.
     this.emit("connection", socket);

@@ -581,6 +581,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (src/http.js + working note).
     // fix/http-trailer-validation branch: Trailer-header validation
     // (src/http.js + working note).
+    // fix/http-req-gc-regression branch: server-socket close releases
+    // the parser's request-capturing callbacks (src/http.js + note).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check. So are the
@@ -589,7 +591,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-trailer-validation.md", "src/http.js"].sort(),
+      ["NOTES-http-req-gc-regression.md", "src/http.js"].sort(),
     );
   });
 
