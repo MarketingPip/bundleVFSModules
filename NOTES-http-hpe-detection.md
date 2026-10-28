@@ -154,4 +154,47 @@ Any future parser strictness needs a loopback-emitter audit first.
   oracle surfaces); sandbox/runtime --check pass; build-vfs failed
   once on an esm.sh fetch flake for the unrelated bundler special,
   passed on pristine base (exit 0), branch retry pending at time of
-  writing. Retriggered with this notes-only commit.
+  writing. Retriggered with this notes-only commit. (Update: branch
+  build-vfs retry passed exit 0; retrigger head 99f95a0f went
+  green on both CI jobs, confirming transient.)
+
+## Follow-up: proxy regression + bonus flips (after the retrigger)
+
+Full sweep diff (branch pre-proxy-fix tree vs pristine base
+`cb4ac2b9`, 397 tests: branch 186 pass / 84 timeout / 127 fail
+vs base 183 / 83 / 131) showed, besides the two named flips, two
+bonus flips and one regression:
+
+- `test-http-invalid-te` 1 → 0 — HackerOne 735748 request
+  smuggling case: `Content-Length: 10` +
+  `Transfer-Encoding: eee, chunked`, expects
+  HPE_INVALID_TRANSFER_ENCODING. Genuine.
+- `test-http-missing-header-separator-lf` 1 → 0 — bare-`\r`
+  header smuggling (`Dummy: x\rContent-Length: 23`,
+  `x:x\rTransfer-Encoding: chunked`, …); expects exactly the
+  400 bytes, which the no-listener clientError path writes.
+  Genuine.
+- `test-http-proxy` base 0 → branch 124 — REGRESSION, fixed in
+  this lane (see below). The proxy forwards the backend's chunked
+  response by doing `writeHead(code, upstreamHeaders)` (TE chunked
+  lands in `_renderedHeaders`) then `write(chunk)` + `end()`.
+  With the dual-store fix, `_streamingHeader()` now saw the
+  app-set TE and skipped its `if (!hasCL && !hasTE ...)` block —
+  but that block is also the ONLY place `_chunkedStreaming` is
+  set true. So the proxy response sent unframed chunks and
+  `_finishSocketResponse` sent no chunked terminator (it gates on
+  `_chunkedStreaming`), and the client hung waiting for the
+  terminator ("got res", "proxy res", never "closed both").
+
+Fix (src/http.js, `_streamingHeader()`): when there is no CL and
+chunked framing is version-allowed, an already-set TE header
+containing the chunked token now ALSO sets `_chunkedStreaming =
+true` (values read from both stores, covering setHeader,
+writeHead(obj), and array-form headers). Non-chunked TE (e.g.
+gzip) still leaves it false: raw body, no terminator, as on real
+Node. After the fix `test-http-proxy` passes with "closed both".
+
+Lesson (both framing bugs): the flag that says "this stream is
+chunked" must follow the app's TE header, not just the header
+this function itself adds. Branch re-sweep on the final tree
+pending at time of writing; merge waits on a clean diff.

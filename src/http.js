@@ -1226,15 +1226,32 @@ export class ServerResponse extends OutgoingMessage {
     // request advertised `TE: chunked`, Node does use chunked for 1.0.
     const isHttp10 = this._reqHttpVersion === "1.0";
     const allowChunked10 = isHttp10 && this._reqHadTE;
-    if (
-      !hasCL &&
-      !hasTE &&
-      this._hasBody !== false &&
-      (!isHttp10 || allowChunked10)
-    ) {
-      // Node defaults to chunked when length is unknown and we're streaming.
-      header = header.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
-      this._chunkedStreaming = true;
+    if (!hasCL && this._hasBody !== false && (!isHttp10 || allowChunked10)) {
+      if (!hasTE) {
+        // Node defaults to chunked when length is unknown and we're streaming.
+        header = header.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
+        this._chunkedStreaming = true;
+      } else {
+        // The app already set Transfer-Encoding: chunked (via setHeader
+        // or writeHead(obj)) — the stream is still chunked, so chunk
+        // framing and the terminator must apply even though no header
+        // is added here. Without this, a proxy forwarding a chunked
+        // response (writeHead with the upstream TE header, then
+        // write/end) sent unframed chunks and no terminator, and the
+        // client hung waiting for it (test-http-proxy). Non-chunked
+        // TE (e.g. gzip) leaves _chunkedStreaming false: raw body, no
+        // terminator, as on real Node.
+        const teVals = [];
+        const h = this.getHeader("transfer-encoding");
+        if (h !== undefined) teVals.push(...(Array.isArray(h) ? h : [h]));
+        const r = rendered["transfer-encoding"];
+        if (r !== undefined) teVals.push(...(Array.isArray(r) ? r : [r]));
+        if (
+          teVals.some((v) => /(^|[, \t])chunked([, \t]|$)/i.test(String(v)))
+        ) {
+          this._chunkedStreaming = true;
+        }
+      }
     }
     return header;
   }
