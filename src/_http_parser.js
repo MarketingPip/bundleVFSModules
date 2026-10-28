@@ -472,7 +472,11 @@ export class HTTPParser {
     const info = this._info;
     info.rawHeaders = this._rawHeaders;
     info.headers = {};
-    info.headersDistinct = {};
+    // Null-prototype: a "constructor" header must not read
+    // Object.prototype when its values are accumulated (below), or the
+    // parser throws and the server answers 400
+    // (test-http-server-multiheaders).
+    info.headersDistinct = Object.create(null);
     let contentLength = null;
     let chunked = false;
     let connection = "";
@@ -491,8 +495,14 @@ export class HTTPParser {
           info.headers[lower] = cur.concat(arr);
         }
       } else {
-        info.headers[lower] =
-          lower in info.headers ? `${info.headers[lower]}, ${value}` : value;
+        // hasOwnProperty, not `in`: a "constructor" header must not read
+        // Object.prototype (test-http-server-multiheaders).
+        info.headers[lower] = Object.prototype.hasOwnProperty.call(
+          info.headers,
+          lower,
+        )
+          ? `${info.headers[lower]}, ${value}`
+          : value;
       }
       info.headersDistinct[lower] = (info.headersDistinct[lower] || []).concat(
         value,
