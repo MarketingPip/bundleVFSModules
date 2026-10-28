@@ -2849,6 +2849,13 @@ class ServerBase extends EventEmitter {
     this.headersTimeout = options.headersTimeout ?? 60000;
     this.requestTimeout = options.requestTimeout ?? 300000;
     this.keepAliveTimeout = options.keepAliveTimeout ?? 5000;
+    // createServer({ IncomingMessage }) — the per-request message class.
+    // Stored raw; dispatch uses it only when it is a constructor, so an
+    // invalid value falls back to the default instead of crashing the
+    // loop (real Node dies with "ParserIncomingMessage is not a
+    // constructor" there; no official test covers invalid values, and a
+    // browser shim must not take the whole page down for one bad option).
+    this._incomingMessageClass = options.IncomingMessage;
     this.connectionsCheckingInterval =
       options.connectionsCheckingInterval ?? 30000;
     this._port = null;
@@ -3302,7 +3309,15 @@ class ServerBase extends EventEmitter {
    * The request body streams into req via parser.onBody as bytes arrive.
    */
   _dispatchSocketRequest(socket, info, state) {
-    const req = new IncomingMessage(socket);
+    // createServer({ IncomingMessage: Sub }) delivers Sub instances:
+    // the subclass constructor receives exactly one argument, the socket
+    // (probed on real Node v24.22.1). Default behavior is byte-identical
+    // — no option means the plain IncomingMessage, as before.
+    const ReqClass =
+      typeof this._incomingMessageClass === "function"
+        ? this._incomingMessageClass
+        : IncomingMessage;
+    const req = new ReqClass(socket);
     req.method = info.method;
     req.url = info.url;
     req.httpVersionMajor = info.httpVersionMajor;
