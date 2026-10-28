@@ -278,6 +278,60 @@ export function validateHeaderValue(name, value) {
   }
 }
 
+/**
+ * Normalize ClientRequest array-form headers to [[name, value], ...]
+ * pairs, preserving order and casing so duplicates survive to the wire
+ * as separate lines. Probed on real Node v24.22.1:
+ * - array of [name, value] pairs, or a flat [name, value, ...] array;
+ * - odd-length flat arrays throw ERR_INVALID_ARG_VALUE at construction;
+ * - an undefined value throws ERR_HTTP_INVALID_HEADER_VALUE (this is
+ *   also what a non-array entry in pairs mode, or a short pair,
+ *   reduces to: [entry, undefined]);
+ * - number values are coerced to strings (wire shows "5").
+ */
+function normalizeArrayHeaders(headers) {
+  const pairs = [];
+  if (headers.length === 0) return pairs;
+  if (Array.isArray(headers[0])) {
+    for (const entry of headers) {
+      const name = Array.isArray(entry) ? entry[0] : entry;
+      const value = Array.isArray(entry) ? entry[1] : undefined;
+      validateHeaderName(name);
+      // An array value expands to one pair per element (probed: a
+      // ["cookie", ["a=1", "b=2", "c=3"]] pair reaches the server as
+      // three cookie lines, joined there with "; ").
+      if (Array.isArray(value)) {
+        for (const el of value) {
+          validateHeaderValue(name, el);
+          pairs.push([name, String(el)]);
+        }
+      } else {
+        validateHeaderValue(name, value);
+        pairs.push([name, String(value)]);
+      }
+    }
+  } else {
+    if (headers.length % 2 !== 0) {
+      throw ERR_INVALID_ARG_VALUE("headers", headers);
+    }
+    for (let n = 0; n < headers.length; n += 2) {
+      validateHeaderName(headers[n]);
+      // An array value expands to one pair per element, as in pairs mode.
+      const value = headers[n + 1];
+      if (Array.isArray(value)) {
+        for (const el of value) {
+          validateHeaderValue(headers[n], el);
+          pairs.push([headers[n], String(el)]);
+        }
+      } else {
+        validateHeaderValue(headers[n], value);
+        pairs.push([headers[n], String(value)]);
+      }
+    }
+  }
+  return pairs;
+}
+
 // ---------------------------------------------------------------------------
 // 4. Minimal synthetic socket — stands in for net.Socket (src/net.js is an
 //    npm-style shim; http must stay dependency-free, so we carry our own).
@@ -382,7 +436,10 @@ export class OutgoingMessage extends Writable {
   }
 
   get headersSent() {
-    return !!this._header;
+    // Array-form request headers count as sent from construction
+    // (probed on real Node v24.22.1: headersSent is true and setHeader
+    // throws immediately). _headersArray exists only on ClientRequest.
+    return !!this._header || !!this._headersArray;
   }
 
   get writableEnded() {
@@ -394,7 +451,7 @@ export class OutgoingMessage extends Writable {
   }
 
   setHeader(name, value) {
-    if (this._header) {
+    if (this._header || this._headersArray) {
       throw ERR_HTTP_HEADERS_SENT("set");
     }
     validateHeaderName(name);
@@ -416,7 +473,7 @@ export class OutgoingMessage extends Writable {
   }
 
   setHeaders(headers) {
-    if (this._header) {
+    if (this._header || this._headersArray) {
       throw ERR_HTTP_HEADERS_SENT("set");
     }
     if (
@@ -450,7 +507,7 @@ export class OutgoingMessage extends Writable {
   }
 
   appendHeader(name, value) {
-    if (this._header) {
+    if (this._header || this._headersArray) {
       throw ERR_HTTP_HEADERS_SENT("append");
     }
     validateHeaderName(name);
@@ -519,7 +576,7 @@ export class OutgoingMessage extends Writable {
 
   removeHeader(name) {
     validateString(name, "name");
-    if (this._header) {
+    if (this._header || this._headersArray) {
       throw ERR_HTTP_HEADERS_SENT("remove");
     }
     const key = name.toLowerCase();
@@ -800,6 +857,30 @@ export class OutgoingMessage extends Writable {
 // ---------------------------------------------------------------------------
 // 6. IncomingMessage — port of node:_http_incoming (Readable-based).
 // ---------------------------------------------------------------------------
+// Singleton headers whose later duplicates Node's parser drops (first
+// wins) instead of joining — probed on real Node v24.22.1, and matching
+// the multipleForbidden list in test-http-server-multiheaders2.
+const DUPLICATES_REMOVED = new Set([
+  "age",
+  "authorization",
+  "content-length",
+  "content-type",
+  "etag",
+  "expires",
+  "from",
+  "host",
+  "if-modified-since",
+  "if-unmodified-since",
+  "last-modified",
+  "location",
+  "max-forwards",
+  "proxy-authorization",
+  "referer",
+  "retry-after",
+  "server",
+  "user-agent",
+]);
+
 export class IncomingMessage extends Readable {
   constructor(socket) {
     super();
@@ -811,7 +892,10 @@ export class IncomingMessage extends Readable {
     this.complete = false;
     this.aborted = false;
     this.headers = {};
-    this.headersDistinct = {};
+    // headersDistinct is null-prototype (probed on real Node v24.22.1):
+    // a "constructor" header must not read Object.prototype when its
+    // values are accumulated (test-http-server-multiheaders).
+    this.headersDistinct = Object.create(null);
     this.rawHeaders = [];
     this.trailers = {};
     this.rawTrailers = [];
@@ -903,8 +987,20 @@ export class IncomingMessage extends Readable {
         const val = Array.isArray(value)
           ? value.map(String).join(", ")
           : String(value);
-        msg.headers[lower] =
-          lower in msg.headers ? `${msg.headers[lower]}, ${val}` : val;
+        // Node's parser drops later duplicates of singleton headers
+        // (first wins) but keeps every value in headersDistinct; other
+        // duplicates join with ", " (cookie with "; "). Probed on real
+        // Node v24.22.1 (host/cookie/content-type/x-foo duplicates).
+        // hasOwnProperty, not `in`: a "constructor" header must not read
+        // Object.prototype (test-http-server-multiheaders).
+        const owned = Object.prototype.hasOwnProperty.call(msg.headers, lower);
+        if (DUPLICATES_REMOVED.has(lower)) {
+          if (!owned) msg.headers[lower] = val;
+        } else if (lower === "cookie") {
+          msg.headers[lower] = owned ? `${msg.headers[lower]}; ${val}` : val;
+        } else {
+          msg.headers[lower] = owned ? `${msg.headers[lower]}, ${val}` : val;
+        }
         msg.headersDistinct[lower] = (msg.headersDistinct[lower] || []).concat(
           val,
         );
@@ -1603,6 +1699,39 @@ export class ClientRequest extends OutgoingMessage {
     }
     options = { __proto__: null, ...urlOpts, ...(options || {}) };
 
+    // Apply options.headers BEFORE any agent/socket activity: malformed
+    // headers throw at construction on real Node, and a throw after
+    // agent.addRequest() would leave a connection attempt racing the
+    // failed construction (unhandled 'error' on a dead request —
+    // test-http-client-headers-host-array).
+    // Default headers (Host, Authorization), mirroring Node. Array-form
+    // headers bypass kOutHeaders entirely (see normalizeArrayHeaders):
+    // getHeaders()/getHeader() do not reflect them, setHeader() throws
+    // once they are set, and no Host/Authorization default is added —
+    // the probed wire shows neither when array headers are supplied.
+    if (options.headers) {
+      if (Array.isArray(options.headers)) {
+        this._headersArray = normalizeArrayHeaders(options.headers);
+      } else {
+        for (const key of Object.keys(options.headers)) {
+          // A host header given as an array throws at construction
+          // (probed on real Node v24.22.1; setHeader("host", []) does
+          // not throw, so the check lives here, not in setHeader).
+          if (
+            key.toLowerCase() === "host" &&
+            Array.isArray(options.headers[key])
+          ) {
+            throw ERR_INVALID_ARG_TYPE(
+              "host",
+              "of type string",
+              options.headers[key],
+            );
+          }
+          this.setHeader(key, options.headers[key]);
+        }
+      }
+    }
+
     // --- agent -----------------------------------------------------------
     let agent = options.agent;
     const defAgent = options._defaultAgent || defaultAgent || globalAgent;
@@ -1702,14 +1831,9 @@ export class ClientRequest extends OutgoingMessage {
     }
     this.connection = this.socket;
 
-    // Default headers (Host, Authorization), mirroring Node.
-    if (options.headers) {
-      for (const key of Object.keys(options.headers)) {
-        this.setHeader(key, options.headers[key]);
-      }
-    }
     if (
       host &&
+      !this._headersArray &&
       !this.getHeader("host") &&
       options.setHost !== false &&
       options.setDefaultHeaders !== false
@@ -1720,7 +1844,11 @@ export class ClientRequest extends OutgoingMessage {
       }
       this.setHeader("Host", hostHeader);
     }
-    if (options.auth && !this.getHeader("authorization")) {
+    if (
+      options.auth &&
+      !this._headersArray &&
+      !this.getHeader("authorization")
+    ) {
       this.setHeader(
         "Authorization",
         `Basic ${Buffer.from(options.auth).toString("base64")}`,
@@ -1965,13 +2093,53 @@ export class ClientRequest extends OutgoingMessage {
    * for the buffered whole-body-at-end() path. Never throws: header
    * validation failures leave the request on the buffered path.
    */
+  /**
+   * Merge stashed array-form headers into a headers object for the
+   * virtual round trip, preserving duplicates as array values so
+   * _serializeRequestHead emits one line per pair (like Node on the
+   * wire). First-seen casing wins for the object key; the server
+   * parser lowercases anyway. Object-form requests pass through
+   * untouched (same reference).
+   */
+  _mergeArrayHeaders(headers) {
+    if (!this._headersArray) return headers;
+    const merged = { ...(headers || {}) };
+    const seen = new Map(); // lower -> key in merged
+    for (const key of Object.keys(merged)) seen.set(key.toLowerCase(), key);
+    for (const [name, value] of this._headersArray) {
+      const lower = String(name).toLowerCase();
+      const key = seen.get(lower);
+      if (key === undefined) {
+        seen.set(lower, name);
+        merged[name] = value;
+      } else if (Array.isArray(merged[key])) {
+        merged[key].push(value);
+      } else {
+        merged[key] = [merged[key], value];
+      }
+    }
+    return merged;
+  }
+
   _streamEnsureStarted() {
     if (this._stream !== undefined) return this._stream;
     const server = this._getVirtualServer();
     const method = this.method;
-    const hasCL = this.hasHeader("content-length");
-    const te = String(this.getHeader("transfer-encoding") || "").toLowerCase();
-    const upgrade = String(this.getHeader("upgrade") || "").toLowerCase();
+    // Array-form headers are invisible to getHeader()/hasHeader()
+    // (probed Node behavior), so consult the stashed pairs too.
+    const arrayHeader = (name) =>
+      this._headersArray?.find(([n]) => String(n).toLowerCase() === name)?.[1];
+    const hasCL =
+      this.hasHeader("content-length") ||
+      arrayHeader("content-length") !== undefined;
+    const te = String(
+      this.getHeader("transfer-encoding") ||
+        arrayHeader("transfer-encoding") ||
+        "",
+    ).toLowerCase();
+    const upgrade = String(
+      this.getHeader("upgrade") || arrayHeader("upgrade") || "",
+    ).toLowerCase();
     const eligible =
       server &&
       method !== "GET" &&
@@ -1988,9 +2156,12 @@ export class ClientRequest extends OutgoingMessage {
       return null;
     }
     const framing = hasCL ? "raw" : "chunked";
-    if (framing === "chunked" && !te) {
+    if (framing === "chunked" && !te && !this._headersArray) {
       // Materialize chunked framing like Node does on first write.
       // This runs before _implicitHeader(), so setHeader() cannot throw.
+      // (Skipped for array headers: setHeader() throws once they are
+      // set, so the framing header is folded into the stream headers
+      // below instead.)
       this.setHeader("transfer-encoding", "chunked");
     }
     const st = {
@@ -2006,7 +2177,22 @@ export class ClientRequest extends OutgoingMessage {
     for (const [k, v] of Object.entries(this.getHeaders())) {
       headers[k] = Array.isArray(v) ? v.join(", ") : String(v);
     }
-    st.roundTrip = this._performVirtualRequest(server, headers, null, true);
+    let streamHeaders = this._mergeArrayHeaders(headers);
+    if (
+      framing === "chunked" &&
+      !te &&
+      this._headersArray &&
+      arrayHeader("transfer-encoding") === undefined
+    ) {
+      streamHeaders = { ...streamHeaders, "transfer-encoding": "chunked" };
+    }
+    st.roundTrip = this._performVirtualRequest(
+      server,
+      streamHeaders,
+      null,
+      true,
+      !!this._headersArray,
+    );
     // An early rejection (e.g., socket assignment failure) must not
     // become an unhandled rejection before end(); _performRequest awaits
     // the same promise at end() and routes the error through its handler.
@@ -2149,10 +2335,16 @@ export class ClientRequest extends OutgoingMessage {
     // genuinely useful browser pattern) work with zero native sockets.
     const virtualServer = this._getVirtualServer();
     if (virtualServer) {
+      // The fetch path above deleted Host (browsers forbid user-set
+      // Host); the virtual path needs the real header set, including
+      // array-form pairs (duplicates as array values, one wire line
+      // per element). Object-form requests pass through untouched.
       await this._performVirtualRequest(
         virtualServer,
-        fetchOptions.headers,
+        this._mergeArrayHeaders(fetchOptions.headers),
         body.length > 0 ? body : null,
+        false,
+        !!this._headersArray,
       );
       return;
     }
@@ -2298,7 +2490,16 @@ export class ClientRequest extends OutgoingMessage {
     }
   }
 
-  async _performVirtualRequest(server, headers, body, streaming) {
+  async _performVirtualRequest(
+    server,
+    headers,
+    body,
+    streaming,
+    // Array-form request headers: the probed wire carries no Host
+    // default when no host pair is supplied, so suppress the
+    // serializer's "Host: localhost" fallback for such requests.
+    noDefaultHost = false,
+  ) {
     // The agent was already notified in the constructor (synchronous
     // addRequest). Wait for the socket assignment via onSocket().
     // Note: the agent used this.port; for virtual servers the actual port
@@ -2448,6 +2649,7 @@ export class ClientRequest extends OutgoingMessage {
         headers,
         body: body && body.length > 0 ? body : null,
         socket: sock,
+        noDefaultHost,
         // Streaming request (started by an early write()): the head was
         // pre-serialized with its framing; body chunks arrive via the
         // writer. The round-trip promise still resolves on response
@@ -2460,6 +2662,7 @@ export class ClientRequest extends OutgoingMessage {
                 this.path,
                 headers,
                 null,
+                noDefaultHost,
               ),
               onStreamReady: (writer) => {
                 const st = this._stream;
@@ -3117,7 +3320,13 @@ function getAllServers() {
  * loopback request gets a fresh connection like Node's default agent
  * would eventually recycle).
  */
-function _serializeRequestHead(method, path, headers, body) {
+function _serializeRequestHead(
+  method,
+  path,
+  headers,
+  body,
+  noDefaultHost = false,
+) {
   const lines = [`${method} ${path} HTTP/1.1`];
   let hasHost = false;
   let hasContentLength = false;
@@ -3135,7 +3344,7 @@ function _serializeRequestHead(method, path, headers, body) {
       push(name, value);
     }
   }
-  if (!hasHost) push("Host", "localhost");
+  if (!hasHost && !noDefaultHost) push("Host", "localhost");
   const bodyBuf =
     body == null ? null : Buffer.isBuffer(body) ? body : Buffer.from(body);
   if (!hasContentLength && bodyBuf && bodyBuf.length > 0) {
@@ -3169,6 +3378,7 @@ function _socketHttpRoundTrip(
     streaming,
     headBytes,
     onStreamReady,
+    noDefaultHost = false,
   },
 ) {
   return new Promise((resolve, reject) => {
@@ -3288,7 +3498,9 @@ function _socketHttpRoundTrip(
             });
           }
         } else {
-          sock.write(_serializeRequestHead(method, path, headers, body));
+          sock.write(
+            _serializeRequestHead(method, path, headers, body, noDefaultHost),
+          );
         }
       } catch (err) {
         fail(err);
