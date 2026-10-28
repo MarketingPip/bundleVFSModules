@@ -615,6 +615,12 @@ export class OutgoingMessage extends Writable {
       case "transfer-encoding":
         this._removedTE = true;
         break;
+      case "date":
+        // Probed real Node v24.22.1: removeHeader('date') suppresses the
+        // auto Date header (test-http-multiple-headers expects no Date
+        // line after removing it).
+        this._removedDate = true;
+        break;
     }
     if (this[kOutHeaders] !== null) {
       delete this[kOutHeaders][key];
@@ -678,7 +684,7 @@ export class OutgoingMessage extends Writable {
     }
 
     let header = firstLine;
-    if (this.sendDate && !flat.date) {
+    if (this.sendDate && !flat.date && !this._removedDate) {
       const date = new Date().toUTCString();
       header += `Date: ${date}\r\n`;
       flat.date = date;
@@ -747,27 +753,22 @@ export class OutgoingMessage extends Writable {
     this._renderedHeaders = flat;
   }
 
-  // Mirrors Node's processHeader array semantics: set-cookie (and other
-  // multi-value arrays of length >= 2 on non-cookie fields) stay separate
-  // lines; single-element arrays collapse to one line.
+  // Mirrors Node's processHeader array semantics (probed v24.22.1):
+  // multi-value arrays render one line per element — except headers in
+  // the uniqueHeaders list, which render a single line with values
+  // joined by '; ' (set-cookie included: probed, it joins too).
+  // pushLine already emits one line per array element and folds flat
+  // with ', ', so arrays reach it intact; only unique-listed arrays
+  // are pre-joined. Empty arrays render nothing.
   _renderHeaderEntry(pushLine, name, value) {
     if (Array.isArray(value)) {
-      const isCookie = String(name).toLowerCase() === "set-cookie";
-      if (isCookie) {
-        // set-cookie arrays must reach pushLine intact: joining them with
-        // '; ' would corrupt a multi-cookie response into one unparseable
-        // value (only the first cookie would survive the jar).
-        pushLine(name, value);
+      if (value.length === 0) return;
+      if (this[kUniqueHeaders]?.has(String(name).toLowerCase())) {
+        pushLine(name, value.map(String).join("; "));
         return;
       }
-      if (
-        value.length < 2 &&
-        !this[kUniqueHeaders]?.has(String(name).toLowerCase())
-      ) {
-        for (const v of value) pushLine(name, v);
-        return;
-      }
-      value = value.join(", ");
+      pushLine(name, value);
+      return;
     }
     pushLine(name, value);
   }
@@ -907,7 +908,14 @@ export class OutgoingMessage extends Writable {
     const lines = [];
     for (const [name, value] of Object.entries(t)) {
       if (Array.isArray(value)) {
-        for (const v of value) lines.push(`${name}: ${String(v)}\r\n`);
+        // Unique-listed trailers render one '; '-joined line, like
+        // unique-listed headers (test-http-multiple-headers: X-req-Y /
+        // X-Res-Y); all others one line per element.
+        if (this[kUniqueHeaders]?.has(String(name).toLowerCase())) {
+          lines.push(`${name}: ${value.map(String).join("; ")}\r\n`);
+        } else {
+          for (const v of value) lines.push(`${name}: ${String(v)}\r\n`);
+        }
       } else {
         lines.push(`${name}: ${String(value)}\r\n`);
       }
@@ -1021,6 +1029,9 @@ export class IncomingMessage extends Readable {
     this.rawHeaders = [];
     this.trailers = {};
     this.rawTrailers = [];
+    // trailersDistinct is null-prototype like headersDistinct (probed
+    // real Node v24.22.1): every trailer line's value, unjoined.
+    this.trailersDistinct = Object.create(null);
     this.method = null;
     this.url = null;
     this.statusCode = null;
@@ -1132,11 +1143,13 @@ export class IncomingMessage extends Readable {
 
   /**
    * Fold flat [name, value] trailer pairs (wire casing preserved, one
-   * pair per line) into trailers / rawTrailers, mirroring Node's trailer
-   * parsing: the same folding as headers (singletons first-wins, other
-   * duplicates join with ", ", cookie with "; ", set-cookie stays an
-   * array), but keys are lowercased plain-object keys and there is no
-   * trailersDistinct in Node.
+   * pair per line) into trailers / rawTrailers / trailersDistinct,
+   * mirroring Node's trailer parsing: the same folding as headers
+   * (singletons first-wins, other duplicates join with ", ", cookie
+   * with "; ", set-cookie stays an array), but keys are lowercased
+   * plain-object keys; trailersDistinct is null-prototype and keeps
+   * EVERY line's value unjoined (probed real Node v24.22.1, including
+   * singleton and cookie lines).
    */
   static _applyRawTrailers(msg, flatPairs) {
     for (let i = 0; i + 1 < flatPairs.length; i += 2) {
@@ -1144,6 +1157,10 @@ export class IncomingMessage extends Readable {
       const value = flatPairs[i + 1];
       const lower = String(key).toLowerCase();
       msg.rawTrailers.push(key, String(value));
+      if (msg.trailersDistinct) {
+        if (!msg.trailersDistinct[lower]) msg.trailersDistinct[lower] = [];
+        msg.trailersDistinct[lower].push(String(value));
+      }
       if (lower === "set-cookie") {
         const arr = [String(value)];
         if (msg.trailers[lower] === undefined) {
@@ -1905,6 +1922,16 @@ export class ClientRequest extends OutgoingMessage {
     }
     options = { __proto__: null, ...urlOpts, ...(options || {}) };
 
+    // request({ uniqueHeaders }) — probed real Node v24.22.1: send-side
+    // only (parsing never joins). Listed headers with array values
+    // serialize as one '; '-joined line; everything else one line per
+    // value. Stored as a lowercase Set for the virtual-path serializer
+    // and the chunked terminator; non-array values are ignored (no
+    // official test covers them).
+    this[kUniqueHeaders] = Array.isArray(options.uniqueHeaders)
+      ? new Set(options.uniqueHeaders.map((n) => String(n).toLowerCase()))
+      : null;
+
     // Apply options.headers BEFORE any agent/socket activity: malformed
     // headers throw at construction on real Node, and a throw after
     // agent.addRequest() would leave a connection attempt racing the
@@ -2327,6 +2354,38 @@ export class ClientRequest extends OutgoingMessage {
     return merged;
   }
 
+  /**
+   * Headers for the virtual-server round trip, preserving what the old
+   * ', '-flattening destroyed: first-seen casing (kOutHeaders entry[0])
+   * and per-value arrays, so _serializeRequestHead emits one wire line
+   * per value like Node — except headers in this request's
+   * uniqueHeaders list, whose arrays collapse to one '; '-joined line.
+   * Array-form pairs merge in after (their values join too when the
+   * name is unique). The real-fetch path keeps its own ', ' flattening;
+   * this builder is virtual-path only.
+   */
+  _virtualHeaders() {
+    const headers = {};
+    const kOut = this[kOutHeaders];
+    if (kOut) {
+      for (const lower of Object.keys(kOut)) {
+        const [name, value] = kOut[lower];
+        headers[name] = Array.isArray(value) ? [...value] : value;
+      }
+    }
+    const merged = this._mergeArrayHeaders(headers);
+    const unique = this[kUniqueHeaders];
+    if (unique) {
+      for (const key of Object.keys(merged)) {
+        const v = merged[key];
+        if (Array.isArray(v) && unique.has(key.toLowerCase())) {
+          merged[key] = v.map(String).join("; ");
+        }
+      }
+    }
+    return merged;
+  }
+
   _streamEnsureStarted() {
     if (this._stream !== undefined) return this._stream;
     const server = this._getVirtualServer();
@@ -2367,8 +2426,9 @@ export class ClientRequest extends OutgoingMessage {
       // This runs before _implicitHeader(), so setHeader() cannot throw.
       // (Skipped for array headers: setHeader() throws once they are
       // set, so the framing header is folded into the stream headers
-      // below instead.)
-      this.setHeader("transfer-encoding", "chunked");
+      // below instead.) Casing is 'Transfer-Encoding': real Node's wire
+      // shows it capitalized (test-http-multiple-headers rawHeaders).
+      this.setHeader("Transfer-Encoding", "chunked");
     }
     const st = {
       framing,
@@ -2378,12 +2438,10 @@ export class ClientRequest extends OutgoingMessage {
       roundTrip: null,
     };
     this._stream = st;
-    // Flatten headers exactly like _performRequest's fetchOptions.
-    const headers = {};
-    for (const [k, v] of Object.entries(this.getHeaders())) {
-      headers[k] = Array.isArray(v) ? v.join(", ") : String(v);
-    }
-    let streamHeaders = this._mergeArrayHeaders(headers);
+    // Preserve casing + per-value arrays for the wire (see
+    // _virtualHeaders); the old ', ' flattening collapsed multi-value
+    // headers into one line and lowercased every name.
+    let streamHeaders = this._virtualHeaders();
     if (
       framing === "chunked" &&
       !te &&
@@ -2438,7 +2496,11 @@ export class ClientRequest extends OutgoingMessage {
     if (!st || st.finished) return;
     st.finished = true;
     if (st.framing !== "chunked") return;
-    const term = Buffer.from("0\r\n\r\n");
+    // Render via _chunkTerminator, not a bare terminator: request
+    // trailers set via addTrailers() must reach the server
+    // (test-http-multiple-headers asserts req.rawTrailers). With no
+    // trailers this is byte-identical to the old bare terminator.
+    const term = Buffer.from(this._chunkTerminator(), "latin1");
     if (st.writer) st.writer.write(term);
     else st.pending.push(term);
   }
@@ -2542,12 +2604,14 @@ export class ClientRequest extends OutgoingMessage {
     const virtualServer = this._getVirtualServer();
     if (virtualServer) {
       // The fetch path above deleted Host (browsers forbid user-set
-      // Host); the virtual path needs the real header set, including
-      // array-form pairs (duplicates as array values, one wire line
-      // per element). Object-form requests pass through untouched.
+      // Host); the virtual path needs the real header set: first-seen
+      // casing, array-form pairs (duplicates as array values, one wire
+      // line per element), and uniqueHeaders '; ' joining — see
+      // _virtualHeaders. Object-form values pass through as arrays,
+      // not ', '-flattened.
       await this._performVirtualRequest(
         virtualServer,
-        this._mergeArrayHeaders(fetchOptions.headers),
+        this._virtualHeaders(),
         body.length > 0 ? body : null,
         false,
         !!this._headersArray,
@@ -3823,6 +3887,13 @@ class ServerBase extends EventEmitter {
     // the whole contract here (test-http-nodelay asserts the property
     // and the client connect options, nothing server-side).
     this.noDelay = options.noDelay == null ? true : Boolean(options.noDelay);
+    // createServer({ uniqueHeaders }) — same send-side-only semantics as
+    // the request option (probed real Node v24.22.1); forwarded to each
+    // ServerResponse at dispatch. Affects response headers (via
+    // _storeHeader) and response trailers (via _chunkTerminator).
+    this._serverUniqueHeaders = Array.isArray(options.uniqueHeaders)
+      ? new Set(options.uniqueHeaders.map((n) => String(n).toLowerCase()))
+      : null;
     this.timeout = 0;
     this.headersTimeout = options.headersTimeout ?? 60000;
     this.requestTimeout = options.requestTimeout ?? 300000;
@@ -4307,6 +4378,15 @@ class ServerBase extends EventEmitter {
       parser.onMessageComplete = () => {
         state.awaitingBody = false;
         state.receiving = false;
+        // Trailers arrive with the chunked terminator, after dispatch:
+        // fold them into the request before 'end' fires, so handlers
+        // asserting req.rawTrailers / req.trailers in 'end' see them
+        // (test-http-multiple-headers). parser.rawTrailers resets per
+        // message (_resetMessage), so no cross-request leak. The client
+        // round-trip path already applies its own copy (result.rawTrailers).
+        if (parser.rawTrailers && parser.rawTrailers.length > 0) {
+          IncomingMessage._applyRawTrailers(created.req, parser.rawTrailers);
+        }
         created.req._finishBody();
         state.current = null;
       };
@@ -4609,6 +4689,7 @@ class ServerBase extends EventEmitter {
     res._serverKeepAliveTimeout = this.keepAliveTimeout;
     res._serverMaxRequestsPerSocket = this.maxRequestsPerSocket;
     res._serverReqNo = reqNo;
+    res[kUniqueHeaders] = this._serverUniqueHeaders;
     // HTTP/1.0 keep-alive framing: Node uses chunked encoding for 1.0
     // responses when the request advertised `TE: chunked`.
     res._reqHadTE = /chunked/i.test(
