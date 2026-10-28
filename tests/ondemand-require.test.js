@@ -571,6 +571,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // docs/http-hitlist-138 branch: http docs sync only (HITLIST row +
     // measured-rates entry for PR #252's flip and the verified #250
     // side-effect flip).
+    // docs/http-hitlist-150 branch: http docs sync only (HITLIST row +
+    // measured-rates entry for PR #254's twelve verified flips).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check. So are the
@@ -579,12 +581,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-http-server-timeouts.md",
-        "src/_http_parser.js",
-        "src/http.js",
-        "src/net.js",
-      ].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 

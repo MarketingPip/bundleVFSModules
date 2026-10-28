@@ -81,8 +81,8 @@
     },
     "http": {
       "date": "2026-10-28",
-      "passed": 138,
-      "source": "Full sequential sweep 2026-10-20 on main da9859b6 (131/397; raw CSV in the parity-sweep goal workspace) + verified single-test flips in PRs #244, #245, #246 + verified single-test flips in PR #250 (client-keep-alive-hint, agent-keep-alive-timeout-buffer; both re-verified exit 0 on merged main 3e509abb) + verified flips in PR #252 (test-http-server) and a verified #250 side-effect flip (test-http-server-non-utf8-header: 124 in the Oct 20 sweep, exit 0 on post-#250 main f0fc91fd and on merged main 2983fd28)",
+      "passed": 150,
+      "source": "Full sequential sweep 2026-10-20 on main da9859b6 (131/397; raw CSV in the parity-sweep goal workspace) + verified single-test flips in PRs #244, #245, #246 + verified single-test flips in PR #250 (client-keep-alive-hint, agent-keep-alive-timeout-buffer; both re-verified exit 0 on merged main 3e509abb) + verified flips in PR #252 (test-http-server) and a verified #250 side-effect flip (test-http-server-non-utf8-header: 124 in the Oct 20 sweep, exit 0 on post-#250 main f0fc91fd and on merged main 2983fd28) + verified flips in PR #254 (4 server-headers-timeout, 7 server-request-timeout, server-keep-alive-timeout; all re-verified exit 0 on merged main 1d8bc7b4)",
       "total": 397
     },
     "http2": {
