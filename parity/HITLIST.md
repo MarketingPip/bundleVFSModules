@@ -3,6 +3,7 @@
 Generated 2026-10-11 (sweep of `parity/node-test/parallel`, shim lane).
 Updated 2026-10-20: http re-swept on main (see the http row): 108/399 → 131/397.
 Updated 2026-10-21: http 131/397 → 134/397 — three verified single-test flips (PRs #244, #245, #246), no re-sweep.
+Updated 2026-10-28: http 134/397 → 136/397 — two verified single-test flips (PR #250: client-keep-alive-hint, agent-keep-alive-timeout-buffer), no re-sweep.
 Updated 2026-10-12: readline 0/22 → 3/22 after PR #218.
 Updated 2026-10-12: readline 3/22 → 22/22 — restored the Node v24.20.0 port
 (commit 89b18176 had replaced the 2838-line port with a 642-line hand shim,
@@ -51,7 +52,7 @@ they do not subtract `parity/expected-failures.shim.json` entries.
 | http2 | 35 | 277 | 12.6% |
 | child_process | 6 | 112 | 5.4% |
 | fs | 99 | 349 | 28.4% |
-| http | 134 | 397 | 33.8% | Full sequential re-sweep 2026-10-20 on main da9859b6 (30s/file, PARITY_TARGET=http; raw CSV: goals/node-parity-sweep hidden_files/http-sweep-2026-10-20.csv; sample re-runs reproduce exactly). 108/399 → 131/397 after PRs #238–#242 (keep-alive/chunked framing, chunk-extensions EOF ownership, agent onSocket delivery + idle reaping, blank-header pipelined validation, pooled-socket timeouts + keepSocketAlive + round-trip listener detach), then 131 → 134 via PRs #244 (keep-alive close-on-header socket release + connect replay), #245 (get-pipeline-problem: writeHead framing + binary-safe coalesced writes), #246 (pipelined leading-empty-line skip in the start-line parser). Remaining 263: 118 timeouts (clusters: server-* 19, client-* 16) and 145 fast failures (client-* 32, server-* 24, agent-* 13, outgoing-* 11, upgrade-* 7). NONE of them are documented in expected-failures.shim.json — all are unclassified gaps, not documented-inherent. |
+| http | 136 | 397 | 34.3% | Full sequential re-sweep 2026-10-20 on main da9859b6 (30s/file, PARITY_TARGET=http; raw CSV: goals/node-parity-sweep hidden_files/http-sweep-2026-10-20.csv; sample re-runs reproduce exactly). 108/399 → 131/397 after PRs #238–#242 (keep-alive/chunked framing, chunk-extensions EOF ownership, agent onSocket delivery + idle reaping, blank-header pipelined validation, pooled-socket timeouts + keepSocketAlive + round-trip listener detach), then 131 → 134 via PRs #244 (keep-alive close-on-header socket release + connect replay), #245 (get-pipeline-problem: writeHead framing + binary-safe coalesced writes), #246 (pipelined leading-empty-line skip in the start-line parser), then 134 → 136 via PR #250 (agent keep-alive timeout-hint machinery: agentKeepAliveTimeoutBuffer storage + Keep-Alive: timeout hint park-time veto). Remaining 261: 118 timeouts (clusters: server-* 19, client-* 16) and 143 fast failures (client-* 32, server-* 24, agent-* 13, outgoing-* 11, upgrade-* 7). NONE of them are documented in expected-failures.shim.json — all are unclassified gaps, not documented-inherent. |
 | domain | 2 | 50 | 4.0% |
 | cluster | 4 | 83 | 4.8% |
 | events | 1 | 9 | 11.1% |

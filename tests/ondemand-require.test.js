@@ -566,6 +566,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // feat/net-parity branch: net parity (vendored tests + harness + fixes).
     // fix/http-keep-alive-hint branch: agent keep-alive timeout hint
     // (src/http.js fix + working note).
+    // docs/http-hitlist-136 branch: http docs sync only (HITLIST row +
+    // measured-rates entry for PR #250's two verified flips).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check. So are the
@@ -574,7 +576,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-keep-alive-hint.md", "src/http.js"].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
