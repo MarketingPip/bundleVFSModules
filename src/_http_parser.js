@@ -441,6 +441,22 @@ export class HTTPParser {
         this._finishHeaders();
         return true;
       }
+      // llhttp is byte-level: a CR inside a header line that is not part
+      // of the terminating CRLF is HPE_LF_EXPECTED ("Missing expected LF
+      // after header value", probed on real Node v24.22.1) — the line
+      // finder only splits on CRLF, so any CR left in the line text is
+      // bare by construction. Checked before the obs-fold check to match
+      // llhttp's byte order (the CR is hit while scanning the value).
+      // A trailing lone CR at the end of the buffer is NOT an error yet:
+      // _findLine returns null until the next byte arrives, so a split
+      // CRLF across chunks is never misjudged.
+      // (test-http-server-reject-cr-no-lf; response side identical.)
+      if (line.includes("\r")) {
+        throw parseError(
+          "HPE_LF_EXPECTED",
+          "Missing expected LF after header value",
+        );
+      }
       if (line[0] === " " || line[0] === "\t") {
         throw parseError(
           "HPE_INVALID_HEADER",
@@ -480,6 +496,7 @@ export class HTTPParser {
     info.headersDistinct = Object.create(null);
     let contentLength = null;
     let chunked = false;
+    let hasTransferEncoding = false;
     let connection = "";
     for (let i = 0; i < this._rawHeaders.length; i += 2) {
       const name = this._rawHeaders[i];
@@ -523,10 +540,27 @@ export class HTTPParser {
         }
         contentLength = value;
       } else if (lower === "transfer-encoding") {
+        // Any Transfer-Encoding header counts, whatever its value
+        // (probed: even an empty value errors with Content-Length).
+        hasTransferEncoding = true;
         if (/(^|[, \t])chunked([, \t]|$)/i.test(value)) chunked = true;
       } else if (lower === "connection") {
         connection += `,${value.toLowerCase()}`;
       }
+    }
+    // llhttp rejects any message carrying both Content-Length and
+    // Transfer-Encoding, whatever the TE value, version, or CL value
+    // (probed on real Node v24.22.1, request and response sides,
+    // including 204/304, HTTP/1.0, CL 0, empty TE, split TE headers).
+    // Checked after the loop so the inline conflicting-CL error keeps
+    // its existing precedence; framing and onHeadersComplete never run
+    // for a rejected message (test-http-server-reject-chunked-with-
+    // content-length; response side identical).
+    if (contentLength !== null && hasTransferEncoding) {
+      throw parseError(
+        "HPE_INVALID_TRANSFER_ENCODING",
+        "Transfer-Encoding can't be present with Content-Length",
+      );
     }
     const connClose = /(^|,)close(,|$)/.test(connection);
     const connKeepAlive = /(^|,)keep-alive(,|$)/.test(connection);

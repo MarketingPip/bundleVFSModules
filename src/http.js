@@ -1206,22 +1206,52 @@ export class ServerResponse extends OutgoingMessage {
    */
   _streamingHeader() {
     let header = this._header;
-    const hasCL = this.hasHeader("content-length");
-    const hasTE = this.hasHeader("transfer-encoding");
+    // Dual header stores (same trap as _finishSocketResponse): headers
+    // set via writeHead(obj) live in _renderedHeaders only, while
+    // hasHeader() sees kOutHeaders only. Consulting one store alone
+    // re-adds Transfer-Encoding: chunked on top of an app-set
+    // Content-Length — a response real Node's client would reject
+    // (HPE_INVALID_TRANSFER_ENCODING) and that the shim's own client
+    // parser now rejects too (test-http-keep-alive: writeHead CL +
+    // write() + end() stalled until this check saw both stores).
+    const rendered = this._renderedHeaders || {};
+    const hasCL =
+      this.hasHeader("content-length") ||
+      rendered["content-length"] !== undefined;
+    const hasTE =
+      this.hasHeader("transfer-encoding") ||
+      rendered["transfer-encoding"] !== undefined;
     // HTTP/1.0 does not support chunked transfer encoding — the connection
     // closes after the response instead (Node behavior). Exception: when the
     // request advertised `TE: chunked`, Node does use chunked for 1.0.
     const isHttp10 = this._reqHttpVersion === "1.0";
     const allowChunked10 = isHttp10 && this._reqHadTE;
-    if (
-      !hasCL &&
-      !hasTE &&
-      this._hasBody !== false &&
-      (!isHttp10 || allowChunked10)
-    ) {
-      // Node defaults to chunked when length is unknown and we're streaming.
-      header = header.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
-      this._chunkedStreaming = true;
+    if (!hasCL && this._hasBody !== false && (!isHttp10 || allowChunked10)) {
+      if (!hasTE) {
+        // Node defaults to chunked when length is unknown and we're streaming.
+        header = header.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
+        this._chunkedStreaming = true;
+      } else {
+        // The app already set Transfer-Encoding: chunked (via setHeader
+        // or writeHead(obj)) — the stream is still chunked, so chunk
+        // framing and the terminator must apply even though no header
+        // is added here. Without this, a proxy forwarding a chunked
+        // response (writeHead with the upstream TE header, then
+        // write/end) sent unframed chunks and no terminator, and the
+        // client hung waiting for it (test-http-proxy). Non-chunked
+        // TE (e.g. gzip) leaves _chunkedStreaming false: raw body, no
+        // terminator, as on real Node.
+        const teVals = [];
+        const h = this.getHeader("transfer-encoding");
+        if (h !== undefined) teVals.push(...(Array.isArray(h) ? h : [h]));
+        const r = rendered["transfer-encoding"];
+        if (r !== undefined) teVals.push(...(Array.isArray(r) ? r : [r]));
+        if (
+          teVals.some((v) => /(^|[, \t])chunked([, \t]|$)/i.test(String(v)))
+        ) {
+          this._chunkedStreaming = true;
+        }
+      }
     }
     return header;
   }
