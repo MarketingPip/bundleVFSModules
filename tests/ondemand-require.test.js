@@ -591,6 +591,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (src/http.js + src/net.js + working note).
     // fix/http-parse-error-surfacing branch: server parse-error
     // surfacing (src/http.js + src/_http_parser.js + note).
+    // fix/http-highwatermark branch: server highWaterMark option
+    // plumbing (src/http.js + preload _http_outgoing redirect + note).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check. So are the
@@ -600,7 +602,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     );
     expect(nonDist.sort()).toEqual(
       [
-        "NOTES-http-loop-drain.md",
+        "NOTES-http-highwatermark.md",
+        "parity/preload.mjs",
         "src/http.js",
       ].sort(),
     );

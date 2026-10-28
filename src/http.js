@@ -23,6 +23,11 @@
 
 import { EventEmitter } from "events";
 import { Readable, Writable } from "stream";
+// NOTE: imported from the relative path, NOT bare "stream": the esbuild
+// browser build resolves bare "stream" to node-modules-polyfills:stream,
+// which does not export getDefaultHighWaterMark (that import broke the
+// build — CI build failure on PR #268's first head, reproduced locally).
+import { getDefaultHighWaterMark } from "./stream/state.js";
 import { Buffer } from "buffer";
 import { _checkInvalidHeaderChar, _checkIsHttpToken } from "./_http_common.js";
 import { kUniqueHeaders, kHighWaterMark } from "./internals/http-symbols.js";
@@ -344,7 +349,11 @@ const INVALID_PATH_REGEX = /[^\u0021-\u00ff]/;
 export class OutgoingMessage extends Writable {
   constructor(options) {
     super({ highWaterMark: options?.highWaterMark });
-    this[kHighWaterMark] = options?.highWaterMark;
+    // Node: the symbol always reads a value — the default when no option
+    // is given (probed real Node v24.22.1: server res and client req both
+    // read getDefaultHighWaterMark(), 65536, with no option).
+    this[kHighWaterMark] =
+      options?.highWaterMark ?? getDefaultHighWaterMark(false);
     this[kOutHeaders] = null;
     this._header = null; // rendered header block; truthy => headers sent
     this._renderedHeaders = null; // flattened map for the server bridge
@@ -986,8 +995,8 @@ function _lookupHeader(headers, name, isOutHeadersMap) {
 }
 
 export class ServerResponse extends OutgoingMessage {
-  constructor(req) {
-    super();
+  constructor(req, options) {
+    super(options);
     // Node: res.req is the request this response belongs to
     // (test-http-server asserts res.req === req).
     this.req = req;
@@ -3373,6 +3382,40 @@ class ServerBase extends EventEmitter {
     // constructor" there; no official test covers invalid values, and a
     // browser shim must not take the whole page down for one bad option).
     this._incomingMessageClass = options.IncomingMessage;
+    // createServer({ highWaterMark }) — forwarded to every req/res pair:
+    // req._readableState.highWaterMark and res[kHighWaterMark] (plus the
+    // res Writable state) all read it; the default is
+    // getDefaultHighWaterMark() (65536). Probed real Node v24.22.1:
+    // non-number values throw ERR_INVALID_ARG_TYPE at createServer;
+    // negative integers fall back to the default; non-integer numbers
+    // throw ERR_INVALID_ARG_VALUE at connection time in real Node — here
+    // at createServer instead, so a bad value fails loudly at setup
+    // rather than as a swallowed mid-dispatch throw (which would hang
+    // the exchange, the failure mode this lane family keeps fixing).
+    if (
+      options.highWaterMark !== undefined &&
+      typeof options.highWaterMark !== "number"
+    ) {
+      throw ERR_INVALID_ARG_TYPE(
+        "options.highWaterMark",
+        "number",
+        options.highWaterMark,
+      );
+    }
+    if (
+      typeof options.highWaterMark === "number" &&
+      !Number.isInteger(options.highWaterMark)
+    ) {
+      throw ERR_INVALID_ARG_VALUE(
+        "options.highWaterMark",
+        options.highWaterMark,
+      );
+    }
+    const serverHwm = options.highWaterMark;
+    this._highWaterMark =
+      serverHwm === undefined || serverHwm < 0
+        ? getDefaultHighWaterMark(false)
+        : serverHwm;
     this.connectionsCheckingInterval =
       options.connectionsCheckingInterval ?? 30000;
     this._port = null;
@@ -3974,6 +4017,15 @@ class ServerBase extends EventEmitter {
         ? this._incomingMessageClass
         : IncomingMessage;
     const req = new ReqClass(socket);
+    // createServer({ highWaterMark }) reaches every request's readable
+    // state — including custom IncomingMessage subclasses, whose
+    // constructors take exactly one argument (the socket) and so cannot
+    // receive the option (probed real Node v24.22.1: a custom subclass
+    // still reads the server value). Post-construction set is the only
+    // uniform mechanism; the state field is read dynamically everywhere.
+    if (req._readableState) {
+      req._readableState.highWaterMark = this._highWaterMark;
+    }
     req.method = info.method;
     req.url = info.url;
     req.httpVersionMajor = info.httpVersionMajor;
@@ -4033,7 +4085,7 @@ class ServerBase extends EventEmitter {
       return { req, res: null };
     }
 
-    const res = new ServerResponse(req);
+    const res = new ServerResponse(req, { highWaterMark: this._highWaterMark });
     const reqNo = ++state.reqCount;
     // Node syncs res.shouldKeepAlive from the request's keep-alive status;
     // _storeHeader uses it to decide on `Connection: close`.

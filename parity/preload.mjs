@@ -94,6 +94,14 @@ if (target === "buffer") {
 // (same src/net.js module instance), so the connection reaches the server.
 function isExtraRedirect(name) {
   if (target === "http" && name === "net") return true;
+  // http tests that require('_http_outgoing') for kHighWaterMark need the
+  // shim's module: the shim's symbol identity must match the one on shim
+  // req/res objects (real Node's symbol is a different instance, so
+  // without this redirect res[kHighWaterMark] reads undefined even when
+  // the shim sets it — test-http-server-options-highwatermark,
+  // test-http-client-highwatermark, the only two http tests that require
+  // it). Mirrors the net redirect above (PR #232 precedent).
+  if (target === "http" && name === "_http_outgoing") return true;
   // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
   // zlib must read the same cell (mirrors Node's load-time capture).
   return target === "zlib" && name === "buffer";
