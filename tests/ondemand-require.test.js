@@ -571,8 +571,9 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // docs/http-hitlist-138 branch: http docs sync only (HITLIST row +
     // measured-rates entry for PR #252's flip and the verified #250
     // side-effect flip).
-    // docs/http-hitlist-150 branch: http docs sync only (HITLIST row +
-    // measured-rates entry for PR #254's twelve verified flips).
+    // docs/http-hitlist-154 branch: http docs sync only (HITLIST row +
+    // measured-rates entry for the 2026-10-28 full re-sweep restatement
+    // plus PR #256/#257/#259 verified flips).
     // fix/http-incoming-message-opt branch: createServer IncomingMessage
     // option (src/http.js + working note).
     // fix/http-client-streaming branch: client streaming writes +
@@ -593,7 +594,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-connect-dispatch.md", "src/http.js"].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
