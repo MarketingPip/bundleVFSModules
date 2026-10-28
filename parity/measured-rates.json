@@ -81,8 +81,8 @@
     },
     "http": {
       "date": "2026-10-28",
-      "passed": 150,
-      "source": "Full sequential sweep 2026-10-20 on main da9859b6 (131/397; raw CSV in the parity-sweep goal workspace) + verified single-test flips in PRs #244, #245, #246 + verified single-test flips in PR #250 (client-keep-alive-hint, agent-keep-alive-timeout-buffer; both re-verified exit 0 on merged main 3e509abb) + verified flips in PR #252 (test-http-server) and a verified #250 side-effect flip (test-http-server-non-utf8-header: 124 in the Oct 20 sweep, exit 0 on post-#250 main f0fc91fd and on merged main 2983fd28) + verified flips in PR #254 (4 server-headers-timeout, 7 server-request-timeout, server-keep-alive-timeout; all re-verified exit 0 on merged main 1d8bc7b4)",
+      "passed": 159,
+      "source": "Full sequential re-sweep 2026-10-28 on main 1d8bc7b4 (151/397; raw CSV in the parity-sweep goal workspace) + verified flips in PR #256 (options-incoming-message), PR #257 (consumed-timeout), PR #259 (connection-list-when-close); all three re-verified exit 0 on merged main 9c8a0c41. Re-sweep also restated the count: two unrecorded flips (client-timeout, keep-alive) and one regression (server-keepalive-req-gc 0->124, under investigation) vs the Oct 20 sweep. + verified flips in PR #258 (keep-alive-max-requests-null, merged main 7c4101c0), PR #263 (de-chunked-trailer, merged main 20eed2ac), PR #264 (keepalive-req-gc regression fixed, merged main bf0f3db9), PR #265 (unconsume-consume + connect-req-res, merged main c58a458e); all five re-verified exit 0 on their merged mains.",
       "total": 397
     },
     "http2": {
