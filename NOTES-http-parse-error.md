@@ -92,6 +92,31 @@ same-cause bonus `test-http-server-client-error` (1 → 0).
   not regressions.
 - `tests/ondemand-require.test.js`: 29/29 on the branch.
 
+## Repo-test corrections (probed real-Node behavior, not weakened checks)
+
+The full local suite initially showed 2 new failures beyond the known
+7-failure baseline, both in `tests/http-socket.test.js` — both encoded
+the shim's previous always-400 / wait-for-end behavior, which real Node
+contradicts (probed v24.22.1):
+
+- `"malformed request -> 400 and clientError"`: with a do-nothing
+  `clientError` listener, real Node sends NO 400 bytes (client sees
+  `'end'` with empty data); the old test only passed because the shim
+  always wrote 400. Rewritten as `"malformed request -> clientError, no
+  automatic 400 with a listener"`: the client ends its write, receives
+  nothing, and the code still surfaces as `HPE_INVALID_METHOD`. The
+  no-listener 400 path stays covered by the official
+  `test-http-server-destroy-socket-on-client-error`.
+- `"response: 204 and HEAD have no body"` trailing-garbage case:
+  real Node errors trailing `"xx"` after a 204 at once as
+  `HPE_INVALID_CONSTANT` (`"Parse Error: Expected HTTP/, RTSP/ or
+  ICE/"`), not `HPE_TRUNCATED` at end. Expectation corrected, and a
+  partial-viable-prefix case (`"HT"` + end) added to prove the
+  truncation path still works (`HPE_TRUNCATED`).
+
+After these corrections the full suite matches the known baseline
+exactly (see Testing).
+
 ## Not in scope (follow-up lanes, detection not surfacing)
 
 - `test-http-server-reject-chunked-with-content-length` (exit 1 on

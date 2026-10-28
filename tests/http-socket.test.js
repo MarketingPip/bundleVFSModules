@@ -299,7 +299,11 @@ describe("HTTPParser", () => {
     });
     expect(r204.events.map((e) => e[0])).toEqual(["headers", "complete"]);
     // Trailing bytes after a bodiless message are NOT body: they start the
-    // next message, so end() mid-line is a truncation error.
+    // next message, and llhttp rejects them at once (probed on real Node
+    // v24.22.1: trailing "xx" after a 204 errors HPE_INVALID_CONSTANT,
+    // "Parse Error: Expected HTTP/, RTSP/ or ICE/"). A partial but viable
+    // next-message prefix, by contrast, waits for more bytes and only
+    // errors as a truncation when the stream ends mid-line.
     const r204x = drive("response", ["HTTP/1.1 204 No Content\r\n\r\nxx"], {
       end: true,
     });
@@ -308,7 +312,20 @@ describe("HTTPParser", () => {
       "complete",
       "error",
     ]);
-    expect(r204x.events[2][1]).toBe("HPE_TRUNCATED");
+    expect(r204x.events[2][1]).toBe("HPE_INVALID_CONSTANT");
+    const r204partial = drive(
+      "response",
+      ["HTTP/1.1 204 No Content\r\n\r\nHT"],
+      {
+        end: true,
+      },
+    );
+    expect(r204partial.events.map((e) => e[0])).toEqual([
+      "headers",
+      "complete",
+      "error",
+    ]);
+    expect(r204partial.events[2][1]).toBe("HPE_TRUNCATED");
     const rHead = drive(
       "response",
       ["HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n"],
@@ -497,14 +514,31 @@ describe("http.Server socket round trip", () => {
     expect(text.slice(text.indexOf("200 OK"))).toContain("abc");
   });
 
-  test("malformed request -> 400 and clientError", async () => {
+  test("malformed request -> clientError, no automatic 400 with a listener", async () => {
     const server = createServer((req, res) => res.end("never"));
     servers.push(server);
     const clientErrors = [];
     server.on("clientError", (err) => clientErrors.push(err.code));
     const { port } = await listenAsync(server, 0);
-    const { headText } = await rawExchange(port, "NOT A REQUEST\r\n\r\n");
-    expect(headText).toMatch(/^HTTP\/1.1 400/);
+    // Real Node (probed v24.22.1): with a clientError listener the handler
+    // owns the socket — no automatic 400 is sent. The old expectation of
+    // a 400 here encoded the shim's previous always-400 behavior, which
+    // the official client-error test contradicts (its handler writes its
+    // own 400). The no-listener 400 path is covered by
+    // test-http-server-destroy-socket-on-client-error.
+    const received = await new Promise((resolve, reject) => {
+      const sock = netConnect(port);
+      const chunks = [];
+      sock.on("error", reject);
+      sock.on("data", (c) => chunks.push(c));
+      sock.on("connect", () => sock.end("NOT A REQUEST\r\n\r\n"));
+      sock.on("end", () => resolve(Buffer.concat(chunks).toString("latin1")));
+      setTimeout(
+        () => reject(new Error("malformed exchange timed out")),
+        5000,
+      ).unref?.();
+    });
+    expect(received).toBe("");
     // llhttp validates against known methods: 'NOT' is not one (verified
     // against real node:http).
     expect(clientErrors).toEqual(["HPE_INVALID_METHOD"]);
