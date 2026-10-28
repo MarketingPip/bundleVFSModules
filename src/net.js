@@ -1069,10 +1069,21 @@ Socket.prototype._releaseLoop = function _releaseLoop() {
 // and like that handle, it must not keep the event loop alive.
 Socket.prototype._isTransportInactive = function _isTransportInactive() {
   if (this.destroyed || this.connecting) return false;
-  if (!this._eofReceived || !this.writableEnded) return false;
+  if (!this._eofReceived) return false;
   if (this._pendingWrites !== null && this._pendingWrites.length > 0)
     return false;
-  return true;
+  if (this.writableEnded) return true;
+  // The peer was destroyed (its _destroy nulled the link before notifying
+  // EOF): no write from here can ever land, so the socket is dead even
+  // though our writable side is still open. A graceful peer FIN does NOT
+  // null the link — the peer stays alive to receive our writes — so
+  // half-close drain (server still owes responses after a client FIN)
+  // keeps its loop keeper. Without this, a client abandoned by a server
+  // destroy holds the process open forever (test-http-server-
+  // keep-alive-timeout: both sub-tests complete, yet the process never
+  // exits because the two orphaned client sockets keep their timers).
+  if (this._peer === null) return true;
+  return false;
 };
 Socket.prototype._maybeReleaseLoop = function _maybeReleaseLoop() {
   if (this._isTransportInactive()) this._releaseLoop();

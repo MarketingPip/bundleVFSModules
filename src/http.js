@@ -2857,6 +2857,10 @@ class ServerBase extends EventEmitter {
     // getConnections() / closeAllConnections() / closeIdleConnections().
     this._connections = new Set();
     this._netServer = null;
+    // Connections-checking interval timer (Node's connectionsCheckingInterval
+    // polling for headersTimeout/requestTimeout/keepAliveTimeout). Started
+    // lazily on first connection, unref'd, stopped when idle/closed.
+    this._checkTimer = null;
   }
 
   listen(portOrOptions, hostOrCallback, callback) {
@@ -2941,6 +2945,7 @@ class ServerBase extends EventEmitter {
       this._netServer.close();
       this._netServer = null;
     }
+    this._stopConnectionChecker();
     this.listening = false;
     queueMicrotask(() => this.emit("close"));
     return this;
@@ -2959,6 +2964,110 @@ class ServerBase extends EventEmitter {
       if (!state || !state.busy) socket.destroy();
     }
     return this;
+  }
+
+  /**
+   * Server timeout enforcement (Node's connectionsCheckingInterval
+   * polling model — probed real Node v24: a 408 lands on the first tick
+   * AFTER its deadline, not exactly at it).
+   *
+   * Per socket, exactly one clock runs at a time:
+   * - fresh (no request ever started): headersTimeout/requestTimeout
+   *   from connection time — a connection that sends nothing still gets
+   *   a 408 (test-http-server-*-delayed-headers).
+   * - receiving: headersTimeout until headers complete, requestTimeout
+   *   until the whole request is received, both from the request's first
+   *   byte (probed: headers at +1500ms with a 2000ms requestTimeout
+   *   still 408s at ~2000ms, not ~3500ms).
+   * - idle after a response: keepAliveTimeout from response finish;
+   *   the socket is destroyed silently (no 408). Fresh sockets are
+   *   exempt (probed: never-requested connections are not closed).
+   * - responding (request received, response in flight): no clock.
+   * - upgraded: exempt entirely.
+   *
+   * A 0 timeout disables that clock; a non-numeric timeout (app-assigned
+   * garbage) compares false everywhere and can neither fire nor crash
+   * (test-http-server-invalid-headers-timeout-no-abort). headers/request
+   * timeouts never emit the server 'timeout' event — they send the exact
+   * 408 Node sends and close (the tests assert 'timeout' mustNotCall).
+   */
+  _startConnectionChecker() {
+    if (this._checkTimer) return;
+    const raw = Number(this.connectionsCheckingInterval);
+    const interval = Number.isFinite(raw) && raw > 0 ? raw : 30000;
+    const timer = setInterval(() => this._checkConnections(), interval);
+    timer.unref?.();
+    this._checkTimer = timer;
+  }
+
+  _stopConnectionChecker() {
+    if (this._checkTimer) {
+      clearInterval(this._checkTimer);
+      this._checkTimer = null;
+    }
+  }
+
+  _checkConnections() {
+    const now = Date.now();
+    for (const socket of [...this._connections]) {
+      try {
+        if (socket.destroyed) continue;
+        const state = socket._httpState;
+        if (!state || state.upgraded || state.timedOut) continue;
+        if (state.fresh) {
+          const elapsed = now - state.connectedAt;
+          if (
+            (this.headersTimeout > 0 && elapsed > this.headersTimeout) ||
+            (this.requestTimeout > 0 && elapsed > this.requestTimeout)
+          ) {
+            this._timeoutSocket(socket, state);
+          }
+          continue;
+        }
+        if (state.receiving) {
+          const elapsed = now - state.requestStart;
+          const headersOver =
+            !state.headersDone &&
+            this.headersTimeout > 0 &&
+            elapsed > this.headersTimeout;
+          const requestOver =
+            this.requestTimeout > 0 && elapsed > this.requestTimeout;
+          if (headersOver || requestOver) {
+            this._timeoutSocket(socket, state);
+          }
+          continue;
+        }
+        if (state.idleSince !== null) {
+          if (
+            this.keepAliveTimeout > 0 &&
+            now - state.idleSince > this.keepAliveTimeout
+          ) {
+            try {
+              socket.destroy();
+            } catch {
+              /* best effort */
+            }
+          }
+        }
+      } catch {
+        // One bad socket (or one weird timeout value) must not kill the
+        // checker for every other connection.
+      }
+    }
+  }
+
+  _timeoutSocket(socket, state) {
+    state.timedOut = true;
+    try {
+      socket.write("HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n");
+    } catch {
+      /* best effort */
+    }
+    try {
+      socket.destroy();
+    } catch {
+      /* best effort */
+    }
   }
 
   address() {
@@ -2996,10 +3105,21 @@ class ServerBase extends EventEmitter {
       current: null, // { req, res } for the in-flight request
       peerEnded: false, // peer sent FIN; close once the response is out
       inFlight: 0, // dispatched requests whose response has not finished
+      // Server timeout accounting (headersTimeout / requestTimeout /
+      // keepAliveTimeout, enforced by _checkConnections polling):
+      connectedAt: Date.now(),
+      fresh: true, // no request has started on this socket yet
+      receiving: false, // a request is currently being received
+      requestStart: 0, // first byte of the current request
+      headersDone: false, // current request's headers are complete
+      idleSince: null, // set when a response finishes and the socket idles
+      upgraded: false, // connection upgraded; HTTP timeouts no longer apply
+      timedOut: false, // a 408 was already sent on this socket
     };
     socket._httpState = state;
     socket.on("close", () => {
       this._connections.delete(socket);
+      if (this._connections.size === 0) this._stopConnectionChecker();
       if (state.current) {
         state.current.req.aborted = true;
         state.current.req.emit("aborted");
@@ -3008,13 +3128,40 @@ class ServerBase extends EventEmitter {
     });
     // Node parity: servers emit 'connection' for every accepted socket.
     this.emit("connection", socket);
+    this._startConnectionChecker();
+    // Socket timeout wiring (server.setTimeout): applied at connection
+    // time ONLY — a later setTimeout() call does not touch existing
+    // connections (probed real-Node behavior). The socket is NOT
+    // destroyed on 'timeout'; the app decides. The event is forwarded to
+    // the server and to the in-flight request, so req.setTimeout
+    // callbacks fire on socket inactivity while body data resets the
+    // timer (net.js refreshes it on every received chunk).
+    if (typeof socket.setTimeout === "function" && this.timeout > 0) {
+      socket.setTimeout(this.timeout);
+    }
+    socket.on("timeout", () => {
+      this.emit("timeout", socket);
+      const cur = state.current;
+      if (cur) cur.req.emit("timeout");
+    });
 
     const parser = new HTTPParser("request");
     // Strict one-request-at-a-time: the parser pauses after each message and
     // only resumes once the in-flight response has been fully written.
     parser.pauseBetweenMessages = true;
+    // A request's headersTimeout/requestTimeout clock starts at its first
+    // byte (probed real Node); the fresh-connection clock (below) runs
+    // from connection time until this first fires.
+    parser.onMessageStart = () => {
+      state.fresh = false;
+      state.receiving = true;
+      state.requestStart = Date.now();
+      state.headersDone = false;
+      state.idleSince = null;
+    };
     parser.onHeadersComplete = (info) => {
       state.busy = true;
+      state.headersDone = true;
       state.awaitingBody = info.hasBody;
       const created = this._dispatchSocketRequest(socket, info, state);
       state.current = created;
@@ -3024,6 +3171,7 @@ class ServerBase extends EventEmitter {
       parser.onBody = (chunk) => created.req._pushBody(chunk);
       parser.onMessageComplete = () => {
         state.awaitingBody = false;
+        state.receiving = false;
         created.req._finishBody();
         state.current = null;
       };
@@ -3079,6 +3227,11 @@ class ServerBase extends EventEmitter {
       }
     };
     socket.on("data", (chunk) => {
+      // Upgraded connections belong to the app now (e.g. socket.pipe
+      // echo): their bytes are not HTTP and must never reach the parser,
+      // or a WebSocket frame would trip clientError and destroy the
+      // socket (test-http-server-request-timeout-upgrade).
+      if (state.upgraded) return;
       // While a request is in flight, only its own body may flow; anything
       // else (e.g. a pipelined next request) waits for the response.
       // Exception: if we're not awaiting a body, feed the parser so it can
@@ -3122,6 +3275,9 @@ class ServerBase extends EventEmitter {
       /* 'close' handles cleanup */
     });
     socket.on("end", () => {
+      // Upgraded connections are the app's lifecycle, not HTTP's: the
+      // pipe (not this handler) decides when the socket ends.
+      if (state.upgraded) return;
       // Client half-closed. If a request is in flight, the response still
       // has to be written first — record the EOF and let
       // _finishSocketResponse close the socket afterwards. Only an idle
@@ -3157,6 +3313,28 @@ class ServerBase extends EventEmitter {
       pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
     }
     IncomingMessage._applyRawHeaders(req, pairs);
+
+    // Upgrade requests are not 'request' dispatches: Node emits 'upgrade'
+    // and detaches the socket from HTTP timeout handling (requestTimeout
+    // is disabled after upgrade — test-http-server-request-timeout-upgrade).
+    // No response is expected, so nothing is counted inFlight.
+    if (
+      req.headers.upgrade !== undefined &&
+      /upgrade/i.test(String(req.headers.connection || ""))
+    ) {
+      state.upgraded = true;
+      state.receiving = false;
+      let head = Buffer.alloc(0);
+      try {
+        if (typeof state.parser.takeRemainder === "function") {
+          head = state.parser.takeRemainder();
+        }
+      } catch {
+        /* empty head */
+      }
+      this.emit("upgrade", req, socket, head);
+      return { req, res: null };
+    }
 
     const res = new ServerResponse(req);
     const reqNo = ++state.reqCount;
@@ -3368,6 +3546,10 @@ class ServerBase extends EventEmitter {
     if (keepAlive || drainPeerEnded) {
       state.busy = false;
       state.awaitingBody = false;
+      // The socket is idle from here: the keep-alive clock runs from this
+      // moment (fresh connections that never served a request are exempt —
+      // probed real Node leaves them alone).
+      state.idleSince = Date.now();
       // Preserve the socket for keep-alive reuse: flag the response so the
       // stream autoDestroy in ServerResponse._destroy doesn't kill it. The
       // socket stays open for the next pipelined request (server side) and

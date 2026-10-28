@@ -99,6 +99,11 @@ export class HTTPParser {
     this.onBody = null; // (chunk: Buffer)
     this.onMessageComplete = null; // ()
     this.onError = null; // (err)
+    // Fires once when the parser starts consuming a new message's first
+    // bytes (first message at stream start, later messages when resumed
+    // after a pause). The HTTP server uses it to start that request's
+    // headersTimeout/requestTimeout clock.
+    this.onMessageStart = null; // ()
   }
 
   _resetMessage() {
@@ -109,6 +114,7 @@ export class HTTPParser {
     this._remaining = 0;
     this._headStart = this._off;
     this._headerBytes = 0;
+    this._messageStarted = false;
   }
 
   /**
@@ -130,6 +136,20 @@ export class HTTPParser {
     }
     try {
       for (;;) {
+        // A new message starts the moment its first bytes are consumed:
+        // a partial start line with no CRLF yet still counts (its clock
+        // must run while the client stalls mid-line). Between messages
+        // (paused/complete/error) nothing starts.
+        if (
+          !this._messageStarted &&
+          this._state !== "paused" &&
+          this._state !== "complete" &&
+          this._state !== "error" &&
+          this._off < this._buf.length
+        ) {
+          this._messageStarted = true;
+          if (this.onMessageStart) this.onMessageStart();
+        }
         switch (this._state) {
           case "start-line":
             if (!this._parseStartLine()) return;
@@ -574,6 +594,19 @@ export class HTTPParser {
       this._state = "complete";
       this.execute();
     }
+  }
+
+  /**
+   * Take any bytes buffered past the current message (an upgrade
+   * request's `head`) and clear them, so the abandoned parser can never
+   * re-parse them as a new message.
+   */
+  takeRemainder() {
+    const rest = this._buf.subarray(this._off);
+    const out = Buffer.from(rest);
+    this._buf = Buffer.alloc(0);
+    this._off = 0;
+    return out;
   }
 }
 
