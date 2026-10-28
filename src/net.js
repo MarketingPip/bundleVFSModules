@@ -1922,6 +1922,13 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
   // Server-side socket gets a handle too (Node creates TCPWrap on accept).
   if (!serverSocket._handle) serverSocket._handle = new VirtualHandle();
   client.emit("connect");
+  // Real Node emits 'ready' immediately after 'connect' on a client socket
+  // (probed on v24.22.1: order is connect -> ready, exactly once, readyState
+  // 'open' at both; a listener registered inside the 'connect' handler still
+  // fires; refused and never-connected sockets never fire it). Server-side
+  // accepted sockets do not observably emit 'ready' after 'connection', so
+  // only the client side gets it here.
+  client.emit("ready");
   // Mirrors lib/net.js: start the first read after connect, unless paused.
   // A paused socket never activates its read watcher (inactive handle).
   if (client.readable && !client.isPaused()) {
