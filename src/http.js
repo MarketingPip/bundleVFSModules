@@ -1028,6 +1028,20 @@ export class ServerResponse extends OutgoingMessage {
     return super.write(chunk, encoding, callback);
   }
 
+  /**
+   * Node sends headers immediately on flushHeaders(); the inherited
+   * version only renders them. Without the socket write, a handler that
+   * flushes headers and then waits for request body data (e.g.
+   * test-http-server-consumed-timeout) never delivers its response, and
+   * the client callback that would produce that body never runs.
+   * _flushHeaders() is a no-op when already flushed or socketless, so
+   * this only adds the missing send.
+   */
+  flushHeaders() {
+    super.flushHeaders();
+    this._flushHeaders();
+  }
+
   writeHead(statusCode, reason, obj) {
     if (this._header) {
       throw ERR_HTTP_HEADERS_SENT("write");
@@ -1660,11 +1674,147 @@ export class ClientRequest extends OutgoingMessage {
       });
     };
     if (chunk !== null && chunk !== undefined) {
-      super.write(chunk, encoding, run);
+      if (this._stream && this._stream.roundTrip) {
+        // Streaming request: the round trip already started on first
+        // write()/flushHeaders(). Forward the final chunk (if any), close
+        // the body framing, then await the in-flight round trip. The
+        // final chunk is NOT re-buffered: it already went (or is queued
+        // to go) through the stream writer.
+        this._streamForward(chunk, encoding);
+        this._streamFinish();
+        run();
+      } else {
+        super.write(chunk, encoding, run);
+      }
+    } else if (this._stream && this._stream.roundTrip) {
+      this._streamFinish();
+      run();
     } else {
       run();
     }
     return this;
+  }
+
+  /**
+   * Node streams request bodies: headers + first chunk go out on the
+   * first write(), not at end(). For virtual-server requests with a
+   * body-capable method, forward the chunk to the streaming round trip
+   * (started by _streamEnsureStarted). Buffered behavior is unchanged
+   * for fetch-path requests, no-body methods, and requests that never
+   * write before end().
+   */
+  write(chunk, encoding, callback) {
+    // Start streaming BEFORE super.write(): super.write() marks headers
+    // sent via _implicitHeader(), and setHeader() throws after that —
+    // the chunked framing header must be set while headers are open.
+    if (!this._ended && !this._aborted) this._streamEnsureStarted();
+    const ret = super.write(chunk, encoding, callback);
+    if (!this._ended && !this._aborted) {
+      this._streamForward(
+        chunk,
+        typeof encoding === "string" ? encoding : undefined,
+      );
+    }
+    return ret;
+  }
+
+  flushHeaders() {
+    // Node sends headers immediately; for a virtual server this starts
+    // the streaming round trip (headers only, body chunks follow).
+    if (!this._ended && !this._aborted) this._streamEnsureStarted();
+    super.flushHeaders();
+  }
+
+  /**
+   * Decide once, on first write()/flushHeaders(), whether this request
+   * streams to its virtual server. Returns the stream state, or null
+   * for the buffered whole-body-at-end() path. Never throws: header
+   * validation failures leave the request on the buffered path.
+   */
+  _streamEnsureStarted() {
+    if (this._stream !== undefined) return this._stream;
+    const server = this._getVirtualServer();
+    const method = this.method;
+    const hasCL = this.hasHeader("content-length");
+    const te = String(this.getHeader("transfer-encoding") || "").toLowerCase();
+    const upgrade = String(this.getHeader("upgrade") || "").toLowerCase();
+    const eligible =
+      server &&
+      method !== "GET" &&
+      method !== "HEAD" &&
+      method !== "CONNECT" &&
+      upgrade !== "websocket" &&
+      (method === "POST" ||
+        method === "PUT" ||
+        method === "PATCH" ||
+        hasCL ||
+        te === "chunked");
+    if (!eligible) {
+      this._stream = null;
+      return null;
+    }
+    const framing = hasCL ? "raw" : "chunked";
+    if (framing === "chunked" && !te) {
+      // Materialize chunked framing like Node does on first write.
+      // This runs before _implicitHeader(), so setHeader() cannot throw.
+      this.setHeader("transfer-encoding", "chunked");
+    }
+    const st = {
+      framing,
+      pending: [],
+      writer: null,
+      finished: false,
+      roundTrip: null,
+    };
+    this._stream = st;
+    // Flatten headers exactly like _performRequest's fetchOptions.
+    const headers = {};
+    for (const [k, v] of Object.entries(this.getHeaders())) {
+      headers[k] = Array.isArray(v) ? v.join(", ") : String(v);
+    }
+    st.roundTrip = this._performVirtualRequest(server, headers, null, true);
+    // An early rejection (e.g., socket assignment failure) must not
+    // become an unhandled rejection before end(); _performRequest awaits
+    // the same promise at end() and routes the error through its handler.
+    st.roundTrip.catch(() => {});
+    return st;
+  }
+
+  /** Frame one written chunk and forward it to the stream writer. */
+  _streamForward(chunk, encoding) {
+    const st = this._streamEnsureStarted();
+    if (!st || st.finished) return;
+    let buf;
+    try {
+      if (Buffer.isBuffer(chunk)) buf = chunk;
+      else if (chunk instanceof Uint8Array) buf = Buffer.from(chunk);
+      else buf = Buffer.from(chunk, encoding);
+    } catch {
+      return;
+    }
+    // Empty writes send nothing (probed Node behavior: headers only).
+    if (buf.length === 0) return;
+    const frame =
+      st.framing === "chunked"
+        ? Buffer.concat([
+            Buffer.from(buf.length.toString(16) + "\r\n"),
+            buf,
+            Buffer.from("\r\n"),
+          ])
+        : buf;
+    if (st.writer) st.writer.write(frame);
+    else st.pending.push(frame);
+  }
+
+  /** Close the streamed body framing (chunked terminator; raw: nothing). */
+  _streamFinish() {
+    const st = this._stream;
+    if (!st || st.finished) return;
+    st.finished = true;
+    if (st.framing !== "chunked") return;
+    const term = Buffer.from("0\r\n\r\n");
+    if (st.writer) st.writer.write(term);
+    else st.pending.push(term);
   }
 
   _buildURL() {
@@ -1698,6 +1848,12 @@ export class ClientRequest extends OutgoingMessage {
 
   async _performRequest() {
     if (this._aborted) return;
+
+    // Streaming request already started by an early write()/flushHeaders():
+    // await its round trip instead of starting a second one.
+    if (this._stream && this._stream.roundTrip) {
+      return this._stream.roundTrip;
+    }
 
     const fetchFn = this._getFetch();
     if (!fetchFn) {
@@ -1908,7 +2064,7 @@ export class ClientRequest extends OutgoingMessage {
     }
   }
 
-  async _performVirtualRequest(server, headers, body) {
+  async _performVirtualRequest(server, headers, body, streaming) {
     // The agent was already notified in the constructor (synchronous
     // addRequest). Wait for the socket assignment via onSocket().
     // Note: the agent used this.port; for virtual servers the actual port
@@ -2058,6 +2214,29 @@ export class ClientRequest extends OutgoingMessage {
         headers,
         body: body && body.length > 0 ? body : null,
         socket: sock,
+        // Streaming request (started by an early write()): the head was
+        // pre-serialized with its framing; body chunks arrive via the
+        // writer. The round-trip promise still resolves on response
+        // completion, exactly like the buffered path.
+        ...(streaming
+          ? {
+              streaming: true,
+              headBytes: _serializeRequestHead(
+                this.method,
+                this.path,
+                headers,
+                null,
+              ),
+              onStreamReady: (writer) => {
+                const st = this._stream;
+                if (!st) return;
+                st.writer = writer;
+                const pending = st.pending;
+                st.pending = [];
+                for (const frame of pending) writer.write(frame);
+              },
+            }
+          : {}),
         // Streaming: emit 'response' as soon as headers arrive, push body
         // chunks as they come. This matches Node for abort/destroy tests
         // where the client must see the response before res.end().
@@ -2699,7 +2878,19 @@ function _serializeRequestHead(method, path, headers, body) {
  */
 function _socketHttpRoundTrip(
   port,
-  { method, path, headers, body, socket, onSocket, onHeaders, onBody },
+  {
+    method,
+    path,
+    headers,
+    body,
+    socket,
+    onSocket,
+    onHeaders,
+    onBody,
+    streaming,
+    headBytes,
+    onStreamReady,
+  },
 ) {
   return new Promise((resolve, reject) => {
     const sock = socket || netConnect(port);
@@ -2771,7 +2962,30 @@ function _socketHttpRoundTrip(
         }
       }
       try {
-        sock.write(_serializeRequestHead(method, path, headers, body));
+        if (streaming) {
+          // Streaming request: head bytes were pre-serialized by the
+          // caller (framing decided at first write); body chunks arrive
+          // later via the writer. Head first, then frames, in order.
+          sock.write(headBytes);
+          if (typeof onStreamReady === "function") {
+            onStreamReady({
+              write(buf) {
+                try {
+                  // Never write into a socket that was released to the
+                  // agent pool (possibly reused by another request) or
+                  // destroyed: further body bytes are dropped, matching
+                  // the post-response-complete case.
+                  if (sock.destroyed || sock._inFreePool) return;
+                  sock.write(buf);
+                } catch {
+                  /* socket write failed; the round trip surfaces it */
+                }
+              },
+            });
+          }
+        } else {
+          sock.write(_serializeRequestHead(method, path, headers, body));
+        }
       } catch (err) {
         fail(err);
       }
