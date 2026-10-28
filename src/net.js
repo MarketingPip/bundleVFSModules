@@ -1568,6 +1568,21 @@ Socket.prototype._destroy = function _destroy(exception, cb) {
     this._server._connections--;
     if (this._server._emitCloseIfDrained) this._server._emitCloseIfDrained();
   }
+
+  // HTTP CONNECT-detached sockets run their server-side close
+  // bookkeeping from _destroy: no EventEmitter 'close' listener remains
+  // after detach (real Node observes 0 at 'connect' time), mirroring
+  // lib/net.js where the connection count releases from the handle
+  // close, not an EE listener. Only set on such sockets.
+  if (typeof this._onHttpSocketClose === "function") {
+    const hook = this._onHttpSocketClose;
+    this._onHttpSocketClose = null;
+    try {
+      hook();
+    } catch {
+      /* bookkeeping must not break close */
+    }
+  }
 };
 
 // Abortive close: the peer sees ECONNRESET instead of a graceful FIN.

@@ -2522,6 +2522,9 @@ export class ClientRequest extends OutgoingMessage {
     if (this.socket && !(this.socket instanceof FakeSocket)) return;
     this.socket = socket;
     this.connection = socket;
+    // Node sets the socket's _httpMessage on assignment (probed: the
+    // 'socket' event already observes it); CONNECT detach clears it.
+    socket._httpMessage = this;
     if (this._onSocketAssigned) {
       const resolve = this._onSocketAssigned;
       this._onSocketAssigned = null;
@@ -2846,6 +2849,17 @@ export class ClientRequest extends OutgoingMessage {
       IncomingMessage._applyRawHeaders(msg, pairs);
       msg.socket = this.socket;
       msg.connection = this.socket;
+      // Detach before handing the tunnel to the app: real Node delivers
+      // it with only the stream-internal 'end' listener left (probed
+      // v24.22.1) and _httpMessage cleared to null. The round trip
+      // already detached its own listeners; the request-level error
+      // forwarder is the one left.
+      try {
+        this.socket.removeListener("error", onSocketError);
+      } catch {
+        /* already detached */
+      }
+      this.socket._httpMessage = null;
       this.emit("connect", msg, this.socket, result.connectHead);
       if (
         this.listenerCount("connect") === 0 &&
@@ -4071,7 +4085,7 @@ class ServerBase extends EventEmitter {
         // No-op: the shim parser holds no native resources.
       },
     };
-    socket.on("close", () => {
+    const onHttpClose = () => {
       this._connections.delete(socket);
       if (this._connections.size === 0) this._stopConnectionChecker();
       if (state.current) {
@@ -4109,7 +4123,8 @@ class ServerBase extends EventEmitter {
       parser.onMessageStart = null;
       parser.onError = null;
       state.parser = null;
-    });
+    };
+    socket.on("close", onHttpClose);
     // Node parity: servers emit 'connection' for every accepted socket.
     // A manually-emitted connection (fromManualEmit) already fired the
     // app's 'connection' listeners via the outer emit — re-emitting
@@ -4127,11 +4142,12 @@ class ServerBase extends EventEmitter {
     if (typeof socket.setTimeout === "function" && this.timeout > 0) {
       socket.setTimeout(this.timeout);
     }
-    socket.on("timeout", () => {
+    const onHttpTimeout = () => {
       this.emit("timeout", socket);
       const cur = state.current;
       if (cur) cur.req.emit("timeout");
-    });
+    };
+    socket.on("timeout", onHttpTimeout);
 
     const parser = new HTTPParser("request");
     // Strict one-request-at-a-time: the parser pauses after each message and
@@ -4233,7 +4249,7 @@ class ServerBase extends EventEmitter {
         }
       }
     };
-    socket.on("data", (chunk) => {
+    const onHttpData = (chunk) => {
       // Upgraded connections belong to the app now (e.g. socket.pipe
       // echo): their bytes are not HTTP and must never reach the parser,
       // or a WebSocket frame would trip clientError and destroy the
@@ -4277,11 +4293,13 @@ class ServerBase extends EventEmitter {
       }
       parser.execute(chunk);
       validatePipelinedRemainder();
-    });
-    socket.on("error", () => {
+    };
+    socket.on("data", onHttpData);
+    const onHttpError = () => {
       /* 'close' handles cleanup */
-    });
-    socket.on("end", () => {
+    };
+    socket.on("error", onHttpError);
+    const onHttpEnd = () => {
       // Upgraded connections are the app's lifecycle, not HTTP's: the
       // pipe (not this handler) decides when the socket ends.
       if (state.upgraded) return;
@@ -4324,7 +4342,18 @@ class ServerBase extends EventEmitter {
         state.parser.unpause();
         if (state.inFlight === 0 && !state.busy) socket.end();
       }
-    });
+    };
+    socket.on("end", onHttpEnd);
+    // Stored by reference so CONNECT dispatch can detach the HTTP layer
+    // (real Node hands the tunnel to the app with only the stream-
+    // internal 'end' listener left) without touching app listeners.
+    state.httpListeners = {
+      close: onHttpClose,
+      timeout: onHttpTimeout,
+      data: onHttpData,
+      error: onHttpError,
+      end: onHttpEnd,
+    };
     state.parser = parser;
   }
 
@@ -4379,6 +4408,27 @@ class ServerBase extends EventEmitter {
         }
       } catch {
         /* empty head */
+      }
+      // Detach the HTTP layer before handing the socket to the app:
+      // real Node delivers a CONNECT tunnel with only the stream-
+      // internal 'end' listener left (probed v24.22.1: close/data/
+      // error/timeout all 0, end 1). Removed by stored reference so
+      // app listeners (e.g. from 'connection') survive. Close
+      // bookkeeping moves to the destroy hook (net.js invokes
+      // socket._onHttpSocketClose in _destroy), so connection tracking
+      // and parser release still run without an EventEmitter listener.
+      // The HTTP 'end' handler goes too: a CONNECT tunnel's close on
+      // peer FIN is the app's lifecycle now (test-http-connect echoes
+      // and ends in its own 'end' handler), and the loop still drains
+      // when the peer destroys (peer link null => transport inactive).
+      const hl = state.httpListeners;
+      if (hl) {
+        socket.removeListener("close", hl.close);
+        socket.removeListener("data", hl.data);
+        socket.removeListener("error", hl.error);
+        socket.removeListener("timeout", hl.timeout);
+        socket.removeListener("end", hl.end);
+        socket._onHttpSocketClose = hl.close;
       }
       if (this.listenerCount("connect") > 0) {
         this.emit("connect", req, socket, head);
