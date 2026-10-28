@@ -607,12 +607,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-http-set-trailers.md",
-        "src/_http_parser.js",
-        "src/http.js",
-        "src/net.js",
-      ].sort(),
+      ["NOTES-http-nodelay.md", "src/http.js", "src/net.js"].sort(),
     );
   });
 

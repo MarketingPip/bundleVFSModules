@@ -1201,6 +1201,19 @@ function _normalizeArgs(args) {
   return [options, cb];
 }
 function normalizeArgs(args) {
+  // createConnection passes the already-normalized tuple straight
+  // through to Socket.prototype.connect (real Node's internal call
+  // shape — this is why a monkeypatched connect receives a single
+  // array argument whose [0] is the options object, which
+  // test-http-nodelay asserts on). Unpack it instead of
+  // re-normalizing, which would spread the tuple into
+  // { 0: options, 1: cb } garbage.
+  if (
+    args.length === 1 &&
+    Array.isArray(args[0]) &&
+    args[0][normalizedArgsSymbol]
+  )
+    return args[0];
   if (Array.isArray(args) && args[normalizedArgsSymbol]) return args;
   const normalized = _normalizeArgs(args);
   Object.defineProperty(normalized, normalizedArgsSymbol, { value: true });
@@ -2080,7 +2093,12 @@ function connect(...args) {
   const options = normalized[0];
   const socket = new Socket(options);
   if (options.timeout) socket.setTimeout(options.timeout);
-  return socket.connect(normalized[0], normalized[1]);
+  // Pass the normalized tuple itself, matching real Node's internal
+  // call shape: Socket.prototype.connect receives one array argument
+  // whose [0] is the options object (and unpacks it via normalizeArgs).
+  // Passing (options, cb) instead would break monkeypatched connect
+  // implementations that read args[0].noDelay (test-http-nodelay).
+  return socket.connect(normalized);
 }
 const createConnection = connect;
 
