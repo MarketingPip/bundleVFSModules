@@ -145,3 +145,13 @@ Any future parser strictness needs a loopback-emitter audit first.
   callback never fired after a client error while the loop still
   emptied. Fixed by running one case per process with an explicit
   timeout + `process.exit(0)`.
+- CI retrigger (transient build): first CI run on head 933009b3 was
+  Parity success + build failure with no log summary via API — the
+  known transient signature (same as #262 rebased head, #263 first
+  head, #272 first head). Local reproduction: full jest suite on
+  the branch matches the known baseline exactly (3059 passed / 7
+  failed, same version-skew suites: constants, perf_hooks, sys,
+  oracle surfaces); sandbox/runtime --check pass; build-vfs failed
+  once on an esm.sh fetch flake for the unrelated bundler special,
+  passed on pristine base (exit 0), branch retry pending at time of
+  writing. Retriggered with this notes-only commit.
