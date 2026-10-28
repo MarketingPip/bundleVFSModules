@@ -842,7 +842,34 @@ export class OutgoingMessage extends Writable {
   }
 
   addTrailers(headers) {
+    // Real Node ignores trailers added after end() (probed v24.22.1:
+    // no throw, no bytes) — the terminator is already written by then.
+    if (this.finished) return;
     this._trailer = headers;
+  }
+
+  /**
+   * Render the chunked terminator, including any trailers set via
+   * addTrailers(): `0\r\n` + one `name: value\r\n` line per trailer
+   * value (array values expand to one line per element) + `\r\n`.
+   * With no trailers (or an empty object) this renders the bare
+   * `0\r\n\r\n`, byte-identical to the previous output. Only called
+   * for chunked framing; non-chunked responses (Content-Length,
+   * close-delimited) never reach a terminator, so their trailers are
+   * silently dropped, matching real Node.
+   */
+  _chunkTerminator() {
+    const t = this._trailer;
+    if (!t || typeof t !== "object" || Array.isArray(t)) return "0\r\n\r\n";
+    const lines = [];
+    for (const [name, value] of Object.entries(t)) {
+      if (Array.isArray(value)) {
+        for (const v of value) lines.push(`${name}: ${String(v)}\r\n`);
+      } else {
+        lines.push(`${name}: ${String(value)}\r\n`);
+      }
+    }
+    return lines.length === 0 ? "0\r\n\r\n" : `0\r\n${lines.join("")}\r\n`;
   }
 
   flushHeaders() {
@@ -1015,6 +1042,49 @@ export class IncomingMessage extends Readable {
         msg.headersDistinct[lower] = (msg.headersDistinct[lower] || []).concat(
           val,
         );
+      }
+    }
+  }
+
+  /**
+   * Fold flat [name, value] trailer pairs (wire casing preserved, one
+   * pair per line) into trailers / rawTrailers, mirroring Node's trailer
+   * parsing: the same folding as headers (singletons first-wins, other
+   * duplicates join with ", ", cookie with "; ", set-cookie stays an
+   * array), but keys are lowercased plain-object keys and there is no
+   * trailersDistinct in Node.
+   */
+  static _applyRawTrailers(msg, flatPairs) {
+    for (let i = 0; i + 1 < flatPairs.length; i += 2) {
+      const key = flatPairs[i];
+      const value = flatPairs[i + 1];
+      const lower = String(key).toLowerCase();
+      msg.rawTrailers.push(key, String(value));
+      if (lower === "set-cookie") {
+        const arr = [String(value)];
+        if (msg.trailers[lower] === undefined) {
+          msg.trailers[lower] = arr[0];
+        } else {
+          const cur = Array.isArray(msg.trailers[lower])
+            ? msg.trailers[lower]
+            : [msg.trailers[lower]];
+          msg.trailers[lower] = cur.concat(arr);
+        }
+      } else {
+        const val = String(value);
+        // hasOwnProperty, not `in`: a "constructor" trailer must not read
+        // Object.prototype (same trap as headers).
+        const owned = Object.prototype.hasOwnProperty.call(
+          msg.trailers,
+          lower,
+        );
+        if (DUPLICATES_REMOVED.has(lower)) {
+          if (!owned) msg.trailers[lower] = val;
+        } else if (lower === "cookie") {
+          msg.trailers[lower] = owned ? `${msg.trailers[lower]}; ${val}` : val;
+        } else {
+          msg.trailers[lower] = owned ? `${msg.trailers[lower]}, ${val}` : val;
+        }
       }
     }
   }
@@ -1585,7 +1655,7 @@ export class ServerResponse extends OutgoingMessage {
       const sock = this.socket;
       if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
         try {
-          sock.write("0\r\n\r\n");
+          sock.write(this._chunkTerminator());
           this._chunkTerminatorSent = true;
         } catch {
           /* socket write failed; finish listener skips destroyed sockets */
@@ -2804,6 +2874,11 @@ export class ClientRequest extends OutgoingMessage {
 
     // Streaming case: message already emitted; just finish the body.
     if (streamedMsg) {
+      // Trailers arrive with message completion, after the body: attach
+      // them before 'end' fires so 'end' handlers see res.trailers.
+      if (result.rawTrailers && result.rawTrailers.length > 0) {
+        IncomingMessage._applyRawTrailers(streamedMsg, result.rawTrailers);
+      }
       streamedMsg._finishBody();
       // Release the socket to the agent's pool for keep-alive reuse.
       // The release always happens at message-complete time, consumed
@@ -2851,6 +2926,9 @@ export class ClientRequest extends OutgoingMessage {
       pairs.push([result.rawHeaders[i], result.rawHeaders[i + 1]]);
     }
     IncomingMessage._applyRawHeaders(msg, pairs);
+    if (result.rawTrailers && result.rawTrailers.length > 0) {
+      IncomingMessage._applyRawTrailers(msg, result.rawTrailers);
+    }
     msg.socket = this.socket;
     msg.connection = this.socket;
     msg._setBody(result.body);
@@ -3474,6 +3552,7 @@ function _socketHttpRoundTrip(
         statusMessage: info.statusMessage,
         rawHeaders: info.rawHeaders.slice(),
         body: Buffer.concat(chunks),
+        rawTrailers: parser.rawTrailers ? parser.rawTrailers.slice() : [],
       });
     };
     parser.onError = (err) => fail(err);
@@ -3769,6 +3848,21 @@ class ServerBase extends EventEmitter {
     if (this._netServer) {
       this._netServer.close();
       this._netServer = null;
+    }
+    // Real Node (probed v24.22.1): server.close() destroys connections
+    // that are idle at close time — the client sees EOF + close at once
+    // and the loop drains — while connections with a request in flight
+    // survive and complete (they are NOT destroyed retroactively once
+    // they go idle). Same predicate as closeIdleConnections().
+    for (const socket of [...this._connections]) {
+      const state = socket._httpState;
+      if (!state || !state.busy) {
+        try {
+          socket.destroy();
+        } catch {
+          /* best effort */
+        }
+      }
     }
     this._stopConnectionChecker();
     this.listening = false;
@@ -4367,7 +4461,7 @@ class ServerBase extends EventEmitter {
         !res._chunkTerminatorSent
       ) {
         try {
-          socket.write("0\r\n\r\n");
+          socket.write(res._chunkTerminator());
         } catch {
           /* ignore */
         }
@@ -4456,12 +4550,12 @@ class ServerBase extends EventEmitter {
             Buffer.from(headOut, "latin1"),
             Buffer.from(`${body.length.toString(16)}\r\n`, "latin1"),
             body,
-            Buffer.from("\r\n0\r\n\r\n", "latin1"),
+            Buffer.from("\r\n" + res._chunkTerminator(), "latin1"),
           ]);
         } else if (!noBodyStatus) {
           // Send terminator only if a body is allowed. 204/304 (and 1xx)
           // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
-          out = headOut + "0\r\n\r\n";
+          out = headOut + res._chunkTerminator();
         } else {
           // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
           out = headOut;

@@ -129,6 +129,7 @@ export class HTTPParser {
     this._state = "start-line";
     this._info = null;
     this._rawHeaders = [];
+    this.rawTrailers = [];
     this._chunkState = null;
     this._remaining = 0;
     this._headStart = this._off;
@@ -657,11 +658,28 @@ export class HTTPParser {
       this._chunkState = "size";
       return true;
     }
-    // trailers: consumed and dropped (out of scope for phase 1)
+    // Trailers: each line is a header line (name: value). Well-formed
+    // lines are recorded on this.rawTrailers (flat [name, value] pairs,
+    // wire casing preserved, one pair per line) for the owner to fold
+    // into the message's trailers at completion. Malformed lines are
+    // consumed and dropped (lenient by design: no official test covers
+    // malformed trailer lines, and throwing here would change error
+    // behavior for trailing garbage).
     const found = this._findLine();
     if (!found) return false;
     this._off = found.next;
-    if (found.text === "") this._finishMessage();
+    if (found.text === "") {
+      this._finishMessage();
+      return true;
+    }
+    const colon = found.text.indexOf(":");
+    if (colon > 0 && TOKEN_RE.test(found.text.slice(0, colon))) {
+      const value = found.text
+        .slice(colon + 1)
+        .replace(/^[ \t]+/, "")
+        .replace(/[ \t]+$/, "");
+      this.rawTrailers.push(found.text.slice(0, colon), value);
+    }
     return true;
   }
 
