@@ -3336,8 +3336,29 @@ class ServerBase extends EventEmitter {
       idleSince: null, // set when a response finishes and the socket idles
       upgraded: false, // connection upgraded; HTTP timeouts no longer apply
       timedOut: false, // a 408 was already sent on this socket
+      parserFreed: false, // socket.parser.free() called (exactly once)
     };
     socket._httpState = state;
+    // Node parity: server sockets expose their HTTP parser as socket.parser
+    // (real Node: the llhttp HTTPParser instance, freed exactly once at
+    // socket close, after which socket.parser reads null — probed on real
+    // Node v24.22.1: free() fires at socket close, NOT at response finish).
+    // The shim's parser is internal, so this is a minimal facade with the
+    // shape the surface needs: free()/close() plus the socket reference.
+    // The 'close' handler below invokes the CURRENT facade's free(), so
+    // app replacements of parser.free (e.g. mustCall wrappers) observe
+    // the real close-time call.
+    socket.parser = {
+      socket,
+      incoming: null,
+      outgoing: null,
+      free() {
+        // No pool to return to: the shim's parser is per-connection.
+      },
+      close() {
+        // No-op: the shim parser holds no native resources.
+      },
+    };
     socket.on("close", () => {
       this._connections.delete(socket);
       if (this._connections.size === 0) this._stopConnectionChecker();
@@ -3345,6 +3366,19 @@ class ServerBase extends EventEmitter {
         state.current.req.aborted = true;
         state.current.req.emit("aborted");
         state.current = null;
+      }
+      // Free the parser facade exactly once at socket close, then read
+      // socket.parser as null (real-Node behavior). The try/catch keeps a
+      // throwing app replacement from breaking close handling.
+      const facade = socket.parser;
+      if (facade && !state.parserFreed) {
+        state.parserFreed = true;
+        try {
+          facade.free();
+        } catch {
+          /* app replacement threw; close proceeds */
+        }
+        socket.parser = null;
       }
     });
     // Node parity: servers emit 'connection' for every accepted socket.
