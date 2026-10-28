@@ -2144,6 +2144,17 @@ export class ClientRequest extends OutgoingMessage {
       // agent.sockets[name].length === 1 inside its 'end' handler).
       const agent = this.agent;
       const sock = this.socket;
+      // Record the response's keep-alive timeout hint on the socket
+      // so the agent's keepSocketAlive veto can read it at release
+      // time (null when the response carried no hint — this also
+      // clears any stale hint from an earlier response on a reused
+      // socket). Stashed before the release even in the deferred
+      // non-keep-alive case, so the value is fixed at response time.
+      if (sock && !(sock instanceof FakeSocket)) {
+        sock._serverKeepAliveTimeout = parseKeepAliveTimeoutHint(
+          streamedMsg.headers,
+        );
+      }
       if (agent && sock && !(sock instanceof FakeSocket) && !agent.keepAlive) {
         const req = this;
         setTimeout(() => req._releaseAgentSocket(), 0);
@@ -2168,6 +2179,14 @@ export class ClientRequest extends OutgoingMessage {
     msg.socket = this.socket;
     msg.connection = this.socket;
     msg._setBody(result.body);
+    // Record the response's keep-alive timeout hint on the socket
+    // for the agent's keepSocketAlive veto (see the streamed path
+    // above for why this is stashed, and why null clears stale hints).
+    if (this.socket && !(this.socket instanceof FakeSocket)) {
+      this.socket._serverKeepAliveTimeout = parseKeepAliveTimeoutHint(
+        msg.headers,
+      );
+    }
     // Release the socket to the agent's pool for keep-alive reuse.
     this._releaseAgentSocket();
     this.emit("response", msg);
@@ -3419,6 +3438,19 @@ export function _connectionListener(socket) {
 // ---------------------------------------------------------------------------
 // 12. Agent — connection-pool metadata only; the browser owns real sockets.
 // ---------------------------------------------------------------------------
+/**
+ * Parse the `timeout=N` (seconds) hint from a response's `Keep-Alive`
+ * header value (headers object with lowercase keys, as built by
+ * IncomingMessage._applyRawHeaders). Returns null when absent or
+ * unparsable. A value like `timeout=5, max=100` yields 5.
+ */
+function parseKeepAliveTimeoutHint(headers) {
+  const value = headers?.["keep-alive"];
+  if (typeof value !== "string") return null;
+  const m = /timeout\s*=\s*(\d+)/i.exec(value);
+  return m ? Number(m[1]) : null;
+}
+
 class AgentBase extends EventEmitter {
   constructor(options) {
     super();
@@ -3429,6 +3461,16 @@ class AgentBase extends EventEmitter {
     this.protocol = opts.protocol || "http:";
     this.keepAliveMsecs = opts.keepAliveMsecs || 1000;
     this.keepAlive = opts.keepAlive || false;
+    // Server keep-alive timeout hint buffer (Node v22.20+/v24.7+):
+    // milliseconds subtracted from the server's `Keep-Alive: timeout`
+    // hint when deciding whether a pooled socket is already expired.
+    // Default 1000; only a finite number >= 0 is accepted — anything
+    // else (negative, Infinity, NaN, non-number) falls back to 1000
+    // (probed against real Node: -100/Infinity/NaN/"500"/null/true
+    // all yield 1000, while 0, -0 and 500.5 pass through).
+    const buf = opts.agentKeepAliveTimeoutBuffer;
+    this.agentKeepAliveTimeoutBuffer =
+      typeof buf === "number" && Number.isFinite(buf) && buf >= 0 ? buf : 1000;
     this.maxSockets = opts.maxSockets || AgentBase.defaultMaxSockets;
     this.maxFreeSockets = opts.maxFreeSockets || 256;
     this.scheduling = opts.scheduling || "lifo";
@@ -3751,7 +3793,24 @@ class AgentBase extends EventEmitter {
     this.addRequest(req, req._agentOptions || {});
   }
 
-  keepSocketAlive(_socket) {
+  keepSocketAlive(socket) {
+    // Server keep-alive timeout hint (Node): when the last response
+    // carried `Keep-Alive: timeout=N`, the socket is already expired
+    // if N seconds minus this agent's buffer leaves nothing — veto
+    // pooling and let releaseSocket destroy it instead
+    // (test-http-client-keep-alive-hint: timeout=1 with the default
+    // 1000ms buffer closes at once, well before the test's 3s guard).
+    // A hint with time remaining is pooled normally; real Node
+    // enforces nothing further (no timer, no reuse-time check —
+    // probed: a timeout=3/buffer=1500 socket stays pooled past
+    // 1500ms and is reused after 2000ms).
+    const hint = socket._serverKeepAliveTimeout;
+    if (
+      typeof hint === "number" &&
+      hint * 1000 <= this.agentKeepAliveTimeoutBuffer
+    ) {
+      return false;
+    }
     return true;
   }
 
@@ -3759,6 +3818,10 @@ class AgentBase extends EventEmitter {
     // A reused socket connected for an earlier request; never replay
     // that 'connect' for the new request.
     socket._connectedBeforeAssign = false;
+    // Drop the previous response's keep-alive hint: the next release
+    // re-stashes from its own response (or null when it has none), so
+    // a stale hint can never veto an unrelated response's pooling.
+    socket._serverKeepAliveTimeout = null;
     socket._agentReused = true;
     // The socket is checked out of the free pool for a new request; clear the
     // released flag so _releaseAgentSocket can park it again on completion.
