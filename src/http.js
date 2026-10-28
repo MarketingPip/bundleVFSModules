@@ -422,6 +422,20 @@ export class OutgoingMessage extends Writable {
     this._removedTE = false;
     this.outputData = [];
     this.outputSize = 0;
+    // Bare OutgoingMessage instances bypass Writable buffering (see
+    // write()): their buffered bytes live only in outputData/outputSize,
+    // so writableLength must read outputSize to match real Node
+    // (test-http-outgoing-properties: write("asd") → writableLength 3).
+    // Subclasses keep the Writable getter: their writes flow through
+    // Writable state (streaming, pipelining, drain timing).
+    if (new.target === OutgoingMessage) {
+      Object.defineProperty(this, "writableLength", {
+        configurable: true,
+        get() {
+          return this.outputSize;
+        },
+      });
+    }
     this.socket = null;
     this.connection = null;
     this._trailer = null;
@@ -817,6 +831,35 @@ export class OutgoingMessage extends Writable {
       if (typeof encoding === "function") callback = encoding;
       if (typeof callback === "function") queueMicrotask(callback);
       return true;
+    }
+    // Bare OutgoingMessage (never socket-assigned, base class only):
+    // real Node's OutgoingMessage is NOT a Writable — write() appends to
+    // outputData/outputSize synchronously and returns false once buffered
+    // bytes reach the highWaterMark, with the write callback stored in the
+    // entry (probed v24.22.1: it never fires, not on a tick and not on
+    // end() — only on flush). Routing through Writable would leave
+    // outputSize lagging: Writable buffers every chunk after the first
+    // internally while _write is in flight, so after a loop that wrote
+    // 64KB outputSize would still read 3 bytes (test-http-outgoing-buffer:
+    // loop terminates on Writable length, but outputSize >= HWM fails).
+    // Scoped to the base class on purpose: pipelined ServerResponses
+    // (socket null while queued) rely on Writable state for
+    // writableNeedDrain/drain timing, and ClientRequest pre-connect
+    // buffering relies on the _write path (#272).
+    if (
+      this.socket === null &&
+      this.constructor === OutgoingMessage &&
+      !this.finished
+    ) {
+      if (typeof encoding === "function") {
+        callback = encoding;
+        encoding = null;
+      }
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      this.outputData.push({ data: buf, encoding: "buffer", callback });
+      this.outputSize += buf.length;
+      const hwm = this.writableHighWaterMark ?? getDefaultHighWaterMark(false);
+      return this.outputSize < hwm;
     }
     return super.write(chunk, encoding, callback);
   }
