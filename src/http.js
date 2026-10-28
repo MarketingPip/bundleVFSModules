@@ -22,7 +22,12 @@
 //     fetch(). Trailers are unsupported.
 
 import { EventEmitter } from "events";
-import { Readable, Writable, getDefaultHighWaterMark } from "stream";
+import { Readable, Writable } from "stream";
+// NOTE: imported from the relative path, NOT bare "stream": the esbuild
+// browser build resolves bare "stream" to node-modules-polyfills:stream,
+// which does not export getDefaultHighWaterMark (that import broke the
+// build — CI build failure on PR #268's first head, reproduced locally).
+import { getDefaultHighWaterMark } from "./stream/state.js";
 import { Buffer } from "buffer";
 import { _checkInvalidHeaderChar, _checkIsHttpToken } from "./_http_common.js";
 import { kUniqueHeaders, kHighWaterMark } from "./internals/http-symbols.js";
