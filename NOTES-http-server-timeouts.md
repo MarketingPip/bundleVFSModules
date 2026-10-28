@@ -156,7 +156,42 @@ The official test deadlocks on the *client* side, not the server side:
 
 ## Guard tests
 
-<!-- filled after the guard loop + differential vs pristine main -->
+Guard set: 51 tests (all `test-http-agent-*`, chunked, blank-header,
+get-pipeline-problem, keep-alive-close-on-header, client-keep-alive-hint,
+client-keep-alive-release-before-finish, all `test-http-keep-alive*`,
+test-http-server, plus timeout-adjacent server tests: close-all,
+close-destroy-timeout, close-idle, close-idle-wait-response,
+connections-checking-leak, keep-alive-defaults, keepalive-end,
+stale-close, timeouts-validation).
+
+- **All previously passing guards still pass** on the branch, including
+  agent-error-on-idle, agent-getname, agent-keep-alive-timeout-buffer,
+  agent-maxsockets, agent-no-protocol, agent-null, agent-timeout,
+  agent-uninitialized, blank-header, chunked (all three), client-keep-alive-hint,
+  get-pipeline-problem, keep-alive-close-on-header, keep-alive-timeout-buffer,
+  keep-alive-timeout-custom, keep-alive-timeout-race-condition, keep-alive,
+  test-http-server, close-idle-wait-response, connections-checking-leak.
+- **27 guard failures, ALL pre-existing:** the same 27 tests were run on
+  pristine main (b1ea9920, scratch worktree) and fail there with
+  identical exit codes — agent-abort-controller 1, agent-close 1,
+  agent-destroyed-socket 1, agent-domain-reused-gc 1, agent-false 1,
+  agent-free-socket-data-guard 124, agent-keepalive-delay 1,
+  agent-keepalive 1, agent-maxsockets-respected 124,
+  agent-maxtotalsockets 1, agent-remove 124,
+  agent-reuse-drained-socket-only 124, agent-scheduling 1,
+  agent-timeout-option 1, agent-uninitialized-with-handle 1, agent 1,
+  keep-alive-drop-requests 124, keep-alive-max-requests 124,
+  keep-alive-pipeline-max-requests 124, keep-alive-timeout 124,
+  server-close-all 1, server-close-destroy-timeout 1, server-close-idle 1,
+  server-keep-alive-defaults 124, server-keepalive-end 124,
+  server-stale-close 124, server-timeouts-validation 1. **Zero
+  regressions.**
+- **Repo tests:** `tests/ondemand-require.test.js` 29/29 pass (including
+  the footprint allowlist check). Full jest suite: 3059 passed, 7 failed,
+  1 skipped — the same 7 failures (perf_hooks, oracle-export-surface
+  util+crypto, constants ×3, export_surface_sys) occur on pristine main:
+  pre-existing Node-version drift (local probe runs v24.22.1, oracles
+  pinned to v24.20.0), not caused by this change.
 
 ## Caveats / open questions
 
