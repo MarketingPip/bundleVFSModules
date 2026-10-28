@@ -1206,8 +1206,21 @@ export class ServerResponse extends OutgoingMessage {
    */
   _streamingHeader() {
     let header = this._header;
-    const hasCL = this.hasHeader("content-length");
-    const hasTE = this.hasHeader("transfer-encoding");
+    // Dual header stores (same trap as _finishSocketResponse): headers
+    // set via writeHead(obj) live in _renderedHeaders only, while
+    // hasHeader() sees kOutHeaders only. Consulting one store alone
+    // re-adds Transfer-Encoding: chunked on top of an app-set
+    // Content-Length — a response real Node's client would reject
+    // (HPE_INVALID_TRANSFER_ENCODING) and that the shim's own client
+    // parser now rejects too (test-http-keep-alive: writeHead CL +
+    // write() + end() stalled until this check saw both stores).
+    const rendered = this._renderedHeaders || {};
+    const hasCL =
+      this.hasHeader("content-length") ||
+      rendered["content-length"] !== undefined;
+    const hasTE =
+      this.hasHeader("transfer-encoding") ||
+      rendered["transfer-encoding"] !== undefined;
     // HTTP/1.0 does not support chunked transfer encoding — the connection
     // closes after the response instead (Node behavior). Exception: when the
     // request advertised `TE: chunked`, Node does use chunked for 1.0.
