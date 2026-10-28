@@ -88,3 +88,13 @@ below shows no behavior change for existing passing tests.
 - The repo's `NOTES-http-diagnosis.md` / `NOTES-http2-parity.md`
   untracked files in the parent checkout were left untouched, and the
   `node_modules` symlink in this worktree is not committed.
+
+## CI retrigger note
+
+- First head `53c361c7`: Parity success, build failure with no log summary
+  via the API — the known transient signature (same as PR #262's rebased
+  head and PR #263's first head, both green on retrigger). Local build
+  steps (build-vfs, sandbox --check, runtime --check) reproduce clean, and
+  the branch is a 3-file change that cannot break the build by content.
+  Retriggered with this notes-only commit (footprint unchanged); if the
+  rerun fails the same way, investigate deeper instead of merging.
