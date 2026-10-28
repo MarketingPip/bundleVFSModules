@@ -3373,6 +3373,13 @@ class ServerBase extends EventEmitter {
     // getConnections() / closeAllConnections() / closeIdleConnections().
     this._connections = new Set();
     this._netServer = null;
+    // Node's http.Server IS a net.Server: emitting 'connection' on it
+    // runs the HTTP connection handling (test-http-server-multiple-
+    // client-error manually emits 'connection' after reading one byte
+    // off a net socket). The guard in _onSocketConnection makes the
+    // normal path (netServer accept -> _onSocketConnection -> this
+    // emit) idempotent, so this listener is a no-op there.
+    this.on("connection", (socket) => this._onSocketConnection(socket, true));
     // Connections-checking interval timer (Node's connectionsCheckingInterval
     // polling for headersTimeout/requestTimeout/keepAliveTimeout). Started
     // lazily on first connection, unref'd, stopped when idle/closed.
@@ -3605,7 +3612,12 @@ class ServerBase extends EventEmitter {
    * connection (no pipelined concurrency); further bytes are gated until the
    * current response finishes.
    */
-  _onSocketConnection(socket) {
+  _onSocketConnection(socket, fromManualEmit = false) {
+    // Idempotence guard for the constructor's 'connection' listener:
+    // _onSocketConnection itself emits 'connection' below, and a
+    // manually-emitted connection re-enters here — the socket already
+    // has its parser and handlers from the first call.
+    if (socket._httpState) return;
     this._connections.add(socket);
     // Like Node's _http_server, the HTTP layer — not the stream layer —
     // decides when an EOF'd socket closes: with allowHalfOpen set, a peer
@@ -3695,7 +3707,11 @@ class ServerBase extends EventEmitter {
       state.parser = null;
     });
     // Node parity: servers emit 'connection' for every accepted socket.
-    this.emit("connection", socket);
+    // A manually-emitted connection (fromManualEmit) already fired the
+    // app's 'connection' listeners via the outer emit — re-emitting
+    // here would fire them twice (Node's connectionListenerInternal
+    // never re-emits).
+    if (!fromManualEmit) this.emit("connection", socket);
     this._startConnectionChecker();
     // Socket timeout wiring (server.setTimeout): applied at connection
     // time ONLY — a later setTimeout() call does not touch existing
@@ -3752,8 +3768,27 @@ class ServerBase extends EventEmitter {
       }
     };
     parser.onError = (err) => {
-      // Malformed request → 400 and close (Node's clientError path).
-      // Chunk extension too large → 413 (Node's behavior).
+      // Node's clientError/socket-error shape (probed on real Node
+      // v24.22.1): message "Parse Error: <llhttp reason>", code,
+      // bytesParsed, rawPacket. Only the method reason is asserted
+      // exactly by official tests; other codes keep the parser's
+      // message behind the same prefix.
+      if (err.code === "HPE_INVALID_METHOD") {
+        err.message = "Parse Error: Invalid method encountered";
+      } else if (!err.message.startsWith("Parse Error:")) {
+        err.message = `Parse Error: ${err.message}`;
+      }
+      if (this.listenerCount("clientError") > 0) {
+        // The handler owns the socket now: no automatic 400, no
+        // destroy, no socket 'error' (probed: a listener that does not
+        // destroy leaves the socket open and silent).
+        this.emit("clientError", err, socket);
+        return;
+      }
+      // No listener: Node writes the 400 and destroys the socket with
+      // the error, so socket 'error' fires (test-http-server-destroy-
+      // socket-on-client-error) and the client sees 'end' after the
+      // 400 bytes. Chunk extension too large → 413 (Node's behavior).
       this.emit("clientError", err, socket);
       if (!socket.destroyed) {
         try {
@@ -3771,7 +3806,7 @@ class ServerBase extends EventEmitter {
         } catch {
           /* best effort */
         }
-        socket.destroy();
+        socket.destroy(err);
       }
     };
     // Malformed pipelined data must surface clientError even when it

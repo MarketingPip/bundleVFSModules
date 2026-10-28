@@ -66,6 +66,25 @@ const KNOWN_METHODS = new Set([
   "UNSUBSCRIBE",
 ]);
 
+// For an invalid method, llhttp's bytesParsed is how many leading bytes of
+// the token matched a known method's prefix before failing (probed on real
+// Node v24.22.1: "GETX" -> 3, "GE" -> 2, "FOO" -> 1, "XFOO"/"1ABC" -> 0).
+// Quirk of the real parser's minimized method DFA, also probed: 'F' counts
+// ("FA" -> 1) and "FL" counts twice ("FL" -> 2), though no known method
+// starts with F — reproduced so bytesParsed matches byte for byte.
+function methodBytesParsed(token) {
+  let n = 0;
+  for (const m of KNOWN_METHODS) {
+    let k = 0;
+    while (k < token.length && k < m.length && token[k] === m[k]) k++;
+    if (k > n) n = k;
+  }
+  if (n === 0 && token[0] === "F") {
+    n = token.length > 1 && token[1] === "L" ? 2 : 1;
+  }
+  return n;
+}
+
 function parseError(code, message) {
   const err = new Error(message);
   err.code = code;
@@ -120,12 +139,29 @@ export class HTTPParser {
   /**
    * Feed bytes into the parser. Returns when more data is needed, the stream
    * ended cleanly between messages, or a fatal parse error occurred
-   * (reported via onError; the parser then ignores further input).
+   * (reported via onError; further chunks re-report the same failure —
+   * llhttp stays in its error state, so a second chunk after the first
+   * error surfaces a second clientError with the new chunk as rawPacket,
+   * test-http-server-multiple-client-error. A re-parse with no new input
+   * (pipelined-remainder validation) reports nothing).
    */
   execute(chunk) {
-    if (this._state === "error") return;
-    if (chunk && chunk.length) {
-      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const bytes =
+      chunk && chunk.length
+        ? chunk instanceof Uint8Array
+          ? chunk
+          : Buffer.from(chunk)
+        : null;
+    if (this._state === "error") {
+      if (bytes && this._fatalCode && this.onError) {
+        const err = parseError(this._fatalCode, this._fatalMessage);
+        err.bytesParsed = -1;
+        err.rawPacket = bytes;
+        this.onError(err);
+      }
+      return;
+    }
+    if (bytes) {
       // Compact: drop consumed prefix so the buffer cannot grow unboundedly.
       this._buf =
         this._off === 0
@@ -183,6 +219,25 @@ export class HTTPParser {
       }
     } catch (err) {
       this._state = "error";
+      // Only llhttp-coded failures re-report on later chunks; a throw from
+      // an owner callback is not a parse failure and must not synthesize
+      // one (its code is not an HPE_ code).
+      if (typeof err.code === "string" && err.code.startsWith("HPE_")) {
+        this._fatalCode = err.code;
+        this._fatalMessage = err.message;
+      }
+      // Node's clientError/socket-error shape: rawPacket is the chunk that
+      // triggered this execute (llhttp's per-execute input); a re-parse
+      // with no new chunk reports the buffered remainder instead.
+      // bytesParsed falls back to the bytes consumed for this message.
+      if (err.rawPacket === undefined) {
+        err.rawPacket = bytes
+          ? bytes
+          : Buffer.from(this._buf.subarray(this._headStart));
+      }
+      if (err.bytesParsed === undefined) {
+        err.bytesParsed = Math.max(0, this._off - this._headStart);
+      }
       if (this.onError) this.onError(err);
     }
   }
@@ -229,57 +284,73 @@ export class HTTPParser {
     return null;
   }
 
+  /**
+   * Judge a partial (CRLF-less) start-line remainder eagerly: llhttp is
+   * a byte-level machine and rejects an invalid start line without
+   * waiting for its CRLF — e.g. the garbage after a blank header block
+   * in test-http-blank-header ("hello world") must produce a 400, not
+   * a wait for bytes that never come, and a lone "1" byte in
+   * test-http-server-multiple-client-error must surface its clientError
+   * at once (rawPacket "1"), not after the rest of the line arrives.
+   * Viability is monotone: a token that is not a prefix of any known
+   * method can never become one by gaining bytes, so an early throw
+   * matches llhttp exactly. A viable prefix (or an empty remainder)
+   * returns silently to wait for more bytes.
+   */
+  _judgePartialStartLine() {
+    if (this._off >= this._buf.length) return;
+    const partial = this._buf.toString("latin1", this._off);
+    if (this.type === "request") {
+      const sp = partial.indexOf(" ");
+      const token = sp < 0 ? partial : partial.slice(0, sp);
+      const viable =
+        token.length > 0 &&
+        TOKEN_RE.test(token) &&
+        (sp >= 0
+          ? KNOWN_METHODS.has(token)
+          : [...KNOWN_METHODS].some((m) => m.startsWith(token)));
+      if (!viable) {
+        const err = parseError(
+          "HPE_INVALID_METHOD",
+          `invalid method: ${token}`,
+        );
+        err.bytesParsed = methodBytesParsed(token);
+        throw err;
+      }
+    } else if (
+      partial.length > 0 &&
+      !"HTTP/".startsWith(partial.slice(0, 5)) &&
+      !partial.startsWith("HTTP/")
+    ) {
+      throw parseError(
+        "HPE_INVALID_CONSTANT",
+        `invalid response prefix: ${partial.slice(0, 10)}`,
+      );
+    }
+  }
+
   _parseStartLine() {
     let found = this._findLine();
-    if (!found) return false;
+    if (!found) {
+      // No complete line yet: judge the partial remainder eagerly
+      // (llhttp is byte-level — a non-viable method token errors at
+      // once, it does not wait for the line's CRLF).
+      this._judgePartialStartLine();
+      return false;
+    }
     // llhttp ignores empty lines preceding the start line (RFC 9112
     // section 4: a recipient MUST ignore at least one empty line
     // before the request line). A pipelined request preceded by a
     // stray CRLF is not a parse error
     // (test-http-incoming-pipelined-socket-destroy writes one).
-    let skippedEmpty = false;
     while (found.text === "") {
-      skippedEmpty = true;
       this._off = found.next;
       found = this._findLine();
       if (!found) break;
     }
     if (!found) {
-      // No complete line yet. llhttp is a byte-level machine and
-      // rejects an invalid start line eagerly, without waiting for
-      // its CRLF — e.g. the garbage after a blank header block in
-      // test-http-blank-header ("hello world") must produce a 400,
-      // not a wait for bytes that never come. A line-based parser
-      // can only decide this once empty lines were skipped (the
-      // pre-skip path never reaches a new message start), so judge
-      // the partial remainder here: it must still be a viable
-      // start-line prefix, otherwise throw what the complete-line
-      // path would throw.
-      if (skippedEmpty && this._off < this._buf.length) {
-        const partial = this._buf.toString("latin1", this._off);
-        if (this.type === "request") {
-          const sp = partial.indexOf(" ");
-          const token = sp < 0 ? partial : partial.slice(0, sp);
-          const viable =
-            token.length > 0 &&
-            TOKEN_RE.test(token) &&
-            (sp >= 0
-              ? KNOWN_METHODS.has(token)
-              : [...KNOWN_METHODS].some((m) => m.startsWith(token)));
-          if (!viable) {
-            throw parseError("HPE_INVALID_METHOD", `invalid method: ${token}`);
-          }
-        } else if (
-          partial.length > 0 &&
-          !"HTTP/".startsWith(partial.slice(0, 5)) &&
-          !partial.startsWith("HTTP/")
-        ) {
-          throw parseError(
-            "HPE_INVALID_CONSTANT",
-            `invalid response prefix: ${partial.slice(0, 10)}`,
-          );
-        }
-      }
+      // Remainder after skipped empty lines: same eager judgment.
+      this._judgePartialStartLine();
       return false;
     }
     const line = found.text;
@@ -293,6 +364,19 @@ export class HTTPParser {
     }
     if (this.type === "request") {
       const sp1 = line.indexOf(" ");
+      // llhttp validates the method token before anything else on the
+      // line: "FOO /\r\n" (no version) and "Oopsie-doopsie\r\n" (no
+      // space at all) are HPE_INVALID_METHOD, not
+      // HPE_INVALID_START_LINE.
+      const method = sp1 < 0 ? line : line.slice(0, sp1);
+      if (!TOKEN_RE.test(method) || !KNOWN_METHODS.has(method)) {
+        const err = parseError(
+          "HPE_INVALID_METHOD",
+          `invalid method: ${method}`,
+        );
+        err.bytesParsed = methodBytesParsed(method);
+        throw err;
+      }
       const sp2 = sp1 < 0 ? -1 : line.indexOf(" ", sp1 + 1);
       if (sp1 < 0 || sp2 < 0) {
         throw parseError(
@@ -300,12 +384,8 @@ export class HTTPParser {
           `malformed request line: ${line}`,
         );
       }
-      const method = line.slice(0, sp1);
       const target = line.slice(sp1 + 1, sp2);
       const version = line.slice(sp2 + 1);
-      if (!TOKEN_RE.test(method) || !KNOWN_METHODS.has(method)) {
-        throw parseError("HPE_INVALID_METHOD", `invalid method: ${method}`);
-      }
       if (target.length === 0) {
         throw parseError("HPE_INVALID_URL", "empty request target");
       }
