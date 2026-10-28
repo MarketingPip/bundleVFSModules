@@ -897,6 +897,19 @@ function onwrite(stream, er) {
 function onReadableStreamEnd() {
   if (!this.allowHalfOpen) {
     this.write = writeAfterFIN;
+    // Real Node (probed v24.22.1): with allowHalfOpen false, the socket
+    // ends itself once EOF is delivered — the client sees 'end' then
+    // 'close' with no user action, and the loop drains. Deferred a tick
+    // so writes issued inside user 'end' handlers still land (also
+    // probed: a write in the 'end' handler reaches the peer). Server
+    // sockets are unaffected: the HTTP layer sets allowHalfOpen true
+    // on accepted sockets, so half-closed request/response still works.
+    if (!this.writableEnded && !this.destroyed) {
+      const self = this;
+      nextTick(() => {
+        if (!self.destroyed && !self.writableEnded) self.end();
+      });
+    }
   }
 }
 
