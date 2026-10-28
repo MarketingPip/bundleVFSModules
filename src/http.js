@@ -1074,10 +1074,7 @@ export class IncomingMessage extends Readable {
         const val = String(value);
         // hasOwnProperty, not `in`: a "constructor" trailer must not read
         // Object.prototype (same trap as headers).
-        const owned = Object.prototype.hasOwnProperty.call(
-          msg.trailers,
-          lower,
-        );
+        const owned = Object.prototype.hasOwnProperty.call(msg.trailers, lower);
         if (DUPLICATES_REMOVED.has(lower)) {
           if (!owned) msg.trailers[lower] = val;
         } else if (lower === "cookie") {
@@ -2475,6 +2472,7 @@ export class ClientRequest extends OutgoingMessage {
     const msg = await IncomingMessage.fromFetchResponse(response);
     msg.socket = this.socket;
     msg.connection = this.socket;
+    msg.req = this;
     this.emit("response", msg);
   }
 
@@ -2774,6 +2772,7 @@ export class ClientRequest extends OutgoingMessage {
           IncomingMessage._applyRawHeaders(msg, pairs);
           msg.socket = this.socket;
           msg.connection = this.socket;
+          msg.req = this;
           streamedMsg = msg;
           this.emit("response", msg);
         },
@@ -2931,6 +2930,7 @@ export class ClientRequest extends OutgoingMessage {
     }
     msg.socket = this.socket;
     msg.connection = this.socket;
+    msg.req = this;
     msg._setBody(result.body);
     // Record the response's keep-alive timeout hint on the socket
     // for the agent's keepSocketAlive veto (see the streamed path
@@ -3673,6 +3673,14 @@ class ServerBase extends EventEmitter {
     // over-limit connections were served instead of dropped.
     this._maxConnections = null;
     this.maxRequestsPerSocket = options.maxRequestsPerSocket ?? 0;
+    // createServer({ noDelay }) — probed real Node v24.22.1: default
+    // true; the option is Boolean-coerced at construction (0 -> false,
+    // 'x' -> true, null -> true). Later assignment stores verbatim
+    // (plain property, no setter). No JS-level setNoDelay call on
+    // accepted sockets was observed on real Node, so the property is
+    // the whole contract here (test-http-nodelay asserts the property
+    // and the client connect options, nothing server-side).
+    this.noDelay = options.noDelay == null ? true : Boolean(options.noDelay);
     this.timeout = 0;
     this.headersTimeout = options.headersTimeout ?? 60000;
     this.requestTimeout = options.requestTimeout ?? 300000;
@@ -4820,7 +4828,17 @@ class AgentBase extends EventEmitter {
     const host = options.host || options.hostname || req.host || "localhost";
     let socket;
     try {
-      socket = netConnect({ port, host });
+      // Real Node passes the agent's noDelay (default true) into the
+      // connect options; a request-level noDelay is ignored (probed
+      // v24.22.1: http.request({ noDelay: false }) still connects with
+      // noDelay true, while new Agent({ noDelay: false }) connects
+      // with false). The agent consumes the option internally — Agent
+      // exposes no noDelay property on real Node.
+      socket = netConnect({
+        port,
+        host,
+        noDelay: this.options.noDelay ?? true,
+      });
     } catch (err) {
       if (typeof callback === "function") {
         queueMicrotask(() => callback(err));
