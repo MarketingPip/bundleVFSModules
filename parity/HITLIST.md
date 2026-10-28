@@ -6,7 +6,7 @@ Updated 2026-10-21: http 131/397 → 134/397 — three verified single-test flip
 Updated 2026-10-28: http 134/397 → 136/397 — two verified single-test flips (PR #250: client-keep-alive-hint, agent-keep-alive-timeout-buffer), no re-sweep.
 Updated 2026-10-28: http 136/397 → 138/397 — two verified flips, no re-sweep (PR #252: test-http-server; test-http-server-non-utf8-header, timed out in the Oct 20 sweep and verified passing on post-#250 main f0fc91fd and on merged main 2983fd28).
 Updated 2026-10-28: http 150/397 → 154/397 — full re-sweep at main 1d8bc7b4 (PR #254) restates the count at 151 (see below), plus three verified post-base flips (PR #256 options-incoming-message, PR #257 consumed-timeout, PR #259 connection-list-when-close), no re-sweep of the new base.
-Updated 2026-10-28: http 154/397 → 159/397 — five verified flips, no re-sweep (PR #258: keep-alive-max-requests-null; PR #263: de-chunked-trailer; PR #264: keepalive-req-gc, the PR #246 regression, fixed; PR #265: unconsume-consume + connect-req-res).
+Updated 2026-10-28: http 154/397 → 159/397 — five verified flips, no re-sweep (PR #258: keep-alive-max-requests-null; PR #263: de-chunked-trailer; PR #264: keepalive-req-gc, the PR #246 regression, fixed; PR #265: unconsume-consume + connect-req-res). (Rebased head: original b0abcffb never triggered CI in 60 min of polling, so this branch was rebased onto main c58a458e to unstick it.)
 Updated 2026-10-12: readline 0/22 → 3/22 after PR #218.
 Updated 2026-10-12: readline 3/22 → 22/22 — restored the Node v24.20.0 port
 (commit 89b18176 had replaced the 2838-line port with a 642-line hand shim,
