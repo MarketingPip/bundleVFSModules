@@ -573,6 +573,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // side-effect flip).
     // docs/http-hitlist-150 branch: http docs sync only (HITLIST row +
     // measured-rates entry for PR #254's twelve verified flips).
+    // fix/http-incoming-message-opt branch: createServer IncomingMessage
+    // option (src/http.js + working note).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check. So are the
@@ -581,7 +583,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      ["NOTES-http-incoming-message.md", "src/http.js"].sort(),
     );
   });
 
