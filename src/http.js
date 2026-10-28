@@ -3381,6 +3381,15 @@ class ServerBase extends EventEmitter {
     // getConnections() / closeAllConnections() / closeIdleConnections().
     this._connections = new Set();
     this._netServer = null;
+    // server.unref() state, sticky across listen() calls: the net server
+    // is recreated on every listen(), so an unref() issued before the
+    // first (or a later) listen must be re-applied to the fresh net
+    // server — real Node keeps an unref-before-listen (probed: the
+    // process still exits once the server-side socket drains). Without
+    // this, ServerBase.unref() was a no-op and the net server's
+    // ref'd loop-keeper timer held the process open forever after the
+    // exchange drained (test-http-server-delete-parser).
+    this._unrefed = false;
     // Node's http.Server IS a net.Server: emitting 'connection' on it
     // runs the HTTP connection handling (test-http-server-multiple-
     // client-error manually emits 'connection' after reading one byte
@@ -3467,6 +3476,8 @@ class ServerBase extends EventEmitter {
     netServer.maxConnections = this._maxConnections;
     this._netServer = netServer;
     netServer.listen(port, this._host);
+    // Apply a sticky unref() issued before this listen() (see _unrefed).
+    if (this._unrefed) netServer.unref();
     this.listening = true;
     // emitMe(fn, method, ...args) serializes only ...args — the payload must
     // go in args (3rd position), not method, or the parent sees an empty message.
@@ -4283,9 +4294,16 @@ class ServerBase extends EventEmitter {
   }
 
   ref() {
+    this._unrefed = false;
+    if (this._netServer) this._netServer.ref();
     return this;
   }
   unref() {
+    // Real Node's http.Server IS a net.Server: unref() releases the
+    // listening handle's loop keeper. The net server is recreated on
+    // every listen(), so the flag is sticky (re-applied in listen()).
+    this._unrefed = true;
+    if (this._netServer) this._netServer.unref();
     return this;
   }
 
