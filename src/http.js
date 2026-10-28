@@ -908,6 +908,9 @@ export class IncomingMessage extends Readable {
 export class ServerResponse extends OutgoingMessage {
   constructor(req) {
     super();
+    // Node: res.req is the request this response belongs to
+    // (test-http-server asserts res.req === req).
+    this.req = req;
     this.socket = req?.socket || new FakeSocket();
     this.connection = this.socket;
     this.statusCode = 200;
@@ -2992,6 +2995,7 @@ class ServerBase extends EventEmitter {
       reqCount: 0,
       current: null, // { req, res } for the in-flight request
       peerEnded: false, // peer sent FIN; close once the response is out
+      inFlight: 0, // dispatched requests whose response has not finished
     };
     socket._httpState = state;
     socket.on("close", () => {
@@ -3121,9 +3125,18 @@ class ServerBase extends EventEmitter {
       // Client half-closed. If a request is in flight, the response still
       // has to be written first — record the EOF and let
       // _finishSocketResponse close the socket afterwards. Only an idle
-      // keep-alive connection is closed immediately.
+      // connection is closed immediately — and "idle" means no response
+      // outstanding, not just "not busy": a FIN queued behind pipelined
+      // requests arrives after the first response finishes (busy is
+      // already false) but while later responses are still pending;
+      // closing there drops them and hangs the client (test-http-server).
+      // Unpausing first flushes any request still buffered in the parser
+      // into the outstanding count, so it is drained rather than dropped.
       state.peerEnded = true;
-      if (!state.busy) socket.end();
+      if (state.inFlight === 0) {
+        state.parser.unpause();
+        if (state.inFlight === 0 && !state.busy) socket.end();
+      }
     });
     state.parser = parser;
   }
@@ -3159,6 +3172,11 @@ class ServerBase extends EventEmitter {
     res.on("finish", () => {
       this._finishSocketResponse(socket, info, state, req, res, reqNo);
     });
+    // Counted before dispatch: a handler that finishes synchronously
+    // (or a pipelined request dispatched while an earlier response is
+    // still in flight) must still be outstanding when the earlier
+    // response finishes, or a half-closed socket is destroyed under it.
+    state.inFlight++;
 
     // Dispatch synchronously, like Node's parserOnIncoming: the handler
     // must attach its req listeners before the parser feeds the body and
@@ -3330,7 +3348,24 @@ class ServerBase extends EventEmitter {
       framingOk &&
       !noBodyWithTE &&
       !state.peerEnded;
-    if (keepAlive) {
+    // Half-closed drain: the peer sent FIN, so no NEW request can arrive,
+    // but responses for already-dispatched pipelined requests must still
+    // go out before the socket closes. Destroying on the first finished
+    // response drops them: the client never sees responses 2..N, its
+    // 'close' never fires, and the test hangs (test-http-server).
+    // Drain exactly like keep-alive while responses remain — the last
+    // one takes the close path below. Narrowly scoped: only when the
+    // response would otherwise have kept the connection alive.
+    state.inFlight = Math.max(0, state.inFlight - 1);
+    const drainPeerEnded =
+      state.peerEnded &&
+      state.inFlight > 0 &&
+      info.shouldKeepAlive &&
+      maxOk &&
+      !socket.destroyed &&
+      framingOk &&
+      !noBodyWithTE;
+    if (keepAlive || drainPeerEnded) {
       state.busy = false;
       state.awaitingBody = false;
       // Preserve the socket for keep-alive reuse: flag the response so the
