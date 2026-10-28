@@ -872,6 +872,47 @@ export class OutgoingMessage extends Writable {
     return lines.length === 0 ? "0\r\n\r\n" : `0\r\n${lines.join("")}\r\n`;
   }
 
+  /**
+   * Coalesced streaming delivery (test-http-keep-alive-max-requests):
+   * real Node flushes a synchronous write();end() sequence as one TCP
+   * segment, so the client sees headers + chunk + terminator in a
+   * single 'data' event. The loopback delivers one 'data' event per
+   * socket.write, so streaming frames pend here instead of going
+   * straight to the socket: end() flushes the pending frame together
+   * with the terminator in a single write, and a microtask flush
+   * covers handlers that stream without ending (delivery stays
+   * prompt, and the next request's dispatch flushes any pending
+   * frame first, so pipelined responses can never overtake an
+   * unfinished one). _flushHeaders() keeps its synchronous send:
+   * an explicit flush means "send now".
+   */
+  _pendFrame(buf) {
+    this._pendingFrame = this._pendingFrame
+      ? Buffer.concat([this._pendingFrame, buf])
+      : buf;
+    if (!this._pendingFlushScheduled) {
+      this._pendingFlushScheduled = true;
+      queueMicrotask(() => {
+        this._pendingFlushScheduled = false;
+        this._flushPendingFrame();
+      });
+    }
+  }
+
+  _flushPendingFrame() {
+    const frame = this._pendingFrame;
+    if (!frame) return;
+    this._pendingFrame = null;
+    const sock = this.socket;
+    if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
+      try {
+        sock.write(frame);
+      } catch {
+        /* socket write failed; ignore */
+      }
+    }
+  }
+
   flushHeaders() {
     if (!this._header) {
       this._implicitHeader();
@@ -1184,6 +1225,11 @@ export class ServerResponse extends OutgoingMessage {
     // directly instead of buffering (needed for abort/destroy tests where
     // the client must see the response before res.end()).
     this._headerFlushed = false;
+    // Coalesced streaming delivery (see _pendFrame): frames pended here
+    // instead of going straight to the socket, so a synchronous
+    // write();end() sequence reaches the client as one 'data' event.
+    this._pendingFrame = null;
+    this._pendingFlushScheduled = false;
     // HTTP version from the request (for 1.0 vs 1.1 response semantics).
     // HTTP/1.0 does not support chunked transfer encoding.
     this._reqHttpVersion = req?.httpVersion || "1.1";
@@ -1310,10 +1356,11 @@ export class ServerResponse extends OutgoingMessage {
       if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
         try {
           if (this._chunkedStreaming && buf.length > 0) {
-            // One write per frame, not three (see _flushHeaders): a
+            // One frame per chunk, not three (see _flushHeaders): a
             // chunk split across delivery events lets a naive client
-            // split-count mis-pair headers and bodies.
-            sock.write(
+            // split-count mis-pair headers and bodies. Frames pend
+            // (see _pendFrame) so end() can join the terminator.
+            this._pendFrame(
               Buffer.concat([
                 Buffer.from(buf.length.toString(16) + "\r\n", "latin1"),
                 buf,
@@ -1321,7 +1368,7 @@ export class ServerResponse extends OutgoingMessage {
               ]),
             );
           } else if (buf.length > 0) {
-            sock.write(buf);
+            this._pendFrame(buf);
           }
         } catch {
           /* ignore */
@@ -1351,7 +1398,7 @@ export class ServerResponse extends OutgoingMessage {
         try {
           const header = this._streamingHeader();
           if (this._chunkedStreaming && buf.length > 0) {
-            sock.write(
+            this._pendFrame(
               Buffer.concat([
                 Buffer.from(header, "latin1"),
                 Buffer.from(buf.length.toString(16) + "\r\n", "latin1"),
@@ -1360,9 +1407,11 @@ export class ServerResponse extends OutgoingMessage {
               ]),
             );
           } else if (buf.length > 0) {
-            sock.write(Buffer.concat([Buffer.from(header, "latin1"), buf]));
+            this._pendFrame(
+              Buffer.concat([Buffer.from(header, "latin1"), buf]),
+            );
           } else {
-            sock.write(header);
+            this._pendFrame(Buffer.from(header, "latin1"));
           }
         } catch {
           /* ignore */
@@ -1682,7 +1731,13 @@ export class ServerResponse extends OutgoingMessage {
       const sock = this.socket;
       if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
         try {
-          sock.write(this._chunkTerminator());
+          // Join the terminator to any pended frame in one write, so
+          // a synchronous write();end() reaches the client as a
+          // single 'data' event (see _pendFrame).
+          const term = Buffer.from(this._chunkTerminator(), "latin1");
+          const pending = this._pendingFrame;
+          this._pendingFrame = null;
+          sock.write(pending ? Buffer.concat([pending, term]) : term);
           this._chunkTerminatorSent = true;
         } catch {
           /* socket write failed; finish listener skips destroyed sockets */
@@ -4153,6 +4208,9 @@ class ServerBase extends EventEmitter {
       parser.onMessageStart = null;
       parser.onError = null;
       state.parser = null;
+      // Same release as _finishSocketResponse below: the dispatch stash
+      // pins res -> req, and the peer link survives a graceful FIN.
+      state.lastResponse = null;
     };
     socket.on("close", onHttpClose);
     // Node parity: servers emit 'connection' for every accepted socket.
@@ -4392,6 +4450,10 @@ class ServerBase extends EventEmitter {
    * The request body streams into req via parser.onBody as bytes arrive.
    */
   _dispatchSocketRequest(socket, info, state) {
+    // A previous response on this socket may still hold a pended
+    // streaming frame (flushed at end() or on a microtask); flush it
+    // now so pipelined responses can never overtake it.
+    if (state.lastResponse) state.lastResponse._flushPendingFrame();
     // createServer({ IncomingMessage: Sub }) delivers Sub instances:
     // the subclass constructor receives exactly one argument, the socket
     // (probed on real Node v24.22.1). Default behavior is byte-identical
@@ -4491,6 +4553,7 @@ class ServerBase extends EventEmitter {
     }
 
     const res = new ServerResponse(req, { highWaterMark: this._highWaterMark });
+    state.lastResponse = res;
     const reqNo = ++state.reqCount;
     // Node syncs res.shouldKeepAlive from the request's keep-alive status;
     // _storeHeader uses it to decide on `Connection: close`.
@@ -4549,7 +4612,11 @@ class ServerBase extends EventEmitter {
         !res._chunkTerminatorSent
       ) {
         try {
-          socket.write(res._chunkTerminator());
+          const term = Buffer.from(res._chunkTerminator(), "latin1");
+          const pending = res._pendingFrame;
+          res._pendingFrame = null;
+          socket.write(pending ? Buffer.concat([pending, term]) : term);
+          res._chunkTerminatorSent = true;
         } catch {
           /* ignore */
         }
@@ -4742,6 +4809,14 @@ class ServerBase extends EventEmitter {
         }
       }
     }
+    // Release the dispatch stash: state.lastResponse pins res -> req
+    // (res.req), and the client-side socket still links to this socket
+    // via _peer after a graceful FIN — without this release a finished
+    // request stays reachable forever and GC-gated tests hang
+    // (test-http-server-keepalive-req-gc). Only clear when this
+    // response is still the stashed one: a pipelined next request may
+    // already have replaced it, and its pending frame must survive.
+    if (state.lastResponse === res) state.lastResponse = null;
   }
 
   setTimeout(msecs, callback) {
