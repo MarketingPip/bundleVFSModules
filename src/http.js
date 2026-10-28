@@ -593,18 +593,62 @@ export class OutgoingMessage extends Writable {
       flat.date = date;
     }
     header += lines.join("");
-    // Node appends `Connection: close` after app headers on server responses
-    // when the connection won't be kept alive (HTTP/1.0 without keep-alive,
-    // or explicit close) and the app didn't set the header itself.
+    // Node's server response framing (probed on real Node v24.22.1):
+    // an app-set Connection header always wins — it is never overridden
+    // and never supplemented with Keep-Alive. Otherwise the header
+    // reflects whether the connection will be kept alive: keep-alive
+    // gets `Connection: keep-alive` plus `Keep-Alive: timeout=N`
+    // (N = floor of the server's keepAliveTimeout in seconds; omitted
+    // when the timeout is 0, and never overriding an app-set Keep-Alive);
+    // anything else gets `Connection: close`. The keep-alive decision
+    // mirrors _finishSocketResponse's: the request-level flag (already
+    // folded with the no-body-with-TE rule by writeHead), the
+    // max-requests budget, and HTTP/1.0 length framing (Content-Length /
+    // Transfer-Encoding, or a TE: chunked request advertising chunked
+    // support). Previously only the close half existed, so every
+    // keep-alive response went out with neither header
+    // (test-http-server-keep-alive-defaults).
     if (
-      !this.shouldKeepAlive &&
-      !flat.connection &&
-      !this._removedConnection &&
       typeof ServerResponse !== "undefined" &&
-      this instanceof ServerResponse
+      this instanceof ServerResponse &&
+      !flat.connection &&
+      !this._removedConnection
     ) {
-      header += "Connection: close\r\n";
-      flat.connection = "close";
+      const max = this._serverMaxRequestsPerSocket;
+      const reqNo = this._serverReqNo;
+      const maxOk =
+        max === undefined ||
+        max === null ||
+        max === 0 ||
+        reqNo === undefined ||
+        reqNo < max;
+      let framingOk = true;
+      if (this._reqHttpVersion === "1.0") {
+        framingOk =
+          flat["content-length"] !== undefined ||
+          flat["transfer-encoding"] !== undefined ||
+          this._reqHadTE === true;
+      }
+      const noBodyWithTE =
+        this._hasBody === false && flat["transfer-encoding"] !== undefined;
+      if (this.shouldKeepAlive && maxOk && framingOk && !noBodyWithTE) {
+        header += "Connection: keep-alive\r\n";
+        flat.connection = "keep-alive";
+        const kaTimeout = this._serverKeepAliveTimeout ?? 5000;
+        if (kaTimeout > 0 && flat["keep-alive"] === undefined) {
+          const secs = Math.floor(kaTimeout / 1000);
+          // When the server caps requests per socket, Node appends the
+          // configured max (not the remaining count — probed: max=3 on
+          // both the first and second of three responses).
+          const maxPart =
+            typeof max === "number" && max > 0 ? `, max=${max}` : "";
+          header += `Keep-Alive: timeout=${secs}${maxPart}\r\n`;
+          flat["keep-alive"] = `timeout=${secs}${maxPart}`;
+        }
+      } else {
+        header += "Connection: close\r\n";
+        flat.connection = "close";
+      }
     }
     header += "\r\n";
 
@@ -972,16 +1016,12 @@ export class ServerResponse extends OutgoingMessage {
   }
 
   /**
-   * Flush buffered headers + body to the socket for streaming.
-   * Uses chunked encoding when Content-Length isn't set (like Node).
+   * Header block to send when streaming starts. Node defaults to chunked
+   * when Content-Length isn't set (like Node). Shared by _flushHeaders()
+   * (headers alone, explicit flush) and _write() (headers + first chunk
+   * coalesced — see _write).
    */
-  _flushHeaders() {
-    if (this._headerFlushed || !this._header) return;
-    const sock = this.socket;
-    // Only stream to real sockets, not the FakeSocket (used for non-virtual paths).
-    if (!sock || sock.constructor.name === "FakeSocket") return;
-    if (sock.destroyed) return;
-
+  _streamingHeader() {
     let header = this._header;
     const hasCL = this.hasHeader("content-length");
     const hasTE = this.hasHeader("transfer-encoding");
@@ -1000,15 +1040,38 @@ export class ServerResponse extends OutgoingMessage {
       header = header.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
       this._chunkedStreaming = true;
     }
+    return header;
+  }
+
+  /**
+   * Flush buffered headers + body to the socket for streaming.
+   * Uses chunked encoding when Content-Length isn't set (like Node).
+   */
+  _flushHeaders() {
+    if (this._headerFlushed || !this._header) return;
+    const sock = this.socket;
+    // Only stream to real sockets, not the FakeSocket (used for non-virtual paths).
+    if (!sock || sock.constructor.name === "FakeSocket") return;
+    if (sock.destroyed) return;
+
+    const header = this._streamingHeader();
     try {
       sock.write(header);
       // Flush any data buffered before the first write().
       for (const entry of this.outputData) {
         const chunk = entry.data;
         if (this._chunkedStreaming && chunk.length > 0) {
-          sock.write(chunk.length.toString(16) + "\r\n");
-          sock.write(chunk);
-          sock.write("\r\n");
+          // One write per frame, not three: a chunk split across
+          // delivery events lets a naive client split-count mis-pair
+          // headers and bodies (test-http-server-keep-alive-defaults
+          // false-triggers its 8-part check on a bare size line).
+          sock.write(
+            Buffer.concat([
+              Buffer.from(chunk.length.toString(16) + "\r\n", "latin1"),
+              chunk,
+              Buffer.from("\r\n", "latin1"),
+            ]),
+          );
         } else if (chunk.length > 0) {
           sock.write(chunk);
         }
@@ -1034,9 +1097,16 @@ export class ServerResponse extends OutgoingMessage {
       if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
         try {
           if (this._chunkedStreaming && buf.length > 0) {
-            sock.write(buf.length.toString(16) + "\r\n");
-            sock.write(buf);
-            sock.write("\r\n");
+            // One write per frame, not three (see _flushHeaders): a
+            // chunk split across delivery events lets a naive client
+            // split-count mis-pair headers and bodies.
+            sock.write(
+              Buffer.concat([
+                Buffer.from(buf.length.toString(16) + "\r\n", "latin1"),
+                buf,
+                Buffer.from("\r\n", "latin1"),
+              ]),
+            );
           } else if (buf.length > 0) {
             sock.write(buf);
           }
@@ -1047,20 +1117,60 @@ export class ServerResponse extends OutgoingMessage {
       callback();
       return;
     }
+    // First chunk with headers already rendered (writeHead called) via
+    // an explicit write(): send headers + chunk as ONE write, like
+    // Node's first write does. Sending headers alone first lets a naive
+    // client that asserts on every blank-line-terminated buffer
+    // (test-http-keep-alive-max-requests asserts on
+    // buffer.endsWith("\r\n\r\n")) fire on a headers-only buffer with
+    // no body yet — and the throw it produces is swallowed by the
+    // delivery path, derailing the request sequence. Explicit
+    // flushHeaders() still sends headers alone (see _flushHeaders).
+    // Excluded when finishing (end(chunk) sets finished before its
+    // internal write): end-chunks stay buffered so the finish path
+    // sends headers + body + terminator as one write, which tests
+    // counting data events per response (test-http-1.0-keep-alive)
+    // rely on.
+    if (this._header && !this.finished) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const sock = this.socket;
+      if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
+        try {
+          const header = this._streamingHeader();
+          if (this._chunkedStreaming && buf.length > 0) {
+            sock.write(
+              Buffer.concat([
+                Buffer.from(header, "latin1"),
+                Buffer.from(buf.length.toString(16) + "\r\n", "latin1"),
+                buf,
+                Buffer.from("\r\n", "latin1"),
+              ]),
+            );
+          } else if (buf.length > 0) {
+            sock.write(Buffer.concat([Buffer.from(header, "latin1"), buf]));
+          } else {
+            sock.write(header);
+          }
+        } catch {
+          /* ignore */
+        }
+        this._headerFlushed = true;
+        callback();
+        return;
+      }
+    }
     // Buffer normally; flush happens on first write() call (below) or end().
     super._write(chunk, encoding, callback);
   }
 
   /**
-   * Override write to trigger header flush on first explicit write.
+   * Override write to stream to the client immediately.
    * This makes res.writeHead(); res.write() stream to the client immediately,
-   * matching Node behavior for abort/destroy tests.
+   * matching Node behavior for abort/destroy tests. Headers go out
+   * coalesced with the first chunk (see _write) rather than flushed alone
+   * beforehand.
    */
   write(chunk, encoding, callback) {
-    if (!this._headerFlushed && this._header) {
-      // Flush headers + any data buffered so far, then stream.
-      this._flushHeaders();
-    }
     return super.write(chunk, encoding, callback);
   }
 
@@ -1340,6 +1450,31 @@ export class ServerResponse extends OutgoingMessage {
       super.write(chunk, encoding, () => super.end(done));
     } else {
       super.end(done);
+    }
+    // Chunked terminator ordering (test-http-server-keep-alive-defaults):
+    // in the streaming path the headers + chunks already went out during
+    // write(), but the "0\r\n\r\n" terminator was only written by the
+    // async 'finish' listener — after the parser had already dispatched
+    // (and flushed) the next pipelined response, so terminators bunched
+    // after all responses instead of terminating each one. The test's
+    // naive header/body split then mis-pairs them and its assertion
+    // throws. Real Node terminates each response before the next
+    // response's bytes. Write it synchronously here, in call order: by
+    // now every chunk is already on the socket (the flushed _write path
+    // is synchronous, verified by probe), and the finish listener skips
+    // it via the flag. Buffered (non-flushed) responses are untouched:
+    // their headers go out at finish time together with the terminator,
+    // so they are already correctly ordered.
+    if (this._headerFlushed && this._chunkedStreaming) {
+      const sock = this.socket;
+      if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
+        try {
+          sock.write("0\r\n\r\n");
+          this._chunkTerminatorSent = true;
+        } catch {
+          /* socket write failed; finish listener skips destroyed sockets */
+        }
+      }
     }
     return this;
   }
@@ -3832,6 +3967,14 @@ class ServerBase extends EventEmitter {
     // Node syncs res.shouldKeepAlive from the request's keep-alive status;
     // _storeHeader uses it to decide on `Connection: close`.
     res.shouldKeepAlive = info.shouldKeepAlive;
+    // _storeHeader also needs the server's keep-alive framing inputs
+    // (Node reads them at header time): the keepAliveTimeout for the
+    // Keep-Alive value, and the max-requests budget for the close-on-
+    // limit response. Fallbacks in _storeHeader cover responses not
+    // built by this dispatch path (unlimited budget, 5000 ms default).
+    res._serverKeepAliveTimeout = this.keepAliveTimeout;
+    res._serverMaxRequestsPerSocket = this.maxRequestsPerSocket;
+    res._serverReqNo = reqNo;
     // HTTP/1.0 keep-alive framing: Node uses chunked encoding for 1.0
     // responses when the request advertised `TE: chunked`.
     res._reqHadTE = /chunked/i.test(
@@ -3872,7 +4015,11 @@ class ServerBase extends EventEmitter {
     // Streaming case: headers + body were already flushed via write().
     // Just terminate the chunked stream (if used) and handle keep-alive.
     if (res._headerFlushed) {
-      if (!socket.destroyed && res._chunkedStreaming) {
+      if (
+        !socket.destroyed &&
+        res._chunkedStreaming &&
+        !res._chunkTerminatorSent
+      ) {
         try {
           socket.write("0\r\n\r\n");
         } catch {

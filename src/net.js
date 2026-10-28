@@ -1434,8 +1434,21 @@ Socket.prototype._deliverToPeer = function _deliverToPeer(chunk, encoding, cb) {
   const buf = toBytes(chunk, encoding);
   this._bytesWritten += buf ? buf.length : 0;
   this._refreshTimeout();
-  if (peer && !peer.destroyed) peer._receiveFromPeer(buf);
-  cb();
+  // A throw in the peer's 'data' listener must not wedge this socket's
+  // write queue: _receiveFromPeer -> push -> emit runs synchronously
+  // inside this _write, so a listener throw used to skip cb() (the
+  // Writable onwrite) and stall every later write forever, with the
+  // process staying alive (test-http-server-keep-alive-defaults: the
+  // test's own split-count assertion throws on a mid-response data
+  // event, and the response's remaining bytes then never arrive). The
+  // finally guarantees onwrite runs so the queue advances; the throw
+  // itself still propagates to the writer's own catch (ServerResponse
+  // _write swallows it) exactly as before.
+  try {
+    if (peer && !peer.destroyed) peer._receiveFromPeer(buf);
+  } finally {
+    cb();
+  }
 };
 
 Socket.prototype._flushPendingWrites = function _flushPendingWrites() {
