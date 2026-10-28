@@ -79,3 +79,13 @@ terminator is sent as bare `0\r\n\r\n` with no `x-foo: bar` trailer line.
 Validation passes for that test's chunked+Trailer response; the missing
 piece is `addTrailers` emission in the chunked terminator — a separate lane
 (chunked-terminator rendering), deliberately out of scope here.
+
+## CI retrigger note
+First CI run on PR #263: Parity success, build failed with no log summary
+available via API and no branch-head movement (failure before the dist-commit
+step). Local reproduction is clean: build-vfs, sandbox --check, runtime
+--check all pass, and the full serial jest suite matches the known baseline
+exactly (3059 passed / 7 pre-existing version-skew failures, zero new
+failures). The build re-run via API is 403 for this token, so this
+notes-only change retriggers CI to distinguish a transient infra failure
+from a real one.
