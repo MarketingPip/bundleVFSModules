@@ -2399,6 +2399,51 @@ export class ClientRequest extends OutgoingMessage {
     }
     if (this._aborted) return;
 
+    // CONNECT tunnel established: 'connect', not 'response', and never
+    // released to the agent pool — the socket is the app's now. With no
+    // 'connect' listener Node destroys the unclaimed tunnel socket
+    // (probed v24.22.1), which is what lets the loop drain in
+    // test-http-server-unconsume-consume.
+    if (result.isConnect) {
+      const msg = new IncomingMessage();
+      msg.statusCode = result.statusCode;
+      msg.statusMessage =
+        result.statusMessage || STATUS_CODES[result.statusCode] || "";
+      msg.httpVersion = "1.1";
+      msg.httpVersionMajor = 1;
+      msg.httpVersionMinor = 1;
+      const pairs = [];
+      for (let i = 0; i < result.rawHeaders.length; i += 2) {
+        pairs.push([result.rawHeaders[i], result.rawHeaders[i + 1]]);
+      }
+      IncomingMessage._applyRawHeaders(msg, pairs);
+      msg.socket = this.socket;
+      msg.connection = this.socket;
+      this.emit("connect", msg, this.socket, result.connectHead);
+      if (
+        this.listenerCount("connect") === 0 &&
+        this.socket &&
+        !(this.socket instanceof FakeSocket)
+      ) {
+        try {
+          this.socket.destroy();
+        } catch {
+          /* best effort */
+        }
+      }
+      // The tunnel socket's close completes the request: Node destroys
+      // the request and emits 'close' (test-http-connect-req-res asserts
+      // req.destroyed === true in 'close'). A second destroy is a
+      // stream no-op, so this is safe if the app destroys first.
+      if (this.socket && !(this.socket instanceof FakeSocket)) {
+        const req = this;
+        this.socket.once("close", () => {
+          if (!req.destroyed) req.destroy();
+        });
+      }
+      return;
+    }
+
     // Streaming case: message already emitted; just finish the body.
     if (streamedMsg) {
       streamedMsg._finishBody();
@@ -3012,6 +3057,31 @@ function _socketHttpRoundTrip(
     let info = null;
     parser.onHeadersComplete = (i) => {
       info = i;
+      // CONNECT responses are tunnels, not responses: real Node delivers
+      // EVERY status via the request's 'connect' event, never 'response'
+      // (probed v24.22.1: 100, 200, 201, 404, 407, 500 all 'connect').
+      // Resolve at headers with the head bytes — never wait for EOF,
+      // since a 200 has no length framing. The caller emits 'connect'
+      // and owns (or destroys) the socket; settling here detaches the
+      // round trip's data listener, so later tunnel bytes flow only to
+      // the app's socket listeners.
+      if (method === "CONNECT") {
+        let head = Buffer.alloc(0);
+        try {
+          head = parser.takeRemainder();
+        } catch {
+          /* empty head */
+        }
+        ok({
+          statusCode: info.statusCode,
+          statusMessage: info.statusMessage,
+          rawHeaders: info.rawHeaders.slice(),
+          body: Buffer.alloc(0),
+          connectHead: head,
+          isConnect: true,
+        });
+        return;
+      }
       // Streaming: notify the caller immediately so it can emit 'response'.
       if (typeof onHeaders === "function") {
         try {
@@ -3425,6 +3495,7 @@ class ServerBase extends EventEmitter {
       headersDone: false, // current request's headers are complete
       idleSince: null, // set when a response finishes and the socket idles
       upgraded: false, // connection upgraded; HTTP timeouts no longer apply
+      connect: false, // CONNECT tunnel; no response pending, peer FIN ends it
       timedOut: false, // a 408 was already sent on this socket
       parserFreed: false, // socket.parser.free() called (exactly once)
     };
@@ -3640,6 +3711,30 @@ class ServerBase extends EventEmitter {
       // Upgraded connections are the app's lifecycle, not HTTP's: the
       // pipe (not this handler) decides when the socket ends.
       if (state.upgraded) return;
+      // CONNECT tunnels have no response to drain and busy stays true
+      // forever (no _finishSocketResponse ever runs), so a peer FIN must
+      // still close the socket — otherwise it never closes and the loop
+      // never drains (test-http-server-unconsume-consume's exit path).
+      // Deferred past this emission: the app's own 'end' listeners were
+      // attached after this handler, and the app may still write
+      // farewell bytes in 'end' (test-http-connect-req-res echoes on
+      // 'end'); ending synchronously here would drop them. The deferred
+      // end is a no-op if the app already ended or destroyed the socket.
+      // No unpause: tunnel bytes buffered in the paused parser belong to
+      // the app, not to a next HTTP message.
+      if (state.connect) {
+        state.peerEnded = true;
+        queueMicrotask(() => {
+          if (!socket.destroyed) {
+            try {
+              socket.end();
+            } catch {
+              /* already ending */
+            }
+          }
+        });
+        return;
+      }
       // Client half-closed. If a request is in flight, the response still
       // has to be written first — record the EOF and let
       // _finishSocketResponse close the socket afterwards. Only an idle
@@ -3683,6 +3778,32 @@ class ServerBase extends EventEmitter {
       pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
     }
     IncomingMessage._applyRawHeaders(req, pairs);
+
+    // CONNECT requests are not 'request' dispatches: Node emits 'connect'
+    // with (req, socket, head) and hands the socket to the app as a tunnel
+    // (test-http-server-unconsume-consume). With no 'connect' listener the
+    // socket is destroyed and no 'request' fires (probed real Node
+    // v24.22.1). No response is expected, so nothing is counted inFlight;
+    // the timeout checker never fires on it (not receiving, never
+    // idle-after-response), and a peer FIN ends it via the 'end' handler.
+    if (req.method === "CONNECT") {
+      state.connect = true;
+      state.receiving = false;
+      let head = Buffer.alloc(0);
+      try {
+        if (typeof state.parser.takeRemainder === "function") {
+          head = state.parser.takeRemainder();
+        }
+      } catch {
+        /* empty head */
+      }
+      if (this.listenerCount("connect") > 0) {
+        this.emit("connect", req, socket, head);
+      } else {
+        socket.destroy();
+      }
+      return { req, res: null };
+    }
 
     // Upgrade requests are not 'request' dispatches: Node emits 'upgrade'
     // and detaches the socket from HTTP timeout handling (requestTimeout
