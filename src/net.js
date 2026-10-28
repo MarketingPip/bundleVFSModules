@@ -1850,16 +1850,74 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
   }
 
   if (this.maxConnections != null && this._connections >= this.maxConnections) {
+    // The ephemeral port must be allocated BEFORE building the drop data:
+    // the accept path only allocates it after this check, so an early
+    // remotePort read was undefined (test-net-server-drop-connections
+    // asserts it truthy).
+    const clientPort = allocPort();
+    client._localPortEphemeral = clientPort;
     const data = {
       localAddress: bindAddr ? bindAddr.address : undefined,
       localPort: bindAddr ? bindAddr.port : undefined,
       localFamily: bindAddr ? bindAddr.family : undefined,
       remoteAddress: "127.0.0.1",
-      remotePort: client._localPortEphemeral || undefined,
+      remotePort: clientPort,
       remoteFamily: "IPv4",
     };
     this.emit("drop", data);
-    client._connectFailed(client._refusedError(req));
+    // Probed real Node (v24.22.1): a dropped connection still completes
+    // its handshake — the client sees 'connect' then 'ready' — and the
+    // server side is then destroyed gracefully, so the client sees EOF
+    // ('end') + 'close' (hadError false). No 'connection' event fires
+    // and the socket is never counted. Pair like the accept path, then
+    // destroy the server side; do NOT set _server or _connections++.
+    const serverSocket = new Socket({
+      allowHalfOpen: this.allowHalfOpen,
+      readableHighWaterMark: this.highWaterMark,
+      writableHighWaterMark: this.highWaterMark,
+    });
+    if (req.pipe) {
+      client._sockname = { address: req.path };
+      client._peername = { address: req.path };
+      serverSocket._sockname = { address: req.path };
+      serverSocket._peername = { address: req.path };
+    } else {
+      client._sockname = {
+        address: "127.0.0.1",
+        family: "IPv4",
+        port: clientPort,
+      };
+      client._peername = {
+        address: bindAddr.address,
+        family: bindAddr.family,
+        port: bindAddr.port,
+      };
+      serverSocket._sockname = {
+        address: bindAddr.address,
+        family: bindAddr.family,
+        port: bindAddr.port,
+      };
+      serverSocket._peername = {
+        address: "127.0.0.1",
+        family: "IPv4",
+        port: clientPort,
+      };
+    }
+    client._peer = serverSocket;
+    serverSocket._peer = client;
+    client._connected = true;
+    serverSocket._connected = true;
+    client.connecting = false;
+    client._flushPendingWrites();
+    client._refreshTimeout();
+    if (!serverSocket._handle) serverSocket._handle = new VirtualHandle();
+    client.emit("connect");
+    client.emit("ready");
+    if (client.readable && !client.isPaused()) {
+      client._readStarted = true;
+    }
+    client._refreshLoopKeeper();
+    serverSocket.destroy();
     return;
   }
 

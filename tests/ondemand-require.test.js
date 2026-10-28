@@ -600,9 +600,9 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     );
     expect(nonDist.sort()).toEqual(
       [
-        "NOTES-http-parse-error.md",
-        "src/_http_parser.js",
+        "NOTES-http-max-connections.md",
         "src/http.js",
+        "src/net.js",
       ].sort(),
     );
   });

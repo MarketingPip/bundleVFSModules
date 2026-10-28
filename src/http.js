@@ -3353,6 +3353,14 @@ class ServerBase extends EventEmitter {
 
     this.listening = false;
     this.maxHeadersCount = null;
+    // maxConnections is a plain property in real Node, read at accept
+    // time — so it must work whether assigned before or after listen().
+    // The accessor stores the value and forwards it to the backing net
+    // server whenever one exists; listen() applies the stored value to a
+    // freshly created net server. Without this, an http server's
+    // maxConnections never reached net's _acceptConnection check and
+    // over-limit connections were served instead of dropped.
+    this._maxConnections = null;
     this.maxRequestsPerSocket = options.maxRequestsPerSocket ?? 0;
     this.timeout = 0;
     this.headersTimeout = options.headersTimeout ?? 60000;
@@ -3384,6 +3392,17 @@ class ServerBase extends EventEmitter {
     // polling for headersTimeout/requestTimeout/keepAliveTimeout). Started
     // lazily on first connection, unref'd, stopped when idle/closed.
     this._checkTimer = null;
+  }
+
+  // Real Node reads maxConnections at accept time, so assignment after
+  // listen() must take effect too: forward to the backing net server
+  // whenever one exists (listen() applies the stored value at creation).
+  get maxConnections() {
+    return this._maxConnections;
+  }
+  set maxConnections(value) {
+    this._maxConnections = value;
+    if (this._netServer) this._netServer.maxConnections = value;
   }
 
   listen(portOrOptions, hostOrCallback, callback) {
@@ -3440,6 +3459,12 @@ class ServerBase extends EventEmitter {
     const netServer = createNetServer();
     netServer.on("connection", (socket) => this._onSocketConnection(socket));
     netServer.on("error", (err) => this.emit("error", err));
+    // Forward the backing net server's 'drop' event: the test listens for
+    // 'drop' on the http server, and net's _acceptConnection is the only
+    // enforcement point (over-limit sockets never reach
+    // _onSocketConnection).
+    netServer.on("drop", (data) => this.emit("drop", data));
+    netServer.maxConnections = this._maxConnections;
     this._netServer = netServer;
     netServer.listen(port, this._host);
     this.listening = true;
