@@ -602,6 +602,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // feat/http-unique-headers branch: uniqueHeaders option (send-side
     // '; ' joining, virtual-path header preservation, server trailer
     // delivery, trailersDistinct) (src/http.js + working note).
+    // fix/http-upgrade-detach branch: upgrade-socket detach (server
+    // detach + fallback + shouldUpgradeCallback, client 101 handling +
+    // loopback routing, parser owner-throw rethrow, Server.call
+    // transplant) (src/http.js + src/_http_parser.js + working note).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check. So are the
@@ -610,7 +614,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      [
+        "src/http.js",
+        "src/_http_parser.js",
+        "NOTES-http-upgrade-detach.md",
+      ].sort(),
     );
   });
 
