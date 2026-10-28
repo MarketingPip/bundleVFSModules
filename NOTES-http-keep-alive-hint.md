@@ -79,6 +79,19 @@ Probes ran against real Node v24.22.1 via `zz-probe-keepalive.js`
 - Repo suites: http, http-socket, http-close-server, https, net —
   187/187 pass. Full suite run logged separately.
 
+## Branch-footprint note (CI lesson)
+
+The first CI run failed on exactly one test:
+`tests/ondemand-require.test.js` — "branch footprint outside tests/ is
+exactly the allowlist". That test hardcodes the branch's expected
+non-dist, non-vendored file set and its own comment says to update
+the allowlist when the branch footprint changes (main currently
+carries PR #249's `["parity/HITLIST.md"]`). The fix was to set it to
+this branch's footprint (`NOTES-http-keep-alive-hint.md`,
+`src/http.js`); the test file itself lives under `tests/` so it is
+excluded from the footprint it guards. Verified locally 29/29 after
+the update. Any future branch must do the same for its own files.
+
 ## Scope notes
 
 - The hint path covers the virtual-server client path only
