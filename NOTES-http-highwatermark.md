@@ -81,7 +81,18 @@ shared-file change, and it is called out in the PR body.
   symbol now reads the 65536 default instead of `undefined`, matching
   real Node.
 
-## Results (PARITY_TARGET=http)
+## Build incident: bare "stream" import broke the browser build
+
+The first version imported `getDefaultHighWaterMark` from bare `"stream"`.
+That passed parity (the ESM hooks redirect `"stream"` to `src/stream.js`
+under Node) but failed CI's build job: esbuild resolves bare `"stream"`
+to `node-modules-polyfills:stream`, which does not export
+`getDefaultHighWaterMark` — `No matching export`, build exit 1, while
+Parity was green. Reproduced locally with `node src/build-vfs.mjs`.
+Fix: import from the relative path `./stream/state.js` (cycle-safe: the
+`src/stream/` subtree never imports `src/http.js`). Lesson: any new
+named import from a bare builtin specifier must be build-checked with
+`build-vfs`, not just parity-checked — the two resolvers disagree.
 
 - `test-http-server-options-highwatermark`: 124 → **0**.
 - `test-http-client-highwatermark`: was exit 1 at Test 1 (symbol assert);
