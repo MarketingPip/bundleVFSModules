@@ -428,11 +428,22 @@ export class OutgoingMessage extends Writable {
   }
 
   // Buffer written chunks until the message is finished (no real socket).
+  // The callback is deferred to a microtask, not invoked synchronously:
+  // real Node fires write callbacks only once the buffered data is
+  // flushed (for a pre-connect client request, after the socket connects),
+  // never during write() itself. A synchronous callback would drain
+  // Writable's length accounting before write() computes its return
+  // value, so write() would always return true regardless of
+  // highWaterMark (test-http-client-highwatermark Test 3: a 2KB write
+  // with HWM 512 must return false, with 'drain' firing after the
+  // buffer flushes). Buffering itself stays synchronous — only the
+  // callback timing changes, so outputData/outputSize reads after
+  // write() are unaffected.
   _write(chunk, encoding, callback) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     this.outputData.push({ data: buf, encoding: "buffer" });
     this.outputSize += buf.length;
-    callback();
+    queueMicrotask(callback);
   }
 
   get headersSent() {
