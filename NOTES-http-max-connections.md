@@ -69,6 +69,11 @@ Two stacked gaps, one enforcement point:
 
 ## Results (PARITY_TARGET=http/net, timeout 30)
 
+(CI note: the first pushed head's build job failed with no log summary
+while Parity passed; local build steps reproduce clean, so the failure
+was treated as transient per the PR #262/#263 precedent and CI was
+retrigged with this note-only commit.)
+
 | Test | Before (base 301e6024) | After (branch) |
 |---|---|---|
 | test-http-server-drop-connections-in-cluster (target) | 124 | 0 (3/3) |
