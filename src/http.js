@@ -86,6 +86,11 @@ const ERR_HTTP_HEADERS_SENT = (op) =>
   );
 const ERR_HTTP_INVALID_STATUS_CODE = (code) =>
   makeError("ERR_HTTP_INVALID_STATUS_CODE", `Invalid status code: ${code}`);
+const ERR_HTTP_TRAILER_INVALID = () =>
+  makeError(
+    "ERR_HTTP_TRAILER_INVALID",
+    "Trailers are invalid with this transfer encoding",
+  );
 const ERR_INVALID_ARG_TYPE = (name, expected, actual) =>
   makeError(
     "ERR_INVALID_ARG_TYPE",
@@ -905,6 +910,37 @@ export class IncomingMessage extends Readable {
 // ---------------------------------------------------------------------------
 // 7. ServerResponse — port of node:_http_server's ServerResponse.
 // ---------------------------------------------------------------------------
+// Read one header's value from a writeHead header view, which takes three
+// shapes: the kOutHeaders map ([name, value] entries keyed lowercase, after
+// setHeader/writeHead-obj merging), a plain object, or an array (flat
+// name/value pairs or [name, value] pairs). Undefined when absent. Used by
+// the Trailer validation, which must see the merged view: hasHeader() alone
+// would miss writeHead-only headers, since it only sees kOutHeaders.
+function _lookupHeader(headers, name, isOutHeadersMap) {
+  const want = name.toLowerCase();
+  if (!headers) return undefined;
+  if (Array.isArray(headers)) {
+    if (headers.length && Array.isArray(headers[0])) {
+      for (const entry of headers) {
+        if (String(entry[0]).toLowerCase() === want) return entry[1];
+      }
+    } else {
+      for (let i = 0; i + 1 < headers.length; i += 2) {
+        if (String(headers[i]).toLowerCase() === want) return headers[i + 1];
+      }
+    }
+    return undefined;
+  }
+  if (isOutHeadersMap) {
+    const entry = headers[want];
+    return entry === undefined ? undefined : entry[1];
+  }
+  for (const k of Object.keys(headers)) {
+    if (k.toLowerCase() === want) return headers[k];
+  }
+  return undefined;
+}
+
 export class ServerResponse extends OutgoingMessage {
   constructor(req) {
     super();
@@ -1135,6 +1171,60 @@ export class ServerResponse extends OutgoingMessage {
       }
       if (hasTE) {
         this.shouldKeepAlive = false;
+      }
+    }
+
+    // Node: a Trailer header is only valid with chunked transfer encoding
+    // (ERR_HTTP_TRAILER_INVALID otherwise). The check runs here, before
+    // _storeHeader renders anything, so a throw leaves headers unsent and
+    // the handler can removeHeader("Trailer") and end() normally — exactly
+    // what test-http-server-de-chunked-trailer does. Because every server
+    // header path funnels through writeHead (_implicitHeader calls it),
+    // this also covers implicit headers (end()/write() without writeHead)
+    // and flushHeaders(). Chunked means: explicit Transfer-Encoding with a
+    // chunked token (any case, list, or array value) on a body-carrying
+    // response, or the default-chunked framing (no TE, no Content-Length,
+    // body allowed, HTTP/1.1 — or HTTP/1.0 when the request advertised
+    // TE: chunked). Probed on real Node v24.22.1: Content-Length,
+    // identity/gzip TE, 204/304/1xx, HEAD-without-chunked-TE, and plain
+    // HTTP/1.0 all throw; explicit chunked TE passes even for HEAD.
+    const trailer = _lookupHeader(
+      headers,
+      "trailer",
+      headers === this[kOutHeaders],
+    );
+    if (trailer !== undefined) {
+      const te = _lookupHeader(
+        headers,
+        "transfer-encoding",
+        headers === this[kOutHeaders],
+      );
+      const teValues = te === undefined ? [] : Array.isArray(te) ? te : [te];
+      const teChunked = teValues.some((v) =>
+        String(v)
+          .split(",")
+          .some((t) => t.trim().toLowerCase() === "chunked"),
+      );
+      let chunked;
+      if (te !== undefined) {
+        chunked = teChunked && this._hasBody !== false;
+      } else if (
+        _lookupHeader(
+          headers,
+          "content-length",
+          headers === this[kOutHeaders],
+        ) !== undefined ||
+        this._hasBody === false ||
+        this.req?.method === "HEAD"
+      ) {
+        chunked = false;
+      } else if (this._reqHttpVersion === "1.0" && !this._reqHadTE) {
+        chunked = false;
+      } else {
+        chunked = true;
+      }
+      if (!chunked) {
+        throw ERR_HTTP_TRAILER_INVALID();
       }
     }
 
