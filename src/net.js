@@ -742,6 +742,24 @@ function serverKey(host, port) {
   return `${host}:${port}`;
 }
 
+// Whether a virtual TCP server is registered for (host, port), using the
+// same lookup keys as Socket connect: an IP-literal host checks its own
+// key first, any other host checks 127.0.0.1, and wildcard binds (::,
+// 0.0.0.0) accept loopback connections. Used by the http client to route
+// loopback requests to a raw net server over an agent socket (with real
+// response parsing) instead of fetch(), which cannot reach the virtual
+// network (test-http-client-reject-chunked-with-content-length,
+// test-http-client-reject-cr-no-lf). Internal only: not a Node API, so
+// it stays out of the default namespace export below.
+export function hasTcpServer(host, port) {
+  const keys = [];
+  if (isIP(host) !== 0) keys.push(serverKey(host, port));
+  else keys.push(serverKey("127.0.0.1", port));
+  keys.push(serverKey("::", port));
+  keys.push(serverKey("0.0.0.0", port));
+  return keys.some((key) => _tcpServers().has(key));
+}
+
 // Ephemeral port pool for both listen(0) and client-side local ports,
 // kept out of the real ephemeral range to avoid confusion.
 let nextEphemeral = 40000;

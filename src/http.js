@@ -39,6 +39,7 @@ import { HTTPParser } from "./_http_parser.js";
 import {
   connect as netConnect,
   createServer as createNetServer,
+  hasTcpServer as netHasTcpServer,
 } from "./net.js";
 
 // ---------------------------------------------------------------------------
@@ -108,6 +109,32 @@ const ERR_INVALID_ARG_TYPE = (name, expected, actual) =>
     "ERR_INVALID_ARG_TYPE",
     `The "${name}" argument must be ${expected}. Received type ${typeof actual} (${String(actual)})`,
   );
+// Node's options-property validation shape (used by http.request's agent
+// check): "property", TypeError, and the invalidArgTypeHelper suffix
+// (object → "an instance of <Ctor>", function → "function <name>",
+// otherwise "type <typeof> (<inspect>)"). The shared factory above says
+// "argument" with a plain Error, which is right for true arguments but
+// wrong for options properties (test-http-client-reject-unexpected-agent).
+const _invalidArgTypeSuffix = (actual) => {
+  if (actual == null) return ` Received ${actual}`;
+  if (typeof actual === "function") return ` Received function ${actual.name}`;
+  if (typeof actual === "object") {
+    if (actual.constructor?.name) {
+      return ` Received an instance of ${actual.constructor.name}`;
+    }
+    return " Received [Object: null prototype] {}";
+  }
+  let inspected = typeof actual === "string" ? `'${actual}'` : String(actual);
+  if (inspected.length > 28) inspected = `${inspected.slice(0, 25)}...`;
+  return ` Received type ${typeof actual} (${inspected})`;
+};
+const ERR_INVALID_ARG_TYPE_PROPERTY = (name, expected, actual) => {
+  const err = new TypeError(
+    `The "${name}" property must be ${expected}.${_invalidArgTypeSuffix(actual)}`,
+  );
+  err.code = "ERR_INVALID_ARG_TYPE";
+  return err;
+};
 const ERR_INVALID_ARG_VALUE = (name, value, reason) =>
   makeError(
     "ERR_INVALID_ARG_VALUE",
@@ -2280,7 +2307,7 @@ export class ClientRequest extends OutgoingMessage {
         agent = defAgent;
       }
     } else if (typeof agent.addRequest !== "function") {
-      throw ERR_INVALID_ARG_TYPE(
+      throw ERR_INVALID_ARG_TYPE_PROPERTY(
         "options.agent",
         "one of Agent-like Object, undefined, or false",
         agent,
@@ -2951,6 +2978,27 @@ export class ClientRequest extends OutgoingMessage {
       return;
     }
 
+    // Loopback target owned by a raw net server (not a virtual http
+    // server): route over an agent socket like the websocket branch
+    // below, so the response bytes are parsed by the real HTTP parser
+    // instead of fetch(), which cannot reach the virtual network.
+    // Without this, every client request to a net server failed with
+    // 'fetch failed' and malformed responses never surfaced as parse
+    // errors (test-http-client-reject-chunked-with-content-length,
+    // test-http-client-reject-cr-no-lf). The gate is the registry
+    // lookup only: loopback targets with no virtual listener keep the
+    // fetch path exactly (real local servers in a browser still work).
+    if (this._hasRawNetServer()) {
+      await this._performVirtualRequest(
+        null,
+        this._virtualHeaders(),
+        body.length > 0 ? body : null,
+        false,
+        !!this._headersArray,
+      );
+      return;
+    }
+
     // Loopback websocket upgrade with no virtual http server: the target
     // is a raw net server (or nothing listening). Same agent-socket
     // round trip as the virtual path — the server side is the app's net
@@ -3031,9 +3079,10 @@ export class ClientRequest extends OutgoingMessage {
   }
 
   /**
-   * Parse this request's target into { local, port }: `host` may carry a
-   * port ("example.com:8080"), which wins over the port option. Shared
-   * by the virtual-server lookup and the websocket-upgrade routing.
+   * Parse this request's target into { local, port, hostname }: `host`
+   * may carry a port ("example.com:8080"), which wins over the port
+   * option. Shared by the virtual-server lookup, the raw-net-server
+   * lookup, and the websocket-upgrade routing.
    */
   _parseTarget() {
     let hostname = this.host;
@@ -3053,7 +3102,23 @@ export class ClientRequest extends OutgoingMessage {
       hostname === "::1" ||
       hostname === "[::1]" ||
       hostname === "";
-    return { local, port };
+    return { local, port, hostname };
+  }
+
+  /**
+   * Whether a raw net server (not a virtual http server) is registered
+   * for this request's loopback target. Bracketed IPv6 literals are
+   * unbracketed for the registry lookup (net's connect lookup only
+   * matches the bare form).
+   */
+  _hasRawNetServer() {
+    const { local, port, hostname } = this._parseTarget();
+    if (!local || !Number.isInteger(port)) return false;
+    let host = hostname;
+    if (host.startsWith("[") && host.endsWith("]")) {
+      host = host.slice(1, -1);
+    }
+    return netHasTcpServer(host, port);
   }
 
   /**
@@ -3403,6 +3468,16 @@ export class ClientRequest extends OutgoingMessage {
         return;
       }
       if (this._aborted) return;
+      // A failed round trip kills the connection on real Node (a parse
+      // error destroys the socket); leaving it open hangs the loop, since
+      // the peer never closes a socket it already answered on
+      // (test-http-client-reject-*: the net server writes once and
+      // waits). Sockets already dead or closing make destroy a no-op.
+      try {
+        sock.destroy();
+      } catch {
+        /* already dead */
+      }
       throw err;
     }
     if (this._timeoutId) {
@@ -4294,7 +4369,25 @@ function _socketHttpRoundTrip(
         rawTrailers: parser.rawTrailers ? parser.rawTrailers.slice() : [],
       });
     };
-    parser.onError = (err) => fail(err);
+    parser.onError = (err) => {
+      // Node's client socket-error shape (probed v24.22.1, mirrored from
+      // the server-side clientError normalization): message "Parse
+      // Error: <llhttp reason>", code, bytesParsed, rawPacket.
+      // HPE_TRUNCATED keeps today's shape: real Node reports a truncated
+      // response as response 'aborted' + ECONNRESET, not a parse error,
+      // and that divergence is separate work (no test hinges on it).
+      if (err.code !== "HPE_TRUNCATED") {
+        if (err.code === "HPE_INVALID_METHOD") {
+          err.message = "Parse Error: Invalid method encountered";
+        } else if (
+          typeof err.message === "string" &&
+          !err.message.startsWith("Parse Error:")
+        ) {
+          err.message = `Parse Error: ${err.message}`;
+        }
+      }
+      fail(err);
+    };
 
     const doConnect = () => {
       if (typeof onSocket === "function") {

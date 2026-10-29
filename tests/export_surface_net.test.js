@@ -18,6 +18,9 @@ const EXPECTED = [
   "default",
   "getDefaultAutoSelectFamily",
   "getDefaultAutoSelectFamilyAttemptTimeout",
+  // Internal helper for the http client (loopback routing to raw net
+  // servers); not a Node API, like _createServerHandle/_normalizeArgs.
+  "hasTcpServer",
   "isIP",
   "isIPv4",
   "isIPv6",
