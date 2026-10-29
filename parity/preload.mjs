@@ -350,6 +350,22 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // The http tests' `_http_common` needs the same treatment as
+    // `internal/event_target` above, for the same reason: the module must
+    // be shared state, not two copies. `http.setMaxIdleHTTPParsers()`
+    // (shim) must mutate the `parsers.max` cell the tests read, but the
+    // shim's own `_http_common.js` cannot supply the real `HTTPParser`
+    // binding that test-http-parser.js and test-http-parser-bad-ref.js
+    // depend on. The adapter merges them: real Node's module with the
+    // shim's `parsers` cell. See parity/http-common-adapter.mjs.
+    if (target === "http" && bare === "_http_common") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "http-common-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
   }
   return origLoad.call(this, request, parent, isMain);
 };

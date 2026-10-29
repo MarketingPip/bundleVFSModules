@@ -373,8 +373,16 @@ export const kSkipPendingData = Symbol("SkipPendingData");
 /** No-op: there is no native HTTP parser pool in the browser. */
 export function freeParser(/* parser, req, socket */) {}
 
-/** No parser pool exists in the browser. */
-export const parsers = null;
+/**
+ * Parser-pool cap cell. There is no llhttp pool in the browser, so no
+ * parser instances are ever pooled — but Node's observable contract for
+ * `parsers.max` (default 1000, mutated by `http.setMaxIdleHTTPParsers()`)
+ * must still hold: the http shim's setter writes this same object, and
+ * the parity adapter re-exports it as `_http_common.parsers`, so the
+ * value the tests read is the value the setter wrote. Only `max` is
+ * meaningful here; there is no list to allocate from.
+ */
+export const parsers = { max: 1000 };
 
 /** The native HTTPParser binding does not exist in the browser. */
 export const HTTPParser = undefined;

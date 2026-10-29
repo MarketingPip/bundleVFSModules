@@ -29,7 +29,11 @@ import { Readable, Writable } from "stream";
 // build — CI build failure on PR #268's first head, reproduced locally).
 import { getDefaultHighWaterMark } from "./stream/state.js";
 import { Buffer } from "buffer";
-import { _checkInvalidHeaderChar, _checkIsHttpToken } from "./_http_common.js";
+import {
+  _checkInvalidHeaderChar,
+  _checkIsHttpToken,
+  parsers,
+} from "./_http_common.js";
 import { kUniqueHeaders, kHighWaterMark } from "./internals/http-symbols.js";
 import { HTTPParser } from "./_http_parser.js";
 import {
@@ -281,9 +285,7 @@ export const METHODS = [
 /** Default --max-http-header-size in Node v24 (no CLI flags in a browser). */
 export const maxHeaderSize = 16384;
 
-let maxIdleHTTPParsers = 1000;
-
-/** Matches Node: validates and stores the parser-cache size (no pool here). */
+/** Matches Node: validates and writes the parser-cap on the shared parsers cell (src/_http_common.js). No pool exists in the browser — only the cap is observable. */
 export function setMaxIdleHTTPParsers(max) {
   if (typeof max !== "number") {
     throw ERR_INVALID_ARG_TYPE("max", "number", max);
@@ -294,7 +296,7 @@ export function setMaxIdleHTTPParsers(max) {
   if (max < 1 || max > Number.MAX_SAFE_INTEGER) {
     throw ERR_OUT_OF_RANGE("max", ">= 1 && <= 9007199254740991", max);
   }
-  maxIdleHTTPParsers = max;
+  parsers.max = max;
 }
 
 /**
