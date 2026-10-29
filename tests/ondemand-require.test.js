@@ -606,6 +606,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // detach + fallback + shouldUpgradeCallback, client 101 handling +
     // loopback routing, parser owner-throw rethrow, Server.call
     // transplant) (src/http.js + src/_http_parser.js + working note).
+    // fix/http-outgoing-family branch: outgoing-message family
+    // (destroy/destroyed/proto/renderHeaders error semantics,
+    // end-types validation ordering, properties framed lengths,
+    // pipelined socket deferral, closing-server finish destroy,
+    // socket-driven HWM) (src/http.js + working note).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check. So are the
@@ -614,11 +619,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
     expect(nonDist.sort()).toEqual(
-      [
-        "src/http.js",
-        "src/_http_parser.js",
-        "NOTES-http-upgrade-detach.md",
-      ].sort(),
+      ["src/http.js", "NOTES-http-outgoing-family.md"].sort(),
     );
   });
 

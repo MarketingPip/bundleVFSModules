@@ -59,8 +59,8 @@ const _NativeWebSocket =
 // ---------------------------------------------------------------------------
 // 2. Error helpers — same codes/messages as Node v24.20.0.
 // ---------------------------------------------------------------------------
-function makeError(code, message) {
-  const err = new Error(message);
+function makeError(code, message, Constructor = Error) {
+  const err = new Constructor(message);
   err.code = code;
   return err;
 }
@@ -69,6 +69,7 @@ const ERR_INVALID_HTTP_TOKEN = (kind, val) =>
   makeError(
     "ERR_INVALID_HTTP_TOKEN",
     `${kind} must be a valid HTTP token [${JSON.stringify(String(val))}]`,
+    TypeError,
   );
 const ERR_INVALID_CHAR = (kind, val) =>
   makeError(
@@ -76,11 +77,13 @@ const ERR_INVALID_CHAR = (kind, val) =>
     val === undefined
       ? `Invalid character in ${kind}`
       : `Invalid character in ${kind} [${JSON.stringify(String(val))}]`,
+    TypeError,
   );
 const ERR_HTTP_INVALID_HEADER_VALUE = (value, name) =>
   makeError(
     "ERR_HTTP_INVALID_HEADER_VALUE",
     `Invalid value ${JSON.stringify(String(value))} for header ${JSON.stringify(String(name))}`,
+    TypeError,
   );
 const ERR_HTTP_HEADERS_SENT = (op) =>
   makeError(
@@ -121,6 +124,45 @@ const ERR_UNESCAPED_CHARACTERS = (what) =>
     "ERR_UNESCAPED_CHARACTERS",
     `${what} contains unescaped characters`,
   );
+
+// Chunk validation for OutgoingMessage.write()/end(), mirroring Node's
+// write_ (probed v24.22.1): validation runs BEFORE _implicitHeader and
+// before the destroyed check, so a bad chunk throws synchronously even
+// on a destroyed message, and a failed end() leaves `finished` unset so
+// a retry still delivers (test-http-outgoing-end-types,
+// test-http-outgoing-write-types). The ported Writable's own message
+// ("Buffer, TypedArray, or DataView") differs from Node's http message,
+// so the check lives here, ahead of super.write().
+const ERR_STREAM_NULL_VALUES = () =>
+  makeError(
+    "ERR_STREAM_NULL_VALUES",
+    "May not write null values to stream",
+    TypeError,
+  );
+function invalidChunkReceived(chunk) {
+  if (chunk === undefined) return "undefined";
+  if (typeof chunk === "object") {
+    const name = chunk.constructor ? chunk.constructor.name : "Object";
+    return `an instance of ${name}`;
+  }
+  if (typeof chunk === "function") {
+    return `function ${chunk.name || "anonymous"}`;
+  }
+  return `type ${typeof chunk} (${String(chunk)})`;
+}
+const ERR_INVALID_CHUNK_TYPE = (chunk) =>
+  makeError(
+    "ERR_INVALID_ARG_TYPE",
+    `The "chunk" argument must be of type string or an instance of ` +
+      `Buffer or Uint8Array. Received ${invalidChunkReceived(chunk)}`,
+    TypeError,
+  );
+function validateOutgoingChunk(chunk) {
+  if (chunk === null) throw ERR_STREAM_NULL_VALUES();
+  if (typeof chunk !== "string" && !(chunk instanceof Uint8Array)) {
+    throw ERR_INVALID_CHUNK_TYPE(chunk);
+  }
+}
 
 function validateString(value, name) {
   if (typeof value !== "string") {
@@ -774,7 +816,10 @@ export class OutgoingMessage extends Writable {
   }
 
   _implicitHeader() {
-    throw makeError("ERR_METHOD_NOT_IMPLEMENTED", "_implicitHeader()");
+    throw makeError(
+      "ERR_METHOD_NOT_IMPLEMENTED",
+      "The _implicitHeader() method is not implemented",
+    );
   }
 
   /**
@@ -823,7 +868,38 @@ export class OutgoingMessage extends Writable {
     return true;
   }
 
+  // Real Node's OutgoingMessage.destroy never emits 'error' on itself:
+  // the error is recorded as `errored` (the ported stream destroy sets
+  // that before calling here) and only 'close' follows (probed
+  // v24.22.1: bare destroy(err) with no 'error' listener does not
+  // throw, and server res.destroy(err) likewise never emits 'error').
+  // The ported Writable default would callback with the error and emit
+  // it; swallowing the callback error keeps close-only semantics.
+  // ClientRequest overrides this to preserve its own error emission
+  // (real Node surfaces client destroy(err) as 'error' via socket
+  // forwarding, and the shim's ClientRequest.destroy relies on this
+  // path for that event).
+  _destroy(err, cb) {
+    cb(null);
+  }
+
   write(chunk, encoding, callback) {
+    if (typeof encoding === "function") {
+      callback = encoding;
+      encoding = null;
+    }
+    // Validation first (see validateOutgoingChunk): a bad chunk throws
+    // before _implicitHeader, so a failed write leaves headers unrendered
+    // and a failed end() retry still works.
+    validateOutgoingChunk(chunk);
+    if (this.destroyed) {
+      // The ported Writable reports write-after-destroy as a callback
+      // ERR_STREAM_DESTROYED with no 'error' event (probed v24.22.1:
+      // return false, callback async, no error event) — but only if it
+      // is reached; the old code threw ERR_METHOD_NOT_IMPLEMENTED from
+      // _implicitHeader first for bare messages.
+      return super.write(chunk, encoding, callback);
+    }
     if (!this._header) {
       this._implicitHeader();
     }
@@ -874,6 +950,12 @@ export class OutgoingMessage extends Writable {
       callback = encoding;
       encoding = null;
     }
+    // Validate before _implicitHeader/finished: a bad chunk throws
+    // without poisoning `finished`, so a retry end() still delivers
+    // (test-http-outgoing-end-types). null/undefined mean "no chunk".
+    if (chunk !== null && chunk !== undefined) {
+      validateOutgoingChunk(chunk);
+    }
     if (!this._header) {
       this._implicitHeader();
     }
@@ -885,10 +967,54 @@ export class OutgoingMessage extends Writable {
     return this;
   }
 
+  // Port of Node's OutgoingMessage._renderHeaders: the flattened header
+  // map (first-seen casing as keys), throwing ERR_HTTP_HEADERS_SENT
+  // once headers are rendered. The store is normally this[kOutHeaders];
+  // under parity the test injects via real Node's internal/http symbol
+  // (--expose-internals respawn), so a foreign same-description symbol
+  // store on the instance wins when present — in a real browser no such
+  // symbol exists and the shim store is used untouched.
+  _renderHeaders() {
+    if (this._header) {
+      throw ERR_HTTP_HEADERS_SENT("render");
+    }
+    let store = this[kOutHeaders];
+    if (store === null || store === undefined) {
+      for (const sym of Object.getOwnPropertySymbols(this)) {
+        if (sym !== kOutHeaders && sym.description === "kOutHeaders") {
+          store = this[sym];
+          break;
+        }
+      }
+    }
+    const headers = {};
+    if (store) {
+      for (const key of Object.keys(store)) {
+        const entry = store[key];
+        headers[entry[0]] = entry[1];
+      }
+    }
+    return headers;
+  }
+
   addTrailers(headers) {
     // Real Node ignores trailers added after end() (probed v24.22.1:
     // no throw, no bytes) — the terminator is already written by then.
     if (this.finished) return;
+    // Real Node validates trailer names/values (addTrailers with no
+    // argument throws a TypeError from the engine; bad names/values
+    // throw the http errors below).
+    if (headers === null || headers === undefined) {
+      throw new TypeError("Cannot convert undefined or null to object");
+    }
+    for (const name of Object.keys(headers)) {
+      if (!_checkIsHttpToken(name)) {
+        throw ERR_INVALID_HTTP_TOKEN("Trailer name", name);
+      }
+      if (_checkInvalidHeaderChar(String(headers[name]), false)) {
+        throw ERR_INVALID_CHAR("trailer content", name);
+      }
+    }
     this._trailer = headers;
   }
 
@@ -941,6 +1067,13 @@ export class OutgoingMessage extends Writable {
     this._pendingFrame = this._pendingFrame
       ? Buffer.concat([this._pendingFrame, buf])
       : buf;
+    // Framed-pending accounting (test-http-outgoing-properties): the
+    // pended frame's byte length is the framed size, so a streaming
+    // response's writableLength can count framed bytes (headers +
+    // chunk frames) instead of the Writable's raw lengths, which drain
+    // to 0 the moment a synchronous _write callback runs. Subtracted
+    // exactly once at each flush site below.
+    this._framedPending = (this._framedPending || 0) + buf.length;
     if (!this._pendingFlushScheduled) {
       this._pendingFlushScheduled = true;
       queueMicrotask(() => {
@@ -950,10 +1083,29 @@ export class OutgoingMessage extends Writable {
     }
   }
 
+  // Emit a streaming 'drain' once pended bytes drop below the mark after
+  // a write() returned false for backpressure (see ServerResponse.write:
+  // the Writable never emits drain for streaming responses because its
+  // synchronous callbacks keep its length at 0).
+  _maybeEmitStreamDrain() {
+    if (
+      this._streamNeedDrain &&
+      (this._framedPending || 0) < (this.writableHighWaterMark ?? 65536)
+    ) {
+      this._streamNeedDrain = false;
+      this.emit("drain");
+    }
+  }
+
   _flushPendingFrame() {
     const frame = this._pendingFrame;
     if (!frame) return;
     this._pendingFrame = null;
+    this._framedPending = Math.max(
+      0,
+      (this._framedPending || 0) - frame.length,
+    );
+    this._maybeEmitStreamDrain();
     const sock = this.socket;
     if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
       try {
@@ -1059,6 +1211,33 @@ export class IncomingMessage extends Readable {
   _destroy(err, cb) {
     if (!this.aborted) {
       this.aborted = true;
+    }
+    // Real Node (probed v24.22.1): destroying an INCOMPLETE incoming
+    // message destroys its socket — client res.destroy() closes the
+    // client socket, the server sees socket close, and the server
+    // response gets 'close' (test-http-outgoing-destroyed block 3).
+    // A complete message's socket is already detached for agent reuse,
+    // so it is left alone (killing a pooled socket would corrupt the
+    // agent). The destroy must be ABORTIVE (resetAndDestroy), not a
+    // graceful destroy: the shim's socket.destroy() only delivers a
+    // FIN to the peer, and an allowHalfOpen HTTP server socket never
+    // closes on FIN — so the server would never see 'close' and the
+    // server response would never fire 'close'. Real Node agrees:
+    // even a no-error client destroy gives the server socket an error
+    // (Parse Error, truncated message) + close with hadError=true.
+    // With an error, the socket is destroyed with it: the server side
+    // then sees an error + close, as on real Node. The server socket's
+    // HTTP error handler is a no-op; 'close' does the cleanup.
+    if (!this.complete && this.socket && !this.socket.destroyed) {
+      try {
+        if (typeof this.socket.resetAndDestroy === "function") {
+          this.socket.resetAndDestroy();
+        } else if (typeof this.socket.destroy === "function") {
+          this.socket.destroy(err);
+        }
+      } catch {
+        /* ignore */
+      }
     }
     cb(err);
   }
@@ -1290,6 +1469,12 @@ export class ServerResponse extends OutgoingMessage {
     // write();end() sequence reaches the client as one 'data' event.
     this._pendingFrame = null;
     this._pendingFlushScheduled = false;
+    // Framed-pending bytes for the streaming writableLength/backpressure
+    // accounting (see _pendFrame): only grows on streaming pends.
+    this._framedPending = 0;
+    // Set when a streaming write() returns false for backpressure; the
+    // streaming 'drain' fires from _maybeEmitStreamDrain at flush time.
+    this._streamNeedDrain = false;
     // HTTP version from the request (for 1.0 vs 1.1 response semantics).
     // HTTP/1.0 does not support chunked transfer encoding.
     this._reqHttpVersion = req?.httpVersion || "1.1";
@@ -1492,8 +1677,67 @@ export class ServerResponse extends OutgoingMessage {
    * coalesced with the first chunk (see _write) rather than flushed alone
    * beforehand.
    */
+  // Streaming writableLength (test-http-outgoing-properties): once
+  // headers are flushed, real Node counts framed bytes still pending
+  // (header block + chunk frames), not the Writable's raw lengths —
+  // with synchronous _write callbacks the Writable length reads 0
+  // immediately after every write, so a chunked "asd" would read +0
+  // instead of +8. Before streaming starts (buffered, pipelined
+  // socketless, FakeSocket) the Writable verdict stands.
+  get writableLength() {
+    if (
+      this._headerFlushed &&
+      this.socket &&
+      this.socket.constructor.name !== "FakeSocket"
+    ) {
+      return this._framedPending || 0;
+    }
+    return super.writableLength;
+  }
+
+  // Streaming writableNeedDrain mirrors the counter-gated write()
+  // return below; buffered/corked writes keep the Writable verdict.
+  get writableNeedDrain() {
+    if (this._streamNeedDrain) return true;
+    return super.writableNeedDrain;
+  }
+
   write(chunk, encoding, callback) {
-    return super.write(chunk, encoding, callback);
+    // Write-after-end must emit 'error' (test-http-res-write-after-end):
+    // the ported Writable routes the WRITE_AFTER_END error through
+    // destroy(), and OutgoingMessage._destroy deliberately swallows it
+    // (close-only: destroy(err) must not emit 'error' — destroyed
+    // blocks 2/4) — so without this the 'error' event would never
+    // fire. Emit it here when the message already ended (finished)
+    // but is not yet destroyed; the ported path still returns false
+    // and calls back with the error, and destroy's close-only callback
+    // prevents a double emission. Scoped to ServerResponse on purpose:
+    // ClientRequest._destroy propagates the error (its destroy path
+    // already emits), and bare messages never reach this override.
+    if (this.finished && !this.destroyed) {
+      const er = new Error("write after end");
+      er.code = "ERR_STREAM_WRITE_AFTER_END";
+      // Async like the ported path's onDestroy emission; with no
+      // listener this throws, exactly as the ported emitErrorNT does.
+      queueMicrotask(() => this.emit("error", er));
+    }
+    const ret = super.write(chunk, encoding, callback);
+    // Streaming backpressure (test-http-outgoing-finish): with
+    // synchronous _write callbacks the Writable length is always 0, so
+    // super.write always returns true and a `while (res.write())` loop
+    // never terminates. Real Node returns false once the pended
+    // (framed) bytes reach the highWaterMark. Buffered/corked writes
+    // keep the Writable verdict: their bytes never pend, so the counter
+    // cannot gate them.
+    if (
+      ret &&
+      this._headerFlushed &&
+      (this._framedPending || 0) >= (this.writableHighWaterMark ?? 65536)
+    ) {
+      this._streamNeedDrain = true;
+      return false;
+    }
+    return ret;
   }
 
   /**
@@ -1702,15 +1946,21 @@ export class ServerResponse extends OutgoingMessage {
   // Destroying the response destroys the socket (Node behavior): the client
   // sees the connection reset. Without this, the virtual socket's loop-keeping
   // timer survives and the process hangs (http parity hang).
-  // Exception: when the server finished the response normally on a keep-alive
+  // Exceptions: when the server finished the response normally on a keep-alive
   // connection, the socket is preserved for reuse (flagged by
-  // _finishSocketResponse). Stream autoDestroy must not kill it — the socket
+  // _finishSocketResponse); and a destroy after end() with no error must
+  // not kill the socket before the async finish delivers the response
+  // (test-http-outgoing-destroyed block 5: end, destroy, end('asd')
+  // must still deliver the response end to the client). The finish path
+  // owns the socket lifecycle for a finished response (keep-alive
+  // preserve, else destroy), so there is nothing left for destroy to
+  // tear down. Stream autoDestroy must not kill it — the socket
   // lifecycle is owned by the server (next pipelined request) and the
   // client's agent pool. An explicit destroy with an error (abort) still
   // destroys the socket.
   _destroy(err, cb) {
     const sock = this.socket;
-    const preserved = this._keepAliveSocket && !err;
+    const preserved = (this._keepAliveSocket || this.finished) && !err;
     if (
       !preserved &&
       sock &&
@@ -1721,6 +1971,21 @@ export class ServerResponse extends OutgoingMessage {
         sock.destroy();
       } catch {
         /* best effort */
+      }
+    }
+    // end() then destroy() with no error (test-http-outgoing-destroyed
+    // block 5): the ported Writable suppresses 'finish' once destroyed
+    // (needFinish excludes kDestroyed), so the finish delivery would
+    // never run and the client would never see the response. Emit
+    // 'finish' manually: the dispatch listener runs
+    // _finishSocketResponse, which is idempotent, so this is safe even
+    // if 'finish' somehow fires later. Skipped for aborts (err): an
+    // aborted response must not be delivered.
+    if (this.finished && !err && !this._finishDelivered) {
+      try {
+        this.emit("finish");
+      } catch {
+        /* delivery errors are swallowed by dispatch */
       }
     }
     super._destroy(err, cb);
@@ -1756,6 +2021,12 @@ export class ServerResponse extends OutgoingMessage {
     } else if (typeof encoding === "function") {
       callback = encoding;
       encoding = null;
+    }
+    // Validate before finished=true (see OutgoingMessage.end): a bad
+    // chunk throws without poisoning `finished`, so a retry end() still
+    // delivers (test-http-outgoing-end-types).
+    if (chunk !== null && chunk !== undefined) {
+      validateOutgoingChunk(chunk);
     }
     if (!this._header) {
       this._implicitHeader();
@@ -1797,6 +2068,13 @@ export class ServerResponse extends OutgoingMessage {
           const term = Buffer.from(this._chunkTerminator(), "latin1");
           const pending = this._pendingFrame;
           this._pendingFrame = null;
+          if (pending) {
+            this._framedPending = Math.max(
+              0,
+              (this._framedPending || 0) - pending.length,
+            );
+          }
+          this._maybeEmitStreamDrain();
           sock.write(pending ? Buffer.concat([pending, term]) : term);
           this._chunkTerminatorSent = true;
         } catch {
@@ -2211,6 +2489,16 @@ export class ClientRequest extends OutgoingMessage {
     return this;
   }
 
+  // Client requests keep the ported Writable's error emission on
+  // destroy(err): real Node surfaces client destroy(err) as 'error'
+  // (via socket-error forwarding), and the shim's ClientRequest.destroy
+  // relies on this path for that event. This preserves the status quo
+  // that OutgoingMessage._destroy deliberately suppresses for bare
+  // messages and server responses.
+  _destroy(err, cb) {
+    cb(err);
+  }
+
   setTimeout(timeout, callback) {
     if (callback) this.once("timeout", callback);
     this.timeout = timeout;
@@ -2254,6 +2542,11 @@ export class ClientRequest extends OutgoingMessage {
     } else if (typeof encoding === "function") {
       callback = encoding;
       encoding = null;
+    }
+    // Validate before _ended=true (see OutgoingMessage.end): a bad
+    // chunk throws without poisoning the request.
+    if (chunk !== null && chunk !== undefined) {
+      validateOutgoingChunk(chunk);
     }
     this._ended = true;
     this.finished = true;
@@ -2299,6 +2592,9 @@ export class ClientRequest extends OutgoingMessage {
    * write before end().
    */
   write(chunk, encoding, callback) {
+    // Validate before _streamEnsureStarted: a bad chunk throws without
+    // starting the streaming round trip (see OutgoingMessage.write).
+    validateOutgoingChunk(chunk);
     // Start streaming BEFORE super.write(): super.write() marks headers
     // sent via _implicitHeader(), and setHeader() throws after that —
     // the chunked framing header must be set while headers are open.
@@ -2984,65 +3280,66 @@ export class ClientRequest extends OutgoingMessage {
       result = await _socketHttpRoundTrip(
         server ? server._port : this._parseTarget().port,
         {
-        method: this.method,
-        path: this.path,
-        headers,
-        body: body && body.length > 0 ? body : null,
-        socket: sock,
-        noDefaultHost,
-        // Streaming request (started by an early write()): the head was
-        // pre-serialized with its framing; body chunks arrive via the
-        // writer. The round-trip promise still resolves on response
-        // completion, exactly like the buffered path.
-        ...(streaming
-          ? {
-              streaming: true,
-              headBytes: _serializeRequestHead(
-                this.method,
-                this.path,
-                headers,
-                null,
-                noDefaultHost,
-              ),
-              onStreamReady: (writer) => {
-                const st = this._stream;
-                if (!st) return;
-                st.writer = writer;
-                const pending = st.pending;
-                st.pending = [];
-                for (const frame of pending) writer.write(frame);
-              },
+          method: this.method,
+          path: this.path,
+          headers,
+          body: body && body.length > 0 ? body : null,
+          socket: sock,
+          noDefaultHost,
+          // Streaming request (started by an early write()): the head was
+          // pre-serialized with its framing; body chunks arrive via the
+          // writer. The round-trip promise still resolves on response
+          // completion, exactly like the buffered path.
+          ...(streaming
+            ? {
+                streaming: true,
+                headBytes: _serializeRequestHead(
+                  this.method,
+                  this.path,
+                  headers,
+                  null,
+                  noDefaultHost,
+                ),
+                onStreamReady: (writer) => {
+                  const st = this._stream;
+                  if (!st) return;
+                  st.writer = writer;
+                  const pending = st.pending;
+                  st.pending = [];
+                  for (const frame of pending) writer.write(frame);
+                },
+              }
+            : {}),
+          // Streaming: emit 'response' as soon as headers arrive, push body
+          // chunks as they come. This matches Node for abort/destroy tests
+          // where the client must see the response before res.end().
+          onHeaders: (info) => {
+            if (this._aborted) return;
+            const msg = new IncomingMessage();
+            msg.statusCode = info.statusCode;
+            msg.statusMessage =
+              info.statusMessage || STATUS_CODES[info.statusCode] || "";
+            msg.httpVersion = "1.1";
+            msg.httpVersionMajor = 1;
+            msg.httpVersionMinor = 1;
+            const pairs = [];
+            for (let i = 0; i < info.rawHeaders.length; i += 2) {
+              pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
             }
-          : {}),
-        // Streaming: emit 'response' as soon as headers arrive, push body
-        // chunks as they come. This matches Node for abort/destroy tests
-        // where the client must see the response before res.end().
-        onHeaders: (info) => {
-          if (this._aborted) return;
-          const msg = new IncomingMessage();
-          msg.statusCode = info.statusCode;
-          msg.statusMessage =
-            info.statusMessage || STATUS_CODES[info.statusCode] || "";
-          msg.httpVersion = "1.1";
-          msg.httpVersionMajor = 1;
-          msg.httpVersionMinor = 1;
-          const pairs = [];
-          for (let i = 0; i < info.rawHeaders.length; i += 2) {
-            pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
-          }
-          IncomingMessage._applyRawHeaders(msg, pairs);
-          msg.socket = this.socket;
-          msg.connection = this.socket;
-          msg.req = this;
-          streamedMsg = msg;
-          this.emit("response", msg);
+            IncomingMessage._applyRawHeaders(msg, pairs);
+            msg.socket = this.socket;
+            msg.connection = this.socket;
+            msg.req = this;
+            streamedMsg = msg;
+            this.emit("response", msg);
+          },
+          onBody: (chunk) => {
+            if (streamedMsg && !this._aborted) {
+              streamedMsg._pushBody(chunk);
+            }
+          },
         },
-        onBody: (chunk) => {
-          if (streamedMsg && !this._aborted) {
-            streamedMsg._pushBody(chunk);
-          }
-        },
-      });
+      );
     } catch (err) {
       if (this._timeoutId) {
         clearTimeout(this._timeoutId);
@@ -4263,7 +4560,12 @@ class ServerBase extends EventEmitter {
     // same port so req.socket is a genuine connected socket with real
     // remoteAddress/remotePort/byte counts. net.connect(port) finds this
     // server through the wildcard keys ('::' / '0.0.0.0').
-    const netServer = createNetServer();
+    // Forward the server highWaterMark: real Node gives http accepted
+    // sockets the server's mark (default 65536, probed v24.22.1), so
+    // res.writableHighWaterMark === req.socket.writableHighWaterMark
+    // (test-http-outgoing-properties); without it the net default
+    // 16384 leaks through and the equality fails.
+    const netServer = createNetServer({ highWaterMark: this._highWaterMark });
     netServer.on("connection", (socket) => this._onSocketConnection(socket));
     netServer.on("error", (err) => this.emit("error", err));
     // Forward the backing net server's 'drop' event: the test listens for
@@ -4305,8 +4607,14 @@ class ServerBase extends EventEmitter {
     // Real Node (probed v24.22.1): server.close() destroys connections
     // that are idle at close time — the client sees EOF + close at once
     // and the loop drains — while connections with a request in flight
-    // survive and complete (they are NOT destroyed retroactively once
-    // they go idle). Same predicate as closeIdleConnections().
+    // survive and complete. Refined by test-http-outgoing-drain-
+    // writable-length: "survive" means the response still completes,
+    // not that the socket lives forever — when such a response
+    // finishes, the socket is destroyed (the client sees close and the
+    // loop drains). Flagged here; _finishSocketResponse takes the
+    // destroy path at finish when the flag is set and no further
+    // pipelined dispatch started. Same predicate as
+    // closeIdleConnections().
     for (const socket of [...this._connections]) {
       const state = socket._httpState;
       if (!state || !state.busy) {
@@ -4315,6 +4623,8 @@ class ServerBase extends EventEmitter {
         } catch {
           /* best effort */
         }
+      } else {
+        state.serverClosing = true;
       }
     }
     this._stopConnectionChecker();
@@ -4522,7 +4832,34 @@ class ServerBase extends EventEmitter {
       if (state.current) {
         state.current.req.aborted = true;
         state.current.req.emit("aborted");
+        // Real Node (probed): a socket close destroys the in-flight
+        // response, so its 'close' fires (test-http-outgoing-destroyed
+        // block 3: client res.destroy() -> server socket close ->
+        // server res 'close'). The dispatch stash covers requests
+        // whose body already completed (current is cleared at
+        // onMessageComplete), so destroy that too when unfinished.
+        const curRes = state.current.res;
+        if (curRes && !curRes.destroyed && !curRes.closed) {
+          try {
+            curRes.destroy();
+          } catch {
+            /* ignore */
+          }
+        }
         state.current = null;
+      }
+      const stashed = state.lastResponse;
+      if (
+        stashed &&
+        !stashed.destroyed &&
+        !stashed.closed &&
+        !stashed.finished
+      ) {
+        try {
+          stashed.destroy();
+        } catch {
+          /* ignore */
+        }
       }
       // Free the parser facade exactly once at socket close, then read
       // socket.parser as null (real-Node behavior). The try/catch keeps a
@@ -4931,8 +5268,7 @@ class ServerBase extends EventEmitter {
       }
       if (
         shouldUpgrade &&
-        (this._shouldUpgradeCallback ||
-          this.listenerCount("upgrade") > 0)
+        (this._shouldUpgradeCallback || this.listenerCount("upgrade") > 0)
       ) {
         if (this.listenerCount("upgrade") === 0) {
           socket.destroy();
@@ -4977,6 +5313,32 @@ class ServerBase extends EventEmitter {
     }
 
     const res = new ServerResponse(req, { highWaterMark: this._highWaterMark });
+    // Pipelined response (test-http-outgoing-drain-writable-length):
+    // while a previous response on this socket is still unfinished,
+    // real Node delivers the new response with a null socket — its
+    // writes buffer (outputData) instead of streaming, write() returns
+    // false past the highWaterMark, and 'drain' fires when the flush
+    // drains. The previous response is state.lastResponse until its
+    // finish clears the stash; a synchronously finished previous
+    // response (finished=true, finish event still queued) is NOT
+    // deferred, so finish-event FIFO keeps byte order for the common
+    // synchronous-handler pipeline.
+    const prevUnfinished = state.lastResponse && !state.lastResponse.finished;
+    if (prevUnfinished) {
+      res.socket = null;
+      res.connection = null;
+    }
+    // Socket-driven response highWaterMark
+    // (test-http-response-drain-cork): real Node gives the response
+    // the socket's live mark at dispatch, so a 'connection' listener
+    // that mutates socket._writableState.highWaterMark is honored and
+    // corked writes report backpressure against it. The server option
+    // already reaches the socket via listen(), so the default and
+    // option cases are unchanged — this only picks up later mutations.
+    const sockHwm = socket?.writableHighWaterMark;
+    if (typeof sockHwm === "number" && res._writableState) {
+      res._writableState.highWaterMark = sockHwm;
+    }
     state.lastResponse = res;
     const reqNo = ++state.reqCount;
     // Node syncs res.shouldKeepAlive from the request's keep-alive status;
@@ -5028,6 +5390,11 @@ class ServerBase extends EventEmitter {
    * bytes, then either resume parsing (keep-alive) or close the connection.
    */
   _finishSocketResponse(socket, info, state, req, res, reqNo) {
+    // Idempotence: the finish listener calls this once, and
+    // ServerResponse._destroy may emit 'finish' manually for the
+    // end-then-destroy case — never deliver twice.
+    if (res._finishDelivered) return;
+    res._finishDelivered = true;
     // Streaming case: headers + body were already flushed via write().
     // Just terminate the chunked stream (if used) and handle keep-alive.
     if (res._headerFlushed) {
@@ -5040,6 +5407,13 @@ class ServerBase extends EventEmitter {
           const term = Buffer.from(res._chunkTerminator(), "latin1");
           const pending = res._pendingFrame;
           res._pendingFrame = null;
+          if (pending) {
+            res._framedPending = Math.max(
+              0,
+              (res._framedPending || 0) - pending.length,
+            );
+          }
+          res._maybeEmitStreamDrain?.();
           socket.write(pending ? Buffer.concat([pending, term]) : term);
           res._chunkTerminatorSent = true;
         } catch {
@@ -5219,6 +5593,38 @@ class ServerBase extends EventEmitter {
       parser.unpause();
       while (state.pending.length > 0 && !state.busy) {
         parser.execute(state.pending.shift());
+      }
+      // Closing server (test-http-outgoing-drain-writable-length): a
+      // connection that was busy at close() time completes its response
+      // and is then destroyed, so the client sees close and the loop
+      // drains — instead of being preserved for keep-alive reuse
+      // forever. Only when NOTHING further is outstanding: inFlight
+      // zero (after this finish's decrement), no pending pipelined
+      // bytes, and no further dispatch started (busy). Destroying at
+      // the first finish after close() drops still-outstanding
+      // pipelined responses (test-http-server: close() runs at req3
+      // dispatch while res1/res2/res3 timers are still pending — an
+      // early destroy loses /quit). A newly dispatched response owns
+      // its own finish, which takes this same path. Never on the
+      // half-closed drain path (drainPeerEnded): remaining in-flight
+      // responses must still go out before any close.
+      if (
+        keepAlive &&
+        !drainPeerEnded &&
+        state.serverClosing &&
+        !state.busy &&
+        state.inFlight === 0 &&
+        state.pending.length === 0
+      ) {
+        try {
+          socket.destroy();
+        } catch {
+          try {
+            socket.end();
+          } catch {
+            /* ignore */
+          }
+        }
       }
     } else {
       // Not keep-alive: destroy (not just end) so both sides release their
