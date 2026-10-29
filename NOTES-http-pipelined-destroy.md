@@ -121,11 +121,12 @@ No `'error'` event on the server req, no uncaught, client gets exactly
   multiple-client-error, keepalive-req-gc, delete-parser,
   drop-connections-in-cluster, client-highwatermark, set-trailers,
   nodelay, multiple-headers, host-headers).
-- Full 397-test differential sweep branch vs pristine base 4705e749:
-  see `http-sweep-pipelined-branch.csv` / `http-sweep-pipelined-base.csv`
-  in the parity-sweep goal hidden_files (exactly one line differs
-  toward pass, zero regressions — to be confirmed when the base sweep
-  finishes).
+- Full 397-test differential sweep branch vs pristine base 4705e749
+  (CSVs in the parity-sweep goal hidden_files): base 217 pass / 68
+  timeout / 112 fail → branch 218 pass / 68 timeout / 111 fail.
+  EXACTLY ONE line differs, toward pass:
+  test-http-server-incomingmessage-destroy 7 → 0. Zero regressions;
+  crash codes 134/139 identical on both trees.
 - Repo jest + ondemand + build-vfs: run before shipping (see PR body).
 
 ## Files changed
