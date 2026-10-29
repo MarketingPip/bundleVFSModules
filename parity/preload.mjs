@@ -77,7 +77,18 @@ Object.defineProperty(globalThis, "__PARITY_ORIG_TIMERS__", {
 // the polyfill as globalThis.Buffer, the way Node's own bootstrap
 // installs the real Buffer. src/buffer.js itself is untouched.
 let bufferPoly = null;
-if (target === "buffer") {
+// ponytail: same install for the http target. Without it, http tests see a
+// split brain no real deployment has: shim http/net, but the REAL global
+// Buffer. test-http-upgrade-server-callback asserts `upgradeHead
+// instanceof Buffer`, and the upgrade head is a genuine shim Buffer from
+// the parser — which can never pass against the real class. In a real
+// deployment (browser, node_globals installed) the global Buffer IS the
+// shim Buffer, so the assert passes there; the harness must present the
+// same single Buffer. Ceiling: this is harness-only presentation, not a
+// product change — if a future http test genuinely needs the real global
+// Buffer, that test needs its own harness carve-out, not a product hack.
+// No product file changes; src/buffer.js itself is untouched.
+if (target === "buffer" || target === "http") {
   const polyfillURL = pathToFileURL(
     path.join(repoRoot, "src", "buffer.js"),
   ).href;
