@@ -1230,7 +1230,18 @@ export class IncomingMessage extends Readable {
     // HTTP error handler is a no-op; 'close' does the cleanup.
     if (!this.complete && this.socket && !this.socket.destroyed) {
       try {
-        if (typeof this.socket.resetAndDestroy === "function") {
+        if (this.socket.server) {
+          // Server-side requests destroy their socket GRACEFULLY, not
+          // abortively: probed on real Node v24.22.1, the client of a
+          // req.destroy(err) sees FIN ('end') + a clean close, and the
+          // HTTP layer generates ECONNRESET "socket hang up" for the
+          // incomplete response — while a reset would wrongly surface
+          // 'read ECONNRESET' on the client
+          // (test-http-server-incomingmessage-destroy). Accepted
+          // sockets carry `.server` (net.js accept path) and client
+          // sockets never do, so that marker selects the behavior.
+          this.socket.destroy();
+        } else if (typeof this.socket.resetAndDestroy === "function") {
           this.socket.resetAndDestroy();
         } else if (typeof this.socket.destroy === "function") {
           this.socket.destroy(err);
@@ -1239,7 +1250,16 @@ export class IncomingMessage extends Readable {
         /* ignore */
       }
     }
-    cb(err);
+    // Server-side requests swallow the destroy error (close-only), like
+    // OutgoingMessage._destroy: probed on real Node v24.22.1, a server
+    // req.destroy(err) with no 'error' listener produces NO
+    // uncaughtException — the error is recorded as `errored` (the ported
+    // stream destroy sets that before calling here) and only 'close'
+    // follows (test-http-server-incomingmessage-destroy). Client
+    // responses keep cb(err): their destroy error surfaces as 'error'
+    // (and, unlistened, as uncaughtException, which
+    // test-http-client-incomingmessage-destroy requires).
+    cb(this.socket && this.socket.server ? null : err);
   }
 
   // Internal: push one body chunk (Buffer/Uint8Array/string).
