@@ -628,8 +628,8 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       [
         "src/http.js",
         "src/net.js",
-        "parity/preload.mjs",
-        "NOTES-http-agent-residuals.md",
+        "src/_http_parser.js",
+        "NOTES-http-multi-line-headers.md",
       ].sort(),
     );
   });
