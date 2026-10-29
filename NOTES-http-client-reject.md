@@ -132,3 +132,15 @@ for every loopback target without a virtual http server.
   (134/139).
 - Repo jest: 3059 passed / 7 failed (known host version-skew) / 1
   skipped — exactly baseline. Ondemand 29/29. `build-vfs` exit 0.
+
+## CI retrigger (amended head 285bd19d)
+
+- Parity job: success. Build job: failure at the "Build VFS" step,
+  with no log summary on the check run — same transient signature
+  seen on earlier lanes.
+- Local `build-vfs` on this tree: exit 0, `http` and `net` built
+  clean. The only local build failure mode observed was the
+  transient esm.sh fetch for `src/specials/bundler.js` (acorn /
+  acorn-walk), unrelated to this change; a re-run passed.
+- This commit is a notes-only retrigger; no source or test file
+  changed, footprint unchanged.
