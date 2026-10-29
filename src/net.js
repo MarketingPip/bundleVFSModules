@@ -1070,6 +1070,14 @@ Socket.prototype.unref = function unref() {
 // inactive, or when reading never started (inactive handle).
 Socket.prototype._needsLoopKeeper = function _needsLoopKeeper() {
   if (this.destroyed) return false;
+  // A socket that never connected and isn't connecting has no handle
+  // on real Node (nothing keeps the loop alive for it), even if the
+  // read machinery ran: a custom createConnection may return a raw
+  // socket that errors without ever connecting or being destroyed,
+  // and pushing bytes into it schedules a read that used to arm the
+  // keeper forever (test-http-client-read-in-error: the request
+  // errors, "ignore" prints, but the process never exits).
+  if (!this._connected && !this.connecting) return false;
   if (this._isTransportInactive()) return false;
   if (this.connecting) return true;
   if (this._pendingWrites !== null && this._pendingWrites.length > 0)
@@ -1326,10 +1334,47 @@ Socket.prototype.connect = function connect(...args) {
 
   this.connecting = true;
   this._refreshTimeout();
-  this._keepLoopAlive();
   // Mirrors Node: the handle exists from connect() onward (tests mock
   // _handle.setKeepAlive immediately after net.connect() returns).
   if (!this._handle) this._handle = new VirtualHandle();
+  // Lookup option (mirrors Node's lookupAndConnect): a custom lookup
+  // resolves the host before connecting. The virtual network is
+  // port-based, so the resolved address is accepted but not used for
+  // routing; what matters is the gate — a lookup that never calls back
+  // keeps the socket pending (connecting) with no error, exactly like
+  // Node (test-http-agent-timeout-option relies on this shape). The
+  // loop keeper is armed only AFTER the lookup resolves: a pending
+  // lookup performs no handle activity on real Node, so it must not
+  // hold the loop open here either (otherwise a never-resolving
+  // lookup hangs the process instead of draining).
+  if (typeof options.lookup === "function") {
+    const lookupHost = options.host === undefined ? "localhost" : options.host;
+    let lookupDone = false;
+    try {
+      options.lookup(lookupHost, options, (err) => {
+        if (lookupDone || this.destroyed || !this.connecting) return;
+        lookupDone = true;
+        if (err) {
+          this._connectFailed(
+            err instanceof Error ? err : new Error(String(err)),
+          );
+          return;
+        }
+        this._keepLoopAlive();
+        defer(() => this._doConnect(options, pipe));
+      });
+    } catch (err) {
+      // A synchronously-throwing lookup fails the connect async (Node
+      // surfaces it as a connection error, not a connect() throw).
+      defer(() =>
+        this._connectFailed(
+          err instanceof Error ? err : new Error(String(err)),
+        ),
+      );
+    }
+    return this;
+  }
+  this._keepLoopAlive();
   // Deferred to a macrotask: a virtual handshake takes event-loop turns like
   // real TCP, so handlers attached after an `await` still catch 'connect'.
   defer(() => this._doConnect(options, pipe));
@@ -1498,8 +1543,31 @@ Socket.prototype._deliverToPeer = function _deliverToPeer(chunk, encoding, cb) {
 Socket.prototype._flushPendingWrites = function _flushPendingWrites() {
   const pending = this._pendingWrites;
   this._pendingWrites = [];
-  for (const item of pending)
+  for (const item of pending) {
+    // A peer that died while an earlier flushed item was delivered
+    // (e.g. the server destroyed its socket during the request head's
+    // delivery) must error later items exactly like a post-connect
+    // _write does, not silently drop them: _deliverToPeer's
+    // peer-destroyed guard drops the bytes and calls back with no
+    // error, so without this check a PUT client never sees 'error'
+    // when the server destroys the response mid-request
+    // (test-http-outgoing-destroyed). The peer is re-read per item
+    // because it can die mid-loop.
+    const peer = this._peer;
+    if (!this._connected || !peer || peer.destroyed) {
+      const er = this.destroyed
+        ? errnoError(
+            "ERR_STREAM_DESTROYED",
+            "write",
+            "Cannot call write after a stream was destroyed",
+          )
+        : new Error("Socket is not connected");
+      if (!this.destroyed) this.destroy(er);
+      item.cb(er);
+      continue;
+    }
     this._deliverToPeer(item.chunk, item.encoding, item.cb);
+  }
 };
 
 Socket.prototype._receiveFromPeer = function _receiveFromPeer(buf) {
