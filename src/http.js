@@ -2219,6 +2219,37 @@ function parseRequestArgs(urlOrOptions, optionsOrCallback, callback) {
   return { options, callback: cb };
 }
 
+/**
+ * Remove the five request listeners onSocket() attaches at assignment
+ * (error forwarder, end observer, timeout observer, agent-timeout
+ * forwarder, close untracker). Used by the CONNECT/upgrade detach paths and by the
+ * agent's parking path; the stashed refs make removal exact even when a
+ * listener was never attached (e.g. no agent timeout option).
+ */
+function _removeRequestSocketListeners(socket) {
+  if (!socket || typeof socket.removeListener !== "function") return;
+  if (socket._requestErrorListener) {
+    socket.removeListener("error", socket._requestErrorListener);
+    socket._requestErrorListener = null;
+  }
+  if (socket._requestEndListener) {
+    socket.removeListener("end", socket._requestEndListener);
+    socket._requestEndListener = null;
+  }
+  if (socket._requestTimeoutListener) {
+    socket.removeListener("timeout", socket._requestTimeoutListener);
+    socket._requestTimeoutListener = null;
+  }
+  if (socket._requestTimeoutCb) {
+    socket.removeListener("timeout", socket._requestTimeoutCb);
+    socket._requestTimeoutCb = null;
+  }
+  if (socket._requestCloseListener) {
+    socket.removeListener("close", socket._requestCloseListener);
+    socket._requestCloseListener = null;
+  }
+}
+
 export class ClientRequest extends OutgoingMessage {
   constructor(input, options, cb, defaultAgent) {
     // Propagate the user's highWaterMark to the Writable base (Node parity).
@@ -2379,6 +2410,14 @@ export class ClientRequest extends OutgoingMessage {
       hostname: host,
       port: Number(port) || 80,
     };
+    // Thread a request-level lookup option to the agent's connect options
+    // (Node passes it through to net.connect). A lookup that never calls
+    // back keeps the socket pending instead of erroring — the shape
+    // test-http-agent-timeout-option relies on. Queued requests reuse
+    // these stashed options on reprocessing.
+    if (typeof options.lookup === "function") {
+      this._agentOptions.lookup = options.lookup;
+    }
     if (agent) {
       try {
         agent.addRequest(this, this._agentOptions);
@@ -3029,6 +3068,70 @@ export class ClientRequest extends OutgoingMessage {
       return;
     }
 
+    // Agent-assigned real socket, no virtual/raw server to round-trip
+    // against (the gates above already excluded servers): do NOT fall
+    // through to fetch(). On real Node the request sits on its socket —
+    // a lookup that never calls back never connects and never errors
+    // (test-http-agent-timeout-option) — while fetching would fail
+    // with 'fetch failed' and the agent's own connect error would
+    // surface a second, spurious error. Emit 'socket' at assignment
+    // (the socket is already assigned via onSocket) and wait on the
+    // socket's fate: an error surfaces once via the request error
+    // forwarder, and a never-connecting socket simply never settles,
+    // so the loop drains and the process can exit — matching Node's
+    // pending-socket hang. (A connected real socket cannot reach this
+    // branch: connection needs a peer, and peer targets take the gates
+    // above.)
+    const assignedSock = this.socket;
+    // Loopback only: creation-time assignment means every request now
+    // holds a real socket here, but a non-loopback target must keep the
+    // fetch path — the shim has no DNS/TCP for real hosts (netConnect
+    // fails non-loopback names with ENOTFOUND), so deferring would
+    // hijack fetch-bridge requests away from fetch (tests/http.test.js
+    // and tests/https.test.js regressed on exactly this: example.com
+    // requests errored ENOTFOUND instead of reaching mocked fetch).
+    // The pending-socket shape this branch serves (a lookup that never
+    // calls back) only exists for loopback targets.
+    if (
+      assignedSock &&
+      !(assignedSock instanceof FakeSocket) &&
+      this._isLoopbackTarget()
+    ) {
+      if (this._aborted) {
+        const err = new Error("socket hang up");
+        err.code = "ECONNRESET";
+        throw err;
+      }
+      if (this.agent) {
+        try {
+          this.agent.emit("request", this);
+        } catch {
+          /* noop */
+        }
+      }
+      // 'socket' fires async (microtask), like the fetch path's
+      // queueMicrotask emission and the virtual path's waiter: the
+      // request is constructed (and this branch reached) synchronously
+      // inside get()/end(), before the caller can attach 'socket'
+      // listeners — a synchronous emission would be lost.
+      if (!this._aborted) {
+        const sockForEvent = assignedSock;
+        queueMicrotask(() => {
+          if (!this._aborted) this.emit("socket", sockForEvent);
+        });
+      }
+      // Never resolves: the socket's own error/close handlers own the
+      // outcome from here (error → forwarder emits once; pending →
+      // hang until loop drain). Returning would wrongly finish a
+      // request whose socket never delivered.
+      await new Promise(() => {});
+      return;
+    }
+
+    // Committing to the fetch path: the agent socket's errors are now
+    // irrelevant (see socketErrorListener's _usingFetch guard) — fetch
+    // owns this request's outcome from here.
+    this._usingFetch = true;
     const controller = new AbortController();
     this._abortController = controller;
     fetchOptions.signal = controller.signal;
@@ -3164,6 +3267,97 @@ export class ClientRequest extends OutgoingMessage {
     // Node sets the socket's _httpMessage on assignment (probed: the
     // 'socket' event already observes it); CONNECT detach clears it.
     socket._httpMessage = this;
+    // Agent-socket listener lifecycle, probed on real Node (v24.22.1) at
+    // assignment: exactly one 'error' listener (the request error
+    // forwarder), two 'end' listeners (stream-internal onReadableStreamEnd
+    // plus the request's observer — a no-op: 'end' listeners never affect
+    // flow, and a 'data' listener here would wrongly switch the socket to
+    // flowing mode), and one 'timeout' observer. When the agent has a
+    // timeout option, the request's timeoutCb is appended as the SECOND
+    // 'timeout' listener and socket.setTimeout arms the timer, so the
+    // socket reports the agent timeout (test-http-agent-timeout-option).
+    // The handlers are stashed on the socket so the agent's parking path
+    // and the CONNECT/upgrade detach paths can remove exactly these.
+    // (test-http-agent-keepalive's checkListeners asserts error==1 and
+    // end==2 at assignment, and error==1/end==1 after free.)
+    const request = this;
+    const socketErrorListener = (err) => {
+      // Fetch-path requests never had a socket error forwarder (base
+      // attached it only inside _performVirtualRequest): the agent
+      // socket for a fetched host is meaningless (fetch owns the
+      // outcome — e.g. the ENOTFOUND from netConnect for example.com
+      // must not clear the request's timeout timer or set _aborted,
+      // or tests/http.test.js "timeout emits timeout" loses its 20ms
+      // timer to an unrelated DNS error). Ignore the error entirely
+      // here; the listener's presence still consumes it, so nothing
+      // throws unhandled on the socket.
+      if (request._usingFetch) return;
+      if (request._timeoutId) {
+        clearTimeout(request._timeoutId);
+        request._timeoutId = null;
+      }
+      if (request._aborted) return;
+      // If the socket is idle in the agent's free pool, the agent handles
+      // the error (removes from pool, destroys). Don't propagate to this
+      // (possibly completed) request — that would be an unhandled 'error'.
+      if (socket._inFreePool) return;
+      request._aborted = true;
+      request.emit(
+        "error",
+        err instanceof Error ? err : new Error(String(err)),
+      );
+    };
+    const socketOnEnd = () => {};
+    const onTimeout = () => {};
+    // An active socket's close untracks it: a request that errors
+    // (remoteError: server destroys its side) never releases, so without
+    // this the dead socket stays in agent.sockets and totalSocketCount
+    // never drops (test-http-agent-keepalive's remoteError). removeSocket
+    // only decrements when the socket is still in the active list, so a
+    // close after release (already untracked) is a safe no-op; parking
+    // removes this listener and installs the free-pool close handler.
+    // The removal is deferred one turn: the request's 'error' is
+    // delivered async via the round-trip rejection, and its handler
+    // still observes the socket tracked (remoteError asserts
+    // sockets=1 there); the 1ms-later close check sees it gone.
+    const socketCloseListener = () => {
+      setTimeout(() => {
+        const agent = request.agent;
+        if (!agent) return;
+        const name =
+          socket._agentName ||
+          agent.getName({
+            host: request.host,
+            port: Number(request.port) || 80,
+          });
+        try {
+          agent.removeSocket(socket, name);
+        } catch {
+          /* best effort */
+        }
+      }, 0);
+    };
+    socket.on("error", socketErrorListener);
+    socket.on("end", socketOnEnd);
+    socket.on("timeout", onTimeout);
+    socket.once("close", socketCloseListener);
+    socket._requestErrorListener = socketErrorListener;
+    socket._requestEndListener = socketOnEnd;
+    socket._requestTimeoutListener = onTimeout;
+    socket._requestCloseListener = socketCloseListener;
+    socket._requestTimeoutCb = null;
+    const agentTimeout = this.agent?.options?.timeout;
+    if (agentTimeout !== undefined && agentTimeout !== null) {
+      const emitRequestTimeout = () => {
+        request.emit("timeout");
+      };
+      this.timeoutCb = emitRequestTimeout;
+      socket._requestTimeoutCb = emitRequestTimeout;
+      socket.on("timeout", emitRequestTimeout);
+      if (typeof socket.setTimeout === "function") {
+        socket.setTimeout(agentTimeout);
+      }
+    }
     if (this._onSocketAssigned) {
       const resolve = this._onSocketAssigned;
       this._onSocketAssigned = null;
@@ -3326,20 +3520,41 @@ export class ClientRequest extends OutgoingMessage {
         });
       }
     }
-    const onSocketError = (err) => {
-      if (this._timeoutId) {
-        clearTimeout(this._timeoutId);
-        this._timeoutId = null;
-      }
-      if (this._aborted) return;
-      // If the socket is idle in the agent's free pool, the agent handles
-      // the error (removes from pool, destroys). Don't propagate to this
-      // (possibly completed) request — that would be an unhandled 'error'.
-      if (sock._inFreePool) return;
-      this._aborted = true;
-      this.emit("error", err instanceof Error ? err : new Error(String(err)));
-    };
-    sock.on("error", onSocketError);
+    // Writes must not start until the socket is connected. 'socket'
+    // was emitted above at assignment time (Node order), but the
+    // round trip body below must wait: pre-connect writes are flushed
+    // during pairing, before the server socket's HTTP machinery is
+    // attached, so the server processes them asynchronously (after all
+    // client writes) instead of synchronously during delivery. That
+    // changes error timing two ways: a server destroy during the
+    // head's delivery must error a later frame's write
+    // (test-http-outgoing-destroyed), and a server handler throw must
+    // land inside the round-trip writer's catch
+    // (test-http-double-content-length, where base swallows the
+    // clientError assertion throw). Waiting here restores
+    // post-connect write timing; reused and already-connected sockets
+    // skip the wait. On connect failure the socket's 'error' was
+    // already forwarded by socketErrorListener, so a dead socket just
+    // returns without a second emission.
+    if (!(sock instanceof FakeSocket) && !sock._connected && !sock.destroyed) {
+      await new Promise((resolve) => {
+        const done = () => {
+          sock.removeListener("connect", done);
+          sock.removeListener("error", done);
+          sock.removeListener("close", done);
+          resolve();
+        };
+        sock.once("connect", done);
+        sock.once("error", done);
+        sock.once("close", done);
+      });
+    }
+    if (sock.destroyed) return;
+    // The request-level socket error forwarder lives in onSocket()
+    // (socketErrorListener, attached at assignment so 'socket' handlers
+    // already observe it); it is NOT re-attached here. The CONNECT and
+    // upgrade detach paths below remove it (plus the other four
+    // request listeners) before handing the socket to the app.
 
     if (this.timeout) {
       this._timeoutId = setTimeout(() => {
@@ -3423,6 +3638,15 @@ export class ClientRequest extends OutgoingMessage {
             msg.connection = this.socket;
             msg.req = this;
             streamedMsg = msg;
+            // Whether anyone observes this response (a 'response'
+            // listener exists now, including once() callbacks about to
+            // fire — the constructor attaches the response callback via
+            // once(), so checking later would miss it). Real Node
+            // releases an UNOBSERVED response's keep-alive socket at
+            // completion, but holds an observed-but-unconsumed one (both
+            // probed v24.22.1); the completion branch below keys off
+            // this flag.
+            streamedMsg._responseObserved = this.listenerCount("response") > 0;
             this.emit("response", msg);
           },
           onBody: (chunk) => {
@@ -3509,10 +3733,11 @@ export class ClientRequest extends OutgoingMessage {
       // Detach before handing the tunnel to the app: real Node delivers
       // it with only the stream-internal 'end' listener left (probed
       // v24.22.1) and _httpMessage cleared to null. The round trip
-      // already detached its own listeners; the request-level error
-      // forwarder is the one left.
+      // already detached its own listeners; the five request listeners
+      // attached in onSocket() are the ones left — remove all of them
+      // (error 0, end 1, timeout 0 at handoff, per test-http-connect).
       try {
-        this.socket.removeListener("error", onSocketError);
+        _removeRequestSocketListeners(this.socket);
       } catch {
         /* already detached */
       }
@@ -3569,8 +3794,11 @@ export class ClientRequest extends OutgoingMessage {
       msg.socket = this.socket;
       msg.connection = this.socket;
       msg.req = this;
+      // Same detach as the CONNECT path: the five request listeners from
+      // onSocket() come off so the handed-off socket carries only the
+      // stream-internal 'end' listener (test-http-connect shape).
       try {
-        this.socket.removeListener("error", onSocketError);
+        _removeRequestSocketListeners(this.socket);
       } catch {
         /* already detached */
       }
@@ -3646,17 +3874,23 @@ export class ClientRequest extends OutgoingMessage {
       }
       streamedMsg._finishBody();
       // Release the socket to the agent's pool for keep-alive reuse.
-      // The release always happens at message-complete time, consumed
-      // or not (test-http-agent-uninitialized never reads its
-      // response, and its socket must still be released). With a
-      // keep-alive agent the socket is parked — its bookkeeping moves
-      // lists immediately, as in Node. With a non-keep-alive agent the
-      // release destroys the socket and removes it from
-      // agent.sockets; Node removes it when the socket actually
-      // closes, which is after the response's 'end' has been
+      // With a non-keep-alive agent the release destroys the socket and
+      // removes it from agent.sockets; Node removes it when the socket
+      // actually closes, which is after the response's 'end' has been
       // delivered, so defer that case one turn to reproduce the
       // ordering (test-http-keep-alive-close-on-header asserts
       // agent.sockets[name].length === 1 inside its 'end' handler).
+      // With a keep-alive agent the release happens AFTER 'end'
+      // listeners run (probed on real Node: 'end' handlers still see
+      // the socket assigned, nextTick callbacks see it freed — see the
+      // branch below). The exception is an UNOBSERVED response (no
+      // 'response' listener at all): real Node releases that at
+      // completion (probed), so the loop drains. An observed-but-
+      // unconsumed response is never released on real Node (probed:
+      // still assigned at +500ms); such tests pass because
+      // server.close() destroys the connection, not because the agent
+      // released it (test-http-agent-uninitialized asserts nothing
+      // about counts).
       const agent = this.agent;
       const sock = this.socket;
       // Record the response's keep-alive timeout hint on the socket
@@ -3673,6 +3907,48 @@ export class ClientRequest extends OutgoingMessage {
       if (agent && sock && !(sock instanceof FakeSocket) && !agent.keepAlive) {
         const req = this;
         setTimeout(() => req._releaseAgentSocket(), 0);
+      } else if (
+        agent &&
+        sock &&
+        !(sock instanceof FakeSocket) &&
+        agent.keepAlive
+      ) {
+        if (!streamedMsg._responseObserved) {
+          // Nobody observes this response (no 'response' listener at
+          // all): real Node releases at completion, so the loop can
+          // drain even though nothing ever reads the message
+          // (test-http-server-delete-parser: the client attaches no
+          // response handler, yet the process must exit).
+          this._releaseAgentSocket();
+        } else {
+          // Keep-alive: release after 'end' listeners run. _finishBody()
+          // above schedules 'end' async, and user 'end' listeners
+          // attached at 'response' time precede this completion-time
+          // once listener in emission order, so they see the socket
+          // still assigned and nextTick callbacks see it freed
+          // (test-http-agent-keepalive). An observed-but-unconsumed
+          // response is never released on real Node (probed) — the
+          // process still exits because server.close() destroys the
+          // connection (test-http-agent-uninitialized).
+          // The 'close' backstop covers abort-before-'end' (where
+          // _finishBody is skipped and 'end' never fires). The two
+          // listeners remove each other: a stale 'close' firing after
+          // the socket was reused for a later request must NOT re-park
+          // the live socket (reuseSocket resets _releasedToAgent, so the
+          // guard alone cannot stop it — the first request's 'close'
+          // backstop re-parking the second request's socket was a real
+          // failure: the reused socket lost its fresh 'end' listener).
+          const releaseOnEnd = () => {
+            streamedMsg.removeListener("close", releaseOnClose);
+            this._releaseAgentSocket();
+          };
+          const releaseOnClose = () => {
+            streamedMsg.removeListener("end", releaseOnEnd);
+            this._releaseAgentSocket();
+          };
+          streamedMsg.once("end", releaseOnEnd);
+          streamedMsg.once("close", releaseOnClose);
+        }
       } else {
         this._releaseAgentSocket();
       }
@@ -5955,40 +6231,112 @@ class AgentBase extends EventEmitter {
     this.totalSocketCount = 0;
   }
 
-  /** No real sockets in the browser: hand out a synthetic placeholder. */
-  createConnection(_options, callback) {
-    const socket = new FakeSocket();
+  /**
+   * Default socket creation: the virtual-network path. This method is the
+   * override point — createSocket calls it, never netConnect directly —
+   * so tests that replace it observe or fail creation (test-http-agent
+   * replaces it to fail every creation; test-http-agent-keepalive-delay
+   * wraps it to assert the options it receives: keepAlive from the agent,
+   * keepAliveInitialDelay from keepAliveMsecs). The callback fires on
+   * connect with (null, socket); socket errors are NOT delivered via
+   * this callback on the default path — they reach the request through
+   * socketErrorListener (see below). An override that calls back with
+   * an error returns undefined and creates no socket; createSocket's
+   * error path handles that (addRequest then errors the request via
+   * onSocketError).
+   */
+  createConnection(options, callback) {
+    const socket = netConnect({
+      port: options.port,
+      host: options.host,
+      noDelay: options.noDelay,
+      keepAlive: options.keepAlive,
+      keepAliveInitialDelay: options.keepAliveInitialDelay,
+      lookup: options.lookup,
+    });
+    // The callback fires on connect ONLY — deliberately no 'error'
+    // listener here. Socket errors are forwarded to the request by
+    // socketErrorListener (attached in onSocket at assignment); a
+    // second 'error' listener would break the assignment-time counts
+    // (test-http-agent-keepalive asserts exactly one) and would
+    // double-emit with the forwarder. Creation errors from OVERRIDES
+    // (which return undefined and call back with the error themselves,
+    // e.g. test-http-agent) still reach createSocket's oncreate.
     if (typeof callback === "function") {
-      queueMicrotask(() => callback(null, socket));
+      socket.once("connect", () => callback(null, socket));
     }
     return socket;
   }
 
   createSocket(req, options, callback) {
     const name = this.getName(options);
-    // For the virtual-server path, create a real virtual socket via net.js.
-    // The port comes from the request options, falling back to the request's
-    // own host/port (for manual addRequest(req, {}) calls).
+    // For the virtual-server path, create a real virtual socket via
+    // createConnection (overridable). The port comes from the request
+    // options, falling back to the request's own host/port (for manual
+    // addRequest(req, {}) calls).
     const port =
       options.port || req.port || req._port || this.defaultPort || 80;
     const host = options.host || options.hostname || req.host || "localhost";
+    // Real Node passes the agent's noDelay (default true) into the
+    // connect options; a request-level noDelay is ignored (probed
+    // v24.22.1: http.request({ noDelay: false }) still connects with
+    // noDelay true, while new Agent({ noDelay: false }) connects
+    // with false). The agent consumes the option internally — Agent
+    // exposes no noDelay property on real Node. keepAlive /
+    // keepAliveInitialDelay and lookup flow the same way (the latter so
+    // a never-returning lookup keeps the socket pending instead of
+    // erroring — test-http-agent-timeout-option).
+    const createOptions = {
+      port,
+      host,
+      noDelay: this.options.noDelay ?? true,
+      keepAlive: this.keepAlive,
+      keepAliveInitialDelay: this.keepAliveMsecs,
+      lookup: options.lookup,
+    };
     let socket;
+    let creationHandled = false;
+    const oncreate = (err, sock) => {
+      // Late creation outcome: the original's once('connect') wiring,
+      // or an async-creation override's callback. The synchronous path
+      // below already assigned the socket and invoked the addRequest
+      // callback, so late successes are no-ops. Late errors only arrive
+      // from overrides (the original wires no 'error' listener) and
+      // propagate to the addRequest error path — which errors the
+      // request exactly once, since no socket exists for
+      // socketErrorListener to forward through.
+      if (creationHandled) return;
+      if (err) {
+        creationHandled = true;
+        if (typeof callback === "function") callback(err);
+        return;
+      }
+      if (!sock || req.socket === sock) return;
+      // Async-creation override delivered a socket after the sync path
+      // returned null: track and assign it now (the old connect-time
+      // path, kept for overrides that create asynchronously).
+      creationHandled = true;
+      sock.autoDestroy = false;
+      (this.sockets[name] ??= []).push(sock);
+      this.totalSocketCount++;
+      sock._agentName = name;
+      sock._agent = this;
+      sock._connectedBeforeAssign = sock._connected === true;
+      req.onSocket(sock);
+      if (typeof callback === "function") callback(null, sock);
+    };
     try {
-      // Real Node passes the agent's noDelay (default true) into the
-      // connect options; a request-level noDelay is ignored (probed
-      // v24.22.1: http.request({ noDelay: false }) still connects with
-      // noDelay true, while new Agent({ noDelay: false }) connects
-      // with false). The agent consumes the option internally — Agent
-      // exposes no noDelay property on real Node.
-      socket = netConnect({
-        port,
-        host,
-        noDelay: this.options.noDelay ?? true,
-      });
+      socket = this.createConnection(createOptions, oncreate);
     } catch (err) {
       if (typeof callback === "function") {
         queueMicrotask(() => callback(err));
       }
+      return null;
+    }
+    if (!socket) {
+      // The override took over creation (returns undefined, calls back
+      // itself with either a socket or an error). Nothing to track or
+      // assign here; oncreate handles the outcome.
       return null;
     }
     // Disable autoDestroy: the agent manages the socket lifecycle explicitly.
@@ -6000,26 +6348,28 @@ class AgentBase extends EventEmitter {
     // Track the agent name on the socket for removal on destroy.
     socket._agentName = name;
     socket._agent = this;
-    if (typeof callback === "function") {
-      // netConnect emits 'connect' asynchronously; invoke callback then.
-      const onError = (err) => callback(err);
-      socket.once("connect", () => {
-        // Connection succeeded: remove the error listener so later
-        // errors on the (possibly pooled) socket don't hit this stale
-        // callback.
-        socket.removeListener("error", onError);
-        // The socket connected before it could be assigned to the
-        // request, so the request's 'socket' event necessarily comes
-        // after 'connect'. Remember that: _performVirtualRequest
-        // replays 'connect' after emitting 'socket', restoring the
-        // observable Node order (assignment first, then connect) for
-        // listeners attached in a 'socket' handler
-        // (test-http-keep-alive-close-on-header counts connects).
-        socket._connectedBeforeAssign = true;
-        callback(null, socket);
-      });
-      socket.once("error", onError);
-    }
+    // Assign at creation, like Node: the request's 'socket' event fires
+    // while the socket is still connecting (probed: connecting=true,
+    // pending=true at 'socket' time), and 'connect' follows naturally —
+    // no replay needed. (Previously assignment waited for connect and
+    // _performVirtualRequest replayed 'connect'; the replay path is kept
+    // for sockets that arrive already connected, e.g. via a
+    // synchronous-connect override.) Pre-connect writes buffer in the
+    // socket's pending-write queue and flush on connect, so the round
+    // trip can start immediately. A never-connecting socket (lookup that
+    // never calls back) simply never delivers — no error, matching Node.
+    socket._connectedBeforeAssign = socket._connected === true;
+    req.onSocket(socket);
+    // Invoke the addRequest callback synchronously at creation (not on
+    // connect): assignment already happened, so its success branch is a
+    // guarded no-op except for the redundant-socket case (a request
+    // that already holds a real socket via another path — the second
+    // addRequest in test-http-agent-uninitialized — whose cleanup the
+    // callback performs). Socket errors now surface solely through
+    // socketErrorListener, so no connect/error listener is attached
+    // here — keeping the assignment-time error count at exactly one.
+    creationHandled = true;
+    if (typeof callback === "function") callback(null, socket);
     return socket;
   }
 
@@ -6157,6 +6507,12 @@ class AgentBase extends EventEmitter {
       }
     }
     if (this.keepAlive && !socket.destroyed) {
+      // The completed request's listeners come off first: after free,
+      // the socket carries exactly one 'error' listener (the free-pool
+      // handler below) and one 'end' listener (stream-internal), per
+      // test-http-agent-keepalive's checkListeners. The pooled-timeout
+      // handler added below is the agent's own, not the request's.
+      _removeRequestSocketListeners(socket);
       // Apply the agent's idle timeout to the socket first; the
       // keepSocketAlive() hook below may override it via
       // socket.setTimeout() (test-http-agent-timeout block 4: a custom
@@ -6185,7 +6541,8 @@ class AgentBase extends EventEmitter {
         socket._inFreePool = true;
         // Agent owns error handling for idle sockets: remove from pool
         // and destroy, don't propagate to any (completed) request.
-        const onIdleError = () => {
+        // (Real Node's name for this handler is freeSocketErrorListener.)
+        const freeSocketErrorListener = () => {
           socket._inFreePool = false;
           if (socket._pooledTimeoutHandler) {
             socket.removeListener("timeout", socket._pooledTimeoutHandler);
@@ -6200,9 +6557,29 @@ class AgentBase extends EventEmitter {
           }
           if (wasPooled) this.totalSocketCount--;
         };
-        socket.once("error", onIdleError);
+        socket.once("error", freeSocketErrorListener);
         // Store for cleanup on reuse (avoid listener leak).
-        socket._idleErrorHandler = onIdleError;
+        socket._idleErrorHandler = freeSocketErrorListener;
+        // Agent owns close handling for idle sockets too: when the
+        // remote server closes a pooled connection (FIN), the socket
+        // must leave the free pool and the count must drop — otherwise
+        // the pool holds a dead socket forever
+        // (test-http-agent-keepalive's remoteClose: 200ms after the
+        // server ends, freeSockets and totalSocketCount are both 0).
+        // No destroy here: the socket is already closed.
+        const freeSocketCloseListener = () => {
+          socket._inFreePool = false;
+          if (socket._pooledTimeoutHandler) {
+            socket.removeListener("timeout", socket._pooledTimeoutHandler);
+            socket._pooledTimeoutHandler = null;
+          }
+          const wasPooled = (this.freeSockets[name] || []).includes(socket);
+          this.removeSocket(socket, name);
+          if (wasPooled) this.totalSocketCount--;
+        };
+        socket.once("close", freeSocketCloseListener);
+        // Store for cleanup on reuse (avoid listener leak).
+        socket._idleCloseHandler = freeSocketCloseListener;
         // Idle reaping (Node): a pooled socket that reaches the timeout
         // set above emits 'timeout' (the socket's own timer); the agent
         // then removes and destroys it, so timed-out sockets are never
@@ -6307,6 +6684,12 @@ class AgentBase extends EventEmitter {
     if (socket._idleErrorHandler) {
       socket.removeListener("error", socket._idleErrorHandler);
       socket._idleErrorHandler = null;
+    }
+    // Remove the idle close handler likewise: a reused socket's later
+    // close belongs to the new request, not the pool.
+    if (socket._idleCloseHandler) {
+      socket.removeListener("close", socket._idleCloseHandler);
+      socket._idleCloseHandler = null;
     }
     req.onSocket(socket);
   }

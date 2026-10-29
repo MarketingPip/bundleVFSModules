@@ -102,6 +102,12 @@ function isExtraRedirect(name) {
   // test-http-client-highwatermark, the only two http tests that require
   // it). Mirrors the net redirect above (PR #232 precedent).
   if (target === "http" && name === "_http_outgoing") return true;
+  // http tests that require('_http_agent') need the shim's Agent: the
+  // real-Node agent's createSocket does a real net.connect against the
+  // virtual server port and dies with ECONNREFUSED (only two tests do
+  // this: test-http-agent-keepalive, test-http-agent-keepalive-delay).
+  // Mirrors the _http_outgoing redirect above (PR #232 precedent).
+  if (target === "http" && name === "_http_agent") return true;
   // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
   // zlib must read the same cell (mirrors Node's load-time capture).
   return target === "zlib" && name === "buffer";

@@ -611,6 +611,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // end-types validation ordering, properties framed lengths,
     // pipelined socket deferral, closing-server finish destroy,
     // socket-driven HWM) (src/http.js + working note).
+    // fix/http-agent-residuals branch: agent-* residuals (createSocket
+    // via createConnection, creation-time assignment, five-listener
+    // lifecycle, keep-alive release ordering, pooled/active close
+    // untracking, lookup gating, pending-socket deferral, agent
+    // timeout wiring, _http_agent preload redirect)
+    // (src/http.js + src/net.js + parity/preload.mjs + working note).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check. So are the
@@ -619,7 +625,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "src/net.js", "NOTES-http-client-reject.md"].sort(),
+      [
+        "src/http.js",
+        "src/net.js",
+        "parity/preload.mjs",
+        "NOTES-http-agent-residuals.md",
+      ].sort(),
     );
   });
 
