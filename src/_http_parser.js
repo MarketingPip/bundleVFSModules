@@ -94,12 +94,18 @@ function parseError(code, message) {
 export class HTTPParser {
   /**
    * @param {'request'|'response'} type
+   * @param {{ insecureHTTPParser?: boolean }} [options] — when true, the
+   *   parser runs in llhttp's lenient mode for the features this port
+   *   implements: obsolete line folding in header values is unfolded
+   *   (test-http-multi-line-headers) instead of rejected. Strict mode
+   *   keeps the existing rejection byte-identical.
    */
-  constructor(type) {
+  constructor(type, options) {
     if (type !== "request" && type !== "response") {
       throw new TypeError('HTTPParser type must be "request" or "response"');
     }
     this.type = type;
+    this.insecureHTTPParser = options?.insecureHTTPParser === true;
     // Mirrors Node's default maxHeaderSize (16 KiB); the server may override.
     this.maxHeaderSize = 16 * 1024;
     // For responses to HEAD requests: no body regardless of framing.
@@ -467,6 +473,23 @@ export class HTTPParser {
         );
       }
       if (line[0] === " " || line[0] === "\t") {
+        // Obsolete line folding (RFC 7230 §3.2.4): in lenient mode the
+        // continuation line is unfolded onto the previous header's
+        // value — the CRLF is dropped and the line is appended verbatim
+        // (its leading whitespace is the separator; probed on real Node
+        // v24.22.1: "one" + "  two" -> "one  two", "one" + "\ttwo" ->
+        // "one\ttwo"). Leading/trailing OWS of the completed value is
+        // trimmed in _finishHeaders (empty value + " cont" -> "cont").
+        // A continuation with no preceding header is an invalid token
+        // (probed: HPE_INVALID_HEADER_TOKEN, "Invalid header token").
+        // Strict mode keeps the historical rejection byte-identical.
+        if (this.insecureHTTPParser) {
+          if (this._rawHeaders.length >= 2) {
+            this._rawHeaders[this._rawHeaders.length - 1] += line;
+            continue;
+          }
+          throw parseError("HPE_INVALID_HEADER_TOKEN", "Invalid header token");
+        }
         throw parseError(
           "HPE_INVALID_HEADER",
           "obsolete line folding is not supported",
@@ -496,6 +519,15 @@ export class HTTPParser {
 
   _finishHeaders() {
     const info = this._info;
+    // Unfolded (obs-fold) values arrive with their continuation lines
+    // appended verbatim; trim leading/trailing OWS of every completed
+    // value now so rawHeaders and headers agree. No-op for ordinary
+    // headers, whose values were already trimmed at push time.
+    for (let i = 1; i < this._rawHeaders.length; i += 2) {
+      this._rawHeaders[i] = this._rawHeaders[i]
+        .replace(/^[ \t]+/, "")
+        .replace(/[ \t]+$/, "");
+    }
     info.rawHeaders = this._rawHeaders;
     info.headers = {};
     // Null-prototype: a "constructor" header must not read

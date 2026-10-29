@@ -1681,6 +1681,22 @@ Socket.prototype.resetAndDestroy = function resetAndDestroy(err) {
       if (peer.destroyed) return;
       if (peer._peer === this) peer._peer = null;
       peer._connected = false;
+      // No-error reset to a peer that already ended its writable side:
+      // real Node delivers no 'error' to that socket (probed v24.22.1:
+      // client res.destroy() after server conn.end() leaves the server
+      // conn with no 'error', no 'end', no 'close'). Destroying it with
+      // ECONNRESET would surface an unhandled 'error' the app never sees
+      // on real Node (test-http-multi-line-headers: the test's net
+      // server attaches no conn 'error' listener). Destroy it cleanly
+      // instead: 'close' with hadError=false releases the loop keeper
+      // without an error event. Error-carrying resets and still-open
+      // peers keep the ECONNRESET destroy (test-http-outgoing-destroyed
+      // block 3 needs the server response 'close' that only a socket
+      // close produces).
+      if (!err && peer.writableEnded) {
+        peer.destroy();
+        return;
+      }
       peer.destroy(errConnReset());
     });
   }

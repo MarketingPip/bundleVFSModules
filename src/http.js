@@ -2285,6 +2285,23 @@ export class ClientRequest extends OutgoingMessage {
     }
     options = { __proto__: null, ...urlOpts, ...(options || {}) };
 
+    // insecureHTTPParser is a strict boolean on real Node: any other
+    // type throws at construction (test-http-client-insecure-http-parser-
+    // error, test-http-insecure-parser-per-stream Test 5). The flag
+    // itself is threaded to the client round-trip parser, where it
+    // enables lenient obs-fold unfolding (test-http-multi-line-headers).
+    if (
+      options.insecureHTTPParser !== undefined &&
+      typeof options.insecureHTTPParser !== "boolean"
+    ) {
+      throw ERR_INVALID_ARG_TYPE_PROPERTY(
+        "options.insecureHTTPParser",
+        "of type boolean",
+        options.insecureHTTPParser,
+      );
+    }
+    this.insecureHTTPParser = options.insecureHTTPParser === true;
+
     // request({ uniqueHeaders }) — probed real Node v24.22.1: send-side
     // only (parsing never joins). Listed headers with array values
     // serialize as one '; '-joined line; everything else one line per
@@ -3593,6 +3610,7 @@ export class ClientRequest extends OutgoingMessage {
           body: body && body.length > 0 ? body : null,
           socket: sock,
           noDefaultHost,
+          insecureHTTPParser: this.insecureHTTPParser,
           // Streaming request (started by an early write()): the head was
           // pre-serialized with its framing; body chunks arrive via the
           // writer. The round-trip promise still resolves on response
@@ -4523,6 +4541,7 @@ function _socketHttpRoundTrip(
     headBytes,
     onStreamReady,
     noDefaultHost = false,
+    insecureHTTPParser = false,
   },
 ) {
   return new Promise((resolve, reject) => {
@@ -4548,7 +4567,7 @@ function _socketHttpRoundTrip(
     const ok = settle(resolve);
     const fail = settle(reject);
 
-    const parser = new HTTPParser("response");
+    const parser = new HTTPParser("response", { insecureHTTPParser });
     // HEAD responses never have a body, regardless of framing.
     parser.isHeadResponse = method === "HEAD";
     const chunks = [];
