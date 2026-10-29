@@ -2554,8 +2554,17 @@ export class ClientRequest extends OutgoingMessage {
     const url = this._buildURL();
 
     // WebSocket upgrade requests cannot use fetch(): browsers strip
-    // Connection/Upgrade headers. Bridge to the native WebSocket instead.
-    if (String(this.getHeader("upgrade") || "").toLowerCase() === "websocket") {
+    // Connection/Upgrade headers. Bridge to the native WebSocket instead
+    // — but NOT for loopback targets: a loopback upgrade goes over an
+    // agent socket (virtual http server, or a raw net server), never a
+    // real TCP dial. The bridge dials ws://localhost:port where no real
+    // server listens, so every loopback websocket upgrade ECONNREFUSED
+    // and the error landed on the still-unassigned FakeSocket
+    // (test-http-upgrade-client/agent). Non-loopback keeps the bridge.
+    if (
+      String(this.getHeader("upgrade") || "").toLowerCase() === "websocket" &&
+      !this._isLoopbackTarget()
+    ) {
       this._handleWebSocketUpgrade(url);
       return;
     }
@@ -2619,6 +2628,36 @@ export class ClientRequest extends OutgoingMessage {
       return;
     }
 
+    // Loopback websocket upgrade with no virtual http server: the target
+    // is a raw net server (or nothing listening). Same agent-socket
+    // round trip as the virtual path — the server side is the app's net
+    // 'connection'/'data' handlers, not HTTP dispatch — so a null server
+    // is all the round trip needs. A refused connection surfaces as a
+    // request 'error' (ECONNREFUSED), never a bridge failure on the
+    // FakeSocket placeholder. Array-form headers are invisible to
+    // getHeader() (they bypass kOutHeaders), so consult the stashed
+    // pairs too — test-http-upgrade-client's second request is
+    // array-form, and without this it fell through to fetch().
+    if (
+      this._isLoopbackTarget() &&
+      String(
+        this.getHeader("upgrade") ??
+          this._headersArray?.find(
+            ([n]) => String(n).toLowerCase() === "upgrade",
+          )?.[1] ??
+          "",
+      ).toLowerCase() === "websocket"
+    ) {
+      await this._performVirtualRequest(
+        null,
+        this._virtualHeaders(),
+        body.length > 0 ? body : null,
+        false,
+        !!this._headersArray,
+      );
+      return;
+    }
+
     const controller = new AbortController();
     this._abortController = controller;
     fetchOptions.signal = controller.signal;
@@ -2669,10 +2708,11 @@ export class ClientRequest extends OutgoingMessage {
   }
 
   /**
-   * Find a virtual server registered for this request's local host:port.
-   * Returns the Server or null (→ the request goes to fetch()).
+   * Parse this request's target into { local, port }: `host` may carry a
+   * port ("example.com:8080"), which wins over the port option. Shared
+   * by the virtual-server lookup and the websocket-upgrade routing.
    */
-  _getVirtualServer() {
+  _parseTarget() {
     let hostname = this.host;
     let port = Number(this.port);
     // `host` may be "example.com:8080".
@@ -2690,6 +2730,25 @@ export class ClientRequest extends OutgoingMessage {
       hostname === "::1" ||
       hostname === "[::1]" ||
       hostname === "";
+    return { local, port };
+  }
+
+  /**
+   * Whether this request targets the loopback network (localhost /
+   * 127.0.0.1 / ::1, any port). Loopback upgrades never take the
+   * native-WebSocket bridge.
+   */
+  _isLoopbackTarget() {
+    const { local, port } = this._parseTarget();
+    return local && Number.isInteger(port);
+  }
+
+  /**
+   * Find a virtual server registered for this request's local host:port.
+   * Returns the Server or null (→ the request goes to fetch()).
+   */
+  _getVirtualServer() {
+    const { local, port } = this._parseTarget();
     if (!local || !Number.isInteger(port)) return null;
     return _httpShared().registry.get(port) || null;
   }
@@ -2917,7 +2976,14 @@ export class ClientRequest extends OutgoingMessage {
     let result;
     let streamedMsg = null;
     try {
-      result = await _socketHttpRoundTrip(server._port, {
+      // A null server means a raw loopback target (a net server, not a
+      // virtual http server): the agent socket already pairs with it, so
+      // the round trip needs only the request's own target port. The
+      // port argument is unused when a socket is supplied, but keep it
+      // exact (a host-carried port wins over the port option).
+      result = await _socketHttpRoundTrip(
+        server ? server._port : this._parseTarget().port,
+        {
         method: this.method,
         path: this.path,
         headers,
@@ -3068,6 +3134,101 @@ export class ClientRequest extends OutgoingMessage {
       // the request and emits 'close' (test-http-connect-req-res asserts
       // req.destroyed === true in 'close'). A second destroy is a
       // stream no-op, so this is safe if the app destroys first.
+      if (this.socket && !(this.socket instanceof FakeSocket)) {
+        const req = this;
+        this.socket.once("close", () => {
+          if (!req.destroyed) req.destroy();
+        });
+      }
+      return;
+    }
+
+    // 101 Switching Protocols: 'upgrade', not 'response', and never
+    // released to the agent pool — the socket is the app's now. Detach
+    // mirrors the CONNECT branch, plus the two upgrade-specific shapes
+    // probed on real Node v24.22.1: the socket's _httpMessage is null
+    // (not merely unset) and socket.parser is null (the client-side
+    // parser is freed before 'upgrade' — test-http-parser-freed-before-
+    // upgrade asserts strict null). The agent pool removal is what
+    // drops totalSocketCount to 0 at 'upgrade' (test-http-upgrade-
+    // agent). With no 'upgrade' listener the socket is destroyed, like
+    // an unclaimed CONNECT tunnel (test-http-upgrade-advertise's
+    // destroy case: the client observes socket 'close').
+    if (result.isUpgrade) {
+      const msg = new IncomingMessage();
+      msg.statusCode = result.statusCode;
+      msg.statusMessage =
+        result.statusMessage || STATUS_CODES[result.statusCode] || "";
+      msg.httpVersion = "1.1";
+      msg.httpVersionMajor = 1;
+      msg.httpVersionMinor = 1;
+      const pairs = [];
+      for (let i = 0; i < result.rawHeaders.length; i += 2) {
+        pairs.push([result.rawHeaders[i], result.rawHeaders[i + 1]]);
+      }
+      IncomingMessage._applyRawHeaders(msg, pairs);
+      msg.socket = this.socket;
+      msg.connection = this.socket;
+      msg.req = this;
+      try {
+        this.socket.removeListener("error", onSocketError);
+      } catch {
+        /* already detached */
+      }
+      this.socket._httpMessage = null;
+      this.socket.parser = null;
+      try {
+        this.agent?.removeSocket(this.socket, this.socket._agentName);
+      } catch {
+        /* best effort */
+      }
+      this.emit("upgrade", msg, this.socket, result.upgradeHead);
+      if (
+        this.listenerCount("upgrade") === 0 &&
+        this.socket &&
+        !(this.socket instanceof FakeSocket)
+      ) {
+        try {
+          this.socket.destroy();
+        } catch {
+          /* best effort */
+        }
+      }
+      // The round trip paused the socket before settling (see the 101
+      // branch): if the app attached a 'data' listener in its 'upgrade'
+      // handler, resume now so buffered post-header bytes flow to it
+      // (test-http-upgrade-client's "nurtzo"). Without a data listener
+      // the bytes stay buffered for a later read/resume, as on a paused
+      // Node stream — resuming blindly would emit them to zero
+      // listeners and lose them the same way the pause prevents.
+      if (
+        this.socket &&
+        !(this.socket instanceof FakeSocket) &&
+        !this.socket.destroyed &&
+        this.socket.listenerCount("data") > 0
+      ) {
+        try {
+          this.socket.resume();
+        } catch {
+          /* best effort */
+        }
+      }
+      // The request completes at upgrade: real Node destroys it
+      // (emitting 'close') with no socket activity at all (probed
+      // v24.22.1: req.destroyed true and 'close' fires while the tunnel
+      // socket is still open — test-http-upgrade-agent's 'close'
+      // handler is what ends the socket, not the other way round).
+      // ClientRequest.destroy() would destroy the socket, so go through
+      // Writable's destroy with the keep-alive preservation flag, which
+      // OutgoingMessage._destroy honors by skipping the socket kill.
+      // The socket-once-close hook below stays as a backstop (inert
+      // once destroyed is set).
+      this._keepAliveSocket = true;
+      try {
+        Writable.prototype.destroy.call(this);
+      } catch {
+        /* best effort */
+      }
       if (this.socket && !(this.socket instanceof FakeSocket)) {
         const req = this;
         this.socket.once("close", () => {
@@ -3659,6 +3820,19 @@ function _serializeRequestHead(
  * `onSocket` (optional) receives the connected socket — the client uses it
  * to swap its synthetic socket for the real one and emit 'socket'.
  */
+// Whether the request headers carry an Upgrade header (object form from
+// _virtualHeaders, or array-form pairs). Used to gate 101-at-headers
+// resolution: only an upgrade request can legitimately receive a 101.
+function _requestHasUpgradeHeader(headers) {
+  if (!headers) return false;
+  if (Array.isArray(headers)) {
+    return headers.some(
+      ([k]) => typeof k === "string" && k.toLowerCase() === "upgrade",
+    );
+  }
+  return Object.keys(headers).some((k) => k.toLowerCase() === "upgrade");
+}
+
 function _socketHttpRoundTrip(
   port,
   {
@@ -3728,6 +3902,41 @@ function _socketHttpRoundTrip(
           body: Buffer.alloc(0),
           connectHead: head,
           isConnect: true,
+        });
+        return;
+      }
+      // 101 Switching Protocols: like CONNECT, a 101 has no body
+      // framing, so the round trip must resolve at headers — never wait
+      // for onMessageComplete, which never fires for a 101. Gated on the
+      // request carrying an Upgrade header: only an upgrade request can
+      // legitimately receive a 101. The caller emits 'upgrade' with the
+      // head bytes (parser remainder) instead of 'response'. Pause
+      // first: settling detaches the round trip's data listener mid-flow
+      // (the flow loop is already running), and a detached-but-still-
+      // flowing socket emits the next buffered chunk to zero listeners,
+      // losing it (test-http-upgrade-client's "nurtzo", written as a
+      // separate chunk after the header block). Pausing stops the loop
+      // so post-header bytes stay buffered for the app; the caller
+      // resumes after 'upgrade' is emitted.
+      if (info.statusCode === 101 && _requestHasUpgradeHeader(headers)) {
+        try {
+          sock.pause();
+        } catch {
+          /* best effort */
+        }
+        let head = Buffer.alloc(0);
+        try {
+          head = parser.takeRemainder();
+        } catch {
+          /* empty head */
+        }
+        ok({
+          statusCode: info.statusCode,
+          statusMessage: info.statusMessage,
+          rawHeaders: info.rawHeaders.slice(),
+          body: Buffer.alloc(0),
+          upgradeHead: head,
+          isUpgrade: true,
         });
         return;
       }
@@ -3828,12 +4037,24 @@ function _socketHttpRoundTrip(
         /* fall through to fail */
       }
       if (!settled) {
-        fail(
-          makeError(
-            "ERR_SOCKET_CLOSED",
-            "Socket closed before the HTTP response completed",
-          ),
-        );
+        // No headers ever arrived (server destroyed the socket before
+        // responding, e.g. an unhandled upgrade): real Node reports
+        // ECONNRESET "socket hang up", not a truncation error
+        // (test-http-upgrade-server-callback's true-without-handler
+        // case). Headers received but body cut short stays
+        // ERR_SOCKET_CLOSED.
+        if (info === null) {
+          const e = new Error("socket hang up");
+          e.code = "ECONNRESET";
+          fail(e);
+        } else {
+          fail(
+            makeError(
+              "ERR_SOCKET_CLOSED",
+              "Socket closed before the HTTP response completed",
+            ),
+          );
+        }
       }
     };
     sock.on("data", onData);
@@ -3879,6 +4100,17 @@ class ServerBase extends EventEmitter {
     // over-limit connections were served instead of dropped.
     this._maxConnections = null;
     this.maxRequestsPerSocket = options.maxRequestsPerSocket ?? 0;
+    // createServer({ shouldUpgradeCallback }) — probed real Node
+    // v24.22.1 (test-http-upgrade-server-callback): the callback decides
+    // whether an Upgrade request is really upgraded. false routes the
+    // request to normal 'request' dispatch (even with an 'upgrade'
+    // listener); true with no 'upgrade' listener destroys the socket
+    // (client sees ECONNRESET); a throw propagates to uncaughtException.
+    // A non-function value is ignored (no official test covers it).
+    this._shouldUpgradeCallback =
+      typeof options.shouldUpgradeCallback === "function"
+        ? options.shouldUpgradeCallback
+        : null;
     // createServer({ noDelay }) — probed real Node v24.22.1: default
     // true; the option is Boolean-coerced at construction (0 -> false,
     // 'x' -> true, null -> true). Later assignment stores verbatim
@@ -4454,8 +4686,13 @@ class ServerBase extends EventEmitter {
         try {
           parser.unpause();
           parser.execute();
-        } catch {
-          // Parser errors are reported via onError.
+        } catch (err) {
+          // Parser errors are reported via onError; an owner-callback
+          // throw (parser.execute rethrows non-HPE errors) propagates
+          // like the bare execute() paths below.
+          if (!(typeof err.code === "string" && err.code.startsWith("HPE_"))) {
+            throw err;
+          }
           break;
         }
       }
@@ -4478,8 +4715,12 @@ class ServerBase extends EventEmitter {
         try {
           parser.unpause();
           parser.execute(chunk);
-        } catch {
-          // Parser error handled via onError.
+        } catch (err) {
+          // Parser error handled via onError; an owner-callback throw
+          // propagates (see the parser.execute rethrow rule).
+          if (!(typeof err.code === "string" && err.code.startsWith("HPE_"))) {
+            throw err;
+          }
         }
         // If the parser completed a message (onHeadersComplete fired), it
         // will have set state.busy (already true). We do NOT dispatch here;
@@ -4661,18 +4902,78 @@ class ServerBase extends EventEmitter {
       req.headers.upgrade !== undefined &&
       /upgrade/i.test(String(req.headers.connection || ""))
     ) {
-      state.upgraded = true;
-      state.receiving = false;
-      let head = Buffer.alloc(0);
-      try {
-        if (typeof state.parser.takeRemainder === "function") {
-          head = state.parser.takeRemainder();
+      // shouldUpgradeCallback gate (probed real Node v24.22.1): false
+      // routes to normal 'request' dispatch below, even with an 'upgrade'
+      // listener; true with no 'upgrade' listener destroys the socket;
+      // a throw propagates (parser.execute rethrows non-HPE errors) to
+      // uncaughtException. With no callback, no 'upgrade' listener also
+      // falls back to 'request' dispatch (probed: 200 OK) — only a
+      // callback-true verdict destroys an unhandled upgrade.
+      let shouldUpgrade = true;
+      if (this._shouldUpgradeCallback) {
+        try {
+          shouldUpgrade = this._shouldUpgradeCallback(req);
+        } catch (err) {
+          // A throw must surface as uncaughtException (real Node), not
+          // as a round-trip failure: on the virtual path the throw
+          // travels back through the client's write call stack, whose
+          // try/catch would swallow it into a silent hang (the raw path
+          // has no such catch, which is why test-http-upgrade-server2
+          // already surfaces). Scheduling past the write stack makes it
+          // uncaught on both paths; the socket is destroyed so a
+          // surviving process doesn't stall on the dead request.
+          queueMicrotask(() => {
+            throw err;
+          });
+          socket.destroy();
+          return { req, res: null };
         }
-      } catch {
-        /* empty head */
       }
-      this.emit("upgrade", req, socket, head);
-      return { req, res: null };
+      if (
+        shouldUpgrade &&
+        (this._shouldUpgradeCallback ||
+          this.listenerCount("upgrade") > 0)
+      ) {
+        if (this.listenerCount("upgrade") === 0) {
+          socket.destroy();
+          return { req, res: null };
+        }
+        state.upgraded = true;
+        state.receiving = false;
+        let head = Buffer.alloc(0);
+        try {
+          if (typeof state.parser.takeRemainder === "function") {
+            head = state.parser.takeRemainder();
+          }
+        } catch {
+          /* empty head */
+        }
+        // Detach the HTTP layer before handing the socket to the app,
+        // mirroring the CONNECT branch: real Node delivers an upgraded
+        // server socket with only the stream-internal 'end' listener
+        // left (probed v24.22.1: close/data/error/timeout all 0, end 1)
+        // and socket.parser null. Removed by stored reference so app
+        // listeners (e.g. from 'connection') survive. Close bookkeeping
+        // moves to the destroy hook, so connection tracking and parser
+        // release still run without an EventEmitter listener. The
+        // parser facade is nulled here (not at close): the app observes
+        // socket.parser === null at 'upgrade' time, and the stashed
+        // close handler's free() block is a no-op facade anyway.
+        const hl = state.httpListeners;
+        if (hl) {
+          socket.removeListener("close", hl.close);
+          socket.removeListener("data", hl.data);
+          socket.removeListener("error", hl.error);
+          socket.removeListener("timeout", hl.timeout);
+          socket.removeListener("end", hl.end);
+          socket._onHttpSocketClose = hl.close;
+        }
+        socket.parser = null;
+        this.emit("upgrade", req, socket, head);
+        return { req, res: null };
+      }
+      // Fall through to normal 'request' dispatch below (callback false,
+      // or no callback and no 'upgrade' listener).
     }
 
     const res = new ServerResponse(req, { highWaterMark: this._highWaterMark });
@@ -5008,6 +5309,32 @@ export function createServer(optionsOrListener, requestListener) {
  * new.target forwarding.
  */
 export function Server(...args) {
+  // Classic-constructor call pattern: a subclass that does
+  // `http.Server.call(this, listener)` (test-http-upgrade-server's
+  // testServer shape) must initialize `this` in place. A class
+  // constructor cannot be .call()ed, and Reflect.construct would return
+  // a NEW object that .call() discards, leaving `this` uninitialized
+  // (the upgrade-server crash: this._connections undefined at
+  // _onSocketConnection). So construct a throwaway instance and
+  // transplant its own properties (string + symbol keys, descriptors
+  // intact — EventEmitter state is plain own properties) onto `this`.
+  // `this` keeps its own prototype chain, so instanceof checks still
+  // work. (Node returns undefined here; returning `this` is harmless
+  // and more useful, and no official test distinguishes.)
+  if (new.target === undefined && this instanceof Server) {
+    const inst = Reflect.construct(ServerBase, args, Server);
+    for (const key of [
+      ...Object.getOwnPropertyNames(inst),
+      ...Object.getOwnPropertySymbols(inst),
+    ]) {
+      Object.defineProperty(
+        this,
+        key,
+        Object.getOwnPropertyDescriptor(inst, key),
+      );
+    }
+    return this;
+  }
   return Reflect.construct(ServerBase, args, new.target ?? Server);
 }
 Object.setPrototypeOf(Server, ServerBase);

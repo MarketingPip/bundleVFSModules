@@ -219,14 +219,23 @@ export class HTTPParser {
         }
       }
     } catch (err) {
+      // A throw from an owner callback (an app 'request'/'upgrade' handler
+      // invoked via onHeadersComplete) is NOT a parse failure: real Node
+      // propagates it to uncaughtException, never a clientError/400.
+      // Previously every throw landed here and became a 400 + destroy,
+      // so a throwing upgrade handler silently hung instead of surfacing
+      // (test-http-upgrade-server2). Only llhttp-coded failures take the
+      // onError path below.
+      if (!(typeof err.code === "string" && err.code.startsWith("HPE_"))) {
+        this._state = "error";
+        throw err;
+      }
       this._state = "error";
       // Only llhttp-coded failures re-report on later chunks; a throw from
       // an owner callback is not a parse failure and must not synthesize
       // one (its code is not an HPE_ code).
-      if (typeof err.code === "string" && err.code.startsWith("HPE_")) {
-        this._fatalCode = err.code;
-        this._fatalMessage = err.message;
-      }
+      this._fatalCode = err.code;
+      this._fatalMessage = err.message;
       // Node's clientError/socket-error shape: rawPacket is the chunk that
       // triggered this execute (llhttp's per-execute input); a re-parse
       // with no new chunk reports the buffered remainder instead.
