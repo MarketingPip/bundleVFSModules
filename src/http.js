@@ -5734,7 +5734,21 @@ class ServerBase extends EventEmitter {
           socket._onHttpSocketClose = hl.close;
         }
         socket.parser = null;
-        this.emit("upgrade", req, socket, head);
+        // Async delivery window for the upgrade handoff only: a
+        // synchronous push would let the peer's 'data' handler run
+        // inside the handler's socket.write(), before the handler's
+        // next statement — so an upgrade handler that writes 101 and
+        // then records the upgrade head hands the client a null head
+        // (test-http-upgrade-server). The flag is cleared in a
+        // finally so a throwing handler (test-http-upgrade-server2)
+        // cannot leave later writes on this socket async.
+        const prevUpgradeDispatch = socket._upgradeDispatch;
+        socket._upgradeDispatch = true;
+        try {
+          this.emit("upgrade", req, socket, head);
+        } finally {
+          socket._upgradeDispatch = prevUpgradeDispatch;
+        }
         return { req, res: null };
       }
       // Fall through to normal 'request' dispatch below (callback false,

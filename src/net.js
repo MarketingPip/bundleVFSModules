@@ -1523,16 +1523,49 @@ Socket.prototype._deliverToPeer = function _deliverToPeer(chunk, encoding, cb) {
   const buf = toBytes(chunk, encoding);
   this._bytesWritten += buf ? buf.length : 0;
   this._refreshTimeout();
-  // A throw in the peer's 'data' listener must not wedge this socket's
-  // write queue: _receiveFromPeer -> push -> emit runs synchronously
-  // inside this _write, so a listener throw used to skip cb() (the
-  // Writable onwrite) and stall every later write forever, with the
-  // process staying alive (test-http-server-keep-alive-defaults: the
-  // test's own split-count assertion throws on a mid-response data
-  // event, and the response's remaining bytes then never arrive). The
-  // finally guarantees onwrite runs so the queue advances; the throw
-  // itself still propagates to the writer's own catch (ServerResponse
-  // _write swallows it) exactly as before.
+  // Async delivery ONLY while a server socket is inside its 'upgrade'
+  // handler (socket._upgradeDispatch, set around the emit in
+  // _dispatchSocketRequest). A synchronous push would let the peer's
+  // 'data' handler run inside the handler's socket.write(), before the
+  // handler's next statement — so an upgrade handler that writes 101
+  // and then records the upgrade head hands the client a null head
+  // (test-http-upgrade-server). Scoped this narrowly on purpose: making
+  // all server delivery async reordered writes against destroys by a
+  // microtask and broke server-unconsume (the client's end() after the
+  // response landed after the server's destroy-at-finish), and making
+  // all delivery async broke 11 passing tests that depend on
+  // synchronous throw propagation into writer catches (the
+  // double-content-length clientError swallow, outgoing-destroyed
+  // frame-error timing, pipeline/keep-alive write-vs-destroy order).
+  // The write callback fires in the delivery microtask; a peer that
+  // died before its delivery runs drops the bytes with a successful
+  // callback (the write was accepted while the peer was alive). A
+  // throw in the upgrade delivery chain surfaces as uncaughtException,
+  // as on real Node (test-http-upgrade-server2's upgrade handler
+  // throw) — the flag is cleared in a finally, so the throw path is
+  // unaffected.
+  if (this._upgradeDispatch) {
+    if (!peer || peer.destroyed) {
+      cb();
+      return;
+    }
+    nextTick(() => {
+      if (!peer.destroyed) peer._receiveFromPeer(buf);
+      cb();
+    });
+    return;
+  }
+  // Base behavior, restored verbatim. A throw in the peer's 'data'
+  // listener must not wedge this socket's write queue:
+  // _receiveFromPeer -> push -> emit runs synchronously inside this
+  // _write, so a listener throw used to skip cb() (the Writable
+  // onwrite) and stall every later write forever, with the process
+  // staying alive (test-http-server-keep-alive-defaults: the test's own
+  // split-count assertion throws on a mid-response data event, and the
+  // response's remaining bytes then never arrive). The finally
+  // guarantees onwrite runs so the queue advances; the throw itself
+  // still propagates to the writer's own catch (ServerResponse _write
+  // swallows it) exactly as before.
   try {
     if (peer && !peer.destroyed) peer._receiveFromPeer(buf);
   } finally {
