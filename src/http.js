@@ -726,12 +726,17 @@ export class OutgoingMessage extends Writable {
     }
 
     let header = firstLine;
+    header += lines.join("");
+    // Real Node renders app headers first, in insertion order, and only
+    // then the auto headers (Date, Connection, Keep-Alive, ...). Previously
+    // the auto Date was prepended ahead of app headers, so a response with
+    // an app-set Connection header started "Date: ...\r\nConnection: ..."
+    // instead of "Connection: ...\r\nDate: ..." (test-http-server-close-idle).
     if (this.sendDate && !flat.date && !this._removedDate) {
       const date = new Date().toUTCString();
       header += `Date: ${date}\r\n`;
       flat.date = date;
     }
-    header += lines.join("");
     // Node's server response framing (probed on real Node v24.22.1):
     // an app-set Connection header always wins — it is never overridden
     // and never supplemented with Keep-Alive. Otherwise the header
@@ -4634,16 +4639,22 @@ class ServerBase extends EventEmitter {
     // loop drains). Flagged here; _finishSocketResponse takes the
     // destroy path at finish when the flag is set and no further
     // pipelined dispatch started. Same predicate as
-    // closeIdleConnections().
+    // closeIdleConnections(). Refined by test-http-server-close-idle:
+    // a connection mid-request — even a partial start line with no
+    // CRLF yet, which never dispatched — is NOT idle (parser
+    // onMessageStart has fired, state.receiving is true), so it
+    // survives close() too. Unlike a busy connection it gets no
+    // serverClosing flag: probed real Node leaves it open after its
+    // late response completes, so it keeps keep-alive like normal.
     for (const socket of [...this._connections]) {
       const state = socket._httpState;
-      if (!state || !state.busy) {
+      if (!state || (!state.busy && !state.receiving)) {
         try {
           socket.destroy();
         } catch {
           /* best effort */
         }
-      } else {
+      } else if (state.busy) {
         state.serverClosing = true;
       }
     }
@@ -4663,7 +4674,7 @@ class ServerBase extends EventEmitter {
   closeIdleConnections() {
     for (const socket of this._connections) {
       const state = socket._httpState;
-      if (!state || !state.busy) socket.destroy();
+      if (!state || (!state.busy && !state.receiving)) socket.destroy();
     }
     return this;
   }
@@ -4988,6 +4999,14 @@ class ServerBase extends EventEmitter {
       }
     };
     parser.onError = (err) => {
+      // The message is dead: a later close()/closeIdleConnections()
+      // must not mistake this socket for one still receiving a request
+      // (test-http-double-content-length: the clientError handler throws
+      // before destroying, the client still errors, and server.close()
+      // must destroy the errored socket so the loop drains — sparing it
+      // as "receiving" hangs the test). Busy sockets are unaffected:
+      // they stay spared via state.busy.
+      state.receiving = false;
       // Node's clientError/socket-error shape (probed on real Node
       // v24.22.1): message "Parse Error: <llhttp reason>", code,
       // bytesParsed, rawPacket. Only the method reason is asserted
