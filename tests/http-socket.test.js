@@ -257,11 +257,11 @@ describe("HTTPParser", () => {
     expect(events[0]).toEqual(["error", "HPE_INVALID_HEADER"]);
   });
 
-  test("conflicting content-lengths -> HPE_INVALID_CONTENT_LENGTH", () => {
+  test("conflicting content-lengths -> HPE_UNEXPECTED_CONTENT_LENGTH", () => {
     const { events } = drive("request", [
       "GET /x HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n",
     ]);
-    expect(events[0]).toEqual(["error", "HPE_INVALID_CONTENT_LENGTH"]);
+    expect(events[0]).toEqual(["error", "HPE_UNEXPECTED_CONTENT_LENGTH"]);
   });
 
   test("header overflow -> HPE_HEADER_OVERFLOW", () => {

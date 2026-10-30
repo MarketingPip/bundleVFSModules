@@ -567,10 +567,15 @@ export class HTTPParser {
         value,
       );
       if (lower === "content-length") {
-        if (contentLength !== null && contentLength !== value) {
+        // llhttp rejects ANY duplicate Content-Length, same value included
+        // (probed real Node v24.22.1: [1,1] and [1,2] both yield
+        // HPE_UNEXPECTED_CONTENT_LENGTH, "Duplicate Content-Length").
+        // The old conflicting-only check was the wrong code and the wrong
+        // shape. Non-numeric values keep HPE_INVALID_CONTENT_LENGTH below.
+        if (contentLength !== null) {
           throw parseError(
-            "HPE_INVALID_CONTENT_LENGTH",
-            "conflicting Content-Length values",
+            "HPE_UNEXPECTED_CONTENT_LENGTH",
+            "Duplicate Content-Length",
           );
         }
         if (!/^\d+$/.test(value)) {
