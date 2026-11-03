@@ -104,6 +104,11 @@ const ERR_HTTP_TRAILER_INVALID = () =>
     "ERR_HTTP_TRAILER_INVALID",
     "Trailers are invalid with this transfer encoding",
   );
+const ERR_HTTP_BODY_NOT_ALLOWED = () =>
+  makeError(
+    "ERR_HTTP_BODY_NOT_ALLOWED",
+    "Adding content for this request method or response status is not allowed.",
+  );
 const ERR_INVALID_ARG_TYPE = (name, expected, actual) =>
   makeError(
     "ERR_INVALID_ARG_TYPE",
@@ -937,6 +942,17 @@ export class OutgoingMessage extends Writable {
     if (!this._header) {
       this._implicitHeader();
     }
+    if (
+      this._rejectNonStandardBodyWrites &&
+      (this._hasBody === false || this.req?.method === "HEAD")
+    ) {
+      // Probed real Node v24.22.1: with the server option enabled, ANY
+      // body write to a 204/304/1xx or HEAD response throws
+      // ERR_HTTP_BODY_NOT_ALLOWED — even an empty write. Default/false
+      // keeps the silent drop in the branch below. Only ServerResponse
+      // ever carries the flag, so ClientRequest is unaffected.
+      throw ERR_HTTP_BODY_NOT_ALLOWED();
+    }
     if (this._hasBody === false) {
       // 204/304/1xx responses MUST NOT have a body: ignore writes (Node parity).
       if (typeof encoding === "function") callback = encoding;
@@ -992,6 +1008,17 @@ export class OutgoingMessage extends Writable {
     }
     if (!this._header) {
       this._implicitHeader();
+    }
+    if (
+      chunk !== null &&
+      chunk !== undefined &&
+      this._rejectNonStandardBodyWrites &&
+      (this._hasBody === false || this.req?.method === "HEAD")
+    ) {
+      // Same rule as write() above, for end(body); a chunkless end()
+      // never throws (probed real Node v24.22.1). Thrown before
+      // `finished` is set so a retry end() still delivers.
+      throw ERR_HTTP_BODY_NOT_ALLOWED();
     }
     this.finished = true;
     if (chunk !== null && chunk !== undefined && this._hasBody !== false) {
@@ -1511,6 +1538,11 @@ export class ServerResponse extends OutgoingMessage {
     this.socket = req?.socket || new FakeSocket();
     this.connection = this.socket;
     this.statusCode = 200;
+    // Server option, forwarded at dispatch (see ServerBase): when true,
+    // body writes to a body-not-allowed response throw instead of being
+    // silently dropped (OutgoingMessage.write/end below).
+    this._rejectNonStandardBodyWrites =
+      options?.rejectNonStandardBodyWrites === true;
     // statusMessage stays undefined until writeHead (Node: prototype default).
     this.sendDate = true;
     this._resolve = null;
@@ -2084,6 +2116,18 @@ export class ServerResponse extends OutgoingMessage {
     }
     if (!this._header) {
       this._implicitHeader();
+    }
+    if (
+      chunk !== null &&
+      chunk !== undefined &&
+      this._rejectNonStandardBodyWrites &&
+      (this._hasBody === false || this.req?.method === "HEAD")
+    ) {
+      // Same rule as OutgoingMessage.write/end: end(body) to a
+      // body-not-allowed response throws when the server option is
+      // enabled (probed real Node v24.22.1); thrown before `finished`
+      // is set so a retry end() still delivers.
+      throw ERR_HTTP_BODY_NOT_ALLOWED();
     }
     this.finished = true;
     const done = () => {
@@ -4887,6 +4931,14 @@ class ServerBase extends EventEmitter {
     // the whole contract here (test-http-nodelay asserts the property
     // and the client connect options, nothing server-side).
     this.noDelay = options.noDelay == null ? true : Boolean(options.noDelay);
+    // createServer({ rejectNonStandardBodyWrites }) — probed real Node
+    // v24.22.1: only the literal `true` enables it (truthy 1 does not
+    // throw); default/false silently drops body writes to 204/304/1xx
+    // and HEAD responses. Forwarded to each ServerResponse at dispatch;
+    // when true, write()/end(body) throw ERR_HTTP_BODY_NOT_ALLOWED
+    // instead of dropping (test-http-head-throw-on-response-body-write).
+    this._rejectNonStandardBodyWrites =
+      options.rejectNonStandardBodyWrites === true;
     // createServer({ uniqueHeaders }) — same send-side-only semantics as
     // the request option (probed real Node v24.22.1); forwarded to each
     // ServerResponse at dispatch. Affects response headers (via
@@ -5834,6 +5886,7 @@ class ServerBase extends EventEmitter {
       const prevRes = state.lastResponse;
       const dropRes = new ServerResponse(req, {
         highWaterMark: this._highWaterMark,
+        rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
       });
       const dropPrevUnfinished =
         state.lastResponse && !state.lastResponse.finished;
@@ -5892,7 +5945,10 @@ class ServerBase extends EventEmitter {
       return { req, res: dropRes };
     }
 
-    const res = new ServerResponse(req, { highWaterMark: this._highWaterMark });
+    const res = new ServerResponse(req, {
+      highWaterMark: this._highWaterMark,
+      rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
+    });
     // Pipelined response (test-http-outgoing-drain-writable-length):
     // while a previous response on this socket is still unfinished,
     // real Node delivers the new response with a null socket — its
@@ -6298,7 +6354,9 @@ class ServerBase extends EventEmitter {
   async handleRequest(method, url, headers, body) {
     return new Promise((resolve, reject) => {
       const req = IncomingMessage.fromRequest(method, url, headers, body);
-      const res = new ServerResponse(req);
+      const res = new ServerResponse(req, {
+        rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
+      });
       res._setResolver(resolve);
 
       let timeoutId = null;
