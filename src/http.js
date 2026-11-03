@@ -2773,6 +2773,13 @@ export class ClientRequest extends OutgoingMessage {
   setTimeout(timeout, callback) {
     if (callback) this.once("timeout", callback);
     this.timeout = timeout;
+    // Forward to the socket when one is already assigned (real Node:
+    // req.setTimeout arms the socket idle timer; the agent-timeout path
+    // in onSocket arms it with the agent's value, and a later
+    // req.setTimeout must win — otherwise a 1ms request timeout fires
+    // at the agent's 5000ms instead). Queued requests (no socket yet)
+    // keep the stored timeout; the round-trip timer below covers them.
+    if (this.socket?.setTimeout) this.socket.setTimeout(timeout);
     return this;
   }
 
@@ -3579,6 +3586,12 @@ export class ClientRequest extends OutgoingMessage {
     const agentTimeout = this.agent?.options?.timeout;
     if (agentTimeout !== undefined && agentTimeout !== null) {
       const emitRequestTimeout = () => {
+        // Records that the request's timeout was already delivered via
+        // the socket timer, so the virtual round-trip timer below does
+        // not deliver a second one (test-http-client-timeout-event:
+        // req.setTimeout(1) + agent timeout would otherwise fire once
+        // from the socket and once from the round-trip timer).
+        request._timeoutFired = true;
         request.emit("timeout");
       };
       this.timeoutCb = emitRequestTimeout;
@@ -3810,13 +3823,23 @@ export class ClientRequest extends OutgoingMessage {
     if (this.timeout) {
       this._timeoutId = setTimeout(() => {
         this._timeoutId = null;
+        // The socket destroy below always runs: it is what unblocks a
+        // round trip to a server that never responds (no handler), letting
+        // end()'s callback fire — without it, end() to a never-responding
+        // server hangs (probed on pristine main). The 'timeout' emit is
+        // skipped only when the socket timer already delivered this
+        // request's timeout (flag set by the agent-timeout forwarder):
+        // emitting again would double-fire 'timeout' for one idle period
+        // (test-http-client-timeout-event). Requests without an agent
+        // timeout never set the flag — the socket fire is a no-op for
+        // them — so this timer remains their only 'timeout' source.
         this._aborted = true;
         try {
           sock.destroy();
         } catch {
           /* best effort */
         }
-        this.emit("timeout");
+        if (!this._timeoutFired) this.emit("timeout");
       }, this.timeout);
     }
     if (this.agent) {

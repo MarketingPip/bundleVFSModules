@@ -624,8 +624,15 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const nonDist = files.filter(
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
+    // fix/http-client-timeout-event branch: request timeout double-fire
+    // (socket forward + write re-arm guard + round-trip emit skip)
+    // (src/http.js + src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      [
+        "src/http.js",
+        "src/net.js",
+        "NOTES-http-client-timeout-event.md",
+      ].sort(),
     );
   });
 
