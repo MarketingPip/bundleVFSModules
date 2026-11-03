@@ -992,6 +992,43 @@ Object.defineProperties(Socket.prototype, {
     enumerable: true,
     configurable: true,
   },
+  writableLength: {
+    // Real Node's socket.writableLength counts bytes not yet accepted by
+    // the receiver: on a virtual socket, delivery is synchronous into
+    // the peer's readable buffer, so the stream queue alone always reads
+    // 0 — yet a peer that never reads leaves the bytes queued (probed
+    // v24.22.1: 192MB written to a paused peer still reads writableLength
+    // 201326657 after end()). Count the stream's own queue, the current
+    // request's unflushed buffer (outputData + Writable queue — only
+    // until _performRequest drains it into the round trip), and the
+    // peer's unread bytes beyond one kernel-scale receive window
+    // (131072, the recvBufferSize observed on real Node: small writes
+    // drain through it, huge ones do not — so a headers-only socket
+    // still reads 0 while a 192MB socket reads undrained). The agent's
+    // drained-only reuse veto reads this value.
+    // ponytail: the 128KiB window approximates kernel buffer accounting,
+    // it is not a protocol constant — if a future test pins an exact
+    // kernel-buffer boundary, this needs the real capacity model.
+    get() {
+      const state = this._writableState;
+      let len = state ? state.length : 0;
+      const msg = this._httpMessage;
+      if (msg) {
+        if (typeof msg.outputSize === "number") len += msg.outputSize;
+        const mstate = msg._writableState;
+        if (mstate && typeof mstate.length === "number") len += mstate.length;
+      }
+      const peer = this._peer;
+      if (peer && !peer.destroyed) {
+        const unread =
+          typeof peer.readableLength === "number" ? peer.readableLength : 0;
+        if (unread > 131072) len += unread - 131072;
+      }
+      return len;
+    },
+    enumerable: true,
+    configurable: true,
+  },
   localAddress: {
     get() {
       return this._sockname ? this._sockname.address : undefined;

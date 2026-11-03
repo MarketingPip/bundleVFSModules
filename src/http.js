@@ -3016,17 +3016,21 @@ export class ClientRequest extends OutgoingMessage {
     delete fetchOptions.headers.host;
 
     const body = Buffer.concat(this.outputData.map((e) => e.data));
+    // The body bytes are now owned by the round trip/fetch below: drain
+    // the request's buffer, mirroring real Node's flush-into-socket (so a
+    // later socket.writableLength read no longer counts bytes already
+    // handed off — the agent's drained check reads the socket, not the
+    // request's stale buffer).
+    this.outputData = [];
+    this.outputSize = 0;
     if (body.length > 0 && this.method !== "GET" && this.method !== "HEAD") {
       fetchOptions.body = body;
-    } else if (
-      (this.method === "GET" || this.method === "HEAD") &&
-      body.length > 0
-    ) {
-      throw makeError(
-        "ERR_INVALID_ARG_VALUE",
-        `Request with ${this.method} method cannot have a body.`,
-      );
     }
+    // No GET/HEAD+body throw here: real Node http sends GET bodies fine,
+    // and the loopback virtual/raw round trips below carry them like any
+    // body (test-http-agent-reuse-drained-socket-only writes 192MB on a
+    // GET). The fetch path below still throws: fetch forbids GET/HEAD
+    // bodies, and no official test covers the old early throw.
 
     // In-process loopback: a virtual server registered for this local
     // host:port answers without touching the network. This makes
@@ -3146,8 +3150,10 @@ export class ClientRequest extends OutgoingMessage {
       // queueMicrotask emission and the virtual path's waiter: the
       // request is constructed (and this branch reached) synchronously
       // inside get()/end(), before the caller can attach 'socket'
-      // listeners — a synchronous emission would be lost.
-      if (!this._aborted) {
+      // listeners — a synchronous emission would be lost. Skipped when
+      // onSocket() already emitted at assignment time.
+      if (!this._aborted && !this._socketEmitted) {
+        this._socketEmitted = true;
         const sockForEvent = assignedSock;
         queueMicrotask(() => {
           if (!this._aborted) this.emit("socket", sockForEvent);
@@ -3163,7 +3169,16 @@ export class ClientRequest extends OutgoingMessage {
 
     // Committing to the fetch path: the agent socket's errors are now
     // irrelevant (see socketErrorListener's _usingFetch guard) — fetch
-    // owns this request's outcome from here.
+    // owns this request's outcome from here. Fetch forbids GET/HEAD
+    // bodies, so the early GET+body throw lives here now (moved from
+    // above _performRequest's body build, where it wrongly rejected
+    // loopback round trips too).
+    if ((this.method === "GET" || this.method === "HEAD") && body.length > 0) {
+      throw makeError(
+        "ERR_INVALID_ARG_VALUE",
+        `Request with ${this.method} method cannot have a body.`,
+      );
+    }
     this._usingFetch = true;
     const controller = new AbortController();
     this._abortController = controller;
@@ -3187,9 +3202,13 @@ export class ClientRequest extends OutgoingMessage {
     let response;
     try {
       // Emit 'socket' with the synthetic socket, like Node does on connect.
-      queueMicrotask(() => {
-        if (!this._aborted) this.emit("socket", this.socket);
-      });
+      // Skipped when onSocket() already emitted at assignment time.
+      if (!this._socketEmitted) {
+        this._socketEmitted = true;
+        queueMicrotask(() => {
+          if (!this._aborted) this.emit("socket", this.socket);
+        });
+      }
       response = await fetchFn(fetchUrl, fetchOptions);
     } catch (err) {
       if (this._timeoutId) {
@@ -3391,6 +3410,26 @@ export class ClientRequest extends OutgoingMessage {
         socket.setTimeout(agentTimeout);
       }
     }
+    // Emit 'socket' at assignment time, like Node: the event fires while
+    // the socket is still connecting (probed v24.22.1: connecting=true,
+    // pending=true at 'socket' time), asynchronously so listeners attached
+    // after http.request() returns still catch it. Previously the virtual
+    // path emitted 'socket' only when the round trip started (at end()),
+    // so a request that defers end() until 'connect' deadlocked: no
+    // 'socket' → no 'connect' handler → no end() → no round trip
+    // (test-http-agent-reuse-drained-socket-only). _performVirtualRequest
+    // and the pending/fetch paths skip their emission once this flag is
+    // set, so 'socket' fires exactly once per request.
+    // ponytail: assignment-time emission is the Node shape; the flag is
+    // the only new state, and it retires if Node ever changes 'socket'
+    // to fire at round-trip time (it does not — the event is defined by
+    // assignment, not by the first byte).
+    if (!this._aborted && !this._socketEmitted) {
+      this._socketEmitted = true;
+      queueMicrotask(() => {
+        if (!this._aborted) this.emit("socket", socket);
+      });
+    }
     if (this._onSocketAssigned) {
       const resolve = this._onSocketAssigned;
       this._onSocketAssigned = null;
@@ -3536,16 +3575,17 @@ export class ClientRequest extends OutgoingMessage {
       });
       return;
     }
-    // The agent assigned the socket; onSocket() already set this.socket.
-    // Emit 'socket' at assignment time, like Node. A freshly created
-    // virtual socket has usually already emitted 'connect' by now
-    // (the agent's create callback runs on 'connect'), so listeners
-    // attaching a 'connect' handler inside their 'socket' handler
-    // would miss it; replay 'connect' once for exactly that case.
-    // Reused sockets never replay (their _connectedBeforeAssign flag
-    // is cleared when they are parked and when they are reused).
+    // The agent assigned the socket; onSocket() already set this.socket
+    // and scheduled the assignment-time 'socket' emission. Emit here only
+    // if that emission never happened (e.g. a socket assigned without
+    // onSocket); the connect replay below is unchanged: listeners
+    // attaching 'connect' inside 'socket' still catch an already-connected
+    // socket's replayed 'connect'.
     if (!this._aborted) {
-      this.emit("socket", sock);
+      if (!this._socketEmitted) {
+        this._socketEmitted = true;
+        this.emit("socket", sock);
+      }
       if (sock._connectedBeforeAssign) {
         sock._connectedBeforeAssign = false;
         queueMicrotask(() => {
@@ -6686,6 +6726,19 @@ class AgentBase extends EventEmitter {
   }
 
   keepSocketAlive(socket) {
+    // Drained-only reuse (test-http-agent-reuse-drained-socket-only):
+    // a socket with pending write data is never pooled. Probed on real
+    // Node v24.22.1: after the first response ends with 192MB still
+    // queued, the socket sits in agent.sockets (active, count 1), NOT
+    // in freeSockets, and is NOT destroyed — the second request gets a
+    // new socket, while a drained socket is reused. The shim's
+    // releaseSocket destroys on veto (the existing hint-veto path);
+    // the test observes only reuse, not the socket's fate, so the
+    // shared veto path serves here. The divergence (destroy vs keep)
+    // is recorded in NOTES, not papered over.
+    if (socket.writableLength > 0) {
+      return false;
+    }
     // Server keep-alive timeout hint (Node): when the last response
     // carried `Keep-Alive: timeout=N`, the socket is already expired
     // if N seconds minus this agent's buffer leaves nothing — veto
