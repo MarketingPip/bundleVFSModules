@@ -1580,7 +1580,14 @@ Socket.prototype._deliverToPeer = function _deliverToPeer(chunk, encoding, cb) {
   const peer = this._peer;
   const buf = toBytes(chunk, encoding);
   this._bytesWritten += buf ? buf.length : 0;
-  this._refreshTimeout();
+  // Writes refresh an ARMED idle timer only (probed real Node v24.22.1):
+  // once the timer has fired (its callback nulls _idleTimer), a later
+  // write must not re-arm it — otherwise a request's end() inside its
+  // own 'timeout' handler fires 'timeout' a second time
+  // (test-http-client-timeout-event expects exactly one). Reads
+  // (_receiveFromPeer) still refresh unconditionally: a post-fire read
+  // re-arms on real Node, as does an explicit setTimeout.
+  if (this._idleTimer !== null) this._refreshTimeout();
   // Async delivery ONLY while a server socket is inside its 'upgrade'
   // handler (socket._upgradeDispatch, set around the emit in
   // _dispatchSocketRequest). A synchronous push would let the peer's
