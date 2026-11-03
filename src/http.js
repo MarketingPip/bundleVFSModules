@@ -5977,6 +5977,20 @@ class ServerBase extends EventEmitter {
     res._finishDelivered = true;
     // Streaming case: headers + body were already flushed via write().
     // Just terminate the chunked stream (if used) and handle keep-alive.
+    // ponytail: non-chunked streaming responses need their pended frame
+    // flushed here too, not just chunked ones. #279 pends streaming
+    // frames for a microtask flush, but for a close-delimited (e.g.
+    // HTTP/1.0) response the finish path closes the socket before that
+    // microtask runs, so the frame was dropped and the client got EOF
+    // with zero bytes (test-http-1.0, regressed by #279). Flushing at
+    // _deliver time — after end() returns, before the keep-alive/close
+    // decision below — restores delivery without the synchronous end()
+    // flush, which broke incremental readers: flushing inside end()
+    // lets a second chunk arrive within the client's first readable
+    // callback, so read() never returns the null the test expects
+    // (test-http-readable-data-event). The chunked path is untouched.
+    // Ceiling: if a future streaming mode needs its pended frame held
+    // past _deliver, that mode needs its own flush rule.
     if (res._headerFlushed) {
       if (
         !socket.destroyed &&
@@ -5996,6 +6010,21 @@ class ServerBase extends EventEmitter {
           res._maybeEmitStreamDrain?.();
           socket.write(pending ? Buffer.concat([pending, term]) : term);
           res._chunkTerminatorSent = true;
+        } catch {
+          /* ignore */
+        }
+      } else if (!socket.destroyed && !res._chunkedStreaming) {
+        try {
+          const pending = res._pendingFrame;
+          res._pendingFrame = null;
+          if (pending) {
+            res._framedPending = Math.max(
+              0,
+              (res._framedPending || 0) - pending.length,
+            );
+            res._maybeEmitStreamDrain?.();
+            socket.write(pending);
+          }
         } catch {
           /* ignore */
         }
