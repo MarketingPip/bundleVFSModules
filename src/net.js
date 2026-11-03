@@ -980,7 +980,28 @@ Object.defineProperties(Socket.prototype, {
   },
   bytesWritten: {
     get() {
-      return this._bytesWritten;
+      // Streaming coalescing (#279) pends response frames in the
+      // message's _pendingFrame instead of writing them to the socket
+      // at once, so _bytesWritten lags until the flush runs — but the
+      // shim delivers synchronously by design, and
+      // test-http-byteswritten asserts bytesWritten > 0 mid-loop,
+      // while the frame is still pended (it passed before #279, when
+      // streaming writes went straight to the socket). Count the
+      // current response's framed-pending bytes alongside the
+      // delivered count: the dispatch stash on _httpState already
+      // tracks the live response per server socket, and framedPending
+      // drains to 0 at flush (or the stash is cleared), so the sum
+      // never double-counts. ponytail: the getter reads the stash
+      // rather than a new socket→response link; a pipelined deferred
+      // response overwrites lastResponse while its predecessor is
+      // unfinished, so the predecessor's pends are briefly invisible
+      // here — they land in _bytesWritten at its finish flush.
+      // Ceiling: if a future test reads bytesWritten mid-pipeline on
+      // a deferred socket, the stash needs per-response accounting.
+      return (
+        this._bytesWritten +
+        (this._httpState?.lastResponse?._framedPending || 0)
+      );
     },
     enumerable: true,
     configurable: true,
