@@ -624,11 +624,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const nonDist = files.filter(
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
-    // fix/http-socket-encoding-error branch: Agent.createConnection
-    // number form + HTTP server socket setEncoding throw
-    // (src/http.js + working note).
+    // fix/http-capture-rejection branch: ServerResponse destroy(err)
+    // carries the error to the socket (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "NOTES-http-socket-encoding-error.md"].sort(),
+      ["src/http.js", "NOTES-http-capture-rejection.md"].sort(),
     );
   });
 
