@@ -69,3 +69,10 @@ no throw.
   other agent test is untouched.
 - `setEncoding` on an HTTP server socket throws for ANY argument on real
   Node, so the shim's thrower ignores its argument too.
+
+## Rebase note
+
+Rebased onto main `d51b6edc` (PR #310) after the first merge attempt
+returned 409 "Head branch is out of date" despite the head's parent
+being `d51b6edc` — a GitHub merge-state stall, not a real conflict.
+This notes-only line retriggers a fresh head + CI run.
