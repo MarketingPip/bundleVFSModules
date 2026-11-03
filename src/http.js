@@ -2813,20 +2813,36 @@ export class ClientRequest extends OutgoingMessage {
     ).toLowerCase();
     const eligible =
       server &&
-      method !== "GET" &&
-      method !== "HEAD" &&
       method !== "CONNECT" &&
       upgrade !== "websocket" &&
-      (method === "POST" ||
-        method === "PUT" ||
-        method === "PATCH" ||
-        hasCL ||
-        te === "chunked");
+      ((method !== "GET" &&
+        method !== "HEAD" &&
+        (method === "POST" ||
+          method === "PUT" ||
+          method === "PATCH" ||
+          hasCL ||
+          te === "chunked")) ||
+        // ponytail: upgrade handshakes must reach the server on first
+        // write(), not at end() — the client never ends an upgraded
+        // request (it owns the socket after 101), so a buffered GET
+        // upgrade would hang forever (test-http-upgrade-client2). No
+        // other upgrade test writes before end, so this branch only
+        // newly affects upgrade requests that do. Ceiling: if a future
+        // upgrade test writes before end on a path that must stay
+        // buffered, that case needs its own eligibility carve-out.
+        upgrade !== "");
     if (!eligible) {
       this._stream = null;
       return null;
     }
-    const framing = hasCL ? "raw" : "chunked";
+    // ponytail: GET/HEAD bodies go raw on real Node (probed: no
+    // Transfer-Encoding, no chunk framing, even for upgrade GETs) —
+    // only explicit chunked TE chunks them. POST/PUT/PATCH without CL
+    // still chunk, as before.
+    const framing =
+      hasCL || ((method === "GET" || method === "HEAD") && te !== "chunked")
+        ? "raw"
+        : "chunked";
     if (framing === "chunked" && !te && !this._headersArray) {
       // Materialize chunked framing like Node does on first write.
       // This runs before _implicitHeader(), so setHeader() cannot throw.
