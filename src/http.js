@@ -5269,6 +5269,7 @@ class ServerBase extends EventEmitter {
       current: null, // { req, res } for the in-flight request
       peerEnded: false, // peer sent FIN; close once the response is out
       inFlight: 0, // dispatched requests whose response has not finished
+      dropResponse: null, // a 503 drop response still outstanding; its finish owns the socket close
       // Server timeout accounting (headersTimeout / requestTimeout /
       // keepAliveTimeout, enforced by _checkConnections polling):
       connectedAt: Date.now(),
@@ -5811,6 +5812,86 @@ class ServerBase extends EventEmitter {
       // or no callback and no 'upgrade' listener).
     }
 
+    // maxRequestsPerSocket drop (test-http-keep-alive-drop-requests):
+    // once the served count on this socket reaches the limit, further
+    // requests are NOT dispatched to 'request' listeners. Real Node
+    // (probed v24.22.1) emits 'dropRequest' with (req, socket) and
+    // answers 503 Service Unavailable with Connection: close, then
+    // closes the socket. Placed after the CONNECT/upgrade early-returns
+    // so those paths are untouched; only normal 'request' dispatches
+    // are subject to dropping. A null/undefined/0 limit means unlimited
+    // (test-http-server-keep-alive-max-requests-null).
+    const maxReq = this.maxRequestsPerSocket;
+    if (typeof maxReq === "number" && maxReq > 0 && state.reqCount >= maxReq) {
+      this.emit("dropRequest", req, socket);
+      // Answer through the normal finish machinery (not a direct socket
+      // write) so byte order holds: earlier pipelined responses serialize
+      // first via finish FIFO. A bare 503 with implicit headers frames
+      // exactly like real Node: Date, Connection: close, chunked, empty
+      // body ("0\r\n\r\n"). The dropped request does not increment the
+      // served count, and its finish owns the socket close (see the
+      // dropResponse guard in _finishSocketResponse).
+      const prevRes = state.lastResponse;
+      const dropRes = new ServerResponse(req, {
+        highWaterMark: this._highWaterMark,
+      });
+      const dropPrevUnfinished =
+        state.lastResponse && !state.lastResponse.finished;
+      if (dropPrevUnfinished) {
+        dropRes.socket = null;
+        dropRes.connection = null;
+      }
+      const dropSockHwm = socket?.writableHighWaterMark;
+      if (typeof dropSockHwm === "number" && dropRes._writableState) {
+        dropRes._writableState.highWaterMark = dropSockHwm;
+      }
+      state.lastResponse = dropRes;
+      const dropReqNo = state.reqCount;
+      dropRes.shouldKeepAlive = false;
+      dropRes._serverKeepAliveTimeout = this.keepAliveTimeout;
+      dropRes._serverMaxRequestsPerSocket = this.maxRequestsPerSocket;
+      dropRes._serverReqNo = dropReqNo;
+      dropRes[kUniqueHeaders] = this._serverUniqueHeaders;
+      dropRes._reqHadTE = /chunked/i.test(
+        String(req.headers?.te || req.headers?.TE || ""),
+      );
+      dropRes.on("finish", () => {
+        this._finishSocketResponse(
+          socket,
+          info,
+          state,
+          req,
+          dropRes,
+          dropReqNo,
+        );
+      });
+      state.inFlight++;
+      state.dropResponse = dropRes;
+      // Explicit writeHead (not a bare end()): the finish framing rules
+      // send an explicit-headers response with no length framing as
+      // chunked, which is exactly real Node's drop shape — Date,
+      // Connection: close, Transfer-Encoding: chunked, empty body. A
+      // bare end() would instead take the implicit-headers branch and
+      // frame Content-Length: 0.
+      dropRes.writeHead(503);
+      // Do not end the drop response while the previous pipelined
+      // response's stream finish is still pending: a zero-body finish
+      // fires on nextTick and would jump ahead of the previous
+      // response's microtask-delayed write callback, so the earlier
+      // response's bytes would be lost to the socket close. Waiting on
+      // the previous finish keeps byte order (earlier response, then
+      // 503) — the server's finish listener runs first (attached at
+      // dispatch), then this one ends the drop. When the previous
+      // response is already finished or destroyed, end immediately.
+      if (prevRes && !prevRes.writableFinished && !prevRes.destroyed) {
+        prevRes.once("finish", () => dropRes.end());
+      } else {
+        dropRes.end();
+      }
+      if (!info.hasBody) req._finishBody();
+      return { req, res: dropRes };
+    }
+
     const res = new ServerResponse(req, { highWaterMark: this._highWaterMark });
     // Pipelined response (test-http-outgoing-drain-writable-length):
     // while a previous response on this socket is still unfinished,
@@ -6125,6 +6206,17 @@ class ServerBase extends EventEmitter {
           }
         }
       }
+    } else if (
+      state.dropResponse &&
+      state.dropResponse !== res &&
+      !state.dropResponse.finished
+    ) {
+      // A drop (503) response is still outstanding behind this one: do
+      // not destroy the socket yet — the drop response's own finish
+      // takes this same branch and owns the close, so the 503 bytes
+      // (serialized by finish FIFO after this response) still reach the
+      // client instead of being lost to an already-destroyed socket
+      // (test-http-keep-alive-drop-requests).
     } else {
       // Not keep-alive: destroy (not just end) so both sides release their
       // loop timers and the process can exit. (end() alone leaves the
@@ -6147,6 +6239,7 @@ class ServerBase extends EventEmitter {
     // response is still the stashed one: a pipelined next request may
     // already have replaced it, and its pending frame must survive.
     if (state.lastResponse === res) state.lastResponse = null;
+    if (state.dropResponse === res) state.dropResponse = null;
   }
 
   setTimeout(msecs, callback) {
