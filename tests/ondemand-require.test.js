@@ -624,15 +624,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const nonDist = files.filter(
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
-    // fix/http-client-timeout-event branch: request timeout double-fire
-    // (socket forward + write re-arm guard + round-trip emit skip)
-    // (src/http.js + src/net.js + working note).
+    // fix/http-socket-encoding-error branch: Agent.createConnection
+    // number form + HTTP server socket setEncoding throw
+    // (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "src/http.js",
-        "src/net.js",
-        "NOTES-http-client-timeout-event.md",
-      ].sort(),
+      ["src/http.js", "NOTES-http-socket-encoding-error.md"].sort(),
     );
   });
 
