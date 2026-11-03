@@ -2620,6 +2620,12 @@ export class ClientRequest extends OutgoingMessage {
       }
       this.setHeader("Host", hostHeader);
     }
+    // Stashed for the request serializer: implicit Content-Length: 0
+    // for empty POST/PUT/PATCH bodies is a default header — it must not
+    // be added when the caller disabled default headers
+    // (test-http-dont-set-default-headers-with-set-header asserts the
+    // exact raw header list for an empty POST with defaults off).
+    this._setDefaultHeaders = options.setDefaultHeaders !== false;
     if (
       options.auth &&
       !this._headersArray &&
@@ -3839,6 +3845,7 @@ export class ClientRequest extends OutgoingMessage {
           socket: sock,
           noDefaultHost,
           insecureHTTPParser: this.insecureHTTPParser,
+          setDefaultHeaders: this._setDefaultHeaders,
           // Streaming request (started by an early write()): the head was
           // pre-serialized with its framing; body chunks arrive via the
           // writer. The round-trip promise still resolves on response
@@ -3852,6 +3859,8 @@ export class ClientRequest extends OutgoingMessage {
                   headers,
                   null,
                   noDefaultHost,
+                  true,
+                  this._setDefaultHeaders,
                 ),
                 onStreamReady: (writer) => {
                   const st = this._stream;
@@ -4703,16 +4712,26 @@ function _serializeRequestHead(
   headers,
   body,
   noDefaultHost = false,
+  // Streaming heads (pre-serialized at first write) carry no body yet:
+  // body bytes follow via the writer, so the empty-body rule below must
+  // not fire for them — a streaming POST is chunked, not zero-length.
+  bodyFollows = false,
+  // Implicit Content-Length: 0 is a default header: it is added only
+  // when default headers are enabled (ClientRequest stashes the option
+  // as _setDefaultHeaders).
+  setDefaultHeaders = true,
 ) {
   const lines = [`${method} ${path} HTTP/1.1`];
   let hasHost = false;
   let hasContentLength = false;
+  let hasTransferEncoding = false;
   let hasConnection = false;
   const push = (name, value) => lines.push(`${name}: ${value}`);
   for (const [name, value] of Object.entries(headers || {})) {
     const lower = name.toLowerCase();
     if (lower === "host") hasHost = true;
     else if (lower === "content-length") hasContentLength = true;
+    else if (lower === "transfer-encoding") hasTransferEncoding = true;
     else if (lower === "connection") hasConnection = true;
     if (Array.isArray(value)) {
       // Like Node on the wire: one header line per element.
@@ -4724,8 +4743,22 @@ function _serializeRequestHead(
   if (!hasHost && !noDefaultHost) push("Host", "localhost");
   const bodyBuf =
     body == null ? null : Buffer.isBuffer(body) ? body : Buffer.from(body);
-  if (!hasContentLength && bodyBuf && bodyBuf.length > 0) {
-    push("Content-Length", String(bodyBuf.length));
+  if (!hasContentLength && !hasTransferEncoding) {
+    if (bodyBuf && bodyBuf.length > 0) {
+      push("Content-Length", String(bodyBuf.length));
+    } else if (
+      !bodyFollows &&
+      setDefaultHeaders &&
+      (method === "POST" || method === "PUT" || method === "PATCH")
+    ) {
+      // Probed real Node v24.22.1: POST/PUT/PATCH with an empty body
+      // send `Content-Length: 0`; GET/HEAD/DELETE/OPTIONS send no
+      // length header at all. Previously the serializer added a length
+      // only for non-empty bodies, so an empty POST reached the server
+      // with no length header and the server-side assertion failed
+      // (test-http-content-length, /empty case).
+      push("Content-Length", "0");
+    }
   }
   if (!hasConnection) push("Connection", "close");
   lines.push("", "");
@@ -4770,6 +4803,10 @@ function _socketHttpRoundTrip(
     onStreamReady,
     noDefaultHost = false,
     insecureHTTPParser = false,
+    // Threaded from ClientRequest._setDefaultHeaders by the virtual
+    // path: implicit Content-Length: 0 is a default header. Other
+    // callers (emulated inbound requests) keep the default true.
+    setDefaultHeaders = true,
   },
 ) {
   return new Promise((resolve, reject) => {
@@ -4944,7 +4981,15 @@ function _socketHttpRoundTrip(
           }
         } else {
           sock.write(
-            _serializeRequestHead(method, path, headers, body, noDefaultHost),
+            _serializeRequestHead(
+              method,
+              path,
+              headers,
+              body,
+              noDefaultHost,
+              false,
+              setDefaultHeaders,
+            ),
           );
         }
       } catch (err) {
