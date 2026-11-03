@@ -109,6 +109,11 @@ const ERR_HTTP_BODY_NOT_ALLOWED = () =>
     "ERR_HTTP_BODY_NOT_ALLOWED",
     "Adding content for this request method or response status is not allowed.",
   );
+const ERR_HTTP_SOCKET_ENCODING = () =>
+  makeError(
+    "ERR_HTTP_SOCKET_ENCODING",
+    "Changing the socket encoding is not allowed per RFC7230 Section 3.",
+  );
 const ERR_HTTP_CONTENT_LENGTH_MISMATCH = (actual, expected) =>
   makeError(
     "ERR_HTTP_CONTENT_LENGTH_MISMATCH",
@@ -5532,6 +5537,14 @@ class ServerBase extends EventEmitter {
       parserFreed: false, // socket.parser.free() called (exactly once)
     };
     socket._httpState = state;
+    // Real Node installs setEncoding as an OWN property on HTTP server
+    // sockets that throws for any argument (probed v24.22.1: own property
+    // on http server sockets, absent on plain net server sockets, where
+    // setEncoding works normally). Mirrors that exactly: an own thrower
+    // here, so net sockets and client sockets keep Readable's setEncoding.
+    socket.setEncoding = () => {
+      throw ERR_HTTP_SOCKET_ENCODING();
+    };
     // Node parity: server sockets expose their HTTP parser as socket.parser
     // (real Node: the llhttp HTTPParser instance, freed exactly once at
     // socket close, after which socket.parser reads null — probed on real
@@ -6711,6 +6724,16 @@ class AgentBase extends EventEmitter {
    * onSocketError).
    */
   createConnection(options, callback) {
+    // Number form (test-http-socket-encoding-error):
+    // createConnection(port[, host][, callback]). Destructuring
+    // options.port on a number yields undefined and netConnect throws
+    // ERR_MISSING_ARGS; normalize first (a string second argument is
+    // the host, as in net.createConnection's overloads).
+    if (typeof options === "number") {
+      const host = typeof callback === "string" ? callback : undefined;
+      if (typeof callback === "string") callback = undefined;
+      options = { port: options, host };
+    }
     const socket = netConnect({
       port: options.port,
       host: options.host,
