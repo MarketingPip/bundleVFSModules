@@ -109,6 +109,11 @@ const ERR_HTTP_BODY_NOT_ALLOWED = () =>
     "ERR_HTTP_BODY_NOT_ALLOWED",
     "Adding content for this request method or response status is not allowed.",
   );
+const ERR_HTTP_CONTENT_LENGTH_MISMATCH = (actual, expected) =>
+  makeError(
+    "ERR_HTTP_CONTENT_LENGTH_MISMATCH",
+    `Response body's content-length of ${actual} byte(s) does not match the content-length of ${expected} byte(s) set in header`,
+  );
 const ERR_INVALID_ARG_TYPE = (name, expected, actual) =>
   makeError(
     "ERR_INVALID_ARG_TYPE",
@@ -197,6 +202,22 @@ function validateOutgoingChunk(chunk) {
   if (chunk === null) throw ERR_STREAM_NULL_VALUES();
   if (typeof chunk !== "string" && !(chunk instanceof Uint8Array)) {
     throw ERR_INVALID_CHUNK_TYPE(chunk);
+  }
+}
+
+// Byte length of a validated outgoing chunk (Buffer, Uint8Array, or
+// string with an optional write encoding). Used only by the strict
+// Content-Length check below.
+function _strictByteLength(chunk, encoding) {
+  if (Buffer.isBuffer(chunk)) return chunk.length;
+  if (chunk instanceof Uint8Array) return chunk.byteLength;
+  try {
+    return Buffer.byteLength(
+      chunk,
+      typeof encoding === "string" ? encoding : "utf8",
+    );
+  } catch {
+    return String(chunk).length;
   }
 }
 
@@ -922,6 +943,62 @@ export class OutgoingMessage extends Writable {
     cb(null);
   }
 
+  // Strict Content-Length accounting (probed real Node v24.22.1, both
+  // ServerResponse and ClientRequest carry the flag, default false):
+  // - The byte count is unconditional (like Node's _contentLength):
+  //   bytes written while the flag is off still count if it is turned
+  //   on later.
+  // - The check runs only when strictContentLength is truthy, an
+  //   explicit Content-Length is set (either header store: writeHead
+  //   (obj) headers live in _renderedHeaders only, while getHeader()
+  //   sees kOutHeaders only), and the framing is not chunked (a CL +
+  //   TE-chunked write never throws mismatch on real Node).
+  // - write(): prospective total > CL throws; end(): prospective total
+  //   !== CL throws, including a chunkless end with a short total.
+  // - A throw leaves the count unchanged and (in end()) runs before
+  //   `finished` is set, so a retry write/end still delivers — the
+  //   mismatch test's fewer-bytes case relies on it.
+  // - Known untested divergence: after an end() that throws for
+  //   OVERFLOW, real Node's retry end() throws again, while this
+  //   helper (overflow chunk not counted) would let a retry deliver.
+  //   No official test covers retry-after-overflow.
+  // `count` is false when the caller routes the chunk through
+  // OutgoingMessage.write right after (ServerResponse.end, buffered
+  // ClientRequest.end), which counts it once via the write check.
+  _strictCheck(len, isEnd, count = true) {
+    const prev = this._clWritten ?? 0;
+    const total = prev + len;
+    if (this.strictContentLength) {
+      let clRaw = this.getHeader("content-length");
+      if (clRaw === undefined) {
+        clRaw = (this._renderedHeaders || {})["content-length"];
+      }
+      let teRaw = this.getHeader("transfer-encoding");
+      if (teRaw === undefined) {
+        teRaw = (this._renderedHeaders || {})["transfer-encoding"];
+      }
+      const cl =
+        Array.isArray(clRaw) && clRaw.length === 1
+          ? Number(clRaw[0])
+          : Number(clRaw);
+      const teVals =
+        teRaw === undefined ? [] : Array.isArray(teRaw) ? teRaw : [teRaw];
+      const chunked =
+        this._chunkedStreaming ||
+        teVals.some((v) => /(^|[, \t])chunked([, \t]|$)/i.test(String(v)));
+      if (
+        clRaw !== undefined &&
+        Number.isFinite(cl) &&
+        cl >= 0 &&
+        !chunked &&
+        (isEnd ? total !== cl : total > cl)
+      ) {
+        throw ERR_HTTP_CONTENT_LENGTH_MISMATCH(total, cl);
+      }
+    }
+    if (count) this._clWritten = total;
+  }
+
   write(chunk, encoding, callback) {
     if (typeof encoding === "function") {
       callback = encoding;
@@ -959,6 +1036,12 @@ export class OutgoingMessage extends Writable {
       if (typeof callback === "function") queueMicrotask(callback);
       return true;
     }
+    // Strict Content-Length enforcement (probed real Node v24.22.1):
+    // with strictContentLength truthy (truthy 1 enables it too) and an
+    // explicit Content-Length, a write whose prospective total exceeds
+    // it throws ERR_HTTP_CONTENT_LENGTH_MISMATCH. The throw leaves the
+    // count unchanged, so a retry write/end still delivers.
+    this._strictCheck(_strictByteLength(chunk, encoding), false);
     // Bare OutgoingMessage (never socket-assigned, base class only):
     // real Node's OutgoingMessage is NOT a Writable — write() appends to
     // outputData/outputSize synchronously and returns false once buffered
@@ -1019,6 +1102,19 @@ export class OutgoingMessage extends Writable {
       // never throws (probed real Node v24.22.1). Thrown before
       // `finished` is set so a retry end() still delivers.
       throw ERR_HTTP_BODY_NOT_ALLOWED();
+    }
+    // Strict Content-Length (see _strictCheck): end() throws when the
+    // prospective total differs from the declared length, including a
+    // chunkless end with a short total. Dropped bodies (204/304/1xx)
+    // are not counted, mirroring write(). Thrown before `finished` is
+    // set so a retry end() still delivers.
+    if (this._hasBody !== false) {
+      this._strictCheck(
+        chunk !== null && chunk !== undefined
+          ? _strictByteLength(chunk, encoding)
+          : 0,
+        true,
+      );
     }
     this.finished = true;
     if (chunk !== null && chunk !== undefined && this._hasBody !== false) {
@@ -2129,6 +2225,21 @@ export class ServerResponse extends OutgoingMessage {
       // is set so a retry end() still delivers.
       throw ERR_HTTP_BODY_NOT_ALLOWED();
     }
+    // Strict Content-Length (see _strictCheck): end() throws when the
+    // prospective total differs from the declared length. The chunk
+    // below routes through OutgoingMessage.write, which counts it, so
+    // the check here does not count; a chunkless end counts nothing
+    // either way. Thrown before `finished` is set so a retry end()
+    // still delivers.
+    if (this._hasBody !== false) {
+      this._strictCheck(
+        chunk !== null && chunk !== undefined
+          ? _strictByteLength(chunk, encoding)
+          : 0,
+        true,
+        chunk === null || chunk === undefined,
+      );
+    }
     this.finished = true;
     const done = () => {
       this._deliver();
@@ -2701,6 +2812,23 @@ export class ClientRequest extends OutgoingMessage {
     // chunk throws without poisoning the request.
     if (chunk !== null && chunk !== undefined) {
       validateOutgoingChunk(chunk);
+    }
+    // Strict Content-Length (see _strictCheck): end() throws when the
+    // prospective total differs from the declared length. Checked
+    // before _ended is set so a retry end() still delivers. The
+    // buffered branch routes the chunk through OutgoingMessage.write,
+    // which counts it, so the check there does not count; the
+    // streaming branch forwards via _streamForward, which does not
+    // count, so the check counts it.
+    if (this._hasBody !== false) {
+      const streaming = !!(this._stream && this._stream.roundTrip);
+      this._strictCheck(
+        chunk !== null && chunk !== undefined
+          ? _strictByteLength(chunk, encoding)
+          : 0,
+        true,
+        chunk === null || chunk === undefined || streaming,
+      );
     }
     this._ended = true;
     this.finished = true;
