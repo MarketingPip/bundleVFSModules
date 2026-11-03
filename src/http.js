@@ -2155,7 +2155,18 @@ export class ServerResponse extends OutgoingMessage {
       !sock.destroyed
     ) {
       try {
-        sock.destroy();
+        // An error destroy carries the error to the socket (real Node:
+        // ServerResponse.destroy(err) destroys the server socket WITH
+        // the error, so socket 'error' fires with it and 'close' carries
+        // hadError=true). This is the path a captureRejections drain
+        // throw takes: the stream machinery routes the rejection through
+        // destroy(err), and the socket 'error' mustCall in
+        // test-http-outgoing-message-capture-rejection block 1 only fires
+        // if the socket gets the error — a graceful destroy left the
+        // socket closing cleanly, the test's server.close() never ran,
+        // and the test hung. A graceful destroy still passes no error.
+        if (err) sock.destroy(err);
+        else sock.destroy();
       } catch {
         /* best effort */
       }
