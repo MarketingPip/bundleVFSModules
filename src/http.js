@@ -2282,8 +2282,15 @@ export class ServerResponse extends OutgoingMessage {
     // is synchronous, verified by probe), and the finish listener skips
     // it via the flag. Buffered (non-flushed) responses are untouched:
     // their headers go out at finish time together with the terminator,
-    // so they are already correctly ordered.
-    if (this._headerFlushed && this._chunkedStreaming) {
+    // so they are already correctly ordered. HEAD responses never get a
+    // terminator here: real Node sends headers-only for HEAD+chunked
+    // (probed v24.22.1), and a terminator after a HEAD response parses
+    // as a new message start on the client (test-http-head-request).
+    if (
+      this._headerFlushed &&
+      this._chunkedStreaming &&
+      this.req?.method !== "HEAD"
+    ) {
       const sock = this.socket;
       if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
         try {
@@ -3959,6 +3966,33 @@ export class ClientRequest extends OutgoingMessage {
         // Streaming: the response was already emitted; propagate the error
         // to it (e.g., ECONNRESET when the server destroys the response).
         const isAbort = this._aborted;
+        if (
+          !isAbort &&
+          typeof err?.code === "string" &&
+          err.code.startsWith("HPE_")
+        ) {
+          // Parse error after the response was emitted (e.g. trailing
+          // garbage after a complete CL:0 response): real Node reports
+          // it on the REQUEST, not the response stream — the response
+          // gets 'aborted' + 'close' only, never an 'error' (emitting
+          // one with no listener would throw, and mapping the code to
+          // ECONNRESET would corrupt the parse error). Abort + close
+          // the stream, then rethrow so the request's 'error' carries
+          // the unmutated parse error (test-http-client-parse-error).
+          streamedMsg._aborted = true;
+          streamedMsg.emit("aborted");
+          try {
+            sock.destroy();
+          } catch {
+            /* best effort */
+          }
+          try {
+            streamedMsg.destroy();
+          } catch {
+            /* best effort */
+          }
+          throw err;
+        }
         if (!isAbort) {
           streamedMsg._aborted = true;
           streamedMsg.emit("aborted");
@@ -4869,13 +4903,35 @@ function _socketHttpRoundTrip(
       fn(value);
     };
     const ok = settle(resolve);
-    const fail = settle(reject);
+    // A failed round trip also drops the request's 'end' observer from
+    // the socket before the rejection propagates: real Node shows
+    // exactly one 'end' listener (the stream-internal
+    // onReadableStreamEnd) on the socket inside a request 'error'
+    // handler, while the assignment-time observer would make two
+    // (test-http-client-parse-error asserts end==1; the observer stays
+    // attached at assignment for test-http-agent-keepalive's end==2).
+    const fail = (err) => {
+      if (sock._requestEndListener) {
+        try {
+          sock.removeListener("end", sock._requestEndListener);
+        } catch {
+          /* already detached */
+        }
+        sock._requestEndListener = null;
+      }
+      settle(reject)(err);
+    };
 
     const parser = new HTTPParser("response", { insecureHTTPParser });
     // HEAD responses never have a body, regardless of framing.
     parser.isHeadResponse = method === "HEAD";
     const chunks = [];
     let info = null;
+    // Deferred completion (see onMessageComplete): set when a message
+    // completes, consumed by onData/onSockClose after the current
+    // execute()/end() returns, so a trailing parse error in the same
+    // chunk wins over the response.
+    let pendingResult = null;
     parser.onHeadersComplete = (i) => {
       info = i;
       // CONNECT responses are tunnels, not responses: real Node delivers
@@ -4960,29 +5016,53 @@ function _socketHttpRoundTrip(
       }
     };
     parser.onMessageComplete = () => {
-      ok({
-        statusCode: info.statusCode,
-        statusMessage: info.statusMessage,
-        rawHeaders: info.rawHeaders.slice(),
-        body: Buffer.concat(chunks),
-        rawTrailers: parser.rawTrailers ? parser.rawTrailers.slice() : [],
-      });
+      // Deferred, first-wins: the caller settles only after execute()
+      // returns (see onData), so a parse error in trailing bytes after
+      // a complete response (e.g. "hi world" after a CL:0 302) still
+      // surfaces as a request 'error' instead of being swallowed by an
+      // already-settled promise (test-http-client-parse-error: real
+      // Node emits BOTH 'response' and 'error' there; the shim delivers
+      // the error, which is what the test counts). A second complete
+      // message in the same chunk never overwrites the first — only a
+      // later error overrides, via fail() above.
+      if (!pendingResult) {
+        pendingResult = {
+          statusCode: info.statusCode,
+          statusMessage: info.statusMessage,
+          rawHeaders: info.rawHeaders.slice(),
+          body: Buffer.concat(chunks),
+          rawTrailers: parser.rawTrailers ? parser.rawTrailers.slice() : [],
+        };
+      }
     };
     parser.onError = (err) => {
       // Node's client socket-error shape (probed v24.22.1, mirrored from
       // the server-side clientError normalization): message "Parse
-      // Error: <llhttp reason>", code, bytesParsed, rawPacket.
-      // HPE_TRUNCATED keeps today's shape: real Node reports a truncated
-      // response as response 'aborted' + ECONNRESET, not a parse error,
-      // and that divergence is separate work (no test hinges on it).
+      // Error: <llhttp reason>", code, bytesParsed, rawPacket, reason
+      // (the llhttp reason verbatim — test-http-client-error-rawbytes
+      // asserts it; the parser sets it, this only repairs the
+      // INVALID_METHOD special case and the bare-"Parse Error" EOF
+      // shape). HPE_TRUNCATED keeps today's shape: real Node reports
+      // a truncated response as response 'aborted' + ECONNRESET, not
+      // a parse error, and that divergence is separate work (no test
+      // hinges on it).
       if (err.code !== "HPE_TRUNCATED") {
         if (err.code === "HPE_INVALID_METHOD") {
           err.message = "Parse Error: Invalid method encountered";
-        } else if (
-          typeof err.message === "string" &&
-          !err.message.startsWith("Parse Error:")
-        ) {
-          err.message = `Parse Error: ${err.message}`;
+          err.reason = "Invalid method encountered";
+        } else {
+          if (err.reason === undefined) {
+            err.reason = err.message.startsWith("Parse Error: ")
+              ? err.message.slice("Parse Error: ".length)
+              : err.message;
+          }
+          if (
+            typeof err.message === "string" &&
+            err.message !== "Parse Error" &&
+            !err.message.startsWith("Parse Error:")
+          ) {
+            err.message = `Parse Error: ${err.message}`;
+          }
         }
       }
       fail(err);
@@ -5048,6 +5128,15 @@ function _socketHttpRoundTrip(
       } catch (err) {
         fail(err);
       }
+      // Deferred completion: only now, with the whole chunk consumed,
+      // does a completed response settle — a parse error above already
+      // settled via fail(), so an error after a complete message in
+      // the same chunk correctly wins over the response.
+      if (pendingResult && !settled) {
+        const result = pendingResult;
+        pendingResult = null;
+        ok(result);
+      }
     };
     const onSockError = (err) =>
       fail(err instanceof Error ? err : new Error(String(err)));
@@ -5059,6 +5148,14 @@ function _socketHttpRoundTrip(
         parser.end();
       } catch {
         /* fall through to fail */
+      }
+      // EOF-framed completion via parser.end() records a pending result
+      // instead of settling immediately (see onMessageComplete); settle
+      // it here before the truncated-response branch below.
+      if (pendingResult && !settled) {
+        const result = pendingResult;
+        pendingResult = null;
+        ok(result);
       }
       if (!settled) {
         // No headers ever arrived (server destroyed the socket before
@@ -5728,13 +5825,27 @@ class ServerBase extends EventEmitter {
       state.receiving = false;
       // Node's clientError/socket-error shape (probed on real Node
       // v24.22.1): message "Parse Error: <llhttp reason>", code,
-      // bytesParsed, rawPacket. Only the method reason is asserted
-      // exactly by official tests; other codes keep the parser's
-      // message behind the same prefix.
+      // bytesParsed, rawPacket, reason (the llhttp reason verbatim).
+      // Only the method reason is asserted exactly by official tests;
+      // other codes keep the parser's message behind the same prefix.
+      // The parser sets reason; this only repairs the INVALID_METHOD
+      // special case and leaves the bare-"Parse Error" EOF shape
+      // (empty reason) unprefixed.
       if (err.code === "HPE_INVALID_METHOD") {
         err.message = "Parse Error: Invalid method encountered";
-      } else if (!err.message.startsWith("Parse Error:")) {
-        err.message = `Parse Error: ${err.message}`;
+        err.reason = "Invalid method encountered";
+      } else {
+        if (err.reason === undefined) {
+          err.reason = err.message.startsWith("Parse Error: ")
+            ? err.message.slice("Parse Error: ".length)
+            : err.message;
+        }
+        if (
+          err.message !== "Parse Error" &&
+          !err.message.startsWith("Parse Error:")
+        ) {
+          err.message = `Parse Error: ${err.message}`;
+        }
       }
       if (this.listenerCount("clientError") > 0) {
         // The handler owns the socket now: no automatic 400, no
@@ -6271,7 +6382,8 @@ class ServerBase extends EventEmitter {
       if (
         !socket.destroyed &&
         res._chunkedStreaming &&
-        !res._chunkTerminatorSent
+        !res._chunkTerminatorSent &&
+        req.method !== "HEAD"
       ) {
         try {
           const term = Buffer.from(res._chunkTerminator(), "latin1");
@@ -6391,9 +6503,12 @@ class ServerBase extends EventEmitter {
             body,
             Buffer.from("\r\n" + res._chunkTerminator(), "latin1"),
           ]);
-        } else if (!noBodyStatus) {
+        } else if (!noBodyStatus && req.method !== "HEAD") {
           // Send terminator only if a body is allowed. 204/304 (and 1xx)
           // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
+          // HEAD likewise gets headers-only: real Node sends no terminator
+          // for HEAD+chunked (probed v24.22.1), and one parses as a new
+          // message start on the client (test-http-head-request).
           out = headOut + res._chunkTerminator();
         } else {
           // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
