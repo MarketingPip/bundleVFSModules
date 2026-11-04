@@ -627,7 +627,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/http-capture-rejection branch: ServerResponse destroy(err)
     // carries the error to the socket (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "src/_http_parser.js", "NOTES-http-client-parse-error.md"].sort(),
+      [
+        "src/http.js",
+        "src/_http_parser.js",
+        "NOTES-http-parser-eof-overflow.md",
+      ].sort(),
     );
   });
 
