@@ -172,6 +172,19 @@ const ERR_INVALID_ARG_TYPE_PROPERTY = (name, expected, actual) => {
   err.code = "ERR_INVALID_ARG_TYPE";
   return err;
 };
+// Node's true-argument validation shape (http.request's `timeout` option
+// and ClientRequest.setTimeout's `msecs`): "argument" (not "property")
+// with the same invalidArgTypeHelper suffix (null → "Received null",
+// string → "Received type string ('x')"). The shared factory above
+// renders a plain "Received type <typeof> (<value>)" suffix, which is
+// wrong for null (real Node: "Received null", no "type object (null)").
+const ERR_INVALID_ARG_TYPE_ARGUMENT = (name, expected, actual) => {
+  const err = new TypeError(
+    `The "${name}" argument must be of type ${expected}.${_invalidArgTypeSuffix(actual)}`,
+  );
+  err.code = "ERR_INVALID_ARG_TYPE";
+  return err;
+};
 const ERR_INVALID_ARG_VALUE = (name, value, reason) =>
   makeError(
     "ERR_INVALID_ARG_VALUE",
@@ -2472,11 +2485,14 @@ function parseRequestArgs(urlOrOptions, optionsOrCallback, callback) {
 }
 
 /**
- * Remove the five request listeners onSocket() attaches at assignment
+ * Remove the six request listeners onSocket() attaches at assignment
  * (error forwarder, end observer, timeout observer, agent-timeout
- * forwarder, close untracker). Used by the CONNECT/upgrade detach paths and by the
- * agent's parking path; the stashed refs make removal exact even when a
- * listener was never attached (e.g. no agent timeout option).
+ * forwarder, close untracker, response-timeout forwarder). Used by the
+ * CONNECT/upgrade detach paths and by the agent's parking path; the
+ * stashed refs make removal exact even when a listener was never
+ * attached (e.g. no agent timeout option). The response forwarder is
+ * removed here as a backstop for responses that never end (the primary
+ * removal is the response's own 'end'/'close' handler).
  */
 function _removeRequestSocketListeners(socket) {
   if (!socket || typeof socket.removeListener !== "function") return;
@@ -2495,6 +2511,10 @@ function _removeRequestSocketListeners(socket) {
   if (socket._requestTimeoutCb) {
     socket.removeListener("timeout", socket._requestTimeoutCb);
     socket._requestTimeoutCb = null;
+  }
+  if (socket._responseTimeoutListener) {
+    socket.removeListener("timeout", socket._responseTimeoutListener);
+    socket._responseTimeoutListener = null;
   }
   if (socket._requestCloseListener) {
     socket.removeListener("close", socket._requestCloseListener);
@@ -2721,13 +2741,43 @@ export class ClientRequest extends OutgoingMessage {
     this.socketPath = options.socketPath || null;
     this.protocol = protocol;
     this.auth = options.auth;
+    // The `timeout` option is validated at construction (probed
+    // v24.22.1): non-number → ERR_INVALID_ARG_TYPE "timeout";
+    // NaN/negative/Infinity → ERR_OUT_OF_RANGE non-negative finite;
+    // floats are accepted. The option value is stashed separately
+    // because setTimeout() must never overwrite it: the option applies
+    // at socket assignment, a later setTimeout() at connect, and the
+    // two must compose (option at assignment, setTimeout at connect).
+    if (options.timeout !== undefined) {
+      if (typeof options.timeout !== "number") {
+        throw ERR_INVALID_ARG_TYPE_ARGUMENT(
+          "timeout",
+          "number",
+          options.timeout,
+        );
+      }
+      if (!(options.timeout >= 0) || !Number.isFinite(options.timeout)) {
+        throw ERR_OUT_OF_RANGE(
+          "timeout",
+          "a non-negative finite number",
+          options.timeout,
+        );
+      }
+    }
     this.timeout = options.timeout;
+    this._timeoutOption = options.timeout;
+    this._responseReceived = false;
+    this._roundTripStarted = false;
+    this._suppressDestroyError = false;
+    this._deferredTimeout = undefined;
+    this._deferredTimeoutHook = false;
     this.maxHeaderSize = options.maxHeaderSize;
     this.reusedSocket = false;
     this.aborted = false;
     this.upgradeOrConnect = false;
     this._ended = false;
     this._aborted = false;
+    this._errorEmitted = false;
     this._timeoutId = null;
     this._abortController = null;
 
@@ -2844,10 +2894,16 @@ export class ClientRequest extends OutgoingMessage {
     if (this.aborted) return;
     this.aborted = true;
     this._aborted = true;
-    // Mark graceful abort: if the request is still queued (waiting for a
-    // socket), Node emits 'abort' but NOT 'error'. This flag is only checked
-    // in the socket-waiting promise path; active requests are unaffected.
+    // Mark graceful abort for the socket error forwarder (it must not
+    // re-emit a socket error for an aborted request). Whether abort()
+    // itself errors is destroy()'s rule: a pending request errors with
+    // ECONNRESET "socket hang up", a still-queued one closes silently
+    // (both probed v24.22.1) — and an abort that lands before the round
+    // trip started (socket assigned but the request never sent, e.g.
+    // end() then abort() in the same tick) also closes silently: the
+    // request never got going, so there is nothing to hang up.
     this._abortGraceful = true;
+    this._suppressDestroyError = !this._roundTripStarted;
     queueMicrotask(() => this.emit("abort"));
     this.destroy();
   }
@@ -2866,6 +2922,48 @@ export class ClientRequest extends OutgoingMessage {
 
   // Node 24: abort() is the legacy spelling; destroy() is canonical.
   destroy(err) {
+    // Node emits ECONNRESET "socket hang up" when a request is
+    // destroyed before any response arrives (probed v24.22.1: pending,
+    // timed-out, even unsent requests all error, whether via destroy()
+    // or abort(); only a completed response avoids it). Pass it
+    // through super.destroy so the emission order is error-then-close,
+    // like a destroy(err) call. Three exceptions, all probed: (a) a
+    // request still queued in the agent (no socket yet) closes
+    // silently; (b) a request still waiting for socket assignment
+    // gets its error from that wait's rejection (via end()'s handler),
+    // so injecting here would double-fire; (c) an explicit error arg,
+    // an already-destroyed request, and one whose error already fired
+    // keep their existing outcome. The gate is error emission, NOT
+    // _aborted: the round-trip timer sets _aborted when it kills an
+    // unresponsive socket without emitting any error, and that must
+    // not suppress the destroy error (test-http-client-timeout-on-
+    // connect: timeout -> abort -> 'socket hang up').
+    if (
+      !err &&
+      !this.destroyed &&
+      !this._responseReceived &&
+      !this._errorEmitted &&
+      !this._suppressDestroyError &&
+      // A request whose custom createConnection was never invoked
+      // (no end() yet, so the shim still holds the FakeSocket
+      // placeholder) has no socket to hang up: real Node emits
+      // neither error nor close for a factory that returns undefined
+      // (probed v24.22.1 — the path-toctou shape), while a default
+      // agent or an already-assigned socket errors (probed: unsent
+      // default-agent destroy, unsent real-socket-factory destroy).
+      // Scope limit, documented: a real-socket factory destroyed
+      // before end() also skips here (the shim only invokes the
+      // factory at end() time, unlike Node's eager construction-time
+      // invocation) — no official test covers that shape.
+      !(this._createConnection && this.socket instanceof FakeSocket) &&
+      this._agentQueueName === undefined &&
+      !this._onSocketAssigned
+    ) {
+      err = new Error("socket hang up");
+      err.code = "ECONNRESET";
+      this._errorEmitted = true;
+    }
+    this._suppressDestroyError = false;
     this._aborted = true;
     if (this._abortController) {
       try {
@@ -2928,16 +3026,137 @@ export class ClientRequest extends OutgoingMessage {
     cb(err);
   }
 
+  /**
+   * Attach the request's socket-timeout listener (this.timeoutCb,
+   * probed name `emitRequestTimeout`) exactly once. Real Node attaches
+   * it at assignment whenever the request carries a timeout (agent
+   * option, timeout option, or an already-called setTimeout), and it is
+   * one-shot: after it fires, re-arming the socket timer does not
+   * re-fire the request 'timeout' (probed v24.22.1) — hence `once`,
+   * not `on`. `listeners()` unwraps once wrappers, so the
+   * `listeners[1] === request.timeoutCb` assertions still hold.
+   */
+  _ensureRequestTimeoutListener() {
+    const sock = this.socket;
+    if (
+      !sock ||
+      sock instanceof FakeSocket ||
+      typeof sock.on !== "function" ||
+      this.timeoutCb
+    ) {
+      return;
+    }
+    const request = this;
+    const emitRequestTimeout = () => {
+      // Records that the request's timeout was already delivered via
+      // the socket timer, so the virtual round-trip timer below does
+      // not deliver a second one (test-http-client-timeout-event:
+      // req.setTimeout(1) + agent timeout would otherwise fire once
+      // from the socket and once from the round-trip timer).
+      request._timeoutFired = true;
+      request.emit("timeout");
+    };
+    this.timeoutCb = emitRequestTimeout;
+    sock._requestTimeoutCb = emitRequestTimeout;
+    sock.once("timeout", emitRequestTimeout);
+  }
+
+  /**
+   * Attach the response's socket-timeout listener (probed name
+   * `responseOnTimeout`) before the user response callback runs: at
+   * response time the socket carries [onTimeout, emitRequestTimeout,
+   * responseOnTimeout] whenever a timeout exists, and [onTimeout,
+   * responseOnTimeout] even with no timeout at all (probed v24.22.1).
+   * It emits 'timeout' on the response object and never destroys: a
+   * stalled body still ends normally with complete === true. Both
+   * timeout listeners come off at response 'end' (or 'close' for
+   * abort-before-end), leaving [onTimeout] — the agent parking path
+   * removes them too, as a backstop.
+   */
+  _attachResponseTimeout(msg) {
+    const sock = this.socket;
+    if (
+      !sock ||
+      sock instanceof FakeSocket ||
+      typeof sock.on !== "function" ||
+      sock._responseTimeoutListener
+    ) {
+      return;
+    }
+    const responseOnTimeout = () => {
+      msg.emit("timeout");
+    };
+    sock._responseTimeoutListener = responseOnTimeout;
+    sock.once("timeout", responseOnTimeout);
+    // Identity-safe removal: a response's 'close' fires asynchronously
+    // AFTER 'end' (emitCloseNT), by which time a keep-alive socket may
+    // already be reused by the next request — so never remove via the
+    // mutable socket stash (that would kill the next request's
+    // listener, as the timeout-option-listeners reuse case proved).
+    // The request listener is removed only while the stash still holds
+    // THIS request's function; the response listener is removed by its
+    // own captured identity, which no later response can share.
+    const request = this;
+    const remove = () => {
+      if (request.timeoutCb && sock._requestTimeoutCb === request.timeoutCb) {
+        sock.removeListener("timeout", request.timeoutCb);
+      }
+      sock.removeListener("timeout", responseOnTimeout);
+      if (sock._responseTimeoutListener === responseOnTimeout) {
+        sock._responseTimeoutListener = null;
+      }
+    };
+    msg.once("end", remove);
+    msg.once("close", remove);
+  }
+
   setTimeout(timeout, callback) {
     if (callback) this.once("timeout", callback);
+    // Validate synchronously like Node (probed v24.22.1): a pre-connect
+    // call must throw at call time, not at connect (the socket's own
+    // setTimeout validates too, but deferral below would delay it).
+    if (typeof timeout !== "number") {
+      throw ERR_INVALID_ARG_TYPE_ARGUMENT("msecs", "number", timeout);
+    }
+    if (!(timeout >= 0) || !Number.isFinite(timeout)) {
+      throw ERR_OUT_OF_RANGE("msecs", "a non-negative finite number", timeout);
+    }
     this.timeout = timeout;
-    // Forward to the socket when one is already assigned (real Node:
-    // req.setTimeout arms the socket idle timer; the agent-timeout path
-    // in onSocket arms it with the agent's value, and a later
-    // req.setTimeout must win — otherwise a 1ms request timeout fires
-    // at the agent's 5000ms instead). Queued requests (no socket yet)
-    // keep the stored timeout; the round-trip timer below covers them.
-    if (this.socket?.setTimeout) this.socket.setTimeout(timeout);
+    // Real Node applies a pre-connect setTimeout at CONNECT, never at
+    // assignment (probed: socket.timeout still shows the option/agent
+    // value at 'socket' time, the setTimeout value only at 'connect').
+    // Forward immediately only when the socket is already connected
+    // (reused keep-alive sockets take this path); otherwise store one
+    // deferred slot and apply the latest value once, on 'connect'.
+    // Queued requests (FakeSocket placeholder, no real socket yet) just
+    // store the slot; onSocket() applies it at assignment/connect.
+    const sock = this.socket;
+    if (
+      sock &&
+      !(sock instanceof FakeSocket) &&
+      typeof sock.setTimeout === "function"
+    ) {
+      // setTimeout(0) disables the timeout (it clears the socket timer
+      // below) and attaches no request-timeout listener: after a
+      // response ends, the socket must show exactly [onTimeout]
+      // (set-timeout-after-end). A nonzero value attaches the
+      // one-shot listener the request-timeout event needs.
+      if (timeout !== 0) this._ensureRequestTimeoutListener();
+      if (sock._connected) {
+        sock.setTimeout(timeout);
+      } else {
+        this._deferredTimeout = timeout;
+        if (!this._deferredTimeoutHook) {
+          this._deferredTimeoutHook = true;
+          sock.once("connect", () => {
+            this._deferredTimeoutHook = false;
+            if (!sock.destroyed) sock.setTimeout(this._deferredTimeout);
+          });
+        }
+      }
+    } else {
+      this._deferredTimeout = timeout;
+    }
     return this;
   }
 
@@ -3010,8 +3229,10 @@ export class ClientRequest extends OutgoingMessage {
     const run = () => {
       this._performRequest().then(finish, (err) => {
         // 'error' must not throw when unhandled during perform; Node emits.
-        if (this.listenerCount("error") > 0) this.emit("error", err);
-        else this.emit("abort");
+        if (this.listenerCount("error") > 0) {
+          this._errorEmitted = true;
+          this.emit("error", err);
+        } else this.emit("abort");
       });
     };
     if (chunk !== null && chunk !== undefined) {
@@ -3627,6 +3848,7 @@ export class ClientRequest extends OutgoingMessage {
     msg.socket = this.socket;
     msg.connection = this.socket;
     msg.req = this;
+    this._responseReceived = true;
     this.emit("response", msg);
   }
 
@@ -3728,12 +3950,16 @@ export class ClientRequest extends OutgoingMessage {
     // forwarder), two 'end' listeners (stream-internal onReadableStreamEnd
     // plus the request's observer — a no-op: 'end' listeners never affect
     // flow, and a 'data' listener here would wrongly switch the socket to
-    // flowing mode), and one 'timeout' observer. When the agent has a
-    // timeout option, the request's timeoutCb is appended as the SECOND
-    // 'timeout' listener and socket.setTimeout arms the timer, so the
-    // socket reports the agent timeout (test-http-agent-timeout-option).
-    // The handlers are stashed on the socket so the agent's parking path
-    // and the CONNECT/upgrade detach paths can remove exactly these.
+    // flowing mode), and one 'timeout' observer. The request's timeout
+    // listener (this.timeoutCb) is appended as the SECOND 'timeout'
+    // listener whenever the request carries a timeout — agent option,
+    // timeout option, or an already-called setTimeout — and the timer
+    // arms in precedence order: agent value, then the request option
+    // overriding it, then a deferred setTimeout value at connect
+    // (test-http-agent-timeout-option,
+    // test-http-client-timeout-option-with-agent). The handlers are
+    // stashed on the socket so the agent's parking path and the
+    // CONNECT/upgrade detach paths can remove exactly these.
     // (test-http-agent-keepalive's checkListeners asserts error==1 and
     // end==2 at assignment, and error==1/end==1 after free.)
     const request = this;
@@ -3758,6 +3984,7 @@ export class ClientRequest extends OutgoingMessage {
       // (possibly completed) request — that would be an unhandled 'error'.
       if (socket._inFreePool) return;
       request._aborted = true;
+      request._errorEmitted = true;
       request.emit(
         "error",
         err instanceof Error ? err : new Error(String(err)),
@@ -3802,22 +4029,37 @@ export class ClientRequest extends OutgoingMessage {
     socket._requestTimeoutListener = onTimeout;
     socket._requestCloseListener = socketCloseListener;
     socket._requestTimeoutCb = null;
+    // Timeout precedence at assignment (probed v24.22.1): the agent
+    // timeout arms first, then the request timeout option overrides it
+    // (agent 50 + option 100 → socket.timeout 100, listeners
+    // [onTimeout, emitRequestTimeout] — one shared listener, never a
+    // second copy), then a pre-assignment setTimeout() value applies
+    // at connect (or now, for an already-connected reused socket).
     const agentTimeout = this.agent?.options?.timeout;
     if (agentTimeout !== undefined && agentTimeout !== null) {
-      const emitRequestTimeout = () => {
-        // Records that the request's timeout was already delivered via
-        // the socket timer, so the virtual round-trip timer below does
-        // not deliver a second one (test-http-client-timeout-event:
-        // req.setTimeout(1) + agent timeout would otherwise fire once
-        // from the socket and once from the round-trip timer).
-        request._timeoutFired = true;
-        request.emit("timeout");
-      };
-      this.timeoutCb = emitRequestTimeout;
-      socket._requestTimeoutCb = emitRequestTimeout;
-      socket.on("timeout", emitRequestTimeout);
+      this._ensureRequestTimeoutListener();
       if (typeof socket.setTimeout === "function") {
         socket.setTimeout(agentTimeout);
+      }
+    }
+    if (this._timeoutOption !== undefined) {
+      this._ensureRequestTimeoutListener();
+      if (typeof socket.setTimeout === "function") {
+        socket.setTimeout(this._timeoutOption);
+      }
+    }
+    if (this._deferredTimeout !== undefined) {
+      this._ensureRequestTimeoutListener();
+      if (socket._connected) {
+        if (typeof socket.setTimeout === "function") {
+          socket.setTimeout(this._deferredTimeout);
+        }
+      } else if (!this._deferredTimeoutHook) {
+        this._deferredTimeoutHook = true;
+        socket.once("connect", () => {
+          this._deferredTimeoutHook = false;
+          if (!socket.destroyed) socket.setTimeout(this._deferredTimeout);
+        });
       }
     }
     // test-http-parser-memory-retention + test-http-parser-free: real
@@ -4002,15 +4244,32 @@ export class ClientRequest extends OutgoingMessage {
       } catch {
         /* best effort */
       }
-      queueMicrotask(() => {
-        if (this.listenerCount("error") > 0) {
-          const err = new Error("socket hang up");
-          err.code = "ECONNRESET";
-          this.emit("error", err);
-        }
-      });
+      // Graceful abort() while waiting closes silently, like its
+      // sibling catch above (which already gates on !_abortGraceful):
+      // the request never got going, so there is nothing to hang up.
+      // A non-graceful destroy() while waiting errors here — that is
+      // also why destroy()'s own injection skips when a socket wait is
+      // pending (this wait's error is the single one) — and when the
+      // wait already resolved before destroy() ran, destroy()'s
+      // injection is the single one, so this branch also skips when
+      // _errorEmitted is already set (close-event: destroy() then the
+      // wait continuation must not emit a second ECONNRESET).
+      if (!this._abortGraceful && !this._errorEmitted) {
+        queueMicrotask(() => {
+          if (this.listenerCount("error") > 0) {
+            const err = new Error("socket hang up");
+            err.code = "ECONNRESET";
+            this.emit("error", err);
+          }
+        });
+      }
       return;
     }
+    // The round trip is committed from here: the assignment wait
+    // resolved and the request proceeds to connect/write. abort()
+    // from this point on is aborting a live request (ECONNRESET),
+    // while abort() before this point closes silently.
+    this._roundTripStarted = true;
     // The agent assigned the socket; onSocket() already set this.socket
     // and scheduled the assignment-time 'socket' emission. Emit here only
     // if that emission never happened (e.g. a socket assigned without
@@ -4174,6 +4433,13 @@ export class ClientRequest extends OutgoingMessage {
             // probed v24.22.1); the completion branch below keys off
             // this flag.
             streamedMsg._responseObserved = this.listenerCount("response") > 0;
+            // The response's socket-timeout listener goes on before the
+            // user callback runs, so response-time listener counts match
+            // real Node ([onTimeout, emitRequestTimeout,
+            // responseOnTimeout], or [onTimeout, responseOnTimeout] with
+            // no request timeout).
+            this._attachResponseTimeout(streamedMsg);
+            this._responseReceived = true;
             this.emit("response", msg);
           },
           onBody: (chunk) => {
@@ -4296,6 +4562,10 @@ export class ClientRequest extends OutgoingMessage {
         /* already detached */
       }
       this.socket._httpMessage = null;
+      // A CONNECT settles the request like a response does: the tunnel
+      // is the app's now, so a later destroy() (e.g. the socket-close
+      // hook below) must not report a hangup for it.
+      this._responseReceived = true;
       this.emit("connect", msg, this.socket, result.connectHead);
       if (
         this.listenerCount("connect") === 0 &&
@@ -4363,6 +4633,10 @@ export class ClientRequest extends OutgoingMessage {
       } catch {
         /* best effort */
       }
+      // An upgrade settles the request like a response does (see the
+      // CONNECT branch above): a later destroy() must not report a
+      // hangup for it.
+      this._responseReceived = true;
       this.emit("upgrade", msg, this.socket, result.upgradeHead);
       if (
         this.listenerCount("upgrade") === 0 &&
@@ -4538,6 +4812,10 @@ export class ClientRequest extends OutgoingMessage {
     }
     // Release the socket to the agent's pool for keep-alive reuse.
     this._releaseAgentSocket();
+    // Same response-timeout attach as the headers path above (this
+    // branch runs when headers never arrived via onHeaders).
+    this._attachResponseTimeout(msg);
+    this._responseReceived = true;
     this.emit("response", msg);
   }
 
