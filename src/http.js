@@ -194,6 +194,7 @@ const ERR_OUT_OF_RANGE = (name, range, received) =>
   makeError(
     "ERR_OUT_OF_RANGE",
     `The value of "${name}" is out of range. It must be ${range}. Received ${received}`,
+    RangeError,
   );
 const ERR_INVALID_PROTOCOL = (protocol, expected) =>
   makeError(
@@ -7510,18 +7511,29 @@ class AgentBase extends EventEmitter {
     this.maxFreeSockets = opts.maxFreeSockets || 256;
     this.scheduling = opts.scheduling || "lifo";
     if (this.scheduling !== "fifo" && this.scheduling !== "lifo") {
-      throw ERR_INVALID_ARG_VALUE(
-        "scheduling",
-        this.scheduling,
-        "must be one of: 'fifo', 'lifo'.",
+      // Real Node validates via validateOneOf, whose message differs
+      // from the generic ERR_INVALID_ARG_VALUE shape ("is invalid.",
+      // double-quoted value): "The argument 'scheduling' must be one
+      // of: 'fifo', 'lifo'. Received 'filo'".
+      const v = this.scheduling;
+      throw makeError(
+        "ERR_INVALID_ARG_VALUE",
+        `The argument 'scheduling' must be one of: 'fifo', 'lifo'. Received ${typeof v === "string" ? `'${v}'` : String(v)}`,
       );
     }
     this.maxTotalSockets = opts.maxTotalSockets;
     if (this.maxTotalSockets !== undefined) {
-      if (
-        typeof this.maxTotalSockets !== "number" ||
-        this.maxTotalSockets < 1
-      ) {
+      // Real Node: non-number → ERR_INVALID_ARG_TYPE; anything not
+      // >= 1 (incl. NaN, -Infinity) → ERR_OUT_OF_RANGE. Infinity and
+      // fractions pass (probed v24.22.1) — no integer requirement.
+      if (typeof this.maxTotalSockets !== "number") {
+        throw ERR_INVALID_ARG_TYPE_ARGUMENT(
+          "maxTotalSockets",
+          "number",
+          this.maxTotalSockets,
+        );
+      }
+      if (!(this.maxTotalSockets >= 1)) {
         throw ERR_OUT_OF_RANGE("maxTotalSockets", ">= 1", this.maxTotalSockets);
       }
     } else {
