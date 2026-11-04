@@ -635,7 +635,9 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // validation (src/http.js only).
     // fix/http-agent-lifecycle-pool branch: agent pool/release/queue/
     // signal/error lifecycle (src/http.js + src/net.js).
-    expect(nonDist.sort()).toEqual(["src/http.js", "src/net.js"].sort());
+    expect(nonDist.sort()).toEqual(
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+    );
   });
 
   test("no new function declarations added by the branch diff", () => {
