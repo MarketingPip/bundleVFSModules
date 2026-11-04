@@ -624,10 +624,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const nonDist = files.filter(
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
-    // fix/http-path-toctou branch: ERR_UNESCAPED_CHARACTERS is a TypeError
-    // (src/http.js + working note).
+    // fix/http-parser-memory-retention branch: request.parser exposure
+    // + close-time nulling (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "NOTES-http-client-path-toctou.md"].sort(),
+      ["src/http.js", "NOTES-http-parser-memory-retention.md"].sort(),
     );
   });
 
