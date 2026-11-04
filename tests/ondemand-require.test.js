@@ -639,9 +639,13 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (writeContinue/writeProcessing/writeEarlyHints/writeInformation
     // wire bytes, client 1xx routing, checkContinue/checkExpectation
     // dispatch + 417, Expect early head send) (src/http.js + note).
-    expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
-    );
+    // fix/http-outgoing-finish branch: outgoing finish family
+    // (ServerResponse.end argument normalization + finished semantics,
+    // OutgoingMessage writable/writableFinished, bare-message socket
+    // write-through, setTimeout forwarding, foreign-socket write
+    // failure propagation, drain-after-wire ordering)
+    // (src/http.js only).
+    expect(nonDist.sort()).toEqual(["src/http.js"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
