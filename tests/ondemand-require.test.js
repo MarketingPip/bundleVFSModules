@@ -633,7 +633,9 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (src/http.js only).
     // fix/http-agent-lifecycle branch: Agent scheduling/maxTotalSockets
     // validation (src/http.js only).
-    expect(nonDist.sort()).toEqual(["src/http.js"].sort());
+    // fix/http-agent-lifecycle-pool branch: agent pool/release/queue/
+    // signal/error lifecycle (src/http.js + src/net.js).
+    expect(nonDist.sort()).toEqual(["src/http.js", "src/net.js"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
