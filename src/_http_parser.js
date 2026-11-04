@@ -309,13 +309,63 @@ export class HTTPParser {
         return { text, next };
       }
     }
-    if (!skipSizeCheck && buf.length - this._headStart > this.maxHeaderSize) {
+    // No complete line yet: llhttp throws the moment its header-byte
+    // count reaches maxHeaderSize, mid-line, before the CRLF arrives
+    // (probed v24.22.1: overflow fires mid-line at exactly 16384).
+    // The count is name + trimmed-value bytes (plus the start line's
+    // target/reason), never raw line bytes with CRLFs and separators —
+    // raw counting trips on headers real Node accepts
+    // (test-http-max-http-headers test3: 16383 counted, 16410 raw).
+    if (
+      !skipSizeCheck &&
+      this._headerBytes + this._provisionalHeaderBytes() >= this.maxHeaderSize
+    ) {
       throw parseError(
         "HPE_HEADER_OVERFLOW",
         `header block exceeds maxHeaderSize of ${this.maxHeaderSize} bytes`,
       );
     }
     return null;
+  }
+
+  /**
+   * llhttp bytes contributed by the in-progress (CRLF-less) line, for
+   * the mid-line overflow check above. Start line: target (request) or
+   * reason (response) so far — method, version, and status never count
+   * (probed v24.22.1). Header/trailer line: name + value so far with
+   * leading OWS stripped (trailing OWS cannot be trimmed yet — it may
+   * be interior); a line with no colon yet contributes its whole
+   * length as name-so-far; a continuation line contributes its whole
+   * length (it appends verbatim). A trailing lone CR is a split CRLF,
+   * not content. Body states contribute nothing (chunk lines already
+   * skip the check).
+   */
+  _provisionalHeaderBytes() {
+    if (this._off >= this._buf.length) return 0;
+    let partial = this._buf.toString("latin1", this._off);
+    if (partial.endsWith("\r")) partial = partial.slice(0, -1);
+    if (partial.length === 0) return 0;
+    if (this._state === "start-line") {
+      const sp1 = partial.indexOf(" ");
+      if (sp1 < 0) return 0;
+      if (this.type === "request") {
+        const sp2 = partial.indexOf(" ", sp1 + 1);
+        return sp2 < 0 ? partial.length - sp1 - 1 : sp2 - sp1 - 1;
+      }
+      const sp2 = partial.indexOf(" ", sp1 + 1);
+      return sp2 < 0 ? 0 : partial.length - sp2 - 1;
+    }
+    if (
+      this._state === "headers" ||
+      (this._state === "body-chunked" && this._chunkState === "trailers")
+    ) {
+      if (partial[0] === " " || partial[0] === "\t") return partial.length;
+      const colon = partial.indexOf(":");
+      if (colon < 0) return partial.length;
+      const valueSoFar = partial.slice(colon + 1).replace(/^[ \t]+/, "");
+      return colon + valueSoFar.length;
+    }
+    return 0;
   }
 
   /**
@@ -389,15 +439,29 @@ export class HTTPParser {
     }
     const line = found.text;
     this._off = found.next;
-    this._headerBytes = (this._headerBytes || 0) + line.length + 2; // +CRLF
-    if (this._headerBytes > this.maxHeaderSize) {
+    // llhttp header count for the start line: target (request) or
+    // reason (response) only — method, version, and status never count
+    // (probed v24.22.1). Counted before validation, like the old raw
+    // check, so an over-limit start line still overflows before any
+    // malformation error; the check is >= (llhttp trips the moment the
+    // count reaches maxHeaderSize).
+    const sp1 = line.indexOf(" ");
+    const sp2 = sp1 < 0 ? -1 : line.indexOf(" ", sp1 + 1);
+    let startContribution = 0;
+    if (this.type === "request") {
+      startContribution =
+        sp1 < 0 ? 0 : sp2 < 0 ? line.length - sp1 - 1 : sp2 - sp1 - 1;
+    } else if (sp2 >= 0) {
+      startContribution = line.length - sp2 - 1;
+    }
+    this._headerBytes = (this._headerBytes || 0) + startContribution;
+    if (this._headerBytes >= this.maxHeaderSize) {
       throw parseError(
         "HPE_HEADER_OVERFLOW",
         `header block exceeds maxHeaderSize of ${this.maxHeaderSize} bytes`,
       );
     }
     if (this.type === "request") {
-      const sp1 = line.indexOf(" ");
       // llhttp validates the method token before anything else on the
       // line: "FOO /\r\n" (no version) and "Oopsie-doopsie\r\n" (no
       // space at all) are HPE_INVALID_METHOD, not
@@ -411,7 +475,6 @@ export class HTTPParser {
         err.bytesParsed = methodBytesParsed(method);
         throw err;
       }
-      const sp2 = sp1 < 0 ? -1 : line.indexOf(" ", sp1 + 1);
       if (sp1 < 0 || sp2 < 0) {
         throw parseError(
           "HPE_INVALID_START_LINE",
@@ -469,16 +532,34 @@ export class HTTPParser {
       if (!found) return false;
       const line = found.text;
       this._off = found.next;
-      this._headerBytes += line.length + 2; // +CRLF
-      if (this._headerBytes > this.maxHeaderSize) {
+      if (line === "") {
+        // Terminating blank line: 0 llhttp bytes (its CRLF is a
+        // separator, not content) — counted before, which pushed
+        // at-the-limit blocks over.
+        this._finishHeaders();
+        return true;
+      }
+      // llhttp header count: name + trimmed-value bytes only (no
+      // colon, no OWS, no CRLF). Computed before validation, like the
+      // old raw check, so an over-limit line still overflows before
+      // any malformation error; a line with no colon contributes its
+      // whole length as name-so-far. Checked with >= (llhttp trips the
+      // moment the count reaches maxHeaderSize).
+      const colon0 = line.indexOf(":");
+      const lineContribution =
+        colon0 < 0
+          ? line.length
+          : colon0 +
+            line
+              .slice(colon0 + 1)
+              .replace(/^[ \t]+/, "")
+              .replace(/[ \t]+$/, "").length;
+      this._headerBytes += lineContribution;
+      if (this._headerBytes >= this.maxHeaderSize) {
         throw parseError(
           "HPE_HEADER_OVERFLOW",
           `header block exceeds maxHeaderSize of ${this.maxHeaderSize} bytes`,
         );
-      }
-      if (line === "") {
-        this._finishHeaders();
-        return true;
       }
       // llhttp is byte-level: a CR inside a header line that is not part
       // of the terminating CRLF is HPE_LF_EXPECTED ("Missing expected LF
@@ -783,6 +864,16 @@ export class HTTPParser {
         .replace(/^[ \t]+/, "")
         .replace(/[ \t]+$/, "");
       this.rawTrailers.push(found.text.slice(0, colon), value);
+      // Trailers count toward the same llhttp header budget as headers
+      // (same header-field machinery), so the provisional check's base
+      // stays exact across multi-line trailer blocks.
+      this._headerBytes += colon + value.length;
+      if (this._headerBytes >= this.maxHeaderSize) {
+        throw parseError(
+          "HPE_HEADER_OVERFLOW",
+          `header block exceeds maxHeaderSize of ${this.maxHeaderSize} bytes`,
+        );
+      }
     }
     return true;
   }

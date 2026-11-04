@@ -5831,6 +5831,18 @@ class ServerBase extends EventEmitter {
       // The parser sets reason; this only repairs the INVALID_METHOD
       // special case and leaves the bare-"Parse Error" EOF shape
       // (empty reason) unprefixed.
+      // EOF mid-message on the server side: real Node reports
+      // HPE_INVALID_EOF_STATE with a bare "Parse Error" message and an
+      // empty reason (probed v24.22.1; test-http-parser-finish-error).
+      // HPE_TRUNCATED is emitted only by parser.end(), so this mapping
+      // is unambiguous; the client round trip keeps the truncation
+      // shape, and the parser-level code stays HPE_TRUNCATED (repo
+      // suite tests/http-socket.test.js asserts it).
+      if (err.code === "HPE_TRUNCATED") {
+        err.code = "HPE_INVALID_EOF_STATE";
+        err.message = "Parse Error";
+        err.reason = "";
+      }
       if (err.code === "HPE_INVALID_METHOD") {
         err.message = "Parse Error: Invalid method encountered";
         err.reason = "Invalid method encountered";
@@ -5998,7 +6010,21 @@ class ServerBase extends EventEmitter {
       state.peerEnded = true;
       if (state.inFlight === 0) {
         state.parser.unpause();
-        if (state.inFlight === 0 && !state.busy) socket.end();
+        // A peer FIN with a partial message buffered must surface as
+        // clientError, not vanish with the socket: end() fires onError
+        // for a mid-message EOF (mapped to HPE_INVALID_EOF_STATE
+        // above); a clean EOF between messages is a no-op here. The
+        // close below is guarded: if the handler destroys the socket,
+        // ending it again is a no-op, and a throwing handler must not
+        // skip the close decision. (test-http-parser-finish-error.)
+        try {
+          state.parser.end();
+        } catch {
+          /* onError owns parse failures; the close below still runs */
+        }
+        if (state.inFlight === 0 && !state.busy && !socket.destroyed) {
+          socket.end();
+        }
       }
     };
     socket.on("end", onHttpEnd);
