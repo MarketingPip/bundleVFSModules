@@ -624,12 +624,9 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const nonDist = files.filter(
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
-    // fix/http-header-value-relaxed branch: httpValidation option +
-    // request-level createConnection honoring (src/http.js +
-    // src/_http_parser.js + working note).
-    expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
-    );
+    // fix/http-insecure-raw branch: --insecure-http-parser flag default
+    // + raw-headers chunk framing/trailers (src/http.js only).
+    expect(nonDist.sort()).toEqual(["src/http.js"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
