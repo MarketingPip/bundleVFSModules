@@ -588,6 +588,20 @@ export class OutgoingMessage extends Writable {
     this.socket = null;
     this.connection = null;
     this._trailer = null;
+    // Real Node's OutgoingMessage is NOT a stream.Writable: `writable`
+    // is a plain own property that stays true through end/finish/close
+    // and even destroy (probed v24.22.1). The Writable getter flips
+    // false at end(), which breaks finish-writable assertions, so
+    // shadow it with the plain property real Node carries.
+    // ponytail: a prototype getter returning true would also work;
+    // the own property additionally matches real Node's assignable
+    // plain-property shape.
+    Object.defineProperty(this, "writable", {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: true,
+    });
   }
 
   // Buffer written chunks until the message is finished (no real socket).
@@ -618,6 +632,16 @@ export class OutgoingMessage extends Writable {
 
   get writableEnded() {
     return this.finished;
+  }
+
+  get writableFinished() {
+    // ClientRequest emits 'finish' manually when its round trip
+    // completes (see end()), never through Writable finish machinery,
+    // so the Writable finished bit is never set for it. The flag set
+    // in end()'s finish closure covers that path; every other message
+    // finishes through Writable machinery, where the bit is set before
+    // the 'finish' event (so the handler already reads true).
+    return this._outgoingFinishEmitted === true || super.writableFinished;
   }
 
   _isLenientHeaderValidation() {
@@ -1119,6 +1143,34 @@ export class OutgoingMessage extends Writable {
     // (socket null while queued) rely on Writable state for
     // writableNeedDrain/drain timing, and ClientRequest pre-connect
     // buffering relies on the _write path (#272).
+    // Bare OutgoingMessage with an assigned real socket: real Node
+    // writes straight through to the socket (no buffering, outputSize
+    // stays 0, write returns true) and end() appends the terminating
+    // empty chunk before 'finish' (probed v24.22.1). The Writable path
+    // below only buffers into outputData and never touches the socket,
+    // so bare messages never delivered. User subclasses (like the
+    // message-inheritance test's Response) share the base behavior;
+    // ServerResponse/ClientRequest have their own delivery machinery
+    // and are excluded.
+    // ponytail: writes buffered BEFORE socket assignment are not
+    // flushed on assignment (no official test covers that order).
+    if (
+      !(this instanceof ServerResponse) &&
+      !(this instanceof ClientRequest) &&
+      this.socket !== null &&
+      !this.finished &&
+      this.socket.constructor?.name !== "FakeSocket" &&
+      typeof this.socket.write === "function"
+    ) {
+      const buf = Buffer.isBuffer(chunk)
+        ? chunk
+        : typeof chunk === "string"
+          ? Buffer.from(chunk, encoding ?? undefined)
+          : Buffer.from(chunk);
+      if (typeof callback === "function") this.socket.write(buf, callback);
+      else this.socket.write(buf);
+      return true;
+    }
     if (
       this.socket === null &&
       this.constructor === OutgoingMessage &&
@@ -1180,6 +1232,30 @@ export class OutgoingMessage extends Writable {
       );
     }
     this.finished = true;
+    // Bare message with an assigned real socket (see write()): the
+    // chunk goes straight to the socket, followed by the terminating
+    // empty chunk, and only then does 'finish' fire (probed
+    // v24.22.1). Routing through super.write would buffer without
+    // ever touching the socket.
+    if (
+      !(this instanceof ServerResponse) &&
+      !(this instanceof ClientRequest) &&
+      this.socket !== null &&
+      this.socket.constructor?.name !== "FakeSocket" &&
+      typeof this.socket.write === "function"
+    ) {
+      if (chunk !== null && chunk !== undefined && this._hasBody !== false) {
+        const buf = Buffer.isBuffer(chunk)
+          ? chunk
+          : typeof chunk === "string"
+            ? Buffer.from(chunk, encoding ?? undefined)
+            : Buffer.from(chunk);
+        this.socket.write(buf);
+      }
+      this.socket.write(Buffer.alloc(0));
+      super.end(callback);
+      return this;
+    }
     if (chunk !== null && chunk !== undefined && this._hasBody !== false) {
       super.write(chunk, encoding);
     }
@@ -1337,14 +1413,48 @@ export class OutgoingMessage extends Writable {
       0,
       (this._framedPending || 0) - frame.length,
     );
-    this._maybeEmitStreamDrain();
     const sock = this.socket;
     if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
-      try {
-        sock.write(frame);
-      } catch {
-        /* socket write failed; ignore */
+      if (this._isForeignSocket()) {
+        // Foreign sockets report write failures through the callback.
+        // The queued _write callbacks fire with the outcome (see
+        // _write): on failure the error reaches the user's write
+        // callback, and the stream 'error' it triggers is swallowed
+        // (see emit) because the error is already delivered through
+        // the callbacks — real Node surfaces it only there.
+        const wCbs = this._pendingFrameCallbacks || [];
+        this._pendingFrameCallbacks = [];
+        try {
+          sock.write(frame, (err) => {
+            if (err) this._socketWriteError ??= err;
+            this._maybeEmitStreamDrain();
+            for (const cb of wCbs) {
+              if (err) {
+                (this._suppressedWriteErrors ??= new Set()).add(err);
+                cb(err);
+              } else cb();
+            }
+          });
+        } catch {
+          /* socket write threw synchronously; the frame is lost */
+          this._maybeEmitStreamDrain();
+          for (const cb of wCbs) cb();
+        }
+      } else {
+        try {
+          sock.write(frame);
+        } catch {
+          /* socket write failed; ignore */
+        }
+        // Drain AFTER the write, not before: a drain listener may
+        // end() the response, and end()'s terminator must follow this
+        // frame on the wire. Emitting first let the terminator overtake
+        // the frame (end-cork: the client saw chunk bytes before the
+        // status line and failed the parse).
+        this._maybeEmitStreamDrain();
       }
+    } else {
+      this._maybeEmitStreamDrain();
     }
   }
 
@@ -1354,8 +1464,41 @@ export class OutgoingMessage extends Writable {
     }
   }
 
+  // A socket the shim did not create: a user-supplied Duplex (server
+  // emit("connection") / request createConnection) or a real net
+  // socket. Shim sockets carry the loopback peer slot (_peer, always
+  // present on the shim's Socket class, null before pairing); user
+  // sockets never do. FakeSocket is the placeholder, never a delivery
+  // target. Foreign sockets can fail writes, so delivery to them needs
+  // callback plumbing (see _flushPendingFrame / end()); virtual
+  // sockets keep the fire-and-forget path.
+  // ponytail: if net.js ever renames _peer, foreign sockets silently
+  // fall back to the fire-and-forget path (status quo, no regression).
+  _isForeignSocket() {
+    const sock = this.socket;
+    return (
+      !!sock &&
+      sock.constructor?.name !== "FakeSocket" &&
+      sock._peer === undefined &&
+      typeof sock.write === "function"
+    );
+  }
+
   setTimeout(msecs, callback) {
     if (callback) this.once("timeout", callback);
+    // Real Node forwards to the socket: immediately when assigned, or
+    // deferred to the 'socket' event when assigned later (probed
+    // v24.22.1). The previous stub registered the callback but never
+    // forwarded, so socket.setTimeout was never called.
+    if (this.socket && typeof this.socket.setTimeout === "function") {
+      this.socket.setTimeout(msecs);
+    } else {
+      this.once("socket", (sock) => {
+        if (sock && typeof sock.setTimeout === "function") {
+          sock.setTimeout(msecs);
+        }
+      });
+    }
     return this;
   }
 
@@ -1756,6 +1899,13 @@ export class ServerResponse extends OutgoingMessage {
         /* socket write failed; ignore */
       }
     });
+    // 'finish'-emitted tracking for end(): a post-finish end() reports
+    // ERR_STREAM_ALREADY_FINISHED while a pre-finish one queues (see
+    // end()). Registered here, before any user listener, so a finish
+    // listener that calls end() already sees the flag set.
+    this.once("finish", () => {
+      this._finishEmitted = true;
+    });
     // Streaming state: once headers are flushed to the socket, writes go
     // directly instead of buffering (needed for abort/destroy tests where
     // the client must see the response before res.end()).
@@ -1853,7 +2003,11 @@ export class ServerResponse extends OutgoingMessage {
    * Flush buffered headers + body to the socket for streaming.
    * Uses chunked encoding when Content-Length isn't set (like Node).
    */
-  _flushHeaders() {
+  // onSocketError, when given, receives foreign-socket write failures
+  // (see end()'s early delivery): without it failures are ignored, as
+  // before. Only end() passes one; every other caller keeps the old
+  // fire-and-forget behavior.
+  _flushHeaders(onSocketError) {
     if (this._headerFlushed || !this._header) return;
     const sock = this.socket;
     // Only stream to real sockets, not the FakeSocket (used for non-virtual paths).
@@ -1861,8 +2015,15 @@ export class ServerResponse extends OutgoingMessage {
     if (sock.destroyed) return;
 
     const header = this._streamingHeader();
+    // A callback only when the caller wants failures: passing an
+    // undefined callback is identical to passing none, but branching
+    // keeps the hot path byte-identical for virtual sockets.
+    const write = (bytes) => {
+      if (onSocketError) sock.write(bytes, onSocketError);
+      else sock.write(bytes);
+    };
     try {
-      sock.write(header);
+      write(header);
       // Flush any data buffered before the first write().
       for (const entry of this.outputData) {
         const chunk = entry.data;
@@ -1871,7 +2032,7 @@ export class ServerResponse extends OutgoingMessage {
           // delivery events lets a naive client split-count mis-pair
           // headers and bodies (test-http-server-keep-alive-defaults
           // false-triggers its 8-part check on a bare size line).
-          sock.write(
+          write(
             Buffer.concat([
               Buffer.from(chunk.length.toString(16) + "\r\n", "latin1"),
               chunk,
@@ -1879,7 +2040,7 @@ export class ServerResponse extends OutgoingMessage {
             ]),
           );
         } else if (chunk.length > 0) {
-          sock.write(chunk);
+          write(chunk);
         }
       }
       this.outputData = [];
@@ -1921,7 +2082,19 @@ export class ServerResponse extends OutgoingMessage {
           /* ignore */
         }
       }
-      callback();
+      // Foreign sockets: the write callback fires with the flush
+      // outcome (see _flushPendingFrame); calling it now with null
+      // would report success before the socket even saw the bytes.
+      // EXCEPT empty writes: they pend no frame, so no flush is ever
+      // scheduled for them — queueing their callback deadlocks the
+      // Writable (later writes never reach _write, finish never
+      // fires). An empty write has no bytes whose outcome to await,
+      // so its callback fires immediately, as before.
+      if (this._isForeignSocket() && buf.length > 0) {
+        (this._pendingFrameCallbacks ??= []).push(callback);
+      } else {
+        callback();
+      }
       return;
     }
     // First chunk with headers already rendered (writeHead called) via
@@ -1964,7 +2137,14 @@ export class ServerResponse extends OutgoingMessage {
           /* ignore */
         }
         this._headerFlushed = true;
-        callback();
+        // Foreign sockets: see the streaming branch above — the
+        // callback waits for the flush outcome, it does not fire null
+        // before the bytes reach the socket.
+        if (this._isForeignSocket()) {
+          (this._pendingFrameCallbacks ??= []).push(callback);
+        } else {
+          callback();
+        }
         return;
       }
     }
@@ -2002,6 +2182,23 @@ export class ServerResponse extends OutgoingMessage {
   get writableNeedDrain() {
     if (this._streamNeedDrain) return true;
     return super.writableNeedDrain;
+  }
+
+  // Foreign-socket write failures are delivered through write
+  // callbacks (see _flushPendingFrame), not as stream 'error' events:
+  // real Node surfaces them only through the callbacks (plus server
+  // 'clientError'), and a test that attaches no 'error' listener would
+  // throw on an emitted 'error'. Swallow exactly the recorded failure
+  // objects; any other error still emits.
+  emit(event, ...args) {
+    if (
+      event === "error" &&
+      args.length > 0 &&
+      this._suppressedWriteErrors?.has(args[0])
+    ) {
+      return false;
+    }
+    return super.emit(event, ...args);
   }
 
   write(chunk, encoding, callback) {
@@ -2412,10 +2609,11 @@ export class ServerResponse extends OutgoingMessage {
   }
 
   end(chunk, encoding, callback) {
-    if (this.finished) {
-      if (typeof callback === "function") queueMicrotask(callback);
-      return this;
-    }
+    // Normalize BEFORE the finished check: real Node calls end(fn)
+    // after finish with fn (it reports ERR_STREAM_ALREADY_FINISHED),
+    // it does not drop it — the old order dropped chunk-as-callback
+    // and encoding-as-callback forms (end-multiple: end2/end3 and the
+    // post-finish end never fired).
     if (typeof chunk === "function") {
       callback = chunk;
       chunk = null;
@@ -2423,6 +2621,52 @@ export class ServerResponse extends OutgoingMessage {
     } else if (typeof encoding === "function") {
       callback = encoding;
       encoding = null;
+    }
+    // Sticky foreign-socket write failure (see _socketWriteError):
+    // the failure was already reported through write callbacks; end()
+    // only re-reports it, never delivers or finishes.
+    if (this._socketWriteError) {
+      if (typeof callback === "function") {
+        queueMicrotask(() => callback(this._socketWriteError));
+      }
+      if (!this.destroyed) this.destroy();
+      return this;
+    }
+    if (this.finished) {
+      if (typeof callback === "function") {
+        if (chunk === null || chunk === undefined) {
+          if (this._finishEmitted) {
+            // (c) chunkless post-finish: ERR_STREAM_ALREADY_FINISHED,
+            // no 'error' event (probed v24.22.1).
+            const er = new Error("Stream already finished");
+            er.code = "ERR_STREAM_ALREADY_FINISHED";
+            queueMicrotask(() => callback(er));
+          } else {
+            // (a) chunkless pre-finish: queue at finish, called with
+            // null before the 'finish' event (Writable onFinished).
+            // Routes through OutgoingMessage.end so validation and
+            // the finished flag stay consistent.
+            super.end(callback);
+          }
+        } else {
+          // (b)/(d) chunk end: always ERR_STREAM_WRITE_AFTER_END;
+          // the 'error' event fires only pre-finish (b), after the
+          // finish event, callback first (probed v24.22.1).
+          const er = new Error("write after end");
+          er.code = "ERR_STREAM_WRITE_AFTER_END";
+          if (this._finishEmitted) {
+            queueMicrotask(() => callback(er));
+          } else {
+            this.once("finish", () => {
+              queueMicrotask(() => {
+                callback(er);
+                this.emit("error", er);
+              });
+            });
+          }
+        }
+      }
+      return this;
     }
     // Validate before finished=true (see OutgoingMessage.end): a bad
     // chunk throws without poisoning `finished`, so a retry end() still
@@ -2462,16 +2706,56 @@ export class ServerResponse extends OutgoingMessage {
     }
     this.finished = true;
     const done = () => {
+      // The flag check comes first: on the foreign-failure path the
+      // end callback already fired from the flush handler (below) or
+      // the _write wrapper, and destroy() may still invoke done — it
+      // must not fire the callback twice or re-deliver.
+      if (this._endCallbackFired) return;
+      this._endCallbackFired = true;
       this._deliver();
       // NOTE: no manual 'finish' emit — Writable emits it exactly once via
       // super.end() below, matching node:http. (A manual emit here used to
       // double-fire 'finish' for on('finish') consumers.)
-      if (callback) callback();
+      if (callback) {
+        if (this._socketWriteError) callback(this._socketWriteError);
+        else callback();
+      }
     };
     if (chunk !== null && chunk !== undefined) {
-      super.write(chunk, encoding, () => super.end(done));
+      super.write(chunk, encoding, () => {
+        if (this._socketWriteError) {
+          if (callback && !this._endCallbackFired) {
+            this._endCallbackFired = true;
+            callback(this._socketWriteError);
+          }
+          if (!this.destroyed) this.destroy();
+        } else super.end(done);
+      });
     } else {
       super.end(done);
+    }
+    // Foreign-socket early delivery (dispatch-created responses
+    // only): a foreign socket can fail, and finish-time delivery (via
+    // _finishSocketResponse) is too late — the end callback and
+    // 'finish' would already have fired with success. Delivering here,
+    // before finish is scheduled, lets a failure divert to the error
+    // path instead. Virtual sockets keep finish-time delivery (a
+    // synchronous end flush broke incremental readers — see
+    // _finishSocketResponse's #279 note). Gated on _serverReqNo:
+    // standalone responses (no dispatch) keep finish-time delivery
+    // via their own listener, which sends headers + body as ONE
+    // write — _flushHeaders sends them as separate writes, and a
+    // standalone test asserts the first write ends with the body.
+    // ponytail: a FAILING standalone foreign socket is not reported
+    // (finish-time delivery ignores it) — no official test covers it.
+    if (
+      this._isForeignSocket() &&
+      this._serverReqNo !== undefined &&
+      !this._headerFlushed
+    ) {
+      this._flushHeaders((err) => {
+        if (err) this._socketWriteError ??= err;
+      });
     }
     // Chunked terminator ordering (test-http-server-keep-alive-defaults):
     // in the streaming path the headers + chunks already went out during
@@ -2510,13 +2794,41 @@ export class ServerResponse extends OutgoingMessage {
               (this._framedPending || 0) - pending.length,
             );
           }
-          this._maybeEmitStreamDrain();
-          sock.write(pending ? Buffer.concat([pending, term]) : term);
+          const bytes = pending ? Buffer.concat([pending, term]) : term;
+          // Foreign sockets: capture a terminator-write failure so the
+          // sticky check below can divert to the error path.
+          if (this._isForeignSocket()) {
+            sock.write(bytes, (err) => {
+              if (err) this._socketWriteError ??= err;
+            });
+          } else {
+            sock.write(bytes);
+          }
           this._chunkTerminatorSent = true;
+          // Drain after the write (see _flushPendingFrame).
+          this._maybeEmitStreamDrain();
+          // The tail just delivered every pended frame, so their
+          // queued _write callbacks (foreign only — virtual callbacks
+          // already ran synchronously) fire now: plain writes with
+          // null (their bytes went out), the end-chunk wrapper via
+          // its sticky check (see above).
+          const queued = this._pendingFrameCallbacks || [];
+          this._pendingFrameCallbacks = [];
+          for (const cb of queued) cb();
         } catch {
           /* socket write failed; finish listener skips destroyed sockets */
         }
       }
+    }
+    // A failure the early delivery just learned about: report it
+    // through the end callback and close, never through finish.
+    if (this._socketWriteError) {
+      if (callback && !this._endCallbackFired) {
+        this._endCallbackFired = true;
+        queueMicrotask(() => callback(this._socketWriteError));
+      }
+      if (!this.destroyed) this.destroy();
+      return this;
     }
     return this;
   }
@@ -3039,6 +3351,14 @@ export class ClientRequest extends OutgoingMessage {
 
   // Node 24: abort() is the legacy spelling; destroy() is canonical.
   destroy(err) {
+    // Teardown-initiated failure (see run()): a later round-trip
+    // rejection from this teardown must not report through the end
+    // callback — the request was torn down, not failed on flush.
+    this._abortSwallow = true;
+    // Deferred write callbacks (see write()) must still fire: before
+    // this change they already fired null at write() time, so firing
+    // null at teardown preserves the observable value.
+    this._flushDeferredWriteCallbacks(null);
     // Node emits ECONNRESET "socket hang up" when a request is
     // destroyed before any response arrives (probed v24.22.1: pending,
     // timed-out, even unsent requests all error, whether via destroy()
@@ -3307,10 +3627,9 @@ export class ClientRequest extends OutgoingMessage {
   }
 
   end(chunk, encoding, callback) {
-    if (this._ended) {
-      if (typeof callback === "function") queueMicrotask(callback);
-      return this;
-    }
+    // Normalize BEFORE the _ended check, like ServerResponse.end:
+    // end(fn) after end must still call fn, not drop it (the second
+    // end() in the write-failure test passes its callback this way).
     if (typeof chunk === "function") {
       callback = chunk;
       chunk = null;
@@ -3318,6 +3637,20 @@ export class ClientRequest extends OutgoingMessage {
     } else if (typeof encoding === "function") {
       callback = encoding;
       encoding = null;
+    }
+    // Replay a sticky flush failure (see run()): a second end() after
+    // a failed flush reports the SAME error object (probed v24.22.1).
+    // Checked before the _ended early-return: after a failure the
+    // request already ended, but the replay must still fire.
+    if (this._flushError) {
+      if (typeof callback === "function") {
+        queueMicrotask(() => callback(this._flushError));
+      }
+      return this;
+    }
+    if (this._ended) {
+      if (typeof callback === "function") queueMicrotask(callback);
+      return this;
     }
     // Validate before _ended=true (see OutgoingMessage.end): a bad
     // chunk throws without poisoning the request.
@@ -3344,16 +3677,45 @@ export class ClientRequest extends OutgoingMessage {
     this._ended = true;
     this.finished = true;
     const finish = () => {
+      this._flushDeferredWriteCallbacks(null);
+      // Real Node's ClientRequest finishes through Writable machinery,
+      // whose finished bit is already set when finish callbacks run;
+      // the shim emits finish manually (no Writable finish bit), so
+      // set the flag before the callbacks (see writableFinished).
+      this._outgoingFinishEmitted = true;
       if (callback) callback();
       this.emit("finish");
     };
     const run = () => {
       this._performRequest().then(finish, (err) => {
-        // 'error' must not throw when unhandled during perform; Node emits.
-        if (this.listenerCount("error") > 0) {
+        // The socket error forwarder may already have emitted this
+        // error; never emit twice (a second emission breaks mustCall
+        // counts for the write-failure test).
+        if (!this._errorEmitted && this.listenerCount("error") > 0) {
           this._errorEmitted = true;
           this.emit("error", err);
-        } else this.emit("abort");
+        } else if (!this._errorEmitted) this.emit("abort");
+        // A socket write failure (not a teardown-initiated failure)
+        // is also the end callback's error, and it sticks for a
+        // second end() (probed v24.22.1). Teardown-initiated failures
+        // keep the old behavior (no end callback). Gated on
+        // _errorEmitted: the socket error forwarder sets it, so this
+        // runs only for genuine socket failures. Ungated, a
+        // non-socket rejection (server closed, unvalidated early
+        // hints) would get an end callback it never had AND a
+        // destroy() that synthesizes a "socket hang up" error
+        // _destroy only skips when _errorEmitted is already true.
+        if (!this._abortSwallow && this._errorEmitted) {
+          this._flushDeferredWriteCallbacks(err);
+          this._flushError = err;
+          if (callback) callback(err);
+          // A failed request still closes (probed v24.22.1: 'close'
+          // with writableFinished false). Without this the request
+          // never closes: the rejection path emits no 'finish', and
+          // no finish means no autoDestroy close. The error already
+          // fired, so destroy() adds no second emission.
+          if (!this.destroyed) this.destroy();
+        }
       });
     };
     if (chunk !== null && chunk !== undefined) {
@@ -3394,7 +3756,38 @@ export class ClientRequest extends OutgoingMessage {
     // sent via _implicitHeader(), and setHeader() throws after that —
     // the chunked framing header must be set while headers are open.
     if (!this._ended && !this._aborted) this._streamEnsureStarted();
-    const ret = super.write(chunk, encoding, callback);
+    // Defer user write callbacks to round-trip settlement (see end())
+    // ONLY for request-level custom connections: the buffered path
+    // calls back null at write() time, before the socket ever saw the
+    // bytes, so a socket write failure could never reach the callback
+    // — real Node reports it there. Narrowed to custom connections on
+    // purpose: streaming requests (virtual servers) and the fetch path
+    // chain further writes inside write callbacks (write-callbacks:
+    // write → cb → write → end), and deferring those deadlocks — the
+    // callback that would trigger end() waits for the settlement that
+    // end() would start. Custom-connection requests never stream (the
+    // stream decision requires a virtual server), so no chain can
+    // deadlock here. The machinery still gets a noop so Writable
+    // accounting is unchanged.
+    if (typeof encoding === "function") {
+      callback = encoding;
+      encoding = null;
+    }
+    let cb = callback;
+    // Writes after end (or after a sticky flush failure) are not
+    // deferred: the Writable machinery reports them (write-after-end /
+    // destroyed errors) directly, and no settlement will ever flush a
+    // callback stashed now.
+    if (
+      typeof cb === "function" &&
+      !this._ended &&
+      !this._flushError &&
+      typeof this._createConnection === "function"
+    ) {
+      (this._deferredWriteCallbacks ??= []).push(cb);
+      cb = () => {};
+    }
+    const ret = super.write(chunk, encoding, cb);
     if (!this._ended && !this._aborted) {
       this._streamForward(
         chunk,
@@ -3402,6 +3795,15 @@ export class ClientRequest extends OutgoingMessage {
       );
     }
     return ret;
+  }
+
+  // Fire deferred write callbacks (see write()) with the round-trip
+  // outcome: null on success, the failure on error. Take-and-clear, so
+  // a later destroy() or second settlement cannot double-fire them.
+  _flushDeferredWriteCallbacks(err) {
+    const cbs = this._deferredWriteCallbacks || [];
+    this._deferredWriteCallbacks = [];
+    for (const cb of cbs) cb(err);
   }
 
   flushHeaders() {
@@ -4311,9 +4713,7 @@ export class ClientRequest extends OutgoingMessage {
       !this._aborted &&
       this._stream === undefined &&
       (this.getHeader("expect") !== undefined ||
-        this._headersArray?.some(
-          ([n]) => String(n).toLowerCase() === "expect",
-        ))
+        this._headersArray?.some(([n]) => String(n).toLowerCase() === "expect"))
     ) {
       this._streamEnsureStarted();
     }
@@ -4583,6 +4983,10 @@ export class ClientRequest extends OutgoingMessage {
         // timeout never set the flag — the socket fire is a no-op for
         // them — so this timer remains their only 'timeout' source.
         this._aborted = true;
+        // Teardown-initiated failure (see run()): the round-trip
+        // rejection from this timeout keeps the old swallow behavior
+        // (no end callback), unlike a socket write failure.
+        this._abortSwallow = true;
         try {
           sock.destroy();
         } catch {
@@ -4807,7 +5211,7 @@ export class ClientRequest extends OutgoingMessage {
         }
         return;
       }
-      if (this._aborted) return;
+      if (this._aborted && this._abortSwallow) return;
       // A failed round trip kills the connection on real Node (a parse
       // error destroys the socket); leaving it open hangs the loop, since
       // the peer never closes a socket it already answered on
@@ -5922,7 +6326,11 @@ function _socketHttpRoundTrip(
       // later error overrides, via fail() above.
       // Interim messages complete without settling the round trip: the
       // deferred result must describe the FINAL response, not a 1xx.
-      if (info.statusCode >= 100 && info.statusCode <= 199 && info.statusCode !== 101) {
+      if (
+        info.statusCode >= 100 &&
+        info.statusCode <= 199 &&
+        info.statusCode !== 101
+      ) {
         return;
       }
       if (!pendingResult) {
@@ -7431,14 +7839,7 @@ class ServerBase extends EventEmitter {
         String(req.headers?.te || req.headers?.TE || ""),
       );
       res417.on("finish", () => {
-        this._finishSocketResponse(
-          socket,
-          info,
-          state,
-          req,
-          res417,
-          reqNo417,
-        );
+        this._finishSocketResponse(socket, info, state, req, res417, reqNo417);
       });
       state.inFlight++;
       res417.writeHead(417);
