@@ -624,14 +624,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const nonDist = files.filter(
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
-    // fix/http-capture-rejection branch: ServerResponse destroy(err)
-    // carries the error to the socket (src/http.js + working note).
+    // fix/http-path-toctou branch: ERR_UNESCAPED_CHARACTERS is a TypeError
+    // (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "src/http.js",
-        "src/_http_parser.js",
-        "NOTES-http-parser-eof-overflow.md",
-      ].sort(),
+      ["src/http.js", "NOTES-http-client-path-toctou.md"].sort(),
     );
   });
 

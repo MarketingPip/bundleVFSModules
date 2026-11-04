@@ -169,6 +169,7 @@ const ERR_UNESCAPED_CHARACTERS = (what) =>
   makeError(
     "ERR_UNESCAPED_CHARACTERS",
     `${what} contains unescaped characters`,
+    TypeError,
   );
 
 // Chunk validation for OutgoingMessage.write()/end(), mirroring Node's
