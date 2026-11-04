@@ -626,9 +626,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     );
     // fix/http-insecure-raw branch: --insecure-http-parser flag default
     // + raw-headers chunk framing/trailers (src/http.js only).
-    expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
-    );
+    // fix/http-timeout-option branch: client timeout-option family
+    // (timeout option validation + assignment-time precedence + one-shot
+    // request/response timeout listeners + pre-connect setTimeout
+    // deferral + destroy/abort ECONNRESET for pending requests)
+    // (src/http.js only).
+    expect(nonDist.sort()).toEqual(["src/http.js"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
