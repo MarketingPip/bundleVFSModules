@@ -55,6 +55,28 @@ const RT =
 // runtime provides an emitter, silently skip otherwise.
 const emitEvent = RT?.emit;
 
+// ponytail: process-wide --insecure-http-parser default, read lazily at
+// server/client construction (not module scope: the flag lives on the
+// host process, and the sandbox's cloaked process only exists after this
+// module loads). Real Node (probed v24.22.1): the flag is a DEFAULT that
+// any explicit insecureHTTPParser/httpValidation option overrides
+// (explicit false/strict under the flag stays strict), and it enables
+// the FULL lenient set (obs-fold + header-value chars, server and
+// client sides). A browser deployment has no CLI flags, so the default
+// is strict there. Deliberately NOT imported from ./process.js: that
+// module installs its shim as globalThis.process, which would trip the
+// parity harness's global-leak detector and change common's exit
+// handling for every http test — the host process is still intact when
+// servers/clients are constructed in this lane.
+function _insecureHttpParserFlag() {
+  const p = typeof globalThis !== "undefined" ? globalThis.process : undefined;
+  return (
+    !!p &&
+    Array.isArray(p.execArgv) &&
+    p.execArgv.includes("--insecure-http-parser")
+  );
+}
+
 // Save the native WebSocket at module load time, BEFORE any bundled CLI can
 // overwrite it (e.g. Convex CLI does `globalThis.WebSocket = bundledWs`).
 // No `window` reference: globalThis keeps this worker-loadable.
@@ -1212,7 +1234,19 @@ export class OutgoingMessage extends Writable {
    */
   _chunkTerminator() {
     const t = this._trailer;
-    if (!t || typeof t !== "object" || Array.isArray(t)) return "0\r\n\r\n";
+    if (!t || typeof t !== "object") return "0\r\n\r\n";
+    // Array form: addTrailers([[name, value], ...]) — the form
+    // test-http-raw-headers uses (repeated trailer names, order kept).
+    // One line per pair, verbatim casing and order.
+    if (Array.isArray(t)) {
+      const lines = [];
+      for (const pair of t) {
+        if (Array.isArray(pair) && pair.length >= 2) {
+          lines.push(`${pair[0]}: ${String(pair[1])}\r\n`);
+        }
+      }
+      return lines.length === 0 ? "0\r\n\r\n" : `0\r\n${lines.join("")}\r\n`;
+    }
     const lines = [];
     for (const [name, value] of Object.entries(t)) {
       if (Array.isArray(value)) {
@@ -2518,7 +2552,11 @@ export class ClientRequest extends OutgoingMessage {
         options.insecureHTTPParser,
       );
     }
-    this.insecureHTTPParser = options.insecureHTTPParser === true;
+    this.insecureHTTPParser =
+      options.insecureHTTPParser === true ||
+      (options.httpValidation === undefined &&
+        options.insecureHTTPParser === undefined &&
+        _insecureHttpParserFlag());
 
     // httpValidation: 'strict' | 'relaxed' | 'insecure' (probed
     // v24.22.1): unknown values throw ERR_INVALID_ARG_VALUE, and
@@ -3898,7 +3936,7 @@ export class ClientRequest extends OutgoingMessage {
         (k) => k.toLowerCase() === "connection",
       );
       if (!hasConnection) {
-        headers = { ...(headers || {}), connection: "keep-alive" };
+        headers = { ...(headers || {}), Connection: "keep-alive" };
       }
     }
 
@@ -4077,6 +4115,9 @@ export class ClientRequest extends OutgoingMessage {
           insecureHTTPParser: this.insecureHTTPParser,
           parser: this.parser,
           setDefaultHeaders: this._setDefaultHeaders,
+          // Request trailers ride the chunked terminator (rendered here
+          // so _serializeRequestHead needs no trailer knowledge).
+          chunkedTerminator: this._chunkTerminator(),
           // Streaming request (started by an early write()): the head was
           // pre-serialized with its framing; body chunks arrive via the
           // writer. The round-trip promise still resolves on response
@@ -4978,19 +5019,27 @@ function _serializeRequestHead(
   // when default headers are enabled (ClientRequest stashes the option
   // as _setDefaultHeaders).
   setDefaultHeaders = true,
+  // Chunked-request terminator (bare "0\r\n\r\n", or with request
+  // trailers when the caller renders them via _chunkTerminator).
+  chunkedTerminator = "0\r\n\r\n",
 ) {
   const lines = [`${method} ${path} HTTP/1.1`];
   let hasHost = false;
   let hasContentLength = false;
   let hasTransferEncoding = false;
+  let transferEncodingValue = "";
   let hasConnection = false;
   const push = (name, value) => lines.push(`${name}: ${value}`);
   for (const [name, value] of Object.entries(headers || {})) {
     const lower = name.toLowerCase();
     if (lower === "host") hasHost = true;
     else if (lower === "content-length") hasContentLength = true;
-    else if (lower === "transfer-encoding") hasTransferEncoding = true;
-    else if (lower === "connection") hasConnection = true;
+    else if (lower === "transfer-encoding") {
+      hasTransferEncoding = true;
+      transferEncodingValue = Array.isArray(value)
+        ? value.join(", ")
+        : String(value);
+    } else if (lower === "connection") hasConnection = true;
     if (Array.isArray(value)) {
       // Like Node on the wire: one header line per element.
       for (const v of value) push(name, v);
@@ -5021,6 +5070,31 @@ function _serializeRequestHead(
   if (!hasConnection) push("Connection", "close");
   lines.push("", "");
   const head = Buffer.from(lines.join("\r\n"));
+  // Chunked request framing (test-http-raw-headers): a BUFFERED request
+  // carrying Transfer-Encoding: chunked must frame its body — previously
+  // the body was appended raw, so the server's chunked parser waited
+  // forever and req 'end' never fired. Streaming heads (bodyFollows)
+  // are excluded: their terminator is written by the streaming end
+  // path (_chunkTerminator), and appending one here would end the
+  // request before its body frames arrive (desync + socket destroy).
+  // The terminator (with request trailers, when the caller renders them
+  // via _chunkTerminator) rides along; an empty chunked body still sends
+  // the terminator alone. Non-chunked TE keeps the raw append.
+  if (
+    !bodyFollows &&
+    hasTransferEncoding &&
+    /\bchunked\b/i.test(transferEncodingValue)
+  ) {
+    if (bodyBuf && bodyBuf.length > 0) {
+      return Buffer.concat([
+        head,
+        Buffer.from(`${bodyBuf.length.toString(16)}\r\n`, "latin1"),
+        bodyBuf,
+        Buffer.from(`\r\n${chunkedTerminator}`, "latin1"),
+      ]);
+    }
+    return Buffer.concat([head, Buffer.from(chunkedTerminator, "latin1")]);
+  }
   return bodyBuf && bodyBuf.length > 0 ? Buffer.concat([head, bodyBuf]) : head;
 }
 
@@ -5069,6 +5143,9 @@ function _socketHttpRoundTrip(
     // path: implicit Content-Length: 0 is a default header. Other
     // callers (emulated inbound requests) keep the default true.
     setDefaultHeaders = true,
+    // Rendered chunked-request terminator from the caller (includes
+    // request trailers when set via addTrailers); default is bare.
+    chunkedTerminator = "0\r\n\r\n",
   },
 ) {
   return new Promise((resolve, reject) => {
@@ -5298,6 +5375,7 @@ function _socketHttpRoundTrip(
               noDefaultHost,
               false,
               setDefaultHeaders,
+              chunkedTerminator,
             ),
           );
         }
@@ -5478,10 +5556,16 @@ class ServerBase extends EventEmitter {
     this._lenientHeaderValidation =
       options.httpValidation === "relaxed" ||
       options.httpValidation === "insecure" ||
-      options.insecureHTTPParser === true;
+      options.insecureHTTPParser === true ||
+      (options.httpValidation === undefined &&
+        options.insecureHTTPParser === undefined &&
+        _insecureHttpParserFlag());
     this._insecureParser =
       options.httpValidation === "insecure" ||
-      options.insecureHTTPParser === true;
+      options.insecureHTTPParser === true ||
+      (options.httpValidation === undefined &&
+        options.insecureHTTPParser === undefined &&
+        _insecureHttpParserFlag());
     this.timeout = 0;
     this.headersTimeout = options.headersTimeout ?? 60000;
     this.requestTimeout = options.requestTimeout ?? 300000;
@@ -5784,7 +5868,7 @@ class ServerBase extends EventEmitter {
           }
           continue;
         }
-        if (state.idleSince !== null) {
+        if (state.idleSince !== null && !state.hasSocketTimeout) {
           if (
             this.keepAliveTimeout > 0 &&
             now - state.idleSince > this.keepAliveTimeout
@@ -5866,6 +5950,8 @@ class ServerBase extends EventEmitter {
       requestStart: 0, // first byte of the current request
       headersDone: false, // current request's headers are complete
       idleSince: null, // set when a response finishes and the socket idles
+      hasSocketTimeout: false, // server.setTimeout applied at connect (below)
+      idleTimer: null, // prompt keepAliveTimeout close (see _finishSocketResponse)
       upgraded: false, // connection upgraded; HTTP timeouts no longer apply
       connect: false, // CONNECT tunnel; no response pending, peer FIN ends it
       timedOut: false, // a 408 was already sent on this socket
@@ -5971,6 +6057,10 @@ class ServerBase extends EventEmitter {
       parser.onMessageStart = null;
       parser.onError = null;
       state.parser = null;
+      if (state.idleTimer) {
+        clearTimeout(state.idleTimer);
+        state.idleTimer = null;
+      }
       // Same release as _finishSocketResponse below: the dispatch stash
       // pins res -> req, and the peer link survives a graceful FIN.
       state.lastResponse = null;
@@ -5992,6 +6082,11 @@ class ServerBase extends EventEmitter {
     // timer (net.js refreshes it on every received chunk).
     if (typeof socket.setTimeout === "function" && this.timeout > 0) {
       socket.setTimeout(this.timeout);
+      // A server socket timeout owns idle sockets (probed v24.22.1:
+      // keepAliveTimeout=50 + setTimeout(500) fires 'timeout' at 500ms,
+      // no destroy at 50ms) — so the keepAlive destroy paths below
+      // (prompt timer + checker backstop) must not fire for it.
+      state.hasSocketTimeout = true;
     }
     const onHttpTimeout = () => {
       this.emit("timeout", socket);
@@ -6016,6 +6111,10 @@ class ServerBase extends EventEmitter {
       state.requestStart = Date.now();
       state.headersDone = false;
       state.idleSince = null;
+      if (state.idleTimer) {
+        clearTimeout(state.idleTimer);
+        state.idleTimer = null;
+      }
     };
     parser.onHeadersComplete = (info) => {
       state.busy = true;
@@ -6700,13 +6799,28 @@ class ServerBase extends EventEmitter {
         rendered["content-length"] !== undefined;
       const hasTE = res.hasHeader("transfer-encoding");
       const isHttp10 = res._reqHttpVersion === "1.0";
+      // A Trailer header forces chunked framing (probed v24.22.1: Trailer
+      // + end(body) with no CL/TE frames chunked, terminator carrying
+      // the trailers). addTrailers WITHOUT the header keeps
+      // Content-Length and drops the trailers, so only the header
+      // triggers this. The header lives in either store (setHeader vs
+      // writeHead(obj)), like Content-Length above.
+      const hasTrailerHeader =
+        res.hasHeader("trailer") || rendered["trailer"] !== undefined;
       // Node frames with Content-Length only when the header block was
       // rendered implicitly by end() itself, so the length is known before
       // anything is committed. An explicit writeHead() commits the headers
       // first; the body that follows is chunked instead.
       // (test-http-chunk-extensions-limit block 3)
       const implicitHeader = res._headersImplicit === true;
-      if (!hasCL && !hasTE && !noBodyStatus && !isHttp10 && implicitHeader) {
+      if (
+        !hasCL &&
+        !hasTE &&
+        !noBodyStatus &&
+        !isHttp10 &&
+        implicitHeader &&
+        !hasTrailerHeader
+      ) {
         // Frame the body like Node does when its length is known at end():
         // HEAD responses carry the length but no bytes.
         // (Not for HTTP/1.0: Node closes instead of auto-framing.)
@@ -6721,6 +6835,18 @@ class ServerBase extends EventEmitter {
       let te = hasTE
         ? String(res.getHeader("transfer-encoding"))
         : rendered["transfer-encoding"] || "";
+      if (hasTrailerHeader && !hasCL && !hasTE && !noBodyStatus && !isHttp10) {
+        // Trailers need chunked framing: without this, the CL branch
+        // above (or the raw fallthrough below) would swallow them
+        // (test-http-raw-headers response half). The chunked branch
+        // below appends _chunkTerminator, which renders the trailers.
+        te = "chunked";
+        headOut = headOut.replace(
+          /\r\n$/,
+          "Transfer-Encoding: chunked\r\n\r\n",
+        );
+        rendered["transfer-encoding"] = "chunked";
+      }
       if (
         !te &&
         !hasCL &&
@@ -6846,6 +6972,36 @@ class ServerBase extends EventEmitter {
       // moment (fresh connections that never served a request are exempt —
       // probed real Node leaves them alone).
       state.idleSince = Date.now();
+      // Prompt idle close: real Node closes an idle keep-alive socket
+      // ~keepAliveTimeout after the response (probed v24.22.1: 6.06s with
+      // the 5000ms default), NOT at the next connectionsCheckingInterval
+      // tick (30s default) — polling alone closes at 30s, past the window
+      // for a test waiting on the client's 'end' (test-http-insecure-parser).
+      // _checkConnections stays as backstop. Unref'd: open sockets keep
+      // the loop alive; the timer itself must not. Suppressed when the
+      // server set a socket timeout at connect (see hasSocketTimeout).
+      if (this.keepAliveTimeout > 0 && !state.hasSocketTimeout) {
+        if (state.idleTimer) clearTimeout(state.idleTimer);
+        const idleSocket = socket;
+        const idleState = state;
+        state.idleTimer = setTimeout(() => {
+          idleState.idleTimer = null;
+          if (
+            !idleSocket.destroyed &&
+            idleSocket._httpState === idleState &&
+            idleState.idleSince !== null &&
+            !idleState.busy &&
+            !idleState.receiving
+          ) {
+            try {
+              idleSocket.destroy();
+            } catch {
+              /* best effort */
+            }
+          }
+        }, this.keepAliveTimeout);
+        state.idleTimer.unref?.();
+      }
       // Preserve the socket for keep-alive reuse: flag the response so the
       // stream autoDestroy in ServerResponse._destroy doesn't kill it. The
       // socket stays open for the next pipelined request (server side) and
