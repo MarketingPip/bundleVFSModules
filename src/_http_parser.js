@@ -18,6 +18,9 @@
 // no global Buffer exists (node_globals.js installs one for the full
 // runtime, but unit consumers shouldn't depend on it).
 import { Buffer } from "./buffer.js";
+// Header-value char check shared with src/http.js's outbound validation;
+// _http_common has no imports, so this cannot cycle.
+import { _checkInvalidHeaderChar } from "./_http_common.js";
 
 const CR = 0x0d;
 const LF = 0x0a;
@@ -102,11 +105,17 @@ function parseError(code, message, reason) {
 export class HTTPParser {
   /**
    * @param {'request'|'response'} type
-   * @param {{ insecureHTTPParser?: boolean }} [options] — when true, the
-   *   parser runs in llhttp's lenient mode for the features this port
-   *   implements: obsolete line folding in header values is unfolded
-   *   (test-http-multi-line-headers) instead of rejected. Strict mode
-   *   keeps the existing rejection byte-identical.
+   * @param {{ insecureHTTPParser?: boolean, lenientHeaderValue?: boolean }} [options]
+   *   insecureHTTPParser, when true, runs the parser in llhttp's lenient
+   *   mode for the features this port implements: obsolete line folding
+   *   in header values is unfolded (test-http-multi-line-headers)
+   *   instead of rejected. Strict mode keeps the existing rejection
+   *   byte-identical.
+   *   lenientHeaderValue, when true, additionally skips strict
+   *   header-value char validation (llhttp's lenient header-value flag,
+   *   test-http-header-value-relaxed); it is set by httpValidation
+   *   'relaxed' as well as 'insecure', while insecureHTTPParser alone
+   *   covers the full lenient set (folding + duplicate chunked TE).
    */
   constructor(type, options) {
     if (type !== "request" && type !== "response") {
@@ -114,6 +123,7 @@ export class HTTPParser {
     }
     this.type = type;
     this.insecureHTTPParser = options?.insecureHTTPParser === true;
+    this.lenientHeaderValue = options?.lenientHeaderValue === true;
     // Mirrors Node's default maxHeaderSize (16 KiB); the server may override.
     this.maxHeaderSize = 16 * 1024;
     // For responses to HEAD requests: no body regardless of framing.
@@ -697,6 +707,40 @@ export class HTTPParser {
         if (/(^|[, \t])chunked([, \t]|$)/i.test(value)) chunked = true;
       } else if (lower === "connection") {
         connection += `,${value.toLowerCase()}`;
+      }
+    }
+    // Strict header-value validation (llhttp byte rule, lines decoded
+    // latin1 so the check is byte-exact): a control char (0x00-0x1f
+    // except HTAB) or DEL (0x7f) in a value is HPE_INVALID_HEADER_TOKEN
+    // ("Invalid header value char", probed v24.22.1, request and
+    // response sides). Relaxed/insecure modes skip the check (llhttp's
+    // lenient header-value flag). Bare CR is already HPE_LF_EXPECTED
+    // above; a bare LF cannot survive line splitting.
+    if (!this.lenientHeaderValue) {
+      for (let i = 1; i < this._rawHeaders.length; i += 2) {
+        if (_checkInvalidHeaderChar(this._rawHeaders[i])) {
+          throw parseError(
+            "HPE_INVALID_HEADER_TOKEN",
+            "Invalid header value char",
+          );
+        }
+      }
+    }
+    // Duplicate chunked Transfer-Encoding — two TE headers, or one
+    // header listing chunked twice — is HPE_INVALID_TRANSFER_ENCODING
+    // ("Invalid `Transfer-Encoding` header value", probed v24.22.1)
+    // unless the full lenient set is on (insecure). A single chunked
+    // among other codings (gzip + chunked) stays accepted.
+    if (!this.insecureHTTPParser) {
+      const teList = (info.headersDistinct["transfer-encoding"] || []).join(
+        ", ",
+      );
+      const chunkedTokens = teList.match(/(^|[, \t])chunked([, \t]|$)/gi) || [];
+      if (chunkedTokens.length > 1) {
+        throw parseError(
+          "HPE_INVALID_TRANSFER_ENCODING",
+          "Invalid `Transfer-Encoding` header value",
+        );
       }
     }
     // llhttp rejects any message carrying both Content-Length and

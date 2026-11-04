@@ -372,11 +372,11 @@ export function validateHeaderName(name) {
 }
 
 /** Throw unless value holds no invalid header chars (Node's validateHeaderValue). */
-export function validateHeaderValue(name, value) {
+export function validateHeaderValue(name, value, lenient = false) {
   if (value === undefined) {
     throw ERR_HTTP_INVALID_HEADER_VALUE(value, name);
   }
-  if (_checkInvalidHeaderChar(String(value))) {
+  if (_checkInvalidHeaderChar(String(value), lenient)) {
     throw ERR_INVALID_CHAR("header content", name);
   }
 }
@@ -392,7 +392,7 @@ export function validateHeaderValue(name, value) {
  *   reduces to: [entry, undefined]);
  * - number values are coerced to strings (wire shows "5").
  */
-function normalizeArrayHeaders(headers) {
+function normalizeArrayHeaders(headers, lenient = false) {
   const pairs = [];
   if (headers.length === 0) return pairs;
   if (Array.isArray(headers[0])) {
@@ -405,11 +405,11 @@ function normalizeArrayHeaders(headers) {
       // three cookie lines, joined there with "; ").
       if (Array.isArray(value)) {
         for (const el of value) {
-          validateHeaderValue(name, el);
+          validateHeaderValue(name, el, lenient);
           pairs.push([name, String(el)]);
         }
       } else {
-        validateHeaderValue(name, value);
+        validateHeaderValue(name, value, lenient);
         pairs.push([name, String(value)]);
       }
     }
@@ -423,11 +423,11 @@ function normalizeArrayHeaders(headers) {
       const value = headers[n + 1];
       if (Array.isArray(value)) {
         for (const el of value) {
-          validateHeaderValue(headers[n], el);
+          validateHeaderValue(headers[n], el, lenient);
           pairs.push([headers[n], String(el)]);
         }
       } else {
-        validateHeaderValue(headers[n], value);
+        validateHeaderValue(headers[n], value, lenient);
         pairs.push([headers[n], String(value)]);
       }
     }
@@ -749,6 +749,17 @@ export class OutgoingMessage extends Writable {
     const pushLine = (name, value) => {
       const values = Array.isArray(value) ? value : [value];
       for (const v of values) {
+        // writeHead(obj) headers reach here without passing setHeader,
+        // so this is where their values are validated (strict rejects
+        // control chars, relaxed/insecure allow them per the Fetch
+        // spec — test-http-header-value-relaxed Tests 17/18). kOutHeaders
+        // entries were already validated at set time under the same
+        // mode, so re-checking them is a no-op.
+        if (
+          _checkInvalidHeaderChar(String(v), this._isLenientHeaderValidation())
+        ) {
+          throw ERR_INVALID_CHAR("header content", name);
+        }
         lines.push(`${name}: ${v}\r\n`);
       }
       const key = String(name).toLowerCase();
@@ -1663,6 +1674,10 @@ export class ServerResponse extends OutgoingMessage {
     // silently dropped (OutgoingMessage.write/end below).
     this._rejectNonStandardBodyWrites =
       options?.rejectNonStandardBodyWrites === true;
+    // Server httpValidation mode, forwarded at dispatch: when true,
+    // setHeader/writeHead allow control chars per the Fetch spec
+    // (test-http-header-value-relaxed).
+    this._lenientHeaderValidation = options?.lenientHeaderValidation === true;
     // statusMessage stays undefined until writeHead (Node: prototype default).
     this.sendDate = true;
     this._resolve = null;
@@ -1684,6 +1699,12 @@ export class ServerResponse extends OutgoingMessage {
     // HTTP version from the request (for 1.0 vs 1.1 response semantics).
     // HTTP/1.0 does not support chunked transfer encoding.
     this._reqHttpVersion = req?.httpVersion || "1.1";
+  }
+
+  // Outbound header-value validation follows the server's mode (see
+  // the constructor field above).
+  _isLenientHeaderValidation() {
+    return this._lenientHeaderValidation === true;
   }
 
   _implicitHeader() {
@@ -2499,6 +2520,40 @@ export class ClientRequest extends OutgoingMessage {
     }
     this.insecureHTTPParser = options.insecureHTTPParser === true;
 
+    // httpValidation: 'strict' | 'relaxed' | 'insecure' (probed
+    // v24.22.1): unknown values throw ERR_INVALID_ARG_VALUE, and
+    // setting it together with insecureHTTPParser — even false —
+    // throws ERR_INVALID_ARG_VALUE (mutual exclusion). 'relaxed'
+    // enables only the header-value leniency; 'insecure' enables the
+    // full lenient set (same as insecureHTTPParser). Default is
+    // strict; insecureHTTPParser: true alone also implies lenient
+    // header validation (test-http-header-value-relaxed Test 9's
+    // converse: false alone stays strict).
+    if (
+      options.httpValidation !== undefined &&
+      !["strict", "relaxed", "insecure"].includes(options.httpValidation)
+    ) {
+      throw ERR_INVALID_ARG_VALUE(
+        "options.httpValidation",
+        options.httpValidation,
+        "must be one of: 'strict', 'relaxed', 'insecure'.",
+      );
+    }
+    if (
+      options.httpValidation !== undefined &&
+      options.insecureHTTPParser !== undefined
+    ) {
+      throw ERR_INVALID_ARG_VALUE(
+        "options.httpValidation",
+        options.httpValidation,
+        "cannot be used together with options.insecureHTTPParser.",
+      );
+    }
+    this._lenientHeaderValidation =
+      options.httpValidation === "relaxed" ||
+      options.httpValidation === "insecure" ||
+      this.insecureHTTPParser;
+
     // joinDuplicateHeaders is stored raw (default undefined, matching
     // real Node's probe: no option -> undefined, not false). It is
     // exposed as request.parser.joinDuplicateHeaders from 'socket' time
@@ -2527,7 +2582,10 @@ export class ClientRequest extends OutgoingMessage {
     // the probed wire shows neither when array headers are supplied.
     if (options.headers) {
       if (Array.isArray(options.headers)) {
-        this._headersArray = normalizeArrayHeaders(options.headers);
+        this._headersArray = normalizeArrayHeaders(
+          options.headers,
+          this._lenientHeaderValidation,
+        );
       } else {
         for (const key of Object.keys(options.headers)) {
           // A host header given as an array throws at construction
@@ -2565,6 +2623,15 @@ export class ClientRequest extends OutgoingMessage {
       );
     }
     this.agent = agent;
+    // Request-level createConnection: when set, the agent stays
+    // undefined (above) and _performRequest honors the factory below
+    // (test-http-header-value-relaxed Test 10's duplexPair shape).
+    // Stored raw; _performRequest calls it with ({ port, host }, cb)
+    // like real Node (probed v24.22.1).
+    this._createConnection =
+      typeof options.createConnection === "function"
+        ? options.createConnection
+        : null;
 
     const protocol = options.protocol || defAgent.protocol || "http:";
     const expectedProtocol =
@@ -2609,6 +2676,11 @@ export class ClientRequest extends OutgoingMessage {
     this.method = method;
     this.host = host;
     this.port = port;
+    // Unix-socket target (Node passes it through to createConnection
+    // as { socketPath, path } — probed v24.22.1); previously dropped,
+    // so a request-level factory for a socketPath target got bare
+    // { port, host } and dialed TCP instead of the path.
+    this.socketPath = options.socketPath || null;
     this.protocol = protocol;
     this.auth = options.auth;
     this.timeout = options.timeout;
@@ -3338,6 +3410,60 @@ export class ClientRequest extends OutgoingMessage {
       return;
     }
 
+    // Request-level createConnection (after the virtual/raw gates, so
+    // loopback targets keep their virtual routing —
+    // test-http-client-with-create-connection): obtain the socket from
+    // the request's own factory and round-trip over it. All factory
+    // shapes (test-http-createConnection): synchronous return, async
+    // callback delivery, both at once (first wins), sync throw, async
+    // callback error. The factory vouches for readiness (duplexPair
+    // sockets are already linked; net sockets from net.connect are
+    // connected), so the socket is marked connected — otherwise
+    // _performVirtualRequest's connect wait would hang on sockets
+    // with no 'connect' event (native Duplex never emits one). A
+    // factory that neither returns a socket nor calls back never
+    // settles, like Node's pending socket — and falls through to
+    // nothing: the request simply never completes.
+    if (typeof this._createConnection === "function") {
+      // Node's factory args (probed v24.22.1): the full connect
+      // options — { port, host } for TCP, plus { socketPath, path }
+      // for unix-socket targets.
+      const factoryOptions = { port: this.port, host: this.host };
+      if (this.socketPath) {
+        factoryOptions.socketPath = this.socketPath;
+        factoryOptions.path = this.socketPath;
+      }
+      const customSock = await new Promise((resolve, reject) => {
+        let settled = false;
+        const done = (err, sock) => {
+          if (settled) return;
+          settled = true;
+          if (err) reject(err);
+          else resolve(sock || null);
+        };
+        let ret;
+        try {
+          ret = this._createConnection(factoryOptions, done);
+        } catch (err) {
+          done(err);
+          return;
+        }
+        if (ret) done(null, ret);
+      });
+      if (customSock) {
+        customSock._connected = true;
+        this.onSocket(customSock);
+        await this._performVirtualRequest(
+          null,
+          this._virtualHeaders(),
+          body.length > 0 ? body : null,
+          false,
+          !!this._headersArray,
+        );
+        return;
+      }
+    }
+
     // Agent-assigned real socket, no virtual/raw server to round-trip
     // against (the gates above already excluded servers): do NOT fall
     // through to fetch(). On real Node the request sits on its socket —
@@ -3539,6 +3665,13 @@ export class ClientRequest extends OutgoingMessage {
    * Called by the Agent when a socket is assigned to this request
    * (either a fresh socket or a reused keep-alive socket).
    */
+  // Outbound header-value validation follows the request's mode:
+  // relaxed/insecure (or insecureHTTPParser) allow control chars per
+  // the Fetch spec; strict rejects them (test-http-header-value-relaxed).
+  _isLenientHeaderValidation() {
+    return this._lenientHeaderValidation === true;
+  }
+
   onSocket(socket) {
     // Ignore late/duplicate assignments (e.g., manual addRequest after the
     // constructor's agent already assigned a socket). Only a REAL socket
@@ -3671,6 +3804,7 @@ export class ClientRequest extends OutgoingMessage {
       socket._pooledParser = parser;
     }
     parser.insecureHTTPParser = this.insecureHTTPParser;
+    parser.lenientHeaderValue = this._lenientHeaderValidation;
     this.parser = parser;
     parser.onIncoming = () => {};
     parser.joinDuplicateHeaders = this.joinDuplicateHeaders;
@@ -5311,6 +5445,43 @@ class ServerBase extends EventEmitter {
     this._serverUniqueHeaders = Array.isArray(options.uniqueHeaders)
       ? new Set(options.uniqueHeaders.map((n) => String(n).toLowerCase()))
       : null;
+    // httpValidation: 'strict' | 'relaxed' | 'insecure' (probed
+    // v24.22.1, same rules as the client option): unknown values throw
+    // ERR_INVALID_ARG_VALUE, and setting it together with
+    // insecureHTTPParser — even false — throws ERR_INVALID_ARG_VALUE.
+    // 'relaxed' enables only header-value leniency; 'insecure' enables
+    // the full lenient set. insecureHTTPParser: true alone is the same
+    // full set (server-side alias; the server parser previously got no
+    // leniency flags at all). Forwarded to each ServerResponse (for
+    // setHeader/writeHead validation) and to the per-connection parser
+    // (for inbound values + duplicate Transfer-Encoding).
+    if (
+      options.httpValidation !== undefined &&
+      !["strict", "relaxed", "insecure"].includes(options.httpValidation)
+    ) {
+      throw ERR_INVALID_ARG_VALUE(
+        "options.httpValidation",
+        options.httpValidation,
+        "must be one of: 'strict', 'relaxed', 'insecure'.",
+      );
+    }
+    if (
+      options.httpValidation !== undefined &&
+      options.insecureHTTPParser !== undefined
+    ) {
+      throw ERR_INVALID_ARG_VALUE(
+        "options.httpValidation",
+        options.httpValidation,
+        "cannot be used together with options.insecureHTTPParser.",
+      );
+    }
+    this._lenientHeaderValidation =
+      options.httpValidation === "relaxed" ||
+      options.httpValidation === "insecure" ||
+      options.insecureHTTPParser === true;
+    this._insecureParser =
+      options.httpValidation === "insecure" ||
+      options.insecureHTTPParser === true;
     this.timeout = 0;
     this.headersTimeout = options.headersTimeout ?? 60000;
     this.requestTimeout = options.requestTimeout ?? 300000;
@@ -5829,7 +6000,10 @@ class ServerBase extends EventEmitter {
     };
     socket.on("timeout", onHttpTimeout);
 
-    const parser = new HTTPParser("request");
+    const parser = new HTTPParser("request", {
+      insecureHTTPParser: this._insecureParser,
+      lenientHeaderValue: this._lenientHeaderValidation,
+    });
     // Strict one-request-at-a-time: the parser pauses after each message and
     // only resumes once the in-flight response has been fully written.
     parser.pauseBetweenMessages = true;
@@ -6306,6 +6480,7 @@ class ServerBase extends EventEmitter {
       const dropRes = new ServerResponse(req, {
         highWaterMark: this._highWaterMark,
         rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
+        lenientHeaderValidation: this._lenientHeaderValidation,
       });
       const dropPrevUnfinished =
         state.lastResponse && !state.lastResponse.finished;
@@ -6367,6 +6542,7 @@ class ServerBase extends EventEmitter {
     const res = new ServerResponse(req, {
       highWaterMark: this._highWaterMark,
       rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
+      lenientHeaderValidation: this._lenientHeaderValidation,
     });
     // Pipelined response (test-http-outgoing-drain-writable-length):
     // while a previous response on this socket is still unfinished,
@@ -6779,6 +6955,7 @@ class ServerBase extends EventEmitter {
       const req = IncomingMessage.fromRequest(method, url, headers, body);
       const res = new ServerResponse(req, {
         rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
+        lenientHeaderValidation: this._lenientHeaderValidation,
       });
       res._setResolver(resolve);
 

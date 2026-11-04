@@ -624,10 +624,15 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const nonDist = files.filter(
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
-    // fix/http-parser-memory-retention branch: request.parser exposure
-    // + close-time nulling (src/http.js + working note).
+    // fix/http-header-value-relaxed branch: httpValidation option +
+    // request-level createConnection honoring (src/http.js +
+    // src/_http_parser.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "NOTES-http-parser-memory-retention.md"].sort(),
+      [
+        "src/http.js",
+        "src/_http_parser.js",
+        "NOTES-http-header-value-relaxed.md",
+      ].sort(),
     );
   });
 
