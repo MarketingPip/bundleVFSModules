@@ -397,6 +397,21 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // The http server-lifecycle tests read server[kConnectionsChecking-
+    // Interval] from `_http_server`. Same treatment: without a redirect
+    // the require falls through to native Node's `_http_server`, whose
+    // symbol never matches the shim's slot, so the slot always reads
+    // undefined. The adapter exports the shim's Symbol.for bridge key
+    // (see src/http.js ServerBase). See parity/http-server-adapter.mjs.
+    // http target only: the https twins keep the real module.
+    if (target === "http" && bare === "_http_server") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "http-server-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
   }
   return origLoad.call(this, request, parent, isMain);
 };
