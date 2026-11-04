@@ -631,9 +631,9 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // request/response timeout listeners + pre-connect setTimeout
     // deferral + destroy/abort ECONNRESET for pending requests)
     // (src/http.js only).
-    expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
-    );
+    // fix/http-agent-lifecycle branch: Agent scheduling/maxTotalSockets
+    // validation (src/http.js only).
+    expect(nonDist.sort()).toEqual(["src/http.js"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
