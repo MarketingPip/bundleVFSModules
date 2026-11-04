@@ -500,6 +500,14 @@ const kPath = Symbol("kPath");
 
 const INVALID_PATH_REGEX = /[^\u0021-\u00ff]/;
 
+// Numeric slot of the server socket.parser facade that mirrors real
+// Node's HTTPParser.kOnTimeout (probed v24.22.1: 6 — a numeric
+// parser-callback slot, hence `| 0` works in the test). The facade
+// holds a function here while the connection lives; the close handler
+// nulls it after free(). Ceiling: the vendored suite pins the era, but
+// a future Node renumbering would break this mapping.
+const HTTP_PARSER_K_ON_TIMEOUT = 6;
+
 // ---------------------------------------------------------------------------
 // 5. OutgoingMessage — port of node:_http_outgoing (Writable-based).
 // ---------------------------------------------------------------------------
@@ -1435,6 +1443,16 @@ export class IncomingMessage extends Readable {
   _finishBody() {
     if (this.complete) return;
     this.complete = true;
+    // test-http-parser-memory-retention: the client parser's props are
+    // nulled at response end, before 'end' fires (push(null) delivers
+    // it), and the request drops its parser reference. Server-side
+    // messages have no .req.parser, so this is a no-op there.
+    const parser = this.req?.parser;
+    if (parser) {
+      parser.onIncoming = null;
+      parser.joinDuplicateHeaders = null;
+      this.req.parser = null;
+    }
     this.push(null);
   }
 
@@ -2480,6 +2498,12 @@ export class ClientRequest extends OutgoingMessage {
       );
     }
     this.insecureHTTPParser = options.insecureHTTPParser === true;
+
+    // joinDuplicateHeaders is stored raw (default undefined, matching
+    // real Node's probe: no option -> undefined, not false). It is
+    // exposed as request.parser.joinDuplicateHeaders from 'socket' time
+    // (test-http-parser-memory-retention).
+    this.joinDuplicateHeaders = options.joinDuplicateHeaders;
 
     // request({ uniqueHeaders }) — probed real Node v24.22.1: send-side
     // only (parsing never joins). Listed headers with array values
@@ -3625,6 +3649,31 @@ export class ClientRequest extends OutgoingMessage {
         socket.setTimeout(agentTimeout);
       }
     }
+    // test-http-parser-memory-retention + test-http-parser-free: real
+    // Node pools parsers per socket — successive requests on a reused
+    // socket observe the SAME parser object (parser-free asserts
+    // identity across 100 pooled requests), while memory-retention
+    // wants the props (re)set at each assignment and nulled at
+    // response end. So the parser lives on the socket: onSocket reuses
+    // it and refreshes its per-request props (and the lenient flag, in
+    // case pooled requests differ). Parser state itself resets at
+    // message completion (_resetMessage), so reuse across sequential
+    // messages is safe. Created here, before the 'socket' microtask
+    // below, so the handler observes it.
+    // ponytail: one pooled object per socket, no separate pool — the
+    // socket already owns the lifetime (destroy frees it with the
+    // socket), and a global pool would add lifecycle for no test gain.
+    let parser = socket._pooledParser;
+    if (!parser) {
+      parser = new HTTPParser("response", {
+        insecureHTTPParser: this.insecureHTTPParser,
+      });
+      socket._pooledParser = parser;
+    }
+    parser.insecureHTTPParser = this.insecureHTTPParser;
+    this.parser = parser;
+    parser.onIncoming = () => {};
+    parser.joinDuplicateHeaders = this.joinDuplicateHeaders;
     // Emit 'socket' at assignment time, like Node: the event fires while
     // the socket is still connecting (probed v24.22.1: connecting=true,
     // pending=true at 'socket' time), asynchronously so listeners attached
@@ -3892,6 +3941,7 @@ export class ClientRequest extends OutgoingMessage {
           socket: sock,
           noDefaultHost,
           insecureHTTPParser: this.insecureHTTPParser,
+          parser: this.parser,
           setDefaultHeaders: this._setDefaultHeaders,
           // Streaming request (started by an early write()): the head was
           // pre-serialized with its framing; body chunks arrive via the
@@ -4877,6 +4927,10 @@ function _socketHttpRoundTrip(
     onStreamReady,
     noDefaultHost = false,
     insecureHTTPParser = false,
+    // test-http-parser-memory-retention: the caller may supply the
+    // request's already-exposed parser (created in onSocket); the
+    // runtime-bridge caller omits it and gets a fresh one.
+    parser: providedParser = null,
     // Threaded from ClientRequest._setDefaultHeaders by the virtual
     // path: implicit Content-Length: 0 is a default header. Other
     // callers (emulated inbound requests) keep the default true.
@@ -4923,7 +4977,8 @@ function _socketHttpRoundTrip(
       settle(reject)(err);
     };
 
-    const parser = new HTTPParser("response", { insecureHTTPParser });
+    const parser =
+      providedParser || new HTTPParser("response", { insecureHTTPParser });
     // HEAD responses never have a body, regardless of framing.
     parser.isHeadResponse = method === "HEAD";
     const chunks = [];
@@ -5667,6 +5722,9 @@ class ServerBase extends EventEmitter {
       socket,
       incoming: null,
       outgoing: null,
+      // Function while the connection lives; nulled at close, after
+      // free() (test-http-parser-memory-retention).
+      [HTTP_PARSER_K_ON_TIMEOUT]: () => {},
       free() {
         // No pool to return to: the shim's parser is per-connection.
       },
@@ -5720,6 +5778,9 @@ class ServerBase extends EventEmitter {
         } catch {
           /* app replacement threw; close proceeds */
         }
+        // Null the callback slot on the facade object itself (not just
+        // socket.parser): the test reads the CAPTURED facade on close.
+        facade[HTTP_PARSER_K_ON_TIMEOUT] = null;
         socket.parser = null;
       }
       // Release the real parser's request-capturing callbacks at socket
