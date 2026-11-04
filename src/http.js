@@ -2965,6 +2965,12 @@ export class ClientRequest extends OutgoingMessage {
       this._errorEmitted = true;
     }
     this._suppressDestroyError = false;
+    // An explicit destroy error owns the request's error emission
+    // (super.destroy emits it): the _performVirtualRequest continuation
+    // and the socket-wait catch must not synthesize a second ECONNRESET
+    // for it (signal abort: single AbortError, not ECONNRESET +
+    // AbortError — test-http-agent-abort-controller).
+    if (err) this._errorEmitted = true;
     this._aborted = true;
     if (this._abortController) {
       try {
@@ -2981,7 +2987,6 @@ export class ClientRequest extends OutgoingMessage {
     // remove it synchronously — Node keeps aborted queued requests in
     // agent.requests until the queue is processed. Just mark it aborted;
     // _processQueue will skip it.
-    const agent = this.agent;
     // Cancel a pending socket assignment.
     if (this._onSocketAssigned) {
       this._onSocketAssigned = null;
@@ -2997,16 +3002,15 @@ export class ClientRequest extends OutgoingMessage {
     // Destroy the socket: in the virtual-server path this is a real net.js
     // socket with a loop-keeping timer. If we don't destroy it here, the
     // event loop never drains and the process hangs (http parity hang).
-    // Also remove it from the agent's tracking so counts stay accurate.
+    // Do NOT remove it from the agent's tracking here: real Node removes
+    // the socket from agent.sockets only on its 'close' event, so
+    // synchronously after abort() the (destroyed) socket is still listed
+    // (test-http-agent-maxsockets-respected asserts the list right after
+    // abort(); synchronous removal emptied the list and its assert threw
+    // inside the response handler, hanging the test). The close listener
+    // installed in onSocket removes it and wakes the queue.
     const sock = this.socket;
     if (sock && typeof sock.destroy === "function" && !sock.destroyed) {
-      if (agent && !(sock instanceof FakeSocket) && sock._agentName) {
-        try {
-          agent.removeSocket(sock, sock._agentName);
-        } catch {
-          /* best effort */
-        }
-      }
       try {
         sock.destroy();
       } catch {
@@ -3850,6 +3854,7 @@ export class ClientRequest extends OutgoingMessage {
     msg.connection = this.socket;
     msg.req = this;
     this._responseReceived = true;
+    this._inFlightMessage = msg;
     this.emit("response", msg);
   }
 
@@ -3991,7 +3996,44 @@ export class ClientRequest extends OutgoingMessage {
         err instanceof Error ? err : new Error(String(err)),
       );
     };
-    const socketOnEnd = () => {};
+    // FIN on an active socket: agent sockets run with autoDestroy
+    // disabled (see createSocket), so the FIN-to-close chain stalls
+    // unless the HTTP layer closes the socket itself. The decision
+    // must be deferred a turn: at 'end' time the parser has not
+    // consumed the buffered body yet (probed: parser _state is still
+    // "start-line" when FIN's 'end' fires — body parsing runs on
+    // later nextTicks), so no state read here can tell a finished
+    // response from a truncated one. A setTimeout(0) runs after all
+    // pending nextTicks and microtasks — data delivery, parser
+    // completion, round-trip settlement — so by then a finished
+    // response shows msg.complete (or parser _state "complete") and
+    // a truncated one still does not. Destroy only the latter:
+    // destroying a finished response's socket now would close it
+    // before the user's 'end' handlers run
+    // (test-http-agent-destroyed-socket) — releaseSocket destroys
+    // after 'end' instead — while a truncated message never
+    // completes without the close (its 'aborted' + request error
+    // come from the close machinery:
+    // test-http-agent-keepalive's remoteError,
+    // test-http-client-aborted-event). Pooled sockets never reach
+    // here (their request listeners come off at release; the
+    // pool-time autoDestroy flip owns FIN-while-pooled), and the
+    // re-checks skip a socket released or destroyed meanwhile.
+    const socketOnEnd = () => {
+      if (socket._inFreePool) return;
+      setTimeout(() => {
+        if (socket._inFreePool || socket.destroyed) return;
+        const msg = request._inFlightMessage;
+        if (msg && (msg.complete || request.parser?._state === "complete")) {
+          return;
+        }
+        try {
+          socket.destroy();
+        } catch {
+          /* best effort */
+        }
+      }, 0);
+    };
     const onTimeout = () => {};
     // An active socket's close untracks it: a request that errors
     // (remoteError: server destroys its side) never releases, so without
@@ -4018,6 +4060,28 @@ export class ClientRequest extends OutgoingMessage {
           agent.removeSocket(socket, name);
         } catch {
           /* best effort */
+        }
+        // A closed active socket frees capacity: wake queued requests.
+        // Real Node drains the queue from removeSocket (same origin
+        // first, then the first queued origin with no active sockets);
+        // the shim's releaseSocket already wakes on release, but a
+        // socket closed without release (user destroy, abort, server
+        // close) must wake too, or queued requests hang forever
+        // (test-http-agent-maxsockets-respected: abort in the response
+        // handler destroys the socket without releasing it). The
+        // close drain is GATED (unlike the release drain): close
+        // already freed an active slot and dropped the total, so the
+        // gate passes for the freed origin — while an ungated close
+        // drain would create a second socket for an origin whose
+        // release drain already assigned one
+        // (test-http-keep-alive-close-on-header: maxSockets 1 with
+        // three queued requests must never show two active sockets).
+        // The _drainQueue guard is load-bearing for custom agents
+        // without it; _processQueue is the pre-drain fallback.
+        if (typeof agent._drainQueue === "function") {
+          agent._drainQueue(name, false);
+        } else if (typeof agent._processQueue === "function") {
+          agent._processQueue(name);
         }
       }, 0);
     };
@@ -4143,17 +4207,56 @@ export class ClientRequest extends OutgoingMessage {
     const agent = this.agent;
     const sock = this.socket;
     if (!agent || !sock || sock instanceof FakeSocket) return;
+    // The message is done; a later FIN must not re-trigger the
+    // incomplete-message destroy in socketOnEnd.
+    this._inFlightMessage = null;
     const name =
       sock._agentName ||
       agent.getName({ host: this.host, port: Number(this.port) || 80 });
     // Only release once.
     if (sock._releasedToAgent) return;
     sock._releasedToAgent = true;
+    // Normal completion closes the request stream: real Node emits
+    // request 'close' after the response ends and before the socket is
+    // pooled (test-http-agent-free-socket-data-guard waits for it, then
+    // nextTicks into the free pool). Drive the ported stream's destroy
+    // directly — NOT this.destroy(), whose override would kill the
+    // socket being released. The stream destroy is once-guarded, so a
+    // later abort cannot emit a second 'close'.
     try {
-      agent.releaseSocket(sock, name);
+      Writable.prototype.destroy.call(this, null);
     } catch {
       /* best effort */
     }
+    try {
+      agent.releaseSocket(sock, name, this._agentOptions);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /**
+   * Release the socket after the response's 'end' listeners run (or on
+   * 'close' for abort-before-'end'). _finishBody()/_setBody() schedule
+   * 'end' async, and user 'end' listeners attached at 'response' time
+   * precede this completion-time once listener in emission order, so
+   * they see the socket still assigned (destroyed === false) and
+   * nextTick callbacks see it freed (test-http-agent-keepalive,
+   * test-http-agent-destroyed-socket). The two listeners remove each
+   * other: a stale 'close' firing after the socket was reused for a
+   * later request must NOT re-park the live socket.
+   */
+  _releaseAfterEnd(msg) {
+    const releaseOnEnd = () => {
+      msg.removeListener("close", releaseOnClose);
+      this._releaseAgentSocket();
+    };
+    const releaseOnClose = () => {
+      msg.removeListener("end", releaseOnEnd);
+      this._releaseAgentSocket();
+    };
+    msg.once("end", releaseOnEnd);
+    msg.once("close", releaseOnClose);
   }
 
   async _performVirtualRequest(
@@ -4218,8 +4321,10 @@ export class ClientRequest extends OutgoingMessage {
     }).catch((err) => {
       // Aborted while waiting for a socket. Node emits ECONNRESET 'error'
       // for destroy(), but NOT for graceful abort() (which only emits 'abort').
+      // And not when destroy() already carried an explicit error (signal
+      // abort): that error is the single emission (see destroy()).
       if (this._aborted || err?.code === "ECONNRESET") {
-        if (!this._abortGraceful) {
+        if (!this._abortGraceful && !this._errorEmitted) {
           queueMicrotask(() => {
             if (this.listenerCount("error") > 0) {
               const e = new Error("socket hang up");
@@ -4441,6 +4546,7 @@ export class ClientRequest extends OutgoingMessage {
             // no request timeout).
             this._attachResponseTimeout(streamedMsg);
             this._responseReceived = true;
+            this._inFlightMessage = msg;
             this.emit("response", msg);
           },
           onBody: (chunk) => {
@@ -4567,6 +4673,13 @@ export class ClientRequest extends OutgoingMessage {
       // is the app's now, so a later destroy() (e.g. the socket-close
       // hook below) must not report a hangup for it.
       this._responseReceived = true;
+      // Detached means unmanaged: the agent's autoDestroy=false (see
+      // createSocket) must not survive handoff, or the tunnel socket
+      // never closes on end — its finish would not destroy it, so
+      // neither socket 'close' nor the request 'close' below ever
+      // fires (test-http-connect, test-http-connect-req-res). Restore
+      // the normal socket lifecycle for the app-owned socket.
+      this.socket.autoDestroy = true;
       this.emit("connect", msg, this.socket, result.connectHead);
       if (
         this.listenerCount("connect") === 0 &&
@@ -4629,6 +4742,11 @@ export class ClientRequest extends OutgoingMessage {
       }
       this.socket._httpMessage = null;
       this.socket.parser = null;
+      // Detached means unmanaged, as in the CONNECT branch: restore
+      // autoDestroy for the app-owned socket, or its finish never
+      // destroys it and socket 'close' never fires
+      // (test-http-upgrade-client, test-http-upgrade-agent).
+      this.socket.autoDestroy = true;
       try {
         this.agent?.removeSocket(this.socket, this.socket._agentName);
       } catch {
@@ -4732,10 +4850,24 @@ export class ClientRequest extends OutgoingMessage {
         sock._serverKeepAliveTimeout = parseKeepAliveTimeoutHint(
           streamedMsg.headers,
         );
+        sock._responseConnectionClose = isConnectionClose(streamedMsg.headers);
       }
       if (agent && sock && !(sock instanceof FakeSocket) && !agent.keepAlive) {
-        const req = this;
-        setTimeout(() => req._releaseAgentSocket(), 0);
+        // Non-keep-alive: the release destroys the socket, and Node
+        // removes it when the socket actually closes, which is after
+        // the response's 'end' has been delivered — so an observed
+        // response releases after 'end' listeners run, exactly like
+        // keep-alive (test-http-agent-destroyed-socket: 'end' handlers
+        // must see destroyed === false and be able to destroy the
+        // socket themselves). An unobserved response still releases
+        // one turn after completion so the loop drains (the old
+        // setTimeout-0 behavior, kept).
+        if (streamedMsg._responseObserved) {
+          this._releaseAfterEnd(streamedMsg);
+        } else {
+          const req = this;
+          setTimeout(() => req._releaseAgentSocket(), 0);
+        }
       } else if (
         agent &&
         sock &&
@@ -4750,33 +4882,12 @@ export class ClientRequest extends OutgoingMessage {
           // response handler, yet the process must exit).
           this._releaseAgentSocket();
         } else {
-          // Keep-alive: release after 'end' listeners run. _finishBody()
-          // above schedules 'end' async, and user 'end' listeners
-          // attached at 'response' time precede this completion-time
-          // once listener in emission order, so they see the socket
-          // still assigned and nextTick callbacks see it freed
-          // (test-http-agent-keepalive). An observed-but-unconsumed
-          // response is never released on real Node (probed) — the
-          // process still exits because server.close() destroys the
-          // connection (test-http-agent-uninitialized).
-          // The 'close' backstop covers abort-before-'end' (where
-          // _finishBody is skipped and 'end' never fires). The two
-          // listeners remove each other: a stale 'close' firing after
-          // the socket was reused for a later request must NOT re-park
-          // the live socket (reuseSocket resets _releasedToAgent, so the
-          // guard alone cannot stop it — the first request's 'close'
-          // backstop re-parking the second request's socket was a real
-          // failure: the reused socket lost its fresh 'end' listener).
-          const releaseOnEnd = () => {
-            streamedMsg.removeListener("close", releaseOnClose);
-            this._releaseAgentSocket();
-          };
-          const releaseOnClose = () => {
-            streamedMsg.removeListener("end", releaseOnEnd);
-            this._releaseAgentSocket();
-          };
-          streamedMsg.once("end", releaseOnEnd);
-          streamedMsg.once("close", releaseOnClose);
+          // Keep-alive: release after 'end' listeners run. An
+          // observed-but-unconsumed response is never released on real
+          // Node (probed) — the process still exits because
+          // server.close() destroys the connection
+          // (test-http-agent-uninitialized). See _releaseAfterEnd.
+          this._releaseAfterEnd(streamedMsg);
         }
       } else {
         this._releaseAgentSocket();
@@ -4810,14 +4921,42 @@ export class ClientRequest extends OutgoingMessage {
       this.socket._serverKeepAliveTimeout = parseKeepAliveTimeoutHint(
         msg.headers,
       );
+      this.socket._responseConnectionClose = isConnectionClose(msg.headers);
     }
-    // Release the socket to the agent's pool for keep-alive reuse.
-    this._releaseAgentSocket();
+    // Release the socket to the agent. For a non-keep-alive agent with
+    // an observed response, release after 'end' listeners run (see the
+    // streamed path): the listeners attach AFTER 'response' is emitted
+    // below, so user 'end' handlers attached in the response callback
+    // precede them in emission order. Every other case releases here,
+    // as before (keep-alive parks immediately; unobserved responses
+    // must not stall the loop).
+    const bufferedAgent = this.agent;
+    const bufferedSock = this.socket;
+    const bufferedObserved = this.listenerCount("response") > 0;
+    if (!(
+      bufferedAgent &&
+      bufferedSock &&
+      !(bufferedSock instanceof FakeSocket) &&
+      !bufferedAgent.keepAlive &&
+      bufferedObserved
+    )) {
+      this._releaseAgentSocket();
+    }
     // Same response-timeout attach as the headers path above (this
     // branch runs when headers never arrived via onHeaders).
     this._attachResponseTimeout(msg);
     this._responseReceived = true;
+    this._inFlightMessage = msg;
     this.emit("response", msg);
+    if (
+      bufferedAgent &&
+      bufferedSock &&
+      !(bufferedSock instanceof FakeSocket) &&
+      !bufferedAgent.keepAlive &&
+      bufferedObserved
+    ) {
+      this._releaseAfterEnd(msg);
+    }
   }
 
   /**
@@ -7487,6 +7626,18 @@ function parseKeepAliveTimeoutHint(headers) {
   return m ? Number(m[1]) : null;
 }
 
+// Whether a response's Connection header says "close" (case-insensitive,
+// string or array form): the server closed its side, so the socket must
+// not be pooled (see keepSocketAlive's veto).
+function isConnectionClose(headers) {
+  const value = headers?.connection;
+  if (typeof value === "string") return value.toLowerCase() === "close";
+  if (Array.isArray(value)) {
+    return value.some((v) => String(v).toLowerCase() === "close");
+  }
+  return false;
+}
+
 class AgentBase extends EventEmitter {
   constructor(options) {
     super();
@@ -7579,6 +7730,27 @@ class AgentBase extends EventEmitter {
       keepAliveInitialDelay: options.keepAliveInitialDelay,
       lookup: options.lookup,
     });
+    // AbortSignal (test-http-agent-abort-controller): Node's
+    // net.createConnection wires exactly one 'abort' listener on the
+    // signal, and aborting destroys the socket with an AbortError
+    // (emitted async by the stream machinery, so a listener attached
+    // after abort() still catches it). An already-aborted signal
+    // errors the socket async with no listener added.
+    const signal = options.signal;
+    if (signal) {
+      const abortSocket = () => {
+        if (socket.destroyed) return;
+        const err = new Error("The operation was aborted");
+        err.name = "AbortError";
+        err.code = "ABORT_ERR";
+        socket.destroy(err);
+      };
+      if (signal.aborted) {
+        queueMicrotask(abortSocket);
+      } else {
+        signal.addEventListener("abort", abortSocket, { once: true });
+      }
+    }
     // The callback fires on connect ONLY — deliberately no 'error'
     // listener here. Socket errors are forwarded to the request by
     // socketErrorListener (attached in onSocket at assignment); a
@@ -7647,6 +7819,11 @@ class AgentBase extends EventEmitter {
       sock._agentName = name;
       sock._agent = this;
       sock._connectedBeforeAssign = sock._connected === true;
+      // Queued-creation 'free' (see _processQueue): before assignment.
+      if (req._fromQueue) {
+        delete req._fromQueue;
+        this.emit("free", sock, options);
+      }
       req.onSocket(sock);
       if (typeof callback === "function") callback(null, sock);
     };
@@ -7684,6 +7861,11 @@ class AgentBase extends EventEmitter {
     // trip can start immediately. A never-connecting socket (lookup that
     // never calls back) simply never delivers — no error, matching Node.
     socket._connectedBeforeAssign = socket._connected === true;
+    // Queued-creation 'free' (see _processQueue): before assignment.
+    if (req._fromQueue) {
+      delete req._fromQueue;
+      this.emit("free", socket, options);
+    }
     req.onSocket(socket);
     // Invoke the addRequest callback synchronously at creation (not on
     // connect): assignment already happened, so its success branch is a
@@ -7741,15 +7923,29 @@ class AgentBase extends EventEmitter {
       } else {
         (this.sockets[name] ??= []).push(socket);
         req.reusedSocket = true;
+        // A dequeued request reusing a pooled socket gets no new 'free'
+        // emission (the socket's release already emitted one) — just
+        // clear the flags.
+        delete req._fromQueue;
+        delete req._drainBypass;
         this.reuseSocket(socket, req);
         return;
       }
     }
-    // 2. Create a new socket if under the per-origin and total limits.
+    // 2. Create a new socket if under the per-origin and total limits —
+    // or when draining: real Node's removeSocket drain calls
+    // createSocket directly with no gate, so a drained request creates
+    // even at cap (test-http-agent-maxtotalsockets: pooled sockets
+    // still count toward totalSocketCount, so a gated drain would
+    // deadlock the second origin forever). The flag is consumed here
+    // so a request that somehow re-queues loses the privilege.
     const active = this.sockets[name] || [];
+    const drainBypass = Boolean(req._drainBypass);
+    delete req._drainBypass;
     if (
-      active.length < this.maxSockets &&
-      this.totalSocketCount < this.maxTotalSockets
+      drainBypass ||
+      (active.length < this.maxSockets &&
+        this.totalSocketCount < this.maxTotalSockets)
     ) {
       req.reusedSocket = false;
       this.createSocket(req, options, (err, socket) => {
@@ -7761,10 +7957,27 @@ class AgentBase extends EventEmitter {
           // test-http-agent-uninitialized) must not be failed by this
           // redundant creation attempt erroring afterwards.
           if (req.socket && !(req.socket instanceof FakeSocket)) return;
-          if (typeof req.onSocketError === "function") {
-            req.onSocketError(err);
+          // A request still waiting for socket assignment (end() called,
+          // _performVirtualRequest pending) keeps the existing path: the
+          // wait rejects with the original error and its handler owns
+          // emission. Otherwise the error must arrive async and destroy
+          // the request: a synchronous createSocket override that calls
+          // back with an error fires during construction, before the
+          // caller can attach 'error'/'close' listeners — emitting
+          // synchronously would throw (no listener) inside the
+          // constructor's try/catch and be swallowed, losing the error
+          // entirely (test-http-agent-close). destroy(err) gives
+          // error-then-close with destroyed === true, like real Node.
+          if (req._onSocketAssigned) {
+            if (typeof req.onSocketError === "function") {
+              req.onSocketError(err);
+            } else {
+              req.emit("error", err);
+            }
           } else {
-            req.emit("error", err);
+            queueMicrotask(() => {
+              if (!req.destroyed) req.destroy(err);
+            });
           }
           return;
         }
@@ -7821,13 +8034,20 @@ class AgentBase extends EventEmitter {
    * Return a socket to the free pool after a response completes, and process
    * any queued requests waiting for a socket to this origin.
    */
-  releaseSocket(socket, name) {
-    // Remove from active.
+  releaseSocket(socket, name, options) {
+    // Remove from active. Only a socket actually tracked here still
+    // contributes to totalSocketCount: a release racing agent.destroy()
+    // (a user 'end' handler destroying the agent while this release
+    // is still queued behind it in the same 'end' emission) must not
+    // decrement a count destroy() already reset to 0, or the count
+    // goes negative (test-http-agent-maxtotalsockets endgame).
     const active = this.sockets[name];
+    let wasActive = false;
     if (active) {
       const idx = active.indexOf(socket);
       if (idx !== -1) {
         active.splice(idx, 1);
+        wasActive = true;
         if (active.length === 0) delete this.sockets[name];
       }
     }
@@ -7849,8 +8069,9 @@ class AgentBase extends EventEmitter {
       if (!this.keepSocketAlive(socket)) {
         // The hook vetoed pooling: close the socket instead.
         socket.destroy();
-        this.totalSocketCount--;
-        this._processQueue(name);
+        if (wasActive) this.totalSocketCount--;
+        this._emitFree(socket, options);
+        this._drainQueue(name);
         return;
       }
       // Keep-alive: park in the free pool (bounded by maxFreeSockets).
@@ -7901,6 +8122,9 @@ class AgentBase extends EventEmitter {
           const wasPooled = (this.freeSockets[name] || []).includes(socket);
           this.removeSocket(socket, name);
           if (wasPooled) this.totalSocketCount--;
+          // A pooled close frees capacity like any close: drain, so a
+          // queued origin is not left waiting on a dead pool entry.
+          this._drainQueue(name);
         };
         socket.once("close", freeSocketCloseListener);
         // Store for cleanup on reuse (avoid listener leak).
@@ -7926,20 +8150,50 @@ class AgentBase extends EventEmitter {
         };
         socket.once("timeout", onPooledTimeout);
         socket._pooledTimeoutHandler = onPooledTimeout;
-        socket.emit("free");
+        // Pooled sockets carry a null parser (the guard test reads it).
+        socket.parser = null;
+        // Pooled sockets die on FIN again: while active, autoDestroy
+        // is false so the socket survives its response end (see
+        // createSocket); once pooled, restore true so a server FIN
+        // ('end' + self-end + finish) destroys it and the free-pool
+        // close handler removes it (test-http-agent-keepalive's
+        // remoteClose: the pool must empty when the server ends the
+        // connection). Flipping the flag is inert by itself — the
+        // destroy check runs only at end/finish events, and at pool
+        // time neither side has ended.
+        socket.autoDestroy = true;
       } else {
         socket.destroy();
-        this.totalSocketCount--;
+        if (wasActive) this.totalSocketCount--;
       }
     } else {
       socket.destroy();
-      this.totalSocketCount--;
+      if (wasActive) this.totalSocketCount--;
     }
-    // Wake a queued request, if any.
-    this._processQueue(name);
+    // Every release frees the socket: the socket 'free' event fires
+    // whether the socket is pooled or destroyed (real Node emits it
+    // from the release path in both cases), and the agent forwards it
+    // as its own 'free' (test-http-agent-destroyed-socket counts 3
+    // agent 'free' events: release-destroyed, queued-creation,
+    // release-destroyed).
+    this._emitFree(socket, options);
+    // Wake a queued request, if any — via the removeSocket-style drain
+    // (same origin first, else the first queued origin with no active
+    // sockets, gate-bypassing), so a release whose own origin has no
+    // waiter still unblocks other origins
+    // (test-http-agent-maxtotalsockets).
+    this._drainQueue(name);
   }
 
-  _processQueue(name) {
+  // Socket 'free' + agent 'free' for one release. Real Node's agent
+  // forwards the socket's 'free' event (installListeners/onFree), so
+  // both fire, socket first.
+  _emitFree(socket, options) {
+    socket.emit("free");
+    this.emit("free", socket, options);
+  }
+
+  _processQueue(name, bypassGate = false) {
     const queue = this.requests[name];
     if (!queue || queue.length === 0) return;
     // A socket just freed up (or was destroyed); try the next queued request.
@@ -7957,8 +8211,45 @@ class AgentBase extends EventEmitter {
     if (queue.length === 0) delete this.requests[name];
     if (!req) return;
     delete req._agentQueueName;
+    // Mark dequeued requests: when one gets a NEW socket (not a pooled
+    // reuse), real Node emits 'free' for it before assignment — the
+    // removeSocket queue-drain path creates the socket and its
+    // callback does only socket.emit('free')
+    // (test-http-agent-destroyed-socket's free#2).
+    req._fromQueue = true;
+    // Drain creations bypass addRequest's caps (see the creation
+    // gate); initial requests never carry the flag.
+    if (bypassGate) req._drainBypass = true;
     // Re-run addRequest: it will find the free socket or create a new one.
     this.addRequest(req, req._agentOptions || {});
+  }
+
+  // Queue drain, mirroring real Node's removeSocket: the released
+  // origin first, else the first queued origin in key order that has
+  // no active sockets (Node breaks at the first origin WITH active
+  // sockets — it does not scan past it — and drains exactly one
+  // request). The release drain bypasses the creation gate (see
+  // _processQueue): each drain frees exactly one active slot first
+  // (release removes from active before draining; close removes in
+  // removeSocket before waking), so active counts stay within caps
+  // while the total may transiently exceed maxTotalSockets, as on
+  // real Node (test-http-agent-maxtotalsockets). The close drain
+  // passes bypassGate=false: close already freed a slot, so the gate
+  // passes for the freed origin, and gating stops a close that
+  // follows a release from creating a second socket for an origin
+  // whose release drain already assigned one
+  // (test-http-keep-alive-close-on-header).
+  _drainQueue(name, bypassGate = true) {
+    if (typeof this._processQueue !== "function") return;
+    if (this.requests[name]?.length) {
+      this._processQueue(name, bypassGate);
+      return;
+    }
+    for (const prop of Object.keys(this.requests)) {
+      if (this.sockets[prop]?.length) break;
+      this._processQueue(prop, bypassGate);
+      break;
+    }
   }
 
   keepSocketAlive(socket) {
@@ -7992,6 +8283,16 @@ class AgentBase extends EventEmitter {
     ) {
       return false;
     }
+    // Response said `Connection: close`: the server already closed
+    // its side, so pooling this socket hands the next request a dead
+    // peer — its first write dies EPIPE
+    // (test-http-get-pipeline-problem: ten Connection: close
+    // responses through the keep-alive globalAgent must each get a
+    // fresh socket). The flag is stashed per response beside the
+    // hint above and cleared on reuse.
+    if (socket._responseConnectionClose) {
+      return false;
+    }
     return true;
   }
 
@@ -7999,10 +8300,16 @@ class AgentBase extends EventEmitter {
     // A reused socket connected for an earlier request; never replay
     // that 'connect' for the new request.
     socket._connectedBeforeAssign = false;
+    // Back to active duty: autoDestroy false again, so the socket
+    // survives its next response end like a fresh agent socket (the
+    // pool-time true flip is only for FIN-while-pooled).
+    socket.autoDestroy = false;
     // Drop the previous response's keep-alive hint: the next release
     // re-stashes from its own response (or null when it has none), so
     // a stale hint can never veto an unrelated response's pooling.
     socket._serverKeepAliveTimeout = null;
+    // Same for the previous response's Connection: close verdict.
+    socket._responseConnectionClose = false;
     socket._agentReused = true;
     // The socket is checked out of the free pool for a new request; clear the
     // released flag so _releaseAgentSocket can park it again on completion.

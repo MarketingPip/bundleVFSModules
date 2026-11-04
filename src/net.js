@@ -1692,6 +1692,17 @@ Socket.prototype._flushPendingWrites = function _flushPendingWrites() {
 
 Socket.prototype._receiveFromPeer = function _receiveFromPeer(buf) {
   if (this.destroyed) return;
+  // Idle-socket read guard (test-http-agent-free-socket-data-guard,
+  // HackerOne #3582376): unsolicited data on a pooled socket means
+  // response-queue poisoning — destroy it instead of buffering the
+  // bytes for the next request. The pooled close listener removes it
+  // from the agent's free pool and drops the count. Reused sockets
+  // have _inFreePool cleared (reuseSocket), so live responses are
+  // unaffected.
+  if (this._inFreePool) {
+    this.destroy();
+    return;
+  }
   this._bytesRead += buf ? buf.length : 0;
   this._refreshTimeout();
   this.push(buf);
@@ -1790,6 +1801,30 @@ Socket.prototype._destroy = function _destroy(exception, cb) {
     }
   }
 };
+
+// autoDestroy as a real accessor (the ported streams define it only as
+// a state bit, so a plain assignment created an inert own property and
+// the socket kept auto-destroying on finish+end). Agent sockets set
+// autoDestroy = false at creation (the agent owns their lifecycle);
+// without this accessor that assignment did nothing, and a client
+// socket died on its own finish+end before the response message's
+// 'end' handlers ran (test-http-agent-destroyed-socket: 'end' handlers
+// must see destroyed === false). Getter mirrors Node: true only when
+// both sides auto-destroy.
+Object.defineProperty(Socket.prototype, "autoDestroy", {
+  enumerable: false,
+  configurable: true,
+  get() {
+    return Boolean(
+      this._readableState?.autoDestroy && this._writableState?.autoDestroy,
+    );
+  },
+  set(value) {
+    const v = Boolean(value);
+    if (this._readableState) this._readableState.autoDestroy = v;
+    if (this._writableState) this._writableState.autoDestroy = v;
+  },
+});
 
 // Abortive close: the peer sees ECONNRESET instead of a graceful FIN.
 Socket.prototype.resetAndDestroy = function resetAndDestroy(err) {
