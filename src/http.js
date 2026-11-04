@@ -2215,16 +2215,98 @@ export class ServerResponse extends OutgoingMessage {
     return this.writeHead(statusCode, reason, obj);
   }
 
-  // 1xx informational responses cannot be emitted through the emulated
-  // server bridge; they are accepted and ignored (noop over throw).
-  writeContinue() {}
-  writeProcessing() {}
-  writeEarlyHints(hints, callback) {
+  // 1xx interim responses ride the socket as raw status lines ahead of
+  // the final response (test-http-information-*, test-http-early-hints,
+  // test-http-expect-continue): the client round trip routes them to
+  // 'continue' (100) / 'information' (other 1xx) instead of 'response'.
+  // ponytail: one shared renderer + socket write; no new stream state —
+  // interim bytes are fire-and-forget wire bytes, and the final response
+  // still frames through _finishSocketResponse. Ceiling: pipelined
+  // responses with a null socket drop interim bytes (no test covers
+  // interim + pipelined-unfinished).
+  _writeInterim(statusCode, pairs) {
+    const sock = this.socket;
+    if (!sock || sock.destroyed || sock.constructor.name === "FakeSocket") {
+      return;
+    }
+    let head = `HTTP/1.1 ${statusCode} ${STATUS_CODES[statusCode] || ""}\r\n`;
+    for (const [name, value] of pairs) head += `${name}: ${value}\r\n`;
+    head += "\r\n";
+    try {
+      sock.write(head);
+    } catch {
+      /* a failed socket write must not break the final response */
+    }
+  }
+
+  _checkInterimHeadersSent(op) {
+    if (this.headersSent) throw ERR_HTTP_HEADERS_SENT(op);
+  }
+
+  writeContinue(callback) {
+    this._checkInterimHeadersSent("write");
+    this._writeInterim(100, []);
     if (typeof callback === "function") queueMicrotask(callback);
   }
-  writeInformation(info, callback) {
+
+  writeProcessing(callback) {
+    this._checkInterimHeadersSent("write");
+    this._writeInterim(102, []);
     if (typeof callback === "function") queueMicrotask(callback);
-    return false;
+  }
+
+  writeEarlyHints(hints, callback) {
+    if (typeof hints !== "object" || hints === null) {
+      throw ERR_INVALID_ARG_TYPE("hints", "object", hints);
+    }
+    // Probed real Node v24.22.1: headers-sent reports as ARG_VALUE here,
+    // not HEADERS_SENT (unlike writeContinue/writeInformation).
+    if (this.headersSent) {
+      throw ERR_INVALID_ARG_VALUE("hints", hints, "headers already sent");
+    }
+    const pairs = [];
+    for (const name of Object.keys(hints)) {
+      validateHeaderName(name);
+      const value = hints[name];
+      if (Array.isArray(value)) {
+        if (value.length === 0) continue;
+        for (const el of value) validateHeaderValue(name, el);
+        pairs.push([name, value.map(String).join(", ")]);
+      } else {
+        validateHeaderValue(name, value);
+        pairs.push([name, String(value)]);
+      }
+    }
+    // Empty hints ({} or all-empty arrays) send nothing — the client
+    // observes no 'information' event (test-http-early-hints).
+    if (pairs.length > 0) this._writeInterim(103, pairs);
+    if (typeof callback === "function") queueMicrotask(callback);
+  }
+
+  writeInformation(statusCode, headers, callback) {
+    if (typeof statusCode !== "number") {
+      throw ERR_INVALID_ARG_TYPE("statusCode", "number", statusCode);
+    }
+    if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 199) {
+      throw ERR_OUT_OF_RANGE("statusCode", "100-199", statusCode);
+    }
+    if (statusCode === 101) {
+      throw ERR_HTTP_INVALID_STATUS_CODE(statusCode);
+    }
+    this._checkInterimHeadersSent("write");
+    const pairs = [];
+    if (headers !== undefined && headers !== null) {
+      const list = Array.isArray(headers) ? headers : Object.entries(headers);
+      for (const entry of list) {
+        const [name, value] = Array.isArray(entry) ? entry : [entry, undefined];
+        validateHeaderName(name);
+        validateHeaderValue(name, value);
+        pairs.push([name, String(value)]);
+      }
+    }
+    this._writeInterim(statusCode, pairs);
+    if (typeof callback === "function") queueMicrotask(callback);
+    return true;
   }
 
   assignSocket(socket) {
@@ -4212,6 +4294,29 @@ export class ClientRequest extends OutgoingMessage {
       this._onSocketAssigned = null;
       resolve(socket);
     }
+    // Expect requests must put their head on the wire before end(): the
+    // server can only answer (100 Continue / 417) once it sees the head,
+    // and an expect-continue client only ends after 'continue' fires
+    // (test-http-expect-continue) — a buffered head would deadlock.
+    // Start the streaming round trip at assignment when an Expect header
+    // is present; _streamEnsureStarted no-ops (buffered path at end())
+    // for stream-ineligible shapes like GET + Expect, and for
+    // non-virtual targets. ponytail: reuses the existing streaming path
+    // (which already renders chunked framing exactly like Node's
+    // expect-continue wire bytes); ceiling: headers set after assignment
+    // miss the stream snapshot — no test covers post-assignment
+    // setHeader on Expect requests.
+    if (
+      !this._ended &&
+      !this._aborted &&
+      this._stream === undefined &&
+      (this.getHeader("expect") !== undefined ||
+        this._headersArray?.some(
+          ([n]) => String(n).toLowerCase() === "expect",
+        ))
+    ) {
+      this._streamEnsureStarted();
+    }
   }
 
   /**
@@ -4582,6 +4687,34 @@ export class ClientRequest extends OutgoingMessage {
             this._responseReceived = true;
             this._inFlightMessage = msg;
             this.emit("response", msg);
+          },
+          // 1xx interim: 100 → the request's 'continue' event, other 1xx
+          // → 'information' carrying a full IncomingMessage (status,
+          // version 1.1, raw headers preserved). Mirrors onHeaders but
+          // without response bookkeeping: an interim message is not the
+          // in-flight response (no timeout attach, no _responseObserved).
+          onInformation: (info) => {
+            if (this._aborted) return;
+            if (info.statusCode === 100) {
+              this.emit("continue");
+              return;
+            }
+            const msg = new IncomingMessage();
+            msg.statusCode = info.statusCode;
+            msg.statusMessage =
+              info.statusMessage || STATUS_CODES[info.statusCode] || "";
+            msg.httpVersion = "1.1";
+            msg.httpVersionMajor = 1;
+            msg.httpVersionMinor = 1;
+            const pairs = [];
+            for (let i = 0; i < info.rawHeaders.length; i += 2) {
+              pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
+            }
+            IncomingMessage._applyRawHeaders(msg, pairs);
+            msg.socket = this.socket;
+            msg.connection = this.socket;
+            msg.req = this;
+            this.emit("information", msg);
           },
           onBody: (chunk) => {
             if (streamedMsg && !this._aborted) {
@@ -5604,6 +5737,9 @@ function _socketHttpRoundTrip(
     onSocket,
     onHeaders,
     onBody,
+    // 1xx interim routing: the caller (ClientRequest) delivers these as
+    // 'continue'/'information' instead of the final 'response'.
+    onInformation,
     streaming,
     headBytes,
     onStreamReady,
@@ -5735,6 +5871,24 @@ function _socketHttpRoundTrip(
         });
         return;
       }
+      // 1xx interim (except 101 upgrade, handled above): delivered to the
+      // caller as information, never as the final response — the round
+      // trip stays open for the real response (test-http-information-*).
+      // A caller without onInformation keeps the old shape (1xx as
+      // 'response') rather than hanging.
+      if (
+        info.statusCode >= 100 &&
+        info.statusCode <= 199 &&
+        info.statusCode !== 101 &&
+        typeof onInformation === "function"
+      ) {
+        try {
+          onInformation(info);
+        } catch {
+          /* listener errors are not fatal */
+        }
+        return;
+      }
       // Streaming: notify the caller immediately so it can emit 'response'.
       if (typeof onHeaders === "function") {
         try {
@@ -5766,6 +5920,11 @@ function _socketHttpRoundTrip(
       // the error, which is what the test counts). A second complete
       // message in the same chunk never overwrites the first — only a
       // later error overrides, via fail() above.
+      // Interim messages complete without settling the round trip: the
+      // deferred result must describe the FINAL response, not a 1xx.
+      if (info.statusCode >= 100 && info.statusCode <= 199 && info.statusCode !== 101) {
+        return;
+      }
       if (!pendingResult) {
         pendingResult = {
           statusCode: info.statusCode,
@@ -6693,29 +6852,16 @@ class ServerBase extends EventEmitter {
       state.awaitingBody = info.hasBody;
       const created = this._dispatchSocketRequest(socket, info, state);
       state.current = created;
-      // Wired BEFORE the 100-continue ack below: net.js virtual sockets
-      // deliver writes synchronously, so the interim response can
-      // reentrantly pull the request body in on this same tick.
-      parser.onBody = (chunk) => created.req._pushBody(chunk);
-      parser.onMessageComplete = () => {
-        state.awaitingBody = false;
-        state.receiving = false;
-        // Trailers arrive with the chunked terminator, after dispatch:
-        // fold them into the request before 'end' fires, so handlers
-        // asserting req.rawTrailers / req.trailers in 'end' see them
-        // (test-http-multiple-headers). parser.rawTrailers resets per
-        // message (_resetMessage), so no cross-request leak. The client
-        // round-trip path already applies its own copy (result.rawTrailers).
-        if (parser.rawTrailers && parser.rawTrailers.length > 0) {
-          IncomingMessage._applyRawTrailers(created.req, parser.rawTrailers);
-        }
-        created.req._finishBody();
-        state.current = null;
-      };
+      // Body callbacks are wired inside dispatch (before emit) now, so
+      // a reentrant body pulled by an interim reply is not lost; the
+      // 100-continue auto-ack stays gated on no checkContinue listener
+      // (a listener owns the reply via writeContinue instead).
       if (
-        info.headers.expect === "100-continue" &&
+        typeof info.headers.expect === "string" &&
+        info.headers.expect.toLowerCase() === "100-continue" &&
         info.httpVersionMajor === 1 &&
-        info.httpVersionMinor === 1
+        info.httpVersionMinor === 1 &&
+        this.listenerCount("checkContinue") === 0
       ) {
         socket.write("HTTP/1.1 100 Continue\r\n\r\n");
       }
@@ -6985,6 +7131,29 @@ class ServerBase extends EventEmitter {
     }
     IncomingMessage._applyRawHeaders(req, pairs);
 
+    // Body callbacks are wired BEFORE any emit below: a handler may
+    // synchronously emit interim bytes (writeContinue) whose client
+    // reply (the request body) arrives reentrantly through synchronous
+    // virtual delivery — wiring after dispatch (the old shape, in the
+    // outer onHeadersComplete) drops that body and never fires req
+    // 'end' (test-http-expect-continue). Non-reentrant behavior is
+    // unchanged: these are the same closures, just bound earlier.
+    state.parser.onBody = (chunk) => req._pushBody(chunk);
+    state.parser.onMessageComplete = () => {
+      state.awaitingBody = false;
+      state.receiving = false;
+      // Trailers arrive with the chunked terminator, after dispatch:
+      // fold them into the request before 'end' fires, so handlers
+      // asserting req.rawTrailers / req.trailers in 'end' see them
+      // (test-http-multiple-headers). parser.rawTrailers resets per
+      // message (_resetMessage), so no cross-request leak.
+      if (state.parser.rawTrailers && state.parser.rawTrailers.length > 0) {
+        IncomingMessage._applyRawTrailers(req, state.parser.rawTrailers);
+      }
+      req._finishBody();
+      state.current = null;
+    };
+
     // CONNECT requests are not 'request' dispatches: Node emits 'connect'
     // with (req, socket, head) and hands the socket to the app as a tunnel
     // (test-http-server-unconsume-consume). With no 'connect' listener the
@@ -7209,6 +7378,79 @@ class ServerBase extends EventEmitter {
       return { req, res: dropRes };
     }
 
+    // Expect routing (test-http-expect-continue, test-http-expect-handling,
+    // probed real Node v24.22.1): 'Expect: 100-continue' with a
+    // checkContinue listener dispatches to 'checkContinue' (never
+    // 'request'); any other Expect value with a checkExpectation
+    // listener dispatches to 'checkExpectation'; any other Expect value
+    // with NEITHER listener is answered 417 Expectation Failed with
+    // Connection: close through the normal finish machinery (mirroring
+    // the drop branch above), and 'request' never fires. With no
+    // Expect header, or 100-continue with no listener, dispatch is the
+    // normal 'request' (the auto-ack in onHeadersComplete covers the
+    // no-listener 100 case).
+    let dispatchEvent = "request";
+    let expect417 = false;
+    const expectVal = req.headers.expect;
+    if (expectVal !== undefined) {
+      if (String(expectVal).toLowerCase() === "100-continue") {
+        if (this.listenerCount("checkContinue") > 0) {
+          dispatchEvent = "checkContinue";
+        }
+      } else if (this.listenerCount("checkExpectation") > 0) {
+        dispatchEvent = "checkExpectation";
+      } else {
+        expect417 = true;
+      }
+    }
+    if (expect417) {
+      const prevRes417 = state.lastResponse;
+      const res417 = new ServerResponse(req, {
+        highWaterMark: this._highWaterMark,
+        rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
+        lenientHeaderValidation: this._lenientHeaderValidation,
+      });
+      const prevUnfinished417 =
+        state.lastResponse && !state.lastResponse.finished;
+      if (prevUnfinished417) {
+        res417.socket = null;
+        res417.connection = null;
+      }
+      const sockHwm417 = socket?.writableHighWaterMark;
+      if (typeof sockHwm417 === "number" && res417._writableState) {
+        res417._writableState.highWaterMark = sockHwm417;
+      }
+      state.lastResponse = res417;
+      const reqNo417 = state.reqCount;
+      res417.shouldKeepAlive = false;
+      res417._serverKeepAliveTimeout = this.keepAliveTimeout;
+      res417._serverMaxRequestsPerSocket = this.maxRequestsPerSocket;
+      res417._serverReqNo = reqNo417;
+      res417[kUniqueHeaders] = this._serverUniqueHeaders;
+      res417._reqHadTE = /chunked/i.test(
+        String(req.headers?.te || req.headers?.TE || ""),
+      );
+      res417.on("finish", () => {
+        this._finishSocketResponse(
+          socket,
+          info,
+          state,
+          req,
+          res417,
+          reqNo417,
+        );
+      });
+      state.inFlight++;
+      res417.writeHead(417);
+      if (prevRes417 && !prevRes417.writableFinished && !prevRes417.destroyed) {
+        prevRes417.once("finish", () => res417.end());
+      } else {
+        res417.end();
+      }
+      if (!info.hasBody) req._finishBody();
+      return { req, res: res417 };
+    }
+
     const res = new ServerResponse(req, {
       highWaterMark: this._highWaterMark,
       rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
@@ -7329,10 +7571,13 @@ class ServerBase extends EventEmitter {
     // before the microtask, closing the socket under the pending response.
     // (test-http-chunk-extensions-limit)
     try {
-      if (this._captureRejections) {
+      // captureRejections covers 'request' only; checkContinue /
+      // checkExpectation dispatch through a plain emit (a sync throw
+      // still lands in clientError below, as before).
+      if (dispatchEvent === "request" && this._captureRejections) {
         this._emitRequestCaptured(req, res);
       } else {
-        this.emit("request", req, res);
+        this.emit(dispatchEvent, req, res);
       }
     } catch (err) {
       this.emit("clientError", err, socket);
