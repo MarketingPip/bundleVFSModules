@@ -141,6 +141,8 @@ const ERR_HTTP_CONTENT_LENGTH_MISMATCH = (actual, expected) =>
     "ERR_HTTP_CONTENT_LENGTH_MISMATCH",
     `Response body's content-length of ${actual} byte(s) does not match the content-length of ${expected} byte(s) set in header`,
   );
+const ERR_HTTP_SOCKET_ASSIGNED = () =>
+  makeError("ERR_HTTP_SOCKET_ASSIGNED", "Socket already assigned");
 const ERR_INVALID_ARG_TYPE = (name, expected, actual) =>
   makeError(
     "ERR_INVALID_ARG_TYPE",
@@ -1729,6 +1731,31 @@ export class ServerResponse extends OutgoingMessage {
     // statusMessage stays undefined until writeHead (Node: prototype default).
     this.sendDate = true;
     this._resolve = null;
+    // Standalone responses (test-http-server-response-standalone) have
+    // no dispatch finish listener to serialize them: at finish, flush
+    // the rendered header block + buffered body to the assigned socket
+    // followed by an empty write (real Node's final empty socket
+    // write). Dispatch-created responses carry _serverReqNo (set by
+    // dispatch before finish can fire) and are serialized by
+    // _finishSocketResponse instead, so they skip this.
+    this.once("finish", () => {
+      if (this._serverReqNo !== undefined) return;
+      const sock = this.socket;
+      if (!sock || sock.destroyed || sock.constructor.name === "FakeSocket") {
+        return;
+      }
+      try {
+        const body = Buffer.concat(this.outputData.map((e) => e.data));
+        const header =
+          this._headerFlushed || !this._header
+            ? Buffer.alloc(0)
+            : Buffer.from(this._header, "latin1");
+        sock.write(Buffer.concat([header, body]));
+        sock.write(Buffer.alloc(0));
+      } catch {
+        /* socket write failed; ignore */
+      }
+    });
     // Streaming state: once headers are flushed to the socket, writes go
     // directly instead of buffering (needed for abort/destroy tests where
     // the client must see the response before res.end()).
@@ -2201,6 +2228,13 @@ export class ServerResponse extends OutgoingMessage {
   }
 
   assignSocket(socket) {
+    // Probed real Node v24.22.1: only assignSocket itself arms the
+    // guard — a second assignSocket throws ERR_HTTP_SOCKET_ASSIGNED
+    // (test-http-server-response-standalone), while a server-created
+    // response (whose socket arrives via the dispatch path, not this
+    // method) still accepts one assignSocket call.
+    if (this._socketAssigned) throw ERR_HTTP_SOCKET_ASSIGNED();
+    this._socketAssigned = true;
     this.socket = socket;
     this.connection = socket;
   }
@@ -4604,15 +4638,37 @@ export class ClientRequest extends OutgoingMessage {
         }
         if (!isAbort) {
           // Map socket-closed errors to ECONNRESET (Node behavior when the
-          // server destroys the response mid-stream).
+          // server destroys the response mid-stream) — but only when
+          // the response stream actually listens for 'error': emitting
+          // an unlistened 'error' throws inside this catch, skipping
+          // the stream destroy and the request close below (and the
+          // throw is then swallowed upstream, so the request just never
+          // closes — test-http-server-capture-rejections block 2, whose
+          // client attaches no res 'error' listener, hung on its req
+          // 'close' mustCall exactly this way). Real Node passes that
+          // test, so its error delivery here is effectively guarded.
           const e = err instanceof Error ? err : new Error(String(err));
           e.code = "ECONNRESET";
-          streamedMsg.emit("error", e);
+          if (streamedMsg.listenerCount("error") > 0) {
+            streamedMsg.emit("error", e);
+          }
         }
         // Don't call _finishBody() — 'end' must NOT fire on abort.
         // Destroy the message which emits 'close'.
         try {
           streamedMsg.destroy();
+        } catch {
+          /* best effort */
+        }
+        // The request itself closes when its socket dies mid-response
+        // (probed v24.22.1: req 'close' fires, no req 'error' — the
+        // error went to the response stream). ClientRequest.destroy()
+        // synthesizes ECONNRESET only before a response arrives, and
+        // _responseReceived is set for a streamed response, so this
+        // stays error-free (test-http-server-capture-rejections
+        // block 2: req 'close' with the partial body intact).
+        try {
+          this.destroy();
         } catch {
           /* best effort */
         }
@@ -5870,6 +5926,25 @@ function _socketHttpRoundTrip(
   });
 }
 
+// Server timeout option validation (probed real Node v24.22.1):
+// headersTimeout / requestTimeout / keepAliveTimeout must be integers
+// in [0, 2^53 - 1] when given (null is a type error, not "missing"),
+// and headersTimeout must be <= requestTimeout unless requestTimeout
+// is 0 (disabled). No official test covers the error shapes beyond
+// the code, but the values are asserted exactly.
+const _validateServerTimeout = (name, value) => {
+  if (value === undefined) return;
+  if (typeof value !== "number") {
+    throw ERR_INVALID_ARG_TYPE_ARGUMENT(name, "number", value);
+  }
+  if (!Number.isInteger(value)) {
+    throw ERR_OUT_OF_RANGE(name, "an integer", value);
+  }
+  if (value < 0 || value > Number.MAX_SAFE_INTEGER) {
+    throw ERR_OUT_OF_RANGE(name, ">= 0 && <= 9007199254740991", value);
+  }
+};
+
 class ServerBase extends EventEmitter {
   constructor(optionsOrListener, requestListener) {
     super();
@@ -5985,9 +6060,38 @@ class ServerBase extends EventEmitter {
         options.insecureHTTPParser === undefined &&
         _insecureHttpParserFlag());
     this.timeout = 0;
-    this.headersTimeout = options.headersTimeout ?? 60000;
+    // Timeout defaulting (probed v24.22.1): requestTimeout defaults to
+    // 300000, and headersTimeout defaults to min(requestTimeout, 60000)
+    // — so { requestTimeout: 20000 } reads headersTimeout 20000, while
+    // { requestTimeout: 100000 } keeps the 60000 ceiling.
+    _validateServerTimeout("headersTimeout", options.headersTimeout);
+    _validateServerTimeout("requestTimeout", options.requestTimeout);
+    _validateServerTimeout("keepAliveTimeout", options.keepAliveTimeout);
     this.requestTimeout = options.requestTimeout ?? 300000;
+    this.headersTimeout =
+      options.headersTimeout ?? Math.min(this.requestTimeout, 60000);
     this.keepAliveTimeout = options.keepAliveTimeout ?? 5000;
+    if (
+      this.requestTimeout !== 0 &&
+      this.headersTimeout > this.requestTimeout
+    ) {
+      throw ERR_OUT_OF_RANGE(
+        "headersTimeout",
+        "<= requestTimeout",
+        this.headersTimeout,
+      );
+    }
+    // optimizeEmptyRequests (probed v24.22.1): with the option, a
+    // request carrying neither Content-Length nor Transfer-Encoding is
+    // delivered already dumped (see dispatch).
+    this._optimizeEmptyRequests = options.optimizeEmptyRequests === true;
+    // Async request-listener rejections are captured only when the
+    // EventEmitter capture default was on at construction (probed
+    // v24.22.1: the global events.captureRejections at createServer
+    // time decides; a later global flip or an own property does not).
+    // The static reads in both builds: native events under the harness,
+    // the shim's mirrored static in the browser build.
+    this._captureRejections = EventEmitter.captureRejections === true;
     // createServer({ IncomingMessage }) — the per-request message class.
     // Stored raw; dispatch uses it only when it is a constructor, so an
     // invalid value falls back to the default instead of crashing the
@@ -7116,6 +7220,58 @@ class ServerBase extends EventEmitter {
     // response finishes, or a half-closed socket is destroyed under it.
     state.inFlight++;
 
+    // optimizeEmptyRequests (probed v24.22.1): header presence — not
+    // method or value — decides. A request with neither Content-Length
+    // nor Transfer-Encoding arrives already dumped: _dumped,
+    // readableEnded and destroyed all read true at listener time, and
+    // no 'data'/'end' ever fires for it (complete short-circuits
+    // _finishBody below and at message completion). POST with
+    // Content-Length: 0 and HEAD with Content-Length stay unoptimized.
+    if (
+      this._optimizeEmptyRequests &&
+      req.headers["content-length"] === undefined &&
+      req.headers["transfer-encoding"] === undefined
+    ) {
+      req._dumped = true;
+      req.complete = true;
+      if (req._readableState) {
+        req._readableState.ended = true;
+        req._readableState.endEmitted = true;
+        req._readableState.destroyed = true;
+      }
+    }
+
+    // test-http-server-keepalive-end: the socket parser facade tracks
+    // the in-flight request. incoming reads req from dispatch until the
+    // tick after req 'end' (probed v24.22.1). The once('end') hook is
+    // registered before emit so it runs ahead of user 'end' handlers
+    // (registration order): user handlers still see incoming === req,
+    // and the queued nextTick nulls it before any nextTick a user
+    // handler schedules. The identity check keeps a pipelined successor
+    // from being nulled by its predecessor's hook. nextTick via
+    // globalThis.process (real under the harness); queueMicrotask
+    // fallback would run after user nextTicks, so it is only a
+    // no-crash fallback for builds without a process shim.
+    if (socket.parser) socket.parser.incoming = req;
+    req.once("end", () => {
+      // Capture the facade object, not the live socket.parser slot:
+      // onHttpClose nulls the slot at socket close, but a test holding
+      // the facade (keepalive-end captures it inside 'end') must still
+      // see incoming nulled on the next tick even if the close landed
+      // between 'end' and this tick.
+      const facade = socket.parser;
+      const run = () => {
+        if (facade && facade.incoming === req) {
+          facade.incoming = null;
+        }
+      };
+      if (typeof globalThis.process?.nextTick === "function") {
+        globalThis.process.nextTick(run);
+      } else {
+        queueMicrotask(run);
+      }
+    });
+
     // Dispatch synchronously, like Node's parserOnIncoming: the handler
     // must attach its req listeners before the parser feeds the body and
     // before a peer FIN queued behind this chunk is processed. Deferring
@@ -7124,13 +7280,64 @@ class ServerBase extends EventEmitter {
     // before the microtask, closing the socket under the pending response.
     // (test-http-chunk-extensions-limit)
     try {
-      this.emit("request", req, res);
+      if (this._captureRejections) {
+        this._emitRequestCaptured(req, res);
+      } else {
+        this.emit("request", req, res);
+      }
     } catch (err) {
       this.emit("clientError", err, socket);
       socket.destroy(err);
     }
     if (!info.hasBody) req._finishBody();
     return { req, res };
+  }
+
+  // Async request-listener rejections under captureRejections (probed
+  // v24.22.1): listeners are invoked directly, not via emit, so the
+  // native capture path cannot also emit 'error' on the server (real
+  // Node sends the 500 / destroys without any server 'error' event).
+  // rawListeners preserves once-wrapper semantics; a sync throw still
+  // propagates to the dispatch catch (clientError + socket destroy).
+  _emitRequestCaptured(req, res) {
+    const listeners =
+      typeof this.rawListeners === "function"
+        ? this.rawListeners("request")
+        : this.listeners("request");
+    for (const fn of listeners) {
+      const ret = fn.call(this, req, res);
+      if (ret && typeof ret.catch === "function") {
+        ret.catch((err) => this._onRequestListenerRejection(req, res, err));
+      }
+    }
+  }
+
+  // Rejection outcome (probed v24.22.1): a rejection after the response
+  // already finished is ignored (the client already got a clean 200);
+  // before headers are sent it becomes a clean 500 ("Internal Server
+  // Error", user headers dropped — only Date/Connection/Keep-Alive/
+  // Content-Length go out); after headers are sent the response is
+  // destroyed with the error (the client sees res 'aborted' +
+  // ECONNRESET once body bytes were delivered, or bare ECONNRESET on
+  // the request when nothing was delivered yet).
+  _onRequestListenerRejection(req, res, err) {
+    if (!res || res.finished || res.destroyed) return;
+    if (!res.headersSent) {
+      res[kOutHeaders] = null;
+      res._renderedHeaders = null;
+      try {
+        res.writeHead(500);
+        res.end("Internal Server Error");
+      } catch {
+        /* handler already tore the response down */
+      }
+      return;
+    }
+    try {
+      res.destroy(err);
+    } catch {
+      /* best effort */
+    }
   }
 
   /**
@@ -7143,6 +7350,22 @@ class ServerBase extends EventEmitter {
     // end-then-destroy case — never deliver twice.
     if (res._finishDelivered) return;
     res._finishDelivered = true;
+    // test-http-server-keepalive-end: real Node drains an unconsumed
+    // request body when its response finishes, so req 'end' fires even
+    // with only an 'end' listener (probed v24.22.1: 'end' fires with
+    // res.end, never without it — writes alone do not dump). Resuming
+    // here flows buffered body + EOF through the stream machinery;
+    // this also covers the already-complete-but-never-ended case
+    // (body arrived before finish, stream never consumed), which a
+    // complete-only guard would miss. A destroyed or already-ended
+    // (or already-dumped: readableEnded) request skips this.
+    if (req && !req.destroyed && !req.readableEnded) {
+      try {
+        req.resume();
+      } catch {
+        /* best effort */
+      }
+    }
     // Streaming case: headers + body were already flushed via write().
     // Just terminate the chunked stream (if used) and handle keep-alive.
     // ponytail: non-chunked streaming responses need their pended frame
@@ -7479,13 +7702,46 @@ class ServerBase extends EventEmitter {
       // Not keep-alive: destroy (not just end) so both sides release their
       // loop timers and the process can exit. (end() alone leaves the
       // virtual socket half-open.)
-      try {
-        socket.destroy();
-      } catch {
+      // Peer half-closed exception (test-http-server-keepalive-end):
+      // the dump hook above resumed the request this same tick, so its
+      // 'end' is queued as a nextTick and has not fired yet — destroying
+      // now nulls socket.parser (onHttpClose) before 'end' handlers run,
+      // and the test reads req.socket.parser.incoming inside 'end'.
+      // Defer one nextTick: it queues after the 'end' delivery but
+      // before the nextTick a user 'end' handler schedules, so 'end'
+      // still sees a live parser and the post-'end' check still sees
+      // null. Narrowly scoped to peerEnded + a not-yet-ended request;
+      // all other closes stay synchronous. (The nextTick fallback only
+      // matters in builds without a process shim, where this test
+      // cannot run — the harness guarantees globalThis.process.nextTick.)
+      if (
+        state.peerEnded &&
+        req &&
+        !req.destroyed &&
+        !req.readableEnded &&
+        typeof globalThis.process?.nextTick === "function"
+      ) {
+        const closingSocket = socket;
+        globalThis.process.nextTick(() => {
+          try {
+            closingSocket.destroy();
+          } catch {
+            try {
+              closingSocket.end();
+            } catch {
+              /* ignore */
+            }
+          }
+        });
+      } else {
         try {
-          socket.end();
+          socket.destroy();
         } catch {
-          /* ignore */
+          try {
+            socket.end();
+          } catch {
+            /* ignore */
+          }
         }
       }
     }
