@@ -636,12 +636,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/http-agent-lifecycle-pool branch: agent pool/release/queue/
     // signal/error lifecycle (src/http.js + src/net.js).
     expect(nonDist.sort()).toEqual(
-      [
-        "src/http.js",
-        "parity/preload.mjs",
-        "parity/http-server-adapter.mjs",
-        "NOTES-http-server-lifecycle-b.md",
-      ].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
