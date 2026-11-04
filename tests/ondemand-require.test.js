@@ -632,7 +632,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // deferral + destroy/abort ECONNRESET for pending requests)
     // (src/http.js only).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      [
+        "src/net.js",
+        "parity/preload.mjs",
+        "parity/internal-timers-adapter.mjs",
+        "NOTES-http-timeout-on-connect.md",
+      ].sort(),
     );
   });
 

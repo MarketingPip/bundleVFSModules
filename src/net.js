@@ -820,6 +820,19 @@ VirtualHandle.prototype.close = function close() {};
 // Extends our own ./stream.js Duplex (NOT stream-browserify).
 // ---------------------------------------------------------------------------
 
+// ponytail: the socket timeout slot is keyed by a Symbol.for bridge, not
+// real Node's internal/timers kTimeout — product code cannot import Node
+// internals (the browser build cannot resolve internal modules). The parity
+// adapter parity/internal-timers-adapter.mjs exports this same key, so
+// tests reading socket[kTimeout] see the slot. Real Node keeps the timer
+// object in the slot on arm, re-arm, clear, fire, and destroy (cleared
+// timers read _idleTimeout -1, _destroyed true) — it is never nulled after
+// first arming, so this slot mirrors that instead of tracking _idleTimer.
+// Ceiling: a test asserting symbol identity against real Node's kTimeout
+// cannot pass through this bridge — that would need a harness-injected
+// symbol, and no vendored test asserts it.
+const kTimeout = Symbol.for("bundleVFSModules.net.kTimeout");
+
 function Socket(options = {}) {
   if (!(this instanceof Socket)) return new Socket(options);
   if (options !== null && typeof options !== "object") {
@@ -848,6 +861,7 @@ function Socket(options = {}) {
   this._bytesRead = 0;
   this._bytesWritten = 0;
   this._idleTimer = null;
+  this[kTimeout] = null;
   this._noDelay = false;
   this._keepAlive = false;
   this._keepAliveInitialDelay = 0;
@@ -1190,15 +1204,22 @@ Socket.prototype._maybeReleaseLoop = function _maybeReleaseLoop() {
 
 Socket.prototype._clearIdleTimer = function _clearIdleTimer() {
   if (this._idleTimer !== null) {
-    clearTimeout(this._idleTimer);
+    const timer = this._idleTimer;
+    clearTimeout(timer);
     this._idleTimer = null;
+    // Probed on real Node: clearing keeps the (now _destroyed) timer in
+    // socket[kTimeout]; the slot is never nulled after first arming.
+    this[kTimeout] = timer;
   }
 };
 Socket.prototype._refreshTimeout = function _refreshTimeout() {
   this._clearIdleTimer();
   if (this.timeout > 0 && !this.destroyed) {
     this._idleTimer = setTimeout(() => {
+      const timer = this._idleTimer;
       this._idleTimer = null;
+      // Probed on real Node: the fired timer stays in socket[kTimeout].
+      this[kTimeout] = timer;
       this.emit("timeout");
     }, this.timeout);
     // Matches Node: the socket idle timer is unref'd.
@@ -1209,6 +1230,7 @@ Socket.prototype._refreshTimeout = function _refreshTimeout() {
         /* ignore */
       }
     }
+    this[kTimeout] = this._idleTimer;
   }
 };
 // setStreamTimeout port: no-op on destroyed sockets; `timeout` is stored

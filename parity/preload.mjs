@@ -383,6 +383,20 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // The http timeout-on-connect test reads socket[kTimeout] from
+    // `internal/timers`. Same treatment as `internal/event_target` above:
+    // the shim's socket carries the timeout slot under a Symbol.for
+    // bridge (product code cannot import Node internals), and this
+    // adapter exports that bridge key so the test sees the slot. See
+    // parity/internal-timers-adapter.mjs and src/net.js.
+    if (target === "http" && bare === "internal/timers") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-timers-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
   }
   return origLoad.call(this, request, parent, isMain);
 };
