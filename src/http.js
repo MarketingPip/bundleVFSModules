@@ -5945,6 +5945,28 @@ const _validateServerTimeout = (name, value) => {
   }
 };
 
+// Bridge key for the connections-checker interval object that
+// test-http-server-{async-dispose,clear-timer,close-destroy-timeout}
+// read via require("_http_server").kConnectionsCheckingInterval.
+// Real Node (probed v24.22.1): the slot is undefined at construction;
+// each 'listening' emit destroys the previous interval object and
+// creates a NEW one (a Timeout with _destroyed=false); close()
+// destroys the current one (same object identity afterwards).
+// Product code cannot import Node internals, so the shim exposes the
+// slot under this Symbol.for key, and parity/http-server-adapter.mjs
+// exports the identical key — the global registry is the sharing
+// mechanism (same precedent as src/net.js kTimeout /
+// internal-timers-adapter).
+// ponytail: the bridged value is a plain {_destroyed} object, not a
+// real Timeout — no suite test asserts timer identity or firing, only
+// _destroyed; the shim's real checker timer (_checkTimer, started
+// lazily on first connection) stays separate. Ceiling: if a test ever
+// asserts the object IS a Timeout, this bridge needs a real timer
+// behind it.
+const kConnectionsCheckingInterval = Symbol.for(
+  "bundleVFSModules.http.kConnectionsCheckingInterval",
+);
+
 class ServerBase extends EventEmitter {
   constructor(optionsOrListener, requestListener) {
     super();
@@ -5970,6 +5992,19 @@ class ServerBase extends EventEmitter {
     if (requestListener) {
       this.on("request", requestListener);
     }
+    // Internal 'listening' listener, registered at construction so it
+    // runs before any user listener on every emit — including manual
+    // server.emit("listening") (test-http-server-clear-timer emits it
+    // twice by hand). Each emit destroys the previous bridged interval
+    // object and creates a new one; close() destroys the current one.
+    // _stopConnectionChecker must NOT touch this slot: it only clears
+    // the shim's real _checkTimer, and a connection draining to zero
+    // while listening must not destroy the bridged object.
+    this.on("listening", () => {
+      const prev = this[kConnectionsCheckingInterval];
+      if (prev) prev._destroyed = true;
+      this[kConnectionsCheckingInterval] = { _destroyed: false };
+    });
 
     this.listening = false;
     this.maxHeadersCount = null;
@@ -6255,6 +6290,11 @@ class ServerBase extends EventEmitter {
   }
 
   close(callback) {
+    // Destroy (do not replace) the bridged connections-checker object:
+    // tests read server[kConnectionsCheckingInterval]._destroyed after
+    // close and expect the SAME object, now destroyed.
+    const checker = this[kConnectionsCheckingInterval];
+    if (checker) checker._destroyed = true;
     if (typeof callback === "function") {
       if (!this.listening) queueMicrotask(callback);
       else this.once("close", callback);
@@ -6302,6 +6342,15 @@ class ServerBase extends EventEmitter {
     this.listening = false;
     queueMicrotask(() => this.emit("close"));
     return this;
+  }
+
+  // test-http-server-async-dispose: Symbol.asyncDispose closes the
+  // server and resolves when it is closed (close()'s callback runs on
+  // the "close" emit, or via microtask when not listening).
+  [Symbol.asyncDispose]() {
+    return new Promise((resolve) => {
+      this.close(() => resolve());
+    });
   }
 
   closeAllConnections() {
