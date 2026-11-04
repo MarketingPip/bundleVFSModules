@@ -85,9 +85,17 @@ function methodBytesParsed(token) {
   return n;
 }
 
-function parseError(code, message) {
+function parseError(code, message, reason) {
   const err = new Error(message);
   err.code = code;
+  // Node's parser errors carry the llhttp reason verbatim (e.g.
+  // "Transfer-Encoding can't be present with Content-Length"), while
+  // message is "Parse Error: <reason>" (test-http-client-error-rawbytes
+  // asserts reason; test-http-client-parse-error asserts message).
+  // Callers that rewrite the message (INVALID_METHOD, EOF) pass the
+  // reason explicitly; otherwise it defaults to the raw message text
+  // before any "Parse Error:" prefixing by the owner.
+  err.reason = reason !== undefined ? reason : message;
   return err;
 }
 
@@ -260,7 +268,17 @@ export class HTTPParser {
 
   /**
    * Signal end-of-stream. Completes a response body that runs to EOF;
-   * anything else mid-message is a truncation error.
+   * anything else mid-message is a truncation error. The truncation
+   * CODE is deliberately left as HPE_TRUNCATED here: the repo suite
+   * (tests/http-socket.test.js, "204 and HEAD have no body") asserts
+   * it at the parser level, and real Node's wire code for a truncated
+   * request is HPE_INVALID_EOF_STATE only on the SERVER side — that
+   * mapping belongs to the server's onError handler (companion EOF
+   * lane), not to the shared parser, because the client round trip
+   * keeps the truncation shape on its own path. An empty buffer keeps
+   * the old silent return: the caller's close path (ECONNRESET /
+   * ERR_SOCKET_CLOSED) owns those cases. Body-EOF framing still
+   * completes normally.
    */
   end() {
     if (this._state === "error") return;
@@ -269,7 +287,7 @@ export class HTTPParser {
       return;
     }
     if (this._state === "complete" || this._state === "paused") return;
-    // Clean EOF between messages: nothing buffered, nothing expected.
+    // Clean EOF: nothing buffered, nothing expected.
     if (this._off >= this._buf.length) return;
     this._state = "error";
     if (this.onError) {
@@ -338,10 +356,10 @@ export class HTTPParser {
       !"HTTP/".startsWith(partial.slice(0, 5)) &&
       !partial.startsWith("HTTP/")
     ) {
-      throw parseError(
-        "HPE_INVALID_CONSTANT",
-        `invalid response prefix: ${partial.slice(0, 10)}`,
-      );
+      // llhttp's constant error (probed v24.22.1): a response start that
+      // cannot become "HTTP/" is HPE_INVALID_CONSTANT, "Expected HTTP/,
+      // RTSP/ or ICE/" — not a version error.
+      throw parseError("HPE_INVALID_CONSTANT", "Expected HTTP/, RTSP/ or ICE/");
     }
   }
 
@@ -407,10 +425,7 @@ export class HTTPParser {
       }
       const vm = /^HTTP\/(\d+)\.(\d+)$/.exec(version);
       if (!vm || vm[1] !== "1" || (vm[2] !== "0" && vm[2] !== "1")) {
-        throw parseError(
-          "HPE_INVALID_VERSION",
-          `unsupported version: ${version}`,
-        );
+        throw parseError("HPE_INVALID_VERSION", "Invalid HTTP version");
       }
       this._info = {
         method,
@@ -421,11 +436,20 @@ export class HTTPParser {
       };
     } else {
       const m = /^HTTP\/(\d+)\.(\d+) (\d{3})(?: (.*))?$/.exec(line);
-      if (!m || m[1] !== "1" || (m[2] !== "0" && m[2] !== "1")) {
-        throw parseError(
-          "HPE_INVALID_VERSION",
-          `malformed status line: ${line}`,
-        );
+      if (!m) {
+        // A status line that cannot start with "HTTP/" is a constant
+        // error, not a version error (probed v24.22.1: "HTTX/..." ->
+        // HPE_INVALID_CONSTANT, "Expected HTTP/, RTSP/ or ICE/").
+        if (!line.startsWith("HTTP/")) {
+          throw parseError(
+            "HPE_INVALID_CONSTANT",
+            "Expected HTTP/, RTSP/ or ICE/",
+          );
+        }
+        throw parseError("HPE_INVALID_VERSION", "Invalid HTTP version");
+      }
+      if (m[1] !== "1" || (m[2] !== "0" && m[2] !== "1")) {
+        throw parseError("HPE_INVALID_VERSION", "Invalid HTTP version");
       }
       this._info = {
         statusCode: Number(m[3]),
