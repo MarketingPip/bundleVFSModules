@@ -628,11 +628,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // request-level createConnection honoring (src/http.js +
     // src/_http_parser.js + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "src/http.js",
-        "src/_http_parser.js",
-        "NOTES-http-header-value-relaxed.md",
-      ].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
