@@ -640,7 +640,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // wire bytes, client 1xx routing, checkContinue/checkExpectation
     // dispatch + 417, Expect early head send) (src/http.js + note).
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "NOTES-http-interim-response.md"].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
