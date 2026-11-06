@@ -35,7 +35,7 @@ import {
   parsers,
 } from "./_http_common.js";
 import { kUniqueHeaders, kHighWaterMark } from "./internals/http-symbols.js";
-import { HTTPParser } from "./_http_parser.js";
+import { HTTPParser, MAX_HEADER_PAIRS } from "./_http_parser.js";
 import {
   connect as netConnect,
   createServer as createNetServer,
@@ -3070,6 +3070,12 @@ export class ClientRequest extends OutgoingMessage {
     // (test-http-parser-memory-retention).
     this.joinDuplicateHeaders = options.joinDuplicateHeaders;
 
+    // maxHeadersCount is a plain property (default null, matching real
+    // Node's ClientRequest ctor — it is NOT a constructor option): the
+    // per-request parser limit is refreshed from it at socket
+    // assignment (Node's tickOnSocket).
+    this.maxHeadersCount = null;
+
     // request({ uniqueHeaders }) — probed real Node v24.22.1: send-side
     // only (parsing never joins). Listed headers with array values
     // serialize as one '; '-joined line; everything else one line per
@@ -4864,6 +4870,14 @@ export class ClientRequest extends OutgoingMessage {
     this.parser = parser;
     parser.onIncoming = () => {};
     parser.joinDuplicateHeaders = this.joinDuplicateHeaders;
+    // Node's tickOnSocket (lib/_http_client.js:1098): the parser's pair
+    // budget follows req.maxHeadersCount (<< 1) when it is a number;
+    // otherwise the parser keeps the MAX_HEADER_PAIRS default. Refreshed
+    // per assignment because the parser is pooled on the socket.
+    parser.maxHeaderPairs =
+      typeof this.maxHeadersCount === "number"
+        ? this.maxHeadersCount << 1
+        : MAX_HEADER_PAIRS;
     // Emit 'socket' at assignment time, like Node: the event fires while
     // the socket is still connecting (probed v24.22.1: connecting=true,
     // pending=true at 'socket' time), asynchronously so listeners attached
@@ -5226,6 +5240,10 @@ export class ClientRequest extends OutgoingMessage {
           noDefaultHost,
           insecureHTTPParser: this.insecureHTTPParser,
           parser: this.parser,
+          // Threaded for the response parser's pair budget (below):
+          // the user assigns req.maxHeadersCount after http.request()
+          // returns, so it must reach the parser at round-trip time.
+          maxHeadersCount: this.maxHeadersCount,
           setDefaultHeaders: this._setDefaultHeaders,
           // Connection-header inputs for the serializer (Node's
           // _storeHeader rule): shouldKeepAlive, chunked-by-default,
@@ -6415,6 +6433,9 @@ function _socketHttpRoundTrip(
     // request's already-exposed parser (created in onSocket); the
     // runtime-bridge caller omits it and gets a fresh one.
     parser: providedParser = null,
+    // Response parser's pair budget, from req.maxHeadersCount
+    // (test-http-max-headers-count). Null means the default.
+    maxHeadersCount = null,
     // Threaded from ClientRequest._setDefaultHeaders by the virtual
     // path: implicit Content-Length: 0 is a default header. Other
     // callers (emulated inbound requests) keep the default true.
@@ -6471,6 +6492,18 @@ function _socketHttpRoundTrip(
 
     const parser =
       providedParser || new HTTPParser("response", { insecureHTTPParser });
+    // Node's tickOnSocket (lib/_http_client.js:1098): the parser's pair
+    // budget follows req.maxHeadersCount (<< 1) when it is a number.
+    // Applied here, at round-trip time, because the user assigns the
+    // property after http.request() returns but before the request is
+    // sent (test-http-max-headers-count) — the onSocket refresh runs
+    // too early for that assignment. Otherwise the MAX_HEADER_PAIRS
+    // default stands (the pooled parser is shared, so a null resets it
+    // like Node's cleanParser does on alloc).
+    parser.maxHeaderPairs =
+      typeof maxHeadersCount === "number"
+        ? maxHeadersCount << 1
+        : MAX_HEADER_PAIRS;
     // HEAD responses never have a body, regardless of framing.
     parser.isHeadResponse = method === "HEAD";
     const chunks = [];
@@ -6849,6 +6882,20 @@ class ServerBase extends EventEmitter {
     // stored raw (default undefined, like the client option); forwarded
     // to each request message at dispatch (lib/_http_common.js:103).
     this.joinDuplicateHeaders = options.joinDuplicateHeaders;
+    // createServer({ requireHostHeader }) — Node validates the boolean
+    // and defaults true (lib/_http_server.js:581-587); a non-boolean
+    // throws ERR_INVALID_ARG_TYPE at construction.
+    if (
+      options.requireHostHeader !== undefined &&
+      typeof options.requireHostHeader !== "boolean"
+    ) {
+      throw ERR_INVALID_ARG_TYPE(
+        "options.requireHostHeader",
+        "boolean",
+        options.requireHostHeader,
+      );
+    }
+    this.requireHostHeader = options.requireHostHeader ?? true;
     // maxConnections is a plain property in real Node, read at accept
     // time — so it must work whether assigned before or after listen().
     // The accessor stores the value and forwards it to the backing net
@@ -7573,6 +7620,14 @@ class ServerBase extends EventEmitter {
       insecureHTTPParser: this._insecureParser,
       lenientHeaderValue: this._lenientHeaderValidation,
     });
+    // Node's connectionListenerInternal (lib/_http_server.js:804): the
+    // parser's pair budget follows server.maxHeadersCount (<< 1) when it
+    // is a number, read at connection time. The per-message refresh in
+    // onMessageStart below keeps the same value current for reused
+    // connections (see there).
+    if (typeof this.maxHeadersCount === "number") {
+      parser.maxHeaderPairs = this.maxHeadersCount << 1;
+    }
     // Strict one-request-at-a-time: the parser pauses after each message and
     // only resumes once the in-flight response has been fully written.
     parser.pauseBetweenMessages = true;
@@ -7585,6 +7640,23 @@ class ServerBase extends EventEmitter {
       state.requestStart = Date.now();
       state.headersDone = false;
       state.idleSince = null;
+      // The parser's pair budget follows the CURRENT server
+      // maxHeadersCount at each message, not just at connection time.
+      // Node reads it once per connection (lib/_http_server.js:804)
+      // because a Connection: close response ends that connection, so
+      // a later assignment is only ever observed on a new one. This
+      // shim reuses a Connection: close socket for a later request
+      // (separate agent/loopback divergence — test-http-max-headers-count
+      // round 2 arrives on round 0's connection), so the connection-time
+      // value would be stale and a 0 (unlimited) assignment would still
+      // overflow. Refreshing per message matches Node's observable
+      // behavior in every case Node actually creates a new connection
+      // for; the only divergence is a mid-connection mutation on a
+      // keep-alive connection, which no official test exercises.
+      parser.maxHeaderPairs =
+        typeof this.maxHeadersCount === "number"
+          ? this.maxHeadersCount << 1
+          : MAX_HEADER_PAIRS;
       if (state.idleTimer) {
         clearTimeout(state.idleTimer);
         state.idleTimer = null;
@@ -7672,6 +7744,13 @@ class ServerBase extends EventEmitter {
           if (err.statusCode === 413) {
             socket.write(
               "HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n",
+            );
+          } else if (err.code === "HPE_HEADER_OVERFLOW") {
+            // Node's socketOnError maps HPE_HEADER_OVERFLOW to 431
+            // (lib/_http_server.js:990); the 400 default below is for
+            // every other parse error.
+            socket.write(
+              "HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n",
             );
           } else {
             // Node's default clientError response carries no
@@ -8068,6 +8147,59 @@ class ServerBase extends EventEmitter {
       }
       // Fall through to normal 'request' dispatch below (callback false,
       // or no callback and no 'upgrade' listener).
+    }
+
+    // requireHostHeader (Node lib/_http_server.js:1249, RFC 7230 5.4):
+    // an HTTP/1.1 request with no Host header is answered 400 with
+    // Connection: close and never reaches 'request' — nor the
+    // maxRequestsPerSocket drop below, since the host check comes first
+    // in Node's parserOnIncoming. requireHostHeader: false opts out.
+    // Shaped like the 417 branch below (same finish wiring, same
+    // no-increment reqNo) with Node's exact writeHead call.
+    if (
+      req.httpVersionMajor === 1 &&
+      req.httpVersionMinor === 1 &&
+      this.requireHostHeader &&
+      req.headers.host === undefined
+    ) {
+      const prevRes400 = state.lastResponse;
+      const res400 = new ServerResponse(req, {
+        highWaterMark: this._highWaterMark,
+        rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
+        lenientHeaderValidation: this._lenientHeaderValidation,
+      });
+      const prevUnfinished400 =
+        state.lastResponse && !state.lastResponse.finished;
+      if (prevUnfinished400) {
+        res400.socket = null;
+        res400.connection = null;
+      }
+      const sockHwm400 = socket?.writableHighWaterMark;
+      if (typeof sockHwm400 === "number" && res400._writableState) {
+        res400._writableState.highWaterMark = sockHwm400;
+      }
+      state.lastResponse = res400;
+      const reqNo400 = state.reqCount;
+      res400.shouldKeepAlive = false;
+      res400._serverKeepAliveTimeout = this.keepAliveTimeout;
+      res400._serverMaxRequestsPerSocket = this.maxRequestsPerSocket;
+      res400._serverReqNo = reqNo400;
+      res400[kUniqueHeaders] = this._serverUniqueHeaders;
+      res400._reqHadTE = /chunked/i.test(
+        String(req.headers?.te || req.headers?.TE || ""),
+      );
+      res400.on("finish", () => {
+        this._finishSocketResponse(socket, info, state, req, res400, reqNo400);
+      });
+      state.inFlight++;
+      res400.writeHead(400, ["Connection", "close"]);
+      if (prevRes400 && !prevRes400.writableFinished && !prevRes400.destroyed) {
+        prevRes400.once("finish", () => res400.end());
+      } else {
+        res400.end();
+      }
+      if (!info.hasBody) req._finishBody();
+      return { req, res: res400 };
     }
 
     // maxRequestsPerSocket drop (test-http-keep-alive-drop-requests):

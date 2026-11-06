@@ -461,7 +461,7 @@ describe("http.Server socket round trip", () => {
   test("POST content-length body streams to the handler", async () => {
     const { seen } = await parseRequest(
       0,
-      "POST /echo HTTP/1.1\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world",
+      "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world",
     );
     expect(seen.method).toBe("POST");
     expect(seen.body).toBe("hello world");
@@ -470,7 +470,7 @@ describe("http.Server socket round trip", () => {
   test("POST chunked body streams to the handler", async () => {
     const { seen } = await parseRequest(
       0,
-      "POST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n",
+      "POST /echo HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n",
     );
     expect(seen.body).toBe("hello world");
   });
@@ -492,7 +492,7 @@ describe("http.Server socket round trip", () => {
       sock.on("error", reject);
       sock.on("connect", () => {
         sock.write(
-          "POST /c HTTP/1.1\r\nContent-Length: 3\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
+          "POST /c HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
         );
       });
       sock.on("data", (c) => {
@@ -553,7 +553,9 @@ describe("http.Server socket round trip", () => {
     const sock = netConnect(port);
     await new Promise((resolve, reject) => {
       sock.on("error", reject);
-      sock.on("connect", () => sock.write("GET /hang HTTP/1.1\r\n\r\n"));
+      sock.on("connect", () =>
+        sock.write("GET /hang HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+      );
       setTimeout(resolve, 100).unref?.();
     });
     const n1 = await new Promise((r) => server.getConnections((e, x) => r(x)));
@@ -578,7 +580,7 @@ describe("http.Server socket round trip", () => {
     await new Promise((resolve, reject) => {
       busySock.on("error", reject);
       busySock.on("connect", () =>
-        busySock.write("GET /hang HTTP/1.1\r\n\r\n"),
+        busySock.write("GET /hang HTTP/1.1\r\nHost: localhost\r\n\r\n"),
       );
       setTimeout(resolve, 100).unref?.();
     });
@@ -587,7 +589,7 @@ describe("http.Server socket round trip", () => {
     await new Promise((resolve, reject) => {
       idleSock.on("error", reject);
       idleSock.on("connect", () =>
-        idleSock.write("GET /quick HTTP/1.1\r\n\r\n"),
+        idleSock.write("GET /quick HTTP/1.1\r\nHost: localhost\r\n\r\n"),
       );
       const chunks = [];
       idleSock.on("data", (c) => {
@@ -623,7 +625,9 @@ describe("http.Server socket round trip", () => {
       let phase = 0;
       const chunks = [];
       sock.on("error", reject);
-      sock.on("connect", () => sock.write("GET /1 HTTP/1.1\r\n\r\n"));
+      sock.on("connect", () =>
+        sock.write("GET /1 HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+      );
       sock.on("data", (c) => {
         chunks.push(c);
         if (phase === 0 && /x/.test(Buffer.concat(chunks).toString())) {
@@ -632,7 +636,9 @@ describe("http.Server socket round trip", () => {
           const sock2 = netConnect(port);
           sock2.on("error", reject);
           sock2.on("connect", () =>
-            sock2.write("GET /2 HTTP/1.1\r\nConnection: close\r\n\r\n"),
+            sock2.write(
+              "GET /2 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            ),
           );
           const c2 = [];
           sock2.on("data", (d) => c2.push(d));
@@ -653,7 +659,7 @@ describe("http.Server socket round trip", () => {
     const { port } = await listenAsync(server, 0);
     const { headText, body } = await rawExchange(
       port,
-      "HEAD /h HTTP/1.1\r\nConnection: close\r\n\r\n",
+      "HEAD /h HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
     );
     expect(headText).toContain("Content-Length: 5");
     expect(body.length).toBe(0);
@@ -668,7 +674,7 @@ describe("http.Server socket round trip", () => {
     const { port } = await listenAsync(server, 0);
     const { headText, body } = await rawExchange(
       port,
-      "GET /c HTTP/1.1\r\nConnection: close\r\n\r\n",
+      "GET /c HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
     );
     expect(headText).toMatch(/transfer-encoding:\s*chunked/i);
     expect(body.toString()).toBe("2\r\nhi\r\n0\r\n\r\n");
