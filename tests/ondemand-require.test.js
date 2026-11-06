@@ -667,8 +667,16 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (Host setHost rule + IPv6 brackets, Connection keep-alive/close
     // rule, array-form header order, URL-auth decoding)
     // (src/http.js + working note).
+    // fix/http-header-server branch: server requireHostHeader +
+    // maxHeadersCount (400 on missing Host, pair-budget overflow/431,
+    // client-side truncation) (src/http.js + src/_http_parser.js +
+    // working note).
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "NOTES-http-join-dup-headers.md"].sort(),
+      [
+        "src/http.js",
+        "src/_http_parser.js",
+        "NOTES-http-header-server.md",
+      ].sort(),
     );
   });
 

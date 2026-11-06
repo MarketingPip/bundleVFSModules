@@ -25,6 +25,13 @@ import { _checkInvalidHeaderChar } from "./_http_common.js";
 const CR = 0x0d;
 const LF = 0x0a;
 
+// llhttp's header-pair budget (Node lib/_http_common.js:53,
+// MAX_HEADER_PAIRS = 2000, reset in cleanParser): the owner overrides
+// it from server.maxHeadersCount / req.maxHeadersCount (<< 1) when that
+// is a number; 0 means no limit. Requests error HPE_HEADER_OVERFLOW
+// past it, responses truncate to it.
+export const MAX_HEADER_PAIRS = 2000;
+
 const TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const HEX_RE = /^[0-9A-Fa-f]+$/;
 
@@ -126,6 +133,8 @@ export class HTTPParser {
     this.lenientHeaderValue = options?.lenientHeaderValue === true;
     // Mirrors Node's default maxHeaderSize (16 KiB); the server may override.
     this.maxHeaderSize = 16 * 1024;
+    // Header-pair budget; see MAX_HEADER_PAIRS above.
+    this.maxHeaderPairs = MAX_HEADER_PAIRS;
     // For responses to HEAD requests: no body regardless of framing.
     // The client sets this before parsing (Node's parser._isHeadResponse).
     this.isHeadResponse = false;
@@ -629,6 +638,19 @@ export class HTTPParser {
         .replace(/^[ \t]+/, "")
         .replace(/[ \t]+$/, "");
       this._rawHeaders.push(name, value);
+      // llhttp counts header pairs as it scans (node_http_parser.cc
+      // TrackHeaderPair, request side only): the (maxHeaderPairs/2 + 1)th
+      // pair errors HPE_HEADER_OVERFLOW at once ("Header overflow") —
+      // maxHeaderPairs <= 0 means no limit. Responses never error here;
+      // they truncate at _finishHeaders instead. Continuation lines
+      // append to the previous value (above), so they add no pair.
+      if (
+        this.type === "request" &&
+        this.maxHeaderPairs > 0 &&
+        this._rawHeaders.length > this.maxHeaderPairs
+      ) {
+        throw parseError("HPE_HEADER_OVERFLOW", "Header overflow");
+      }
     }
   }
 
@@ -643,7 +665,14 @@ export class HTTPParser {
         .replace(/^[ \t]+/, "")
         .replace(/[ \t]+$/, "");
     }
-    info.rawHeaders = this._rawHeaders;
+    // Node's parserOnHeadersComplete caps the delivered headers at
+    // parser.maxHeaderPairs (lib/_http_common.js): framing was already
+    // decided from the full block, so only what the consumer sees is
+    // trimmed — rawHeaders, headers, headersDistinct. Requests never
+    // reach here over the cap (the _parseHeaders throw fires first), so
+    // this is the response-side truncation for req.maxHeadersCount.
+    const pairCap = this.maxHeaderPairs > 0 ? this.maxHeaderPairs : Infinity;
+    info.rawHeaders = this._rawHeaders.slice(0, pairCap);
     info.headers = {};
     // Null-prototype: a "constructor" header must not read
     // Object.prototype when its values are accumulated (below), or the
@@ -663,7 +692,9 @@ export class HTTPParser {
       const name = this._rawHeaders[i];
       const value = this._rawHeaders[i + 1];
       const lower = name.toLowerCase();
-      if (lower === "set-cookie") {
+      // Delivered headers stop at pairCap (above); framing detection
+      // below still reads every pair, like llhttp.
+      if (i < pairCap && lower === "set-cookie") {
         const arr = Array.isArray(value) ? value : [value];
         if (info.headers[lower] === undefined) {
           info.headers[lower] = arr.length === 1 ? arr[0] : arr.slice();
@@ -673,7 +704,7 @@ export class HTTPParser {
             : [info.headers[lower]];
           info.headers[lower] = cur.concat(arr);
         }
-      } else {
+      } else if (i < pairCap) {
         // hasOwnProperty, not `in`: a "constructor" header must not read
         // Object.prototype (test-http-server-multiheaders).
         info.headers[lower] = Object.prototype.hasOwnProperty.call(
@@ -683,9 +714,11 @@ export class HTTPParser {
           ? `${info.headers[lower]}, ${value}`
           : value;
       }
-      info.headersDistinct[lower] = (info.headersDistinct[lower] || []).concat(
-        value,
-      );
+      if (i < pairCap) {
+        info.headersDistinct[lower] = (
+          info.headersDistinct[lower] || []
+        ).concat(value);
+      }
       if (lower === "content-length") {
         // llhttp rejects ANY duplicate Content-Length, same value included
         // (probed real Node v24.22.1: [1,1] and [1,2] both yield
