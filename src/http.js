@@ -6038,6 +6038,22 @@ export class ClientRequest extends OutgoingMessage {
           // where the client must see the response before res.end().
           onHeaders: (info) => {
             if (this._aborted) return;
+            // Node (lib/_http_client.js parserOnIncomingClient, ~930):
+            // the response's keep-alive verdict downgrades the request's
+            // shouldKeepAlive — a 1.0 response without keep-alive (or a
+            // 1.1 with Connection: close) means this socket won't be
+            // reused. Only ever downgrades; upgrade/CONNECT exempt.
+            // ponytail: the parser already computes info.shouldKeepAlive
+            // (version + Connection header, _http_parser.js); this only
+            // applies it. upgradeOrConnect is never set true in the shim
+            // today, so the guard reads false — kept for fidelity.
+            if (
+              this.shouldKeepAlive &&
+              !info.shouldKeepAlive &&
+              !this.upgradeOrConnect
+            ) {
+              this.shouldKeepAlive = false;
+            }
             const msg = new IncomingMessage(this.socket);
             msg.statusCode = info.statusCode;
             msg.statusMessage =
@@ -6601,6 +6617,15 @@ export class ClientRequest extends OutgoingMessage {
     }
     // Same response-timeout attach as the headers path above (this
     // branch runs when headers never arrived via onHeaders).
+    // Same parserOnIncomingClient downgrade as the headers path, from
+    // the round trip's threaded verdict (see pendingResult).
+    if (
+      this.shouldKeepAlive &&
+      !result.shouldKeepAlive &&
+      !this.upgradeOrConnect
+    ) {
+      this.shouldKeepAlive = false;
+    }
     this._attachResponseTimeout(msg);
     this._responseReceived = true;
     this._inFlightMessage = msg;
@@ -7464,6 +7489,10 @@ function _socketHttpRoundTrip(
           rawHeaders: info.rawHeaders.slice(),
           body: Buffer.concat(chunks),
           rawTrailers: parser.rawTrailers ? parser.rawTrailers.slice() : [],
+          // Parser's keep-alive verdict for this response (version +
+          // Connection header) — the buffered response path applies
+          // Node's parserOnIncomingClient downgrade from it.
+          shouldKeepAlive: info.shouldKeepAlive,
         };
       }
     };
@@ -10512,7 +10541,19 @@ class AgentBase extends EventEmitter {
       // Validate the socket before reuse: a manually-stuffed or stale socket
       // may have no _handle (never connected) or be destroyed. Node checks
       // _handle before calling asyncReset(); we skip unusable sockets.
-      if (!socket._handle || socket.destroyed) {
+      // Also skip a socket the peer already half-closed: the server's FIN
+      // fires 'end' (installing writeAfterFIN) a tick before the pooled
+      // 'close' removes it from the pool, so a checkout in that window
+      // would write to a dead socket (test-http-should-keep-alive:
+      // request 3 reusing request 1's server-ended socket → EPIPE).
+      // readableEnded covers the peer-FIN case, writableEnded the
+      // self-ended case; neither can ever serve a new request head.
+      if (
+        !socket._handle ||
+        socket.destroyed ||
+        socket.readableEnded ||
+        socket.writableEnded
+      ) {
         try {
           socket.destroy();
         } catch {
@@ -10852,6 +10893,22 @@ class AgentBase extends EventEmitter {
   }
 
   keepSocketAlive(socket) {
+    // Node (lib/_http_agent.js releaseSocket): a socket is pooled only
+    // if the request that used it is keep-alive — the response's
+    // keep-alive verdict (req.shouldKeepAlive, downgraded at headers
+    // per parserOnIncomingClient) decides. An HTTP/1.0 response with
+    // no Connection header leaves no explicit `Connection: close` for
+    // the veto below, so without this the socket would pool and the
+    // server side would never close (test-http-should-keep-alive
+    // hangs at server.close()). Only vetoes when a message is
+    // attached; a bare release keeps the old behavior.
+    // ponytail: the verdict already lives on socket._httpMessage
+    // (set at assignment, cleared only on CONNECT/upgrade); this only
+    // reads it.
+    const msg = socket._httpMessage;
+    if (msg && !msg.shouldKeepAlive) {
+      return false;
+    }
     // Drained-only reuse (test-http-agent-reuse-drained-socket-only):
     // a socket with pending write data is never pooled. Probed on real
     // Node v24.22.1: after the first response ends with 192MB still

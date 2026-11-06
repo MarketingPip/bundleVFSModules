@@ -674,7 +674,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // _addHeaderLineDistinct port + constructor socket assignment
     // (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-incoming-surface.md", "src/http.js"].sort(),
+      ["NOTES-http-should-keep-alive.md", "src/http.js"].sort(),
     );
   });
 
