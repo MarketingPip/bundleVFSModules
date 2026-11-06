@@ -151,6 +151,12 @@ export class HTTPParser {
     this.onBody = null; // (chunk: Buffer)
     this.onMessageComplete = null; // ()
     this.onError = null; // (err)
+    // Double-response skip (set by the client round trip when it
+    // destroys the socket after a second response's headers): body
+    // bytes of the skipped message are never emitted. Cleared in
+    // _resetMessage() so a later message on the same parser can be
+    // delivered again (Node rewinds parser.incoming per message).
+    this._skipPendingData = false;
     // Fires once when the parser starts consuming a new message's first
     // bytes (first message at stream start, later messages when resumed
     // after a pause). The HTTP server uses it to start that request's
@@ -168,6 +174,7 @@ export class HTTPParser {
     this._headStart = this._off;
     this._headerBytes = 0;
     this._messageStarted = false;
+    this._skipPendingData = false;
   }
 
   /**
@@ -237,7 +244,8 @@ export class HTTPParser {
             // Unframed response body: stream what arrived, wait for end().
             const avail = this._buf.length - this._off;
             if (avail > 0) {
-              if (this.onBody) this.onBody(this._buf.subarray(this._off));
+              if (this.onBody && !this._skipPendingData)
+                this.onBody(this._buf.subarray(this._off));
               this._off = this._buf.length;
             }
             return;
@@ -974,7 +982,7 @@ export class HTTPParser {
     const avail = this._buf.length - this._off;
     if (avail === 0) return false;
     const take = Math.min(avail, this._remaining);
-    if (this.onBody)
+    if (this.onBody && !this._skipPendingData)
       this.onBody(this._buf.subarray(this._off, this._off + take));
     this._off += take;
     this._remaining -= take;
@@ -1029,7 +1037,7 @@ export class HTTPParser {
       const avail = this._buf.length - this._off;
       if (avail === 0) return false;
       const take = Math.min(avail, this._remaining);
-      if (this.onBody)
+      if (this.onBody && !this._skipPendingData)
         this.onBody(this._buf.subarray(this._off, this._off + take));
       this._off += take;
       this._remaining -= take;

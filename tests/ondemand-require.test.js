@@ -673,22 +673,15 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/http-incoming-surface branch: IncomingMessage._addHeaderLine /
     // _addHeaderLineDistinct port + constructor socket assignment
     // (src/http.js + working note).
-    // fix/http-perf-hooks branch: perf_hooks http entries
-    // (src/http.js + src/perf_hooks.js + src/internals/perf-observe.js +
-    // parity/preload.mjs perf_hooks redirect + working note).
-    // fix/http-abort-mid-stream branch: ClientRequest.destroy() dumps the
-    // in-flight response via this.res (assigned at response creation)
-    // (src/http.js + working note).
-    // docs/http-hitlist-378 branch: HITLIST + measured-rates sync
-    // (374 -> 378; PRs #369, #370, #372, #373).
-    // fix/http-dns-error branch: DNS-lookup-first for the fetch path —
-    // definitive getaddrinfo errors (ENOTFOUND/EAI_FAIL) surface on the
-    // request instead of an uncaught undici fetch failure
-    // (src/http.js + working note).
-    // docs/http-hitlist-382 branch: HITLIST + measured-rates sync
-    // (http 378 -> 382, net 72 -> 87; PRs #356, #375, #378).
+    // fix/http-trailing-bytes branch: trailing bytes after a completed
+    // response must not surface as data (src/http.js +
+    // src/_http_parser.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      [
+        "NOTES-http-trailing-bytes.md",
+        "src/_http_parser.js",
+        "src/http.js",
+      ].sort(),
     );
   });
 
