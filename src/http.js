@@ -4041,6 +4041,25 @@ export class ClientRequest extends OutgoingMessage {
     if (!(timeout >= 0) || !Number.isFinite(timeout)) {
       throw ERR_OUT_OF_RANGE("msecs", "a non-negative finite number", timeout);
     }
+    // Node getTimerDuration (lib/internal/timers.js:490): durations
+    // above 2**31-1 warn synchronously and clamp to TIMEOUT_MAX.
+    // Must happen here, at call time: the value is deferred to
+    // 'connect', and by then a native-timer warning would fire with
+    // an async stack that lacks the caller's file — and with the
+    // wrong message ("set to 1", not "truncated to 2147483647")
+    // (test-http-timeout-client-warning). Clamping first also keeps
+    // the later sock.setTimeout(TIMEOUT_MAX) warning-free, so exactly
+    // one warning fires.
+    if (timeout > 2 ** 31 - 1) {
+      const proc = globalThis.process;
+      if (proc && typeof proc.emitWarning === "function") {
+        proc.emitWarning(
+          `${timeout} does not fit into a 32-bit signed integer.\nTimer duration was truncated to ${2 ** 31 - 1}.`,
+          "TimeoutOverflowWarning",
+        );
+      }
+      timeout = 2 ** 31 - 1;
+    }
     this.timeout = timeout;
     // Real Node applies a pre-connect setTimeout at CONNECT, never at
     // assignment (probed: socket.timeout still shows the option/agent
@@ -4501,7 +4520,29 @@ export class ClientRequest extends OutgoingMessage {
     // An early rejection (e.g., socket assignment failure) must not
     // become an unhandled rejection before end(); _performRequest awaits
     // the same promise at end() and routes the error through its handler.
-    st.roundTrip.catch(() => {});
+    // But a rejection that arrives while end() was NEVER called has no
+    // awaiter at all — the socket can die under a still-writing request
+    // (server destroys it on req timeout) and the request just hangs
+    // (test-http-set-timeout-server's serverRequestTimeout: the POST
+    // client's 'error' mustCall never fires). Real Node surfaces it via
+    // socketCloseListener (lib/_http_client.js:712: no response yet →
+    // ECONNRESET 'socket hang up' on the request, then 'close').
+    // Surface it here, mirroring the end() path's emission exactly
+    // (same _errorEmitted single-fire gate, same 'abort' fallback when
+    // no 'error' listener, same destroy for 'close') — so a later end()
+    // never double-emits. Teardown-initiated rejections never reach
+    // this catch: the round-trip catch returns early for them
+    // (_aborted && _abortSwallow), and destroy() sets _errorEmitted
+    // for its own error, so the gate below skips.
+    st.roundTrip.catch((err) => {
+      if (!this._errorEmitted && this.listenerCount("error") > 0) {
+        this._errorEmitted = true;
+        this.emit("error", err);
+      } else if (!this._errorEmitted) {
+        this.emit("abort");
+      }
+      if (this._errorEmitted && !this.destroyed) this.destroy();
+    });
     return st;
   }
 
@@ -8156,10 +8197,19 @@ class ServerBase extends EventEmitter {
       // (prompt timer + checker backstop) must not fire for it.
       state.hasSocketTimeout = true;
     }
+    // Node socketOnTimeout (lib/_http_server.js:900): req emits only
+    // while incomplete, res is socket._httpMessage — the response
+    // currently ATTACHED to the socket — and the server emits always,
+    // each with the socket arg; the socket is destroyed only when
+    // nothing listened anywhere.
     const onHttpTimeout = () => {
-      this.emit("timeout", socket);
       const cur = state.current;
-      if (cur) cur.req.emit("timeout");
+      const reqTimeout =
+        cur?.req && !cur.req.complete && cur.req.emit("timeout", socket);
+      const res = socket._httpMessage;
+      const resTimeout = res && res.emit("timeout", socket);
+      const serverTimeout = this.emit("timeout", socket);
+      if (!reqTimeout && !resTimeout && !serverTimeout) socket.destroy();
     };
     socket.on("timeout", onHttpTimeout);
 
@@ -8775,6 +8825,7 @@ class ServerBase extends EventEmitter {
         res400._writableState.highWaterMark = sockHwm400;
       }
       state.lastResponse = res400;
+      if (res400.socket) socket._httpMessage = res400;
       const reqNo400 = state.reqCount;
       res400.shouldKeepAlive = false;
       res400._serverKeepAliveTimeout = this.keepAliveTimeout;
@@ -8834,6 +8885,7 @@ class ServerBase extends EventEmitter {
         dropRes._writableState.highWaterMark = dropSockHwm;
       }
       state.lastResponse = dropRes;
+      if (dropRes.socket) socket._httpMessage = dropRes;
       const dropReqNo = state.reqCount;
       dropRes.shouldKeepAlive = false;
       dropRes._serverKeepAliveTimeout = this.keepAliveTimeout;
@@ -8923,6 +8975,7 @@ class ServerBase extends EventEmitter {
         res417._writableState.highWaterMark = sockHwm417;
       }
       state.lastResponse = res417;
+      if (res417.socket) socket._httpMessage = res417;
       const reqNo417 = state.reqCount;
       res417.shouldKeepAlive = false;
       res417._serverKeepAliveTimeout = this.keepAliveTimeout;
@@ -8978,6 +9031,15 @@ class ServerBase extends EventEmitter {
       res._writableState.highWaterMark = sockHwm;
     }
     state.lastResponse = res;
+    // Node's socket._httpMessage (lib/_http_server.js:300, assignSocket):
+    // the response currently ATTACHED to the socket — the one whose
+    // setTimeout arms the socket timer. A pipelined res waits with a
+    // null socket until the previous finishes, so it must NOT become
+    // the attached one (its timeout listener would otherwise fire for
+    // a timer it never armed — test-http-set-timeout-server's
+    // pipeline sub-test: /3's res must never fire, /2's must).
+    // Cleared in _finishSocketResponse (Node's detachSocket).
+    if (res.socket) socket._httpMessage = res;
     const reqNo = ++state.reqCount;
     // Node syncs res.shouldKeepAlive from the request's keep-alive status;
     // _storeHeader uses it to decide on `Connection: close`.
@@ -9223,6 +9285,11 @@ class ServerBase extends EventEmitter {
     // end-then-destroy case — never deliver twice.
     if (res._finishDelivered) return;
     res._finishDelivered = true;
+    // Node's detachSocket (lib/_http_server.js:310, via resOnFinish):
+    // the finished response releases the socket, so a later socket
+    // timeout must not emit on it (test-http-set-timeout-server's
+    // fastTimeout: no res emit after res.end()).
+    if (socket && socket._httpMessage === res) socket._httpMessage = null;
     // test-http-server-keepalive-end: real Node drains an unconsumed
     // request body when its response finishes, so req 'end' fires even
     // with only an 'end' listener (probed v24.22.1: 'end' fires with
