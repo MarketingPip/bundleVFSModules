@@ -673,8 +673,17 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/http-incoming-surface branch: IncomingMessage._addHeaderLine /
     // _addHeaderLineDistinct port + constructor socket assignment
     // (src/http.js + working note).
+    // fix/http-perf-hooks branch: perf_hooks http entries
+    // (src/http.js + src/perf_hooks.js + src/internals/perf-observe.js +
+    // parity/preload.mjs perf_hooks redirect + working note).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      [
+        "NOTES-http-perf-hooks.md",
+        "parity/preload.mjs",
+        "src/http.js",
+        "src/internals/perf-observe.js",
+        "src/perf_hooks.js",
+      ].sort(),
     );
   });
 

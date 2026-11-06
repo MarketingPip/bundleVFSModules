@@ -129,6 +129,13 @@ function isExtraRedirect(name) {
   // request-agent, url.parse-https.request); the differential guards the
   // other five. Mirrors the _http_agent redirect above.
   if (target === "http" && name === "https") return true;
+  // http tests that require('perf_hooks') need the shim's observer
+  // registry: test-http-perf_hooks observes {type:"http"} and the entries
+  // are emitted by the shim's http instrumentation through the shared
+  // bridge (src/internals/perf-observe.js) — the native observer can never
+  // see shim entries. Only test-http-perf_hooks requires it under the http
+  // target. Mirrors the net redirect above (PR #232 precedent).
+  if (target === "http" && name === "perf_hooks") return true;
   // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
   // zlib must read the same cell (mirrors Node's load-time capture).
   return target === "zlib" && name === "buffer";

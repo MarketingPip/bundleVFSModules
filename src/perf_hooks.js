@@ -28,6 +28,8 @@
 // ---------------------------------------------------------------------------
 // 1. Runtime bridge (rewritten per-sandbox by the runtime's _build_file).
 // ---------------------------------------------------------------------------
+import { perfObserveBridge } from "./internals/perf-observe.js";
+
 const RT =
   typeof globalThis._RUNTIME_ !== "undefined"
     ? globalThis._RUNTIME_
@@ -1249,6 +1251,56 @@ function dispatchObservers() {
     }
   }
 }
+
+// Port of Node's `lib/internal/perf/observe.js` trio (`hasObserver` /
+// `startPerf` / `stopPerf`), which is how lib/_http_client.js and
+// lib/_http_server.js emit `http` performance entries. Module-internal
+// (NOT exported — the export surface is pinned to real Node's by
+// tests/export_surface_perf_hooks.test.js); src/http.js reaches them
+// through the bridge in src/internals/perf-observe.js.
+function hasObserver(type) {
+  for (const observer of kObservers) {
+    if (observer[kType] === type) return true;
+    const entryTypes = observer[kEntryTypes];
+    if (entryTypes !== undefined && entryTypes.has(type)) return true;
+  }
+  return false;
+}
+
+function startPerf(target, key, context = {}) {
+  target[key] = {
+    ...context,
+    startTime: now(),
+  };
+}
+
+function stopPerf(target, key, context = {}) {
+  const ctx = target[key];
+  if (!ctx) {
+    return;
+  }
+  // Shim-only deviation: drop the slot after stopping so a second
+  // headers-complete (a 1xx interim then the final response, or a double
+  // response) cannot emit a duplicate entry. Node's internal stopPerf keeps
+  // the slot, but its call sites guarantee a single stop; the observable
+  // behavior — exactly one entry per request/response — is the same.
+  delete target[key];
+  const entry = createPerformanceNodeEntry(
+    ctx.name,
+    ctx.type,
+    ctx.startTime,
+    now() - ctx.startTime,
+    { ...ctx.detail, ...context.detail },
+  );
+  enqueue(entry);
+}
+
+// Wire the http-entry bridge for src/http.js (see
+// src/internals/perf-observe.js). Runs at import time; http.js reads the
+// bridge at request time, so load order does not matter.
+perfObserveBridge.hasObserver = hasObserver;
+perfObserveBridge.startPerf = startPerf;
+perfObserveBridge.stopPerf = stopPerf;
 
 function bufferUserTiming(entry) {
   if (entry.entryType === "mark") {

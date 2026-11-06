@@ -39,6 +39,7 @@ import {
   kHighWaterMark,
   kOutHeaders,
 } from "./internals/http-symbols.js";
+import { perfObserveBridge } from "./internals/perf-observe.js";
 import { HTTPParser, MAX_HEADER_PAIRS } from "./_http_parser.js";
 import {
   connect as netConnect,
@@ -58,6 +59,30 @@ const RT =
 
 // Guarded host-call pattern: forward lifecycle events to the host when the
 // runtime provides an emitter, silently skip otherwise.
+
+// perf_hooks `http` entries (Node lib/_http_client.js `kClientRequestStatistics`
+// and lib/_http_server.js `kServerResponseStatistics`): slots holding the
+// startPerf context until the matching stopPerf emits the entry.
+const kClientRequestStatistics = Symbol("kClientRequestStatistics");
+const kServerResponseStatistics = Symbol("kServerResponseStatistics");
+
+// Thin wrappers over the perf-observe bridge (src/internals/perf-observe.js),
+// mirroring Node's call-site gating in lib/_http_client.js and
+// lib/_http_server.js: start only when an `http` observer exists right now,
+// stop only when a start context exists and an observer still exists.
+// When perf_hooks.js was never loaded the bridge is empty and both are
+// no-ops — instrumentation must never slow down or break plain requests.
+function _httpPerfStart(target, key, context) {
+  if (perfObserveBridge.hasObserver?.("http")) {
+    perfObserveBridge.startPerf(target, key, context);
+  }
+}
+
+function _httpPerfStop(target, key, context) {
+  if (target[key] && perfObserveBridge.hasObserver?.("http")) {
+    perfObserveBridge.stopPerf(target, key, context);
+  }
+}
 const emitEvent = RT?.emit;
 
 // ponytail: process-wide --insecure-http-parser default, read lazily at
@@ -2370,6 +2395,20 @@ export class ServerResponse extends OutgoingMessage {
     // Node: res.req is the request this response belongs to
     // (test-http-server asserts res.req === req).
     this.req = req;
+    // perf_hooks `http` entries (Node lib/_http_server.js ServerResponse
+    // constructor): start the HttpRequest entry now; the matching stopPerf
+    // runs when the response finishes (end()'s done callback).
+    _httpPerfStart(this, kServerResponseStatistics, {
+      type: "http",
+      name: "HttpRequest",
+      detail: {
+        req: {
+          method: req?.method,
+          url: req?.url,
+          headers: req?.headers ?? {},
+        },
+      },
+    });
     this.socket = req?.socket || new FakeSocket();
     this.connection = this.socket;
     this.statusCode = 200;
@@ -3261,6 +3300,20 @@ export class ServerResponse extends OutgoingMessage {
       if (this._endCallbackFired) return;
       this._endCallbackFired = true;
       this._deliver();
+      // perf_hooks `http` entries (Node lib/_http_server.js
+      // ServerResponse._finish): stop the HttpRequest entry with the
+      // response detail. getHeaders() mirrors Node's res detail shape.
+      // done fires once (guarded above), so exactly one entry is emitted.
+      _httpPerfStop(this, kServerResponseStatistics, {
+        detail: {
+          res: {
+            statusCode: this.statusCode,
+            statusMessage: this.statusMessage,
+            headers:
+              typeof this.getHeaders === "function" ? this.getHeaders() : {},
+          },
+        },
+      });
       // NOTE: no manual 'finish' emit — Writable emits it exactly once via
       // super.end() below, matching node:http. (A manual emit here used to
       // double-fire 'finish' for on('finish') consumers.)
@@ -4933,6 +4986,25 @@ export class ClientRequest extends OutgoingMessage {
   async _performRequest() {
     if (this._aborted) return;
 
+    // perf_hooks `http` entries (Node lib/_http_client.js
+    // ClientRequest._finish): start the HttpClient entry when the request
+    // finishes — end() is the only caller of _performRequest, so this is
+    // the _finish point for both the buffered and the streaming paths.
+    // _buildURL() renders the full URL (protocol//authority + path), which
+    // is the entry's req.url (test-http-perf_hooks asserts the port form).
+    _httpPerfStart(this, kClientRequestStatistics, {
+      type: "http",
+      name: "HttpClient",
+      detail: {
+        req: {
+          method: this.method,
+          url: this._buildURL(),
+          headers:
+            typeof this.getHeaders === "function" ? this.getHeaders() : {},
+        },
+      },
+    });
+
     // Streaming request already started by an early write()/flushHeaders():
     // await its round trip instead of starting a second one.
     if (this._stream && this._stream.roundTrip) {
@@ -5268,6 +5340,20 @@ export class ClientRequest extends OutgoingMessage {
     msg.socket = this.socket;
     msg.connection = this.socket;
     msg.req = this;
+    // perf_hooks `http` entries (Node lib/_http_client.js
+    // parserOnIncomingClient): the fetch path has no headers callback —
+    // stop the HttpClient entry here, when the response headers are in
+    // hand. fetch() never resolves with a 1xx, so no informational guard
+    // is needed.
+    _httpPerfStop(this, kClientRequestStatistics, {
+      detail: {
+        res: {
+          statusCode: msg.statusCode,
+          statusMessage: msg.statusMessage,
+          headers: msg.headers,
+        },
+      },
+    });
     // Response already complete (body read above) — same detach as
     // the streamed path (test-http-request-signal test 6).
     msg._detachAbortSignal();
@@ -6074,6 +6160,21 @@ export class ClientRequest extends OutgoingMessage {
             msg.connection = this.socket;
             msg.req = this;
             streamedMsg = msg;
+            // perf_hooks `http` entries (Node lib/_http_client.js
+            // parserOnIncomingClient): stop the HttpClient entry when the
+            // response headers arrive. Informational (1xx) responses return
+            // early in Node before the stop, so skip them here too.
+            if (info.statusCode >= 200) {
+              _httpPerfStop(this, kClientRequestStatistics, {
+                detail: {
+                  res: {
+                    statusCode: msg.statusCode,
+                    statusMessage: msg.statusMessage,
+                    headers: msg.headers,
+                  },
+                },
+              });
+            }
             // Whether anyone observes this response (a 'response'
             // listener exists now, including once() callbacks about to
             // fire — the constructor attaches the response callback via
@@ -6584,6 +6685,22 @@ export class ClientRequest extends OutgoingMessage {
     msg.connection = this.socket;
     msg.req = this;
     msg._setBody(result.body);
+    // perf_hooks `http` entries: this branch runs when onHeaders never
+    // fired (no headers-complete callback reached the request), so stop
+    // the HttpClient entry here at response delivery instead. The slot
+    // delete in stopPerf makes this a no-op when onHeaders already
+    // stopped it, so a request can never emit twice.
+    if (result.statusCode >= 200) {
+      _httpPerfStop(this, kClientRequestStatistics, {
+        detail: {
+          res: {
+            statusCode: msg.statusCode,
+            statusMessage: msg.statusMessage,
+            headers: msg.headers,
+          },
+        },
+      });
+    }
     // Response already complete — same detach as the streamed path
     // above (test-http-request-signal test 6).
     msg._detachAbortSignal();
