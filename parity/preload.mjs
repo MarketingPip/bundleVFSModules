@@ -403,8 +403,11 @@ Module._load = function (request, parent, isMain) {
     // symbol never matches the shim's slot, so the slot always reads
     // undefined. The adapter exports the shim's Symbol.for bridge key
     // (see src/http.js ServerBase). See parity/http-server-adapter.mjs.
-    // http target only: the https twins keep the real module.
-    if (target === "http" && bare === "_http_server") {
+    // http + https targets: the https twins (async-dispose,
+    // close-destroy-timeout) need the same bridge — the shim https
+    // Server extends http's ServerBase, so it carries the identical slot
+    // (Node lib/https.js:79 shares setupConnectionsTracking).
+    if ((target === "http" || target === "https") && bare === "_http_server") {
       return origLoad.call(
         this,
         path.join(repoRoot, "parity", "http-server-adapter.mjs"),
