@@ -642,6 +642,12 @@ class FakeSocket extends EventEmitter {
 // ./internals/http-symbols.js so the http module family shares them
 // without exposing them on the public surface.)
 const kPath = Symbol("kPath");
+// Node lib/_http_incoming.js:40-45 — abort-signal slots for the lazy
+// `signal` getter (test-http-request-signal).
+const kAbortController = Symbol("kAbortController");
+const kAbortSignalSocket = Symbol("kAbortSignalSocket");
+const kAbortSignalListener = Symbol("kAbortSignalListener");
+const kAbortSignalDetached = Symbol("kAbortSignalDetached");
 // Real Node's OutgoingMessage.errored slot (lib/_http_outgoing.js):
 // null at construction, set to the destroy() argument verbatim —
 // including undefined for a bare destroy() (test-http-outgoing-
@@ -1757,6 +1763,12 @@ export class IncomingMessage extends Readable {
     // server option / client request option flows in before headers are
     // folded (lib/_http_common.js:103).
     this.joinDuplicateHeaders = false;
+    // Node lib/_http_incoming.js:101-104 — abort-signal slots, all
+    // null/false until `signal` is first accessed.
+    this[kAbortController] = null;
+    this[kAbortSignalSocket] = null;
+    this[kAbortSignalListener] = null;
+    this[kAbortSignalDetached] = false;
   }
 
   _read() {
@@ -1805,6 +1817,70 @@ export class IncomingMessage extends Readable {
     this.socket = val;
   }
 
+  // Node lib/_http_incoming.js:199 — lazy `signal` getter. The
+  // AbortController is created on first access; accessing after destroy
+  // of an incomplete message yields an already-aborted signal, and
+  // accessing before that attaches a one-shot socket-'close' listener
+  // that aborts it (test-http-request-signal).
+  // ponytail: AbortController is a platform global (browser + Node),
+  // no shim import needed; ceiling: none — this is the native API.
+  get signal() {
+    if (this[kAbortController] === null) {
+      const ac = new AbortController();
+      this[kAbortController] = ac;
+      if (this.destroyed && (!this.readableEnded || !this.complete)) {
+        ac.abort();
+      } else {
+        this._attachAbortSignal();
+      }
+    }
+    return this[kAbortController].signal;
+  }
+
+  // Node lib/_http_incoming.js:215-238 (kAttachAbortSignal).
+  _attachAbortSignal() {
+    if (
+      this[kAbortController].signal.aborted ||
+      this[kAbortSignalDetached] ||
+      this[kAbortSignalListener] !== null
+    ) {
+      return;
+    }
+    const socket = this.socket;
+    if (!socket) return;
+    if (socket.destroyed) {
+      this._abortSignal();
+      return;
+    }
+    this[kAbortSignalSocket] = socket;
+    this[kAbortSignalListener] = () => {
+      this._abortSignal();
+    };
+    socket.once("close", this[kAbortSignalListener]);
+  }
+
+  // Node lib/_http_incoming.js:240-249 (kDetachAbortSignal). Called
+  // when the message completes normally (server resOnFinish, client
+  // responseOnEnd) so a later socket close does not abort the signal.
+  _detachAbortSignal() {
+    const socket = this[kAbortSignalSocket];
+    const listener = this[kAbortSignalListener];
+    this[kAbortSignalDetached] = true;
+    this[kAbortSignalSocket] = null;
+    this[kAbortSignalListener] = null;
+    if (socket !== null && listener !== null) {
+      socket.removeListener("close", listener);
+    }
+  }
+
+  // Node lib/_http_incoming.js:300-305 (abortSignal).
+  _abortSignal() {
+    this._detachAbortSignal();
+    if (this[kAbortController] !== null) {
+      this[kAbortController].abort();
+    }
+  }
+
   setTimeout(msecs, callback) {
     if (callback) this.once("timeout", callback);
     if (this.socket?.setTimeout) this.socket.setTimeout(msecs);
@@ -1812,8 +1888,29 @@ export class IncomingMessage extends Readable {
   }
 
   _destroy(err, cb) {
-    if (!this.aborted) {
+    // Node lib/_http_incoming.js:271-279: only an INCOMPLETE message is
+    // marked aborted (and emits 'aborted' + aborts its signal) on
+    // destroy. A complete message's destroy leaves `aborted` false
+    // (test-http-request-signal test 2 asserts req.aborted === false
+    // after normal completion) and its signal unaborted.
+    // The emit is gated on !aborted && !_aborted: the socket-close path
+    // (onHttpClose) already emits 'aborted' and sets aborted=true
+    // before destroying the message, and the client round-trip abort
+    // paths (~5931/5964/5978) emit before destroying — the HPE/generic
+    // branches record it as _aborted, not aborted, so the gate must
+    // consult both (the codebase's own combined predicate, ~10554).
+    // Emitting again here double-fires mustCall(1) 'aborted' listeners
+    // (test-http-aborted, test-http-client-abort, test-http-abort-client,
+    // test-http-client-aborted-event, test-http-client-spurious-aborted,
+    // test-http-outgoing-message-capture-rejection). A direct destroy()
+    // of an incomplete message is the first emitter and still emits
+    // once. Public `aborted` is always set here, as Node does.
+    if (!this.readableEnded || !this.complete) {
+      if (!this.aborted && !this._aborted) {
+        this.emit("aborted");
+      }
       this.aborted = true;
+      this._abortSignal();
     }
     // Real Node (probed v24.22.1): destroying an INCOMPLETE incoming
     // message destroys its socket — client res.destroy() closes the
@@ -5012,6 +5109,9 @@ export class ClientRequest extends OutgoingMessage {
     msg.socket = this.socket;
     msg.connection = this.socket;
     msg.req = this;
+    // Response already complete (body read above) — same detach as
+    // the streamed path (test-http-request-signal test 6).
+    msg._detachAbortSignal();
     this._responseReceived = true;
     this._inFlightMessage = msg;
     this.emit("response", msg);
@@ -6209,6 +6309,11 @@ export class ClientRequest extends OutgoingMessage {
         }
       }
       streamedMsg._finishBody();
+      // Node responseOnEnd (lib/_http_client.js:1021) detaches the
+      // response's abort signal when the response ends normally, so a
+      // later socket close (agent release / server.close()) does not
+      // abort it (test-http-request-signal test 6).
+      streamedMsg._detachAbortSignal();
       // Release the socket to the agent's pool for keep-alive reuse.
       // With a non-keep-alive agent the release destroys the socket and
       // removes it from agent.sockets; Node removes it when the socket
@@ -6304,6 +6409,9 @@ export class ClientRequest extends OutgoingMessage {
     msg.connection = this.socket;
     msg.req = this;
     msg._setBody(result.body);
+    // Response already complete — same detach as the streamed path
+    // above (test-http-request-signal test 6).
+    msg._detachAbortSignal();
     // Record the response's keep-alive timeout hint on the socket
     // for the agent's keepSocketAlive veto (see the streamed path
     // above for why this is stashed, and why null clears stale hints).
@@ -9268,6 +9376,19 @@ class ServerBase extends EventEmitter {
    * bytes, then either resume parsing (keep-alive) or close the connection.
    */
   _finishSocketResponse(socket, info, state, req, res, reqNo) {
+    // Node resOnFinish (lib/_http_server.js:1111) detaches the
+    // request's abort signal when the response finishes: a
+    // normally-completed request must not abort when its socket later
+    // closes (test-http-request-signal test 2). Destroy-without-end
+    // never reaches here ('finish' is only emitted manually for
+    // end-then-destroy), so test 1's res.destroy() abort is unaffected.
+    if (req && typeof req._detachAbortSignal === "function") {
+      try {
+        req._detachAbortSignal();
+      } catch {
+        /* best effort */
+      }
+    }
     // Remove the response's socket-close observer (see dispatch): a
     // finished response must not linger on a keep-alive socket.
     if (res._socketCloseListener && socket) {
