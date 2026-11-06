@@ -458,6 +458,10 @@ describe("http.Server socket round trip", () => {
     expect(n).toBe(0);
   });
 
+  // Raw requests below carry a Host header: real Node defaults
+  // requireHostHeader to true, so a Host-less HTTP/1.1 request is
+  // answered 400 before the handler runs — these tests exercise the
+  // handler path, not Host validation.
   test("POST content-length body streams to the handler", async () => {
     const { seen } = await parseRequest(
       0,
