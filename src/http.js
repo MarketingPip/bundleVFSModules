@@ -160,17 +160,40 @@ const ERR_HTTP_CONTENT_LENGTH_MISMATCH = (actual, expected) =>
   );
 const ERR_HTTP_SOCKET_ASSIGNED = () =>
   makeError("ERR_HTTP_SOCKET_ASSIGNED", "Socket already assigned");
-const ERR_INVALID_ARG_TYPE = (name, expected, actual) =>
-  makeError(
-    "ERR_INVALID_ARG_TYPE",
-    `The "${name}" argument must be ${expected}. Received type ${typeof actual} (${String(actual)})`,
-  );
-// Node's options-property validation shape (used by http.request's agent
-// check): "property", TypeError, and the invalidArgTypeHelper suffix
-// (object → "an instance of <Ctor>", function → "function <name>",
-// otherwise "type <typeof> (<inspect>)"). The shared factory above says
-// "argument" with a plain Error, which is right for true arguments but
-// wrong for options properties (test-http-client-reject-unexpected-agent).
+// Node's single ERR_INVALID_ARG_TYPE shape (lib/internal/errors.js:1390+):
+// the noun is "property" when the name contains a dot (options.*), else
+// "argument"; `expected` is bare type names (or an array of them) joined
+// by Node's type/instance/other rules ("of type X", "one of type X or Y",
+// "an instance of X or Y"); the suffix is invalidArgTypeHelper. This
+// replaces the two paper-over factories (PROPERTY/ARGUMENT), which
+// rendered the same output for their call sites via pre-rendered
+// `expected` strings; call sites now pass bare types like Node does.
+const _kArgTypes = [
+  "string",
+  "function",
+  "number",
+  "object",
+  "Function",
+  "Object",
+  "boolean",
+  "bigint",
+  "symbol",
+];
+const _classRegExp = /^[A-Z][a-zA-Z0-9]*$/;
+const _formatList = (array, type = "or") => {
+  switch (array.length) {
+    case 0:
+      return "";
+    case 1:
+      return `${array[0]}`;
+    case 2:
+      return `${array[0]} ${type} ${array[1]}`;
+    case 3:
+      return `${array[0]}, ${array[1]}, ${type} ${array[2]}`;
+    default:
+      return `${array.slice(0, -1).join(", ")}, ${type} ${array[array.length - 1]}`;
+  }
+};
 const _invalidArgTypeSuffix = (actual) => {
   if (actual == null) return ` Received ${actual}`;
   if (typeof actual === "function") return ` Received function ${actual.name}`;
@@ -184,25 +207,47 @@ const _invalidArgTypeSuffix = (actual) => {
   if (inspected.length > 28) inspected = `${inspected.slice(0, 25)}...`;
   return ` Received type ${typeof actual} (${inspected})`;
 };
-const ERR_INVALID_ARG_TYPE_PROPERTY = (name, expected, actual) => {
-  const err = new TypeError(
-    `The "${name}" property must be ${expected}.${_invalidArgTypeSuffix(actual)}`,
+const ERR_INVALID_ARG_TYPE = (name, expected, actual) => {
+  const list = Array.isArray(expected) ? expected : [expected];
+  let msg = "The ";
+  if (name.endsWith(" argument")) msg += `${name} `;
+  else msg += `"${name}" ${name.includes(".") ? "property" : "argument"} `;
+  msg += "must be ";
+  const types = [];
+  const instances = [];
+  const other = [];
+  for (const value of list) {
+    if (_kArgTypes.includes(value)) types.push(value.toLowerCase());
+    else if (_classRegExp.test(value)) instances.push(value);
+    else other.push(value);
+  }
+  if (instances.length > 0) {
+    const pos = types.indexOf("object");
+    if (pos !== -1) {
+      types.splice(pos, 1);
+      instances.push("Object");
+    }
+  }
+  if (types.length > 0) {
+    msg += `${types.length > 1 ? "one of type" : "of type"} ${_formatList(types, "or")}`;
+    if (instances.length > 0 || other.length > 0) msg += " or ";
+  }
+  if (instances.length > 0) {
+    msg += `an instance of ${_formatList(instances, "or")}`;
+    if (other.length > 0) msg += " or ";
+  }
+  if (other.length > 0) {
+    if (other.length > 1) msg += `one of ${_formatList(other, "or")}`;
+    else {
+      if (other[0].toLowerCase() !== other[0]) msg += "an ";
+      msg += `${other[0]}`;
+    }
+  }
+  return makeError(
+    "ERR_INVALID_ARG_TYPE",
+    `${msg}.${_invalidArgTypeSuffix(actual)}`,
+    TypeError,
   );
-  err.code = "ERR_INVALID_ARG_TYPE";
-  return err;
-};
-// Node's true-argument validation shape (http.request's `timeout` option
-// and ClientRequest.setTimeout's `msecs`): "argument" (not "property")
-// with the same invalidArgTypeHelper suffix (null → "Received null",
-// string → "Received type string ('x')"). The shared factory above
-// renders a plain "Received type <typeof> (<value>)" suffix, which is
-// wrong for null (real Node: "Received null", no "type object (null)").
-const ERR_INVALID_ARG_TYPE_ARGUMENT = (name, expected, actual) => {
-  const err = new TypeError(
-    `The "${name}" argument must be of type ${expected}.${_invalidArgTypeSuffix(actual)}`,
-  );
-  err.code = "ERR_INVALID_ARG_TYPE";
-  return err;
 };
 const ERR_INVALID_ARG_VALUE = (name, value, reason) =>
   makeError(
@@ -284,7 +329,7 @@ function _strictByteLength(chunk, encoding) {
 
 function validateString(value, name) {
   if (typeof value !== "string") {
-    throw ERR_INVALID_ARG_TYPE(name, "of type string", value);
+    throw ERR_INVALID_ARG_TYPE(name, "string", value);
   }
 }
 
@@ -796,11 +841,7 @@ export class OutgoingMessage extends Writable {
       typeof headers.keys !== "function" ||
       typeof headers.get !== "function"
     ) {
-      throw ERR_INVALID_ARG_TYPE(
-        "headers",
-        "an instance of Headers or Map",
-        headers,
-      );
+      throw ERR_INVALID_ARG_TYPE("headers", ["Headers", "Map"], headers);
     }
 
     // set-cookie values are collected so setHeader does not overwrite them.
@@ -1847,9 +1888,11 @@ export class IncomingMessage extends Readable {
       const lower = key.toLowerCase();
       msg.rawHeaders.push(key, String(value));
       if (lower === "set-cookie") {
+        // Node lib/_http_incoming.js _addHeaderLine flag 1: set-cookie
+        // is ALWAYS an array, even for a single value.
         const arr = Array.isArray(value) ? value.map(String) : [String(value)];
         if (msg.headers[lower] === undefined) {
-          msg.headers[lower] = arr.length === 1 ? arr[0] : arr;
+          msg.headers[lower] = arr;
         } else {
           const cur = Array.isArray(msg.headers[lower])
             ? msg.headers[lower]
@@ -1909,9 +1952,11 @@ export class IncomingMessage extends Readable {
         msg.trailersDistinct[lower].push(String(value));
       }
       if (lower === "set-cookie") {
+        // Same always-array rule as headers: trailers fold through the
+        // same _addHeaderLine in Node.
         const arr = [String(value)];
         if (msg.trailers[lower] === undefined) {
-          msg.trailers[lower] = arr[0];
+          msg.trailers[lower] = arr;
         } else {
           const cur = Array.isArray(msg.trailers[lower])
             ? msg.trailers[lower]
@@ -3226,9 +3271,9 @@ export class ClientRequest extends OutgoingMessage {
       options.insecureHTTPParser !== undefined &&
       typeof options.insecureHTTPParser !== "boolean"
     ) {
-      throw ERR_INVALID_ARG_TYPE_PROPERTY(
+      throw ERR_INVALID_ARG_TYPE(
         "options.insecureHTTPParser",
-        "of type boolean",
+        "boolean",
         options.insecureHTTPParser,
       );
     }
@@ -3320,8 +3365,8 @@ export class ClientRequest extends OutgoingMessage {
             Array.isArray(options.headers[key])
           ) {
             throw ERR_INVALID_ARG_TYPE(
-              "host",
-              "of type string",
+              "options.headers.host",
+              "string",
               options.headers[key],
             );
           }
@@ -3340,9 +3385,9 @@ export class ClientRequest extends OutgoingMessage {
         agent = defAgent;
       }
     } else if (typeof agent.addRequest !== "function") {
-      throw ERR_INVALID_ARG_TYPE_PROPERTY(
+      throw ERR_INVALID_ARG_TYPE(
         "options.agent",
-        "one of Agent-like Object, undefined, or false",
+        ["Agent-like Object", "undefined", "false"],
         agent,
       );
     }
@@ -3390,10 +3435,32 @@ export class ClientRequest extends OutgoingMessage {
     // hid the suffix.
     const defaultPort = options.defaultPort || this.agent?.defaultPort;
     const port = options.port || defaultPort || 80;
-    let host = options.hostname || options.host || "localhost";
-    if (host !== null && host !== undefined && typeof host !== "string") {
-      throw ERR_INVALID_ARG_TYPE("options.host", "of type string", host);
+    // Node lib/_http_client.js:131-135,401-402: validateHost(hostname)
+    // then validateHost(host); each throws ERR_INVALID_ARG_TYPE with its
+    // own options.* name and ['string','undefined','null'] expected.
+    if (
+      options.hostname !== null &&
+      options.hostname !== undefined &&
+      typeof options.hostname !== "string"
+    ) {
+      throw ERR_INVALID_ARG_TYPE(
+        "options.hostname",
+        ["string", "undefined", "null"],
+        options.hostname,
+      );
     }
+    if (
+      options.host !== null &&
+      options.host !== undefined &&
+      typeof options.host !== "string"
+    ) {
+      throw ERR_INVALID_ARG_TYPE(
+        "options.host",
+        ["string", "undefined", "null"],
+        options.host,
+      );
+    }
+    let host = options.hostname || options.host || "localhost";
     host = host || "localhost";
 
     let method = options.method;
@@ -3434,11 +3501,7 @@ export class ClientRequest extends OutgoingMessage {
     // two must compose (option at assignment, setTimeout at connect).
     if (options.timeout !== undefined) {
       if (typeof options.timeout !== "number") {
-        throw ERR_INVALID_ARG_TYPE_ARGUMENT(
-          "timeout",
-          "number",
-          options.timeout,
-        );
+        throw ERR_INVALID_ARG_TYPE("timeout", "number", options.timeout);
       }
       if (!(options.timeout >= 0) || !Number.isFinite(options.timeout)) {
         throw ERR_OUT_OF_RANGE(
@@ -3921,7 +3984,7 @@ export class ClientRequest extends OutgoingMessage {
     // call must throw at call time, not at connect (the socket's own
     // setTimeout validates too, but deferral below would delay it).
     if (typeof timeout !== "number") {
-      throw ERR_INVALID_ARG_TYPE_ARGUMENT("msecs", "number", timeout);
+      throw ERR_INVALID_ARG_TYPE("msecs", "number", timeout);
     }
     if (!(timeout >= 0) || !Number.isFinite(timeout)) {
       throw ERR_OUT_OF_RANGE("msecs", "a non-negative finite number", timeout);
@@ -7151,7 +7214,7 @@ function _socketHttpRoundTrip(
 const _validateServerTimeout = (name, value) => {
   if (value === undefined) return;
   if (typeof value !== "number") {
-    throw ERR_INVALID_ARG_TYPE_ARGUMENT(name, "number", value);
+    throw ERR_INVALID_ARG_TYPE(name, "number", value);
   }
   if (!Number.isInteger(value)) {
     throw ERR_OUT_OF_RANGE(name, "an integer", value);
@@ -7198,11 +7261,9 @@ class ServerBase extends EventEmitter {
     ) {
       options = optionsOrListener;
     } else {
-      throw ERR_INVALID_ARG_TYPE(
-        "options",
-        ["Object", "Function"],
-        optionsOrListener,
-      );
+      // Node lib/_http_server.js:641: validateObject(options, 'options')
+      // → ERR_INVALID_ARG_TYPE('options', 'object', options).
+      throw ERR_INVALID_ARG_TYPE("options", "object", optionsOrListener);
     }
     this._requestListener = requestListener;
     if (requestListener) {
@@ -9674,7 +9735,7 @@ class AgentBase extends EventEmitter {
       // >= 1 (incl. NaN, -Infinity) → ERR_OUT_OF_RANGE. Infinity and
       // fractions pass (probed v24.22.1) — no integer requirement.
       if (typeof this.maxTotalSockets !== "number") {
-        throw ERR_INVALID_ARG_TYPE_ARGUMENT(
+        throw ERR_INVALID_ARG_TYPE(
           "maxTotalSockets",
           "number",
           this.maxTotalSockets,
