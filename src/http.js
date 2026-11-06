@@ -9321,6 +9321,13 @@ class ServerBase extends EventEmitter {
       // anything is committed. An explicit writeHead() commits the headers
       // first; the body that follows is chunked instead.
       // (test-http-chunk-extensions-limit block 3)
+      // Node's _storeHeader adds this Content-Length only when the app
+      // did NOT remove it (lib/_http_outgoing.js: `!this._removedContLen`
+      // — re-adding a removed header breaks the client's header view:
+      // test-http-remove-header-stays-removed asserts the client sees
+      // only the Date header). When the length IS added, record it in
+      // `rendered` — the header is on the wire, so the keep-alive
+      // framing decision below must see the length framing.
       const implicitHeader = res._headersImplicit === true;
       if (
         !hasCL &&
@@ -9328,7 +9335,8 @@ class ServerBase extends EventEmitter {
         !noBodyStatus &&
         !isHttp10 &&
         implicitHeader &&
-        !hasTrailerHeader
+        !hasTrailerHeader &&
+        !res._removedContLen
       ) {
         // Frame the body like Node does when its length is known at end():
         // HEAD responses carry the length but no bytes.
@@ -9337,6 +9345,7 @@ class ServerBase extends EventEmitter {
           /\r\n$/,
           `Content-Length: ${body.length}\r\n\r\n`,
         );
+        rendered["content-length"] = String(body.length);
       }
       // TE can come from setHeader (kOutHeaders) or writeHead(obj)
       // (_renderedHeaders). For HTTP/1.0 with a `TE: chunked` request, Node
@@ -9467,8 +9476,21 @@ class ServerBase extends EventEmitter {
       res.hasHeader("transfer-encoding") ||
       rendered["transfer-encoding"] !== undefined ||
       res._chunkedStreaming === true;
+    // Node's _last (lib/_http_outgoing.js _storeHeader): a response that
+    // carries a body but has no length framing (no Content-Length, no
+    // Transfer-Encoding, not chunked) cannot keep the connection alive —
+    // the body is delimited by the close, so this is the last response
+    // (test-http-remove-header-stays-removed: both CL and TE removed).
+    // HEAD / 204 / 304 / 1xx carry no body, so framing is not required
+    // for them. The send branches above may have added an implicit
+    // Content-Length (recorded in `rendered`) or chunked framing, and
+    // streaming responses default to chunked — all visible in hasLen.
+    // HTTP/1.0 keeps its existing rule (close without length framing).
+    const needsFraming = res._hasBody !== false && req.method !== "HEAD";
     let framingOk = true;
     if (res._reqHttpVersion === "1.0") {
+      framingOk = hasLen;
+    } else if (needsFraming) {
       framingOk = hasLen;
     }
     // 204/304/1xx responses MUST NOT have a body (RFC 2616 10.2.5). If the
@@ -9632,8 +9654,21 @@ class ServerBase extends EventEmitter {
           }
         });
       } else {
+        // Not keep-alive: end the socket (Node's resOnFinish calls
+        // socket.destroySoon() for last responses —
+        // lib/_http_server.js:1123-1129 — not destroy()), so the peer
+        // sees a clean FIN, socket.writableEnded is already true when
+        // user 'finish' handlers run, and the socket is destroyed once
+        // its writable side finishes (test-http-remove-header-*). A bare
+        // destroy() leaves writableEnded false and the client without a
+        // clean close. destroySoon falls back to destroy()/end() for
+        // sockets without the method (e.g. FakeSocket stand-ins).
+        // The peerEnded branch above keeps its deferred destroy (the
+        // parser-visibility ordering there is deliberate), and the
+        // serverClosing branch keeps destroy (the server is going away).
         try {
-          socket.destroy();
+          if (typeof socket.destroySoon === "function") socket.destroySoon();
+          else socket.destroy();
         } catch {
           try {
             socket.end();
