@@ -659,8 +659,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // guard, pre-round-trip socket destroys deferred one macrotask,
     // factory sockets wired synchronously, server-side 'aborted' on
     // peer destroy + stashed response) (src/http.js + working note).
+    // fix/http-localaddress branch: localAddress/host family
+    // (Host IPv6 brackets + defaultPort, localAddress/localPort
+    // threading + net bind emulation + validation, legacy 4-arg
+    // addRequest) (src/http.js + src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      ["src/http.js", "src/net.js", "NOTES-http-localaddress.md"].sort(),
     );
   });
 
