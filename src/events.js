@@ -115,17 +115,32 @@ function emitWarning(warning) {
 }
 
 /** Minimal util.inspect stand-in (only used for warning text). */
-function inspect(value) {
+function inspect(value, depth = 0, seen = new Set()) {
   try {
     if (typeof value === "string") return `'${value}'`;
     if (value === null) return "null";
     if (value === undefined) return "undefined";
     if (typeof value !== "object") return String(value);
-    if (Array.isArray(value))
-      return `[ ${value.map((v) => inspect(v)).join(", ")} ]`;
-    const keys = Object.keys(value);
-    if (keys.length === 0) return "{}";
-    return `{ ${keys.map((k) => `${k}: ${inspect(value[k])}`).join(", ")} }`;
+    // Cycle + depth guard (real inspect prints [Circular] and stops
+    // at a depth cap): without either, a MaxListeners warning on a
+    // cyclic emitter — a socket points back at itself through its
+    // HTTP state and responses — recurses astronomically and hangs
+    // the process inside this function
+    // (test-http-many-ended-pipelines). `seen` tracks the current
+    // path only, so a repeated-but-not-ancestor reference still
+    // prints in full, like real inspect.
+    if (seen.has(value)) return "[Circular]";
+    if (depth > 2) return "[Object]";
+    seen.add(value);
+    try {
+      if (Array.isArray(value))
+        return `[ ${value.map((v) => inspect(v, depth + 1, seen)).join(", ")} ]`;
+      const keys = Object.keys(value);
+      if (keys.length === 0) return "{}";
+      return `{ ${keys.map((k) => `${k}: ${inspect(value[k], depth + 1, seen)}`).join(", ")} }`;
+    } finally {
+      seen.delete(value);
+    }
   } catch {
     return "[object]";
   }

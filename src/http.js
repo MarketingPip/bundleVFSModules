@@ -592,6 +592,12 @@ class FakeSocket extends EventEmitter {
 // http module family shares them without exposing them on the public surface.)
 const kOutHeaders = Symbol("kOutHeaders");
 const kPath = Symbol("kPath");
+// Real Node's OutgoingMessage.errored slot (lib/_http_outgoing.js):
+// null at construction, set to the destroy() argument verbatim —
+// including undefined for a bare destroy() (test-http-outgoing-
+// destroyed block 4). It shadows the ported Writable's state-based
+// `errored`, which reports null after a bare destroy.
+const kErrored = Symbol("errored");
 
 const INVALID_PATH_REGEX = /[^\u0021-\u00ff]/;
 
@@ -615,6 +621,7 @@ export class OutgoingMessage extends Writable {
     this[kHighWaterMark] =
       options?.highWaterMark ?? getDefaultHighWaterMark(false);
     this[kOutHeaders] = null;
+    this[kErrored] = null;
     this._header = null; // rendered header block; truthy => headers sent
     this._renderedHeaders = null; // flattened map for the server bridge
     this.finished = false;
@@ -692,6 +699,25 @@ export class OutgoingMessage extends Writable {
     const sock = this.socket;
     if (sock && sock._writableState) sock._writableState.corked = 1;
     this.uncork();
+  }
+
+  // Real Node's OutgoingMessage.errored (lib/_http_outgoing.js): the
+  // kErrored slot above, NOT the ported Writable's state-based value
+  // (which stays null after a bare destroy). Shadows the Writable
+  // prototype getter for every OutgoingMessage, ServerResponse, and
+  // ClientRequest.
+  get errored() {
+    return this[kErrored];
+  }
+
+  destroy(err) {
+    // Record the destroy argument verbatim, including undefined for a
+    // bare destroy() — real Node's OutgoingMessage.destroy assigns
+    // this[kErrored] = error before tearing down (test-http-outgoing-
+    // destroyed block 4: errored === undefined after destroy()).
+    // ClientRequest.destroy funnels through here via super.destroy.
+    this[kErrored] = err;
+    return super.destroy(err);
   }
 
   // Buffer written chunks until the message is finished (no real socket).
@@ -1649,6 +1675,12 @@ export class IncomingMessage extends Readable {
     ) {
       this._readableState.highWaterMark = socket.readableHighWaterMark;
     }
+    // Deprecated alias for `socket` (lib/_http_incoming.js:95: plain
+    // own property `this.client = socket`). The shim only had
+    // `connection`, so req.client read undefined and
+    // test-http-req-close-robust-from-tampering's handler threw before
+    // it could invoke the socket's close handlers.
+    this.client = this.socket;
     this.httpVersionMajor = 1;
     this.httpVersionMinor = 1;
     this.httpVersion = "1.1";
@@ -1728,7 +1760,14 @@ export class IncomingMessage extends Readable {
           // sockets never do, so that marker selects the behavior.
           this.socket.destroy();
         } else if (typeof this.socket.resetAndDestroy === "function") {
-          this.socket.resetAndDestroy();
+          // Destroyed WITH the error: real Node's _destroy calls
+          // socket.destroy(err), and the socket error forwarder
+          // carries it to the request as an unhandled 'error'
+          // (test-http-client-incomingmessage-destroy's
+          // uncaughtException comes from the request, not the
+          // response). The peer still gets ECONNRESET either way
+          // (net.js resetAndDestroy), so peer behavior is unchanged.
+          this.socket.resetAndDestroy(err);
         } else if (typeof this.socket.destroy === "function") {
           this.socket.destroy(err);
         }
@@ -1736,16 +1775,25 @@ export class IncomingMessage extends Readable {
         /* ignore */
       }
     }
-    // Server-side requests swallow the destroy error (close-only), like
-    // OutgoingMessage._destroy: probed on real Node v24.22.1, a server
-    // req.destroy(err) with no 'error' listener produces NO
-    // uncaughtException — the error is recorded as `errored` (the ported
-    // stream destroy sets that before calling here) and only 'close'
-    // follows (test-http-server-incomingmessage-destroy). Client
-    // responses keep cb(err): their destroy error surfaces as 'error'
-    // (and, unlistened, as uncaughtException, which
-    // test-http-client-incomingmessage-destroy requires).
-    cb(this.socket && this.socket.server ? null : err);
+    // Real Node's _destroy defers its callback via process.nextTick
+    // (onError, lib/_http_incoming.js:512) and guards the error: the
+    // callback runs on nextTick, never synchronously — so `closed`
+    // stays false until 'close' fires (test-http-client-
+    // incomingmessage-destroy asserts closed === false right after
+    // destroy() returns) — and the destroy error reaches cb ONLY when
+    // the message has 'error' listeners; otherwise cb() runs with no
+    // error and no 'error' is emitted on the message at all (the
+    // ported destroy would emit it unguarded, throwing on an
+    // unlistened 'error' and skipping 'close'). The uncaught, when
+    // the app wants one, comes from the request via the socket error
+    // forwarder above, not from the response. The old server-side
+    // null is subsumed: no listeners means no error on either side.
+    const cbErr = this.listenerCount("error") > 0 ? err : undefined;
+    if (typeof globalThis.process?.nextTick === "function") {
+      globalThis.process.nextTick(cb, cbErr);
+    } else {
+      queueMicrotask(() => cb(cbErr));
+    }
   }
 
   // Internal: push one body chunk (Buffer/Uint8Array/string).
@@ -2680,6 +2728,25 @@ export class ServerResponse extends OutgoingMessage {
   // destroys the socket.
   _destroy(err, cb) {
     const sock = this.socket;
+    // Remove the response's socket-close observer (see dispatch)
+    // first: a destroyed response must not linger on a socket that
+    // outlives it (keep-alive preserve), and removing here keeps the
+    // manual-invocation path (test-http-req-close-robust-from-
+    // tampering) from re-entering a half-destroyed response.
+    if (this._socketCloseListener && sock) {
+      try {
+        sock.removeListener("close", this._socketCloseListener);
+      } catch {
+        /* ignore */
+      }
+      // Clear the per-socket live-pointer too (see dispatch): the
+      // socket's state holds the same closure, and the closure holds
+      // res → req — leaving it pins the request past GC
+      // (test-http-server-keepalive-req-gc).
+      if (sock._httpState?.resCloseListener === this._socketCloseListener) {
+        sock._httpState.resCloseListener = null;
+      }
+    }
     const preserved = (this._keepAliveSocket || this.finished) && !err;
     if (
       !preserved &&
@@ -3095,6 +3162,24 @@ function _removeRequestSocketListeners(socket) {
     socket.removeListener("close", socket._requestCloseListener);
     socket._requestCloseListener = null;
   }
+}
+
+/**
+ * Surface a user-callback throw as a genuine uncaught exception. Real
+ * Node has NO try/catch on the parse/emit path — lib/_http_client.js
+ * socketOnData/parserOnIncomingClient and lib/_http_server.js
+ * parserOnIncoming call user code bare, so a throw reaches
+ * process.on('uncaughtException') (test-http-exceptions,
+ * test-http-catch-uncaughtexception). The shim's round trip is
+ * promise-based, so a throw inside an emit would otherwise become a
+ * swallowed rejection or a transport error. Scheduling past the
+ * current stack (same pattern as the shouldUpgradeCallback throw
+ * below) makes it uncaught on both paths.
+ */
+function _rethrowUncaught(err) {
+  queueMicrotask(() => {
+    throw err;
+  });
 }
 
 export class ClientRequest extends OutgoingMessage {
@@ -5541,7 +5626,17 @@ export class ClientRequest extends OutgoingMessage {
             this._attachResponseTimeout(streamedMsg);
             this._responseReceived = true;
             this._inFlightMessage = msg;
-            this.emit("response", msg);
+            // A throw in the user's response callback must reach
+            // uncaughtException (real Node emits 'response' bare —
+            // no try/catch on the path), not be swallowed by the
+            // round trip's listener-error catch
+            // (test-http-catch-uncaughtexception,
+            // test-http-uncaught-from-request-callback).
+            try {
+              this.emit("response", msg);
+            } catch (err) {
+              _rethrowUncaught(err);
+            }
           },
           // 1xx interim: 100 → the request's 'continue' event, other 1xx
           // → 'information' carrying a full IncomingMessage (status,
@@ -5551,7 +5646,11 @@ export class ClientRequest extends OutgoingMessage {
           onInformation: (info) => {
             if (this._aborted) return;
             if (info.statusCode === 100) {
-              this.emit("continue");
+              try {
+                this.emit("continue");
+              } catch (err) {
+                _rethrowUncaught(err);
+              }
               return;
             }
             const msg = new IncomingMessage(this.socket);
@@ -5570,7 +5669,11 @@ export class ClientRequest extends OutgoingMessage {
             msg.socket = this.socket;
             msg.connection = this.socket;
             msg.req = this;
-            this.emit("information", msg);
+            try {
+              this.emit("information", msg);
+            } catch (err) {
+              _rethrowUncaught(err);
+            }
           },
           onBody: (chunk) => {
             if (streamedMsg && !this._aborted) {
@@ -5588,11 +5691,41 @@ export class ClientRequest extends OutgoingMessage {
         // Streaming: the response was already emitted; propagate the error
         // to it (e.g., ECONNRESET when the server destroys the response).
         const isAbort = this._aborted;
-        if (
-          !isAbort &&
-          typeof err?.code === "string" &&
-          err.code.startsWith("HPE_")
-        ) {
+        if (isAbort) {
+          // Client abort after a response was emitted: real Node's
+          // socketCloseListener destroys the incomplete response with
+          // ConnResetException('aborted') — IncomingMessage._destroy
+          // sets aborted, emits 'aborted', and the error surfaces
+          // only when a listener exists (lib/_http_incoming.js
+          // onError guard), then 'close' (test-http-aborted: res
+          // 'aborted' → req 'close' → res 'error' → res 'close').
+          // The old code skipped both emits for aborts, so the
+          // response only ever saw 'close'.
+          streamedMsg.aborted = true;
+          streamedMsg.emit("aborted");
+          try {
+            sock.destroy();
+          } catch {
+            /* best effort */
+          }
+          try {
+            this.destroy();
+          } catch {
+            /* best effort */
+          }
+          if (streamedMsg.listenerCount("error") > 0) {
+            const e = new Error("aborted");
+            e.code = "ECONNRESET";
+            streamedMsg.emit("error", e);
+          }
+          try {
+            streamedMsg.destroy();
+          } catch {
+            /* best effort */
+          }
+          return;
+        }
+        if (typeof err?.code === "string" && err.code.startsWith("HPE_")) {
           // Parse error after the response was emitted (e.g. trailing
           // garbage after a complete CL:0 response): real Node reports
           // it on the REQUEST, not the response stream — the response
@@ -5615,32 +5748,30 @@ export class ClientRequest extends OutgoingMessage {
           }
           throw err;
         }
-        if (!isAbort) {
-          streamedMsg._aborted = true;
-          streamedMsg.emit("aborted");
-        }
+        streamedMsg._aborted = true;
+        streamedMsg.emit("aborted");
         // Destroy the socket to release the loop keeper.
         try {
           sock.destroy();
         } catch {
           /* best effort */
         }
-        if (!isAbort) {
-          // Map socket-closed errors to ECONNRESET (Node behavior when the
-          // server destroys the response mid-stream) — but only when
-          // the response stream actually listens for 'error': emitting
-          // an unlistened 'error' throws inside this catch, skipping
-          // the stream destroy and the request close below (and the
-          // throw is then swallowed upstream, so the request just never
-          // closes — test-http-server-capture-rejections block 2, whose
-          // client attaches no res 'error' listener, hung on its req
-          // 'close' mustCall exactly this way). Real Node passes that
-          // test, so its error delivery here is effectively guarded.
-          const e = err instanceof Error ? err : new Error(String(err));
-          e.code = "ECONNRESET";
-          if (streamedMsg.listenerCount("error") > 0) {
-            streamedMsg.emit("error", e);
-          }
+        // Map socket-closed errors to ECONNRESET (Node behavior when the
+        // server destroys the response mid-stream) — but only when
+        // the response stream actually listens for 'error': emitting
+        // an unlistened 'error' throws inside this catch, skipping
+        // the stream destroy and the request close below (and the
+        // throw is then swallowed upstream, so the request just never
+        // closes — test-http-server-capture-rejections block 2, whose
+        // client attaches no res 'error' listener, hung on its req
+        // 'close' mustCall exactly this way). Real Node passes that
+        // test, so its error delivery here is effectively guarded.
+        // (Aborts return early above, so no isAbort guard is needed
+        // here anymore.)
+        const e = err instanceof Error ? err : new Error(String(err));
+        e.code = "ECONNRESET";
+        if (streamedMsg.listenerCount("error") > 0) {
+          streamedMsg.emit("error", e);
         }
         // Don't call _finishBody() — 'end' must NOT fire on abort.
         // Destroy the message which emits 'close'.
@@ -7732,6 +7863,27 @@ class ServerBase extends EventEmitter {
             /* ignore */
           }
         }
+        // Real Node's socketOnClose destroys every in-flight request
+        // with ConnResetException('aborted') (lib/_http_server.js
+        // abortIncoming): 'aborted' above, then 'error' ECONNRESET
+        // "aborted" — only when a listener exists
+        // (lib/_http_incoming.js onError guard, so a listenerless
+        // request never crashes) — then 'close'
+        // (test-http-aborted). Skipped when the app already
+        // destroyed the request itself.
+        const curReq = state.current.req;
+        if (curReq && !curReq.destroyed) {
+          if (curReq.listenerCount("error") > 0) {
+            const e = new Error("aborted");
+            e.code = "ECONNRESET";
+            curReq.emit("error", e);
+          }
+          try {
+            curReq.destroy();
+          } catch {
+            /* ignore */
+          }
+        }
         state.current = null;
       }
       const stashed = state.lastResponse;
@@ -7758,6 +7910,22 @@ class ServerBase extends EventEmitter {
           stashed.destroy();
         } catch {
           /* ignore */
+        }
+        // Same ConnResetException('aborted') destroy as the current
+        // branch above: 'aborted', then a listener-guarded 'error',
+        // then 'close' (test-http-aborted). Skipped when the app
+        // already destroyed the request itself.
+        if (stashedReq && !stashedReq.destroyed) {
+          if (stashedReq.listenerCount("error") > 0) {
+            const e = new Error("aborted");
+            e.code = "ECONNRESET";
+            stashedReq.emit("error", e);
+          }
+          try {
+            stashedReq.destroy();
+          } catch {
+            /* ignore */
+          }
         }
       }
       // Free the parser facade exactly once at socket close, then read
@@ -8619,6 +8787,55 @@ class ServerBase extends EventEmitter {
     res.on("finish", () => {
       this._finishSocketResponse(socket, info, state, req, res, reqNo);
     });
+    // Real Node's ServerResponse.assignSocket observes the socket's
+    // 'close' (lib/_http_server.js onServerResponseClose): at dispatch
+    // the socket carries TWO close listeners (the server's onClose +
+    // this one) — test-http-req-close-robust-from-tampering invokes
+    // both by hand. On socket close the listener removes itself and
+    // destroys the response if it is still unfinished (onHttpClose,
+    // registered first, already destroyed it on a real close, so this
+    // is normally a no-op guard). Removed at finish and at destroy so
+    // keep-alive sockets don't accumulate one per response.
+    if (res.socket && !res._socketCloseListener) {
+      const resSocket = res.socket;
+      const onResClose = () => {
+        try {
+          resSocket.removeListener("close", onResClose);
+        } catch {
+          /* ignore */
+        }
+        if (state.resCloseListener === onResClose) {
+          state.resCloseListener = null;
+        }
+        if (!res.destroyed && !res.closed && !res.finished) {
+          try {
+            res.destroy();
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+      // One live per-response close listener per socket (real Node's
+      // socket carries exactly two close listeners: its own onClose +
+      // the current response's onServerResponseClose). The previous
+      // response is finished by now (it holds no socket otherwise),
+      // so its listener is stale — drop it before attaching, or a
+      // pipelined socket accumulates one listener per response and
+      // trips MaxListeners (test-http-many-ended-pipelines, 20
+      // pipelined requests on one socket; test-http-pipeline-
+      // requests-connection-leak, 10,000). A stale state pointer
+      // (listener already removed at finish/destroy) is a no-op here.
+      if (state.resCloseListener) {
+        try {
+          resSocket.removeListener("close", state.resCloseListener);
+        } catch {
+          /* ignore */
+        }
+      }
+      res._socketCloseListener = onResClose;
+      state.resCloseListener = onResClose;
+      res.socket.on("close", onResClose);
+    }
     // Counted before dispatch: a handler that finishes synchronously
     // (or a pipelined request dispatched while an earlier response is
     // still in flight) must still be outstanding when the earlier
@@ -8686,16 +8903,24 @@ class ServerBase extends EventEmitter {
     // (test-http-chunk-extensions-limit)
     try {
       // captureRejections covers 'request' only; checkContinue /
-      // checkExpectation dispatch through a plain emit (a sync throw
-      // still lands in clientError below, as before).
+      // checkExpectation dispatch through a plain emit.
       if (dispatchEvent === "request" && this._captureRejections) {
         this._emitRequestCaptured(req, res);
       } else {
         this.emit(dispatchEvent, req, res);
       }
     } catch (err) {
-      this.emit("clientError", err, socket);
-      socket.destroy(err);
+      // A sync throw in a request/checkContinue/checkExpectation
+      // handler is NOT a clientError and does NOT destroy the socket:
+      // real Node lets it propagate through parser.execute to
+      // uncaughtException (probed v24.22.1: handler throws reach
+      // uncaughtException, zero clientError, the client hangs with no
+      // error). Schedule it past the virtual write stack so it
+      // surfaces as uncaught instead of landing in the round-trip
+      // writer's catch as a transport failure
+      // (test-http-exceptions). No response is written; the request
+      // stays in flight, exactly as on real Node.
+      _rethrowUncaught(err);
     }
     // No body finish here: completion belongs to the parser. A no-body
     // request is finished by _finishMessage -> onMessageComplete (wired
@@ -8716,7 +8941,8 @@ class ServerBase extends EventEmitter {
   // native capture path cannot also emit 'error' on the server (real
   // Node sends the 500 / destroys without any server 'error' event).
   // rawListeners preserves once-wrapper semantics; a sync throw still
-  // propagates to the dispatch catch (clientError + socket destroy).
+  // propagates to the dispatch catch (scheduled as uncaughtException,
+  // like any other handler throw).
   _emitRequestCaptured(req, res) {
     const listeners =
       typeof this.rawListeners === "function"
@@ -8763,6 +8989,22 @@ class ServerBase extends EventEmitter {
    * bytes, then either resume parsing (keep-alive) or close the connection.
    */
   _finishSocketResponse(socket, info, state, req, res, reqNo) {
+    // Remove the response's socket-close observer (see dispatch): a
+    // finished response must not linger on a keep-alive socket.
+    if (res._socketCloseListener && socket) {
+      try {
+        socket.removeListener("close", res._socketCloseListener);
+      } catch {
+        /* ignore */
+      }
+      // Clear the per-socket live-pointer too (see dispatch): the
+      // socket's state holds the same closure, and the closure holds
+      // res → req — leaving it pins the request past GC
+      // (test-http-server-keepalive-req-gc).
+      if (state.resCloseListener === res._socketCloseListener) {
+        state.resCloseListener = null;
+      }
+    }
     // Idempotence: the finish listener calls this once, and
     // ServerResponse._destroy may emit 'finish' manually for the
     // end-then-destroy case — never deliver twice.
