@@ -672,11 +672,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // client-side truncation) (src/http.js + src/_http_parser.js +
     // working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "src/http.js",
-        "src/_http_parser.js",
-        "NOTES-http-header-server.md",
-      ].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
