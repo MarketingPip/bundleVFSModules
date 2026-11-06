@@ -659,20 +659,16 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // guard, pre-round-trip socket destroys deferred one macrotask,
     // factory sockets wired synchronously, server-side 'aborted' on
     // peer destroy + stashed response) (src/http.js + working note).
-    // fix/http-localaddress branch: localAddress/host family
-    // (Host IPv6 brackets + defaultPort, localAddress/localPort
-    // threading + net bind emulation + validation, legacy 4-arg
-    // addRequest) (src/http.js + src/net.js + working note).
-    // fix/http-header-assembly branch: client request-head assembly
-    // (Host setHost rule + IPv6 brackets, Connection keep-alive/close
-    // rule, array-form header order, URL-auth decoding)
-    // (src/http.js + working note).
-    // fix/http-header-server branch: server requireHostHeader +
-    // maxHeadersCount (400 on missing Host, pair-budget overflow/431,
-    // client-side truncation) (src/http.js + src/_http_parser.js +
-    // working note).
+    // fix/http-response-write branch: response-write lifecycle
+    // (early-hints link validation, statusMessage/statusCode error
+    // rendering, incoming-message HWM sync, cork/uncork socket mirroring
+    // + end() full uncork + chunked end(chunk) 5-write framing,
+    // flushHeaders force-start, write-callback end-at-flush ordering,
+    // Expect+factory early kick + Host :80 default-port fix; src/net.js
+    // gains Socket _writev for corked-batch delivery coalescing)
+    // (src/http.js + src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      ["NOTES-http-response-write.md", "src/http.js", "src/net.js"].sort(),
     );
   });
 

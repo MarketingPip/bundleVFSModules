@@ -1676,6 +1676,51 @@ Socket.prototype._write = function _write(chunk, encoding, cb) {
   this._deliverToPeer(chunk, encoding, cb);
 };
 
+Socket.prototype._writev = function _writev(chunks, cb) {
+  // Corked-batch coalescing (test-http-response-cork vs the pipelined
+  // raw-socket tests): real Node's net.Socket implements _writev, and
+  // the Writable routes a corked batch of 2+ writes through it as ONE
+  // call — on the wire those bytes leave as one TCP segment, so a raw
+  // client sees ONE 'data' event per response. The shim's virtual
+  // transport delivers per _write call, so without this the five
+  // socket.write calls of a chunked end(chunk) response arrive as five
+  // 'data' events and break pipelined clients that advance one request
+  // per event (test-http-1.0-keep-alive,
+  // test-http-server-keep-alive-defaults). The five calls still happen
+  // — the cork test counts them — only the delivery coalesces. The
+  // connecting case buffers the concatenated bytes as one pending write
+  // whose callback is the batch callback, so onwrite fires exactly once
+  // at flush (mirrors _write's connecting branch, which stores
+  // state.onwrite as the pending item's cb).
+  if (!this._connected || !this._peer || this._peer.destroyed) {
+    if (this.connecting) {
+      this._pendingWrites.push({
+        chunk: Buffer.concat(
+          chunks.map((item) => toBytes(item.chunk, item.encoding)),
+        ),
+        encoding: "",
+        cb,
+      });
+      return;
+    }
+    const er = this.destroyed
+      ? errnoError(
+          "ERR_STREAM_DESTROYED",
+          "write",
+          "Cannot call write after a stream was destroyed",
+        )
+      : new Error("Socket is not connected");
+    if (!this.destroyed) this.destroy(er);
+    cb(er);
+    return;
+  }
+  this._deliverToPeer(
+    Buffer.concat(chunks.map((item) => toBytes(item.chunk, item.encoding))),
+    "",
+    cb,
+  );
+};
+
 Socket.prototype._deliverToPeer = function _deliverToPeer(chunk, encoding, cb) {
   const peer = this._peer;
   const buf = toBytes(chunk, encoding);
