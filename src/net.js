@@ -36,6 +36,14 @@
 import { Duplex } from "./stream.js";
 import { EventEmitter } from "./events.js";
 import { undestroy as undestroyStream } from "./stream/destroy.js";
+// ponytail: node:fs is imported ONLY for existsSync on pipe-bind parent
+// dirs (BoundSocket EACCES case). In the parity harness this resolves to
+// real fs, so the check sees the real tmpdir; in the browser build esbuild
+// externalizes node: builtins (same precedent as src/url.js importing
+// node:path), so the sandbox resolves it to the memfs-backed shim fs and
+// the check runs against the visible virtual filesystem. No other fs API
+// is used here — the virtual transport never reads real disk.
+import { existsSync as fsExistsSync } from "node:fs";
 
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
@@ -154,6 +162,16 @@ function errServerAlreadyListening() {
 function errServerNotRunning() {
   const e = new Error("Server is not running.");
   e.code = "ERR_SERVER_NOT_RUNNING";
+  return e;
+}
+
+function errSocketHandleAdopted() {
+  // Node lib/internal/errors.js: 'The bound socket has already been adopted
+  // by a server or socket'.
+  const e = new Error(
+    "The bound socket has already been adopted by a server or socket",
+  );
+  e.code = "ERR_SOCKET_HANDLE_ADOPTED";
   return e;
 }
 
@@ -733,6 +751,7 @@ function setDefaultAutoSelectFamilyAttemptTimeout(value) {
 const _localNetShared = {
   tcpServers: new Map(), // "<host>:<port>" -> Server
   pipeServers: new Map(), // path -> Server
+  boundPipes: new Map(), // path -> BoundSocket (not yet listening/adopted)
 };
 function _netShared() {
   if (RT) {
@@ -740,6 +759,7 @@ function _netShared() {
       RT.__netSharedState = {
         tcpServers: new Map(),
         pipeServers: new Map(),
+        boundPipes: new Map(),
       };
     }
     return RT.__netSharedState;
@@ -753,6 +773,9 @@ function _tcpServers() {
 }
 function _pipeServers() {
   return _netShared().pipeServers;
+}
+function _boundPipes() {
+  return _netShared().boundPipes;
 }
 
 function serverKey(host, port) {
@@ -784,6 +807,36 @@ export function hasTcpServer(host, port) {
   keys.push(serverKey("0.0.0.0", port));
   return keys.some((key) => _tcpServers().has(key));
 }
+
+// Whether a (host, port) bind conflicts with a live listener: an exact
+// match, a wildcard listener covering the host, or a wildcard bind against
+// any listener on the port. Used by BoundSocket construction (EADDRINUSE
+// vs a live listener — role-neutral binds coexist, libuv SO_REUSEADDR)
+// and by the client bind-twice check in _doConnect.
+function _tcpListenerConflicts(host, family, port) {
+  const servers = _tcpServers();
+  if (servers.has(serverKey(host, port))) return true;
+  if (family === "IPv4") {
+    if (servers.has(serverKey("0.0.0.0", port))) return true;
+  } else if (servers.has(serverKey("::", port))) {
+    return true;
+  }
+  if (host === "0.0.0.0" || host === "::") {
+    for (const key of servers.keys()) {
+      if (key.endsWith(`:${port}`)) return true;
+    }
+  }
+  return false;
+}
+
+// Virtual fds for BoundSocket.fd(): no OS descriptor exists in the browser,
+// so each bound socket gets a synthetic descriptor (>= 100, clear of
+// stdio). Ceiling: a test comparing it against a real OS fd (e.g. via
+// fs.fstat) cannot pass — no such test exists in the vendored suite.
+let nextVirtualFd = 100;
+const _isWindows =
+  typeof process !== "undefined" && process.platform === "win32";
+const _isLinux = typeof process !== "undefined" && process.platform === "linux";
 
 // Ephemeral port pool for both listen(0) and client-side local ports,
 // kept out of the real ephemeral range to avoid confusion.
@@ -926,10 +979,20 @@ function Socket(options = {}) {
   // Adopt a pre-bound BoundSocket as the local endpoint (virtual).
   if (options.handle instanceof BoundSocket) {
     // Remember the adoption: connect() rejects localAddress/localPort
-    // on an adopted socket (Node lib/net.js lookupAndConnect).
+    // on an adopted socket (Node lib/net.js lookupAndConnect), and the
+    // bound endpoint is the socket's local endpoint from construction
+    // (connect() is synchronous for an adopted handle, so localAddress/
+    // localPort resolve in-tick). Consuming here transfers ownership:
+    // the BoundSocket's address()/fd()/close() throw from now on.
     this._adoptedHandle = true;
     const addr = options.handle.address();
-    if (addr && typeof addr.port === "number") {
+    options.handle._consume();
+    if (typeof addr === "string") {
+      this._boundPath = addr;
+      this._sockname = { address: addr };
+    } else if (addr && typeof addr.port === "number") {
+      this._bindLocalAddress = addr.address;
+      this._bindLocalPort = addr.port;
       this._sockname = {
         address: addr.address,
         family: addr.family,
@@ -1388,9 +1451,13 @@ Socket.prototype.connect = function connect(...args) {
   }
   // Stash the requested source endpoint for _doConnect/_acceptConnection:
   // the virtual layer has no real bind, so the pairing presents it as the
-  // socket's local address (and the server side's remote address).
-  this._bindLocalAddress = options.localAddress;
-  this._bindLocalPort = options.localPort;
+  // socket's local address (and the server side's remote address). An
+  // adopted bound socket keeps its constructor-stashed endpoint (connect()
+  // rejects localAddress/localPort on adopted sockets above).
+  if (!this._adoptedHandle) {
+    this._bindLocalAddress = options.localAddress;
+    this._bindLocalPort = options.localPort;
+  }
 
   if (this.write !== Socket.prototype.write) {
     // If the user has overwritten .write, reset it so connect() works.
@@ -1409,6 +1476,21 @@ Socket.prototype.connect = function connect(...args) {
   this._pendingWrites = [];
   this._finSent = false;
   this._localPortEphemeral = 0;
+
+  // An adopted bound socket's local endpoint resolves synchronously:
+  // connect(2) is synchronous for an adopted handle in Node, so
+  // localAddress/localPort read in-tick, before the 'connect' event.
+  if (this._adoptedHandle) {
+    if (this._boundPath !== undefined) {
+      this._sockname = { address: this._boundPath };
+    } else if (this._bindLocalPort !== undefined) {
+      this._sockname = {
+        address: this._bindLocalAddress,
+        family: isIP(this._bindLocalAddress) === 6 ? "IPv6" : "IPv4",
+        port: this._bindLocalPort,
+      };
+    }
+  }
 
   // Mirrors lib/net.js: connect options set socket properties applied on
   // successful connection (via _handle.setKeepAlive/setNoDelay).
@@ -1581,6 +1663,31 @@ Socket.prototype._doConnect = function _doConnect(options, pipe) {
           address: options.localAddress,
           port: options.localPort,
         },
+      );
+      defer(() => this._connectFailed(err));
+      return;
+    }
+  }
+
+  // A requested localPort that a live listener already holds fails the
+  // bind (probed real Node v24.22.1: async EADDRINUSE, syscall bind,
+  // errno -98). Role-neutral binds coexist, so only listening servers
+  // conflict — never a BoundSocket-held port. No localAddress means a
+  // wildcard bind, which conflicts with any listener on the port.
+  if (!pipe && options.localPort !== undefined && options.localPort !== 0) {
+    const bindHost = options.localAddress ?? "0.0.0.0";
+    if (
+      _tcpListenerConflicts(
+        bindHost,
+        isIP(bindHost) === 6 ? "IPv6" : "IPv4",
+        options.localPort,
+      )
+    ) {
+      const err = errnoError(
+        "EADDRINUSE",
+        "bind",
+        `bind EADDRINUSE ${bindHost}:${options.localPort}`,
+        { errno: -98, address: bindHost, port: options.localPort },
       );
       defer(() => this._connectFailed(err));
       return;
@@ -2101,11 +2208,15 @@ Server.prototype._releaseLoop = function _releaseLoop() {
 };
 
 // Adopts a BoundSocket as this server's listen endpoint (virtual).
+// Consumes the bound socket synchronously (Node transfers the handle in
+// listen()); its address()/fd()/close() throw from now on.
 Server.prototype._adoptBoundSocket = function _adoptBoundSocket(bound) {
   const addr = bound.address();
-  if (addr && typeof addr.path === "string") {
+  bound._consume();
+  this._reusePortAdopted = !!bound._reusePort;
+  if (typeof addr === "string") {
     this._bindPending = true;
-    nextTick(() => this._doListenPipe(addr.path));
+    nextTick(() => this._doListenPipe(addr));
   } else {
     this._bindPending = true;
     nextTick(() => this._doListenTCP(addr.port, addr.address));
@@ -2195,13 +2306,20 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
 
   const actualPort = port === 0 ? allocPort() : port;
   const key = serverKey(bindHost, actualPort);
-  if (_tcpServers().has(key)) {
-    this._bindPending = false;
-    nextTick(() => this.emit("error", errAddrInUse(bindHost, actualPort)));
-    return;
+  const existing = _tcpServers().get(key);
+  if (existing) {
+    // SO_REUSEPORT: two servers adopted from reusePort BoundSockets may
+    // share one port. The first entry stays for routing (the kernel
+    // load-balances; this test never connects); the second server still
+    // listens with its own _bindAddress.
+    if (!(this._reusePortAdopted && existing._reusePortAdopted)) {
+      this._bindPending = false;
+      nextTick(() => this.emit("error", errAddrInUse(bindHost, actualPort)));
+      return;
+    }
+  } else {
+    _tcpServers().set(key, this);
   }
-
-  _tcpServers().set(key, this);
   this._bindPending = false;
   this._listening = true;
   this._backlog = backlog;
@@ -2244,128 +2362,40 @@ Server.prototype.address = function address() {
   return { address, family, port };
 };
 
-// Pairs an incoming client with a server-side Socket (virtual accept).
-Server.prototype._acceptConnection = function _acceptConnection(client, req) {
-  const bindAddr = this._bindAddress;
-
-  // The accept is deferred a macrotask after the client's lookup; the server
-  // may have closed in between (close() nulls _bindAddress and clears
-  // _listening). Refuse cleanly instead of throwing on the nulled address.
-  if (!this._listening || !bindAddr) {
-    client._connectFailed(client._refusedError(req));
-    return;
-  }
-
-  // Server-side blockList: silently refused, like Node closing clientHandle.
-  if (this.blockList) {
-    let blocked = false;
-    try {
-      blocked = this.blockList.check("127.0.0.1", "ipv4");
-    } catch {
-      blocked = false;
-    }
-    if (blocked) {
-      client._connectFailed(client._refusedError(req));
-      return;
-    }
-  }
-
-  // The client's bound source address (Node: the socket's local endpoint
-  // after bind) is what the server sees as remoteAddress; the client's
-  // local port is its requested localPort when one was bound.
-  const srcAddress = client._bindLocalAddress || "127.0.0.1";
-  const srcFamily = isIP(srcAddress) === 6 ? "IPv6" : "IPv4";
-
-  if (this.maxConnections != null && this._connections >= this.maxConnections) {
-    // The ephemeral port must be allocated BEFORE building the drop data:
-    // the accept path only allocates it after this check, so an early
-    // remotePort read was undefined (test-net-server-drop-connections
-    // asserts it truthy).
-    const clientPort = client._bindLocalPort ?? allocPort();
-    client._localPortEphemeral = clientPort;
-    const data = {
-      localAddress: bindAddr ? bindAddr.address : undefined,
-      localPort: bindAddr ? bindAddr.port : undefined,
-      localFamily: bindAddr ? bindAddr.family : undefined,
-      remoteAddress: srcAddress,
-      remotePort: clientPort,
-      remoteFamily: srcFamily,
-    };
-    this.emit("drop", data);
-    // Probed real Node (v24.22.1): a dropped connection still completes
-    // its handshake — the client sees 'connect' then 'ready' — and the
-    // server side is then destroyed gracefully, so the client sees EOF
-    // ('end') + 'close' (hadError false). No 'connection' event fires
-    // and the socket is never counted. Pair like the accept path, then
-    // destroy the server side; do NOT set _server or _connections++.
-    const serverSocket = new Socket({
-      allowHalfOpen: this.allowHalfOpen,
-      readableHighWaterMark: this.highWaterMark,
-      writableHighWaterMark: this.highWaterMark,
-    });
-    if (req.pipe) {
-      client._sockname = { address: req.path };
-      client._peername = { address: req.path };
-      serverSocket._sockname = { address: req.path };
-      serverSocket._peername = { address: req.path };
-    } else {
-      client._sockname = {
-        address: srcAddress,
-        family: srcFamily,
-        port: clientPort,
-      };
-      client._peername = {
-        address: bindAddr.address,
-        family: bindAddr.family,
-        port: bindAddr.port,
-      };
-      serverSocket._sockname = {
-        address: bindAddr.address,
-        family: bindAddr.family,
-        port: bindAddr.port,
-      };
-      serverSocket._peername = {
-        address: srcAddress,
-        family: srcFamily,
-        port: clientPort,
-      };
-    }
-    client._peer = serverSocket;
-    serverSocket._peer = client;
-    client._connected = true;
-    serverSocket._connected = true;
-    client.connecting = false;
-    client._flushPendingWrites();
-    client._refreshTimeout();
-    if (!serverSocket._handle) serverSocket._handle = new VirtualHandle();
-    client.emit("connect");
-    client.emit("ready");
-    if (client.readable && !client.isPaused()) {
-      client._readStarted = true;
-    }
-    client._refreshLoopKeeper();
-    serverSocket.destroy();
-    return;
-  }
-
+// Pairs an incoming client with a server-side Socket, completes its
+// handshake ('connect' then 'ready'), then destroys the server side
+// gracefully — the client sees EOF ('end') + 'close' (hadError false).
+// Probed real Node (v24.22.1). No 'connection' event fires and the socket
+// is never counted; do NOT set _server or _connections++. Shared by the
+// maxConnections drop path (which also emits 'drop') and the server-side
+// blockList path (which does not). clientPort and bindAddr are passed in:
+// the caller's 'drop'/'drop'-data read happens before this pairing, and a
+// 'drop' listener may close the server (nulling _bindAddress), so the
+// helper must not re-read them — and must not allocate a second ephemeral
+// port (the drop data's remotePort is the paired port).
+Server.prototype._dropPairedConnection = function _dropPairedConnection(
+  client,
+  req,
+  srcAddress,
+  srcFamily,
+  clientPort,
+  bindAddr,
+) {
+  client._localPortEphemeral = clientPort;
   const serverSocket = new Socket({
     allowHalfOpen: this.allowHalfOpen,
     readableHighWaterMark: this.highWaterMark,
     writableHighWaterMark: this.highWaterMark,
   });
-  if (this.pauseOnConnect) serverSocket.pause();
-  serverSocket.setNoDelay(this.noDelay);
-  if (this.keepAlive)
-    serverSocket.setKeepAlive(true, this.keepAliveInitialDelay * 1000);
-
-  const clientPort = client._bindLocalPort ?? allocPort();
-  client._localPortEphemeral = clientPort;
-
   if (req.pipe) {
-    client._sockname = { address: req.path };
+    // An adopted source pipe keeps its bound path as the local endpoint
+    // (Node: localAddress is the source path); a plain pipe client has
+    // no local name — the destination path stands in, as before.
+    const localPath = client._boundPath ?? req.path;
+    client._sockname = { address: localPath };
     client._peername = { address: req.path };
     serverSocket._sockname = { address: req.path };
-    serverSocket._peername = { address: req.path };
+    serverSocket._peername = { address: localPath };
   } else {
     client._sockname = {
       address: srcAddress,
@@ -2388,6 +2418,146 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
       port: clientPort,
     };
   }
+  client._peer = serverSocket;
+  serverSocket._peer = client;
+  client._connected = true;
+  serverSocket._connected = true;
+  client.connecting = false;
+  client._flushPendingWrites();
+  client._refreshTimeout();
+  if (!serverSocket._handle) serverSocket._handle = new VirtualHandle();
+  client.emit("connect");
+  client.emit("ready");
+  if (client.readable && !client.isPaused()) {
+    client._readStarted = true;
+  }
+  client._refreshLoopKeeper();
+  serverSocket.destroy();
+};
+
+// Pairs an incoming client with a server-side Socket (virtual accept).
+Server.prototype._acceptConnection = function _acceptConnection(client, req) {
+  const bindAddr = this._bindAddress;
+
+  // The accept is deferred a macrotask after the client's lookup; the server
+  // may have closed in between (close() nulls _bindAddress and clears
+  // _listening). Refuse cleanly instead of throwing on the nulled address.
+  if (!this._listening || !bindAddr) {
+    client._connectFailed(client._refusedError(req));
+    return;
+  }
+
+  // The client's bound source address (Node: the socket's local endpoint
+  // after bind) is what the server sees as remoteAddress; the client's
+  // local port is its requested localPort when one was bound.
+  const srcAddress = client._bindLocalAddress || "127.0.0.1";
+  const srcFamily = isIP(srcAddress) === 6 ? "IPv6" : "IPv4";
+
+  // Server-side blockList: Node accepts the connection, then closes the
+  // accepted handle — the client sees 'connect' then 'end' + 'close'
+  // (hadError false), never an 'error' (probed real Node v24.22.1). That
+  // is exactly the drop pairing below, minus the 'drop' event.
+  if (this.blockList && !req.pipe) {
+    let blocked = false;
+    try {
+      blocked = this.blockList.check(
+        srcAddress,
+        srcFamily === "IPv6" ? "ipv6" : "ipv4",
+      );
+    } catch {
+      blocked = false;
+    }
+    if (blocked) {
+      this._dropPairedConnection(
+        client,
+        req,
+        srcAddress,
+        srcFamily,
+        client._bindLocalPort ?? allocPort(),
+        bindAddr,
+      );
+      return;
+    }
+  }
+
+  if (this.maxConnections != null && this._connections >= this.maxConnections) {
+    // The ephemeral port must be allocated BEFORE building the drop data:
+    // the accept path only allocates it after this check, so an early
+    // remotePort read was undefined (test-net-server-drop-connections
+    // asserts it truthy).
+    const clientPort = client._bindLocalPort ?? allocPort();
+    client._localPortEphemeral = clientPort;
+    const data = {
+      localAddress: bindAddr ? bindAddr.address : undefined,
+      localPort: bindAddr ? bindAddr.port : undefined,
+      localFamily: bindAddr ? bindAddr.family : undefined,
+      remoteAddress: srcAddress,
+      remotePort: clientPort,
+      remoteFamily: srcFamily,
+    };
+    this.emit("drop", data);
+    this._dropPairedConnection(
+      client,
+      req,
+      srcAddress,
+      srcFamily,
+      clientPort,
+      bindAddr,
+    );
+    return;
+  }
+
+  const serverSocket = new Socket({
+    allowHalfOpen: this.allowHalfOpen,
+    readableHighWaterMark: this.highWaterMark,
+    writableHighWaterMark: this.highWaterMark,
+  });
+  if (this.pauseOnConnect) serverSocket.pause();
+  serverSocket.setNoDelay(this.noDelay);
+  if (this.keepAlive)
+    serverSocket.setKeepAlive(true, this.keepAliveInitialDelay * 1000);
+
+  const clientPort = client._bindLocalPort ?? allocPort();
+  client._localPortEphemeral = clientPort;
+
+  if (req.pipe) {
+    // An adopted source pipe keeps its bound path as the local endpoint
+    // (Node: localAddress is the source path); a plain pipe client has
+    // no local name — the destination path stands in, as before.
+    const localPath = client._boundPath ?? req.path;
+    client._sockname = { address: localPath };
+    client._peername = { address: req.path };
+    serverSocket._sockname = { address: req.path };
+    serverSocket._peername = { address: localPath };
+  } else {
+    client._sockname = {
+      address: srcAddress,
+      family: srcFamily,
+      port: clientPort,
+    };
+    client._peername = {
+      address: bindAddr.address,
+      family: bindAddr.family,
+      port: bindAddr.port,
+    };
+    serverSocket._sockname = {
+      address: bindAddr.address,
+      family: bindAddr.family,
+      port: bindAddr.port,
+    };
+    serverSocket._peername = {
+      address: srcAddress,
+      family: srcFamily,
+      port: clientPort,
+    };
+  }
+
+  client._peer = serverSocket;
+  serverSocket._peer = client;
+  client._connected = true;
+  serverSocket._connected = true;
+  serverSocket._server = this;
+  serverSocket.server = this;
 
   client._peer = serverSocket;
   serverSocket._peer = client;
@@ -2454,11 +2624,21 @@ Server.prototype.close = function close(cb) {
 
   if (this._listening || this._bindPending) {
     if (this._bindAddress) {
-      if (this._pipeName) _pipeServers().delete(this._pipeName);
-      else
+      // Only release the registry slot this server owns: with
+      // SO_REUSEPORT two servers share one key and the first entry stays
+      // for routing.
+      if (this._pipeName) {
+        if (_pipeServers().get(this._pipeName) === this)
+          _pipeServers().delete(this._pipeName);
+      } else if (
+        _tcpServers().get(
+          serverKey(this._bindAddress.address, this._bindAddress.port),
+        ) === this
+      ) {
         _tcpServers().delete(
           serverKey(this._bindAddress.address, this._bindAddress.port),
         );
+      }
     }
     this._listening = false;
     this._bindPending = false;
@@ -2518,9 +2698,7 @@ function createServer(options, connectionListener) {
 function BoundSocket(options = {}) {
   validateObject(options, "options");
   if (options.path !== undefined) {
-    validateString(options.path, "options.path");
-    this._path = options.path;
-    this._address = { address: options.path };
+    this._bindPipe(options);
     return;
   }
   const port = validatePort(options.port ?? 0, "options.port");
@@ -2528,32 +2706,168 @@ function BoundSocket(options = {}) {
   validateBoolean(ipv6Only, "options.ipv6Only");
   const reusePort = options.reusePort ?? false;
   validateBoolean(reusePort, "options.reusePort");
-  const host = options.host ?? "::";
+  // No DNS: a non-IP host throws (Node lib/net.js BoundSocket).
+  let host = options.host;
   let address;
   let family;
-  if (isIP(host)) {
+  if (host === undefined || host === null) {
+    host = ipv6Only ? "::" : "0.0.0.0";
     address = host;
-    family = isIPv4(host) ? "IPv4" : "IPv6";
-  } else if (isLoopbackName(host)) {
-    address = "127.0.0.1";
-    family = "IPv4";
+    family = ipv6Only ? "IPv6" : "IPv4";
   } else {
-    throw errNotFound(host);
+    validateString(host, "options.host");
+    const type = isIP(host);
+    if (type === 0) {
+      throw errInvalidArgValue(
+        "options.host",
+        host,
+        "must be a numeric IP address; net.BoundSocket does not perform DNS resolution",
+      );
+    }
+    address = host;
+    family = type === 6 ? "IPv6" : "IPv4";
   }
-  this._port = port;
+  // The virtual layer has no real interfaces: only loopback and the
+  // wildcards are bindable; anything else is EADDRNOTAVAIL (Node binds a
+  // local interface address, which cannot exist here). Ceiling: a test
+  // binding the machine's real LAN IP cannot pass — no such test exists.
+  if (
+    !isLoopbackAddress(address) &&
+    address !== "0.0.0.0" &&
+    address !== "::"
+  ) {
+    throw errnoError("EADDRNOTAVAIL", "bind", `bind EADDRNOTAVAIL ${address}`, {
+      errno: -99,
+      address,
+      port,
+    });
+  }
+  if (
+    port !== 0 &&
+    port < 1024 &&
+    typeof process !== "undefined" &&
+    typeof process.getuid === "function" &&
+    process.getuid() !== 0
+  ) {
+    throw errnoError("EACCES", "bind", `bind EACCES ${address}:${port}`, {
+      errno: -13,
+      address,
+      port,
+    });
+  }
+  // Port 0 allocates from the shared ephemeral pool (same pool as
+  // listen(0)). A live listener on an explicit port conflicts
+  // (EADDRINUSE); role-neutral binds coexist, so no registry of TCP
+  // BoundSockets is kept.
+  const actualPort = port === 0 ? allocPort() : port;
+  if (port !== 0 && _tcpListenerConflicts(address, family, port)) {
+    throw errnoError(
+      "EADDRINUSE",
+      "bind",
+      `bind EADDRINUSE ${address}:${port}`,
+      { errno: -98, address, port },
+    );
+  }
+  this._port = actualPort;
   this._host = address;
   this._ipv6Only = ipv6Only;
   this._reusePort = reusePort;
-  this._address = { address, family, port };
+  this._address = { address, family, port: actualPort };
 }
+// Bind a named unix-domain socket (or Windows named pipe). A leading '\0'
+// selects the Linux abstract namespace. Path is mutually exclusive with
+// the TCP options; conflicts and filesystem errors throw synchronously
+// (Node lib/net.js BoundSocket #bindPipe; libuv maps a missing parent
+// directory's ENOENT to EACCES, and an over-long path to EINVAL).
+BoundSocket.prototype._bindPipe = function _bindPipe(options) {
+  const { path, host, port, ipv6Only, reusePort } = options;
+  if (
+    host !== undefined ||
+    port !== undefined ||
+    ipv6Only !== undefined ||
+    reusePort !== undefined
+  ) {
+    throw errInvalidArgValue(
+      "options",
+      options,
+      "path is mutually exclusive with host, port, ipv6Only, and reusePort",
+    );
+  }
+  validateString(path, "options.path");
+  const isAbstract = path[0] === "\0";
+  // Node: abstract socket paths are only supported on Linux.
+  if (isAbstract && !_isLinux) {
+    throw errInvalidArgValue(
+      "options.path",
+      path,
+      "abstract socket paths are only supported on Linux",
+    );
+  }
+  // sun_path is 108 bytes on Linux (107 usable); libuv binds with
+  // UV_PIPE_NO_TRUNCATE, so an over-long path is EINVAL, not truncation.
+  if (path.length > 107) {
+    throw errnoError("EINVAL", "bind", `bind EINVAL ${path}`, {
+      errno: -22,
+      path,
+    });
+  }
+  if (!isAbstract) {
+    // Parent directory must exist in the filesystem this runtime sees
+    // (real disk in the parity harness, memfs in the browser).
+    const slash = path.lastIndexOf("/");
+    const parent = slash > 0 ? path.slice(0, slash) : slash === 0 ? "/" : "";
+    if (parent !== "" && !fsExistsSync(parent)) {
+      throw errnoError("EACCES", "bind", `bind EACCES ${path}`, {
+        errno: -13,
+        path,
+      });
+    }
+  }
+  if (_boundPipes().has(path) || _pipeServers().has(path)) {
+    throw errnoError("EADDRINUSE", "bind", `bind EADDRINUSE ${path}`, {
+      errno: -98,
+      path,
+    });
+  }
+  _boundPipes().set(path, this);
+  this._path = path;
+  this._address = path;
+};
 BoundSocket.prototype.address = function address() {
-  if (this._path !== undefined) return { address: this._path };
+  if (this._adopted || this._closed) throw errSocketHandleAdopted();
+  if (this._path !== undefined) return this._path;
   const { address, family, port } = this._address;
   return { address, family, port };
 };
+// Reports whether this is a pipe (unix-domain) bind rather than TCP. Its
+// mere presence on the prototype ('isPipe' in net.BoundSocket.prototype)
+// is the capability signal that this build honors { path }.
+Object.defineProperty(BoundSocket.prototype, "isPipe", {
+  get() {
+    return this._path !== undefined;
+  },
+  enumerable: true,
+  configurable: true,
+});
+BoundSocket.prototype.fd = function fd() {
+  if (this._adopted || this._closed) throw errSocketHandleAdopted();
+  if (_isWindows) return -1;
+  if (this._fd === undefined) this._fd = nextVirtualFd++;
+  return this._fd;
+};
 BoundSocket.prototype.close = function close() {
-  // Virtual endpoint descriptors hold no OS resources.
+  if (this._adopted || this._closed) throw errSocketHandleAdopted();
+  this._closed = true;
+  if (this._path !== undefined) _boundPipes().delete(this._path);
   return undefined;
+};
+// Internal: transfer ownership to exactly one Server (server.listen) or
+// Socket (new Socket({ handle })). After this, address()/fd()/close()
+// throw ERR_SOCKET_HANDLE_ADOPTED (Node [kBoundSocketConsume]).
+BoundSocket.prototype._consume = function _consume() {
+  if (this._adopted || this._closed) throw errSocketHandleAdopted();
+  this._adopted = true;
+  if (this._path !== undefined) _boundPipes().delete(this._path);
 };
 
 // _createServerHandle — compat export; returns a virtual bound endpoint.
