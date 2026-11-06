@@ -751,6 +751,14 @@ function serverKey(host, port) {
 // network (test-http-client-reject-chunked-with-content-length,
 // test-http-client-reject-cr-no-lf). Internal only: not a Node API, so
 // it stays out of the default namespace export below.
+// Whether a virtual pipe (unix-socket) server is registered for a path.
+// Internal only, like hasTcpServer: the http client routes socketPath
+// requests over an agent socket (with real response parsing) instead of
+// fetch(), which cannot reach the virtual network.
+export function hasPipeServer(path) {
+  return _pipeServers().has(path);
+}
+
 export function hasTcpServer(host, port) {
   const keys = [];
   if (isIP(host) !== 0) keys.push(serverKey(host, port));

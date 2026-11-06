@@ -21,6 +21,9 @@ const EXPECTED = [
   // Internal helper for the http client (loopback routing to raw net
   // servers); not a Node API, like _createServerHandle/_normalizeArgs.
   "hasTcpServer",
+  // Internal helper for the http client (unix-socket routing to raw net
+  // pipe servers); not a Node API, same family as hasTcpServer.
+  "hasPipeServer",
   "isIP",
   "isIPv4",
   "isIPv6",
