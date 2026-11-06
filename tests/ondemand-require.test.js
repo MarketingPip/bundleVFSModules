@@ -668,7 +668,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // rule, array-form header order, URL-auth decoding)
     // (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      ["src/http.js", "NOTES-http-join-dup-headers.md"].sort(),
     );
   });
 

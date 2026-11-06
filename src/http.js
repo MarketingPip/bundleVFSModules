@@ -1565,6 +1565,11 @@ export class IncomingMessage extends Readable {
     this.statusCode = null;
     this.statusMessage = null;
     this._dumped = false;
+    // Node lib/_http_incoming.js:83: default false — no-duplicate fields
+    // (DUPLICATES_REMOVED) join with ", " only when this is set; the
+    // server option / client request option flows in before headers are
+    // folded (lib/_http_common.js:103).
+    this.joinDuplicateHeaders = false;
   }
 
   _read() {
@@ -1713,7 +1718,11 @@ export class IncomingMessage extends Readable {
         // Object.prototype (test-http-server-multiheaders).
         const owned = Object.prototype.hasOwnProperty.call(msg.headers, lower);
         if (DUPLICATES_REMOVED.has(lower)) {
+          // Node lib/_http_incoming.js:464: a no-duplicate field joins
+          // with ", " only when joinDuplicateHeaders is set; otherwise
+          // the first value wins (headersDistinct still keeps all).
           if (!owned) msg.headers[lower] = val;
+          else if (msg.joinDuplicateHeaders) msg.headers[lower] += `, ${val}`;
         } else if (lower === "cookie") {
           msg.headers[lower] = owned ? `${msg.headers[lower]}; ${val}` : val;
         } else {
@@ -1762,7 +1771,10 @@ export class IncomingMessage extends Readable {
         // Object.prototype (same trap as headers).
         const owned = Object.prototype.hasOwnProperty.call(msg.trailers, lower);
         if (DUPLICATES_REMOVED.has(lower)) {
+          // Same joinDuplicateHeaders rule as headers (Node folds
+          // trailers through the same _addHeaderLine).
           if (!owned) msg.trailers[lower] = val;
+          else if (msg.joinDuplicateHeaders) msg.trailers[lower] += `, ${val}`;
         } else if (lower === "cookie") {
           msg.trailers[lower] = owned ? `${msg.trailers[lower]}; ${val}` : val;
         } else {
@@ -5270,6 +5282,10 @@ export class ClientRequest extends OutgoingMessage {
             for (let i = 0; i < info.rawHeaders.length; i += 2) {
               pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
             }
+            // Node lib/_http_common.js:103-104: the response message takes
+            // the flag from the request's parser (set from the request
+            // option in onSocket).
+            msg.joinDuplicateHeaders = this.joinDuplicateHeaders;
             IncomingMessage._applyRawHeaders(msg, pairs);
             msg.socket = this.socket;
             msg.connection = this.socket;
@@ -5316,6 +5332,7 @@ export class ClientRequest extends OutgoingMessage {
             for (let i = 0; i < info.rawHeaders.length; i += 2) {
               pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
             }
+            msg.joinDuplicateHeaders = this.joinDuplicateHeaders;
             IncomingMessage._applyRawHeaders(msg, pairs);
             msg.socket = this.socket;
             msg.connection = this.socket;
@@ -5449,6 +5466,7 @@ export class ClientRequest extends OutgoingMessage {
       for (let i = 0; i < result.rawHeaders.length; i += 2) {
         pairs.push([result.rawHeaders[i], result.rawHeaders[i + 1]]);
       }
+      msg.joinDuplicateHeaders = this.joinDuplicateHeaders;
       IncomingMessage._applyRawHeaders(msg, pairs);
       msg.socket = this.socket;
       msg.connection = this.socket;
@@ -5523,6 +5541,7 @@ export class ClientRequest extends OutgoingMessage {
       for (let i = 0; i < result.rawHeaders.length; i += 2) {
         pairs.push([result.rawHeaders[i], result.rawHeaders[i + 1]]);
       }
+      msg.joinDuplicateHeaders = this.joinDuplicateHeaders;
       IncomingMessage._applyRawHeaders(msg, pairs);
       msg.socket = this.socket;
       msg.connection = this.socket;
@@ -5701,6 +5720,7 @@ export class ClientRequest extends OutgoingMessage {
     for (let i = 0; i < result.rawHeaders.length; i += 2) {
       pairs.push([result.rawHeaders[i], result.rawHeaders[i + 1]]);
     }
+    msg.joinDuplicateHeaders = this.joinDuplicateHeaders;
     IncomingMessage._applyRawHeaders(msg, pairs);
     if (result.rawTrailers && result.rawTrailers.length > 0) {
       IncomingMessage._applyRawTrailers(msg, result.rawTrailers);
@@ -6825,6 +6845,10 @@ class ServerBase extends EventEmitter {
 
     this.listening = false;
     this.maxHeadersCount = null;
+    // createServer({ joinDuplicateHeaders }) — Node lib/_http_server.js:589:
+    // stored raw (default undefined, like the client option); forwarded
+    // to each request message at dispatch (lib/_http_common.js:103).
+    this.joinDuplicateHeaders = options.joinDuplicateHeaders;
     // maxConnections is a plain property in real Node, read at accept
     // time — so it must work whether assigned before or after listen().
     // The accessor stores the value and forwards it to the backing net
@@ -7870,6 +7894,11 @@ class ServerBase extends EventEmitter {
     req.httpVersionMajor = info.httpVersionMajor;
     req.httpVersionMinor = info.httpVersionMinor;
     req.httpVersion = info.httpVersion;
+    // Node lib/_http_common.js:103: the incoming message takes the flag
+    // from the server option (client side it comes from the parser).
+    // Post-construction set, like highWaterMark above: custom
+    // IncomingMessage subclasses take only the socket.
+    req.joinDuplicateHeaders = this.joinDuplicateHeaders;
     const pairs = [];
     for (let i = 0; i < info.rawHeaders.length; i += 2) {
       pairs.push([info.rawHeaders[i], info.rawHeaders[i + 1]]);
@@ -8825,6 +8854,7 @@ class ServerBase extends EventEmitter {
   async handleRequest(method, url, headers, body) {
     return new Promise((resolve, reject) => {
       const req = IncomingMessage.fromRequest(method, url, headers, body);
+      req.joinDuplicateHeaders = this.joinDuplicateHeaders;
       const res = new ServerResponse(req, {
         rejectNonStandardBodyWrites: this._rejectNonStandardBodyWrites,
         lenientHeaderValidation: this._lenientHeaderValidation,
