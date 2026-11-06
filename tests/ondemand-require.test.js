@@ -645,12 +645,16 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // write-through, setTimeout forwarding, foreign-socket write
     // failure propagation, drain-after-wire ordering)
     // (src/http.js only).
+    // fix/http-transfer-encoding branch: Transfer-Encoding validation
+    // (repeated chunked + smuggling) (src/http.js + src/_http_parser.js
+    // + working note).
+    // fix/http-unix-socket branch: unix-socket pair (agent socketPath →
+    // net path, Server.listen(path) pipe bind + pipe registry,
+    // _performRequest pipe gate, factory branch before the virtual/raw
+    // gates, close() ERR_SERVER_NOT_RUNNING)
+    // (src/http.js + src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "src/http.js",
-        "src/_http_parser.js",
-        "NOTES-http-transfer-encoding.md",
-      ].sort(),
+      ["src/http.js", "src/net.js", "NOTES-http-unix-socket.md"].sort(),
     );
   });
 

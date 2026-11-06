@@ -39,6 +39,7 @@ import { HTTPParser } from "./_http_parser.js";
 import {
   connect as netConnect,
   createServer as createNetServer,
+  hasPipeServer as netHasPipeServer,
   hasTcpServer as netHasTcpServer,
 } from "./net.js";
 
@@ -3227,6 +3228,14 @@ export class ClientRequest extends OutgoingMessage {
     if (typeof options.lookup === "function") {
       this._agentOptions.lookup = options.lookup;
     }
+    // Unix-socket target: the agent dials the path, so it must travel
+    // in the stashed options (real Node: _http_agent sets
+    // options.path = options.socketPath in addRequest/createSocket).
+    // Previously dropped here, so the agent dialed TCP localhost:80
+    // and every socketPath request failed ECONNREFUSED.
+    if (options.socketPath) {
+      this._agentOptions.socketPath = options.socketPath;
+    }
     if (agent) {
       try {
         agent.addRequest(this, this._agentOptions);
@@ -4119,6 +4128,65 @@ export class ClientRequest extends OutgoingMessage {
     // GET). The fetch path below still throws: fetch forbids GET/HEAD
     // bodies, and no official test covers the old early throw.
 
+    // Request-level createConnection goes FIRST, before the virtual/raw
+    // gates: the factory replaces the agent entirely (real Node: no
+    // agent when createConnection is set), and the gates need an
+    // agent-assigned socket — a factory request reaching them crashes
+    // in _performVirtualRequest on the undefined agent (probed
+    // v24.22.1 shape: TypeError reading 'addRequest';
+    // test-http-client-with-create-connection names the server's port,
+    // so the virtual gate used to swallow its TCP half). Obtain the
+    // socket from the request's own factory and round-trip over it.
+    // All factory shapes (test-http-createConnection): synchronous
+    // return, async callback delivery, both at once (first wins), sync
+    // throw, async callback error. The factory vouches for readiness
+    // (duplexPair sockets are already linked; net sockets from
+    // net.connect are connected), so the socket is marked connected —
+    // otherwise _performVirtualRequest's connect wait would hang on
+    // sockets with no 'connect' event (native Duplex never emits one).
+    // A factory that neither returns a socket nor calls back never
+    // settles, like Node's pending socket — and falls through to
+    // nothing: the request simply never completes.
+    if (typeof this._createConnection === "function") {
+      // Node's factory args (probed v24.22.1): the full connect
+      // options — { port, host } for TCP, plus { socketPath, path }
+      // for unix-socket targets.
+      const factoryOptions = { port: this.port, host: this.host };
+      if (this.socketPath) {
+        factoryOptions.socketPath = this.socketPath;
+        factoryOptions.path = this.socketPath;
+      }
+      const customSock = await new Promise((resolve, reject) => {
+        let settled = false;
+        const done = (err, sock) => {
+          if (settled) return;
+          settled = true;
+          if (err) reject(err);
+          else resolve(sock || null);
+        };
+        let ret;
+        try {
+          ret = this._createConnection(factoryOptions, done);
+        } catch (err) {
+          done(err);
+          return;
+        }
+        if (ret) done(null, ret);
+      });
+      if (customSock) {
+        customSock._connected = true;
+        this.onSocket(customSock);
+        await this._performVirtualRequest(
+          null,
+          this._virtualHeaders(),
+          body.length > 0 ? body : null,
+          false,
+          !!this._headersArray,
+        );
+        return;
+      }
+    }
+
     // In-process loopback: a virtual server registered for this local
     // host:port answers without touching the network. This makes
     // same-process client/server round trips (the common test shape, and a
@@ -4192,58 +4260,32 @@ export class ClientRequest extends OutgoingMessage {
       return;
     }
 
-    // Request-level createConnection (after the virtual/raw gates, so
-    // loopback targets keep their virtual routing —
-    // test-http-client-with-create-connection): obtain the socket from
-    // the request's own factory and round-trip over it. All factory
-    // shapes (test-http-createConnection): synchronous return, async
-    // callback delivery, both at once (first wins), sync throw, async
-    // callback error. The factory vouches for readiness (duplexPair
-    // sockets are already linked; net sockets from net.connect are
-    // connected), so the socket is marked connected — otherwise
-    // _performVirtualRequest's connect wait would hang on sockets
-    // with no 'connect' event (native Duplex never emits one). A
-    // factory that neither returns a socket nor calls back never
-    // settles, like Node's pending socket — and falls through to
-    // nothing: the request simply never completes.
-    if (typeof this._createConnection === "function") {
-      // Node's factory args (probed v24.22.1): the full connect
-      // options — { port, host } for TCP, plus { socketPath, path }
-      // for unix-socket targets.
-      const factoryOptions = { port: this.port, host: this.host };
-      if (this.socketPath) {
-        factoryOptions.socketPath = this.socketPath;
-        factoryOptions.path = this.socketPath;
-      }
-      const customSock = await new Promise((resolve, reject) => {
-        let settled = false;
-        const done = (err, sock) => {
-          if (settled) return;
-          settled = true;
-          if (err) reject(err);
-          else resolve(sock || null);
-        };
-        let ret;
-        try {
-          ret = this._createConnection(factoryOptions, done);
-        } catch (err) {
-          done(err);
-          return;
-        }
-        if (ret) done(null, ret);
-      });
-      if (customSock) {
-        customSock._connected = true;
-        this.onSocket(customSock);
-        await this._performVirtualRequest(
-          null,
-          this._virtualHeaders(),
-          body.length > 0 ? body : null,
-          false,
-          !!this._headersArray,
-        );
-        return;
-      }
+    // Unix-socket target owned by a pipe server (a virtual http server
+    // bound via listen(path), or a raw net pipe server): route over the
+    // agent socket like the raw-net gate above. Without this, a
+    // socketPath request falls through to the assigned-socket branch
+    // below and hangs forever — the agent socket is connected, but no
+    // round trip is ever started for it. (The virtual-server gate
+    // cannot serve it: the http registry is keyed by port, and a
+    // socketPath request carries the default port 80.) Both registries
+    // are consulted: the net bind lands after the 'listening' callback
+    // (the backing net server binds on a later turn), so a request
+    // made inside that callback would miss the net registry — the
+    // http pipe registry is written synchronously at listen() time
+    // and covers it; the net registry covers raw net pipe servers.
+    if (
+      this.socketPath &&
+      (netHasPipeServer(this.socketPath) ||
+        _httpShared().pipeRegistry.has(this.socketPath))
+    ) {
+      await this._performVirtualRequest(
+        null,
+        this._virtualHeaders(),
+        body.length > 0 ? body : null,
+        false,
+        !!this._headersArray,
+      );
+      return;
     }
 
     // Agent-assigned real socket, no virtual/raw server to round-trip
@@ -5917,6 +5959,7 @@ function _createWsFrame(opcode, payload, masked) {
 // preserving existing behavior.
 const _localHttpShared = {
   registry: new Map(),
+  pipeRegistry: new Map(),
   waitPromise: null,
   waitResolve: null,
 };
@@ -5925,6 +5968,7 @@ function _httpShared() {
     if (!RT.__httpSharedState) {
       RT.__httpSharedState = {
         registry: new Map(),
+        pipeRegistry: new Map(),
         waitPromise: null,
         waitResolve: null,
       };
@@ -5968,6 +6012,18 @@ function _unregisterServer(port) {
   if (s.registry.size === 0) {
     _resolveWaitForServers();
   }
+}
+
+// Pipe (unix-socket) servers live in a separate registry keyed by path:
+// the port registry cannot hold them (a socketPath request carries the
+// default port 80), and listen(path) needs the same EADDRINUSE guard
+// the port registry gives TCP servers.
+function _registerPipeServer(path, server) {
+  _httpShared().pipeRegistry.set(path, server);
+}
+
+function _unregisterPipeServer(path) {
+  _httpShared().pipeRegistry.delete(path);
 }
 
 // Host-side hook: forcibly close the server bound to `port`. The parent
@@ -6739,6 +6795,8 @@ class ServerBase extends EventEmitter {
       options.connectionsCheckingInterval ?? 30000;
     this._port = null;
     this._host = null;
+    // Unix-socket listen target (server.listen(path)); null for TCP.
+    this._pipePath = null;
     // Real virtual-network connections (src/net.js sockets), tracked for
     // getConnections() / closeAllConnections() / closeIdleConnections().
     this._connections = new Set();
@@ -6780,12 +6838,15 @@ class ServerBase extends EventEmitter {
     let port;
     let host;
     let cb;
+    // Unix-socket target: a non-numeric string, or { path }.
+    let pipePath = null;
 
     if (
       typeof portOrOptions === "number" ||
       typeof portOrOptions === "string"
     ) {
       port = Number(portOrOptions);
+      if (Number.isNaN(port)) pipePath = portOrOptions;
       if (typeof hostOrCallback === "string") {
         host = hostOrCallback;
         cb = callback;
@@ -6796,6 +6857,7 @@ class ServerBase extends EventEmitter {
       port =
         portOrOptions.port !== undefined ? Number(portOrOptions.port) : port;
       host = portOrOptions.host;
+      if (typeof portOrOptions.path === "string") pipePath = portOrOptions.path;
       cb = typeof hostOrCallback === "function" ? hostOrCallback : callback;
     } else if (typeof portOrOptions === "function") {
       cb = portOrOptions;
@@ -6803,26 +6865,48 @@ class ServerBase extends EventEmitter {
       cb = hostOrCallback;
     }
 
-    if (!port || Number.isNaN(port)) {
-      // Ephemeral port, like Node's listen(0).
-      do {
-        port = 1024 + Math.floor(Math.random() * (65535 - 1024));
-      } while (_httpShared().registry.has(port));
+    // Unix-socket listen: bind the backing net server to the pipe
+    // instead of a TCP port (real Node: server.listen(path) /
+    // listen({ path })). Previously Number(path) was NaN, so the
+    // ephemeral branch below bound a random TCP port and the pipe was
+    // never listened on at all.
+    if (pipePath) {
+      if (_httpShared().pipeRegistry.has(pipePath)) {
+        const err = makeError(
+          "EADDRINUSE",
+          `listen EADDRINUSE: address already in use ${pipePath}`,
+        );
+        err.path = pipePath;
+        queueMicrotask(() => this.emit("error", err));
+        return this;
+      }
+    } else {
+      if (!port || Number.isNaN(port)) {
+        // Ephemeral port, like Node's listen(0).
+        do {
+          port = 1024 + Math.floor(Math.random() * (65535 - 1024));
+        } while (_httpShared().registry.has(port));
+      }
+
+      if (_httpShared().registry.has(port)) {
+        const err = makeError(
+          "EADDRINUSE",
+          `listen EADDRINUSE: address already in use :::${port}`,
+        );
+        err.port = port;
+        queueMicrotask(() => this.emit("error", err));
+        return this;
+      }
     }
 
-    if (_httpShared().registry.has(port)) {
-      const err = makeError(
-        "EADDRINUSE",
-        `listen EADDRINUSE: address already in use :::${port}`,
-      );
-      err.port = port;
-      queueMicrotask(() => this.emit("error", err));
-      return this;
+    if (pipePath) {
+      this._pipePath = pipePath;
+      _registerPipeServer(pipePath, this);
+    } else {
+      this._port = port;
+      this._host = host || "::";
+      _registerServer(port, this);
     }
-
-    this._port = port;
-    this._host = host || "::";
-    _registerServer(port, this);
     // Real virtual-network round trip: bind a net.js socket server on the
     // same port so req.socket is a genuine connected socket with real
     // remoteAddress/remotePort/byte counts. net.connect(port) finds this
@@ -6842,13 +6926,18 @@ class ServerBase extends EventEmitter {
     netServer.on("drop", (data) => this.emit("drop", data));
     netServer.maxConnections = this._maxConnections;
     this._netServer = netServer;
-    netServer.listen(port, this._host);
+    if (pipePath) netServer.listen(pipePath);
+    else netServer.listen(port, this._host);
     // Apply a sticky unref() issued before this listen() (see _unrefed).
     if (this._unrefed) netServer.unref();
     this.listening = true;
     // emitMe(fn, method, ...args) serializes only ...args — the payload must
     // go in args (3rd position), not method, or the parent sees an empty message.
-    emitEvent?.("serverListening", null, { port });
+    emitEvent?.(
+      "serverListening",
+      null,
+      pipePath ? { path: pipePath } : { port },
+    );
     queueMicrotask(() => {
       this.emit("listening");
       if (cb) cb.call(this);
@@ -6863,7 +6952,15 @@ class ServerBase extends EventEmitter {
     const checker = this[kConnectionsCheckingInterval];
     if (checker) checker._destroyed = true;
     if (typeof callback === "function") {
-      if (!this.listening) queueMicrotask(callback);
+      // Real Node (http close delegates to net Server.close): a server
+      // that is not running calls back with ERR_SERVER_NOT_RUNNING
+      // (probed v24.22.1, never-listened and already-closed alike).
+      if (!this.listening)
+        queueMicrotask(() =>
+          callback(
+            makeError("ERR_SERVER_NOT_RUNNING", "Server is not running."),
+          ),
+        );
       else this.once("close", callback);
     }
     if (this._port !== null) {
@@ -6871,6 +6968,12 @@ class ServerBase extends EventEmitter {
       this._port = null;
       _unregisterServer(port);
       emitEvent?.("serverClosed", null, { port });
+    }
+    if (this._pipePath) {
+      const pipePath = this._pipePath;
+      this._pipePath = null;
+      _unregisterPipeServer(pipePath);
+      emitEvent?.("serverClosed", null, { path: pipePath });
     }
     if (this._netServer) {
       this._netServer.close();
@@ -7040,6 +7143,8 @@ class ServerBase extends EventEmitter {
   }
 
   address() {
+    // Unix-socket servers report the path string (real Node, probed).
+    if (this.listening && this._pipePath) return this._pipePath;
     if (!this.listening || this._port === null) return null;
     return { address: this._host, family: "IPv6", port: this._port };
   }
@@ -8683,14 +8788,25 @@ class AgentBase extends EventEmitter {
       if (typeof callback === "string") callback = undefined;
       options = { port: options, host };
     }
-    const socket = netConnect({
+    // Unix-socket target (real Node _http_agent: createSocket sets
+    // options.path = options.socketPath, and net.connect treats `path`
+    // as the pipe). Forwarded only when present, so TCP callers see
+    // exactly the options they passed (test-http-agent-keepalive-delay
+    // asserts keepAlive/keepAliveInitialDelay and nothing else).
+    const connectOptions = {
       port: options.port,
       host: options.host,
       noDelay: options.noDelay,
       keepAlive: options.keepAlive,
       keepAliveInitialDelay: options.keepAliveInitialDelay,
       lookup: options.lookup,
-    });
+    };
+    if (options.path) connectOptions.path = options.path;
+    if (options.socketPath) {
+      connectOptions.path = options.socketPath;
+      connectOptions.socketPath = options.socketPath;
+    }
+    const socket = netConnect(connectOptions);
     // AbortSignal (test-http-agent-abort-controller): Node's
     // net.createConnection wires exactly one 'abort' listener on the
     // signal, and aborting destroys the socket with an AbortError
@@ -8752,6 +8868,15 @@ class AgentBase extends EventEmitter {
       keepAliveInitialDelay: this.keepAliveMsecs,
       lookup: options.lookup,
     };
+    // Unix-socket target: translate socketPath to net's `path`, like
+    // real Node's Agent.createSocket (options.path = options.socketPath).
+    // Falls back to the request itself so queued/drained re-creations
+    // (which rebuild options) keep the target.
+    const socketPath = options.socketPath || req.socketPath || null;
+    if (socketPath) {
+      createOptions.path = socketPath;
+      createOptions.socketPath = socketPath;
+    }
     let socket;
     let creationHandled = false;
     const oncreate = (err, sock) => {
