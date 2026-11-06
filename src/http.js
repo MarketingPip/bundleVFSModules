@@ -5695,6 +5695,12 @@ export class ClientRequest extends OutgoingMessage {
       typeof this.maxHeadersCount === "number"
         ? this.maxHeadersCount << 1
         : MAX_HEADER_PAIRS;
+    // Node's tickOnSocket (lib/_http_client.js:1088): the parser's size
+    // budget follows req.maxHeaderSize; 0 means the default in the
+    // binding (node_http_parser.cc Initialize falls back to the process
+    // default), so falsy falls back to 16 KiB here. Refreshed per
+    // assignment like the pair budget, because the parser is pooled.
+    parser.maxHeaderSize = this.maxHeaderSize || 16 * 1024;
     // Emit 'socket' at assignment time, like Node: the event fires while
     // the socket is still connecting (probed v24.22.1: connecting=true,
     // pending=true at 'socket' time), asynchronously so listeners attached
@@ -6090,6 +6096,8 @@ export class ClientRequest extends OutgoingMessage {
           // the user assigns req.maxHeadersCount after http.request()
           // returns, so it must reach the parser at round-trip time.
           maxHeadersCount: this.maxHeadersCount,
+          // Same, for the response parser's size budget.
+          maxHeaderSize: this.maxHeaderSize,
           setDefaultHeaders: this._setDefaultHeaders,
           // Connection-header inputs for the serializer (Node's
           // _storeHeader rule): shouldKeepAlive, chunked-by-default,
@@ -7422,6 +7430,9 @@ function _socketHttpRoundTrip(
     // Response parser's pair budget, from req.maxHeadersCount
     // (test-http-max-headers-count). Null means the default.
     maxHeadersCount = null,
+    // Response parser's size budget, from req.maxHeaderSize
+    // (test-http-max-header-size-per-stream). Null means the default.
+    maxHeaderSize = null,
     // Threaded from ClientRequest._setDefaultHeaders by the virtual
     // path: implicit Content-Length: 0 is a default header. Other
     // callers (emulated inbound requests) keep the default true.
@@ -7490,6 +7501,9 @@ function _socketHttpRoundTrip(
       typeof maxHeadersCount === "number"
         ? maxHeadersCount << 1
         : MAX_HEADER_PAIRS;
+    // Size budget, same rule as the pair budget above (Node's tickOnSocket,
+    // lib/_http_client.js:1088; 0 means the default in the binding).
+    parser.maxHeaderSize = maxHeaderSize || 16 * 1024;
     // HEAD responses never have a body, regardless of framing.
     parser.isHeadResponse = method === "HEAD";
     const chunks = [];
@@ -7884,6 +7898,17 @@ class ServerBase extends EventEmitter {
       );
     }
     this.requireHostHeader = options.requireHostHeader ?? true;
+    // createServer({ maxHeaderSize }) — Node lib/_http_server.js:508-510
+    // (storeHTTPOptions): validated integer >= 0, stored raw (undefined
+    // means the 16 KiB default); threaded to the request parser at
+    // connection time (lib/_http_server.js:772).
+    if (
+      options.maxHeaderSize !== undefined &&
+      (!Number.isInteger(options.maxHeaderSize) || options.maxHeaderSize < 0)
+    ) {
+      throw ERR_OUT_OF_RANGE("maxHeaderSize", ">= 0", options.maxHeaderSize);
+    }
+    this.maxHeaderSize = options.maxHeaderSize;
     // maxConnections is a plain property in real Node, read at accept
     // time — so it must work whether assigned before or after listen().
     // The accessor stores the value and forwards it to the backing net
@@ -8662,6 +8687,10 @@ class ServerBase extends EventEmitter {
     if (typeof this.maxHeadersCount === "number") {
       parser.maxHeaderPairs = this.maxHeadersCount << 1;
     }
+    // Node's connectionListenerInternal (lib/_http_server.js:772): the
+    // parser's size budget follows server.maxHeaderSize; 0 means the
+    // default in the binding, so falsy falls back to 16 KiB.
+    parser.maxHeaderSize = this.maxHeaderSize || 16 * 1024;
     // Strict one-request-at-a-time: the parser pauses after each message and
     // only resumes once the in-flight response has been fully written.
     parser.pauseBetweenMessages = true;
@@ -8691,6 +8720,8 @@ class ServerBase extends EventEmitter {
         typeof this.maxHeadersCount === "number"
           ? this.maxHeadersCount << 1
           : MAX_HEADER_PAIRS;
+      // Size budget, same per-message refresh as the pair budget above.
+      parser.maxHeaderSize = this.maxHeaderSize || 16 * 1024;
       if (state.idleTimer) {
         clearTimeout(state.idleTimer);
         state.idleTimer = null;
