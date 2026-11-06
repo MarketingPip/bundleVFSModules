@@ -1743,6 +1743,10 @@ export class IncomingMessage extends Readable {
     this.statusCode = null;
     this.statusMessage = null;
     this._dumped = false;
+    // Node lib/_http_incoming.js:97 — set true by _read() below; the
+    // resOnFinish dump gate (lib/_http_server.js:1117) only dumps a
+    // request the user never consumed.
+    this._consuming = false;
     // Node lib/_http_incoming.js:83: default false — no-duplicate fields
     // (DUPLICATES_REMOVED) join with ", " only when this is set; the
     // server option / client request option flows in before headers are
@@ -1752,6 +1756,41 @@ export class IncomingMessage extends Readable {
 
   _read() {
     // Data is pushed manually via _setBody / pushBodyChunk.
+    // Node lib/_http_incoming.js:259: _read marks the message consumed
+    // (readingMore reset + socket unpause are no-ops here — the parser
+    // fills the buffer directly and the socket already flows).
+    // ponytail: the flag is set only when the buffer is empty, i.e.
+    // the machinery genuinely needs more data. On real Node a paused,
+    // unconsumed request never reaches _read before its response ends
+    // (the whole body + terminator arrive in one TCP read, so the
+    // message is already ended when maybeReadMore_ runs and its loop
+    // skips read(0)); the shim delivers each client write
+    // synchronously, so maybeReadMore_ prefetches read(0) while the
+    // first chunk is still buffered and the terminator is a tick away
+    // — that prefetch must not mark the message consumed, or
+    // resOnFinish never dumps it (test-http-dump-req-when-res-ends).
+    // Ceiling: a user read(n) that needs more than the buffered bytes
+    // still sets the flag (length 0 at that point); only the
+    // partial-buffer read(n) case (buffered but insufficient) is
+    // missed — no official test covers it.
+    if (!this._consuming && this._readableState.length === 0) {
+      this._consuming = true;
+    }
+  }
+
+  // Call this instead of resume() if we want to just
+  // dump all the data to /dev/null
+  // (Node lib/_http_incoming.js:502). _dumped guards re-entry;
+  // 'data' listeners are removed BEFORE resume() so a 'resume'
+  // handler sees zero of them (test-http-dump-req-when-res-ends).
+  _dump() {
+    if (!this._dumped) {
+      this._dumped = true;
+      // If there is buffered data, it may trigger 'data' events.
+      // Remove 'data' event listeners explicitly.
+      this.removeAllListeners("data");
+      this.resume();
+    }
   }
 
   get connection() {
@@ -9123,15 +9162,23 @@ class ServerBase extends EventEmitter {
     // test-http-server-keepalive-end: real Node drains an unconsumed
     // request body when its response finishes, so req 'end' fires even
     // with only an 'end' listener (probed v24.22.1: 'end' fires with
-    // res.end, never without it — writes alone do not dump). Resuming
-    // here flows buffered body + EOF through the stream machinery;
-    // this also covers the already-complete-but-never-ended case
-    // (body arrived before finish, stream never consumed), which a
-    // complete-only guard would miss. A destroyed or already-ended
-    // (or already-dumped: readableEnded) request skips this.
+    // res.end, never without it — writes alone do not dump). Node's
+    // resOnFinish (lib/_http_server.js:1115) does this via req._dump()
+    // — 'data' listeners removed BEFORE resume() — and only when the
+    // user never consumed the request (!req._consuming, set in _read(),
+    // and no resume scheduled); a consuming request keeps its listeners
+    // and its own flow. Dumping (not bare resume()) is what makes
+    // test-http-dump-req-when-res-ends pass: its 'resume' handler
+    // asserts zero 'data' listeners. This also covers the
+    // already-complete-but-never-ended case (body arrived before
+    // finish, stream never consumed), which a complete-only guard would
+    // miss. A destroyed or already-ended (or already-dumped:
+    // readableEnded) request skips this.
     if (req && !req.destroyed && !req.readableEnded) {
       try {
-        req.resume();
+        if (!req._consuming && !req._readableState?.resumeScheduled) {
+          req._dump();
+        }
       } catch {
         /* best effort */
       }
