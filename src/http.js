@@ -120,8 +120,24 @@ const ERR_HTTP_HEADERS_SENT = (op) =>
       ? "Cannot write headers after they are sent to the client"
       : `Cannot ${op} headers after they are sent to the client`,
   );
+// Node formats %s with util.format: primitives via String(), objects via
+// inspect() ({} renders "{}", [] renders "[]"). A template literal would
+// render "[object Object]" / "" instead (test-http-response-statuscode).
+const _formatPercentS = (value) => {
+  if (value === null || typeof value !== "object") return String(value);
+  if (Array.isArray(value)) {
+    return `[${value.map(_formatPercentS).join(", ")}]`;
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0) return "{}";
+  return `{ ${entries.map(([k, v]) => `${k}: ${_formatPercentS(v)}`).join(", ")} }`;
+};
 const ERR_HTTP_INVALID_STATUS_CODE = (code) =>
-  makeError("ERR_HTTP_INVALID_STATUS_CODE", `Invalid status code: ${code}`);
+  makeError(
+    "ERR_HTTP_INVALID_STATUS_CODE",
+    `Invalid status code: ${_formatPercentS(code)}`,
+    RangeError,
+  );
 const ERR_HTTP_TRAILER_INVALID = () =>
   makeError(
     "ERR_HTTP_TRAILER_INVALID",
@@ -420,6 +436,38 @@ export function validateHeaderValue(name, value, lenient = false) {
   }
 }
 
+// Node's Link header value grammar (lib/internal/validators.js:522):
+// a "<...>" URI-reference followed by ";" parameters. writeEarlyHints
+// validates the link FIRST (before any other header), so a malformed
+// link reports ERR_INVALID_ARG_VALUE even when another header is also
+// bad (test-http-early-hints-invalid-argument).
+const linkValueRegExp =
+  /^(?:<[^>\r\n]*>)(?:\s*;\s*[^;"\s]+(?:=(")?[^;"\s]*\1)?)*$/;
+const validateLinkHeaderValue = (hints) => {
+  const reason =
+    'must be an array or string of format "</styles.css>; rel=preload; as=style"';
+  if (typeof hints === "string") {
+    if (!linkValueRegExp.test(hints)) {
+      throw ERR_INVALID_ARG_VALUE("hints", hints, reason);
+    }
+    return hints;
+  }
+  if (Array.isArray(hints)) {
+    if (hints.length === 0) return "";
+    let result = "";
+    for (let i = 0; i < hints.length; i++) {
+      const link = hints[i];
+      if (typeof link !== "string" || !linkValueRegExp.test(link)) {
+        throw ERR_INVALID_ARG_VALUE("hints", link, reason);
+      }
+      result += link;
+      if (i !== hints.length - 1) result += ", ";
+    }
+    return result;
+  }
+  throw ERR_INVALID_ARG_VALUE("hints", hints, reason);
+};
+
 /**
  * Normalize ClientRequest array-form headers to [[name, value], ...]
  * pairs, preserving order and casing so duplicates survive to the wire
@@ -488,6 +536,7 @@ class FakeSocket extends EventEmitter {
     this.remotePort = 0;
     this.localAddress = "127.0.0.1";
     this.localPort = 0;
+    this._corked = 0;
   }
   write(chunk, encoding, cb) {
     const callback = typeof encoding === "function" ? encoding : cb;
@@ -527,8 +576,15 @@ class FakeSocket extends EventEmitter {
   unref() {
     return this;
   }
-  cork() {}
-  uncork() {}
+  cork() {
+    this._corked++;
+  }
+  uncork() {
+    if (this._corked > 0) this._corked--;
+  }
+  get writableCorked() {
+    return this._corked;
+  }
 }
 
 // Module-local symbols mirroring Node's internal slots.
@@ -603,6 +659,39 @@ export class OutgoingMessage extends Writable {
       writable: true,
       value: true,
     });
+  }
+
+  // Node's OutgoingMessage.cork/uncork (lib/_http_outgoing.js:288-298)
+  // cork the SOCKET as well as the message: writableCorked on the
+  // message and on the socket are separate counters that move together
+  // (test-http-response-cork asserts res.writableCorked ===
+  // res.socket.writableCorked after every cork/uncork/end). Writable's
+  // end() fully uncorks via this.uncork(), so the socket is released
+  // there too, exactly like Node's end().
+  cork() {
+    super.cork();
+    if (this.socket && typeof this.socket.cork === "function") {
+      this.socket.cork();
+    }
+  }
+
+  uncork() {
+    super.uncork();
+    if (this.socket && typeof this.socket.uncork === "function") {
+      this.socket.uncork();
+    }
+  }
+
+  // Node's OutgoingMessage.end fully uncorks the message AND the socket
+  // (lib/_http_outgoing.js:1179-1184): a corked res.end(chunk) must flush,
+  // not deadlock behind the still-corked Writable buffer
+  // (test-http-response-cork: cork, cork, writeHead, uncork, end — one
+  // uncork leaves both counters at 1, so end() itself must drain them).
+  _fullyUncork() {
+    if (this._writableState) this._writableState.corked = 1;
+    const sock = this.socket;
+    if (sock && sock._writableState) sock._writableState.corked = 1;
+    this.uncork();
   }
 
   // Buffer written chunks until the message is finished (no real socket).
@@ -1233,6 +1322,10 @@ export class OutgoingMessage extends Writable {
       );
     }
     this.finished = true;
+    // Node's end() fully uncorks first (see _fullyUncork): a chunk
+    // routed through super.write() below must not stall behind a
+    // still-corked Writable buffer.
+    this._fullyUncork();
     // Bare message with an assigned real socket (see write()): the
     // chunk goes straight to the socket, followed by the terminating
     // empty chunk, and only then does 'finish' fire (probed
@@ -1544,6 +1637,18 @@ export class IncomingMessage extends Readable {
     super();
     this.socket = socket || new FakeSocket();
     this.connection = this.socket;
+    // Node builds the message with the socket's readable highWaterMark
+    // (lib/_http_incoming.js:63) — a createConnection that sets
+    // readableHighWaterMark must show up on res as well as on the socket
+    // (test-http-incoming-message-options). FakeSocket has none, so the
+    // default stands there.
+    if (
+      socket &&
+      typeof socket.readableHighWaterMark === "number" &&
+      this._readableState
+    ) {
+      this._readableState.highWaterMark = socket.readableHighWaterMark;
+    }
     this.httpVersionMajor = 1;
     this.httpVersionMinor = 1;
     this.httpVersion = "1.1";
@@ -1812,7 +1917,7 @@ export class IncomingMessage extends Readable {
     const msg = new IncomingMessage();
     msg.statusCode = response.status;
     msg.statusMessage =
-      response.statusText || STATUS_CODES[response.status] || "";
+      response.statusText ?? STATUS_CODES[response.status] ?? "";
     msg.httpVersion = "1.1";
     msg.httpVersionMajor = 1;
     msg.httpVersionMinor = 1;
@@ -2474,8 +2579,24 @@ export class ServerResponse extends OutgoingMessage {
     if (this.headersSent) {
       throw ERR_INVALID_ARG_VALUE("hints", hints, "headers already sent");
     }
-    const pairs = [];
+    // Node validates the Link value first (lib/_http_server.js:374-381)
+    // and returns silently for a null/undefined/empty link — no 103,
+    // no callback. A malformed link is ERR_INVALID_ARG_VALUE; a link
+    // with bad chars is ERR_INVALID_CHAR. Other headers are validated
+    // after, by the writeInformation(103) call below.
+    if (hints.link === null || hints.link === undefined) {
+      return;
+    }
+    const link = validateLinkHeaderValue(hints.link);
+    if (link.length === 0) {
+      return;
+    }
+    if (_checkInvalidHeaderChar(link)) {
+      throw ERR_INVALID_CHAR("header content", "Link");
+    }
+    const pairs = [["Link", link]];
     for (const name of Object.keys(hints)) {
+      if (name === "link") continue;
       validateHeaderName(name);
       const value = hints[name];
       if (Array.isArray(value)) {
@@ -2487,9 +2608,7 @@ export class ServerResponse extends OutgoingMessage {
         pairs.push([name, String(value)]);
       }
     }
-    // Empty hints ({} or all-empty arrays) send nothing — the client
-    // observes no 'information' event (test-http-early-hints).
-    if (pairs.length > 0) this._writeInterim(103, pairs);
+    this._writeInterim(103, pairs);
     if (typeof callback === "function") queueMicrotask(callback);
   }
 
@@ -2718,6 +2837,10 @@ export class ServerResponse extends OutgoingMessage {
       );
     }
     this.finished = true;
+    // Node's end() fully uncorks first (see _fullyUncork): a chunk
+    // routed through super.write() below must not stall behind a
+    // still-corked Writable buffer.
+    this._fullyUncork();
     const done = () => {
       // The flag check comes first: on the foreign-failure path the
       // end callback already fired from the flush handler (below) or
@@ -3173,11 +3296,13 @@ export class ClientRequest extends OutgoingMessage {
       throw ERR_INVALID_PROTOCOL(protocol, expectedProtocol);
     }
 
-    // Node lib/_http_client.js:395-400: defaultPort is ONLY options.defaultPort
+    // Node lib/_http_client.js:390-400: defaultPort is ONLY options.defaultPort
     // or the agent's — no `|| 80` here (port still defaults to 80 below).
-    // The `|| 80` used to hide the ":80" suffix: with no agent (e.g. a
-    // request-level createConnection) defaultPort is undefined, so a port-80
-    // request gets "Host: [::1]:80" (test-http-host-header-ipv6-fail).
+    // With no agent (e.g. a request-level createConnection) defaultPort is
+    // undefined, so a port-80 request keeps ":80" in the Host header
+    // ("Host: localhost:80" — test-http-sync-write-error-during-continue;
+    // "Host: [::1]:80" — test-http-host-header-ipv6-fail). The old `|| 80`
+    // hid the suffix.
     const defaultPort = options.defaultPort || this.agent?.defaultPort;
     const port = options.port || defaultPort || 80;
     let host = options.hostname || options.host || "localhost";
@@ -3397,6 +3522,28 @@ export class ClientRequest extends OutgoingMessage {
       method === "CONNECT"
     ) {
       this.useChunkedEncodingByDefault = false;
+    }
+
+    // Expect + factory: the head must reach the server BEFORE end() —
+    // an expect-continue client only ends after 'continue' fires, and
+    // the server can only answer once it sees the head, so waiting for
+    // end() to invoke the factory deadlocks
+    // (test-http-sync-write-error-during-continue: the head never
+    // reaches the serverSide duplexPair). Kick the factory off now,
+    // async and fire-and-forget: the promise is stored so
+    // _performRequest reuses the same socket instead of invoking the
+    // factory a second time (its mustCall expects exactly 1 call).
+    // Errors stay on the promise — _performRequest surfaces them at
+    // end() time through its normal error path. The trailing catch
+    // marks the promise handled so a factory that errors before any
+    // end() never becomes an unhandled rejection.
+    if (
+      typeof this._createConnection === "function" &&
+      (this.getHeader("expect") !== undefined ||
+        this._headersArray?.some(([n]) => String(n).toLowerCase() === "expect"))
+    ) {
+      this._factorySocketPromise = this._invokeFactory();
+      this._factorySocketPromise.catch(() => {});
     }
   }
 
@@ -3808,6 +3955,10 @@ export class ClientRequest extends OutgoingMessage {
     }
     this._ended = true;
     this.finished = true;
+    // Node's end() fully uncorks first (see _fullyUncork): a chunk
+    // routed through the stream below must not stall behind a
+    // still-corked Writable buffer.
+    this._fullyUncork();
     const finish = () => {
       this._flushDeferredWriteCallbacks(null);
       // Real Node's ClientRequest finishes through Writable machinery,
@@ -3819,36 +3970,51 @@ export class ClientRequest extends OutgoingMessage {
       this.emit("finish");
     };
     const run = () => {
-      this._performRequest().then(finish, (err) => {
-        // The socket error forwarder may already have emitted this
-        // error; never emit twice (a second emission breaks mustCall
-        // counts for the write-failure test).
-        if (!this._errorEmitted && this.listenerCount("error") > 0) {
-          this._errorEmitted = true;
-          this.emit("error", err);
-        } else if (!this._errorEmitted) this.emit("abort");
-        // A socket write failure (not a teardown-initiated failure)
-        // is also the end callback's error, and it sticks for a
-        // second end() (probed v24.22.1). Teardown-initiated failures
-        // keep the old behavior (no end callback). Gated on
-        // _errorEmitted: the socket error forwarder sets it, so this
-        // runs only for genuine socket failures. Ungated, a
-        // non-socket rejection (server closed, unvalidated early
-        // hints) would get an end callback it never had AND a
-        // destroy() that synthesizes a "socket hang up" error
-        // _destroy only skips when _errorEmitted is already true.
-        if (!this._abortSwallow && this._errorEmitted) {
-          this._flushDeferredWriteCallbacks(err);
-          this._flushError = err;
-          if (callback) callback(err);
-          // A failed request still closes (probed v24.22.1: 'close'
-          // with writableFinished false). Without this the request
-          // never closes: the rejection path emits no 'finish', and
-          // no finish means no autoDestroy close. The error already
-          // fired, so destroy() adds no second emission.
-          if (!this.destroyed) this.destroy();
-        }
-      });
+      this._performRequest().then(
+        () => {
+          // Streaming path: finish() already fired at flush time (below),
+          // so the round-trip resolution must not fire it again.
+          if (!this._outgoingFinishEmitted) finish();
+        },
+        (err) => {
+          // The socket error forwarder may already have emitted this
+          // error; never emit twice (a second emission breaks mustCall
+          // counts for the write-failure test).
+          if (!this._errorEmitted && this.listenerCount("error") > 0) {
+            this._errorEmitted = true;
+            this.emit("error", err);
+          } else if (!this._errorEmitted) this.emit("abort");
+          // A socket write failure (not a teardown-initiated failure)
+          // is also the end callback's error, and it sticks for a
+          // second end() (probed v24.22.1). Teardown-initiated failures
+          // keep the old behavior (no end callback). Gated on
+          // _errorEmitted: the socket error forwarder sets it, so this
+          // runs only for genuine socket failures. Ungated, a
+          // non-socket rejection (server closed, unvalidated early
+          // hints) would get an end callback it never had AND a
+          // destroy() that synthesizes a "socket hang up" error
+          // _destroy only skips when _errorEmitted is already true.
+          // Skipped when finish already fired at flush time (streaming
+          // path): the end callback already ran with success, so a
+          // later round-trip failure surfaces via 'error' only, never
+          // as a second end callback.
+          if (
+            !this._abortSwallow &&
+            this._errorEmitted &&
+            !this._outgoingFinishEmitted
+          ) {
+            this._flushDeferredWriteCallbacks(err);
+            this._flushError = err;
+            if (callback) callback(err);
+            // A failed request still closes (probed v24.22.1: 'close'
+            // with writableFinished false). Without this the request
+            // never closes: the rejection path emits no 'finish', and
+            // no finish means no autoDestroy close. The error already
+            // fired, so destroy() adds no second emission.
+            if (!this.destroyed) this.destroy();
+          }
+        },
+      );
     };
     if (chunk !== null && chunk !== undefined) {
       if (this._stream && this._stream.roundTrip) {
@@ -3857,14 +4023,23 @@ export class ClientRequest extends OutgoingMessage {
         // the body framing, then await the in-flight round trip. The
         // final chunk is NOT re-buffered: it already went (or is queued
         // to go) through the stream writer.
+        // Node's end callback fires at Writable finish — when the bytes
+        // are flushed to the socket — BEFORE the server can respond
+        // (emergent flush-then-parse ordering, lib/_http_client.js).
+        // Firing it only at round-trip resolution put it AFTER
+        // 'response' (test-http-write-callbacks). A microtask after
+        // _streamFinish() lands before the response, whose delivery
+        // needs several async hops past end().
         this._streamForward(chunk, encoding);
         this._streamFinish();
+        queueMicrotask(finish);
         run();
       } else {
         super.write(chunk, encoding, run);
       }
     } else if (this._stream && this._stream.roundTrip) {
       this._streamFinish();
+      queueMicrotask(finish);
       run();
     } else {
       run();
@@ -3941,7 +4116,13 @@ export class ClientRequest extends OutgoingMessage {
   flushHeaders() {
     // Node sends headers immediately; for a virtual server this starts
     // the streaming round trip (headers only, body chunks follow).
-    if (!this._ended && !this._aborted) this._streamEnsureStarted();
+    // Forced: flushHeaders() must dispatch the head for ANY method —
+    // a plain GET has no CL/TE/upgrade, so the unforced eligibility
+    // check excludes it and the head never reaches the server
+    // (test-http-flush-headers). The force bypasses only the
+    // method/body eligibility; a non-virtual target or CONNECT still
+    // stays buffered.
+    if (!this._ended && !this._aborted) this._streamEnsureStarted(true);
     super.flushHeaders();
   }
 
@@ -4018,7 +4199,7 @@ export class ClientRequest extends OutgoingMessage {
     return headers;
   }
 
-  _streamEnsureStarted() {
+  _streamEnsureStarted(force) {
     if (this._stream !== undefined) return this._stream;
     const server = this._getVirtualServer();
     const method = this.method;
@@ -4038,16 +4219,26 @@ export class ClientRequest extends OutgoingMessage {
       this.getHeader("upgrade") || arrayHeader("upgrade") || "",
     ).toLowerCase();
     const eligible =
-      server &&
+      (server ||
+        // Forced factory start: the target is the already-assigned
+        // factory socket, not a virtual server — the round trip below
+        // is _performVirtualRequest(null, ...), the factory shape
+        // _performRequest uses. Without this the head of an Expect
+        // factory request never reaches the server before end()
+        // (test-http-sync-write-error-during-continue).
+        (force &&
+          this.socket &&
+          this.socket.constructor?.name !== "FakeSocket")) &&
       method !== "CONNECT" &&
       upgrade !== "websocket" &&
-      ((method !== "GET" &&
-        method !== "HEAD" &&
-        (method === "POST" ||
-          method === "PUT" ||
-          method === "PATCH" ||
-          hasCL ||
-          te === "chunked")) ||
+      (force ||
+        (method !== "GET" &&
+          method !== "HEAD" &&
+          (method === "POST" ||
+            method === "PUT" ||
+            method === "PATCH" ||
+            hasCL ||
+            te === "chunked")) ||
         // ponytail: upgrade handshakes must reach the server on first
         // write(), not at end() — the client never ends an upgraded
         // request (it owns the socket after 101), so a buffered GET
@@ -4184,6 +4375,60 @@ export class ClientRequest extends OutgoingMessage {
     return f;
   }
 
+  // Invoke the request-level createConnection factory once and return
+  // its socket (or null). All factory shapes
+  // (test-http-createConnection): synchronous return, async callback
+  // delivery, both at once (first wins), sync throw, async callback
+  // error. The factory vouches for readiness (duplexPair sockets are
+  // already linked; net sockets from net.connect are connected), so the
+  // socket is marked connected — otherwise _performVirtualRequest's
+  // connect wait would hang on sockets with no 'connect' event (native
+  // Duplex never emits one). A factory that neither returns a socket
+  // nor calls back never settles, like Node's pending socket.
+  // Shared by _performRequest (end-time) and the constructor's early
+  // kick for Expect requests (below): the factory must be invoked
+  // exactly once — the stored promise is reused, never re-invoked.
+  _invokeFactory() {
+    // Node's factory args (probed v24.22.1): the full connect
+    // options — { port, host } for TCP, plus { socketPath, path }
+    // for unix-socket targets.
+    const factoryOptions = { port: this.port, host: this.host };
+    if (this.socketPath) {
+      factoryOptions.socketPath = this.socketPath;
+      factoryOptions.path = this.socketPath;
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const done = (err, sock) => {
+        if (settled) return;
+        settled = true;
+        if (err) reject(err);
+        else resolve(sock || null);
+      };
+      let ret;
+      try {
+        ret = this._createConnection(factoryOptions, done);
+      } catch (err) {
+        done(err);
+        return;
+      }
+      if (ret) {
+        // Wire the socket synchronously, like Node's onSocket: the
+        // error listener must be attached before user code runs, so
+        // a factory-queued error destroy on the next tick still
+        // reaches the request even after a synchronous abort()
+        // (test-http-client-abort3). A later onSocket for the same
+        // socket is a no-op via its duplicate guard. _connected
+        // is set first, exactly as the continuation does — a
+        // factory socket vouches for its own readiness (duplexPair
+        // never emits 'connect').
+        ret._connected = true;
+        this.onSocket(ret);
+        done(null, ret);
+      }
+    });
+  }
+
   async _performRequest() {
     if (this._aborted) return;
 
@@ -4280,44 +4525,8 @@ export class ClientRequest extends OutgoingMessage {
     // settles, like Node's pending socket — and falls through to
     // nothing: the request simply never completes.
     if (typeof this._createConnection === "function") {
-      // Node's factory args (probed v24.22.1): the full connect
-      // options — { port, host } for TCP, plus { socketPath, path }
-      // for unix-socket targets.
-      const factoryOptions = { port: this.port, host: this.host };
-      if (this.socketPath) {
-        factoryOptions.socketPath = this.socketPath;
-        factoryOptions.path = this.socketPath;
-      }
-      const customSock = await new Promise((resolve, reject) => {
-        let settled = false;
-        const done = (err, sock) => {
-          if (settled) return;
-          settled = true;
-          if (err) reject(err);
-          else resolve(sock || null);
-        };
-        let ret;
-        try {
-          ret = this._createConnection(factoryOptions, done);
-        } catch (err) {
-          done(err);
-          return;
-        }
-        if (ret) {
-          // Wire the socket synchronously, like Node's onSocket: the
-          // error listener must be attached before user code runs, so
-          // a factory-queued error destroy on the next tick still
-          // reaches the request even after a synchronous abort()
-          // (test-http-client-abort3). The continuation's onSocket
-          // below is then a no-op via its duplicate guard. _connected
-          // is set first, exactly as the continuation does — a
-          // factory socket vouches for its own readiness (duplexPair
-          // never emits 'connect').
-          ret._connected = true;
-          this.onSocket(ret);
-          done(null, ret);
-        }
-      });
+      const customSock = await (this._factorySocketPromise ??
+        this._invokeFactory());
       if (customSock) {
         customSock._connected = true;
         this.onSocket(customSock);
@@ -4922,7 +5131,13 @@ export class ClientRequest extends OutgoingMessage {
       (this.getHeader("expect") !== undefined ||
         this._headersArray?.some(([n]) => String(n).toLowerCase() === "expect"))
     ) {
-      this._streamEnsureStarted();
+      // Forced for factory sockets: a factory target has no virtual
+      // server, so the unforced eligibility check would no-op and the
+      // head would never reach the server before end()
+      // (test-http-sync-write-error-during-continue). Virtual targets
+      // keep the unforced call (a GET + Expect there stays buffered
+      // until end(), as before).
+      this._streamEnsureStarted(this._createConnection ? true : undefined);
     }
   }
 
@@ -5289,10 +5504,10 @@ export class ClientRequest extends OutgoingMessage {
           // where the client must see the response before res.end().
           onHeaders: (info) => {
             if (this._aborted) return;
-            const msg = new IncomingMessage();
+            const msg = new IncomingMessage(this.socket);
             msg.statusCode = info.statusCode;
             msg.statusMessage =
-              info.statusMessage || STATUS_CODES[info.statusCode] || "";
+              info.statusMessage ?? STATUS_CODES[info.statusCode] ?? "";
             msg.httpVersion = "1.1";
             msg.httpVersionMajor = 1;
             msg.httpVersionMinor = 1;
@@ -5339,10 +5554,10 @@ export class ClientRequest extends OutgoingMessage {
               this.emit("continue");
               return;
             }
-            const msg = new IncomingMessage();
+            const msg = new IncomingMessage(this.socket);
             msg.statusCode = info.statusCode;
             msg.statusMessage =
-              info.statusMessage || STATUS_CODES[info.statusCode] || "";
+              info.statusMessage ?? STATUS_CODES[info.statusCode] ?? "";
             msg.httpVersion = "1.1";
             msg.httpVersionMajor = 1;
             msg.httpVersionMinor = 1;
@@ -5473,10 +5688,10 @@ export class ClientRequest extends OutgoingMessage {
     // (probed v24.22.1), which is what lets the loop drain in
     // test-http-server-unconsume-consume.
     if (result.isConnect) {
-      const msg = new IncomingMessage();
+      const msg = new IncomingMessage(this.socket);
       msg.statusCode = result.statusCode;
       msg.statusMessage =
-        result.statusMessage || STATUS_CODES[result.statusCode] || "";
+        result.statusMessage ?? STATUS_CODES[result.statusCode] ?? "";
       msg.httpVersion = "1.1";
       msg.httpVersionMajor = 1;
       msg.httpVersionMinor = 1;
@@ -5548,10 +5763,10 @@ export class ClientRequest extends OutgoingMessage {
     // an unclaimed CONNECT tunnel (test-http-upgrade-advertise's
     // destroy case: the client observes socket 'close').
     if (result.isUpgrade) {
-      const msg = new IncomingMessage();
+      const msg = new IncomingMessage(this.socket);
       msg.statusCode = result.statusCode;
       msg.statusMessage =
-        result.statusMessage || STATUS_CODES[result.statusCode] || "";
+        result.statusMessage ?? STATUS_CODES[result.statusCode] ?? "";
       msg.httpVersion = "1.1";
       msg.httpVersionMajor = 1;
       msg.httpVersionMinor = 1;
@@ -5727,10 +5942,10 @@ export class ClientRequest extends OutgoingMessage {
       return;
     }
 
-    const msg = new IncomingMessage();
+    const msg = new IncomingMessage(this.socket);
     msg.statusCode = result.statusCode;
     msg.statusMessage =
-      result.statusMessage || STATUS_CODES[result.statusCode] || "";
+      result.statusMessage ?? STATUS_CODES[result.statusCode] ?? "";
     msg.httpVersion = "1.1";
     msg.httpVersionMajor = 1;
     msg.httpVersionMinor = 1;
@@ -8729,26 +8944,46 @@ class ServerBase extends EventEmitter {
         // client's parser ("expected CRLF after chunk data" on any
         // binary body — test-http-get-pipeline-problem). Build the
         // coalesced write as Buffers instead.
-        let out;
+        // Node's _send makes FIVE separate conn.write calls for an
+        // end(chunk) chunked response (lib/_http_outgoing.js:382-411,
+        // 1141-1177): header+size line, CRLF, body, CRLF, terminator —
+        // the header rides the FIRST chunk via _send's prepend
+        // (test-http-response-cork counts exactly 5 socket.write
+        // calls). Coalescing into one write hid the call count. The
+        // 'data'-event-per-response concern that motivated the
+        // coalescing does not apply here: the tests counting data
+        // events use non-chunked responses (test-http-1.0-keep-alive
+        // is HTTP/1.0, no chunked framing) or write()+chunkless end
+        // (test-http-server-keep-alive-defaults, streaming branch).
         if (sendBody) {
-          out = Buffer.concat([
-            Buffer.from(headOut, "latin1"),
-            Buffer.from(`${body.length.toString(16)}\r\n`, "latin1"),
-            body,
-            Buffer.from("\r\n" + res._chunkTerminator(), "latin1"),
-          ]);
+          // Call 1 is header + size digits WITHOUT the line CRLF:
+          // Node's first _send writes the size bare ("3") and the
+          // CRLF is the second _send call. Appending "\r\n" here
+          // would emit a spurious empty line between size and data
+          // and desync the client's chunk parser.
+          socket.write(
+            Buffer.concat([
+              Buffer.from(headOut, "latin1"),
+              Buffer.from(`${body.length.toString(16)}`, "latin1"),
+            ]),
+          );
+          socket.write(Buffer.from("\r\n", "latin1"));
+          socket.write(body);
+          socket.write(Buffer.from("\r\n", "latin1"));
+          socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
         } else if (!noBodyStatus && req.method !== "HEAD") {
           // Send terminator only if a body is allowed. 204/304 (and 1xx)
           // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
           // HEAD likewise gets headers-only: real Node sends no terminator
           // for HEAD+chunked (probed v24.22.1), and one parses as a new
           // message start on the client (test-http-head-request).
-          out = headOut + res._chunkTerminator();
+          // Node still sends header and terminator as two writes.
+          socket.write(headOut);
+          socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
         } else {
           // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
-          out = headOut;
+          socket.write(headOut);
         }
-        socket.write(out);
       } else if (sendBody) {
         // Coalesce headers + body into one write (Node behavior; the test
         // counts 'data' events per response, not per write). Buffer
