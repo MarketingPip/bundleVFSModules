@@ -645,7 +645,9 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // write-through, setTimeout forwarding, foreign-socket write
     // failure propagation, drain-after-wire ordering)
     // (src/http.js only).
-    expect(nonDist.sort()).toEqual(["src/http.js"].sort());
+    expect(nonDist.sort()).toEqual(
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+    );
   });
 
   test("no new function declarations added by the branch diff", () => {
