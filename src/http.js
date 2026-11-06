@@ -8797,6 +8797,9 @@ class ServerBase extends EventEmitter {
         } catch {
           /* ignore */
         }
+        if (state.resCloseListener === onResClose) {
+          state.resCloseListener = null;
+        }
         if (!res.destroyed && !res.closed && !res.finished) {
           try {
             res.destroy();
@@ -8805,7 +8808,25 @@ class ServerBase extends EventEmitter {
           }
         }
       };
+      // One live per-response close listener per socket (real Node's
+      // socket carries exactly two close listeners: its own onClose +
+      // the current response's onServerResponseClose). The previous
+      // response is finished by now (it holds no socket otherwise),
+      // so its listener is stale — drop it before attaching, or a
+      // pipelined socket accumulates one listener per response and
+      // trips MaxListeners (test-http-many-ended-pipelines, 20
+      // pipelined requests on one socket; test-http-pipeline-
+      // requests-connection-leak, 10,000). A stale state pointer
+      // (listener already removed at finish/destroy) is a no-op here.
+      if (state.resCloseListener) {
+        try {
+          resSocket.removeListener("close", state.resCloseListener);
+        } catch {
+          /* ignore */
+        }
+      }
       res._socketCloseListener = onResClose;
+      state.resCloseListener = onResClose;
       res.socket.on("close", onResClose);
     }
     // Counted before dispatch: a handler that finishes synchronously

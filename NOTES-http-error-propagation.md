@@ -169,6 +169,51 @@ exits 1 fast instead of hanging. They still fail — they need the
 other lanes' feature fixes — but they fail fast now. Not
 regressions.
 
+## Second differential: two pipeline regressions — ROOT CAUSED AND FIXED
+
+- Branch differential 2 (`http-sweep-ep-branch2.csv` vs base, 328):
+  branch 331 pass / 7 timeout / 57 fail — the 4 targets + bonus
+  `test-http-request-host-header` flipped, but **2 regressions
+  (pass→timeout): `test-http-many-ended-pipelines` and
+  `test-http-pipeline-requests-connection-leak`**, both 0→124.
+- Bisect + instrumented probes (module-local counters, never
+  `globalThis` — the harness rejects unexpected globals) traced the
+  stall to `res.socket.on("close", onResClose)` inside Fix 8's
+  attach block at dispatch #9 of many-ended-pipelines:
+  - Each pipelined predecessor reads `finished` by the next
+    dispatch, so every response gets the real socket and attaches
+    another close listener. At dispatch #9 the socket holds 10
+    close listeners; the 11th trips `warnMaxListenersExceeded`.
+  - The warning message calls the `inspect` stand-in in
+    `src/events.js`, which had **no cycle detection and no depth
+    limit** — it recurses astronomically on the socket's cyclic
+    graph (`socket → _httpState → lastResponse → socket …`) and
+    hangs synchronously. Proved: the warning probe fired, the
+    post-`inspect` probe never did.
+  - On base (no Fix 8) the socket carries only 2 close listeners,
+    so the warning never fires — the hang is entirely this lane's
+    Fix 8 + the latent `inspect` bug.
+- Fix 9 — `src/events.js` `inspect()`: path-based `seen` set
+  (`[Circular]` on re-entry) + depth cap 2 (Node's default,
+  `[Object]` beyond). Proved alone: many-ended-pipelines went
+  124 → 1 (the warning now surfaces and the test's `mustNotCall`
+  warning handler throws), connection-leak 124 → 0 with the
+  warning printed.
+- Fix 10 — `src/http.js` attach block: one live per-response close
+  listener per socket, tracked as `state.resCloseListener`
+  (per-socket state). Before attaching, the previous response's
+  listener is removed from the socket; it is stale by construction
+  (the previous response is finished whenever a new response gets
+  the real socket). This matches real Node's observable shape
+  (exactly two close listeners: its own onClose + the current
+  response's `onServerResponseClose`, probed v24.22.1). A stale
+  state pointer (listener already removed at finish/destroy) is a
+  removeListener no-op. Finish/destroy removals unchanged.
+- After Fixes 9–10: many-ended-pipelines 0, connection-leak 0,
+  req-close-robust-from-tampering 0 (2-listener shape preserved),
+  all 4 targets + request-host-header + the false-green pair 0,
+  guards 81/81.
+
 ## Leftovers (not this PR)
 
 - `onBody` data-listener throws are still swallowed by
@@ -194,7 +239,7 @@ regressions.
   client-incomingmessage-destroy, server-capture-rejections,
   expect-handling, req-res-close, 1.0, byteswritten) — re-run after
   the regression fixes, still 81/81.
-- Differential: fast-sweep, `http-sweep-ep-{branch2,base}.csv`
-  [PENDING — re-run after the regression fixes].
+- Differential: fast-sweep, `http-sweep-ep-{branch3,base}.csv`
+  [PENDING — re-run after Fixes 9–10].
 - Jest baseline 3059 passed / 7 failed / 1 skipped [PENDING].
 - Ondemand 29/29 [PENDING]; builds exit 0 [PENDING].
