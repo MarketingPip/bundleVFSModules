@@ -3134,7 +3134,12 @@ export class ClientRequest extends OutgoingMessage {
       throw ERR_INVALID_PROTOCOL(protocol, expectedProtocol);
     }
 
-    const defaultPort = options.defaultPort || this.agent?.defaultPort || 80;
+    // Node lib/_http_client.js:395-400: defaultPort is ONLY options.defaultPort
+    // or the agent's — no `|| 80` here (port still defaults to 80 below).
+    // The `|| 80` used to hide the ":80" suffix: with no agent (e.g. a
+    // request-level createConnection) defaultPort is undefined, so a port-80
+    // request gets "Host: [::1]:80" (test-http-host-header-ipv6-fail).
+    const defaultPort = options.defaultPort || this.agent?.defaultPort;
     const port = options.port || defaultPort || 80;
     let host = options.hostname || options.host || "localhost";
     if (host !== null && host !== undefined && typeof host !== "string") {
@@ -3236,6 +3241,16 @@ export class ClientRequest extends OutgoingMessage {
     if (options.socketPath) {
       this._agentOptions.socketPath = options.socketPath;
     }
+    // localAddress/localPort thread to the agent's connect options the
+    // same way (Node passes request options through to net.connect):
+    // the virtual layer binds/emulates them in Socket.connect/_doConnect
+    // so the server sees the bound source as remoteAddress.
+    if (options.localAddress !== undefined) {
+      this._agentOptions.localAddress = options.localAddress;
+    }
+    if (options.localPort !== undefined) {
+      this._agentOptions.localPort = options.localPort;
+    }
     if (agent) {
       try {
         agent.addRequest(this, this._agentOptions);
@@ -3261,6 +3276,17 @@ export class ClientRequest extends OutgoingMessage {
       options.setDefaultHeaders !== false
     ) {
       let hostHeader = host;
+      // Node lib/_http_client.js:512-520: IPv6 literals in the Host header
+      // get square brackets (RFC 3986 §3.2.2). A host with a second colon
+      // that doesn't already start with "[" is an unbracketed literal.
+      const posColon = hostHeader.indexOf(":");
+      if (
+        posColon !== -1 &&
+        hostHeader.includes(":", posColon + 1) &&
+        hostHeader.charCodeAt(0) !== 91 /* "[" */
+      ) {
+        hostHeader = `[${hostHeader}]`;
+      }
       if (port && Number(port) !== Number(defaultPort)) {
         hostHeader += `:${port}`;
       }
@@ -8923,6 +8949,14 @@ class AgentBase extends EventEmitter {
       connectOptions.path = options.socketPath;
       connectOptions.socketPath = options.socketPath;
     }
+    // Forwarded only when present (same rule as socketPath above):
+    // test-http-agent-keepalive-delay asserts the exact connect options.
+    if (options.localAddress !== undefined) {
+      connectOptions.localAddress = options.localAddress;
+    }
+    if (options.localPort !== undefined) {
+      connectOptions.localPort = options.localPort;
+    }
     const socket = netConnect(connectOptions);
     // AbortSignal (test-http-agent-abort-controller): Node's
     // net.createConnection wires exactly one 'abort' listener on the
@@ -8993,6 +9027,18 @@ class AgentBase extends EventEmitter {
     if (socketPath) {
       createOptions.path = socketPath;
       createOptions.socketPath = socketPath;
+    }
+    // localAddress/localPort thread through to net.connect (same shape as
+    // socketPath above; the request's stashed options cover queued/drained
+    // re-creations that rebuild options).
+    const localAddress =
+      options.localAddress ?? req._agentOptions?.localAddress;
+    if (localAddress !== undefined) {
+      createOptions.localAddress = localAddress;
+    }
+    const localPort = options.localPort ?? req._agentOptions?.localPort;
+    if (localPort !== undefined) {
+      createOptions.localPort = localPort;
     }
     let socket;
     let creationHandled = false;
@@ -9096,7 +9142,12 @@ class AgentBase extends EventEmitter {
     return name;
   }
 
-  addRequest(req, options) {
+  addRequest(req, options, port, localAddress) {
+    // Legacy API: addRequest(req, host, port, localAddress) — Node
+    // lib/_http_agent.js:356-367 rewrites the string form to options.
+    if (typeof options === "string") {
+      options = { host: options, port, localAddress };
+    }
     // For manual addRequest(req, {}) calls, derive host/port from the request
     // itself so the freeSockets name matches getName(req).
     const effectiveOptions =

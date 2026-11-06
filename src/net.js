@@ -169,6 +169,13 @@ function errInvalidAddress() {
   return e;
 }
 
+function errInvalidIpAddress(address) {
+  // Node lib/net.js lookupAndConnect: `Invalid IP address: <address>`.
+  const e = new TypeError(`Invalid IP address: ${address}`);
+  e.code = "ERR_INVALID_IP_ADDRESS";
+  return e;
+}
+
 // errno-style errors (shapes mirror libuv failures in real Node).
 function errnoError(code, syscall, message, fields) {
   const e = new Error(message);
@@ -322,6 +329,16 @@ function isIP(s) {
   if (isIPv4(s)) return 4;
   if (isIPv6(s)) return 6;
   return 0;
+}
+function isLoopbackAddress(s) {
+  // The virtual layer has no real interfaces: only loopback is bindable
+  // as a source address (127.0.0.0/8, ::1). Anything else fails the bind
+  // (probed real Node v24.22.1: 1.2.3.4 and 0.0.0.0 both fail EINVAL).
+  if (typeof s !== "string") return false;
+  if (s === "::1") return true;
+  if (!isIPv4(s)) return false;
+  const first = Number(s.split(".")[0]);
+  return first === 127;
 }
 function isLoopbackName(host) {
   return typeof host === "string" && host.toLowerCase() === "localhost";
@@ -908,6 +925,9 @@ function Socket(options = {}) {
 
   // Adopt a pre-bound BoundSocket as the local endpoint (virtual).
   if (options.handle instanceof BoundSocket) {
+    // Remember the adoption: connect() rejects localAddress/localPort
+    // on an adopted socket (Node lib/net.js lookupAndConnect).
+    this._adoptedHandle = true;
     const addr = options.handle.address();
     if (addr && typeof addr.port === "number") {
       this._sockname = {
@@ -1344,6 +1364,34 @@ Socket.prototype.connect = function connect(...args) {
   if (options.port === undefined && options.path == null)
     throw errMissingArgs();
 
+  // Mirrors Node lib/net.js lookupAndConnect, in Node's order: an adopted
+  // bound socket rejects localAddress/localPort, then the address itself
+  // is validated synchronously (test-net-localerror asserts both throws).
+  if (
+    this._adoptedHandle &&
+    (options.localAddress !== undefined || options.localPort !== undefined)
+  ) {
+    throw errInvalidArgValue(
+      "options",
+      options,
+      "localAddress and localPort cannot be used with an adopted bound socket",
+    );
+  }
+  if (options.localAddress !== undefined && isIP(options.localAddress) === 0) {
+    throw errInvalidIpAddress(options.localAddress);
+  }
+  if (
+    options.localPort !== undefined &&
+    typeof options.localPort !== "number"
+  ) {
+    throw errInvalidArgType("options.localPort", "number", options.localPort);
+  }
+  // Stash the requested source endpoint for _doConnect/_acceptConnection:
+  // the virtual layer has no real bind, so the pairing presents it as the
+  // socket's local address (and the server side's remote address).
+  this._bindLocalAddress = options.localAddress;
+  this._bindLocalPort = options.localPort;
+
   if (this.write !== Socket.prototype.write) {
     // If the user has overwritten .write, reset it so connect() works.
     this.write = Socket.prototype.write;
@@ -1516,6 +1564,28 @@ Socket.prototype._doConnect = function _doConnect(options, pipe) {
     port,
     family === "IPv6" ? 6 : family === "IPv4" ? 4 : undefined,
   );
+
+  // Bind emulation (Node lib/net.js internalConnect/checkBindError: the
+  // bind happens before the connect attempt, and a failed bind destroys
+  // the socket with the error). The virtual layer has no real interfaces,
+  // so only a loopback source address can bind; anything else fails with
+  // the probed shape (EINVAL, syscall bind, errno -22).
+  if (!pipe && options.localAddress !== undefined) {
+    if (!isLoopbackAddress(options.localAddress)) {
+      const err = errnoError(
+        "EINVAL",
+        "bind",
+        `bind EINVAL ${options.localAddress}`,
+        {
+          errno: -22,
+          address: options.localAddress,
+          port: options.localPort,
+        },
+      );
+      defer(() => this._connectFailed(err));
+      return;
+    }
+  }
 
   // Client-side blockList check (mirrors lookupAndConnect).
   if (this.blockList && !pipe) {
@@ -2155,20 +2225,26 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
     }
   }
 
+  // The client's bound source address (Node: the socket's local endpoint
+  // after bind) is what the server sees as remoteAddress; the client's
+  // local port is its requested localPort when one was bound.
+  const srcAddress = client._bindLocalAddress || "127.0.0.1";
+  const srcFamily = isIP(srcAddress) === 6 ? "IPv6" : "IPv4";
+
   if (this.maxConnections != null && this._connections >= this.maxConnections) {
     // The ephemeral port must be allocated BEFORE building the drop data:
     // the accept path only allocates it after this check, so an early
     // remotePort read was undefined (test-net-server-drop-connections
     // asserts it truthy).
-    const clientPort = allocPort();
+    const clientPort = client._bindLocalPort ?? allocPort();
     client._localPortEphemeral = clientPort;
     const data = {
       localAddress: bindAddr ? bindAddr.address : undefined,
       localPort: bindAddr ? bindAddr.port : undefined,
       localFamily: bindAddr ? bindAddr.family : undefined,
-      remoteAddress: "127.0.0.1",
+      remoteAddress: srcAddress,
       remotePort: clientPort,
-      remoteFamily: "IPv4",
+      remoteFamily: srcFamily,
     };
     this.emit("drop", data);
     // Probed real Node (v24.22.1): a dropped connection still completes
@@ -2189,8 +2265,8 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
       serverSocket._peername = { address: req.path };
     } else {
       client._sockname = {
-        address: "127.0.0.1",
-        family: "IPv4",
+        address: srcAddress,
+        family: srcFamily,
         port: clientPort,
       };
       client._peername = {
@@ -2204,8 +2280,8 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
         port: bindAddr.port,
       };
       serverSocket._peername = {
-        address: "127.0.0.1",
-        family: "IPv4",
+        address: srcAddress,
+        family: srcFamily,
         port: clientPort,
       };
     }
@@ -2237,7 +2313,7 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
   if (this.keepAlive)
     serverSocket.setKeepAlive(true, this.keepAliveInitialDelay * 1000);
 
-  const clientPort = allocPort();
+  const clientPort = client._bindLocalPort ?? allocPort();
   client._localPortEphemeral = clientPort;
 
   if (req.pipe) {
@@ -2247,8 +2323,8 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
     serverSocket._peername = { address: req.path };
   } else {
     client._sockname = {
-      address: "127.0.0.1",
-      family: "IPv4",
+      address: srcAddress,
+      family: srcFamily,
       port: clientPort,
     };
     client._peername = {
@@ -2262,8 +2338,8 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
       port: bindAddr.port,
     };
     serverSocket._peername = {
-      address: "127.0.0.1",
-      family: "IPv4",
+      address: srcAddress,
+      family: srcFamily,
       port: clientPort,
     };
   }
