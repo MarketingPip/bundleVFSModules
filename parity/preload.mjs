@@ -119,6 +119,16 @@ function isExtraRedirect(name) {
   // this: test-http-agent-keepalive, test-http-agent-keepalive-delay).
   // Mirrors the _http_outgoing redirect above (PR #232 precedent).
   if (target === "http" && name === "_http_agent") return true;
+  // http tests that require('https') need the shim's https module:
+  // test-http-correct-hostname reads req[kOutHeaders] off both the http
+  // and the https request with one symbol (from internal/http), so the
+  // https request must be a shim request storing under the shim's symbol
+  // — the native https request stores under real Node's symbol and the
+  // lookup reads undefined. Only six http tests require('https')
+  // (correct-hostname, default-port, dns-error, invalid-urls,
+  // request-agent, url.parse-https.request); the differential guards the
+  // other five. Mirrors the _http_agent redirect above.
+  if (target === "http" && name === "https") return true;
   // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
   // zlib must read the same cell (mirrors Node's load-time capture).
   return target === "zlib" && name === "buffer";
@@ -189,7 +199,9 @@ function polyfillPath(request) {
   // pulls in async_hooks → als-browser via stream), replacing timer globals
   // on import and tripping Node's global-leak detector. The harness restores
   // the originals snapshotted in preload.mjs. src/https.js itself is untouched.
-  if (target === "https" && name === "https") {
+  // Also used when target === "http": test-http-correct-hostname needs the
+  // shim's https request (see isExtraRedirect above).
+  if ((target === "https" || target === "http") && name === "https") {
     return path.join(repoRoot, "parity", "https-harness.mjs");
   }
   // Harness-only timer-globals restore for child_process parity
@@ -411,6 +423,21 @@ Module._load = function (request, parent, isMain) {
       return origLoad.call(
         this,
         path.join(repoRoot, "parity", "http-server-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
+    // test-http-correct-hostname reads req[kOutHeaders] from
+    // `internal/http`. Same treatment: without a redirect the require
+    // falls through to native Node's `internal/http`, whose symbol never
+    // matches the shim's slot, so the lookup always reads undefined.
+    // The adapter re-exports real Node's module with the shim's
+    // kOutHeaders symbol (see src/internals/http-symbols.js).
+    // See parity/internal-http-adapter.mjs.
+    if ((target === "http" || target === "https") && bare === "internal/http") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-http-adapter.mjs"),
         parent,
         isMain,
       );
