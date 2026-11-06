@@ -3279,6 +3279,11 @@ export class ClientRequest extends OutgoingMessage {
     const hw = rawOpts?.highWaterMark;
     super(hw == null ? undefined : { highWaterMark: hw });
 
+    // Node: the current response, null until one arrives
+    // (lib/_http_client.js:486; set on response, cleared at response
+    // end). Only the null init is ported — no test reads a live res.
+    this.res = null;
+
     // Normalize (url, options?, cb?) and (options, cb?) signatures.
     if (typeof options === "function") {
       cb = options;
@@ -5112,6 +5117,13 @@ export class ClientRequest extends OutgoingMessage {
       if (socket._inFreePool) return;
       request._aborted = true;
       request._errorEmitted = true;
+      // Node drops the unwritten request body on socket error
+      // ("Too bad. That output wasn't getting written",
+      // lib/_http_client.js:748): a request whose socket dies before
+      // its body flushes must read outputData.length === 0 in its
+      // 'error' handler (test-http-destroyed-socket-write2).
+      if (request.outputData) request.outputData.length = 0;
+      request.outputSize = 0;
       request.emit(
         "error",
         err instanceof Error ? err : new Error(String(err)),
