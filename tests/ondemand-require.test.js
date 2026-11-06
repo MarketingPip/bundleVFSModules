@@ -664,7 +664,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // threading + net bind emulation + validation, legacy 4-arg
     // addRequest) (src/http.js + src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "src/net.js", "NOTES-http-localaddress.md"].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
