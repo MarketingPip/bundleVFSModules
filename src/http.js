@@ -1710,10 +1710,114 @@ const DUPLICATES_REMOVED = new Set([
   "user-agent",
 ]);
 
+// Node lib/_http_incoming.js:340 — returns the lowercased field name,
+// with a flag byte prepended to indicate how duplicates fold in
+// _addHeaderLine: `\u0000` = join with ", ", `\u0001` = Set-Cookie
+// (array), `\u0002` = Cookie (join with "; "). A field with no flag
+// byte is a no-duplicates field: first wins unless
+// joinDuplicateHeaders is set. Ported verbatim from Node.
+function matchKnownFields(field, lowercased) {
+  switch (field.length) {
+    case 3:
+      if (field === "Age" || field === "age") return "age";
+      break;
+    case 4:
+      if (field === "Host" || field === "host") return "host";
+      if (field === "From" || field === "from") return "from";
+      if (field === "ETag" || field === "etag") return "etag";
+      if (field === "Date" || field === "date") return "\u0000date";
+      if (field === "Vary" || field === "vary") return "\u0000vary";
+      break;
+    case 6:
+      if (field === "Server" || field === "server") return "server";
+      if (field === "Cookie" || field === "cookie") return "\u0002cookie";
+      if (field === "Origin" || field === "origin") return "\u0000origin";
+      if (field === "Expect" || field === "expect") return "\u0000expect";
+      if (field === "Accept" || field === "accept") return "\u0000accept";
+      break;
+    case 7:
+      if (field === "Referer" || field === "referer") return "referer";
+      if (field === "Expires" || field === "expires") return "expires";
+      if (field === "Upgrade" || field === "upgrade") return "\u0000upgrade";
+      break;
+    case 8:
+      if (field === "Location" || field === "location") return "location";
+      if (field === "If-Match" || field === "if-match") return "\u0000if-match";
+      break;
+    case 10:
+      if (field === "User-Agent" || field === "user-agent") return "user-agent";
+      if (field === "Set-Cookie" || field === "set-cookie") return "\u0001";
+      if (field === "Connection" || field === "connection")
+        return "\u0000connection";
+      break;
+    case 11:
+      if (field === "Retry-After" || field === "retry-after")
+        return "retry-after";
+      break;
+    case 12:
+      if (field === "Content-Type" || field === "content-type")
+        return "content-type";
+      if (field === "Max-Forwards" || field === "max-forwards")
+        return "max-forwards";
+      break;
+    case 13:
+      if (field === "Authorization" || field === "authorization")
+        return "authorization";
+      if (field === "Last-Modified" || field === "last-modified")
+        return "last-modified";
+      if (field === "Cache-Control" || field === "cache-control")
+        return "\u0000cache-control";
+      if (field === "If-None-Match" || field === "if-none-match")
+        return "\u0000if-none-match";
+      break;
+    case 14:
+      if (field === "Content-Length" || field === "content-length")
+        return "content-length";
+      break;
+    case 15:
+      if (field === "Accept-Encoding" || field === "accept-encoding")
+        return "\u0000accept-encoding";
+      if (field === "Accept-Language" || field === "accept-language")
+        return "\u0000accept-language";
+      if (field === "X-Forwarded-For" || field === "x-forwarded-for")
+        return "\u0000x-forwarded-for";
+      break;
+    case 16:
+      if (field === "Content-Encoding" || field === "content-encoding")
+        return "\u0000content-encoding";
+      if (field === "X-Forwarded-Host" || field === "x-forwarded-host")
+        return "\u0000x-forwarded-host";
+      break;
+    case 17:
+      if (field === "If-Modified-Since" || field === "if-modified-since")
+        return "if-modified-since";
+      if (field === "Transfer-Encoding" || field === "transfer-encoding")
+        return "\u0000transfer-encoding";
+      if (field === "X-Forwarded-Proto" || field === "x-forwarded-proto")
+        return "\u0000x-forwarded-proto";
+      break;
+    case 19:
+      if (field === "Proxy-Authorization" || field === "proxy-authorization")
+        return "proxy-authorization";
+      if (field === "If-Unmodified-Since" || field === "if-unmodified-since")
+        return "if-unmodified-since";
+      break;
+  }
+  if (lowercased) {
+    return "\u0000" + field;
+  }
+  return matchKnownFields(field.toLowerCase(), true);
+}
+
 export class IncomingMessage extends Readable {
   constructor(socket) {
     super();
-    this.socket = socket || new FakeSocket();
+    // Node lib/_http_incoming.js: `this.socket = socket` — no default.
+    // A message built with no socket has socket/connection/client all
+    // undefined (test-http-incoming-message-connection-setter); the
+    // shim used to substitute a FakeSocket here, which made
+    // `connection` read as an object on a fresh message.
+    this.socket = socket;
     this.connection = this.socket;
     // Node builds the message with the socket's readable highWaterMark
     // (lib/_http_incoming.js:63) — a createConnection that sets
@@ -1878,6 +1982,61 @@ export class IncomingMessage extends Readable {
     this._detachAbortSignal();
     if (this[kAbortController] !== null) {
       this[kAbortController].abort();
+    }
+  }
+
+  // Node lib/_http_incoming.js:447 — fold one (field, value) pair into
+  // dest with exactly Node's rules. The shim's internal wire fold
+  // (IncomingMessage._applyRawHeaders) already implements these
+  // semantics for the parser paths (duplicate joining, set-cookie
+  // arrays, joinDuplicateHeaders gating); this is the public method
+  // surface the official test calls directly, not a second fold path.
+  // ponytail: ported verbatim from Node; ceiling is a shared fold —
+  // if a future change needs one implementation, rewire
+  // _applyRawHeaders onto this method (the blocker today is array
+  // values in fromRequest: Node's port takes a single string value).
+  _addHeaderLine(field, value, dest) {
+    field = matchKnownFields(field);
+    const flag = field.charCodeAt(0);
+    if (flag === 0 || flag === 2) {
+      field = field.slice(1);
+      // Make a delimited list
+      if (typeof dest[field] === "string") {
+        dest[field] += (flag === 0 ? ", " : "; ") + value;
+      } else {
+        dest[field] = value;
+      }
+    } else if (flag === 1) {
+      // Array header -- only Set-Cookie at the moment
+      if (dest["set-cookie"] !== undefined) {
+        dest["set-cookie"].push(value);
+      } else {
+        dest["set-cookie"] = [value];
+      }
+    } else if (this.joinDuplicateHeaders) {
+      // RFC 9110 https://www.rfc-editor.org/rfc/rfc9110#section-5.2
+      // https://github.com/nodejs/node/issues/45699
+      // allow authorization multiple fields
+      // Make a delimited list
+      if (dest[field] === undefined) {
+        dest[field] = value;
+      } else {
+        dest[field] += ", " + value;
+      }
+    } else if (dest[field] === undefined) {
+      // Drop duplicates
+      dest[field] = value;
+    }
+  }
+
+  // Node lib/_http_incoming.js:481 — fold one (field, value) pair into
+  // dest keeping EVERY value unjoined, as an array per field.
+  _addHeaderLineDistinct(field, value, dest) {
+    field = field.toLowerCase();
+    if (!dest[field]) {
+      dest[field] = [value];
+    } else {
+      dest[field].push(value);
     }
   }
 
