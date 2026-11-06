@@ -667,9 +667,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // Expect+factory early kick + Host :80 default-port fix; src/net.js
     // gains Socket _writev for corked-batch delivery coalescing)
     // (src/http.js + src/net.js + working note).
-    expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
-    );
+    expect(nonDist.sort()).toEqual(["NOTES-http-header-badrequest.md", "src/http.js"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
