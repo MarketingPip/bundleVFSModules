@@ -213,6 +213,25 @@ regressions.
   req-close-robust-from-tampering 0 (2-listener shape preserved),
   all 4 targets + request-host-header + the false-green pair 0,
   guards 81/81.
+- Branch differential 3 (`http-sweep-ep-branch3.csv` vs base, 328):
+  branch 332 pass / 6 timeout / 59 fail — 5 toward-pass, 0
+  pipeline regressions, but **1 regression:
+  `test-http-server-keepalive-req-gc` (0→124)**.
+- Fix 11 — the `state.resCloseListener` live-pointer (Fix 10) was
+  never cleared where the listener is removed: the socket's state
+  kept `socket._httpState → resCloseListener → closure → res →
+  req` alive past finish (the client-side socket holds the server
+  socket via `_peer`, so the chain never died and the req was
+  never GC'd, so `onGC` never fired and the test hung). Both
+  removal sites now clear it when it points at the removed
+  listener: `_finishSocketResponse` (has `state`) and
+  `ServerResponse._destroy` (reaches state via
+  `sock._httpState`). After Fix 11: keepalive-req-gc 0, all 12
+  key tests still 0, guards 80/81 with the single failure
+  `test-http-byteswritten` at 124 — proven flake, not a
+  regression: 0×3 on branch, 0×3 on base, 0 in both the base and
+  branch3 sweep CSVs (byteswritten is a known pre-existing
+  timing flake per the fast-sweep README).
 
 ## Leftovers (not this PR)
 
@@ -239,7 +258,7 @@ regressions.
   client-incomingmessage-destroy, server-capture-rejections,
   expect-handling, req-res-close, 1.0, byteswritten) — re-run after
   the regression fixes, still 81/81.
-- Differential: fast-sweep, `http-sweep-ep-{branch3,base}.csv`
-  [PENDING — re-run after Fixes 9–10].
+- Differential: fast-sweep, `http-sweep-ep-{branch4,base}.csv`
+  [PENDING — re-run after Fix 11].
 - Jest baseline 3059 passed / 7 failed / 1 skipped [PENDING].
 - Ondemand 29/29 [PENDING]; builds exit 0 [PENDING].

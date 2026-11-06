@@ -2739,6 +2739,13 @@ export class ServerResponse extends OutgoingMessage {
       } catch {
         /* ignore */
       }
+      // Clear the per-socket live-pointer too (see dispatch): the
+      // socket's state holds the same closure, and the closure holds
+      // res → req — leaving it pins the request past GC
+      // (test-http-server-keepalive-req-gc).
+      if (sock._httpState?.resCloseListener === this._socketCloseListener) {
+        sock._httpState.resCloseListener = null;
+      }
     }
     const preserved = (this._keepAliveSocket || this.finished) && !err;
     if (
@@ -8989,6 +8996,13 @@ class ServerBase extends EventEmitter {
         socket.removeListener("close", res._socketCloseListener);
       } catch {
         /* ignore */
+      }
+      // Clear the per-socket live-pointer too (see dispatch): the
+      // socket's state holds the same closure, and the closure holds
+      // res → req — leaving it pins the request past GC
+      // (test-http-server-keepalive-req-gc).
+      if (state.resCloseListener === res._socketCloseListener) {
+        state.resCloseListener = null;
       }
     }
     // Idempotence: the finish listener calls this once, and
