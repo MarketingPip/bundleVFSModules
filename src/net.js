@@ -1948,6 +1948,44 @@ Socket.prototype._receiveEOF = function _receiveEOF() {
   this._maybeReleaseLoop();
 };
 
+// destroySoon port (lib/net.js:1084): half-close now, destroy once the
+// writable side finishes — Node's resOnFinish calls this for last
+// responses instead of destroy(), so socket.writableEnded is already
+// true when user 'finish' handlers run
+// (test-http-remove-header-stays-removed,
+// test-http-remove-connection-header-persists-connection HTTP/1.0 leg).
+// The arrow closure (not Node's bare `this.destroy` listener) keeps the
+// socket bound even if a ported `once` calls listeners unbound.
+// ponytail: ceiling — a socket whose 'finish' never fires (already
+// destroyed, or end() skipped because !writable) is never destroyed by
+// this; callers needing a guaranteed close must destroy() directly.
+// The server finish path relies on the peer FIN-ing back to release the
+// loop keeper if 'finish' stalls (see _isTransportInactive).
+Socket.prototype.destroySoon = function destroySoon() {
+  // Already destroyed: nothing left to end, and attaching a
+  // finish listener to a dead socket only accumulates listeners
+  // (test-http-many-ended-pipelines: the handler destroys the socket
+  // per request, and all 20 pipelined responses still finish).
+  if (this.destroyed) return;
+  if (this.writable) this.end();
+
+  if (this.writableFinished) this.destroy();
+  else if (!this._destroySoonArmed) {
+    // Arm the destroy-on-finish listener exactly once: several
+    // last-responses can finish on the same socket (the pipelined
+    // buffer keeps dispatching after the first end), and a
+    // once-listener per response trips the MaxListeners warning
+    // (test-http-many-ended-pipelines). Real Node never calls
+    // destroySoon twice on one socket — its parser stops at the first
+    // end — so single arming matches Node's observable exactly.
+    this._destroySoonArmed = true;
+    this.once("finish", () => {
+      this._destroySoonArmed = false;
+      this.destroy();
+    });
+  }
+};
+
 // _final port: end() half-closes; the peer sees a clean FIN ('end').
 // The FIN is delivered on a later tick — on a real network FIN and data
 // race, so a write the peer queued in its own 'connect' handler still lands.
