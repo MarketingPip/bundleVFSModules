@@ -664,14 +664,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // rendering, incoming-message HWM sync, cork/uncork socket mirroring
     // + end() full uncork + chunked end(chunk) 5-write framing,
     // flushHeaders force-start, write-callback end-at-flush ordering,
-    // Expect+factory early kick + Host :80 default-port fix)
-    // (src/http.js + working note).
-    // fix/http-header-server branch: server requireHostHeader +
-    // maxHeadersCount (400 on missing Host, pair-budget overflow/431,
-    // client-side truncation) (src/http.js + src/_http_parser.js +
-    // working note).
+    // Expect+factory early kick + Host :80 default-port fix; src/net.js
+    // gains Socket _writev for corked-batch delivery coalescing)
+    // (src/http.js + src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-response-write.md", "src/http.js"].sort(),
+      ["NOTES-http-response-write.md", "src/http.js", "src/net.js"].sort(),
     );
   });
 

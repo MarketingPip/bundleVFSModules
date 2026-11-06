@@ -8949,40 +8949,50 @@ class ServerBase extends EventEmitter {
         // 1141-1177): header+size line, CRLF, body, CRLF, terminator —
         // the header rides the FIRST chunk via _send's prepend
         // (test-http-response-cork counts exactly 5 socket.write
-        // calls). Coalescing into one write hid the call count. The
-        // 'data'-event-per-response concern that motivated the
-        // coalescing does not apply here: the tests counting data
-        // events use non-chunked responses (test-http-1.0-keep-alive
-        // is HTTP/1.0, no chunked framing) or write()+chunkless end
-        // (test-http-server-keep-alive-defaults, streaming branch).
-        if (sendBody) {
-          // Call 1 is header + size digits WITHOUT the line CRLF:
-          // Node's first _send writes the size bare ("3") and the
-          // CRLF is the second _send call. Appending "\r\n" here
-          // would emit a spurious empty line between size and data
-          // and desync the client's chunk parser.
-          socket.write(
-            Buffer.concat([
-              Buffer.from(headOut, "latin1"),
-              Buffer.from(`${body.length.toString(16)}`, "latin1"),
-            ]),
-          );
-          socket.write(Buffer.from("\r\n", "latin1"));
-          socket.write(body);
-          socket.write(Buffer.from("\r\n", "latin1"));
-          socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
-        } else if (!noBodyStatus && req.method !== "HEAD") {
-          // Send terminator only if a body is allowed. 204/304 (and 1xx)
-          // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
-          // HEAD likewise gets headers-only: real Node sends no terminator
-          // for HEAD+chunked (probed v24.22.1), and one parses as a new
-          // message start on the client (test-http-head-request).
-          // Node still sends header and terminator as two writes.
-          socket.write(headOut);
-          socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
-        } else {
-          // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
-          socket.write(headOut);
+        // calls). Coalescing into one write hid the call count. But
+        // five separate writes arrive as five 'data' events on the
+        // shim's virtual transport (no TCP coalescing), which breaks
+        // pipelined raw-socket clients that advance one request per
+        // event (test-http-1.0-keep-alive,
+        // test-http-server-keep-alive-defaults — the buffered branch
+        // serves pipelined responses whose socket is assigned late).
+        // So the split writes run under a socket cork: the five calls
+        // still happen, but the socket's _writev flushes them as ONE
+        // peer delivery (src/net.js), i.e. one 'data' event — the same
+        // observable shape as one TCP segment on real Node.
+        socket.cork();
+        try {
+          if (sendBody) {
+            // Call 1 is header + size digits WITHOUT the line CRLF:
+            // Node's first _send writes the size bare ("3") and the
+            // CRLF is the second _send call. Appending "\r\n" here
+            // would emit a spurious empty line between size and data
+            // and desync the client's chunk parser.
+            socket.write(
+              Buffer.concat([
+                Buffer.from(headOut, "latin1"),
+                Buffer.from(`${body.length.toString(16)}`, "latin1"),
+              ]),
+            );
+            socket.write(Buffer.from("\r\n", "latin1"));
+            socket.write(body);
+            socket.write(Buffer.from("\r\n", "latin1"));
+            socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
+          } else if (!noBodyStatus && req.method !== "HEAD") {
+            // Send terminator only if a body is allowed. 204/304 (and 1xx)
+            // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
+            // HEAD likewise gets headers-only: real Node sends no terminator
+            // for HEAD+chunked (probed v24.22.1), and one parses as a new
+            // message start on the client (test-http-head-request).
+            // Node still sends header and terminator as two writes.
+            socket.write(headOut);
+            socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
+          } else {
+            // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
+            socket.write(headOut);
+          }
+        } finally {
+          socket.uncork();
         }
       } else if (sendBody) {
         // Coalesce headers + body into one write (Node behavior; the test

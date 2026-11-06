@@ -162,9 +162,57 @@ proceed. The mechanism does not exist in the shim:
   `res.end()`. Closed NO-FIX; revisit only with a design for the
   `_dump()` + pause/resume surface as a whole.
 
+## Regression: 5-write split vs pipelined raw-socket clients (FIXED)
+
+The first differential (fast-sweep, base `67448061` 328 pass) showed the 8
+targets flipping 124/1 -> 0 but 8 REGRESSIONS, all 0 -> 1, all in the
+keep-alive/timeout/close family: test-http-1.0-keep-alive,
+test-http-server-close-all, test-http-server-close-idle,
+test-http-server-headers-timeout-keepalive,
+test-http-server-headers-timeout-pipelining,
+test-http-server-keep-alive-defaults,
+test-http-server-request-timeout-keepalive,
+test-http-server-request-timeout-pipelining.
+
+Root cause: the 5-write split in the buffered chunked finish path
+(`_finishSocketResponse`). The shim's virtual transport delivers per
+`_write` call, so five writes arrive as five `data` events; the raw-socket
+clients in these tests advance one request per `data` event and mis-pair
+the following requests. Bisect: temporarily restoring the coalesced single
+write cleared all 8 regressions (and response-cork went back to failing),
+proving the split was the sole cause. A probe (`zz-rw-kad.js`, deleted)
+showed it concretely: response 1 arrives as one 179-byte event (streaming
+branch concatenates pended frame + terminator), while pipelined responses
+2-4 arrive as 5 events each (head+size, CRLF, body, CRLF, terminator) —
+the buffered branch serves pipelined responses whose socket is assigned
+late (pipelined dispatch defers socket assignment while a previous
+response is unfinished, so `res.write()` skips the first-chunk branch and
+buffers into `outputData`).
+
+Fix (two parts, both grounded in real Node):
+- `src/net.js`: `Socket.prototype._writev` — real Node's net.Socket has
+  one, and the Writable routes a corked batch of 2+ writes through it as a
+  single call. It concatenates the batch and delivers once via
+  `_deliverToPeer`. The connecting case buffers the concatenated bytes as
+  one pending write whose callback is the batch callback, so `onwrite`
+  fires exactly once at flush (mirrors `_write`'s connecting branch).
+  The destroyed case calls back with the same error `_write` raises.
+- `src/http.js`: the chunked finish block runs its split writes under a
+  socket cork (`socket.cork()` / `try` / `finally` `socket.uncork()`).
+  The five `socket.write` calls still happen (response-cork counts them);
+  only the delivery coalesces into one `data` event — the same observable
+  shape as one TCP segment on real Node. `FakeSocket`'s cork/uncork stubs
+  make the same code safe on the socketless path.
+
+Verified after the fix: response-cork 0, all 8 regressions 0, all other 7
+targets 0 (no-read-no-dump still 124, NO-FIX as above), 29/29 guards 0.
+
 ## Guards / differential
-TODO at ship time (see lane brief): outgoing-* family, flush-response-headers,
-write-information, information-headers, early-hints, response-close,
-response-drain-cork, write-head, expect-continue family; full 397 fast-sweep
-differential `http-sweep-rw-{branch,base}.csv`; jest 3059/7/1; ondemand 29/29;
-three build checks; `dist/` restored.
+- Guards 29/29 green (outgoing-* family incl. finish-writable,
+  drain-writable-length, end-cork; flush-response-headers, write-information,
+  information-headers, early-hints, response-close, response-drain-cork,
+  write-head, expect-continue, expect-continue-reuse-race).
+- Full 397 fast-sweep differential `http-sweep-rw2-{branch,base}.csv`
+  (fresh filenames; the first run's `http-sweep-rw-{branch,base}.csv` is
+  the pre-fix differential with the 8 regressions — kept for the record).
+- jest 3059/7/1; ondemand 29/29; three build checks; `dist/` restored.
