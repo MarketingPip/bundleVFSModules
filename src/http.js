@@ -3786,6 +3786,13 @@ export class ClientRequest extends OutgoingMessage {
 
   // Node 24: abort() is the legacy spelling; destroy() is canonical.
   destroy(err) {
+    // A destroyed request's destroy() is a no-op in real Node — including
+    // NOT touching the socket. The ported stream destroy already no-ops,
+    // but this override destroyed the socket unconditionally, so a
+    // second destroy() (e.g. req.destroy() after the response already
+    // completed and destroyed the request — test-http-keepalive-free)
+    // killed the pooled socket the first destroy had preserved.
+    if (this.destroyed) return;
     // Teardown-initiated failure (see run()): a later round-trip
     // rejection from this teardown must not report through the end
     // callback — the request was torn down, not failed on flush.
@@ -5363,6 +5370,29 @@ export class ClientRequest extends OutgoingMessage {
       agent.getName({ host: this.host, port: Number(this.port) || 80 });
     // Only release once.
     if (sock._releasedToAgent) return;
+    // Node's requestOnFinish (lib/_http_client.js:1066): when the
+    // response ends before the request finishes writing, the socket is
+    // NOT released and the request is NOT destroyed — release happens
+    // when 'finish' fires. Without this, a still-writing request is
+    // destroyed at response completion: its chunked terminator is never
+    // sent and the server request never completes (probed: keep-alive
+    // client writing after res 'end' — real Node finishes the request
+    // and the server sees all 12 bytes; the shim closed the request
+    // with writableEnded false and the server saw 6 bytes, no 'end').
+    // ponytail: the deferred release re-enters here on 'finish'; the
+    // _releasedToAgent guard above keeps it once-only. If the request
+    // never finishes, the socket stays assigned — matching real Node
+    // (an observed-but-unconsumed response is never released either).
+    if (!this.writableFinished && !this.destroyed) {
+      if (!this._releaseDeferred) {
+        this._releaseDeferred = true;
+        this.once("finish", () => {
+          this._releaseDeferred = false;
+          this._releaseAgentSocket();
+        });
+      }
+      return;
+    }
     sock._releasedToAgent = true;
     // Normal completion closes the request stream: real Node emits
     // request 'close' after the response ends and before the socket is
@@ -6098,6 +6128,27 @@ export class ClientRequest extends OutgoingMessage {
       // them before 'end' fires so 'end' handlers see res.trailers.
       if (result.rawTrailers && result.rawTrailers.length > 0) {
         IncomingMessage._applyRawTrailers(streamedMsg, result.rawTrailers);
+      }
+      // Node destroys a finished request at response completion, before
+      // user 'end' handlers run (responseOnEnd → responseKeepAlive sets
+      // req.destroyed synchronously; test-http-keepalive-free asserts it
+      // in 'end'). Only when end() was already called (writableEnded):
+      // writableFinished is still false here for buffered requests —
+      // ClientRequest emits 'finish' only after _performRequest()
+      // resolves, which is after this completion branch — so the
+      // finished bit cannot be the predicate here. A still-writing
+      // request is left alone until 'finish' (requestOnFinish — see
+      // _releaseAgentSocket's deferral). The socket release stays
+      // after 'end' (see _releaseAfterEnd): pooling/destroying the
+      // socket here would break tests that read agent.sockets inside
+      // 'end' (test-http-keep-alive-close-on-header) or destroy the
+      // socket themselves there (test-http-agent-destroyed-socket).
+      if (this.writableEnded && !this.destroyed) {
+        try {
+          Writable.prototype.destroy.call(this, null);
+        } catch {
+          /* best effort */
+        }
       }
       streamedMsg._finishBody();
       // Release the socket to the agent's pool for keep-alive reuse.
