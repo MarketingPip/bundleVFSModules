@@ -1,6 +1,10 @@
 # Error propagation — http timeouts (triage rank 12)
 
-Branch `fix/http-error-prop`, base main `67448061` (PR #338 merged).
+Branch `fix/http-error-prop`, base main `67448061` (PR #338 merged),
+rebased onto `a9000409` (docs sync #348) and then onto `e6a11156`
+(PR #345, response-write lifecycle) at ship time. Flips: 4 —
+`test-http-request-host-header` went green on main via PR #346, not
+this lane.
 Targets: `test-http-aborted`, `test-http-catch-uncaughtexception`,
 `test-http-exceptions`, `test-http-uncaught-from-request-callback`
 — all four were timeouts (exit 124) on base except
@@ -85,19 +89,22 @@ parse/emit path, where real Node has no try/catch at all.
   branch is unchanged (graceful destroy, probed close-only
   behavior); the peer still gets ECONNRESET either way.
 - Fix 6 — `requireHostHeader` (lib/_http_server.js:581-586, 1249):
-  the option is now stored on ServerBase (default `true`, non-
-  boolean throws `ERR_INVALID_ARG_TYPE` at createServer), and a
-  Host-less HTTP/1.1 request is answered 400 with `Connection:
-  close` before the handler runs. This was missing entirely from
-  the shim — without it, test-http-highwatermark's `mustNotCall`
-  handler fired on the shim (natively it never runs: Node 24
-  defaults the option to true). Overlap note: rank 9
-  (header-assembly) lists requireHostHeader as a lead; this is the
-  minimal implementation its lane can build on. Known corner
-  divergences: a Host-less checkContinue/checkExpectation request
-  goes to its handler here (native 400s it first), and a Host-less
-  request past maxRequestsPerSocket gets 503 here (native 400s it
-  first) — no official test covers either.
+  the option is stored on ServerBase (default `true`, non-boolean
+  throws `ERR_INVALID_ARG_TYPE` at createServer), and a Host-less
+  HTTP/1.1 request is answered 400 with `Connection: close` before
+  the handler runs. This was missing entirely from the shim —
+  without it, test-http-highwatermark's `mustNotCall` handler fired
+  on the shim (natively it never runs: Node 24 defaults the option
+  to true). **Rebase note (2026-11-06): PR #346 landed the same
+  feature on main first (`06ddb727`, server requireHostHeader +
+  maxHeadersCount) with an equivalent option block and a better-
+  placed 400 check (before the maxRequestsPerSocket drop, through
+  the normal finish machinery — it also fixes the two corner
+  divergences noted here); this lane's own implementation was
+  dropped at rebase in favor of #346's, and
+  test-http-request-host-header is green on main via #346, not via
+  this PR. The highwatermark guard still depends on the behavior,
+  not on whose code provides it.**
 - Fix 7 — `IncomingMessage.client`: plain own property
   `this.client = socket` in the constructor, mirroring
   lib/_http_incoming.js:95 (the shim only had `connection`).
@@ -257,8 +264,36 @@ regressions.
   family, unix-socket family, server-incomingmessage-destroy,
   client-incomingmessage-destroy, server-capture-rejections,
   expect-handling, req-res-close, 1.0, byteswritten) — re-run after
-  the regression fixes, still 81/81.
-- Differential: fast-sweep, `http-sweep-ep-{branch4,base}.csv`
-  [PENDING — re-run after Fix 11].
-- Jest baseline 3059 passed / 7 failed / 1 skipped [PENDING].
-- Ondemand 29/29 [PENDING]; builds exit 0 [PENDING].
+  the regression fixes, still 81/81, and re-run again after each
+  rebase (`a9000409`, then `e6a11156`): 81/81 both times.
+- Differential: fast-sweep, `http-sweep-ep-branch7.csv` vs fresh base
+  `http-sweep-ep-base-e6a11156.csv` (main `e6a11156`, 349 pass):
+  branch **353 pass / 4 timeout / 40 fail / 1×134 / 1×139** —
+  toward-pass exactly the 4 targets (aborted, catch-uncaughtexception,
+  exceptions, uncaught-from-request-callback), **regressions 0**,
+  mode-changes 3 (all 124→1: mutable-headers, set-cookies,
+  should-keep-alive — rank-11 leftovers, still 124 on main, failing
+  fast now because handler throws surface instead of hanging). The
+  rebase onto `e6a11156` resolved two `src/http.js` conflicts by
+  keeping both lanes' code (rank-11 cork/uncork/_fullyUncork +
+  this lane's `errored`/`destroy`; rank-11 readableHighWaterMark sync
+  + this lane's `this.client = this.socket`); all 5 rank-11 flips
+  survive on the branch (early-hints-invalid-argument,
+  incoming-message-options, response-cork, response-status-message,
+  response-statuscode all exit 0). Earlier differential vs main
+  `06ddb727` (341 pass): branch6 345 pass, toward-pass the same 4,
+  0 regressions, 8 mode-changes; branch5 vs `811cfb45` (338): 343
+  pass, toward-pass 5 (the 4 targets + request-host-header, since
+  flipped on main by #346), 0 regressions, 9 mode-changes; on old
+  base `67448061` (328): branch2 331 with 2 pipeline regressions
+  (fixed by Fixes 9–10), branch3 332 with 1 regression
+  (keepalive-req-gc, fixed by Fix 11), branch4 333 with 0 regressions.
+- Jest baseline: **3059 passed / 7 failed / 1 skipped** (post-rebase
+  full suite, re-run after the `e6a11156` rebase) — exactly the known
+  host-Node-skew baseline (constants 3, perf_hooks 1, oracle util+crypto 2, sys 1).
+- Ondemand 29/29 (post-rebase; allowlist is exactly this branch's
+  footprint: NOTES + src/events.js + src/http.js).
+- Builds (post-rebase): sandbox 0, runtime 0, build-vfs 0 on retry
+  (first run exited 1 on the known transient esm.sh acorn fetch,
+  failing module `src/specials/bundler.js`, unrelated to this change;
+  base run 0 in between); dist/ restored.
