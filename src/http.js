@@ -3292,7 +3292,14 @@ export class ClientRequest extends OutgoingMessage {
     const signal = options.signal;
     if (signal) {
       if (signal.aborted) {
-        queueMicrotask(() => this._onAbortSignal());
+        // Node destroys synchronously for an already-aborted signal
+        // (add-abort-signal: sync destroy when signal.aborted is
+        // already true), so req.destroyed reads true right after
+        // construction (test-http-client-abort-destroy, pre-aborted
+        // block). The AbortError itself still arrives async — destroy
+        // schedules 'error' on nextTick — so a listener attached after
+        // http.get() returns still catches it.
+        this._onAbortSignal();
       } else {
         signal.addEventListener("abort", () => this._onAbortSignal(), {
           once: true,
@@ -3348,7 +3355,11 @@ export class ClientRequest extends OutgoingMessage {
 
   _onAbortSignal() {
     if (this.aborted || this._aborted) return;
-    this.aborted = true;
+    // Node destroys (never aborts) on signal: lib/_http_client.js
+    // addAbortSignal destroys the stream with an AbortError, so
+    // req.aborted stays false while req.destroyed becomes true
+    // (test-http-client-abort-destroy). _aborted (internal) is set
+    // by destroy() below; the public flag is untouched here.
     this._aborted = true;
     const err = new Error("The operation was aborted");
     err.name = "AbortError";
@@ -3454,12 +3465,43 @@ export class ClientRequest extends OutgoingMessage {
     // abort(); synchronous removal emptied the list and its assert threw
     // inside the response handler, hanging the test). The close listener
     // installed in onSocket removes it and wakes the queue.
+    // Pre-round-trip, the socket destroy is deferred one macrotask
+    // (setTimeout 0): Node assigns req.socket only in onSocketNT (a
+    // tick after construction), so a destroy() landing before that
+    // tick never touches the socket — and a factory-queued error
+    // destroy on the next tick (test-http-client-abort3:
+    // socket.destroy(Error("Oops")) queued during construction)
+    // still lands first and surfaces as the request's single
+    // 'error'. A synchronous destroy here would kill the socket
+    // first and swallow it (the ported stream destroy no-ops on an
+    // already-destroyed socket, exactly like Node's). The deferral
+    // must be a macrotask, not a microtask: under the parity harness
+    // the test module runs inside a dynamic-import microtask, so
+    // microtasks drain before nextTicks there (inverted vs real
+    // Node) — a queueMicrotask destroy would still beat the
+    // factory's nextTick. setTimeout(0) runs after all pending
+    // nextTicks and microtasks in every environment (this file
+    // already relies on that for the FIN-to-close chain).
+    // Once the round trip started the destroy stays synchronous
+    // (an in-flight abort must kill the socket at once).
     const sock = this.socket;
     if (sock && typeof sock.destroy === "function" && !sock.destroyed) {
-      try {
-        sock.destroy();
-      } catch {
-        /* best effort */
+      if (!this._roundTripStarted && !(sock instanceof FakeSocket)) {
+        setTimeout(() => {
+          if (!sock.destroyed) {
+            try {
+              sock.destroy();
+            } catch {
+              /* best effort */
+            }
+          }
+        }, 0);
+      } else {
+        try {
+          sock.destroy();
+        } catch {
+          /* best effort */
+        }
       }
     }
     super.destroy(err);
@@ -4171,7 +4213,20 @@ export class ClientRequest extends OutgoingMessage {
           done(err);
           return;
         }
-        if (ret) done(null, ret);
+        if (ret) {
+          // Wire the socket synchronously, like Node's onSocket: the
+          // error listener must be attached before user code runs, so
+          // a factory-queued error destroy on the next tick still
+          // reaches the request even after a synchronous abort()
+          // (test-http-client-abort3). The continuation's onSocket
+          // below is then a no-op via its duplicate guard. _connected
+          // is set first, exactly as the continuation does — a
+          // factory socket vouches for its own readiness (duplexPair
+          // never emits 'connect').
+          ret._connected = true;
+          this.onSocket(ret);
+          done(null, ret);
+        }
       });
       if (customSock) {
         customSock._connected = true;
@@ -4544,7 +4599,19 @@ export class ClientRequest extends OutgoingMessage {
         clearTimeout(request._timeoutId);
         request._timeoutId = null;
       }
-      if (request._aborted) return;
+      // Node's socketErrorListener has NO aborted check
+      // (lib/_http_client.js:757): any socket error reaches the
+      // request, aborted or not. The synthetic 'socket hang up' is
+      // suppressed at emission time instead (destroy() only injects
+      // it when no error was already emitted, and onSocketNT skips
+      // it when req.aborted) — so an explicit socket error that
+      // arrives after abort() still surfaces (test-http-client-
+      // abort3: factory destroys the socket with Error("Oops") on
+      // the next tick, after a synchronous abort()). The single-fire
+      // guard is _errorEmitted, not _aborted: a request whose error
+      // already fired (signal abort's AbortError, a destroy-injected
+      // ECONNRESET) never double-fires.
+      if (request._errorEmitted) return;
       // If the socket is idle in the agent's free pool, the agent handles
       // the error (removes from pool, destroys). Don't propagate to this
       // (possibly completed) request — that would be an unhandled 'error'.
@@ -4926,11 +4993,23 @@ export class ClientRequest extends OutgoingMessage {
       } catch {
         /* best effort */
       }
-      try {
-        sock.destroy();
-      } catch {
-        /* best effort */
-      }
+      // Defer the destroy one macrotask (setTimeout 0), like
+      // destroy()'s pre-round-trip deferral: a factory-queued error
+      // destroy on the next tick (test-http-client-abort3) must land
+      // while the socket is still alive, or its error is swallowed
+      // (the ported stream destroy no-ops on an already-destroyed
+      // socket). This continuation is a microtask, which the parity
+      // harness drains before nextTicks (inverted vs real Node), so
+      // a synchronous destroy here would beat the factory's nextTick.
+      setTimeout(() => {
+        if (!sock.destroyed) {
+          try {
+            sock.destroy();
+          } catch {
+            /* best effort */
+          }
+        }
+      }, 0);
       // Graceful abort() while waiting closes silently, like its
       // sibling catch above (which already gates on !_abortGraceful):
       // the request never got going, so there is nothing to hang up.
@@ -7261,6 +7340,19 @@ class ServerBase extends EventEmitter {
         !stashed.closed &&
         !stashed.finished
       ) {
+        // The stashed response's request never gets 'aborted' from the
+        // state.current branch above: for a bodyless request (GET) the
+        // body already completed at dispatch, so current was cleared
+        // at onMessageComplete while the response was still running
+        // (test-http-client-abort: server-side req 'aborted' N=8).
+        // Real Node's IncomingMessage._destroy emits 'aborted' when
+        // the socket closes mid-response; the guard keeps a request
+        // that already got it (via current) from double-firing.
+        const stashedReq = stashed.req;
+        if (stashedReq && !stashedReq.aborted) {
+          stashedReq.aborted = true;
+          stashedReq.emit("aborted");
+        }
         try {
           stashed.destroy();
         } catch {
@@ -7573,6 +7665,31 @@ class ServerBase extends EventEmitter {
       // Unpausing first flushes any request still buffered in the parser
       // into the outstanding count, so it is drained rather than dropped.
       state.peerEnded = true;
+      // Peer DESTROYED (not half-closed) with a response outstanding:
+      // the handler never ends, so _finishSocketResponse never runs
+      // and the socket would never close — the server-side request
+      // never gets 'aborted' and the process hangs
+      // (test-http-client-abort). A destroyed peer is distinguished
+      // from a graceful half-close by the nulled peer link: net.js
+      // _destroy nulls peer._peer before delivering the EOF, while a
+      // graceful FIN keeps the link up (real-Node probe order:
+      // client close -> server socket end -> server req 'aborted' ->
+      // server socket close). Destroy the socket one microtask later
+      // so the app's own 'end' listeners still run first (same
+      // deference as the CONNECT branch); onHttpClose then emits
+      // 'aborted' on the stashed request. Idle FINs (inFlight === 0)
+      // keep the existing path below.
+      if (socket._peer === null && state.inFlight > 0 && !socket.destroyed) {
+        queueMicrotask(() => {
+          if (!socket.destroyed) {
+            try {
+              socket.destroy();
+            } catch {
+              /* already closing */
+            }
+          }
+        });
+      }
       if (state.inFlight === 0) {
         state.parser.unpause();
         // A peer FIN with a partial message buffered must surface as

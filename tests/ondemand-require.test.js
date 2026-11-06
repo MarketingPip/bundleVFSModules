@@ -653,8 +653,14 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // _performRequest pipe gate, factory branch before the virtual/raw
     // gates, close() ERR_SERVER_NOT_RUNNING)
     // (src/http.js + src/net.js + working note).
+    // fix/http-client-abort branch: client abort family (signal
+    // abort leaves public aborted false + sync destroy for a
+    // pre-aborted signal, socket-error forwarder drops the _aborted
+    // guard, pre-round-trip socket destroys deferred one macrotask,
+    // factory sockets wired synchronously, server-side 'aborted' on
+    // peer destroy + stashed response) (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "src/net.js", "NOTES-http-unix-socket.md"].sort(),
+      ["NOTES-http-client-abort.md", "src/http.js"].sort(),
     );
   });
 
