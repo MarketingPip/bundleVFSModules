@@ -7984,7 +7984,17 @@ class ServerBase extends EventEmitter {
       this.emit("clientError", err, socket);
       socket.destroy(err);
     }
-    if (!info.hasBody) req._finishBody();
+    // No body finish here: completion belongs to the parser. A no-body
+    // request is finished by _finishMessage -> onMessageComplete (wired
+    // above) immediately after _finishHeaders returns from
+    // onHeadersComplete — same tick, same 'end' delivery. Finishing
+    // here would pre-empt the parser's post-dispatch validation: a
+    // request whose Transfer-Encoding fails llhttp's
+    // after_headers_complete check ("Request has invalid
+    // `Transfer-Encoding`") is dispatched and THEN errored, and must
+    // never see req 'end' (test-http-transfer-encoding-
+    // repeated-chunked). The dispatch-time finish predates the
+    // onMessageComplete wiring (#99) and is redundant with it.
     return { req, res };
   }
 

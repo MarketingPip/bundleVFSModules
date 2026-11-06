@@ -653,6 +653,11 @@ export class HTTPParser {
     let contentLength = null;
     let chunked = false;
     let hasTransferEncoding = false;
+    // Transfer-Encoding codings in header order, across all TE headers
+    // (llhttp parses each TE value as a comma-separated coding list).
+    // teEmpty records a bare empty TE value ("Empty Transfer-Encoding").
+    const teElements = [];
+    let teEmpty = false;
     let connection = "";
     for (let i = 0; i < this._rawHeaders.length; i += 2) {
       const name = this._rawHeaders[i];
@@ -704,7 +709,25 @@ export class HTTPParser {
         // Any Transfer-Encoding header counts, whatever its value
         // (probed: even an empty value errors with Content-Length).
         hasTransferEncoding = true;
-        if (/(^|[, \t])chunked([, \t]|$)/i.test(value)) chunked = true;
+        // llhttp parses each TE value as a comma-separated coding
+        // list: split it into elements now. Leading empty elements
+        // (a value starting with "," / OWS) are skipped by llhttp's
+        // value state machine (probed: ", chunked" is accepted);
+        // middle/trailing empties are not (probed: "chunked,,
+        // chunked", "chunked,"). A bare empty value is its own error
+        // below ("Empty Transfer-Encoding", probed v24.22.1).
+        if (value === "") {
+          teEmpty = true;
+        } else {
+          const elements = value
+            .split(",")
+            .map((el) => el.replace(/^[ \t]+/, "").replace(/[ \t]+$/, ""));
+          let first = 0;
+          while (first < elements.length && elements[first] === "") first++;
+          for (let j = first; j < elements.length; j++) {
+            teElements.push(elements[j]);
+          }
+        }
       } else if (lower === "connection") {
         connection += `,${value.toLowerCase()}`;
       }
@@ -726,23 +749,14 @@ export class HTTPParser {
         }
       }
     }
-    // Duplicate chunked Transfer-Encoding — two TE headers, or one
-    // header listing chunked twice — is HPE_INVALID_TRANSFER_ENCODING
-    // ("Invalid `Transfer-Encoding` header value", probed v24.22.1)
-    // unless the full lenient set is on (insecure). A single chunked
-    // among other codings (gzip + chunked) stays accepted.
-    if (!this.insecureHTTPParser) {
-      const teList = (info.headersDistinct["transfer-encoding"] || []).join(
-        ", ",
-      );
-      const chunkedTokens = teList.match(/(^|[, \t])chunked([, \t]|$)/gi) || [];
-      if (chunkedTokens.length > 1) {
-        throw parseError(
-          "HPE_INVALID_TRANSFER_ENCODING",
-          "Invalid `Transfer-Encoding` header value",
-        );
-      }
-    }
+    // Framing follows the FINAL coding only (llhttp sets F_CHUNKED only
+    // when "chunked" is the last coding matched, deps/llhttp
+    // llhttp__after_headers_complete): "chunked, gzip" is not chunked
+    // framing on either side (probed: a response body runs to EOF),
+    // "gzip, chunked" is.
+    chunked =
+      teElements.length > 0 &&
+      teElements[teElements.length - 1].toLowerCase() === "chunked";
     // llhttp rejects any message carrying both Content-Length and
     // Transfer-Encoding, whatever the TE value, version, or CL value
     // (probed on real Node v24.22.1, request and response sides,
@@ -756,6 +770,61 @@ export class HTTPParser {
         "HPE_INVALID_TRANSFER_ENCODING",
         "Transfer-Encoding can't be present with Content-Length",
       );
+    }
+    // Transfer-Encoding list validation, requests only, strict mode.
+    // llhttp gates the TE state machine and the after-headers check
+    // on type == HTTP_REQUEST and the lenient flags: a response with
+    // TE "chunked, gzip" is NOT an error — its body runs to EOF
+    // (probed v24.22.1) — so responses skip this block and only the
+    // framing rule above applies. Order vs the CL+TE check above:
+    // probed CL-first + TE "chunked, gzip" reports the CL+TE reason,
+    // so structural validation runs after it. (Known divergence,
+    // reason text only: TE-first + invalid TE + a later CL reports
+    // the CL+TE reason here, where llhttp reports the structural one
+    // — same code, no official test covers the combination.)
+    if (
+      this.type === "request" &&
+      !this.insecureHTTPParser &&
+      hasTransferEncoding
+    ) {
+      if (teEmpty) {
+        throw parseError(
+          "HPE_INVALID_TRANSFER_ENCODING",
+          "Empty Transfer-Encoding",
+        );
+      }
+      if (teElements.length === 0) {
+        // A value of only commas/OWS (",", " , ") lists no coding.
+        throw parseError(
+          "HPE_INVALID_TRANSFER_ENCODING",
+          "Invalid `Transfer-Encoding` header value",
+        );
+      }
+      let chunkedSeen = false;
+      for (let i = 0; i < teElements.length; i++) {
+        const el = teElements[i];
+        if (el === "") {
+          // Empty element after the first coding ("chunked,, chunked",
+          // "chunked,") — leading empties were already dropped above.
+          throw parseError(
+            "HPE_INVALID_TRANSFER_ENCODING",
+            "Invalid `Transfer-Encoding` header value",
+          );
+        }
+        if (el.toLowerCase() === "chunked") {
+          if (chunkedSeen || i !== teElements.length - 1) {
+            // Duplicate chunked, or chunked followed by another coding
+            // ("chunked, gzip", two "chunked" headers, "chunked" +
+            // "chunked-false") — chunked must be the final coding.
+            // This subsumes the old duplicate-chunked check.
+            throw parseError(
+              "HPE_INVALID_TRANSFER_ENCODING",
+              "Invalid `Transfer-Encoding` header value",
+            );
+          }
+          chunkedSeen = true;
+        }
+      }
     }
     const connClose = /(^|,)close(,|$)/.test(connection);
     const connKeepAlive = /(^|,)keep-alive(,|$)/.test(connection);
@@ -809,6 +878,26 @@ export class HTTPParser {
     }
 
     if (this.onHeadersComplete) this.onHeadersComplete(info);
+    // llhttp's after_headers_complete: a request whose Transfer-Encoding
+    // is present but whose final coding is not exactly "chunked"
+    // ("chunkedchunked", "chunked-false", "gzip" alone, "identity",
+    // "chunked; foo=bar", "chunked chunked" — probed v24.22.1) is
+    // HPE_INVALID_TRANSFER_ENCODING, raised AFTER onHeadersComplete —
+    // the request handler has already run (test-http-transfer-encoding-
+    // repeated-chunked expects the handler called once, then the 400).
+    // Responses never raise here: the same shape just reads the body
+    // to EOF (probed). Strict requests only; insecure mode accepts.
+    if (
+      this.type === "request" &&
+      !this.insecureHTTPParser &&
+      hasTransferEncoding &&
+      !chunked
+    ) {
+      throw parseError(
+        "HPE_INVALID_TRANSFER_ENCODING",
+        "Request has invalid `Transfer-Encoding`",
+      );
+    }
     if (completeNow) this._finishMessage();
   }
 

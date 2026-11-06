@@ -646,7 +646,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // failure propagation, drain-after-wire ordering)
     // (src/http.js only).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      [
+        "src/http.js",
+        "src/_http_parser.js",
+        "NOTES-http-transfer-encoding.md",
+      ].sort(),
     );
   });
 
