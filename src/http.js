@@ -34,7 +34,11 @@ import {
   _checkIsHttpToken,
   parsers,
 } from "./_http_common.js";
-import { kUniqueHeaders, kHighWaterMark } from "./internals/http-symbols.js";
+import {
+  kUniqueHeaders,
+  kHighWaterMark,
+  kOutHeaders,
+} from "./internals/http-symbols.js";
 import { HTTPParser, MAX_HEADER_PAIRS } from "./_http_parser.js";
 import {
   connect as netConnect,
@@ -634,9 +638,9 @@ class FakeSocket extends EventEmitter {
 }
 
 // Module-local symbols mirroring Node's internal slots.
-// (kUniqueHeaders / kHighWaterMark live in ./internals/http-symbols.js so the
-// http module family shares them without exposing them on the public surface.)
-const kOutHeaders = Symbol("kOutHeaders");
+// (kUniqueHeaders / kHighWaterMark / kOutHeaders live in
+// ./internals/http-symbols.js so the http module family shares them
+// without exposing them on the public surface.)
 const kPath = Symbol("kPath");
 // Real Node's OutgoingMessage.errored slot (lib/_http_outgoing.js):
 // null at construction, set to the destroy() argument verbatim —

@@ -667,12 +667,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // Expect+factory early kick + Host :80 default-port fix; src/net.js
     // gains Socket _writev for corked-batch delivery coalescing)
     // (src/http.js + src/net.js + working note).
-    // fix/http-timeout-semantics branch: server timeout socket arg +
-    // _httpMessage attach tracking + client overflow warning + detached
-    // streaming round-trip error surfacing (src/http.js + working note).
-    expect(nonDist.sort()).toEqual(
-      ["NOTES-http-timeout-semantics.md", "src/http.js"].sort(),
-    );
+    expect(nonDist.sort()).toEqual(["NOTES-http-kout-headers.md", "parity/internal-http-adapter.mjs", "parity/preload.mjs", "src/http.js", "src/https.js", "src/internals/http-symbols.js"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {

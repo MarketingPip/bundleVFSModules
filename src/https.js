@@ -40,6 +40,29 @@ class HttpsServerBase extends http.Server {
     if (this._tlsOptions.ALPNCallback !== undefined) {
       this.ALPNCallback = this._tlsOptions.ALPNCallback;
     }
+    // Node: sockets accepted by an https server are TLSSockets.
+    // _secureEstablished is false until the handshake completes and true
+    // after it (test-https-timeout-server asserts false on the clientError
+    // conn; test-http-url.parse-https.request asserts true in the request
+    // handler). The virtual server performs no TLS handshake (browsers
+    // cannot), so the handshake is emulated: false at connection, true
+    // once a request is dispatched to the handler. The clientError path
+    // never dispatches, so its conn stays false.
+    // ponytail: ceiling — if a real TLS layer ever lands, these become
+    // the handshake start/completion assignments instead.
+    this.on("connection", (socket) => {
+      socket._secureEstablished = false;
+    });
+    const listener = this._requestListener;
+    if (listener) {
+      const wrapped = (req, res) => {
+        if (req.socket) req.socket._secureEstablished = true;
+        listener(req, res);
+      };
+      this.off("request", listener);
+      this._requestListener = wrapped;
+      this.on("request", wrapped);
+    }
   }
 
   setSecureContext(options) {
