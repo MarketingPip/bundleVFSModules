@@ -605,12 +605,22 @@ describe("virtual loopback", () => {
     );
     const addr = await listenAsync(sv, 0);
     const client = trackSocket(connect(addr.port));
-    const code = await new Promise((resolve) => {
-      client.on("error", (e) => resolve(e.code));
-      client.on("close", () => resolve("closed"));
+    // Real Node (probed v24.22.1; lib/net.js onconnection closes the
+    // accepted handle when the blockList matches): the client sees
+    // 'connect' then 'end' + 'close' (hadError false), never an 'error'.
+    // No 'connection' event fires on the server.
+    const events = [];
+    await new Promise((resolve) => {
+      client.on("connect", () => events.push("connect"));
+      client.on("end", () => events.push("end"));
+      client.on("error", (e) => events.push(["error", e.code]));
+      client.on("close", (h) => {
+        events.push(["close", h]);
+        resolve();
+      });
     });
     expect(connected).toBe(false);
-    expect(code).toBe("ECONNREFUSED");
+    expect(events).toEqual(["connect", "end", ["close", false]]);
   });
 });
 
