@@ -3921,6 +3921,11 @@ export class ClientRequest extends OutgoingMessage {
     if (options.localPort !== undefined) {
       this._agentOptions.localPort = options.localPort;
     }
+    // family threads to the agent's connect options the same way (Node
+    // passes request options through to net.connect: dnsopts.family).
+    if (options.family !== undefined) {
+      this._agentOptions.family = options.family;
+    }
     if (agent) {
       try {
         agent.addRequest(this, this._agentOptions);
@@ -4957,7 +4962,27 @@ export class ClientRequest extends OutgoingMessage {
     // Node's factory args (probed v24.22.1): the full connect
     // options — { port, host } for TCP, plus { socketPath, path }
     // for unix-socket targets.
+    // Node's Agent.createSocket passes the FULL request options object
+    // to createConnection (lib/_http_agent.js:463) — lookup, family,
+    // localAddress/localPort included. The old { port, host } shape
+    // dropped lookup, so a factory doing net.createConnection(opts)
+    // never ran the custom lookup and the shim's own DNS path failed
+    // the host instead (test-http-request-lookup-error-catchable:
+    // ENOTFOUND where Node says ERR_IP_BLOCKED). Only defined values
+    // travel, matching the agent's "forwarded only when present" rule.
     const factoryOptions = { port: this.port, host: this.host };
+    if (this._agentOptions.lookup !== undefined) {
+      factoryOptions.lookup = this._agentOptions.lookup;
+    }
+    if (this._agentOptions.family !== undefined) {
+      factoryOptions.family = this._agentOptions.family;
+    }
+    if (this._agentOptions.localAddress !== undefined) {
+      factoryOptions.localAddress = this._agentOptions.localAddress;
+    }
+    if (this._agentOptions.localPort !== undefined) {
+      factoryOptions.localPort = this._agentOptions.localPort;
+    }
     if (this.socketPath) {
       factoryOptions.socketPath = this.socketPath;
       factoryOptions.path = this.socketPath;
@@ -5288,6 +5313,19 @@ export class ClientRequest extends OutgoingMessage {
       return;
     }
 
+    // A custom lookup that already failed (flagged on the assigned
+    // agent socket by net's connect) is the request's outcome: real
+    // Node never opens a connection after a lookup failure. Return
+    // without starting fetch — starting it would open an egress-proxy
+    // connection that an abort cannot reclaim (an aborted fetch leaves
+    // an idle proxy socket that holds the loop open forever;
+    // test-http-client-req-error-dont-double-fire). The socket's own
+    // deferred 'error' reaches the request through socketErrorListener
+    // exactly once, so no emission is needed here.
+    if (this.socket && this.socket._lookupError) {
+      return;
+    }
+
     // Committing to the fetch path: the agent socket's errors are now
     // irrelevant (see socketErrorListener's _usingFetch guard) — fetch
     // owns this request's outcome from here. Fetch forbids GET/HEAD
@@ -5493,8 +5531,22 @@ export class ClientRequest extends OutgoingMessage {
       // or tests/http.test.js "timeout emits timeout" loses its 20ms
       // timer to an unrelated DNS error). Ignore the error entirely
       // here; the listener's presence still consumes it, so nothing
-      // throws unhandled on the socket.
-      if (request._usingFetch) return;
+      // throws unhandled on the socket. EXCEPTION: a custom-lookup
+      // failure (socket._lookupError, set by net's connect) is
+      // authoritative — real Node fails the request outright — so it
+      // still reaches the request on the fetch path, and the in-flight
+      // fetch is aborted first so the request cannot hang on an
+      // unresolvable host (test-http-client-req-error-dont-double-fire:
+      // the fetch to something.invalid never settles in this
+      // environment).
+      if (request._usingFetch && !socket._lookupError) return;
+      if (request._usingFetch) {
+        try {
+          request._abortController?.abort();
+        } catch {
+          /* abort is best-effort; the error below is the outcome */
+        }
+      }
       if (request._timeoutId) {
         clearTimeout(request._timeoutId);
         request._timeoutId = null;
