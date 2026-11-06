@@ -8223,8 +8223,57 @@ class ServerBase extends EventEmitter {
       validatePipelinedRemainder();
     };
     socket.on("data", onHttpData);
-    const onHttpError = () => {
-      /* 'close' handles cleanup */
+    // Node's socketOnError (lib/_http_server.js:999): a server socket
+    // 'error' destroys the socket unless the server's 'clientError'
+    // handles it. The no-op this replaced let a manual error emit
+    // (test-http-header-badrequest: res.write('asd') then
+    // res.socket.emit('error')) leave the socket alive, so the client
+    // never saw 'end' and the test hung (124). Port of the function,
+    // minus the HPE/413 branches (those arrive via the parser path,
+    // which owns its own responses):
+    // - remove this listener first (Node parity; destroy re-emits
+    //   'error' on nextTick via emitErrorNT) and keep a noop 'error'
+    //   listener, or destroy's error emission throws unhandled.
+    // - a socket already destroyed/destroying (the parser-error path
+    //   destroys directly) re-enters here on destroy's error emission:
+    //   ignore it, so 'clientError' is never double-emitted.
+    // - header not sent yet: Node answers 400 before destroying;
+    //   header sent (this test): destroy with nothing more written,
+    //   so the client sees 'end' right after the 'asd' chunk frame.
+    const noop = () => {};
+    const onHttpError = (e) => {
+      if (socket.destroyed) return;
+      socket.removeListener("error", onHttpError);
+      if (socket.listenerCount("error", noop) === 0) {
+        socket.on("error", noop);
+      }
+      if (!this.emit("clientError", e, socket)) {
+        const res = state.current ? state.current.res : state.lastResponse;
+        if (socket.writable && (!res || !res.headersSent)) {
+          try {
+            socket.write(
+              "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n",
+            );
+          } catch {
+            /* best effort */
+          }
+        }
+        // The response's chunk frame is still pended (flushed on a
+        // microtask) when the write callback fires: destroy() now
+        // would discard it before delivery, and the client would see
+        // 'end' with zero bytes. Flush it first — sock.write delivers
+        // to the peer synchronously — so the bytes land before the
+        // FIN (test-http-header-badrequest: received must end with
+        // the 'asd' chunk frame).
+        if (res && typeof res._flushPendingFrame === "function") {
+          try {
+            res._flushPendingFrame();
+          } catch {
+            /* best effort */
+          }
+        }
+        socket.destroy(e);
+      }
     };
     socket.on("error", onHttpError);
     const onHttpEnd = () => {
