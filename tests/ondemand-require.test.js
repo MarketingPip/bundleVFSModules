@@ -660,7 +660,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // factory sockets wired synchronously, server-side 'aborted' on
     // peer destroy + stashed response) (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-client-abort.md", "src/http.js"].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
