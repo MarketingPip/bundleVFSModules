@@ -96,7 +96,7 @@ function makeError(code, message, Constructor = Error) {
 const ERR_INVALID_HTTP_TOKEN = (kind, val) =>
   makeError(
     "ERR_INVALID_HTTP_TOKEN",
-    `${kind} must be a valid HTTP token [${JSON.stringify(String(val))}]`,
+    `${kind} must be a valid HTTP token ["${String(val)}"]`,
     TypeError,
   );
 const ERR_INVALID_CHAR = (kind, val) =>
@@ -264,6 +264,7 @@ const ERR_INVALID_PROTOCOL = (protocol, expected) =>
   makeError(
     "ERR_INVALID_PROTOCOL",
     `Protocol "${protocol}" not supported. Expected "${expected}"`,
+    TypeError,
   );
 const ERR_UNESCAPED_CHARACTERS = (what) =>
   makeError(
