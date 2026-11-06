@@ -668,7 +668,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // gains Socket _writev for corked-batch delivery coalescing)
     // (src/http.js + src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-arg-validation.md", "src/http.js"].sort(),
+      ["NOTES-http-peer-destroy.md", "src/http.js", "src/net.js"].sort(),
     );
   });
 

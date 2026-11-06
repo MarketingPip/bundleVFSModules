@@ -954,6 +954,7 @@ function Socket(options = {}) {
   // bytes — mirroring libuv, where a TCP handle with shut-down write side
   // and EOF'd read side goes inactive and stops keeping the loop alive.
   this._eofReceived = false;
+  this._peerReset = false;
   // Mirrors libuv: the virtual read watcher only activates once the stream
   // starts reading (_read invoked). A socket that never started reading
   // (e.g. paused before connect) has an inactive handle and does not keep
@@ -1046,8 +1047,21 @@ function writeAfterFIN(chunk, encoding, cb) {
     encoding = null;
   }
 
-  const er = new Error("This socket has been ended by the other party");
-  er.code = "EPIPE";
+  // A write after the peer destroyed its socket is ECONNRESET, not
+  // EPIPE: destroy() is an abortive close (RST), while a graceful FIN
+  // (peer end()) keeps the EPIPE shape (test-http-conn-reset vs the
+  // repo net test 'write after local end and remote FIN fails with
+  // EPIPE'). _destroy marks the peer with _peerReset when it delivers
+  // the EOF, so this branch can tell the two apart.
+  // ponytail: ceiling — the flag is set only by _destroy's EOF
+  // delivery; resetAndDestroy already destroys the peer with
+  // ECONNRESET directly and never goes through here.
+  const er = this._peerReset
+    ? errConnReset()
+    : Object.assign(
+        new Error("This socket has been ended by the other party"),
+        { code: "EPIPE" },
+      );
   if (typeof cb === "function") {
     nextTick(cb, er);
   }
@@ -1769,13 +1783,19 @@ Socket.prototype._write = function _write(chunk, encoding, cb) {
       this._pendingWrites.push({ chunk, encoding, cb });
       return;
     }
+    // A write to a peer that destroyed its socket is ECONNRESET
+    // (test-http-conn-reset, test-http-destroyed-socket-write2):
+    // destroy() is an abortive close (RST). Any other not-connected
+    // state keeps the existing codeless error — no test pins it.
     const er = this.destroyed
       ? errnoError(
           "ERR_STREAM_DESTROYED",
           "write",
           "Cannot call write after a stream was destroyed",
         )
-      : new Error("Socket is not connected");
+      : peer && peer.destroyed
+        ? errConnReset()
+        : new Error("Socket is not connected");
     if (!this.destroyed) this.destroy(er);
     cb(er);
     return;
@@ -1810,13 +1830,19 @@ Socket.prototype._writev = function _writev(chunks, cb) {
       });
       return;
     }
+    // A write to a peer that destroyed its socket is ECONNRESET
+    // (test-http-conn-reset, test-http-destroyed-socket-write2):
+    // destroy() is an abortive close (RST). Any other not-connected
+    // state keeps the existing codeless error — no test pins it.
     const er = this.destroyed
       ? errnoError(
           "ERR_STREAM_DESTROYED",
           "write",
           "Cannot call write after a stream was destroyed",
         )
-      : new Error("Socket is not connected");
+      : this._peer && this._peer.destroyed
+        ? errConnReset()
+        : new Error("Socket is not connected");
     if (!this.destroyed) this.destroy(er);
     cb(er);
     return;
@@ -1905,13 +1931,19 @@ Socket.prototype._flushPendingWrites = function _flushPendingWrites() {
     // because it can die mid-loop.
     const peer = this._peer;
     if (!this._connected || !peer || peer.destroyed) {
+      // A write to a peer that destroyed its socket is ECONNRESET
+      // (test-http-conn-reset, test-http-destroyed-socket-write2):
+      // destroy() is an abortive close (RST). Any other not-connected
+      // state keeps the existing codeless error — no test pins it.
       const er = this.destroyed
         ? errnoError(
             "ERR_STREAM_DESTROYED",
             "write",
             "Cannot call write after a stream was destroyed",
           )
-        : new Error("Socket is not connected");
+        : peer && peer.destroyed
+          ? errConnReset()
+          : new Error("Socket is not connected");
       if (!this.destroyed) this.destroy(er);
       item.cb(er);
       continue;
@@ -2037,6 +2069,9 @@ Socket.prototype._destroy = function _destroy(exception, cb) {
     nextTick(() => {
       if (peer.destroyed) return;
       if (peer._peer === this) peer._peer = null;
+      // Abortive close: the peer's EOF came from a destroy, not a
+      // graceful FIN — a later write fails ECONNRESET (see writeAfterFIN).
+      peer._peerReset = true;
       peer._receiveEOF();
     });
   }
