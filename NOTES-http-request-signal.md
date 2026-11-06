@@ -108,6 +108,10 @@ after use), never with `/tmp` probes alone.
   regressions; 4 were real double-`'aborted'` regressions (fixed by
   the final gate, all 0×2 after), 2 were contention flakes, 2 were
   sweep-timeout flakes. That CSV is stale — do not use it.
+- Ship note: first CI run green on code SHA `34bfc9bb` (Parity +
+  build success); merge 405'd (Lanes 1+3 + sync #361 landed
+  mid-CI), rebased onto `7b899270` with no conflicts, re-verified
+  (target + abort guards + ondemand 29/29).
 
 ## Guards (all 0 on branch)
 
