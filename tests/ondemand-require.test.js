@@ -663,8 +663,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (Host IPv6 brackets + defaultPort, localAddress/localPort
     // threading + net bind emulation + validation, legacy 4-arg
     // addRequest) (src/http.js + src/net.js + working note).
+    // fix/http-header-assembly branch: client request-head assembly
+    // (Host setHost rule + IPv6 brackets, Connection keep-alive/close
+    // rule, array-form header order, URL-auth decoding)
+    // (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      ["src/http.js", "NOTES-http-header-assembly-client.md"].sort(),
     );
   });
 

@@ -2894,11 +2894,21 @@ function parseRequestArgs(urlOrOptions, optionsOrCallback, callback) {
       port: parsed.port ? Number(parsed.port) : undefined,
       path: `${parsed.pathname}${parsed.search}`,
       hash: parsed.hash,
+      // Node (lib/internal/url.js urlToHttpOptions): auth is the
+      // decodeURIComponent'd userinfo — the raw percent-encoded form
+      // base64s to the wrong Authorization header
+      // (test-http-decoded-auth). Same function also spreads the URL
+      // object, so user-added properties (e.g. url.headers) survive;
+      // spreading a URL instance only enumerates those own props.
       auth: parsed.username
-        ? `${parsed.username}:${parsed.password}`
+        ? decodeURIComponent(parsed.username) +
+          (parsed.password ? `:${decodeURIComponent(parsed.password)}` : "")
         : undefined,
       method: "GET",
     };
+    if (urlOrOptions instanceof URL) {
+      options = { __proto__: null, ...urlOrOptions, ...options };
+    }
     if (typeof optionsOrCallback === "function") {
       cb = optionsOrCallback;
     } else if (optionsOrCallback) {
@@ -3111,6 +3121,17 @@ export class ClientRequest extends OutgoingMessage {
       );
     }
     this.agent = agent;
+    // Node (lib/_http_client.js:504-507): shouldKeepAlive is false
+    // only when the agent opts out of keep-alive AND has unbounded
+    // sockets (maxSockets Infinity); every other combination keeps
+    // the connection alive. Drives the wire Connection header.
+    // ponytail: Node also sets _last here; nothing in this codebase
+    // reads it, so it is not tracked.
+    this.shouldKeepAlive = !(
+      this.agent &&
+      !this.agent.keepAlive &&
+      !Number.isFinite(this.agent.maxSockets)
+    );
     // Request-level createConnection: when set, the agent stays
     // undefined (above) and _performRequest honors the factory below
     // (test-http-header-value-relaxed Test 10's duplexPair shape).
@@ -3268,17 +3289,33 @@ export class ClientRequest extends OutgoingMessage {
     }
     this.connection = this.socket;
 
-    if (
-      host &&
-      !this._headersArray &&
-      !this.getHeader("host") &&
-      options.setHost !== false &&
-      options.setDefaultHeaders !== false
-    ) {
+    // Node (lib/_http_client.js:404,408,511,545): setHost defaults
+    // to setDefaultHeaders !== false, and setDefaultHeaders === false
+    // also suppresses the default Connection/Content-Length/
+    // Transfer-Encoding headers (_removed*). The old gate keyed the
+    // Host on setDefaultHeaders directly, so setDefaultHeaders:false
+    // + setHost:true sent no Host (and the serializer then invented
+    // "Host: localhost"); and with defaults off a bogus
+    // "Connection: keep-alive" was injected at request time
+    // (test-http-dont-set-default-headers-with-setHost,
+    // test-http-dont-set-default-headers). The auto Host is
+    // host (+:port when the port is not the default), IPv6-bracketed.
+    const setHost =
+      options.setHost !== undefined
+        ? Boolean(options.setHost)
+        : options.setDefaultHeaders !== false;
+    this._setHost = setHost;
+    this._removedConnection =
+      this._removedContLen =
+      this._removedTE =
+        options.setDefaultHeaders === false;
+    if (host && !this._headersArray && !this.getHeader("host") && setHost) {
       let hostHeader = host;
       // Node lib/_http_client.js:512-520: IPv6 literals in the Host header
       // get square brackets (RFC 3986 §3.2.2). A host with a second colon
-      // that doesn't already start with "[" is an unbracketed literal.
+      // that doesn't already start with "[" is an unbracketed literal;
+      // a single colon is a host:port pair, not IPv6. (Bracket check
+      // kept from the localaddress lane's fix.)
       const posColon = hostHeader.indexOf(":");
       if (
         posColon !== -1 &&
@@ -3904,37 +3941,45 @@ export class ClientRequest extends OutgoingMessage {
    * parser lowercases anyway. Object-form requests pass through
    * untouched (same reference).
    */
-  _mergeArrayHeaders(headers) {
-    if (!this._headersArray) return headers;
-    const merged = { ...(headers || {}) };
-    const seen = new Map(); // lower -> key in merged
-    for (const key of Object.keys(merged)) seen.set(key.toLowerCase(), key);
-    for (const [name, value] of this._headersArray) {
-      const lower = String(name).toLowerCase();
-      const key = seen.get(lower);
-      if (key === undefined) {
-        seen.set(lower, name);
-        merged[name] = value;
-      } else if (Array.isArray(merged[key])) {
-        merged[key].push(value);
-      } else {
-        merged[key] = [merged[key], value];
-      }
-    }
-    return merged;
-  }
-
   /**
    * Headers for the virtual-server round trip, preserving what the old
    * ', '-flattening destroyed: first-seen casing (kOutHeaders entry[0])
    * and per-value arrays, so _serializeRequestHead emits one wire line
    * per value like Node — except headers in this request's
    * uniqueHeaders list, whose arrays collapse to one '; '-joined line.
-   * Array-form pairs merge in after (their values join too when the
-   * name is unique). The real-fetch path keeps its own ', ' flattening;
-   * this builder is virtual-path only.
+   * Array-form headers return as ordered pairs, NOT folded into an
+   * object: folding regroups duplicate names at first-seen position
+   * and destroys interleaved order (test-http-dont-set-default-headers
+   * expects foo, test, foo in exactly that order). kOutHeaders is
+   * empty in that case — setHeader() throws once array headers are
+   * set — so the pairs are the complete set. The real-fetch path
+   * keeps its own ', ' flattening; this builder is virtual-path only.
    */
   _virtualHeaders() {
+    if (this._headersArray) {
+      const pairs = this._headersArray.map(([n, v]) => [n, v]);
+      const unique = this[kUniqueHeaders];
+      if (unique) {
+        const out = [];
+        const joined = new Map(); // lower -> index in out
+        for (const [name, value] of pairs) {
+          const lower = String(name).toLowerCase();
+          if (!unique.has(lower)) {
+            out.push([name, value]);
+            continue;
+          }
+          const idx = joined.get(lower);
+          if (idx === undefined) {
+            joined.set(lower, out.length);
+            out.push([name, String(value)]);
+          } else {
+            out[idx][1] = `${out[idx][1]}; ${value}`;
+          }
+        }
+        return out;
+      }
+      return pairs;
+    }
     const headers = {};
     const kOut = this[kOutHeaders];
     if (kOut) {
@@ -3943,17 +3988,16 @@ export class ClientRequest extends OutgoingMessage {
         headers[name] = Array.isArray(value) ? [...value] : value;
       }
     }
-    const merged = this._mergeArrayHeaders(headers);
     const unique = this[kUniqueHeaders];
     if (unique) {
-      for (const key of Object.keys(merged)) {
-        const v = merged[key];
+      for (const key of Object.keys(headers)) {
+        const v = headers[key];
         if (Array.isArray(v) && unique.has(key.toLowerCase())) {
-          merged[key] = v.map(String).join("; ");
+          headers[key] = v.map(String).join("; ");
         }
       }
     }
-    return merged;
+    return headers;
   }
 
   _streamEnsureStarted() {
@@ -4034,7 +4078,9 @@ export class ClientRequest extends OutgoingMessage {
       this._headersArray &&
       arrayHeader("transfer-encoding") === undefined
     ) {
-      streamHeaders = { ...streamHeaders, "transfer-encoding": "chunked" };
+      streamHeaders = Array.isArray(streamHeaders)
+        ? [...streamHeaders, ["transfer-encoding", "chunked"]]
+        : { ...streamHeaders, "transfer-encoding": "chunked" };
     }
     st.roundTrip = this._performVirtualRequest(
       server,
@@ -4949,16 +4995,15 @@ export class ClientRequest extends OutgoingMessage {
     // is server._port. If they differ, re-key the socket tracking.
     const agent = this.agent;
 
-    // If the agent has keepAlive enabled, ensure the Connection header is set
-    // so the server keeps the socket open for reuse (Node behavior).
-    if (agent && agent.keepAlive) {
-      const hasConnection = Object.keys(headers || {}).some(
-        (k) => k.toLowerCase() === "connection",
-      );
-      if (!hasConnection) {
-        headers = { ...(headers || {}), Connection: "keep-alive" };
-      }
-    }
+    // The Connection header is the serializer's job now (Node's
+    // _storeHeader decides keep-alive vs close in one place, with
+    // _removedConnection gating); the old keep-alive injection here
+    // fired even with default headers off, and missed the
+    // keepAlive:false + finite-maxSockets case. Likewise the
+    // serializer's "Host: localhost" fallback must stay suppressed
+    // when the constructor decided against an auto Host
+    // (setHost false), not only for array-form headers.
+    noDefaultHost = noDefaultHost || this._setHost === false;
 
     const sock = await new Promise((resolve, reject) => {
       // If the socket was already assigned (synchronous free-socket reuse),
@@ -5170,6 +5215,12 @@ export class ClientRequest extends OutgoingMessage {
           insecureHTTPParser: this.insecureHTTPParser,
           parser: this.parser,
           setDefaultHeaders: this._setDefaultHeaders,
+          // Connection-header inputs for the serializer (Node's
+          // _storeHeader rule): shouldKeepAlive, chunked-by-default,
+          // and whether an agent exists at all.
+          shouldKeepAlive: this.shouldKeepAlive,
+          useChunkedEncodingByDefault: this.useChunkedEncodingByDefault,
+          hasAgent: !!this.agent,
           // Request trailers ride the chunked terminator (rendered here
           // so _serializeRequestHead needs no trailer knowledge).
           chunkedTerminator: this._chunkTerminator(),
@@ -5188,6 +5239,10 @@ export class ClientRequest extends OutgoingMessage {
                   noDefaultHost,
                   true,
                   this._setDefaultHeaders,
+                  undefined,
+                  this.shouldKeepAlive,
+                  this.useChunkedEncodingByDefault,
+                  !!this.agent,
                 ),
                 onStreamReady: (writer) => {
                   const st = this._stream;
@@ -6194,6 +6249,12 @@ function _serializeRequestHead(
   // Chunked-request terminator (bare "0\r\n\r\n", or with request
   // trailers when the caller renders them via _chunkTerminator).
   chunkedTerminator = "0\r\n\r\n",
+  // Connection-rule inputs (Node lib/_http_outgoing.js:517-530).
+  // Defaults keep the runtime-bridge caller on its old wire
+  // (Connection: close); client paths pass real values.
+  shouldKeepAlive = false,
+  useChunkedEncodingByDefault = false,
+  hasAgent = false,
 ) {
   const lines = [`${method} ${path} HTTP/1.1`];
   let hasHost = false;
@@ -6202,7 +6263,13 @@ function _serializeRequestHead(
   let transferEncodingValue = "";
   let hasConnection = false;
   const push = (name, value) => lines.push(`${name}: ${value}`);
-  for (const [name, value] of Object.entries(headers || {})) {
+  // Headers arrive as an object (object-form) or as ordered pairs
+  // (array-form, via _virtualHeaders) — pairs preserve interleaved
+  // duplicate order that an object cannot hold.
+  const entries = Array.isArray(headers)
+    ? headers
+    : Object.entries(headers || {});
+  for (const [name, value] of entries) {
     const lower = name.toLowerCase();
     if (lower === "host") hasHost = true;
     else if (lower === "content-length") hasContentLength = true;
@@ -6220,6 +6287,21 @@ function _serializeRequestHead(
     }
   }
   if (!hasHost && !noDefaultHost) push("Host", "localhost");
+  // Node (lib/_http_outgoing.js:517-530): with default headers off
+  // there is no Connection header at all; otherwise keep-alive iff
+  // shouldKeepAlive && (Content-Length || chunked-by-default ||
+  // agent), else close. Emitted before Content-Length: Node renders
+  // auto Connection ahead of auto Content-Length.
+  if (!hasConnection && setDefaultHeaders) {
+    if (
+      shouldKeepAlive &&
+      (hasContentLength || useChunkedEncodingByDefault || hasAgent)
+    ) {
+      push("Connection", "keep-alive");
+    } else {
+      push("Connection", "close");
+    }
+  }
   const bodyBuf =
     body == null ? null : Buffer.isBuffer(body) ? body : Buffer.from(body);
   if (!hasContentLength && !hasTransferEncoding) {
@@ -6239,7 +6321,6 @@ function _serializeRequestHead(
       push("Content-Length", "0");
     }
   }
-  if (!hasConnection) push("Connection", "close");
   lines.push("", "");
   const head = Buffer.from(lines.join("\r\n"));
   // Chunked request framing (test-http-raw-headers): a BUFFERED request
@@ -6318,6 +6399,11 @@ function _socketHttpRoundTrip(
     // path: implicit Content-Length: 0 is a default header. Other
     // callers (emulated inbound requests) keep the default true.
     setDefaultHeaders = true,
+    // Connection-rule inputs for the serializer (Node's _storeHeader
+    // rule); threaded from ClientRequest by the virtual path only.
+    shouldKeepAlive = false,
+    useChunkedEncodingByDefault = false,
+    hasAgent = false,
     // Rendered chunked-request terminator from the caller (includes
     // request trailers when set via addTrailers); default is bare.
     chunkedTerminator = "0\r\n\r\n",
@@ -6578,6 +6664,9 @@ function _socketHttpRoundTrip(
               false,
               setDefaultHeaders,
               chunkedTerminator,
+              shouldKeepAlive,
+              useChunkedEncodingByDefault,
+              hasAgent,
             ),
           );
         }
