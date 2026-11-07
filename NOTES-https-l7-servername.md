@@ -269,6 +269,14 @@ Target `test-https-agent-sni`: 0 (×3 runs).
   Full local jest suite on the final tree: 7 failed / 3059 passed
   (baseline version-skew suites only); footprint 29/29;
   build-sandbox/runtime 0, build-vfs 1 (esm.sh transient only).
+- Second rebase onto main `e34a9347` (L1 #393 landed): only the
+  allowlist conflicted (L1's entry + L7's); `src/` byte-identical
+  to the l7e-verified tree, so the http/net l7e differentials
+  stand. Fresh https pair vs the L1 base (CSVs
+  `*-2026-11-07-l7f.csv`): base 39/67 (5 timeout, 23 fail) →
+  branch 40/67 (5 timeout, 22 fail), changed lines exactly 1 —
+  `agent-sni` 1→0. Guards re-verified 0×3 on the rebased tree;
+  footprint 29/29.
 - Final tree (CSVs `*-2026-11-07-l7c.csv`): https 32/67 (6 timeout,
   29 fail), diff vs l7b base exactly 1 line (`agent-sni` 1→0).
   http 387/397 (2 timeout, 8 fail, 134:1, 139:1) — same totals as
