@@ -87,16 +87,26 @@ class HttpsServerBase extends http.Server {
       // emits 'clientError' with the cleartext socket. A raw-TCP peer
       // that never sends a ClientHello (test-https-timeout-server) trips
       // it; a real request dispatch clears it (wrap.js:1201-1202).
+      // Standalone timer, NOT socket.setTimeout: the net socket has ONE
+      // timeout slot, shared with the server's own setTimeout — arming
+      // or clearing the handshake timer through it would clobber the
+      // server timeout (test-https-set-timeout-server regressed 1→124).
       const hsTimeout = this._tlsOptions.handshakeTimeout || 120 * 1000;
       if (typeof hsTimeout === "number" && hsTimeout > 0) {
         const onHandshakeTimeout = () => {
+          socket._handshakeTimer = null;
           const err = new Error("TLS handshake timeout");
           err.code = "ERR_TLS_HANDSHAKE_TIMEOUT";
           this.emit("clientError", err, socket);
           socket.destroy();
         };
-        socket._handshakeTimeoutCb = onHandshakeTimeout;
-        socket.setTimeout(hsTimeout, onHandshakeTimeout);
+        socket._handshakeTimer = setTimeout(onHandshakeTimeout, hsTimeout);
+        socket.once("close", () => {
+          if (socket._handshakeTimer) {
+            clearTimeout(socket._handshakeTimer);
+            socket._handshakeTimer = null;
+          }
+        });
       }
       // Node: https.Server inherits tls.Server, which emits
       // 'secureConnection' per accepted connection with the TLSSocket
@@ -121,9 +131,9 @@ class HttpsServerBase extends http.Server {
           req.socket._secureEstablished = true;
           // Handshake "completes" at first dispatch: clear the handshake
           // timeout (Node lib/internal/tls/wrap.js:1201-1202).
-          if (req.socket._handshakeTimeoutCb) {
-            req.socket.setTimeout(0, req.socket._handshakeTimeoutCb);
-            req.socket._handshakeTimeoutCb = null;
+          if (req.socket._handshakeTimer) {
+            clearTimeout(req.socket._handshakeTimer);
+            req.socket._handshakeTimer = null;
           }
           _setSocketAuthSurface(this, req.socket);
           // The client certificate the peer presented (if any) is the
