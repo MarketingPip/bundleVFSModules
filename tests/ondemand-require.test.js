@@ -679,9 +679,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // already-ended socket (src/http.js + src/_http_parser.js + note).
     // docs/http-hitlist-388 branch: HITLIST + measured-rates sync
     // (http 382 -> 388; PRs #374, #376, #379, #381).
-    expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
-    );
+    // fix/https-wrapper-this-identity branch: HttpsServerBase listener
+    // wrapper calls the listener with .call(server) and preserves its
+    // identity via .listener (src/https.js only).
+    expect(nonDist.sort()).toEqual(["src/https.js"].sort());
   });
 
   test("no new function declarations added by the branch diff", () => {
