@@ -10422,7 +10422,25 @@ class ServerBase extends EventEmitter {
           /* ignore */
         }
       }
-    } else if (!socket.destroyed && !res._bytesDelivered) {
+      // A buffered (non-streaming) response sends its bytes here, at
+      // finish time — but Writable.finish() runs end(chunk, cb)
+      // callbacks BEFORE emitting 'finish' (lib/internal/streams/
+      // writable.js:955, same order in the shim), so an end callback
+      // that ends the socket — e.g. test-http-pipeline-socket-parser-
+      // typeerror's upgrade handler ending the socket in second's
+      // finish callback — leaves this response with nowhere to send:
+      // the socket is ended (writable false) but not destroyed, so the
+      // bare !destroyed guard passes and the send throws
+      // ERR_STREAM_WRITE_AFTER_END. Real Node writes the bytes during
+      // end() itself, before any callback runs, so it never hits this;
+      // the shim can't move the send earlier (framing is decided
+      // here), so skip the send when the socket is already ended —
+      // the bytes are undeliverable — and still run the bookkeeping
+      // below. `!== false` keeps the old behavior for sockets without
+      // a writable property (e.g. FakeSocket). The send itself is
+      // _writeBufferedResponse (extracted by the trailing-bytes lane,
+      // PR #381). (test-http-pipeline-socket-parser-typeerror.)
+    } else if (!socket.destroyed && !res._bytesDelivered && socket.writable !== false) {
       _writeBufferedResponse(socket, req, res);
     }
     const maxOk =

@@ -140,7 +140,43 @@ principle), so an in-flight request body is not truncated.
 - fast-sweep only: `http-sweep-fd-base.csv` / `http-sweep-fd-branch.csv`.
   Expect exactly the 3 targets 1 → 0, zero regressions.
 
+### 7. Buffered finish must not write to an already-ended socket (src/http.js ~9779, NEW — regression fix)
+
+The fast-sweep differential flagged one regression:
+`test-http-pipeline-socket-parser-typeerror` 0 → 1 (branch fails 2/2
+isolated; base and live main pass 2/2). Root cause, traced end to end:
+the parser guard (fix 4) makes pipelined dispatch faithful — on base
+the nested execute mis-parsed the pipelined request as headers, the
+parser landed in `error` state and the upgrade never dispatched, so
+the test passed by accident (it only asserts no-crash). With faithful
+parsing the upgrade dispatches, the upgrade handler calls
+`second.end(chunk, () => socket.end())` then `first.end("hello")` —
+and Writable.finish() runs end-callbacks BEFORE emitting `'finish'`
+(`lib/internal/streams/writable.js:955`, same order in the shim), so
+the socket is already ended when second's `_finishSocketResponse`
+runs. The non-flushed send branch guarded only on `!socket.destroyed`
+(ended ≠ destroyed), so `socket.write` threw
+`ERR_STREAM_WRITE_AFTER_END` uncaught. Fix: the branch also requires
+`socket.writable !== false` — skip the send when the socket is already
+ended (bytes undeliverable) while still running all bookkeeping. `!==
+false` keeps the old behavior for sockets without a `writable`
+property (e.g. FakeSocket). Real Node writes the bytes during `end()`
+itself, before any callback runs, so it never hits this; the shim
+can't move the send earlier (framing is decided at finish time).
+
 ## Scope limits
+
+- Response-order serialization is NOT implemented: when two responses
+  on one socket finish out of request order, the later-finishing one
+  writes immediately rather than queueing behind the earlier one. Real
+  Node serializes (first's bytes go out before second's regardless of
+  end() order); the shim drops the bytes of a response whose socket
+  was already ended (fix 7). No test in the suite asserts on those
+  bytes — the differential is clean — but a future test that reads an
+  out-of-order response body would need the queue. ponytail: ceiling
+  is a per-socket response FIFO in `_finishSocketResponse`; upgrade
+  path is flushing the buffered body from `ServerResponse.end()`
+  (Node's `_send` timing) instead of at finish time.
 
 - Does NOT touch L13's tests (`test-http-header-overflow`,
   `test-http-max-header-size-per-stream`): `maxHeaderSize` is still never
