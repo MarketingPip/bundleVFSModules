@@ -256,8 +256,19 @@ Target `test-https-agent-sni`: 0 (×3 runs).
   shared `OutgoingMessage` base broke it for server responses.
   The real-Node probe (finished but not destroyed) stays a
   recorded divergence for a follow-up lane scoped to the client
-  request only — NOT as a shared-base change. Re-verify: fresh
-  l7e sweeps on the final tree (see below).
+  request only — NOT as a shared-base change.
+- Final differential vs new main `4f98f142` (CSVs
+  `*-base-2026-11-07-l7d.csv` vs `*-branch-2026-11-07-l7e.csv`):
+  https base 38/67 → branch 39/67, changed lines exactly 1 —
+  `agent-sni` 1→0 (THE flip). http base 388/397 → branch 388/397,
+  changed lines exactly 0 (all 5 l7d regressions gone after
+  dropping (a)). net base 87/156 → branch 87/156, changed lines
+  exactly 1 — `write-fully-async-hex-string` 124→137, a kill-code
+  mode variation on a pre-existing spinner: isolated 137×2 on
+  BOTH base and branch (spins until killed), NOT a regression.
+  Full local jest suite on the final tree: 7 failed / 3059 passed
+  (baseline version-skew suites only); footprint 29/29;
+  build-sandbox/runtime 0, build-vfs 1 (esm.sh transient only).
 - Final tree (CSVs `*-2026-11-07-l7c.csv`): https 32/67 (6 timeout,
   29 fail), diff vs l7b base exactly 1 line (`agent-sni` 1→0).
   http 387/397 (2 timeout, 8 fail, 134:1, 139:1) — same totals as
