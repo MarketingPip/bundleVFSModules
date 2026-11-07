@@ -174,6 +174,102 @@ class HttpsAgentBase extends HttpAgent {
     });
     this.maxCachedSessions = options?.maxCachedSessions ?? 100;
   }
+
+  // Port of Node lib/https.js:515-594 (Agent.prototype.getName): the http
+  // base name plus the TLS option fields, in Node's exact field order.
+  // The http base (super.getName) already yields e.g. 'localhost::' for {}.
+  // ponytail: ceiling — a real TLS layer would also need the per-request
+  // checkServerIdentity symbol threaded from createConnection (L8); the
+  // symbol key below is faithful to Node's tail but nothing sets it yet.
+  getName(options = {}) {
+    let name = super.getName(options);
+
+    name += ":";
+    if (options.ca) name += options.ca;
+
+    name += ":";
+    if (options.cert) name += options.cert;
+
+    name += ":";
+    if (options.clientCertEngine) name += options.clientCertEngine;
+
+    name += ":";
+    if (options.ciphers) name += options.ciphers;
+
+    name += ":";
+    if (options.key) name += options.key;
+
+    name += ":";
+    if (options.pfx) name += getPfxAgentKey(options.pfx, options.passphrase);
+
+    name += ":";
+    if (options.rejectUnauthorized !== undefined)
+      name += options.rejectUnauthorized;
+
+    name += ":";
+    if (options.servername && options.servername !== options.host)
+      name += options.servername;
+
+    name += ":";
+    if (options.minVersion) name += options.minVersion;
+
+    name += ":";
+    if (options.maxVersion) name += options.maxVersion;
+
+    name += ":";
+    if (options.secureProtocol) name += options.secureProtocol;
+
+    name += ":";
+    if (options.crl) name += options.crl;
+
+    name += ":";
+    if (options.honorCipherOrder !== undefined)
+      name += options.honorCipherOrder;
+
+    name += ":";
+    if (options.ecdhCurve) name += options.ecdhCurve;
+
+    name += ":";
+    if (options.dhparam) name += options.dhparam;
+
+    name += ":";
+    if (options.secureOptions !== undefined) name += options.secureOptions;
+
+    name += ":";
+    if (options.sessionIdContext) name += options.sessionIdContext;
+
+    name += ":";
+    if (options.sigalgs) name += JSON.stringify(options.sigalgs);
+
+    name += ":";
+    if (options.privateKeyIdentifier) name += options.privateKeyIdentifier;
+
+    name += ":";
+    if (options.privateKeyEngine) name += options.privateKeyEngine;
+
+    if (options[kPerRequestCheckServerIdentity])
+      name += `:${options[kPerRequestCheckServerIdentity]}`;
+
+    return name;
+  }
+}
+
+// Port of Node lib/https.js:52 (module-local symbol) and :491-503.
+const kPerRequestCheckServerIdentity = Symbol(
+  "per-request checkServerIdentity",
+);
+
+function getPfxAgentKey(pfx, passphrase) {
+  if (!Array.isArray(pfx)) return pfx;
+
+  let key = "";
+  for (let i = 0; i < pfx.length; i++) {
+    const value = pfx[i];
+    const raw = value?.buf || value;
+    const pass = value?.passphrase || passphrase;
+    key += `:${raw}:${pass}`;
+  }
+  return key;
 }
 
 /** Node's https.Agent is callable without `new` as well. */
