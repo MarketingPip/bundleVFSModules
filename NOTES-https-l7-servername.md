@@ -223,6 +223,17 @@ Target `test-https-agent-sni`: 0 (×3 runs).
   small synchronously-delivered responses — and stays for a
   follow-up lane. Verified: abort-stream-end 0×3, unconsume 0×3,
   sni 0×3, keepalive-free 0×3, allowhalfopen 0×2.
+- Rebase onto main `4f98f142` (PRs #386, #387, #392 L8, #385 L4
+  landed): conflicts in `src/http.js` (kept both L8's
+  `_tlsOptions` stash and L7's `_servername` stash), `src/https.js`
+  (took HEAD's full L4 `getName` — it supersedes L7's minimal
+  servername-suffix override with identical pool-separation
+  semantics — so `src/https.js` drops out of the branch diff and
+  out of the footprint allowlist), and the allowlist itself.
+  Rebased HEAD `8962b311`; sni/agent-getname/abort-stream-end/
+  unconsume/keepalive-free all 0×3 and allowhalfopen 0×2 on the
+  rebased tree; footprint 29/29; build-sandbox/runtime 0,
+  build-vfs 1 (esm.sh transient only).
 - Final tree (CSVs `*-2026-11-07-l7c.csv`): https 32/67 (6 timeout,
   29 fail), diff vs l7b base exactly 1 line (`agent-sni` 1→0).
   http 387/397 (2 timeout, 8 fail, 134:1, 139:1) — same totals as
