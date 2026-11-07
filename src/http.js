@@ -4018,6 +4018,16 @@ export class ClientRequest extends OutgoingMessage {
     if (options.family !== undefined) {
       this._agentOptions.family = options.family;
     }
+    // highWaterMark threads to the agent's connect options the same way
+    // (Node passes request options through to net.connect, and the
+    // socket's readableHighWaterMark becomes the response's:
+    // lib/_http_incoming.js:63 — the IncomingMessage ctor already reads
+    // it from the socket). Without this the socket keeps the default
+    // 64K and res.readableHighWaterMark ignores the option
+    // (test-https-hwm).
+    if (options.highWaterMark !== undefined) {
+      this._agentOptions.highWaterMark = options.highWaterMark;
+    }
     if (agent) {
       try {
         agent.addRequest(this, this._agentOptions);
@@ -5091,6 +5101,9 @@ export class ClientRequest extends OutgoingMessage {
     }
     if (this._agentOptions.localPort !== undefined) {
       factoryOptions.localPort = this._agentOptions.localPort;
+    }
+    if (this._agentOptions.highWaterMark !== undefined) {
+      factoryOptions.highWaterMark = this._agentOptions.highWaterMark;
     }
     if (this.socketPath) {
       factoryOptions.socketPath = this.socketPath;
@@ -10927,6 +10940,14 @@ class AgentBase extends EventEmitter {
     if (options.localPort !== undefined) {
       connectOptions.localPort = options.localPort;
     }
+    // Thread the request's highWaterMark to the socket (stashed on the
+    // request by the ClientRequest ctor, forwarded by createSocket
+    // above): the socket's readableHighWaterMark becomes the response's
+    // (lib/_http_incoming.js:63). Forwarded only when present, like
+    // localAddress/localPort above.
+    if (options.highWaterMark !== undefined) {
+      connectOptions.highWaterMark = options.highWaterMark;
+    }
     const socket = netConnect(connectOptions);
     // AbortSignal (test-http-agent-abort-controller): Node's
     // net.createConnection wires exactly one 'abort' listener on the
@@ -11009,6 +11030,13 @@ class AgentBase extends EventEmitter {
     const localPort = options.localPort ?? req._agentOptions?.localPort;
     if (localPort !== undefined) {
       createOptions.localPort = localPort;
+    }
+    // Thread the request's highWaterMark to the socket (stashed above):
+    // the response IncomingMessage reads it from the socket
+    // (lib/_http_incoming.js:63). Forwarded only when present, like
+    // localAddress/localPort above.
+    if (options.highWaterMark !== undefined) {
+      createOptions.highWaterMark = options.highWaterMark;
     }
     let socket;
     let creationHandled = false;

@@ -685,8 +685,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/https-l9 branch: TLS socket auth surface (server socket
     // authorized/authorizationError port, client cert presentation flag)
     // (src/http.js + src/https.js + working note).
+    // fix/https-client-hwm branch: request highWaterMark threads to the
+    // client socket (stash in _agentOptions, forward in createSocket /
+    // createConnection / _invokeFactory) so res.readableHighWaterMark
+    // reads it (src/http.js + note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-https-l9.md", "src/http.js", "src/https.js"].sort(),
+      ["NOTES-https-client-hwm.md", "src/http.js"].sort(),
     );
   });
 
