@@ -50,6 +50,14 @@ import {
   isIP as netIsIP,
 } from "./net.js";
 import { lookup as dnsLookup } from "./dns.js";
+// Virtual TLS verification for https: clients (src/tls.js owns the
+// hostname check; src/internals/tls-verify.js owns cert parsing and
+// name-based chain trust). No import cycle: neither module imports http.
+import { checkServerIdentity as tlsCheckServerIdentity } from "./tls.js";
+import {
+  parseCertificate as tlsParseCertificate,
+  verifyPeerCertificate as tlsVerifyPeerCertificate,
+} from "./internals/tls-verify.js";
 
 // ---------------------------------------------------------------------------
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
@@ -101,6 +109,30 @@ const emitEvent = RT?.emit;
 // parity harness's global-leak detector and change common's exit
 // handling for every http test — the host process is still intact when
 // servers/clients are constructed in this lane.
+// Node lib/internal/options.js getAllowUnauthorized(): the env var is a
+// DEFAULT that any explicit rejectUnauthorized option overrides; the
+// warning fires once per process on first use. Same globalThis.process
+// read as _insecureHttpParserFlag (never import ./process.js — it would
+// trip the harness's global-leak detector).
+let _tlsAllowUnauthorizedWarned = false;
+function _tlsAllowUnauthorized() {
+  const p = typeof globalThis !== "undefined" ? globalThis.process : undefined;
+  const allow = p?.env?.NODE_TLS_REJECT_UNAUTHORIZED === "0";
+  if (allow && !_tlsAllowUnauthorizedWarned) {
+    _tlsAllowUnauthorizedWarned = true;
+    try {
+      p.emitWarning?.(
+        "Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' " +
+          "makes TLS connections and HTTPS requests insecure by disabling " +
+          "certificate verification.",
+      );
+    } catch {
+      /* the warning is best-effort */
+    }
+  }
+  return allow;
+}
+
 function _insecureHttpParserFlag() {
   const p = typeof globalThis !== "undefined" ? globalThis.process : undefined;
   return (
@@ -3969,6 +4001,16 @@ export class ClientRequest extends OutgoingMessage {
     this._deferredTimeout = undefined;
     this._deferredTimeoutHook = false;
     this.maxHeaderSize = options.maxHeaderSize;
+    // TLS options for https: requests (Node threads them to tls.connect
+    // via the agent; the virtual handshake in _performVirtualRequest
+    // reads them). Stashed for http: too — the gate there never reads
+    // them.
+    this._tlsOptions = {
+      ca: options.ca,
+      rejectUnauthorized: options.rejectUnauthorized,
+      checkServerIdentity: options.checkServerIdentity,
+      servername: options.servername,
+    };
     this.reusedSocket = false;
     this.aborted = false;
     this.upgradeOrConnect = false;
@@ -6143,6 +6185,92 @@ export class ClientRequest extends OutgoingMessage {
     msg.once("close", releaseOnClose);
   }
 
+  // Virtual TLS verification (Node lib/internal/tls/wrap.js
+  // onConnectSecure): the client checks the server's certificate before
+  // any request bytes are delivered. Chain first (the leaf's issuer must
+  // match a CA the client supplied), then hostname identity (the
+  // effective checkServerIdentity: per-request, else the agent's, else
+  // tls.checkServerIdentity). On failure the socket is destroyed with
+  // the verify error — socketErrorListener forwards it to the request —
+  // and the handler never runs. With rejectUnauthorized: false the
+  // response is delivered with socket.authorized === false. Returns
+  // true when the request may proceed.
+  //
+  // The server's certificate comes from its registered TLS options: the
+  // virtual transport has no handshake, so the presented cert is the one
+  // createServer was given. No cert presented (plain http server) skips
+  // the check — the existing round-trip failure owns that case
+  // (test-https-connecting-to-http).
+  // Port of Node lib/_http_agent.js calculateServerName: the TLS
+  // servername is the request's Host header (host part, port stripped)
+  // when present, else options.host; an IP is never a servername ('').
+  // test-https-strict sets Host: agent1 and expects the identity check
+  // against "agent1" (not the connect host localhost).
+  _calculateTlsServerName() {
+    let servername = this.host;
+    const hostHeader = this.getHeader("host");
+    if (typeof hostHeader === "string" && hostHeader.length > 0) {
+      if (hostHeader[0] === "[") {
+        const index = hostHeader.indexOf("]");
+        servername = index === -1 ? hostHeader : hostHeader.substring(1, index);
+      } else {
+        servername = hostHeader.split(":", 1)[0];
+      }
+    }
+    if (netIsIP(servername)) servername = "";
+    return servername;
+  }
+
+  _verifyHttpsPeer(server, sock) {
+    const certPem = server._tlsOptions?.cert;
+    const leafPem = Array.isArray(certPem) ? certPem[0] : certPem;
+    const peerCert = tlsParseCertificate(leafPem);
+    if (peerCert === null) return true;
+    const reqTls = this._tlsOptions ?? {};
+    const agentTls = this.agent?.options ?? {};
+    const ca = reqTls.ca ?? agentTls.ca;
+    // Node lib/internal/tls/wrap.js connect(): the env var is a DEFAULT
+    // that any explicit rejectUnauthorized option overrides
+    // (rejectUnauthorized: !allowUnauthorized, then ...options).
+    const rejectUnauthorized =
+      reqTls.rejectUnauthorized ??
+      agentTls.rejectUnauthorized ??
+      !_tlsAllowUnauthorized();
+    const checkIdentity =
+      reqTls.checkServerIdentity ??
+      agentTls.checkServerIdentity ??
+      tlsCheckServerIdentity;
+    // Node lib/_http_agent.js normalizeServerName + lib/internal/tls/wrap.js
+    // getSessionServerIdentity: an explicit servername wins; otherwise the
+    // Host header's host, else options.host; an empty servername falls
+    // through to the host.
+    let servername = reqTls.servername ?? agentTls.servername;
+    if (servername === undefined) servername = this._calculateTlsServerName();
+    const identityHost = servername || this.host || "localhost";
+    let verifyError = tlsVerifyPeerCertificate(peerCert, ca);
+    if (!verifyError) {
+      // A custom check returns a falsy value on success (false in
+      // test-https-client-checkServerIdentity); Node's returns undefined
+      // or an ERR_TLS_CERT_ALTNAME_INVALID Error.
+      verifyError = checkIdentity(identityHost, peerCert) || null;
+    }
+    if (verifyError) {
+      sock.authorized = false;
+      sock.authorizationError = verifyError.code || verifyError.message;
+      if (rejectUnauthorized !== false) {
+        sock.destroy(verifyError);
+        return false;
+      }
+    } else {
+      sock.authorized = true;
+      // Node lib/internal/tls/wrap.js:652 initializes authorizationError
+      // to null; a verified peer must read null, not undefined
+      // (test-https-strict asserts null on its valid requests).
+      sock.authorizationError = null;
+    }
+    return true;
+  }
+
   async _performVirtualRequest(
     server,
     headers,
@@ -6296,6 +6424,13 @@ export class ClientRequest extends OutgoingMessage {
     // resolved and the request proceeds to connect/write. abort()
     // from this point on is aborting a live request (ECONNRESET),
     // while abort() before this point closes silently.
+    // Virtual TLS handshake (https: only): verify the server's
+    // certificate before any request bytes reach it. On failure the
+    // socket is destroyed with the verify error and the round trip
+    // never starts.
+    if (this.protocol === "https:" && server != null) {
+      if (!this._verifyHttpsPeer(server, sock)) return;
+    }
     this._roundTripStarted = true;
     // The agent assigned the socket; onSocket() already set this.socket
     // and scheduled the assignment-time 'socket' emission. Emit here only

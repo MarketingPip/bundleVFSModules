@@ -695,11 +695,13 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/https-options-boolean-check branch: key/cert/ca type validation
     // (validateKeyOrCertOption port; src/_tls_common.js + src/https.js +
     // src/tls.js + working note).
+    // fix/https-l8-checkServerIdentity branch: virtual TLS verification
+    // (src/http.js + src/tls.js + src/internals/tls-verify.js + note).
     expect(nonDist.sort()).toEqual(
       [
-        "NOTES-https-options-boolean-check.md",
-        "src/_tls_common.js",
-        "src/https.js",
+        "NOTES-https-l8-checkServerIdentity.md",
+        "src/http.js",
+        "src/internals/tls-verify.js",
         "src/tls.js",
       ].sort(),
     );
