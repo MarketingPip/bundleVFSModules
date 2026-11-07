@@ -22,6 +22,14 @@ class HttpsServerBase extends http.Server {
   constructor(options, requestListener) {
     // options may carry key/cert/ca/etc.; the virtual server ignores them.
     super(options, requestListener);
+    // Marker for the shared virtual registry: the port registry is keyed
+    // by port only, so an https client cannot tell a registered https
+    // server from a plain-http one without it — the client must error
+    // (EPROTO, like real Node's failed TLS handshake) instead of
+    // delivering to a plain server (test-https-connecting-to-http).
+    // src/http.js reads this in _performVirtualRequest; http.js cannot
+    // import https.js (circular), so the marker lives here.
+    this._isHttpsServer = true;
     this._tlsOptions = options && typeof options === "object" ? options : {};
     // Store ALPNProtocols as a Buffer like Node's tls.convertALPNProtocols.
     // This is just option storage — no TLS handshake happens in the browser.
