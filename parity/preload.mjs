@@ -129,6 +129,14 @@ function isExtraRedirect(name) {
   // request-agent, url.parse-https.request); the differential guards the
   // other five. Mirrors the _http_agent redirect above.
   if (target === "http" && name === "https") return true;
+  // https tests that require('http') need the shim's IncomingMessage:
+  // the shim's https server builds shim requests, so a test asserting
+  // `s instanceof http.IncomingMessage` (test-https-set-timeout-server)
+  // or extending http.IncomingMessage
+  // (test-https-server-options-incoming-message) fails against native
+  // http — two classes, same name. Mirrors the https redirect above
+  // (PR #232 precedent).
+  if (target === "https" && name === "http") return true;
   // http tests that require('perf_hooks') need the shim's observer
   // registry: test-http-perf_hooks observes {type:"http"} and the entries
   // are emitted by the shim's http instrumentation through the shared
@@ -184,6 +192,15 @@ function polyfillPath(request) {
   // detector. The harness restores the originals snapshotted in preload.mjs.
   // src/http.js itself is untouched.
   if (target === "http" && name === "http") {
+    return path.join(repoRoot, "parity", "http-harness.mjs");
+  }
+  // Harness-only timer-globals restore for http under the https target
+  // (parity/http-harness.mjs): https tests that require('http') get the
+  // shim so the IncomingMessage class identity matches the shim's https
+  // server (test-https-set-timeout-server,
+  // test-https-server-options-incoming-message). src/http.js itself is
+  // untouched.
+  if (target === "https" && name === "http") {
     return path.join(repoRoot, "parity", "http-harness.mjs");
   }
   // Harness-only timer-globals restore for net under the http target

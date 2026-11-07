@@ -25,6 +25,13 @@ const target = process.env.PARITY_TARGET; // e.g. "path" — only redirect this 
 // (same src/net.js module instance), so the connection reaches the server.
 function isExtraRedirect(name) {
   if (target === "http" && name === "net") return true;
+  // https tests that import 'http' need the shim's IncomingMessage:
+  // the shim's https server builds shim requests, so a test asserting
+  // `s instanceof http.IncomingMessage` or extending
+  // http.IncomingMessage fails against native http — two classes, same
+  // name. CJS require path is in preload.mjs. Mirrors the net redirect
+  // above (PR #232 precedent).
+  if (target === "https" && name === "http") return true;
   // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
   // zlib must read the same cell (mirrors Node's load-time capture).
   return target === "zlib" && name === "buffer";
@@ -78,6 +85,13 @@ function polyfillURL(specifier) {
   // preload.mjs.
   if (target === "https" && name === "https") {
     return pathToFileURL(path.join(repoRoot, "parity", "https-harness.mjs"))
+      .href;
+  }
+  // Harness-only timer-globals restore for http under the https target
+  // (parity/http-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs.
+  if (target === "https" && name === "http") {
+    return pathToFileURL(path.join(repoRoot, "parity", "http-harness.mjs"))
       .href;
   }
   // Harness-only timer-globals restore for child_process parity

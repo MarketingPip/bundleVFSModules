@@ -699,8 +699,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (src/http.js + src/tls.js + src/internals/tls-verify.js + note).
     // fix/https-agent-getname branch: https Agent.getName port
     // (src/https.js + working note).
+    // fix/https-harness-http-redirect branch: https tests that
+    // require('http') get the shim (IncomingMessage class identity
+    // matches the shim's https server) via the #232 extra redirect
+    // (parity/preload.mjs + parity/hooks.mjs + note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-https-agent-getname.md", "src/https.js"].sort(),
+      ["NOTES-https-l1r.md", "parity/hooks.mjs", "parity/preload.mjs"].sort(),
     );
   });
 
