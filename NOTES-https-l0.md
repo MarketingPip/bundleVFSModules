@@ -55,3 +55,7 @@ version number`).
 0 by design — this lane keeps connecting-to-http at 0 so L1 can ship
 on top (+2 flips, 0 regressions). set-timeout-server stays 1 here;
 it moves to joint L1+L12 (needs raw TLS transport).
+
+## CI retrigger (2026-11-07)
+- Notes-only synchronize push: the rebased head got zero check runs
+  (CI no-show); this commit retriggers CI with no code change.
