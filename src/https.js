@@ -279,7 +279,15 @@ export function Agent(...args) {
 Object.setPrototypeOf(Agent, HttpsAgentBase);
 Agent.prototype = HttpsAgentBase.prototype;
 
-export const globalAgent = new Agent({
+/** The default agent used when none is supplied. */
+// ponytail: `let`, not `const` — Node exposes globalAgent as an accessor
+// (lib/http.js:220 get/set, read by lib/https.js:649/681) so
+// `https.globalAgent = agent` rebinds it; the default-export object below
+// carries the matching setter, and the request path reads this binding
+// (request() passes it as _createClientRequest's defaultAgent), so
+// assignment routes new requests to the assigned agent. Unassigned, the
+// default keep-alive agent stands.
+export let globalAgent = new Agent({
   keepAlive: true,
   scheduling: "lifo",
   timeout: 5000,
@@ -307,5 +315,13 @@ export default {
   request,
   get,
   Agent,
-  globalAgent,
+  // ponytail: accessor, not a snapshot — matches Node's globalAgent
+  // getter/setter (lib/http.js:220); assignment rebinds the module-scope
+  // binding above, which the request path reads.
+  get globalAgent() {
+    return globalAgent;
+  },
+  set globalAgent(value) {
+    globalAgent = value;
+  },
 };

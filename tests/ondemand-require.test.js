@@ -712,8 +712,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fields thread into _agentOptions (getName keys) + non-keep-alive
     // agent skips the early request destroy at response completion
     // (src/http.js + working note).
+    // fix/https-globalagent-rebind branch: https.globalAgent rebind
+    // (export let + default-export accessor, #363 pattern ported to
+    // src/https.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-https-l5.md", "src/http.js"].sort(),
+      ["NOTES-https-globalagent-rebind.md", "src/https.js"].sort(),
     );
   });
 
