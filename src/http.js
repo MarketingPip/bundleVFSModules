@@ -7668,10 +7668,18 @@ function _socketHttpRoundTrip(
     // Size budget, same rule as the pair budget above (Node's tickOnSocket,
     // lib/_http_client.js:1088; 0 means the default in the binding).
     parser.maxHeaderSize = maxHeaderSize || 16 * 1024;
+    // A previous round trip on a reused parser may have set the
+    // double-response skip flag (see onHeadersComplete); a new round
+    // trip starts unskipped.
+    parser._skipPendingData = false;
     // HEAD responses never have a body, regardless of framing.
     parser.isHeadResponse = method === "HEAD";
     const chunks = [];
     let info = null;
+    // Whether a final (non-1xx) response was already delivered for this
+    // request: the double-response guard in onHeadersComplete below
+    // (Node lib/_http_client.js parserOnIncomingClient).
+    let finalDelivered = false;
     // Deferred completion (see onMessageComplete): set when a message
     // completes, consumed by onData/onSockClose after the current
     // execute()/end() returns, so a trailing parse error in the same
@@ -7679,6 +7687,25 @@ function _socketHttpRoundTrip(
     let pendingResult = null;
     parser.onHeadersComplete = (i) => {
       info = i;
+      // Double response (Node lib/_http_client.js:881-897): headers for
+      // a second response while this request already has one mean the
+      // server sent two responses on one connection — destroy the
+      // socket, rewind the parser to the first message and skip the
+      // pending data. The first response still completes from the data
+      // already parsed (test-http-client-leaky-with-double-response).
+      // 1xx responses never set finalDelivered, so a 1xx after a final
+      // response is also a double response. The socket destroy is
+      // safe mid-execute: close fires via nextTick (net.js _destroy),
+      // after onData settles with the first response.
+      if (finalDelivered) {
+        try {
+          sock.destroy();
+        } catch {
+          /* already destroyed */
+        }
+        parser._skipPendingData = true;
+        return;
+      }
       // CONNECT responses are tunnels, not responses: real Node delivers
       // EVERY status via the request's 'connect' event, never 'response'
       // (probed v24.22.1: 100, 200, 201, 404, 407, 500 all 'connect').
@@ -7688,6 +7715,7 @@ function _socketHttpRoundTrip(
       // round trip's data listener, so later tunnel bytes flow only to
       // the app's socket listeners.
       if (method === "CONNECT") {
+        finalDelivered = true;
         let head = Buffer.alloc(0);
         try {
           head = parser.takeRemainder();
@@ -7718,6 +7746,7 @@ function _socketHttpRoundTrip(
       // so post-header bytes stay buffered for the app; the caller
       // resumes after 'upgrade' is emitted.
       if (info.statusCode === 101 && _requestHasUpgradeHeader(headers)) {
+        finalDelivered = true;
         try {
           sock.pause();
         } catch {
@@ -7757,6 +7786,9 @@ function _socketHttpRoundTrip(
         }
         return;
       }
+      // A final (non-1xx) response: a second message's headers in the
+      // same execute now hit the double-response guard above.
+      finalDelivered = true;
       // Streaming: notify the caller immediately so it can emit 'response'.
       if (typeof onHeaders === "function") {
         try {
@@ -8004,6 +8036,177 @@ const _validateServerTimeout = (name, value) => {
 const kConnectionsCheckingInterval = Symbol.for(
   "bundleVFSModules.http.kConnectionsCheckingInterval",
 );
+
+// Serialize a fully-buffered dispatch-created response (headers +
+// body, with Node framing: implicit Content-Length, chunked when
+// no length framing, trailer-forced chunked) and write it to the
+// socket as one delivery. Extracted verbatim from
+// _finishSocketResponse's buffered branch so the same bytes go out
+// whether delivery happens synchronously in end() (wire order vs a
+// handler's later raw socket.write — real Node delivers in end())
+// or at finish time. Pure in (socket, req, res): no server state.
+function _writeBufferedResponse(socket, req, res) {
+  const head = res._header || "HTTP/1.1 200 OK\r\n\r\n";
+  const body = res._getBody();
+  const noBodyStatus = res._hasBody === false;
+  const sendBody = body.length > 0 && req.method !== "HEAD" && !noBodyStatus;
+  let headOut = head;
+  // hasHeader() only sees kOutHeaders (the setHeader API);
+  // writeHead(obj) headers live in _renderedHeaders, so
+  // Content-Length must be checked in both stores — with only
+  // hasHeader(), a writeHead content-length was invisible here and
+  // the response was framed chunked ON TOP of the rendered
+  // Content-Length header (test-http-get-pipeline-problem).
+  const rendered = res._renderedHeaders || {};
+  const hasCL =
+    res.hasHeader("content-length") || rendered["content-length"] !== undefined;
+  const hasTE = res.hasHeader("transfer-encoding");
+  const isHttp10 = res._reqHttpVersion === "1.0";
+  // A Trailer header forces chunked framing (probed v24.22.1: Trailer
+  // + end(body) with no CL/TE frames chunked, terminator carrying
+  // the trailers). addTrailers WITHOUT the header keeps
+  // Content-Length and drops the trailers, so only the header
+  // triggers this. The header lives in either store (setHeader vs
+  // writeHead(obj)), like Content-Length above.
+  const hasTrailerHeader =
+    res.hasHeader("trailer") || rendered["trailer"] !== undefined;
+  // Node frames with Content-Length only when the header block was
+  // rendered implicitly by end() itself, so the length is known before
+  // anything is committed. An explicit writeHead() commits the headers
+  // first; the body that follows is chunked instead.
+  // (test-http-chunk-extensions-limit block 3)
+  // Node's _storeHeader adds this Content-Length only when the app
+  // did NOT remove it (lib/_http_outgoing.js: `!this._removedContLen`
+  // — re-adding a removed header breaks the client's header view:
+  // test-http-remove-header-stays-removed asserts the client sees
+  // only the Date header). When the length IS added, record it in
+  // `rendered` — the header is on the wire, so the keep-alive
+  // framing decision below must see the length framing.
+  const implicitHeader = res._headersImplicit === true;
+  if (
+    !hasCL &&
+    !hasTE &&
+    !noBodyStatus &&
+    !isHttp10 &&
+    implicitHeader &&
+    !hasTrailerHeader &&
+    !res._removedContLen
+  ) {
+    // Frame the body like Node does when its length is known at end():
+    // HEAD responses carry the length but no bytes.
+    // (Not for HTTP/1.0: Node closes instead of auto-framing.)
+    headOut = head.replace(/\r\n$/, `Content-Length: ${body.length}\r\n\r\n`);
+    rendered["content-length"] = String(body.length);
+  }
+  // TE can come from setHeader (kOutHeaders) or writeHead(obj)
+  // (_renderedHeaders). For HTTP/1.0 with a `TE: chunked` request, Node
+  // uses chunked encoding even though the app didn't set the header.
+  let te = hasTE
+    ? String(res.getHeader("transfer-encoding"))
+    : rendered["transfer-encoding"] || "";
+  if (hasTrailerHeader && !hasCL && !hasTE && !noBodyStatus && !isHttp10) {
+    // Trailers need chunked framing: without this, the CL branch
+    // above (or the raw fallthrough below) would swallow them
+    // (test-http-raw-headers response half). The chunked branch
+    // below appends _chunkTerminator, which renders the trailers.
+    te = "chunked";
+    headOut = headOut.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
+    rendered["transfer-encoding"] = "chunked";
+  }
+  if (
+    !te &&
+    !hasCL &&
+    !noBodyStatus &&
+    !isHttp10 &&
+    !implicitHeader &&
+    req.method !== "HEAD"
+  ) {
+    // Explicit writeHead() committed the headers with no length
+    // framing: the buffered body is sent chunked, like Node.
+    te = "chunked";
+    headOut = headOut.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
+    rendered["transfer-encoding"] = "chunked";
+  }
+  if (!te && !hasCL && isHttp10 && res._reqHadTE && !noBodyStatus) {
+    te = "chunked";
+    headOut = headOut.replace(/\r\n$/, "Transfer-Encoding: chunked\r\n\r\n");
+    rendered["transfer-encoding"] = "chunked";
+  }
+  // Mark delivered BEFORE the first write: a throw mid-branch must
+  // not let the finish path re-deliver (and duplicate) the response.
+  res._bytesDelivered = true;
+  if (/chunked/i.test(te)) {
+    // Coalesce headers + body + terminator into one write like Node
+    // (test counts data events per response, not per write). Two
+    // separate writes split the response into two 'data' events,
+    // which breaks clients that increment a counter per event
+    // (e.g. test-http-1.0-keep-alive).
+    // The body is a Buffer of raw bytes: it must reach the wire
+    // byte-exact. Interpolating body.toString() (UTF-8) inflates
+    // or replaces non-ASCII bytes while the chunk-size line still
+    // declares the original byte count, desynchronizing the
+    // client's parser ("expected CRLF after chunk data" on any
+    // binary body — test-http-get-pipeline-problem). Build the
+    // coalesced write as Buffers instead.
+    // Node's _send makes FIVE separate conn.write calls for an
+    // end(chunk) chunked response (lib/_http_outgoing.js:382-411,
+    // 1141-1177): header+size line, CRLF, body, CRLF, terminator —
+    // the header rides the FIRST chunk via _send's prepend
+    // (test-http-response-cork counts exactly 5 socket.write
+    // calls). Coalescing into one write hid the call count. But
+    // five separate writes arrive as five 'data' events on the
+    // shim's virtual transport (no TCP coalescing), which breaks
+    // pipelined raw-socket clients that advance one request per
+    // event (test-http-1.0-keep-alive,
+    // test-http-server-keep-alive-defaults — the buffered branch
+    // serves pipelined responses whose socket is assigned late).
+    // So the split writes run under a socket cork: the five calls
+    // still happen, but the socket's _writev flushes them as ONE
+    // peer delivery (src/net.js), i.e. one 'data' event — the same
+    // observable shape as one TCP segment on real Node.
+    socket.cork();
+    try {
+      if (sendBody) {
+        // Call 1 is header + size digits WITHOUT the line CRLF:
+        // Node's first _send writes the size bare ("3") and the
+        // CRLF is the second _send call. Appending "\r\n" here
+        // would emit a spurious empty line between size and data
+        // and desync the client's chunk parser.
+        socket.write(
+          Buffer.concat([
+            Buffer.from(headOut, "latin1"),
+            Buffer.from(`${body.length.toString(16)}`, "latin1"),
+          ]),
+        );
+        socket.write(Buffer.from("\r\n", "latin1"));
+        socket.write(body);
+        socket.write(Buffer.from("\r\n", "latin1"));
+        socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
+      } else if (!noBodyStatus && req.method !== "HEAD") {
+        // Send terminator only if a body is allowed. 204/304 (and 1xx)
+        // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
+        // HEAD likewise gets headers-only: real Node sends no terminator
+        // for HEAD+chunked (probed v24.22.1), and one parses as a new
+        // message start on the client (test-http-head-request).
+        // Node still sends header and terminator as two writes.
+        socket.write(headOut);
+        socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
+      } else {
+        // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
+        socket.write(headOut);
+      }
+    } finally {
+      socket.uncork();
+    }
+  } else if (sendBody) {
+    // Coalesce headers + body into one write (Node behavior; the test
+    // counts 'data' events per response, not per write). Buffer
+    // concat, not string concat — the body is raw bytes (see above).
+    socket.write(Buffer.concat([Buffer.from(headOut, "latin1"), body]));
+  } else {
+    socket.write(headOut);
+  }
+}
 
 class ServerBase extends EventEmitter {
   constructor(optionsOrListener, requestListener) {
@@ -8643,6 +8846,43 @@ class ServerBase extends EventEmitter {
       parserFreed: false, // socket.parser.free() called (exactly once)
     };
     socket._httpState = state;
+    // Raw user writes must not overtake a finished-but-undelivered
+    // buffered response: real Node writes the response bytes inside
+    // end(), before the next statement runs, so a handler's synchronous
+    // req.socket.write() after res.end() goes out AFTER the response.
+    // The shim buffers the end chunk until finish (a nextTick later),
+    // so the raw write would overtake it on the wire — the client
+    // parsed the trailing bytes as THE response
+    // (test-http-client-leaky-with-double-response). Flush the pending
+    // response from the socket's own write path, so the wire order is
+    // response-then-raw. Scoped to fully-buffered dispatch responses
+    // (headers not yet flushed); streaming responses have no
+    // finished-undelivered state to flush. _bytesDelivered (set before
+    // the helper's first write) keeps the helper's own writes from
+    // re-flushing, and the server's dispatch gating (the next request
+    // is not dispatched until the in-flight response finishes) means
+    // no later finished response can be pending during a delivery.
+    const _origSocketWrite = socket.write.bind(socket);
+    socket.write = function (...args) {
+      const res = state.lastResponse;
+      if (
+        res &&
+        res.finished &&
+        !res._headerFlushed &&
+        !res._bytesDelivered &&
+        res._serverReqNo !== undefined &&
+        !socket.destroyed &&
+        socket.constructor.name !== "FakeSocket"
+      ) {
+        try {
+          _writeBufferedResponse(socket, res.req, res);
+        } catch {
+          /* socket write failed mid-branch; the flag is already set, so
+             finish skips re-delivery instead of duplicating the bytes */
+        }
+      }
+      return _origSocketWrite(...args);
+    };
     // Real Node installs setEncoding as an OWN property on HTTP server
     // sockets that throws for any argument (probed v24.22.1: own property
     // on http server sockets, absent on plain net server sockets, where
@@ -10014,178 +10254,8 @@ class ServerBase extends EventEmitter {
           /* ignore */
         }
       }
-    } else if (!socket.destroyed) {
-      const head = res._header || "HTTP/1.1 200 OK\r\n\r\n";
-      const body = res._getBody();
-      const noBodyStatus = res._hasBody === false;
-      const sendBody =
-        body.length > 0 && req.method !== "HEAD" && !noBodyStatus;
-      let headOut = head;
-      // hasHeader() only sees kOutHeaders (the setHeader API);
-      // writeHead(obj) headers live in _renderedHeaders, so
-      // Content-Length must be checked in both stores — with only
-      // hasHeader(), a writeHead content-length was invisible here and
-      // the response was framed chunked ON TOP of the rendered
-      // Content-Length header (test-http-get-pipeline-problem).
-      const rendered = res._renderedHeaders || {};
-      const hasCL =
-        res.hasHeader("content-length") ||
-        rendered["content-length"] !== undefined;
-      const hasTE = res.hasHeader("transfer-encoding");
-      const isHttp10 = res._reqHttpVersion === "1.0";
-      // A Trailer header forces chunked framing (probed v24.22.1: Trailer
-      // + end(body) with no CL/TE frames chunked, terminator carrying
-      // the trailers). addTrailers WITHOUT the header keeps
-      // Content-Length and drops the trailers, so only the header
-      // triggers this. The header lives in either store (setHeader vs
-      // writeHead(obj)), like Content-Length above.
-      const hasTrailerHeader =
-        res.hasHeader("trailer") || rendered["trailer"] !== undefined;
-      // Node frames with Content-Length only when the header block was
-      // rendered implicitly by end() itself, so the length is known before
-      // anything is committed. An explicit writeHead() commits the headers
-      // first; the body that follows is chunked instead.
-      // (test-http-chunk-extensions-limit block 3)
-      // Node's _storeHeader adds this Content-Length only when the app
-      // did NOT remove it (lib/_http_outgoing.js: `!this._removedContLen`
-      // — re-adding a removed header breaks the client's header view:
-      // test-http-remove-header-stays-removed asserts the client sees
-      // only the Date header). When the length IS added, record it in
-      // `rendered` — the header is on the wire, so the keep-alive
-      // framing decision below must see the length framing.
-      const implicitHeader = res._headersImplicit === true;
-      if (
-        !hasCL &&
-        !hasTE &&
-        !noBodyStatus &&
-        !isHttp10 &&
-        implicitHeader &&
-        !hasTrailerHeader &&
-        !res._removedContLen
-      ) {
-        // Frame the body like Node does when its length is known at end():
-        // HEAD responses carry the length but no bytes.
-        // (Not for HTTP/1.0: Node closes instead of auto-framing.)
-        headOut = head.replace(
-          /\r\n$/,
-          `Content-Length: ${body.length}\r\n\r\n`,
-        );
-        rendered["content-length"] = String(body.length);
-      }
-      // TE can come from setHeader (kOutHeaders) or writeHead(obj)
-      // (_renderedHeaders). For HTTP/1.0 with a `TE: chunked` request, Node
-      // uses chunked encoding even though the app didn't set the header.
-      let te = hasTE
-        ? String(res.getHeader("transfer-encoding"))
-        : rendered["transfer-encoding"] || "";
-      if (hasTrailerHeader && !hasCL && !hasTE && !noBodyStatus && !isHttp10) {
-        // Trailers need chunked framing: without this, the CL branch
-        // above (or the raw fallthrough below) would swallow them
-        // (test-http-raw-headers response half). The chunked branch
-        // below appends _chunkTerminator, which renders the trailers.
-        te = "chunked";
-        headOut = headOut.replace(
-          /\r\n$/,
-          "Transfer-Encoding: chunked\r\n\r\n",
-        );
-        rendered["transfer-encoding"] = "chunked";
-      }
-      if (
-        !te &&
-        !hasCL &&
-        !noBodyStatus &&
-        !isHttp10 &&
-        !implicitHeader &&
-        req.method !== "HEAD"
-      ) {
-        // Explicit writeHead() committed the headers with no length
-        // framing: the buffered body is sent chunked, like Node.
-        te = "chunked";
-        headOut = headOut.replace(
-          /\r\n$/,
-          "Transfer-Encoding: chunked\r\n\r\n",
-        );
-        rendered["transfer-encoding"] = "chunked";
-      }
-      if (!te && !hasCL && isHttp10 && res._reqHadTE && !noBodyStatus) {
-        te = "chunked";
-        headOut = headOut.replace(
-          /\r\n$/,
-          "Transfer-Encoding: chunked\r\n\r\n",
-        );
-        rendered["transfer-encoding"] = "chunked";
-      }
-      if (/chunked/i.test(te)) {
-        // Coalesce headers + body + terminator into one write like Node
-        // (test counts data events per response, not per write). Two
-        // separate writes split the response into two 'data' events,
-        // which breaks clients that increment a counter per event
-        // (e.g. test-http-1.0-keep-alive).
-        // The body is a Buffer of raw bytes: it must reach the wire
-        // byte-exact. Interpolating body.toString() (UTF-8) inflates
-        // or replaces non-ASCII bytes while the chunk-size line still
-        // declares the original byte count, desynchronizing the
-        // client's parser ("expected CRLF after chunk data" on any
-        // binary body — test-http-get-pipeline-problem). Build the
-        // coalesced write as Buffers instead.
-        // Node's _send makes FIVE separate conn.write calls for an
-        // end(chunk) chunked response (lib/_http_outgoing.js:382-411,
-        // 1141-1177): header+size line, CRLF, body, CRLF, terminator —
-        // the header rides the FIRST chunk via _send's prepend
-        // (test-http-response-cork counts exactly 5 socket.write
-        // calls). Coalescing into one write hid the call count. But
-        // five separate writes arrive as five 'data' events on the
-        // shim's virtual transport (no TCP coalescing), which breaks
-        // pipelined raw-socket clients that advance one request per
-        // event (test-http-1.0-keep-alive,
-        // test-http-server-keep-alive-defaults — the buffered branch
-        // serves pipelined responses whose socket is assigned late).
-        // So the split writes run under a socket cork: the five calls
-        // still happen, but the socket's _writev flushes them as ONE
-        // peer delivery (src/net.js), i.e. one 'data' event — the same
-        // observable shape as one TCP segment on real Node.
-        socket.cork();
-        try {
-          if (sendBody) {
-            // Call 1 is header + size digits WITHOUT the line CRLF:
-            // Node's first _send writes the size bare ("3") and the
-            // CRLF is the second _send call. Appending "\r\n" here
-            // would emit a spurious empty line between size and data
-            // and desync the client's chunk parser.
-            socket.write(
-              Buffer.concat([
-                Buffer.from(headOut, "latin1"),
-                Buffer.from(`${body.length.toString(16)}`, "latin1"),
-              ]),
-            );
-            socket.write(Buffer.from("\r\n", "latin1"));
-            socket.write(body);
-            socket.write(Buffer.from("\r\n", "latin1"));
-            socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
-          } else if (!noBodyStatus && req.method !== "HEAD") {
-            // Send terminator only if a body is allowed. 204/304 (and 1xx)
-            // MUST NOT have a body, so no chunked terminator (RFC 2616 10.2.5).
-            // HEAD likewise gets headers-only: real Node sends no terminator
-            // for HEAD+chunked (probed v24.22.1), and one parses as a new
-            // message start on the client (test-http-head-request).
-            // Node still sends header and terminator as two writes.
-            socket.write(headOut);
-            socket.write(Buffer.from(res._chunkTerminator(), "latin1"));
-          } else {
-            // For noBodyStatus (204/304/1xx), send nothing more; headers already written.
-            socket.write(headOut);
-          }
-        } finally {
-          socket.uncork();
-        }
-      } else if (sendBody) {
-        // Coalesce headers + body into one write (Node behavior; the test
-        // counts 'data' events per response, not per write). Buffer
-        // concat, not string concat — the body is raw bytes (see above).
-        socket.write(Buffer.concat([Buffer.from(headOut, "latin1"), body]));
-      } else {
-        socket.write(headOut);
-      }
+    } else if (!socket.destroyed && !res._bytesDelivered) {
+      _writeBufferedResponse(socket, req, res);
     }
     const maxOk =
       this.maxRequestsPerSocket === 0 || reqNo < this.maxRequestsPerSocket;
