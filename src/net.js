@@ -36,6 +36,7 @@
 import { Duplex } from "./stream.js";
 import { EventEmitter } from "./events.js";
 import { undestroy as undestroyStream } from "./stream/destroy.js";
+import { constants as osConstants } from "./os.js";
 // ponytail: node:fs is imported ONLY for existsSync on pipe-bind parent
 // dirs (BoundSocket EACCES case). In the parity harness this resolves to
 // real fs, so the check sees the real tmpdir; in the browser build esbuild
@@ -209,6 +210,45 @@ function errConnRefused(address, port) {
     `connect ECONNREFUSED ${address}:${port}`,
     { errno: -111, address, port },
   );
+}
+
+// libuv errno -> name, via the canonical os.constants.errno table (Linux
+// values: ENETUNREACH 101, ECONNREFUSED 111, ...). NOTE: util's
+// getSystemErrorName is NOT used here — its systemErrorMap is shifted by 7
+// in the network range (-101 reads ESHUTDOWN there), so it would report the
+// wrong code for connect errnos. Lazily built once; first name wins on
+// duplicate values (EAGAIN before EWOULDBLOCK), matching Node.
+let _errnoNameByValue = null;
+function errnoNameForUv(errno) {
+  if (_errnoNameByValue === null) {
+    _errnoNameByValue = new Map();
+    for (const [name, value] of Object.entries(osConstants.errno)) {
+      if (!_errnoNameByValue.has(value)) _errnoNameByValue.set(value, name);
+    }
+  }
+  return _errnoNameByValue.get(-errno);
+}
+
+// Mirrors Node lib/net.js internalConnect + ExceptionWithHostPort: a libuv
+// errno from _handle.connect becomes `connect <CODE> <address>:<port>`.
+function errConnectErrno(errno, address, port) {
+  const code = errnoNameForUv(errno) ?? `Unknown system error ${errno}`;
+  return errnoError(code, "connect", `connect ${code} ${address}:${port}`, {
+    errno,
+    address,
+    port,
+  });
+}
+
+// Normalizes a fake _handle.connect return / oncomplete status to an Error:
+// a negative libuv errno maps to its code; anything else passes through
+// (a real libuv handle only ever returns a negative errno or 0).
+function connectFailureToError(err, address, port) {
+  if (typeof err === "number" && err < 0) {
+    return errConnectErrno(err, address, port);
+  }
+  if (err instanceof Error) return err;
+  return new Error(String(err));
 }
 function errConnRefusedBare() {
   // Node's connection failure without an IP literal host (the DNS /
@@ -1723,6 +1763,49 @@ Socket.prototype._doConnect = function _doConnect(options, pipe) {
       defer(() => this._connectFailed(errIpBlocked(address)));
       return;
     }
+  }
+
+  // Foreign-handle connect (Node lib/net.js internalConnect): a pre-existing
+  // _handle with a `connect` drives the dial — a non-zero libuv return
+  // destroys the socket with that errno (ExceptionWithHostPort). The shim's
+  // own VirtualHandle has no `connect`, and adopted BoundSockets get a
+  // VirtualHandle, so this only fires for foreign (e.g. test-faked) handles.
+  // A zero return means the handle owns the connection from here (async
+  // completion via req.oncomplete); never fall through to the virtual server
+  // lookup, which would be a fake success.
+  // ponytail: ceiling — a fake handle reporting async success has no
+  // transport in the shim, so the socket stays connecting (as in Node, where
+  // the handle would own I/O from here); no vendored test covers that path.
+  if (typeof this._handle?.connect === "function") {
+    const self = this;
+    const req = {
+      address,
+      port,
+      oncomplete(status) {
+        if (status) {
+          self._connectFailed(connectFailureToError(status, address, port));
+        }
+      },
+    };
+    let err;
+    try {
+      err = pipe
+        ? this._handle.connect(req, address)
+        : this._handle.connect(req, address, port);
+    } catch (e) {
+      // A throwing fake fails the connect async, like a sync-throwing lookup
+      // — never a connect() throw.
+      defer(() =>
+        this._connectFailed(e instanceof Error ? e : new Error(String(e))),
+      );
+      return;
+    }
+    if (err) {
+      const connectErr = connectFailureToError(err, address, port);
+      defer(() => this._connectFailed(connectErr));
+      return;
+    }
+    return;
   }
 
   this._host = host;
