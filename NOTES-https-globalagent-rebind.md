@@ -24,3 +24,11 @@ base 27 pass / 6 timeout / 34 fail; branch 28 pass / 6 timeout / 33 fail.
 Exactly 1 changed line: test-https-client-override-global-agent 1 -> 0.
 Zero regressions. Base CSV: hidden_files/fast-sweep/https-sweep-2026-11-07.csv;
 branch CSV: hidden_files/fast-sweep/https-l3-branch-2026-11-07.csv.
+
+## CI no-show (2026-11-07, round 2)
+Both pushed heads (ec8ad1c8, then rebased 4b4916b4 onto main 44d1ed84)
+got ZERO check runs / zero workflow runs across ~2.5h of polling, while
+CI ran green for other wave-3 lanes in the same window (repo-wide CI
+healthy). Rebase + force-push did not unstick it; this notes-only commit
+is the synchronize-push retrigger. If CI still shows nothing, the lane
+is blocked on a GitHub-side trigger failure, not on the code.
