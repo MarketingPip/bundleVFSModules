@@ -677,8 +677,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // reentrancy guard, resOnFinish end() fallback, agent-less socket
     // close on response end) + buffered finish must not write to an
     // already-ended socket (src/http.js + src/_http_parser.js + note).
+    // docs/http-hitlist-388 branch: HITLIST + measured-rates sync
+    // (http 382 -> 388; PRs #374, #376, #379, #381).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-conn-close-reuse.md", "src/http.js"].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
