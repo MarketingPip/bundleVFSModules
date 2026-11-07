@@ -681,8 +681,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (src/http.js + working note).
     // docs/http-hitlist-378 branch: HITLIST + measured-rates sync
     // (374 -> 378; PRs #369, #370, #372, #373).
+    // fix/http-dns-error branch: DNS-lookup-first for the fetch path —
+    // definitive getaddrinfo errors (ENOTFOUND/EAI_FAIL) surface on the
+    // request instead of an uncaught undici fetch failure
+    // (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-custom-lookup.md", "src/http.js", "src/net.js"].sort(),
+      ["NOTES-http-dns-error.md", "src/http.js"].sort(),
     );
   });
 
