@@ -450,6 +450,9 @@ export class Server extends EventEmitter {
       options = {};
     }
     this._options = { ...(options || {}) };
+    // Node: the TLS Server constructor builds its shared secure context,
+    // which validates key/cert/ca types (lib/internal/tls/wrap.js:1626).
+    createSecureContext(this._options);
     this.listening = false;
     this._connections = 0;
     if (typeof connectionListener === "function") {

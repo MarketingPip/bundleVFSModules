@@ -692,8 +692,16 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/https-client-plain-http-error branch: https client errors
     // (EPROTO) against a plain-http virtual server instead of
     // delivering to it (src/http.js gate + src/https.js marker + note).
+    // fix/https-options-boolean-check branch: key/cert/ca type validation
+    // (validateKeyOrCertOption port; src/_tls_common.js + src/https.js +
+    // src/tls.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-https-l0.md", "src/http.js", "src/https.js"].sort(),
+      [
+        "NOTES-https-options-boolean-check.md",
+        "src/_tls_common.js",
+        "src/https.js",
+        "src/tls.js",
+      ].sort(),
     );
   });
 

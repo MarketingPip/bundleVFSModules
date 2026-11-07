@@ -7,6 +7,7 @@
 // browsers do not let pages configure TLS.
 
 import http, { Agent as HttpAgent } from "./http.js";
+import { createSecureContext } from "./_tls_common.js";
 
 // ---------------------------------------------------------------------------
 // Runtime bridge (guarded: rewritten to the sandbox scope at load time,
@@ -31,6 +32,11 @@ class HttpsServerBase extends http.Server {
     // import https.js (circular), so the marker lives here.
     this._isHttpsServer = true;
     this._tlsOptions = options && typeof options === "object" ? options : {};
+    // Node: the TLS Server constructor builds its shared secure context,
+    // which validates key/cert/ca types (lib/internal/tls/wrap.js:1626 via
+    // createSecureContext -> configSecureContext). Validated here, result
+    // discarded — no TLS stack exists to hold it.
+    createSecureContext(this._tlsOptions);
     // Store ALPNProtocols as a Buffer like Node's tls.convertALPNProtocols.
     // This is just option storage — no TLS handshake happens in the browser.
     // Node's rule: if ALPNProtocols is set, convert it; else if ALPNCallback
@@ -85,6 +91,7 @@ class HttpsServerBase extends http.Server {
 
   setSecureContext(options) {
     if (options && typeof options === "object") {
+      createSecureContext(options);
       this._tlsOptions = { ...this._tlsOptions, ...options };
       if (options.ALPNProtocols !== undefined) {
         this.ALPNProtocols = _convertALPNProtocols(options.ALPNProtocols);
