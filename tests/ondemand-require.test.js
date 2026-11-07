@@ -678,11 +678,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // close on response end) + buffered finish must not write to an
     // already-ended socket (src/http.js + src/_http_parser.js + note).
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-http-foreign-duplex.md",
-        "src/_http_parser.js",
-        "src/http.js",
-      ].sort(),
+      ["NOTES-http-conn-close-reuse.md", "src/http.js"].sort(),
     );
   });
 
