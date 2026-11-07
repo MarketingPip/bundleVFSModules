@@ -685,8 +685,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // definitive getaddrinfo errors (ENOTFOUND/EAI_FAIL) surface on the
     // request instead of an uncaught undici fetch failure
     // (src/http.js + working note).
+    // docs/http-hitlist-382 branch: HITLIST + measured-rates sync
+    // (http 378 -> 382, net 72 -> 87; PRs #356, #375, #378).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-dns-error.md", "src/http.js"].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
