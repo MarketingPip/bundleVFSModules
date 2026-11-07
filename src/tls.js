@@ -568,79 +568,233 @@ export function convertALPNProtocols(protocols, out) {
 }
 
 // ---------------------------------------------------------------------------
-// checkServerIdentity — pure hostname matching (no chain verification)
+// checkServerIdentity — port of Node lib/tls.js checkServerIdentity
+// (Node v24.20.0). Pure hostname matching against the peer certificate's
+// SANs with CN fallback; returns undefined on match, an
+// ERR_TLS_CERT_ALTNAME_INVALID Error otherwise (same .code/.reason/.host/
+// .cert shape as Node's lib/internal/errors.js entry).
+//
+// Honesty note: this checks the *hostname* only. Chain trust is separate
+// (verifyPeerCertificate in ./internals/tls-verify.js, name-based — the
+// virtual transport has no real handshake to verify signatures against),
+// so `undefined` here means "hostname matches", NOT "certificate is
+// trusted".
 // ---------------------------------------------------------------------------
 
-function isIPHost(host) {
+function _tlsAltnameInvalid(reason, host, cert) {
+  const err = new Error(
+    `Hostname/IP does not match certificate's altnames: ${reason}`,
+  );
+  err.code = "ERR_TLS_CERT_ALTNAME_INVALID";
+  err.reason = reason;
+  err.host = host;
+  err.cert = cert;
+  return err;
+}
+
+function _unfqdn(host) {
+  return host.replace(/[.]$/, "");
+}
+
+// String#toLowerCase() is locale-sensitive so Node lowercases ASCII only.
+function _asciiLower(c) {
+  return String.fromCharCode(32 + c.charCodeAt(0));
+}
+
+function _splitHost(host) {
+  return _unfqdn(host).replace(/[A-Z]/g, _asciiLower).split(".");
+}
+
+// Node lib/tls.js check(): left-most-label wildcards only (RFC 6125),
+// including partial wildcards (f*o.example.com) and the *.tld ban.
+function _checkName(hostParts, pattern, wildcards) {
+  // Empty strings, null, undefined, etc. never match.
+  if (!pattern) return false;
+  const patternParts = _splitHost(pattern);
+  if (hostParts.length !== patternParts.length) return false;
+  // Pattern has empty components, e.g. "bad..example.com".
+  if (patternParts.includes("")) return false;
+  const isBad = (s) => /[^\u0021-\u007F]/u.test(s);
+  if (patternParts.some(isBad)) return false;
+  // Check host parts from right to left first.
+  for (let i = hostParts.length - 1; i > 0; i -= 1) {
+    if (hostParts[i] !== patternParts[i]) return false;
+  }
+  const hostSubdomain = hostParts[0];
+  const patternSubdomain = patternParts[0];
+  const patternSubdomainParts = patternSubdomain.split("*", 3);
+  // Short-circuit when the subdomain does not contain a wildcard.
+  // RFC 6125 does not allow wildcard substitution for components
+  // containing IDNA A-labels (Punycode) so match those verbatim.
+  if (patternSubdomainParts.length === 1 || patternSubdomain.includes("xn--"))
+    return hostSubdomain === patternSubdomain;
+  if (!wildcards) return false;
+  // More than one wildcard is always wrong.
+  if (patternSubdomainParts.length > 2) return false;
+  // *.tld wildcards are not allowed.
+  if (patternParts.length <= 2) return false;
+  const { 0: prefix, 1: suffix } = patternSubdomainParts;
+  if (prefix.length + suffix.length > hostSubdomain.length) return false;
+  if (!hostSubdomain.startsWith(prefix)) return false;
+  if (!hostSubdomain.endsWith(suffix)) return false;
+  return true;
+}
+
+// Node lib/tls.js domainToASCII is ICU IDNA; the URL parser performs the
+// same ASCII conversion for the hosts this check ever sees. Falls back to
+// the raw hostname when the URL parser rejects it (e.g. a bare IPv6
+// literal, which takes the IP branch below anyway).
+function _domainToASCII(hostname) {
+  try {
+    return new URL(`http://${hostname}/`).hostname;
+  } catch {
+    return hostname;
+  }
+}
+
+// This pattern is used to determine the length of escaped sequences within
+// the subject alt names string. It allows any valid JSON string literal.
+// This MUST match the JSON specification (ECMA-404 / RFC8259) exactly.
+// (Node lib/tls.js jsonStringPattern.)
+const _jsonStringPattern =
+  // eslint-disable-next-line no-control-regex
+  /^"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"/;
+
+function _splitEscapedAltNames(altNames) {
+  const result = [];
+  let currentToken = "";
+  let offset = 0;
+  while (offset !== altNames.length) {
+    const nextSep = altNames.indexOf(",", offset);
+    const nextQuote = altNames.indexOf('"', offset);
+    if (nextQuote !== -1 && (nextSep === -1 || nextQuote < nextSep)) {
+      // There is a quote character and no separator before the quote.
+      currentToken += altNames.substring(offset, nextQuote);
+      const match = _jsonStringPattern.exec(altNames.substring(nextQuote));
+      if (!match) {
+        const err = new Error("Failed to parse certificate altname");
+        err.code = "ERR_TLS_CERT_ALTNAME_FORMAT";
+        throw err;
+      }
+      currentToken += JSON.parse(match[0]);
+      offset = nextQuote + match[0].length;
+    } else if (nextSep !== -1) {
+      // There is a separator and no quote before it.
+      currentToken += altNames.substring(offset, nextSep);
+      result.push(currentToken);
+      currentToken = "";
+      offset = nextSep + 2;
+    } else {
+      currentToken += altNames.substring(offset);
+      offset = altNames.length;
+    }
+  }
+  result.push(currentToken);
+  return result;
+}
+
+function _isIPHost(host) {
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;
   return host.includes(":");
 }
 
-// RFC 6125 §6.4.3 as implemented by Node: a wildcard may only be the entire
-// left-most label and matches exactly one label.
-function dnsNameMatches(host, pattern) {
-  host = String(host).toLowerCase();
-  pattern = String(pattern).toLowerCase();
-  if (host === pattern) return true;
-  if (!pattern.startsWith("*.")) return false;
-  const rest = pattern.slice(2);
-  if (rest.includes("*") || rest.length === 0) return false;
-  if (!host.endsWith(`.${rest}`)) return false;
-  const left = host.slice(0, host.length - rest.length - 1);
-  return left.length > 0 && !left.includes(".");
+// Canonicalize an IP literal the same way on both sides of the comparison
+// (Node's c-ares canonicalizeIP). IPv4: strip leading zeros per octet.
+// IPv6: expand ::, strip leading zeros per group, rejoin without
+// compression — consistent, not pretty. ponytail: ceiling — compressed
+// vs expanded forms of the same address compare equal here, but exotic
+// spellings (e.g. embedded IPv4 in IPv6) are not normalized.
+function _canonicalizeIP(host) {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    return host
+      .split(".")
+      .map((o) => String(parseInt(o, 10)))
+      .join(".");
+  }
+  if (!host.includes(":")) return host;
+  const halves = host.split("::");
+  if (halves.length > 2) return host.toLowerCase();
+  let groups = [];
+  if (halves.length === 2) {
+    const left = halves[0] ? halves[0].split(":") : [];
+    const right = halves[1] ? halves[1].split(":") : [];
+    const missing = 8 - left.length - right.length;
+    if (missing < 0) return host.toLowerCase();
+    groups = [...left, ...Array(missing).fill("0"), ...right];
+  } else {
+    groups = host.split(":");
+  }
+  if (groups.length !== 8) return host.toLowerCase();
+  return groups
+    .map((g) => {
+      const n = parseInt(g, 16);
+      return Number.isNaN(n) ? g.toLowerCase() : n.toString(16);
+    })
+    .join(":");
 }
 
-// Mirrors Node's observable contract: returns undefined when the hostname
-// matches the certificate's names, an Error describing the mismatch
-// otherwise, and throws a plain TypeError for a null/undefined cert (same
-// as real Node, which reads cert.subject unguarded).
-//
-// Honesty note: this checks the *hostname* only. Signature verification and
-// chain building are browser-impossible, so `undefined` here means
-// "hostname matches", NOT "certificate is trusted".
 export function checkServerIdentity(hostname, cert) {
-  const { subjectaltname = "", subject } = cert;
-  const host = String(hostname);
+  const subject = cert.subject;
+  const altNames = cert.subjectaltname;
   const dnsNames = [];
-  const ipAddrs = [];
-  if (typeof subjectaltname === "string" && subjectaltname.length > 0) {
-    for (const entry of subjectaltname.split(", ")) {
-      if (entry.startsWith("DNS:")) dnsNames.push(entry.slice(4));
-      else if (entry.startsWith("IP Address:")) ipAddrs.push(entry.slice(11));
+  const ips = [];
+
+  hostname = "" + hostname;
+  const hostnameASCII = _domainToASCII(hostname);
+
+  // Remove trailing dots for error messages and matching.
+  hostname = _unfqdn(hostname);
+  const hostnameASCIIWithoutFQDN = _unfqdn(hostnameASCII);
+
+  if (altNames) {
+    const splitAltNames = altNames.includes('"')
+      ? _splitEscapedAltNames(altNames)
+      : altNames.split(", ");
+    splitAltNames.forEach((name) => {
+      if (name.startsWith("DNS:")) {
+        dnsNames.push(name.slice(4));
+      } else if (name.startsWith("IP Address:")) {
+        ips.push(_canonicalizeIP(name.slice(11)));
+      }
+    });
+  }
+
+  let valid = false;
+  let reason = "Unknown reason";
+
+  // An IP literal must not be IDNA-normalized: domainToASCII() returns ''
+  // for an IPv6 literal (it is not a domain), so matching against the
+  // normalized host would skip IP-SAN matching for IPv6 entirely.
+  if (_isIPHost(hostname)) {
+    valid = ips.includes(_canonicalizeIP(hostname));
+    if (!valid) {
+      reason = `IP: ${hostname} is not in the cert's list: ${ips.join(", ")}`;
     }
+  } else if (dnsNames.length > 0 || subject?.CN) {
+    const hostParts = _splitHost(hostnameASCIIWithoutFQDN);
+    const wildcard = (pattern) => _checkName(hostParts, pattern, true);
+
+    if (dnsNames.length > 0) {
+      valid = dnsNames.some(wildcard);
+      if (!valid)
+        reason = `Host: ${hostname}. is not in the cert's altnames: ${altNames}`;
+    } else {
+      // Match against Common Name only if no supported identifiers exist.
+      const cn = subject.CN;
+
+      if (Array.isArray(cn)) valid = cn.some(wildcard);
+      else if (cn) valid = wildcard(cn);
+
+      if (!valid) reason = `Host: ${hostname}. is not cert's CN: ${cn}`;
+    }
+  } else {
+    reason = "Cert does not contain a DNS name";
   }
 
-  if (isIPHost(host)) {
-    const lower = host.toLowerCase();
-    if (ipAddrs.some((ip) => ip.toLowerCase() === lower)) return undefined;
-    return new Error(
-      `Hostname/IP does not match certificate's altnames: ` +
-        `IP: ${host} is not in the cert's altnames: ${subjectaltname || "(none)"}`,
-    );
+  if (!valid) {
+    return _tlsAltnameInvalid(reason, hostname, cert);
   }
-
-  for (const name of dnsNames) {
-    if (dnsNameMatches(host, name)) return undefined;
-  }
-
-  // CN fallback, only when no dNSName SANs are present (as in Node).
-  const cn =
-    subject != null && typeof subject === "object" ? subject.CN : undefined;
-  if (dnsNames.length === 0 && typeof cn === "string") {
-    if (dnsNameMatches(host, cn)) return undefined;
-  }
-
-  if (dnsNames.length === 0 && cn === undefined) {
-    return new Error(
-      `Hostname/IP does not match certificate's altnames: ` +
-        "Cert does not contain a dNSName nor an iPAddress subjectAltName " +
-        "and has no commonName to fall back to",
-    );
-  }
-  return new Error(
-    `Hostname/IP does not match certificate's altnames: ` +
-      `Host: ${host}. is not in the cert's altnames: ${subjectaltname}`,
-  );
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
