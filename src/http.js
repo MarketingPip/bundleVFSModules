@@ -46,7 +46,9 @@ import {
   createServer as createNetServer,
   hasPipeServer as netHasPipeServer,
   hasTcpServer as netHasTcpServer,
+  isIP as netIsIP,
 } from "./net.js";
+import { lookup as dnsLookup } from "./dns.js";
 
 // ---------------------------------------------------------------------------
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
@@ -301,6 +303,87 @@ const ERR_UNESCAPED_CHARACTERS = (what) =>
     `${what} contains unescaped characters`,
     TypeError,
   );
+
+// DNS-lookup-first for the fetch path (test-http-dns-error): real Node
+// resolves the host via getaddrinfo inside net.connect before any byte
+// is sent; an unresolvable name errors ENOTFOUND/EAI_FAIL on the
+// request, never a fetch failure. The shim's dns.lookup is DoH-based:
+// a malformed name answers EFORMERR (DoH FORMERR) where getaddrinfo
+// answers ENOTFOUND (EAI_NONAME), so translate it. Only DEFINITIVE
+// name failures are returned: a transient lookup failure (EAI_AGAIN,
+// transport errors) resolves null and fetch stays authoritative — the
+// browser's own resolver may still answer, and the repo's mocked-fetch
+// tests drive fetch directly (their DoH lookup fails EAI_AGAIN under
+// the mock). The promise never rejects, so a fetch success that leaves
+// it un-awaited cannot become an unhandled rejection.
+// ponytail: the lookup runs PARALLEL to fetch, not before it — a
+// sequential lookup would add a DoH round trip to every external
+// request and would stall the timeout test behind the DoH timeout;
+// the decision is consulted only when fetch fails. Two cost guards
+// inside the helper: malformed names answer immediately (no DoH walk
+// for a name that cannot exist), and identical in-flight lookups are
+// coalesced (four concurrent requests at one bad host share one
+// lookup instead of each walking both DoH servers). Ceiling: if a
+// future test needs EAI_AGAIN to surface (test-http-dns-error retries
+// on it), the decision must also cover transport failures — but only
+// with a fetch-error discriminator, or tests/http.test.js "network
+// failure emits error" (which expects the bare fetch TypeError) breaks.
+const _dnsLookupDecisions = new Map();
+function _dnsLookupDefinitiveError(hostname) {
+  // Malformed names can never resolve: these characters appear in no
+  // DNS name and no IP literal, so every compliant resolver answers
+  // FORMERR/NXDOMAIN — getaddrinfo reports that as ENOTFOUND without
+  // any network round trip (probed real Node v24.22.1: 259ms for the
+  // 64-asterisk host, versus ~7.5s over DoH here). Answer immediately
+  // instead of walking both DoH servers for a name that cannot exist.
+  // Deliberately narrow: ":" is excluded (IPv6 literals / zone IDs)
+  // and so is "%" — those go to the lookup below.
+  if (/[* /?#@\\^|<>\"'\u0000-\u001f\u007f]/.test(hostname)) {
+    const e = new Error(`getaddrinfo ENOTFOUND ${hostname}`);
+    e.code = "ENOTFOUND";
+    e.syscall = "getaddrinfo";
+    e.hostname = hostname;
+    return Promise.resolve(e);
+  }
+  // Coalesce identical in-flight lookups: the dns-error test fires
+  // four requests at the same unresolvable host, and each DoH lookup
+  // walks both servers for A and AAAA — four concurrent lookups never
+  // settle in 20s through this VM's proxy, while one settles in ~7.5s.
+  // Only in-flight work is shared (the entry is deleted on settle, so
+  // a later request re-resolves fresh — no result caching).
+  const inFlight = _dnsLookupDecisions.get(hostname);
+  if (inFlight) return inFlight;
+  const decision = new Promise((resolve) => {
+    try {
+      dnsLookup(hostname, (err) => {
+        if (!err) return resolve(null);
+        if (err.code === "ENOTFOUND" || err.code === "EAI_FAIL") {
+          return resolve(err);
+        }
+        if (err.code === "EFORMERR") {
+          // getaddrinfo has no FORMERR: a malformed name is EAI_NONAME.
+          const e = new Error(`getaddrinfo ENOTFOUND ${hostname}`);
+          e.code = "ENOTFOUND";
+          e.syscall = "getaddrinfo";
+          e.hostname = hostname;
+          return resolve(e);
+        }
+        resolve(null);
+      });
+    } catch {
+      // Synchronous validation throw (e.g. NUL in hostname): fetch
+      // stays authoritative, exactly as before this step existed.
+      resolve(null);
+    }
+  });
+  _dnsLookupDecisions.set(hostname, decision);
+  decision.then(() => {
+    if (_dnsLookupDecisions.get(hostname) === decision) {
+      _dnsLookupDecisions.delete(hostname);
+    }
+  });
+  return decision;
+}
 
 // Chunk validation for OutgoingMessage.write()/end(), mirroring Node's
 // write_ (probed v24.22.1): validation runs BEFORE _implicitHeader and
@@ -5338,6 +5421,28 @@ export class ClientRequest extends OutgoingMessage {
         `Request with ${this.method} method cannot have a body.`,
       );
     }
+    // DNS-lookup-first, started in parallel with fetch (see
+    // _dnsLookupDefinitiveError): the lookup decision is consulted only
+    // if fetch fails, so a successful fetch never waits on DoH. Skipped
+    // for loopback targets (the gates above own them), literal IPs
+    // (Node skips lookup for IPs), and requests with a custom lookup
+    // option (Lane 8 owns threading those through; a default lookup
+    // here would pre-empt the custom one).
+    let lookupDecision = null;
+    {
+      let lookupHost = this._parseTarget().hostname;
+      if (lookupHost.startsWith("[") && lookupHost.endsWith("]")) {
+        lookupHost = lookupHost.slice(1, -1);
+      }
+      if (
+        !this._isLoopbackTarget() &&
+        !this._agentOptions?.lookup &&
+        lookupHost !== "" &&
+        !netIsIP(lookupHost)
+      ) {
+        lookupDecision = _dnsLookupDefinitiveError(lookupHost);
+      }
+    }
     this._usingFetch = true;
     const controller = new AbortController();
     this._abortController = controller;
@@ -5376,6 +5481,13 @@ export class ClientRequest extends OutgoingMessage {
       }
       if (this._aborted) return;
       if (err && err.name === "AbortError") return; // timeout already emitted
+      // Fetch failed: a definitive DNS failure (unresolvable name) is
+      // the faithful error — real Node never reaches the network when
+      // getaddrinfo fails. Any other fetch failure keeps its own error.
+      if (lookupDecision) {
+        const lookupErr = await lookupDecision;
+        if (lookupErr) throw lookupErr;
+      }
       throw err;
     }
 
