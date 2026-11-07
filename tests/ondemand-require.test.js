@@ -679,8 +679,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/http-abort-mid-stream branch: ClientRequest.destroy() dumps the
     // in-flight response via this.res (assigned at response creation)
     // (src/http.js + working note).
+    // docs/http-hitlist-378 branch: HITLIST + measured-rates sync
+    // (374 -> 378; PRs #369, #370, #372, #373).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-fake-handle-connect.md", "src/net.js"].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
