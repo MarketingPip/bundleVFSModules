@@ -145,6 +145,12 @@ export class HTTPParser {
     // uses this for strict one-request-at-a-time pipelining: it resumes the
     // parser only after the in-flight response finishes.
     this.pauseBetweenMessages = false;
+    // Reentrancy guard for execute(): a callback fired mid-parse (e.g. an
+    // 'information' handler pushing the final response into the socket)
+    // feeds bytes back into execute() while the outer call is still inside
+    // onHeadersComplete, when _state is still "headers" — the nested bytes
+    // would be misread as header lines. See execute().
+    this._executing = false;
     this._resetMessage();
     // Callbacks, assigned by the owner:
     this.onHeadersComplete = null; // (info)
@@ -202,6 +208,24 @@ export class HTTPParser {
       }
       return;
     }
+    if (this._executing) {
+      // Reentrant feed: a callback fired by this execute() pushed more
+      // bytes into the socket (the 'information' handler in
+      // test-http-parser-multiple-execute pushes the 200 response while
+      // onHeadersComplete for the 100 is still on the stack). Real
+      // Node's llhttp is already in next-message state when
+      // onHeadersComplete fires, so the nested bytes parse as a new
+      // message; the shim only reaches that state after _finishMessage,
+      // and at callback time _state is still "headers" — running the
+      // loop now would misread the new start line as a header line
+      // ("malformed header line: HTTP/1.1 200 OK"). Buffer the bytes
+      // WITHOUT compacting: _off/_headStart still belong to the outer
+      // call's in-progress message, and the outer loop consumes the
+      // appended bytes once the current message completes.
+      // (test-http-parser-multiple-execute.)
+      if (bytes) this._buf = Buffer.concat([this._buf, bytes]);
+      return;
+    }
     if (bytes) {
       // Compact: drop consumed prefix so the buffer cannot grow unboundedly.
       this._buf =
@@ -211,6 +235,7 @@ export class HTTPParser {
       this._headStart = this._headStart - this._off;
       this._off = 0;
     }
+    this._executing = true;
     try {
       for (;;) {
         // A new message starts the moment its first bytes are consumed:
@@ -305,6 +330,8 @@ export class HTTPParser {
         }
       }
       if (this.onError) this.onError(err);
+    } finally {
+      this._executing = false;
     }
   }
 

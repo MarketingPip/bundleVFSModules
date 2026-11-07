@@ -673,14 +673,16 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/http-incoming-surface branch: IncomingMessage._addHeaderLine /
     // _addHeaderLineDistinct port + constructor socket assignment
     // (src/http.js + working note).
-    // fix/http-trailing-bytes branch: trailing bytes after a completed
-    // response must not surface as data (src/http.js +
-    // src/_http_parser.js + working note).
-    // fix/http-agent-listener-leak branch: destroy-immediately agent
-    // listener leak (destroyed-request socket released to the free pool
-    // instead of deferred destroy; src/http.js + working note).
+    // fix/http-foreign-duplex branch: foreign-Duplex transport (parser
+    // reentrancy guard, resOnFinish end() fallback, agent-less socket
+    // close on response end) + buffered finish must not write to an
+    // already-ended socket (src/http.js + src/_http_parser.js + note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-agent-listener-leak.md", "src/http.js"].sort(),
+      [
+        "NOTES-http-foreign-duplex.md",
+        "src/_http_parser.js",
+        "src/http.js",
+      ].sort(),
     );
   });
 

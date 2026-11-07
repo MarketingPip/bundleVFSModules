@@ -42,6 +42,7 @@ import {
 import { perfObserveBridge } from "./internals/perf-observe.js";
 import { HTTPParser, MAX_HEADER_PAIRS } from "./_http_parser.js";
 import {
+  Socket as NetSocket,
   connect as netConnect,
   createServer as createNetServer,
   hasPipeServer as netHasPipeServer,
@@ -5380,6 +5381,24 @@ export class ClientRequest extends OutgoingMessage {
       !(assignedSock instanceof FakeSocket) &&
       this._isLoopbackTarget()
     ) {
+      // Foreign socket from a custom agent createConnection (a stream
+      // Duplex, not a net Socket): real Node parses responses off
+      // whatever the socket delivers (tickOnSocket,
+      // lib/_http_client.js:1242: writes proceed unless the socket is
+      // still connecting — a Duplex never is), so round-trip over it
+      // like the request-level factory branch above
+      // (test-http-client-readable). A pending net socket keeps the
+      // hang below.
+      if (!(assignedSock instanceof NetSocket)) {
+        await this._performVirtualRequest(
+          null,
+          this._virtualHeaders(),
+          body.length > 0 ? body : null,
+          false,
+          !!this._headersArray,
+        );
+        return;
+      }
       if (this._aborted) {
         const err = new Error("socket hang up");
         err.code = "ECONNRESET";
@@ -6006,13 +6025,10 @@ export class ClientRequest extends OutgoingMessage {
   _releaseAgentSocket() {
     const agent = this.agent;
     const sock = this.socket;
-    if (!agent || !sock || sock instanceof FakeSocket) return;
+    if (!sock || sock instanceof FakeSocket) return;
     // The message is done; a later FIN must not re-trigger the
     // incomplete-message destroy in socketOnEnd.
     this._inFlightMessage = null;
-    const name =
-      sock._agentName ||
-      agent.getName({ host: this.host, port: Number(this.port) || 80 });
     // Only release once.
     if (sock._releasedToAgent) return;
     // Node's requestOnFinish (lib/_http_client.js:1066): when the
@@ -6051,6 +6067,30 @@ export class ClientRequest extends OutgoingMessage {
     } catch {
       /* best effort */
     }
+    if (!agent) {
+      // No agent (request-level createConnection — real Node leaves
+      // this.agent undefined there, lib/_http_client.js:366-372): there
+      // is no pool to free the socket to, but responseOnEnd
+      // (lib/_http_client.js:1017-1031) still closes a non-keep-alive
+      // socket — destroySoon() when present, else end(). Without this
+      // the client side of a foreign Duplex is never closed after a
+      // Connection: close response, so the server side never sees 'end'
+      // (test-http-generic-streams Tests 3/4). A keep-alive agent-less
+      // socket is left alone: the next request reuses the same factory
+      // socket (Test 2).
+      if (!this.shouldKeepAlive && sock.writable) {
+        try {
+          if (typeof sock.destroySoon === "function") sock.destroySoon();
+          else sock.end();
+        } catch {
+          /* best effort */
+        }
+      }
+      return;
+    }
+    const name =
+      sock._agentName ||
+      agent.getName({ host: this.host, port: Number(this.port) || 80 });
     try {
       agent.releaseSocket(sock, name, this._agentOptions);
     } catch {
@@ -6259,7 +6299,19 @@ export class ClientRequest extends OutgoingMessage {
     // skip the wait. On connect failure the socket's 'error' was
     // already forwarded by socketErrorListener, so a dead socket just
     // returns without a second emission.
-    if (!(sock instanceof FakeSocket) && !sock._connected && !sock.destroyed) {
+    // Wait only for a net Socket that has not connected yet. A foreign
+    // Duplex (custom createConnection) never emits 'connect' and its
+    // `connecting` is undefined — the round trip below writes
+    // immediately for it, exactly like Node's tickOnSocket
+    // (lib/_http_client.js:1242 checks `sock.connecting` only). The
+    // old `!sock._connected` wait hung forever on such sockets
+    // (test-http-client-readable's agent-factory Duplex).
+    if (
+      !(sock instanceof FakeSocket) &&
+      sock instanceof NetSocket &&
+      !sock._connected &&
+      !sock.destroyed
+    ) {
       await new Promise((resolve) => {
         const done = () => {
           sock.removeListener("connect", done);
@@ -6469,11 +6521,17 @@ export class ClientRequest extends OutgoingMessage {
               _rethrowUncaught(err);
             }
           },
-          // 1xx interim: 100 → the request's 'continue' event, other 1xx
-          // → 'information' carrying a full IncomingMessage (status,
-          // version 1.1, raw headers preserved). Mirrors onHeaders but
-          // without response bookkeeping: an interim message is not the
-          // in-flight response (no timeout attach, no _responseObserved).
+          // 1xx interim: 100 → BOTH the request's 'continue' event
+          // AND 'information' (Node lib/_http_client.js:910-924 emits
+          // 'continue' for 100, then 'information' for every 1xx except
+          // 101); other 1xx → 'information' only, carrying a full
+          // IncomingMessage (status, version 1.1, raw headers
+          // preserved). Mirrors onHeaders but without response
+          // bookkeeping: an interim message is not the in-flight
+          // response (no timeout attach, no _responseObserved).
+          // (test-http-parser-multiple-execute listens for 'information'
+          // on a 100 — the old early return after 'continue' never
+          // delivered it.)
           onInformation: (info) => {
             if (this._aborted) return;
             if (info.statusCode === 100) {
@@ -6482,7 +6540,7 @@ export class ClientRequest extends OutgoingMessage {
               } catch (err) {
                 _rethrowUncaught(err);
               }
-              return;
+              // Fall through: Node emits 'information' for 100 too.
             }
             const msg = new IncomingMessage(this.socket);
             msg.statusCode = info.statusCode;
@@ -7707,7 +7765,32 @@ function _socketHttpRoundTrip(
       // destroys it via ClientRequest.destroy().
       fn(value);
     };
-    const ok = settle(resolve);
+    // Post-settle drain for foreign sockets (see ok() below): a shared
+    // no-op 'data' listener that keeps the socket flowing after the
+    // round trip detaches, so a later FIN surfaces as socket 'end'
+    // instead of stalling in a paused stream. Stored on the socket so
+    // the next round trip can remove exactly this one listener.
+    // ponytail: a single shared function, not a closure per trip — a
+    // per-trip closure would leak one listener per reuse cycle.
+    // Ceiling: if a foreign socket is ever reused for pipelined
+    // responses arriving between round trips, the drain would eat them;
+    // that is why it is gated on !shouldKeepAlive (a closing
+    // connection is never reused).
+    const ok = (value) => {
+      settle(resolve)(value);
+      if (
+        value &&
+        !value.isConnect &&
+        !value.isUpgrade &&
+        value.shouldKeepAlive === false &&
+        !(sock instanceof NetSocket)
+      ) {
+        if (!sock._httpDrain) {
+          sock._httpDrain = _foreignSocketDrain;
+          sock.on("data", _foreignSocketDrain);
+        }
+      }
+    };
     // A failed round trip also drops the request's 'end' observer from
     // the socket before the rejection propagates: real Node shows
     // exactly one 'end' listener (the stream-internal
@@ -8066,11 +8149,20 @@ function _socketHttpRoundTrip(
         }
       }
     };
+    // A previous round trip's drain (kept the socket flowing after a
+    // closing response) comes off now: this trip's own listener owns
+    // the socket from here.
+    if (sock._httpDrain) {
+      sock.removeListener("data", sock._httpDrain);
+      sock._httpDrain = null;
+    }
     sock.on("data", onData);
     sock.on("error", onSockError);
     sock.on("close", onSockClose);
   });
 }
+
+const _foreignSocketDrain = () => {};
 
 // Server timeout option validation (probed real Node v24.22.1):
 // headersTimeout / requestTimeout / keepAliveTimeout must be integers
@@ -10330,7 +10422,25 @@ class ServerBase extends EventEmitter {
           /* ignore */
         }
       }
-    } else if (!socket.destroyed && !res._bytesDelivered) {
+      // A buffered (non-streaming) response sends its bytes here, at
+      // finish time — but Writable.finish() runs end(chunk, cb)
+      // callbacks BEFORE emitting 'finish' (lib/internal/streams/
+      // writable.js:955, same order in the shim), so an end callback
+      // that ends the socket — e.g. test-http-pipeline-socket-parser-
+      // typeerror's upgrade handler ending the socket in second's
+      // finish callback — leaves this response with nowhere to send:
+      // the socket is ended (writable false) but not destroyed, so the
+      // bare !destroyed guard passes and the send throws
+      // ERR_STREAM_WRITE_AFTER_END. Real Node writes the bytes during
+      // end() itself, before any callback runs, so it never hits this;
+      // the shim can't move the send earlier (framing is decided
+      // here), so skip the send when the socket is already ended —
+      // the bytes are undeliverable — and still run the bookkeeping
+      // below. `!== false` keeps the old behavior for sockets without
+      // a writable property (e.g. FakeSocket). The send itself is
+      // _writeBufferedResponse (extracted by the trailing-bytes lane,
+      // PR #381). (test-http-pipeline-socket-parser-typeerror.)
+    } else if (!socket.destroyed && !res._bytesDelivered && socket.writable !== false) {
       _writeBufferedResponse(socket, req, res);
     }
     const maxOk =
@@ -10532,17 +10642,22 @@ class ServerBase extends EventEmitter {
         // user 'finish' handlers run, and the socket is destroyed once
         // its writable side finishes (test-http-remove-header-*). A bare
         // destroy() leaves writableEnded false and the client without a
-        // clean close. destroySoon falls back to destroy()/end() for
-        // sockets without the method (e.g. FakeSocket stand-ins).
+        // clean close. The no-destroySoon fallback is end(), exactly
+        // like Node's resOnFinish (`else socket.end()`, same lines):
+        // destroy() on a foreign Duplex (e.g. a duplexPair side from
+        // test-http-generic-streams) propagates nothing to the peer, so
+        // the client's socket never sees 'end'; end() delivers the FIN
+        // the peer waits for. destroy() is only the catch fallback if
+        // end() itself throws.
         // The peerEnded branch above keeps its deferred destroy (the
         // parser-visibility ordering there is deliberate), and the
         // serverClosing branch keeps destroy (the server is going away).
         try {
           if (typeof socket.destroySoon === "function") socket.destroySoon();
-          else socket.destroy();
+          else socket.end();
         } catch {
           try {
-            socket.end();
+            socket.destroy();
           } catch {
             /* ignore */
           }
