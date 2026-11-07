@@ -6153,6 +6153,17 @@ export class ClientRequest extends OutgoingMessage {
     // serializer's "Host: localhost" fallback for such requests.
     noDefaultHost = false,
   ) {
+    // An https client speaking to a plain-http virtual server: real Node
+    // fails the TLS handshake (EPROTO, wrong version number — probed
+    // v24.22.1) and the plain server never sees the request. Without this
+    // the shared port registry delivers the request to the http handler
+    // (test-https-connecting-to-http). Throws before any socket wait, so
+    // the rejection reaches end()'s handler (or the streaming round-trip
+    // catch) and surfaces as a single request 'error'.
+    if (server && this.protocol === "https:" && !server._isHttpsServer) {
+      throw makeError("EPROTO", "write EPROTO: wrong version number");
+    }
+
     // The agent was already notified in the constructor (synchronous
     // addRequest). Wait for the socket assignment via onSocket().
     // Note: the agent used this.port; for virtual servers the actual port

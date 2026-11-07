@@ -689,8 +689,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // client socket (stash in _agentOptions, forward in createSocket /
     // createConnection / _invokeFactory) so res.readableHighWaterMark
     // reads it (src/http.js + note).
+    // fix/https-client-plain-http-error branch: https client errors
+    // (EPROTO) against a plain-http virtual server instead of
+    // delivering to it (src/http.js gate + src/https.js marker + note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-https-client-hwm.md", "src/http.js"].sort(),
+      ["NOTES-https-l0.md", "src/http.js", "src/https.js"].sort(),
     );
   });
 
