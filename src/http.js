@@ -3765,6 +3765,14 @@ export class ClientRequest extends OutgoingMessage {
     // (test-http-parser-memory-retention).
     this.joinDuplicateHeaders = options.joinDuplicateHeaders;
 
+    // Whether this request presents a client certificate in the TLS
+    // handshake: Node presents the cert material from options.cert or
+    // options.pfx. The https server reads it off the loopback peer
+    // socket's _httpMessage at dispatch to compute the server socket's
+    // auth surface (test-https-pfx; Node lib/internal/tls/wrap.js
+    // onServerSocketSecure).
+    this._tlsClientCertPresented = !!(options.cert || options.pfx);
+
     // maxHeadersCount is a plain property (default null, matching real
     // Node's ClientRequest ctor — it is NOT a constructor option): the
     // per-request parser limit is refreshed from it at socket
@@ -10431,7 +10439,11 @@ class ServerBase extends EventEmitter {
       // a writable property (e.g. FakeSocket). The send itself is
       // _writeBufferedResponse (extracted by the trailing-bytes lane,
       // PR #381). (test-http-pipeline-socket-parser-typeerror.)
-    } else if (!socket.destroyed && !res._bytesDelivered && socket.writable !== false) {
+    } else if (
+      !socket.destroyed &&
+      !res._bytesDelivered &&
+      socket.writable !== false
+    ) {
       _writeBufferedResponse(socket, req, res);
     }
     const maxOk =
