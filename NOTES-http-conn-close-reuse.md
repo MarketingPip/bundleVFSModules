@@ -100,3 +100,11 @@ test changes value; the differential must show zero changes.
   its mechanism was misattributed to the agent/loopback layer in
   general; the precise mechanism is the two missed vetoes above
   (truncation hole + hardcoded `shouldKeepAlive`), both closed by #362.
+- **Rebase onto `f2d70569`:** the `onMessageStart` hunk conflicted with
+  PR #378, which had added a per-message `parser.maxHeaderSize`
+  refresh modeled on the pair-budget refresh. Resolution: the pair
+  refresh stays deleted (this lane), the size refresh stays (PR #378's
+  scope — its `test-http-header-overflow` /
+  `test-http-max-header-size-per-stream` guards re-verified 0 after the
+  rebase), with its comment corrected since it no longer has a "pair
+  budget above" to mirror.
