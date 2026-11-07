@@ -4116,6 +4116,41 @@ export class ClientRequest extends OutgoingMessage {
         this._agentOptions[field] = options[field];
       }
     }
+    // The same TLS options also travel as one bundle (the https agent
+    // reads the bundle in createConnection for its session-key,
+    // client-certificate, and per-request-checkServerIdentity
+    // decisions). checkServerIdentity rides the bundle only — it is a
+    // function, not a pool-key field.
+    const tlsOptions = {};
+    for (const k of [
+      "ca",
+      "cert",
+      "checkServerIdentity",
+      "ciphers",
+      "clientCertEngine",
+      "crl",
+      "dhparam",
+      "ecdhCurve",
+      "honorCipherOrder",
+      "key",
+      "maxVersion",
+      "minVersion",
+      "passphrase",
+      "pfx",
+      "privateKeyEngine",
+      "privateKeyIdentifier",
+      "rejectUnauthorized",
+      "secureOptions",
+      "secureProtocol",
+      "servername",
+      "sessionIdContext",
+      "sigalgs",
+    ]) {
+      if (options[k] !== undefined) tlsOptions[k] = options[k];
+    }
+    if (Object.keys(tlsOptions).length > 0) {
+      this._agentOptions._tlsOptions = tlsOptions;
+    }
     if (agent) {
       try {
         agent.addRequest(this, this._agentOptions);
@@ -6274,6 +6309,16 @@ export class ClientRequest extends OutgoingMessage {
   }
 
   _verifyHttpsPeer(server, sock) {
+    // A resumed TLS session presents no new certificate (abbreviated
+    // handshake), so there is nothing to verify — the peer was verified
+    // when the session was established. The https agent owns the cache;
+    // _peekSession answers whether this request will resume one. The
+    // resumed socket reads authorized (the session is trusted).
+    if (this.agent?._peekSession?.(this._agentOptions ?? {}, server)) {
+      sock.authorized = true;
+      sock.authorizationError = null;
+      return true;
+    }
     const certPem = server._tlsOptions?.cert;
     const leafPem = Array.isArray(certPem) ? certPem[0] : certPem;
     const peerCert = tlsParseCertificate(leafPem);
@@ -11309,6 +11354,18 @@ class AgentBase extends EventEmitter {
     // localAddress/localPort above.
     if (options.highWaterMark !== undefined) {
       createOptions.highWaterMark = options.highWaterMark;
+    }
+    // Family threads to the connect options (Node passes request options
+    // through to net.connect: dnsopts.family); the https agent also
+    // reads it for its session key.
+    if (options.family !== undefined) {
+      createOptions.family = options.family;
+    }
+    // TLS options bundle (see ClientRequest: stashed on _agentOptions);
+    // forwarded untouched — net.connect ignores it, the https agent's
+    // createConnection reads it.
+    if (options._tlsOptions !== undefined) {
+      createOptions._tlsOptions = options._tlsOptions;
     }
     let socket;
     let creationHandled = false;

@@ -715,8 +715,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/https-globalagent-rebind branch: https.globalAgent rebind
     // (export let + default-export accessor, #363 pattern ported to
     // src/https.js + working note).
+    // fix/https-session-surface branch: TLS session surface
+    // (Agent._sessionCache + getSession/getPeerCertificate/isSessionReused
+    // + ticket-epoch + pfx client-cert extraction).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-https-globalagent-rebind.md", "src/https.js"].sort(),
+      ["src/http.js", "src/https.js", "src/net.js"].sort(),
     );
   });
 
