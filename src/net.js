@@ -1306,6 +1306,24 @@ Socket.prototype.address = function address() {
   return { address, family, port };
 };
 
+// -- TLS session surface (populated by the https/tls layers) -----------------
+// Node's TLSSocket.getSession/getPeerCertificate/isSessionReused live on
+// the socket the request used; the shim's https sockets are net.Sockets,
+// so the methods live here and read the _tls* fields the https agent
+// attaches at connection time. Defaults match src/tls.js's TLSSocket
+// stubs (undefined/{}/false) — never fabricated.
+Socket.prototype.getSession = function getSession() {
+  return this._tlsSession ?? undefined;
+};
+
+Socket.prototype.isSessionReused = function isSessionReused() {
+  return this._tlsSessionReused ?? false;
+};
+
+Socket.prototype.getPeerCertificate = function getPeerCertificate() {
+  return this._tlsPeerCertificate ?? {};
+};
+
 Socket.prototype.ref = function ref() {
   this._socketUnrefed = false;
   if (this._loopTimer !== null && typeof this._loopTimer.ref === "function") {
