@@ -77,6 +77,31 @@ const defer =
     ? setImmediate
     : (fn, ...args) => setTimeout(() => fn(...args), 0);
 
+// Pending virtual accepts, drained as one batch. Real Node's kernel
+// completes a burst of handshakes in parallel, so all of the burst's
+// connections are accepted before any request handler runs. A per-socket
+// defer interleaved a full round trip (microtask drain) between accepts,
+// so the Nth connect of a burst could land after the server's close()
+// in an earlier handler (test-https-agent-sni: the 5th of 5 parallel
+// connects was refused). Batching keeps the one-extra-turn handshake —
+// the drain still runs on a macrotask — and preserves the per-client
+// destroyed/connecting guard, just evaluated at drain time.
+const _pendingAccepts = [];
+let _acceptDrainScheduled = false;
+function queueAccept(server, client, req) {
+  _pendingAccepts.push({ server, client, req });
+  if (_acceptDrainScheduled) return;
+  _acceptDrainScheduled = true;
+  defer(() => {
+    _acceptDrainScheduled = false;
+    const batch = _pendingAccepts.splice(0, _pendingAccepts.length);
+    for (const { server: s, client: c, req: r } of batch) {
+      if (c.destroyed || !c.connecting) continue;
+      s._acceptConnection(c, r);
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Error factories (mirror Node's internal/errors messages for net's codes).
 // ---------------------------------------------------------------------------
@@ -1964,10 +1989,10 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
   const req = { address, family, port, pipe, path: options.path };
   // One more event-loop turn before the handshake completes, like a real
   // TCP handshake: handlers attached after an `await` still catch 'connect'.
-  defer(() => {
-    if (this.destroyed || !this.connecting) return;
-    server._acceptConnection(this, req);
-  });
+  // Accepts are batched (queueAccept) so a burst of connects is accepted
+  // together, like the kernel's parallel handshakes — see the comment at
+  // the queue.
+  queueAccept(server, this, req);
 };
 
 // --- Virtual data path ---------------------------------------------------

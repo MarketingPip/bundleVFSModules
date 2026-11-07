@@ -703,8 +703,16 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // require('http') get the shim (IncomingMessage class identity
     // matches the shim's https server) via the #232 extra redirect
     // (parity/preload.mjs + parity/hooks.mjs + note).
+    // fix/https-l7-servername branch: SNI/servername threading + pool
+    // separation by servername + accept batching + fresh-connection
+    // close exemption (src/http.js + src/https.js + src/net.js + note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-https-l1r.md", "parity/hooks.mjs", "parity/preload.mjs"].sort(),
+      [
+        "NOTES-https-l7-servername.md",
+        "src/http.js",
+        "src/https.js",
+        "src/net.js",
+      ].sort(),
     );
   });
 
