@@ -195,6 +195,17 @@ function errInvalidIpAddress(address) {
   return e;
 }
 
+function errInvalidAddressFamily(addressType, host, port) {
+  // Node lib/internal/errors.js:1385 (RangeError, host/port fields).
+  const e = new RangeError(
+    `Invalid address family: ${addressType} ${host}:${port}`,
+  );
+  e.code = "ERR_INVALID_ADDRESS_FAMILY";
+  e.host = host;
+  e.port = port;
+  return e;
+}
+
 // errno-style errors (shapes mirror libuv failures in real Node).
 function errnoError(code, syscall, message, fields) {
   const e = new Error(message);
@@ -1503,6 +1514,12 @@ Socket.prototype.connect = function connect(...args) {
   ) {
     throw errInvalidArgType("options.localPort", "number", options.localPort);
   }
+  // Node lib/net.js lookupAndConnect: a non-function lookup is a
+  // synchronous TypeError (test-net-options-lookup). `null` counts as
+  // absent, like Node's `options.lookup != null` check.
+  if (options.lookup != null && typeof options.lookup !== "function") {
+    throw errInvalidArgType("options.lookup", "function", options.lookup);
+  }
   // Stash the requested source endpoint for _doConnect/_acceptConnection:
   // the virtual layer has no real bind, so the pairing presents it as the
   // socket's local address (and the server side's remote address). An
@@ -1522,6 +1539,8 @@ Socket.prototype.connect = function connect(...args) {
     undestroyStream.call(this);
     this._connected = false;
     this._hadError = false;
+    // A previous lookup failure must not leak into the next connect.
+    this._lookupError = undefined;
   }
 
   this._sockname = null;
@@ -1610,30 +1629,112 @@ Socket.prototype.connect = function connect(...args) {
   // _handle.setKeepAlive immediately after net.connect() returns).
   if (!this._handle) this._handle = new VirtualHandle();
   // Lookup option (mirrors Node's lookupAndConnect): a custom lookup
-  // resolves the host before connecting. The virtual network is
-  // port-based, so the resolved address is accepted but not used for
-  // routing; what matters is the gate — a lookup that never calls back
-  // keeps the socket pending (connecting) with no error, exactly like
-  // Node (test-http-agent-timeout-option relies on this shape). The
-  // loop keeper is armed only AFTER the lookup resolves: a pending
-  // lookup performs no handle activity on real Node, so it must not
-  // hold the loop open here either (otherwise a never-resolving
-  // lookup hangs the process instead of draining).
+  // resolves the host before connecting. The resolved IP is threaded
+  // into _doConnect (like Node's internalConnect receiving the resolved
+  // ip): it drives the blockList check and the virtual-server lookup.
+  // A lookup that never calls back keeps the socket pending (connecting)
+  // with no error, exactly like Node (test-http-agent-timeout-option
+  // relies on this shape). The loop keeper is armed only AFTER the
+  // lookup resolves: a pending lookup performs no handle activity on
+  // real Node, so it must not hold the loop open here either (otherwise
+  // a never-resolving lookup hangs the process instead of draining).
   if (typeof options.lookup === "function") {
     const lookupHost = options.host === undefined ? "localhost" : options.host;
     let lookupDone = false;
     try {
-      options.lookup(lookupHost, options, (err) => {
+      options.lookup(lookupHost, options, (err, ip, addressType) => {
         if (lookupDone || this.destroyed || !this.connecting) return;
         lookupDone = true;
+        // Node's emitLookup (lib/net.js:1778, 1815): the socket emits
+        // 'lookup' for every lookup outcome — once per address in the
+        // `all` form, once otherwise.
+        if (Array.isArray(ip)) {
+          for (const entry of ip) {
+            this.emit(
+              "lookup",
+              err,
+              entry && entry.address,
+              entry && entry.family,
+              lookupHost,
+            );
+          }
+        } else {
+          this.emit("lookup", err, ip, addressType, lookupHost);
+        }
         if (err) {
-          this._connectFailed(
-            err instanceof Error ? err : new Error(String(err)),
+          // A custom-lookup failure is authoritative (real Node fails
+          // the connect outright). Flag it on the socket: the http
+          // layer's fetch-path guard must still forward it — a lookup
+          // error is the request's outcome, unlike the background
+          // ENOTFOUND of the agent socket for a fetched host
+          // (test-http-client-req-error-dont-double-fire).
+          this._lookupError =
+            err instanceof Error ? err : new Error(String(err));
+          this._connectFailed(this._lookupError);
+          return;
+        }
+        // Node validates the resolved address (lib/net.js:1788-1796):
+        // a non-string or non-IP result is ERR_INVALID_IP_ADDRESS,
+        // and a family other than 4/6 is ERR_INVALID_ADDRESS_FAMILY.
+        // The `all` form returns an array: the first entry with a
+        // valid IP and family wins, else the first entry decides the
+        // error — invalid IP first, bad family second
+        // (lookupAndConnectMultiple, lib/net.js:1811+).
+        // (test-net-dns-custom-lookup, test-net-options-lookup).
+        let resolvedIp = ip;
+        let resolvedFamily = addressType;
+        if (Array.isArray(ip)) {
+          const first = ip[0];
+          const valid = ip.find(
+            (entry) =>
+              entry &&
+              typeof entry.address === "string" &&
+              isIP(entry.address) !== 0 &&
+              (entry.family === 4 || entry.family === 6),
           );
+          if (!valid) {
+            const firstIp = first && first.address;
+            if (typeof firstIp !== "string" || isIP(firstIp) === 0) {
+              this._lookupError = errInvalidIpAddress(firstIp);
+            } else {
+              this._lookupError = errInvalidAddressFamily(
+                first && first.family,
+                lookupHost,
+                options.port | 0,
+              );
+            }
+            this._connectFailed(this._lookupError);
+            return;
+          }
+          resolvedIp = valid.address;
+          resolvedFamily = valid.family;
+        }
+        if (typeof resolvedIp !== "string" || isIP(resolvedIp) === 0) {
+          this._lookupError = errInvalidIpAddress(resolvedIp);
+          this._connectFailed(this._lookupError);
+          return;
+        }
+        if (resolvedFamily !== 4 && resolvedFamily !== 6) {
+          this._lookupError = errInvalidAddressFamily(
+            resolvedFamily,
+            lookupHost,
+            options.port | 0,
+          );
+          this._connectFailed(this._lookupError);
           return;
         }
         this._keepLoopAlive();
-        defer(() => this._doConnect(options, pipe));
+        // Node's lookupAndConnect hands internalConnect the RESOLVED
+        // ip (lib/net.js:1778 emitLookup -> internalConnect): the
+        // blockList check and the address derivation run against it,
+        // not the hostname — a blocked resolved IP must ERR_IP_BLOCKED
+        // even when the hostname itself is not an IP literal
+        // (test-http-request-lookup-error-catchable).
+        const resolved = {
+          address: resolvedIp,
+          family: resolvedFamily === 6 || isIPv6(resolvedIp) ? "IPv6" : "IPv4",
+        };
+        defer(() => this._doConnect(options, pipe, resolved));
       });
     } catch (err) {
       // A synchronously-throwing lookup fails the connect async (Node
@@ -1669,7 +1770,7 @@ Socket.prototype._refusedError = function _refusedError(req) {
     : errConnRefusedBare();
 };
 
-Socket.prototype._doConnect = function _doConnect(options, pipe) {
+Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
   if (this.destroyed || !this.connecting) return;
 
   const host = options.host === undefined ? "localhost" : options.host;
@@ -1681,15 +1782,30 @@ Socket.prototype._doConnect = function _doConnect(options, pipe) {
     address = options.path;
   } else {
     port = options.port | 0;
-    if (isIP(host)) {
+    if (resolved) {
+      // Lookup-resolved address (see connect(): Node's internalConnect
+      // receives the resolved ip, not the hostname).
+      address = resolved.address;
+      family = resolved.family;
+    } else if (isIP(host)) {
       address = host;
       family = isIPv4(host) ? "IPv4" : "IPv6";
     } else if (isLoopbackName(host)) {
       address = "127.0.0.1";
       family = "IPv4";
+      // Node looks 'localhost' up like any hostname (lib/net.js
+      // lookupAndConnect): the socket emits 'lookup' with the resolved
+      // address (test-net-dns-lookup). IP literals skip lookup
+      // entirely, so no emit there; the custom-lookup path emits in
+      // connect() instead.
+      this.emit("lookup", null, address, 4, host);
     } else {
-      // No DNS resolver in a dependency-free browser shim.
-      defer(() => this._connectFailed(errNotFound(host)));
+      // No DNS resolver in a dependency-free browser shim: the lookup
+      // fails (test-net-dns-error expects the 'lookup' event carrying
+      // the error, then the socket error).
+      const err = errNotFound(host);
+      this.emit("lookup", err, undefined, undefined, host);
+      defer(() => this._connectFailed(err));
       return;
     }
   }
@@ -1820,8 +1936,13 @@ Socket.prototype._doConnect = function _doConnect(options, pipe) {
   } else {
     const keys = [];
     const ipLiteral = isIP(host) !== 0;
-    if (ipLiteral) keys.push(serverKey(host, port));
-    else keys.push(serverKey("127.0.0.1", port));
+    // Look the server up by the address we actually connect to: for a
+    // lookup-resolved address that is the resolved IP, not the hostname
+    // (a ::1 server was unreachable — the keys only ever named
+    // 127.0.0.1 for a 'localhost' host; test-net-dns-custom-lookup
+    // check(6)). For IP literals and loopback names address == host /
+    // 127.0.0.1, so this is unchanged there.
+    keys.push(serverKey(address, port));
     // A server bound to the wildcard also accepts loopback connections.
     keys.push(serverKey("::", port));
     keys.push(serverKey("0.0.0.0", port));
