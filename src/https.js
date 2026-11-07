@@ -56,7 +56,10 @@ class HttpsServerBase extends http.Server {
     const listener = this._requestListener;
     if (listener) {
       const wrapped = (req, res) => {
-        if (req.socket) req.socket._secureEstablished = true;
+        if (req.socket) {
+          req.socket._secureEstablished = true;
+          _setSocketAuthSurface(this, req.socket);
+        }
         listener.call(this, req, res);
       };
       // Node's EventEmitter unwraps `.listener` in listeners() and
@@ -80,6 +83,34 @@ class HttpsServerBase extends http.Server {
       }
     }
   }
+}
+
+/**
+ * Port of Node's server-side TLS auth surface (lib/internal/tls/wrap.js
+ * onServerSocketSecure + TLSSocket ctor :651-652): authorized starts
+ * false, authorizationError starts null. Only when the server requested
+ * a client cert (requestCert) is the presented cert verified: a
+ * presented self-signed cert fails DEPTH_ZERO_SELF_SIGNED_CERT, no
+ * presented cert fails UNABLE_TO_GET_ISSUER_CERT (both probed on real
+ * Node v24.22.1). The virtual world has no CA to verify against, so a
+ * presented cert can never verify (authorized stays false). The client
+ * presents a cert iff its request options carried cert or pfx, recorded
+ * on the ClientRequest as _tlsClientCertPresented and read here off the
+ * loopback peer socket's _httpMessage; no peer / no message means no
+ * presented cert (e.g. external handleRequest traffic).
+ * ponytail: ceiling — a real TLS layer would set these from the actual
+ * handshake verify result instead.
+ */
+function _setSocketAuthSurface(server, socket) {
+  socket.authorized = false;
+  if (!server._tlsOptions.requestCert) {
+    socket.authorizationError = null;
+    return;
+  }
+  const presented = !!socket._peer?._httpMessage?._tlsClientCertPresented;
+  socket.authorizationError = presented
+    ? "DEPTH_ZERO_SELF_SIGNED_CERT"
+    : "UNABLE_TO_GET_ISSUER_CERT";
 }
 
 /**

@@ -682,7 +682,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/https-wrapper-this-identity branch: HttpsServerBase listener
     // wrapper calls the listener with .call(server) and preserves its
     // identity via .listener (src/https.js only).
-    expect(nonDist.sort()).toEqual(["src/https.js"].sort());
+    // fix/https-l9 branch: TLS socket auth surface (server socket
+    // authorized/authorizationError port, client cert presentation flag)
+    // (src/http.js + src/https.js + working note).
+    expect(nonDist.sort()).toEqual(
+      ["NOTES-https-l9.md", "src/http.js", "src/https.js"].sort(),
+    );
   });
 
   test("no new function declarations added by the branch diff", () => {
