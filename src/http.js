@@ -4328,12 +4328,29 @@ export class ClientRequest extends OutgoingMessage {
     if (sock && typeof sock.destroy === "function" && !sock.destroyed) {
       if (!this._roundTripStarted && !(sock instanceof FakeSocket)) {
         setTimeout(() => {
-          if (!sock.destroyed) {
-            try {
-              sock.destroy();
-            } catch {
-              /* best effort */
-            }
+          // A socket released to the pool meanwhile (by the round-trip
+          // abort continuation below, which is Node's onSocketNT free
+          // branch) must not be destroyed: it is pooled for reuse, and
+          // may already serve another request.
+          if (sock.destroyed || sock._inFreePool || this._socketReleased) {
+            return;
+          }
+          // Node's onSocketNT (lib/_http_client.js:1155): a request
+          // destroyed before its socket is assigned frees the socket
+          // to the agent pool instead of destroying it. This deferred
+          // callback is the backstop for shapes where the round trip
+          // never runs (no end() call), so no continuation releases
+          // it — the socket was never used, so the next request
+          // reuses it (test-http-client-request-listeners-leak).
+          // _releaseDestroyedSocket does the release when the socket
+          // is still an unused agent socket; otherwise the old
+          // destroy runs (factory socket, already-destroyed socket,
+          // or a round trip that started meanwhile).
+          if (this._releaseDestroyedSocket(sock)) return;
+          try {
+            sock.destroy();
+          } catch {
+            /* best effort */
           }
         }, 0);
       } else {
@@ -5939,6 +5956,50 @@ export class ClientRequest extends OutgoingMessage {
   }
 
   /**
+   * Node's onSocketNT free branch (lib/_http_client.js:1155-1182): a
+   * request destroyed before its socket is assigned frees the socket
+   * to the agent pool (socket.emit('free')) instead of destroying it.
+   * Releases this request's socket to the agent pool when it is still
+   * an unused agent socket — the round trip never started, so nothing
+   * was written to it and the next request can reuse it
+   * (test-http-client-request-listeners-leak). Returns true when the
+   * socket was released (or was already released/pooled), false when
+   * the caller must destroy it instead: no agent (request-level
+   * factory socket — Node destroys those), a socket the agent does
+   * not own, an already-destroyed socket (a factory-queued error
+   * destroy, test-http-client-abort3), or a round trip that started
+   * meanwhile. The agent's releaseSocket does the pooling itself
+   * (keepAlive veto destroys; free-pool parking removes the request
+   * listeners, so no listener accumulates on reuse) and keeps
+   * totalSocketCount exact (a pooled socket still counts).
+   * ponytail: one shared release point for the destroy deferral and
+   * the round-trip abort continuation; ceiling: a socket released
+   * here is unchecked-out by the next addRequest, which re-validates
+   * _handle/destroyed/ended before reuse.
+   */
+  _releaseDestroyedSocket(sock) {
+    const agent = this.agent;
+    if (!agent || sock._agent !== agent) return false;
+    // Already pooled: never remove it from the free pool or destroy
+    // it — the release already happened.
+    if (sock._inFreePool || this._socketReleased) return true;
+    // Already destroyed: let the caller run its old path (removeSocket
+    // + a no-op deferred destroy); the close listener owns cleanup.
+    if (sock.destroyed) return false;
+    if (this._roundTripStarted) return false;
+    const name =
+      sock._agentName ||
+      agent.getName({ host: this.host, port: Number(this.port) || 80 });
+    try {
+      agent.releaseSocket(sock, name, this._agentOptions);
+    } catch {
+      return false;
+    }
+    this._socketReleased = true;
+    return true;
+  }
+
+  /**
    * Release the socket back to the agent's pool (keep-alive) or destroy it.
    * Called when the response completes or the request is done with the socket.
    */
@@ -6099,30 +6160,45 @@ export class ClientRequest extends OutgoingMessage {
       throw err;
     });
     if (!sock) return;
-    // If aborted while waiting, destroy the socket and bail.
+    // If aborted while waiting, free the socket and bail.
     if (this._aborted) {
-      try {
-        agent.removeSocket(sock, sock._agentName);
-      } catch {
-        /* best effort */
-      }
-      // Defer the destroy one macrotask (setTimeout 0), like
-      // destroy()'s pre-round-trip deferral: a factory-queued error
-      // destroy on the next tick (test-http-client-abort3) must land
-      // while the socket is still alive, or its error is swallowed
-      // (the ported stream destroy no-ops on an already-destroyed
-      // socket). This continuation is a microtask, which the parity
-      // harness drains before nextTicks (inverted vs real Node), so
-      // a synchronous destroy here would beat the factory's nextTick.
-      setTimeout(() => {
-        if (!sock.destroyed) {
-          try {
-            sock.destroy();
-          } catch {
-            /* best effort */
-          }
+      // Node's onSocketNT (lib/_http_client.js:1155) frees a socket
+      // assigned to an already-destroyed request (socket.emit('free'))
+      // instead of destroying it: the socket was never used, so the
+      // agent pools it and the next request reuses it
+      // (test-http-client-request-listeners-leak). The release must be
+      // synchronous here: the request's 'error'/'close' settle the
+      // caller's promise on the next microtask, and the next request's
+      // addRequest must already find the socket pooled. A socket that
+      // cannot be pooled (factory socket with no agent, or one a
+      // factory-queued error destroy already killed —
+      // test-http-client-abort3) keeps the old destroy path, still
+      // deferred one macrotask so the factory's nextTick error lands
+      // while the socket is alive.
+      if (!this._releaseDestroyedSocket(sock)) {
+        try {
+          agent.removeSocket(sock, sock._agentName);
+        } catch {
+          /* best effort */
         }
-      }, 0);
+        // Defer the destroy one macrotask (setTimeout 0), like
+        // destroy()'s pre-round-trip deferral: a factory-queued error
+        // destroy on the next tick (test-http-client-abort3) must land
+        // while the socket is still alive, or its error is swallowed
+        // (the ported stream destroy no-ops on an already-destroyed
+        // socket). This continuation is a microtask, which the parity
+        // harness drains before nextTicks (inverted vs real Node), so
+        // a synchronous destroy here would beat the factory's nextTick.
+        setTimeout(() => {
+          if (!sock.destroyed) {
+            try {
+              sock.destroy();
+            } catch {
+              /* best effort */
+            }
+          }
+        }, 0);
+      }
       // Graceful abort() while waiting closes silently, like its
       // sibling catch above (which already gates on !_abortGraceful):
       // the request never got going, so there is nothing to hang up.
