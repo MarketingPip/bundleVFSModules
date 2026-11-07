@@ -85,7 +85,12 @@ const defer =
 // in an earlier handler (test-https-agent-sni: the 5th of 5 parallel
 // connects was refused). Batching keeps the one-extra-turn handshake —
 // the drain still runs on a macrotask — and preserves the per-client
-// destroyed/connecting guard, just evaluated at drain time.
+// destroyed/connecting guard, just evaluated at drain time. The
+// server-side accept is what batches: each client's 'connect' tail still
+// fires on its own macrotask (first item synchronously in the drain), so
+// a microtask can run between two clients' 'connect' events and a
+// listener registered while awaiting the first never misses the second
+// (tests/net.test.js getConnections).
 const _pendingAccepts = [];
 let _acceptDrainScheduled = false;
 function queueAccept(server, client, req) {
@@ -95,9 +100,15 @@ function queueAccept(server, client, req) {
   defer(() => {
     _acceptDrainScheduled = false;
     const batch = _pendingAccepts.splice(0, _pendingAccepts.length);
-    for (const { server: s, client: c, req: r } of batch) {
+    for (let i = 0; i < batch.length; i++) {
+      const { server: s, client: c, req: r } = batch[i];
       if (c.destroyed || !c.connecting) continue;
-      s._acceptConnection(c, r);
+      // The first accept connects synchronously (single-connect timing
+      // unchanged); later ones defer the client 'connect' tail, so a
+      // microtask can run between two clients' 'connect' events — while
+      // every server-side accept in the batch completes here, before any
+      // request handler runs (test-https-agent-sni).
+      s._acceptConnection(c, r, i !== 0);
     }
   });
 }
@@ -2738,7 +2749,11 @@ Server.prototype._dropPairedConnection = function _dropPairedConnection(
 };
 
 // Pairs an incoming client with a server-side Socket (virtual accept).
-Server.prototype._acceptConnection = function _acceptConnection(client, req) {
+Server.prototype._acceptConnection = function _acceptConnection(
+  client,
+  req,
+  deferConnect,
+) {
   const bindAddr = this._bindAddress;
 
   // The accept is deferred a macrotask after the client's lookup; the server
@@ -2873,38 +2888,50 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
 
   this.emit("connection", serverSocket);
 
-  client.connecting = false;
-  client._flushPendingWrites();
-  client._refreshTimeout();
-  // Mirrors lib/net.js: apply socket options to the handle on connect.
-  // The handle may have been mocked by tests (e.g. test-net-connect-keepalive
-  // replaces _handle.setKeepAlive to verify it's called).
-  // Node's C++ TCPWrap takes keepalive delay in SECONDS; the JS API takes
-  // milliseconds — convert here (tests assert the converted value).
-  if (client._handle) {
-    if (client._noDelay) client._handle.setNoDelay(true);
-    if (client._keepAlive)
-      client._handle.setKeepAlive(
-        true,
-        Math.floor(client._keepAliveInitialDelay / 1000),
-      );
-  }
   // Server-side socket gets a handle too (Node creates TCPWrap on accept).
   if (!serverSocket._handle) serverSocket._handle = new VirtualHandle();
-  client.emit("connect");
-  // Real Node emits 'ready' immediately after 'connect' on a client socket
-  // (probed on v24.22.1: order is connect -> ready, exactly once, readyState
-  // 'open' at both; a listener registered inside the 'connect' handler still
-  // fires; refused and never-connected sockets never fire it). Server-side
-  // accepted sockets do not observably emit 'ready' after 'connection', so
-  // only the client side gets it here.
-  client.emit("ready");
-  // Mirrors lib/net.js: start the first read after connect, unless paused.
-  // A paused socket never activates its read watcher (inactive handle).
-  if (client.readable && !client.isPaused()) {
-    client._readStarted = true;
-  }
-  client._refreshLoopKeeper();
+  // The client-side 'connect' is the handshake completion: pre-connect
+  // writes flush, options apply, and 'connect' + 'ready' fire here. In a
+  // burst the drain defers this tail for every accept after the first, so
+  // a microtask can run between two clients' 'connect' events (a listener
+  // registered while awaiting the first must not miss the second), while
+  // the server-side accepts all complete in the batch
+  // (test-https-agent-sni). The drop path above keeps its synchronous
+  // connect-then-destroy (atomic by design); only the normal tail defers.
+  const emitClientConnect = () => {
+    client.connecting = false;
+    client._flushPendingWrites();
+    client._refreshTimeout();
+    // Mirrors lib/net.js: apply socket options to the handle on connect.
+    // The handle may have been mocked by tests (e.g. test-net-connect-keepalive
+    // replaces _handle.setKeepAlive to verify it's called).
+    // Node's C++ TCPWrap takes keepalive delay in SECONDS; the JS API takes
+    // milliseconds — convert here (tests assert the converted value).
+    if (client._handle) {
+      if (client._noDelay) client._handle.setNoDelay(true);
+      if (client._keepAlive)
+        client._handle.setKeepAlive(
+          true,
+          Math.floor(client._keepAliveInitialDelay / 1000),
+        );
+    }
+    client.emit("connect");
+    // Real Node emits 'ready' immediately after 'connect' on a client socket
+    // (probed on v24.22.1: order is connect -> ready, exactly once, readyState
+    // 'open' at both; a listener registered inside the 'connect' handler still
+    // fires; refused and never-connected sockets never fire it). Server-side
+    // accepted sockets do not observably emit 'ready' after 'connection', so
+    // only the client side gets it here.
+    client.emit("ready");
+    // Mirrors lib/net.js: start the first read after connect, unless paused.
+    // A paused socket never activates its read watcher (inactive handle).
+    if (client.readable && !client.isPaused()) {
+      client._readStarted = true;
+    }
+    client._refreshLoopKeeper();
+  };
+  if (deferConnect) defer(emitClientConnect);
+  else emitClientConnect();
 };
 
 Server.prototype._emitCloseIfDrained = function _emitCloseIfDrained() {

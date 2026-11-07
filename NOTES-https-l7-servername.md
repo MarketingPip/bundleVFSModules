@@ -52,7 +52,17 @@ responses must arrive; the `""` case must see `servername === false`.
    refuses when the server stopped listening (probed real Node: a
    connection whose handshake completed in-kernel but whose JS accept had
    not fired when `close()` ran is still refused — the accept backlog is
-   discarded).
+   discarded). **Split (fix for the CI failure below): only the
+   server-side accept batches.** The client-side `connect` tail
+   (`connecting = false`, pending-write flush, timeout refresh, handle
+   options, `connect` + `ready`, read start, loop keeper) is extracted
+   as `emitClientConnect` inside `_acceptConnection` and deferred one
+   macrotask per client for every batch item after the first (the first
+   connects synchronously in the drain, so single-connect timing is
+   unchanged). A microtask can therefore run between two clients'
+   `connect` events — a listener registered while awaiting the first
+   must not miss the second. The drop path keeps its synchronous
+   connect-then-destroy (atomic by design).
 4. **Fresh connections are not idle (`src/http.js`, `ServerBase.close`)**
    — the close predicate gains `&& !state.fresh`. Probed real Node:
    `close()` leaves a just-accepted connection alone — even one with no
@@ -66,6 +76,14 @@ responses must arrive; the `""` case must see `servername === false`.
 
 ## What was tried and rejected
 
+- **Naive batching (all client `connect`s in one macrotask)**: tried
+  first, then split (mechanism 3 above). It collapsed both `connect`
+  events of a burst into one callback, so a test awaiting c1's connect
+  before listening for c2's missed c2's event and hung 30s
+  (`tests/net.test.js` "getConnections counts live connections" — the
+  only extra failure in the full local jest suite vs the 7 known
+  version-skew failures). Real Node drains microtasks between the two
+  connect callbacks, so the await interleaves there.
 - **Relaxing the accept-time refusal** (accept in-flight connects after
   `close()`): refuted by probe — real Node refuses even a
   handshake-complete connection whose JS accept had not fired
@@ -130,9 +148,14 @@ Target `test-https-agent-sni`: 0 (×3 runs).
   still 1 (L4's target, unchanged shape). Target 0 ×3.
 - Repo checks: `tests/ondemand-require.test.js` 29/29; build-vfs,
   build-sandbox --check, build-runtime --check all 0.
-- CI round 1 (head `e698fa64`): Parity success, build failure with no
-  log summary via API; local build steps clean on this tree — the
-  known esm.sh-fetch transient. Retriggered with this notes-only line.
+- CI round 1 (head `e698fa64`) and round 2 (head `03be23dd`): Parity
+  success, build failure with no log summary via API. The build job's
+  "Run Tests" step (full jest suite) was the failing step — NOT the
+  esm.sh transient: the only extra local failure was
+  `tests/net.test.js` "getConnections counts live connections" (30s
+  timeout), fixed by the connect-tail split above. Round-3 CI pending
+  on the split-fix commit; full sweeps re-run on the final tree (fresh
+  CSVs `*-2026-11-07-l7b.csv`).
 
 ## Follow-up lanes (not this PR)
 
