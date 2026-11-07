@@ -4112,6 +4112,17 @@ export class ClientRequest extends OutgoingMessage {
     // completed and destroyed the request — test-http-keepalive-free)
     // killed the pooled socket the first destroy had preserved.
     if (this.destroyed) return;
+    // Node lib/_http_client.js:686-692: destroy() dumps the in-flight
+    // response first — "If we're aborting, we don't care about any more
+    // response data." _dump() removes the response's 'data' listeners
+    // and resumes it, so chunks already buffered in the message stop
+    // firing 'data' (test-http-abort-stream-end: the whole body is
+    // pushed before the first 'data' handler runs, so the onBody
+    // _aborted guard alone cannot stop the drain). Placed before the
+    // socket destroy, like Node.
+    if (this.res) {
+      this.res._dump();
+    }
     // Teardown-initiated failure (see run()): a later round-trip
     // rejection from this teardown must not report through the end
     // callback — the request was torn down, not failed on flush.
@@ -6175,6 +6186,12 @@ export class ClientRequest extends OutgoingMessage {
                 },
               });
             }
+            // Node lib/_http_client.js:960 (parserOnIncomingClient):
+            // req.res is the in-flight response. destroy() dumps it,
+            // which is what stops post-abort 'data' delivery
+            // (test-http-abort-stream-end): chunks already pushed into
+            // the message's buffer keep flowing until the listeners go.
+            this.res = msg;
             // Whether anyone observes this response (a 'response'
             // listener exists now, including once() callbacks about to
             // fire — the constructor attaches the response callback via
@@ -6746,6 +6763,9 @@ export class ClientRequest extends OutgoingMessage {
     this._attachResponseTimeout(msg);
     this._responseReceived = true;
     this._inFlightMessage = msg;
+    // Node lib/_http_client.js:960: req.res is the in-flight response
+    // (see the streaming onHeaders site above).
+    this.res = msg;
     this.emit("response", msg);
     if (
       bufferedAgent &&

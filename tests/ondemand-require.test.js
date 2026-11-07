@@ -676,8 +676,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/http-perf-hooks branch: perf_hooks http entries
     // (src/http.js + src/perf_hooks.js + src/internals/perf-observe.js +
     // parity/preload.mjs perf_hooks redirect + working note).
+    // fix/http-abort-mid-stream branch: ClientRequest.destroy() dumps the
+    // in-flight response via this.res (assigned at response creation)
+    // (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-09.md", "src/_http_parser.js"].sort(),
+      ["NOTES-http-abort-mid-stream.md", "src/http.js"].sort(),
     );
   });
 
