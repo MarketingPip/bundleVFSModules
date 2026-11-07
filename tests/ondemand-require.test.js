@@ -697,13 +697,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // src/tls.js + working note).
     // fix/https-l8-checkServerIdentity branch: virtual TLS verification
     // (src/http.js + src/tls.js + src/internals/tls-verify.js + note).
+    // fix/https-agent-getname branch: https Agent.getName port
+    // (src/https.js + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-https-l8-checkServerIdentity.md",
-        "src/http.js",
-        "src/internals/tls-verify.js",
-        "src/tls.js",
-      ].sort(),
+      ["NOTES-https-agent-getname.md", "src/https.js"].sort(),
     );
   });
 
