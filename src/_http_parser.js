@@ -506,15 +506,27 @@ export class HTTPParser {
         throw parseError("HPE_INVALID_URL", "empty request target");
       }
       const vm = /^HTTP\/(\d+)\.(\d+)$/.exec(version);
-      if (!vm || vm[1] !== "1" || (vm[2] !== "0" && vm[2] !== "1")) {
+      // llhttp accepts exactly {0.9, 1.0, 1.1, 2.0} as a version token
+      // (probed on real Node v24.22.1, request and response sides);
+      // anything else is HPE_INVALID_VERSION.
+      // ponytail: one shared rule, both sides — the request and response
+      // branches below must stay in sync (test-http-response-no-headers).
+      if (
+        !vm ||
+        !(
+          (vm[1] === "0" && vm[2] === "9") ||
+          (vm[1] === "1" && (vm[2] === "0" || vm[2] === "1")) ||
+          (vm[1] === "2" && vm[2] === "0")
+        )
+      ) {
         throw parseError("HPE_INVALID_VERSION", "Invalid HTTP version");
       }
       this._info = {
         method,
         url: target,
-        httpVersionMajor: 1,
+        httpVersionMajor: Number(vm[1]),
         httpVersionMinor: Number(vm[2]),
-        httpVersion: `1.${vm[2]}`,
+        httpVersion: `${vm[1]}.${vm[2]}`,
       };
     } else {
       const m = /^HTTP\/(\d+)\.(\d+) (\d{3})(?: (.*))?$/.exec(line);
@@ -530,15 +542,23 @@ export class HTTPParser {
         }
         throw parseError("HPE_INVALID_VERSION", "Invalid HTTP version");
       }
-      if (m[1] !== "1" || (m[2] !== "0" && m[2] !== "1")) {
+      // llhttp accepts exactly {0.9, 1.0, 1.1, 2.0} as a version token
+      // (probed on real Node v24.22.1, request and response sides);
+      // anything else is HPE_INVALID_VERSION. A 0.9 response has no
+      // headers and its body runs to EOF — the framing below already
+      // does that (body-eof), so accepting the version is the whole fix
+      // (test-http-response-no-headers).
+      const is09 = m[1] === "0" && m[2] === "9";
+      const is20 = m[1] === "2" && m[2] === "0";
+      if (!is09 && !is20 && (m[1] !== "1" || (m[2] !== "0" && m[2] !== "1"))) {
         throw parseError("HPE_INVALID_VERSION", "Invalid HTTP version");
       }
       this._info = {
         statusCode: Number(m[3]),
         statusMessage: m[4] || "",
-        httpVersionMajor: 1,
+        httpVersionMajor: Number(m[1]),
         httpVersionMinor: Number(m[2]),
-        httpVersion: `1.${m[2]}`,
+        httpVersion: `${m[1]}.${m[2]}`,
       };
     }
     this._state = "headers";

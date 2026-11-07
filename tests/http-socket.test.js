@@ -246,7 +246,10 @@ describe("HTTPParser", () => {
   });
 
   test("bad version -> HPE_INVALID_VERSION", () => {
-    const { events } = drive("request", ["GET /x HTTP/2.0\r\n\r\n"]);
+    // HTTP/1.2: real Node rejects it on both sides (probed v24.22.1);
+    // HTTP/2.0 is ACCEPTED by real Node (llhttp version set is
+    // {0.9, 1.0, 1.1, 2.0}), so it must not be the bad-version case.
+    const { events } = drive("request", ["GET /x HTTP/1.2\r\n\r\n"]);
     expect(events[0]).toEqual(["error", "HPE_INVALID_VERSION"]);
   });
 

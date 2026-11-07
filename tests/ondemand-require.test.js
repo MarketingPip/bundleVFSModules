@@ -677,13 +677,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (src/http.js + src/perf_hooks.js + src/internals/perf-observe.js +
     // parity/preload.mjs perf_hooks redirect + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-http-perf-hooks.md",
-        "parity/preload.mjs",
-        "src/http.js",
-        "src/internals/perf-observe.js",
-        "src/perf_hooks.js",
-      ].sort(),
+      ["NOTES-http-09.md", "src/_http_parser.js"].sort(),
     );
   });
 
