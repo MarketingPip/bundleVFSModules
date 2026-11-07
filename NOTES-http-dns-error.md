@@ -114,6 +114,11 @@ run: exit 1, uncaught TypeError at `src/https.js:151` → `_performRequest`
   third failure churns between (b) sandbox markers and static ESM import
   under load — each probe takes 70–85 s). Pre-existing load flake, not
   a regression; this lane touches only the http fetch path.
+- CI (code SHA 7e8a6fa6): Parity success, build failure at the "Build
+  VFS" step — the known esm.sh acorn/acorn-walk fetch transient
+  (identical failure locally on branch AND base; "Run Tests" step
+  passed; no log summary via API). Retriggered with this NOTES-only
+  commit after esm.sh answered 200 again.
 - Differential (fast-sweep, 397 rows each): base 372 pass / 5 timeout /
   20 fail → branch 359 pass / 19 timeout / 19 fail. Exactly 18 changed
   lines: 1 real flip (`test-http-dns-error` 1→0); `pipeline-requests-
