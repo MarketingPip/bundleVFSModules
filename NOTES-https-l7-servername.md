@@ -234,6 +234,30 @@ Target `test-https-agent-sni`: 0 (×3 runs).
   unconsume/keepalive-free all 0×3 and allowhalfopen 0×2 on the
   rebased tree; footprint 29/29; build-sandbox/runtime 0,
   build-vfs 1 (esm.sh transient only).
+- l7d differential vs new main `4f98f142` (CSVs `*-2026-11-07-l7d.csv`):
+  https base 38/67 (6 timeout, 23 fail) → branch 39/67 (6 timeout,
+  22 fail), changed lines exactly 1 — `agent-sni` 1→0. net base
+  87/156 (5 timeout, 64 fail) → branch 87/156, changed lines
+  exactly 0. http base 388/397 (2 timeout, 7 fail, 134:1, 139:1)
+  → branch 383/397 (3 timeout, 11 fail), changed lines exactly 5,
+  ALL toward-fail and ALL in the write-after-end/finish family:
+  `outgoing-finished` 0→1, `req-res-close` 0→1,
+  `res-write-after-end` 0→124, `server-write-after-end` 0→1,
+  `server-write-end-after-end` 0→1.
+- **l7d adjudication — the 5 http flags were REAL regressions
+  from fix part (a) (`autoDestroy: false`).** All 5 fail 3/3
+  isolated on the branch and pass 3/3 on base. Bisect: reverting
+  (a) alone (keeping (b)) restores all 5 to 0×2 AND keeps
+  abort-stream-end at 0×2 — so (b) alone is the abort fix and (a)
+  is DROPPED from this lane. The shim's `ServerResponse.write`
+  error/return path depends on the finish→autoDestroy lifecycle
+  (write-after-end must return false + emit
+  `ERR_STREAM_WRITE_AFTER_END`); disabling autoDestroy on the
+  shared `OutgoingMessage` base broke it for server responses.
+  The real-Node probe (finished but not destroyed) stays a
+  recorded divergence for a follow-up lane scoped to the client
+  request only — NOT as a shared-base change. Re-verify: fresh
+  l7e sweeps on the final tree (see below).
 - Final tree (CSVs `*-2026-11-07-l7c.csv`): https 32/67 (6 timeout,
   29 fail), diff vs l7b base exactly 1 line (`agent-sni` 1→0).
   http 387/397 (2 timeout, 8 fail, 134:1, 139:1) — same totals as

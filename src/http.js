@@ -811,16 +811,7 @@ const HTTP_PARSER_K_ON_TIMEOUT = 6;
 // ---------------------------------------------------------------------------
 export class OutgoingMessage extends Writable {
   constructor(options) {
-    // Real Node's OutgoingMessage is NOT a stream.Writable
-    // (lib/_http_outgoing.js), so it has no generic finish ->
-    // autoDestroy: probed v24.22.1, writableFinished=true but
-    // destroyed=false while the response is in flight, and abort()
-    // mid-response still runs destroy() + _dump(). The Writable
-    // default (autoDestroy: true) destroyed the request at finish,
-    // so destroy() early-returned and _dump() never ran — whether
-    // an abort stopped the response drain then depended on
-    // finish/response interleaving (test-http-abort-stream-end).
-    super({ highWaterMark: options?.highWaterMark, autoDestroy: false });
+    super({ highWaterMark: options?.highWaterMark });
     // Node: the symbol always reads a value — the default when no option
     // is given (probed real Node v24.22.1: server res and client req both
     // read getDefaultHighWaterMark(), 65536, with no option).
