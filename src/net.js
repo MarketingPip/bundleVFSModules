@@ -77,6 +77,42 @@ const defer =
     ? setImmediate
     : (fn, ...args) => setTimeout(() => fn(...args), 0);
 
+// Pending virtual accepts, drained as one batch. Real Node's kernel
+// completes a burst of handshakes in parallel, so all of the burst's
+// connections are accepted before any request handler runs. A per-socket
+// defer interleaved a full round trip (microtask drain) between accepts,
+// so the Nth connect of a burst could land after the server's close()
+// in an earlier handler (test-https-agent-sni: the 5th of 5 parallel
+// connects was refused). Batching keeps the one-extra-turn handshake —
+// the drain still runs on a macrotask — and preserves the per-client
+// destroyed/connecting guard, just evaluated at drain time. The
+// server-side accept is what batches: each client's 'connect' tail still
+// fires on its own macrotask (first item synchronously in the drain), so
+// a microtask can run between two clients' 'connect' events and a
+// listener registered while awaiting the first never misses the second
+// (tests/net.test.js getConnections).
+const _pendingAccepts = [];
+let _acceptDrainScheduled = false;
+function queueAccept(server, client, req) {
+  _pendingAccepts.push({ server, client, req });
+  if (_acceptDrainScheduled) return;
+  _acceptDrainScheduled = true;
+  defer(() => {
+    _acceptDrainScheduled = false;
+    const batch = _pendingAccepts.splice(0, _pendingAccepts.length);
+    for (let i = 0; i < batch.length; i++) {
+      const { server: s, client: c, req: r } = batch[i];
+      if (c.destroyed || !c.connecting) continue;
+      // The first accept connects synchronously (single-connect timing
+      // unchanged); later ones defer the client 'connect' tail, so a
+      // microtask can run between two clients' 'connect' events — while
+      // every server-side accept in the batch completes here, before any
+      // request handler runs (test-https-agent-sni).
+      s._acceptConnection(c, r, i !== 0);
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Error factories (mirror Node's internal/errors messages for net's codes).
 // ---------------------------------------------------------------------------
@@ -1964,10 +2000,10 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
   const req = { address, family, port, pipe, path: options.path };
   // One more event-loop turn before the handshake completes, like a real
   // TCP handshake: handlers attached after an `await` still catch 'connect'.
-  defer(() => {
-    if (this.destroyed || !this.connecting) return;
-    server._acceptConnection(this, req);
-  });
+  // Accepts are batched (queueAccept) so a burst of connects is accepted
+  // together, like the kernel's parallel handshakes — see the comment at
+  // the queue.
+  queueAccept(server, this, req);
 };
 
 // --- Virtual data path ---------------------------------------------------
@@ -2235,9 +2271,23 @@ Socket.prototype._final = function _final(cb) {
   const peer = this._peer;
   this._finSent = true;
   if (peer && !peer.destroyed) {
-    nextTick(() => {
-      if (!peer.destroyed) peer._receiveEOF();
-    });
+    if (peer.connecting) {
+      // The peer's 'connect' has not fired yet (deferred burst tail in
+      // _acceptConnection): delivering EOF now would let its 'end' fire
+      // before the connect callback attaches listeners
+      // (test-net-connect-options-allowhalfopen: the server ends each
+      // socket in its connection handler, the client's 'end' listener
+      // is attached in 'connect'). On real Node nothing from the server
+      // can arrive before the client's 'connect'. Wait for it; if the
+      // peer dies first, the EOF is moot (its 'close' settles it).
+      peer.once("connect", () => {
+        if (!peer.destroyed) peer._receiveEOF();
+      });
+    } else {
+      nextTick(() => {
+        if (!peer.destroyed) peer._receiveEOF();
+      });
+    }
   }
   cb();
   // The writable side is now ended; if the peer already sent FIN, the
@@ -2270,14 +2320,19 @@ Socket.prototype._destroy = function _destroy(exception, cb) {
   // a real network never signals the peer synchronously. The peer's link is
   // torn down — this socket is gone, so further peer writes fail.
   if (peer && !peer.destroyed && !this._finSent) {
-    nextTick(() => {
+    const notifyPeer = () => {
       if (peer.destroyed) return;
       if (peer._peer === this) peer._peer = null;
       // Abortive close: the peer's EOF came from a destroy, not a
       // graceful FIN — a later write fails ECONNRESET (see writeAfterFIN).
       peer._peerReset = true;
       peer._receiveEOF();
-    });
+    };
+    // Same connecting-peer guard as _final: a peer whose 'connect' has
+    // not fired yet (deferred burst tail) must not see EOF before its
+    // connect callback attaches listeners.
+    if (peer.connecting) peer.once("connect", notifyPeer);
+    else nextTick(notifyPeer);
   }
 
   cb(exception);
@@ -2713,7 +2768,11 @@ Server.prototype._dropPairedConnection = function _dropPairedConnection(
 };
 
 // Pairs an incoming client with a server-side Socket (virtual accept).
-Server.prototype._acceptConnection = function _acceptConnection(client, req) {
+Server.prototype._acceptConnection = function _acceptConnection(
+  client,
+  req,
+  deferConnect,
+) {
   const bindAddr = this._bindAddress;
 
   // The accept is deferred a macrotask after the client's lookup; the server
@@ -2848,38 +2907,63 @@ Server.prototype._acceptConnection = function _acceptConnection(client, req) {
 
   this.emit("connection", serverSocket);
 
-  client.connecting = false;
-  client._flushPendingWrites();
-  client._refreshTimeout();
-  // Mirrors lib/net.js: apply socket options to the handle on connect.
-  // The handle may have been mocked by tests (e.g. test-net-connect-keepalive
-  // replaces _handle.setKeepAlive to verify it's called).
-  // Node's C++ TCPWrap takes keepalive delay in SECONDS; the JS API takes
-  // milliseconds — convert here (tests assert the converted value).
-  if (client._handle) {
-    if (client._noDelay) client._handle.setNoDelay(true);
-    if (client._keepAlive)
-      client._handle.setKeepAlive(
-        true,
-        Math.floor(client._keepAliveInitialDelay / 1000),
-      );
-  }
   // Server-side socket gets a handle too (Node creates TCPWrap on accept).
   if (!serverSocket._handle) serverSocket._handle = new VirtualHandle();
-  client.emit("connect");
-  // Real Node emits 'ready' immediately after 'connect' on a client socket
-  // (probed on v24.22.1: order is connect -> ready, exactly once, readyState
-  // 'open' at both; a listener registered inside the 'connect' handler still
-  // fires; refused and never-connected sockets never fire it). Server-side
-  // accepted sockets do not observably emit 'ready' after 'connection', so
-  // only the client side gets it here.
-  client.emit("ready");
-  // Mirrors lib/net.js: start the first read after connect, unless paused.
-  // A paused socket never activates its read watcher (inactive handle).
-  if (client.readable && !client.isPaused()) {
-    client._readStarted = true;
-  }
-  client._refreshLoopKeeper();
+  // The client-side 'connect' is the handshake completion: pre-connect
+  // writes flush, options apply, and 'connect' + 'ready' fire here. In a
+  // burst the drain defers this tail for every accept after the first, so
+  // a microtask can run between two clients' 'connect' events (a listener
+  // registered while awaiting the first must not miss the second), while
+  // the server-side accepts all complete in the batch
+  // (test-https-agent-sni). The drop path above keeps its synchronous
+  // connect-then-destroy (atomic by design); only the normal tail defers.
+  const emitClientConnect = () => {
+    client.connecting = false;
+    client._flushPendingWrites();
+    client._refreshTimeout();
+    // Mirrors lib/net.js: apply socket options to the handle on connect.
+    // The handle may have been mocked by tests (e.g. test-net-connect-keepalive
+    // replaces _handle.setKeepAlive to verify it's called).
+    // Node's C++ TCPWrap takes keepalive delay in SECONDS; the JS API takes
+    // milliseconds — convert here (tests assert the converted value).
+    if (client._handle) {
+      if (client._noDelay) client._handle.setNoDelay(true);
+      if (client._keepAlive)
+        client._handle.setKeepAlive(
+          true,
+          Math.floor(client._keepAliveInitialDelay / 1000),
+        );
+    }
+    client.emit("connect");
+    // Real Node emits 'ready' immediately after 'connect' on a client socket
+    // (probed on v24.22.1: order is connect -> ready, exactly once, readyState
+    // 'open' at both; a listener registered inside the 'connect' handler still
+    // fires; refused and never-connected sockets never fire it). Server-side
+    // accepted sockets do not observably emit 'ready' after 'connection', so
+    // only the client side gets it here.
+    client.emit("ready");
+    // Mirrors lib/net.js: start the first read after connect, unless paused.
+    // A paused socket never activates its read watcher (inactive handle).
+    // Call read(0) rather than just setting the flag: the first read()
+    // clears the readable state's sync guard, so a response that arrives
+    // in the same tick chain emits 'data' synchronously (addChunk's
+    // sync-emit path) instead of buffering it a tick — otherwise a server
+    // that finishes and destroys the socket in that tick beats the
+    // client's reply to the response (test-http-server-unconsume: the
+    // deferred burst items' connects ran a macrotask after the drain, so
+    // their resume nextTick had not run when the response arrived). On
+    // real Node the read watcher is already active at 'connect' (libuv
+    // readStart), so the sync guard is always clear by the time network
+    // data can arrive; the virtual transport has no such RTT. _read is
+    // trivial (sets _readStarted, engages the loop keeper), and push
+    // clears the reading flag, so later reads are unaffected.
+    if (client.readable && !client.isPaused()) {
+      client.read(0);
+    }
+    client._refreshLoopKeeper();
+  };
+  if (deferConnect) defer(emitClientConnect);
+  else emitClientConnect();
 };
 
 Server.prototype._emitCloseIfDrained = function _emitCloseIfDrained() {

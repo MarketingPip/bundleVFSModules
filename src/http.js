@@ -4011,6 +4011,13 @@ export class ClientRequest extends OutgoingMessage {
       checkServerIdentity: options.checkServerIdentity,
       servername: options.servername,
     };
+    // SNI: the raw servername option, resolved per request by
+    // _performVirtualRequest (Node resolves it in Agent.createSocket,
+    // lib/_http_agent.js:474-504 — but the shim's agent pools one socket
+    // across requests, so the value must travel with the request, not
+    // the socket). Kept alongside _tlsOptions.servername: L8 reads the
+    // bundle, the SNI threading reads this per-request stash.
+    this._servername = options.servername;
     this.reusedSocket = false;
     this.aborted = false;
     this.upgradeOrConnect = false;
@@ -4069,6 +4076,14 @@ export class ClientRequest extends OutgoingMessage {
     // (test-https-hwm).
     if (options.highWaterMark !== undefined) {
       this._agentOptions.highWaterMark = options.highWaterMark;
+    }
+    // servername threads the same way: HttpsAgentBase.getName appends
+    // it to the pool name (Node lib/https.js:547-548), so requests with
+    // different servernames get different sockets instead of sharing
+    // one pool slot — test-https-agent-sni needs all five connects in
+    // parallel under maxSockets: 1.
+    if (typeof options.servername === "string") {
+      this._agentOptions.servername = options.servername;
     }
     if (agent) {
       try {
@@ -4260,18 +4275,24 @@ export class ClientRequest extends OutgoingMessage {
     // second destroy() (e.g. req.destroy() after the response already
     // completed and destroyed the request — test-http-keepalive-free)
     // killed the pooled socket the first destroy had preserved.
-    if (this.destroyed) return;
-    // Node lib/_http_client.js:686-692: destroy() dumps the in-flight
-    // response first — "If we're aborting, we don't care about any more
-    // response data." _dump() removes the response's 'data' listeners
-    // and resumes it, so chunks already buffered in the message stop
-    // firing 'data' (test-http-abort-stream-end: the whole body is
-    // pushed before the first 'data' handler runs, so the onBody
-    // _aborted guard alone cannot stop the drain). Placed before the
-    // socket destroy, like Node.
+    // EXCEPTION: the in-flight response is still dumped first. The
+    // round-trip destroys the request at response parse-complete
+    // (streamed-complete branch below), which with synchronous virtual
+    // delivery lands before the user consumes the first body chunk —
+    // so abort() mid-body finds destroyed already true. Without the
+    // dump, the buffered chunks keep firing 'data' after the abort
+    // (test-http-abort-stream-end). Node lib/_http_client.js:686-692:
+    // destroy() dumps the in-flight response first — "If we're
+    // aborting, we don't care about any more response data." _dump()
+    // removes the response's 'data' listeners and resumes it, so
+    // chunks already buffered in the message stop firing 'data'.
+    // _dump() is re-entry-guarded (_dumped), so this is safe on a
+    // second destroy(). Only the dump moves above the guard; the
+    // socket teardown below still early-returns.
     if (this.res) {
       this.res._dump();
     }
+    if (this.destroyed) return;
     // Teardown-initiated failure (see run()): a later round-trip
     // rejection from this teardown must not report through the end
     // callback — the request was torn down, not failed on flush.
@@ -6535,6 +6556,11 @@ export class ClientRequest extends OutgoingMessage {
     let result;
     let streamedMsg = null;
     try {
+      // SNI for this request (https only): the effective servername, queued
+      // onto the socket by the round trip and consumed by the server at
+      // dispatch (see _dispatchSocketRequest).
+      const servername =
+        this.protocol === "https:" ? _effectiveServername(this) : undefined;
       // A null server means a raw loopback target (a net server, not a
       // virtual http server): the agent socket already pairs with it, so
       // the round trip needs only the request's own target port. The
@@ -6549,6 +6575,7 @@ export class ClientRequest extends OutgoingMessage {
           body: body && body.length > 0 ? body : null,
           socket: sock,
           noDefaultHost,
+          servername,
           insecureHTTPParser: this.insecureHTTPParser,
           parser: this.parser,
           // Threaded for the response parser's pair budget (below):
@@ -7848,6 +7875,28 @@ function _serializeRequestHead(
   return bodyBuf && bodyBuf.length > 0 ? Buffer.concat([head, bodyBuf]) : head;
 }
 
+// Port of Node's normalizeServerName/calculateServerName
+// (lib/_http_agent.js:474-504): the SNI name for one request. An explicit
+// servername option wins (including "" = send no SNI); otherwise the Host
+// header's host part, else the request host; an IP literal means no SNI.
+function _effectiveServername(req) {
+  const explicit = req._servername;
+  if (explicit || explicit === "") return explicit;
+  let servername =
+    req.getHeader("host") ||
+    req._headersArray?.find(([n]) => String(n).toLowerCase() === "host")?.[1];
+  if (servername == null || servername === "") servername = req.host;
+  const h = String(servername);
+  if (h[0] === "[") {
+    const index = h.indexOf("]");
+    servername = index === -1 ? h : h.substring(1, index);
+  } else {
+    servername = h.split(":", 1)[0];
+  }
+  if (netIsIP(servername)) return "";
+  return servername;
+}
+
 /**
  * Perform one HTTP request/response exchange over a virtual socket.
  *
@@ -7910,6 +7959,9 @@ function _socketHttpRoundTrip(
     // Rendered chunked-request terminator from the caller (includes
     // request trailers when set via addTrailers); default is bare.
     chunkedTerminator = "0\r\n\r\n",
+    // SNI name for this request, from ClientRequest by the virtual path
+    // only (undefined for http requests and emulated inbound requests).
+    servername = undefined,
   },
 ) {
   return new Promise((resolve, reject) => {
@@ -8209,6 +8261,13 @@ function _socketHttpRoundTrip(
         } catch {
           /* listener errors are not fatal */
         }
+      }
+      // SNI: queue one value per request on the client socket, ahead of
+      // the head bytes; the server consumes one per dispatch (see
+      // _dispatchSocketRequest). A queue, not a socket field: the agent
+      // may reuse one socket for requests with different servernames.
+      if (servername !== undefined) {
+        (sock._pendingServernames ??= []).push(servername);
       }
       try {
         if (streaming) {
@@ -8976,9 +9035,17 @@ class ServerBase extends EventEmitter {
     // survives close() too. Unlike a busy connection it gets no
     // serverClosing flag: probed real Node leaves it open after its
     // late response completes, so it keeps keep-alive like normal.
+    // A FRESH connection is not idle either (probed real Node:
+    // close() leaves a just-accepted connection alone — even one
+    // with no bytes yet, and one whose request bytes are still in
+    // flight — Node's closeIdleConnections destroys only the
+    // kConnections.idle() list, and a connection that never served
+    // a request is not on it; test-https-agent-sni needs the 5th
+    // parallel connection to survive close() for its request to be
+    // served). state.fresh clears at the first byte (onMessageStart).
     for (const socket of [...this._connections]) {
       const state = socket._httpState;
-      if (!state || (!state.busy && !state.receiving)) {
+      if (!state || (!state.busy && !state.receiving && !state.fresh)) {
         try {
           socket.destroy();
         } catch {
@@ -9811,6 +9878,17 @@ class ServerBase extends EventEmitter {
     // uniform mechanism; the state field is read dynamically everywhere.
     if (req._readableState) {
       req._readableState.highWaterMark = this._highWaterMark;
+    }
+    // SNI (Node lib/internal/tls/wrap.js:1189-1198): an https server's
+    // socket carries the servername the client sent, or false when no SNI
+    // was sent. The virtual client queues one value per request on its
+    // socket (see _socketHttpRoundTrip); the peer link hands the server
+    // side the queue. Plain http servers never set this.
+    if (this._tlsOptions !== undefined) {
+      const queued = socket._peer?._pendingServernames;
+      const sni =
+        Array.isArray(queued) && queued.length > 0 ? queued.shift() : undefined;
+      socket.servername = typeof sni === "string" && sni !== "" ? sni : false;
     }
     req.method = info.method;
     req.url = info.url;
