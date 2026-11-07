@@ -130,6 +130,9 @@ Target `test-https-agent-sni`: 0 (×3 runs).
   still 1 (L4's target, unchanged shape). Target 0 ×3.
 - Repo checks: `tests/ondemand-require.test.js` 29/29; build-vfs,
   build-sandbox --check, build-runtime --check all 0.
+- CI round 1 (head `e698fa64`): Parity success, build failure with no
+  log summary via API; local build steps clean on this tree — the
+  known esm.sh-fetch transient. Retriggered with this notes-only line.
 
 ## Follow-up lanes (not this PR)
 
