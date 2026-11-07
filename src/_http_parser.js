@@ -279,7 +279,22 @@ export class HTTPParser {
           : Buffer.from(this._buf.subarray(this._headStart));
       }
       if (err.bytesParsed === undefined) {
-        err.bytesParsed = Math.max(0, this._off - this._headStart);
+        if (err._midLineOverflow) {
+          // llhttp trips the budget in the header-value span callback,
+          // which runs only after the span is fully scanned — for an
+          // unterminated line the span runs to the end of the input, so
+          // the error consumed the whole current chunk (binding:
+          // bytesParsed = error_pos - chunk base). With no new chunk
+          // (a re-parse of buffered bytes) fall back to the bytes
+          // buffered for this message. The marker is deleted so the
+          // surfaced error carries exactly Node's shape.
+          err.bytesParsed = bytes
+            ? bytes.length
+            : Math.max(0, this._buf.length - this._headStart);
+          delete err._midLineOverflow;
+        } else {
+          err.bytesParsed = Math.max(0, this._off - this._headStart);
+        }
       }
       if (this.onError) this.onError(err);
     }
@@ -339,10 +354,17 @@ export class HTTPParser {
       !skipSizeCheck &&
       this._headerBytes + this._provisionalHeaderBytes() >= this.maxHeaderSize
     ) {
-      throw parseError(
-        "HPE_HEADER_OVERFLOW",
-        `header block exceeds maxHeaderSize of ${this.maxHeaderSize} bytes`,
-      );
+      // llhttp's reason for the size overflow is "Header overflow"
+      // (binding TrackHeader, node_http_parser.cc); owners prefix it to
+      // "Parse Error: Header overflow" (Node prepareError,
+      // lib/_http_common.js:301) — the pair-budget site below already
+      // uses the same text. bytesParsed is fixed up in execute()'s
+      // catch (see _midLineOverflow): llhttp's span callback trips the
+      // budget only after scanning the whole in-progress line, so the
+      // error consumed the entire current chunk.
+      const err = parseError("HPE_HEADER_OVERFLOW", "Header overflow");
+      err._midLineOverflow = true;
+      throw err;
     }
     return null;
   }
@@ -475,10 +497,7 @@ export class HTTPParser {
     }
     this._headerBytes = (this._headerBytes || 0) + startContribution;
     if (this._headerBytes >= this.maxHeaderSize) {
-      throw parseError(
-        "HPE_HEADER_OVERFLOW",
-        `header block exceeds maxHeaderSize of ${this.maxHeaderSize} bytes`,
-      );
+      throw parseError("HPE_HEADER_OVERFLOW", "Header overflow");
     }
     if (this.type === "request") {
       // llhttp validates the method token before anything else on the
@@ -595,10 +614,7 @@ export class HTTPParser {
               .replace(/[ \t]+$/, "").length;
       this._headerBytes += lineContribution;
       if (this._headerBytes >= this.maxHeaderSize) {
-        throw parseError(
-          "HPE_HEADER_OVERFLOW",
-          `header block exceeds maxHeaderSize of ${this.maxHeaderSize} bytes`,
-        );
+        throw parseError("HPE_HEADER_OVERFLOW", "Header overflow");
       }
       // llhttp is byte-level: a CR inside a header line that is not part
       // of the terminating CRLF is HPE_LF_EXPECTED ("Missing expected LF
@@ -1055,10 +1071,7 @@ export class HTTPParser {
       // stays exact across multi-line trailer blocks.
       this._headerBytes += colon + value.length;
       if (this._headerBytes >= this.maxHeaderSize) {
-        throw parseError(
-          "HPE_HEADER_OVERFLOW",
-          `header block exceeds maxHeaderSize of ${this.maxHeaderSize} bytes`,
-        );
+        throw parseError("HPE_HEADER_OVERFLOW", "Header overflow");
       }
     }
     return true;

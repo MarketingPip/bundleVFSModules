@@ -682,7 +682,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // docs/http-hitlist-378 branch: HITLIST + measured-rates sync
     // (374 -> 378; PRs #369, #370, #372, #373).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      [
+        "NOTES-http-header-size-budgets.md",
+        "src/_http_parser.js",
+        "src/http.js",
+      ].sort(),
     );
   });
 
