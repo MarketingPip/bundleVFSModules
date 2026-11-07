@@ -9253,9 +9253,16 @@ class ServerBase extends EventEmitter {
     });
     // Node's connectionListenerInternal (lib/_http_server.js:804): the
     // parser's pair budget follows server.maxHeadersCount (<< 1) when it
-    // is a number, read at connection time. The per-message refresh in
-    // onMessageStart below keeps the same value current for reused
-    // connections (see there).
+    // is a number, read ONCE at connection time. There used to be a
+    // per-message refresh in onMessageStart below (PR #346), papering
+    // over a Connection: close socket being reused for a later request
+    // (test-http-max-headers-count round 2 arriving on round 0's
+    // connection). That reuse is fixed by PR #362's shouldKeepAlive
+    // veto (keepSocketAlive destroys the socket when the response
+    // says close), and the refresh itself diverged from Node: on a
+    // keep-alive connection a mid-connection maxHeadersCount mutation
+    // must NOT affect the live parser (probed: real Node 200, shim
+    // 431 before this removal). So the budget is read here only.
     if (typeof this.maxHeadersCount === "number") {
       parser.maxHeaderPairs = this.maxHeadersCount << 1;
     }
@@ -9275,24 +9282,8 @@ class ServerBase extends EventEmitter {
       state.requestStart = Date.now();
       state.headersDone = false;
       state.idleSince = null;
-      // The parser's pair budget follows the CURRENT server
-      // maxHeadersCount at each message, not just at connection time.
-      // Node reads it once per connection (lib/_http_server.js:804)
-      // because a Connection: close response ends that connection, so
-      // a later assignment is only ever observed on a new one. This
-      // shim reuses a Connection: close socket for a later request
-      // (separate agent/loopback divergence — test-http-max-headers-count
-      // round 2 arrives on round 0's connection), so the connection-time
-      // value would be stale and a 0 (unlimited) assignment would still
-      // overflow. Refreshing per message matches Node's observable
-      // behavior in every case Node actually creates a new connection
-      // for; the only divergence is a mid-connection mutation on a
-      // keep-alive connection, which no official test exercises.
-      parser.maxHeaderPairs =
-        typeof this.maxHeadersCount === "number"
-          ? this.maxHeadersCount << 1
-          : MAX_HEADER_PAIRS;
-      // Size budget, same per-message refresh as the pair budget above.
+      // Size budget refreshed per message (PR #378). (The pair budget
+      // is read once at connection time only — see above.)
       parser.maxHeaderSize = this.maxHeaderSize || 16 * 1024;
       if (state.idleTimer) {
         clearTimeout(state.idleTimer);
