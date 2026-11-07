@@ -708,8 +708,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // close exemption (src/http.js + src/net.js + note). src/https.js
     // is NOT listed: the L7 getName override was superseded by L4's
     // full port on the rebase onto 4f98f142 (identical file now).
+    // fix/https-l5 branch: https agent socket release/free — TLS
+    // fields thread into _agentOptions (getName keys) + non-keep-alive
+    // agent skips the early request destroy at response completion
+    // (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-https-l7-servername.md", "src/http.js", "src/net.js"].sort(),
+      ["NOTES-https-l5.md", "src/http.js"].sort(),
     );
   });
 
