@@ -57,8 +57,15 @@ class HttpsServerBase extends http.Server {
     if (listener) {
       const wrapped = (req, res) => {
         if (req.socket) req.socket._secureEstablished = true;
-        listener(req, res);
+        listener.call(this, req, res);
       };
+      // Node's EventEmitter unwraps `.listener` in listeners() and
+      // removeListener(), so the constructor listener keeps its identity
+      // (test-https-argument-of-creating: listeners("request")[0] === fn).
+      // `.call(this, ...)` keeps `this` the server inside the handler
+      // (test-https-strict / test-https-host-headers), as EventEmitter
+      // would invoke the listener directly.
+      wrapped.listener = listener;
       this.off("request", listener);
       this._requestListener = wrapped;
       this.on("request", wrapped);
