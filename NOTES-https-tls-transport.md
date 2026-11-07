@@ -49,6 +49,32 @@ client-resume, insecure-parse-per-stream, max-header-size-per-stream.
   the existing net-harness for `net`. `socket instanceof net.Socket`
   (keep-alive-drop-requests dropRequest) needs the net redirect.
 
+## 2026-11-07 — follow-up: two 1→124 mode changes from the redirect
+
+The first differential showed 8 flips + 2 mode changes (both 1→124):
+`test-https-timeout-server` and `test-https-timeout-server-2`. Both are
+lane-11 NO-FIX in the triage — but the mode change is deterministic and
+caused by this lane (connections now reach the server instead of failing
+fast), so they are fixed here rather than left hanging:
+
+- `test-https-timeout-server`: raw `net.connect` (no ClientHello) to an
+  https server with `handshakeTimeout: 50`. Oracle `wrap.js:1057-1058`:
+  the server-side socket gets `setTimeout(handshakeTimeout,
+  _handleTimeout)`; `_handleTimeout` emits `ERR_TLS_HANDSHAKE_TIMEOUT`
+  (`wrap.js:1152-1153`); dispatch clears it (`wrap.js:1201-1202`).
+  Ported in `src/https.js` HttpsServerBase 'connection' listener (default
+  120s per `wrap.js:1491`; the net idle timer is unref'd, so the default
+  cannot hold the loop) + clear in the wrapped request listener.
+- `test-https-timeout-server-2`: `tls.connect` to an https server; expects
+  'secureConnection' with a `tls.TLSSocket` (asserts instanceof). Real
+  Node: https.Server inherits tls.Server, which emits 'secureConnection'
+  per connection. Ported: the 'connection' listener wraps the accepted
+  net socket in a `TLSSocket` (shares the socket with the http dispatch,
+  re-emits only) and emits 'secureConnection'. Only this test listens
+  for it among the https suite.
+- Both flip 1→0. L12 total: 10 flips (7 targets + set-timeout-server
+  + these 2). https 47→57/67 — the wave-3 ceiling.
+
 ## Ceiling / non-goals
 
 - No real TLS: no handshake bytes, no cert verification, no keylog,
