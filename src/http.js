@@ -4077,13 +4077,44 @@ export class ClientRequest extends OutgoingMessage {
     if (options.highWaterMark !== undefined) {
       this._agentOptions.highWaterMark = options.highWaterMark;
     }
-    // servername threads the same way: HttpsAgentBase.getName appends
-    // it to the pool name (Node lib/https.js:547-548), so requests with
-    // different servernames get different sockets instead of sharing
-    // one pool slot — test-https-agent-sni needs all five connects in
-    // parallel under maxSockets: 1.
-    if (typeof options.servername === "string") {
-      this._agentOptions.servername = options.servername;
+    // TLS fields thread to the agent's connect options the same way:
+    // Node passes the full request options to agent.addRequest
+    // (lib/_http_client.js:575) and https Agent.getName reads the TLS
+    // fields from them (lib/https.js:515-594). Without them every https
+    // request pools under a TLS-empty name, so the freeSockets key
+    // never carries the option values (test-https-agent-additional-
+    // options) and requests with different TLS options wrongly share
+    // one pool. Only defined values travel; the http base name ignores
+    // them, and createSocket builds its own curated connect options,
+    // so nothing leaks into net.connect. (Subsumes L7's servername
+    // threading: getName appends servername at lib/https.js:547-548,
+    // so different servernames get different pool slots.)
+    for (const field of [
+      "ca",
+      "cert",
+      "clientCertEngine",
+      "ciphers",
+      "key",
+      "pfx",
+      "passphrase",
+      "rejectUnauthorized",
+      "servername",
+      "minVersion",
+      "maxVersion",
+      "secureProtocol",
+      "crl",
+      "honorCipherOrder",
+      "ecdhCurve",
+      "dhparam",
+      "secureOptions",
+      "sessionIdContext",
+      "sigalgs",
+      "privateKeyIdentifier",
+      "privateKeyEngine",
+    ]) {
+      if (options[field] !== undefined) {
+        this._agentOptions[field] = options[field];
+      }
     }
     if (agent) {
       try {
@@ -7094,7 +7125,24 @@ export class ClientRequest extends OutgoingMessage {
       // socket here would break tests that read agent.sockets inside
       // 'end' (test-http-keep-alive-close-on-header) or destroy the
       // socket themselves there (test-http-agent-destroyed-socket).
-      if (this.writableEnded && !this.destroyed) {
+      // Exception: a NON-keep-alive agent. Real Node does not destroy
+      // the request at completion there (responseOnEnd only destroySoons
+      // the socket); req becomes destroyed at socket close, AFTER the
+      // agent's onClose removed the socket from its pool — and req
+      // 'close' fires only then. The early destroy here scheduled
+      // 'close' on nextTick, before 'end' and before the release, so
+      // agent.sockets still held the socket at 'close'
+      // (test-https-agent-sockets-leak: 1 !== 0, probed on real Node
+      // v24.22.1: sockets 1 at 'end', 0 at 'close'). Skip it for a
+      // non-keep-alive agent: _releaseAgentSocket's destroy runs after
+      // 'end' and emits 'close' once the socket has left the pool.
+      // Keep-alive and agent-less requests keep the current shape
+      // (test-http-keepalive-free asserts destroyed at 'end').
+      if (
+        this.writableEnded &&
+        !this.destroyed &&
+        (!this.agent || this.agent.keepAlive)
+      ) {
         try {
           Writable.prototype.destroy.call(this, null);
         } catch {
