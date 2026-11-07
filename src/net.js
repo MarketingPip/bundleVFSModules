@@ -2271,9 +2271,23 @@ Socket.prototype._final = function _final(cb) {
   const peer = this._peer;
   this._finSent = true;
   if (peer && !peer.destroyed) {
-    nextTick(() => {
-      if (!peer.destroyed) peer._receiveEOF();
-    });
+    if (peer.connecting) {
+      // The peer's 'connect' has not fired yet (deferred burst tail in
+      // _acceptConnection): delivering EOF now would let its 'end' fire
+      // before the connect callback attaches listeners
+      // (test-net-connect-options-allowhalfopen: the server ends each
+      // socket in its connection handler, the client's 'end' listener
+      // is attached in 'connect'). On real Node nothing from the server
+      // can arrive before the client's 'connect'. Wait for it; if the
+      // peer dies first, the EOF is moot (its 'close' settles it).
+      peer.once("connect", () => {
+        if (!peer.destroyed) peer._receiveEOF();
+      });
+    } else {
+      nextTick(() => {
+        if (!peer.destroyed) peer._receiveEOF();
+      });
+    }
   }
   cb();
   // The writable side is now ended; if the peer already sent FIN, the
@@ -2306,14 +2320,19 @@ Socket.prototype._destroy = function _destroy(exception, cb) {
   // a real network never signals the peer synchronously. The peer's link is
   // torn down — this socket is gone, so further peer writes fail.
   if (peer && !peer.destroyed && !this._finSent) {
-    nextTick(() => {
+    const notifyPeer = () => {
       if (peer.destroyed) return;
       if (peer._peer === this) peer._peer = null;
       // Abortive close: the peer's EOF came from a destroy, not a
       // graceful FIN — a later write fails ECONNRESET (see writeAfterFIN).
       peer._peerReset = true;
       peer._receiveEOF();
-    });
+    };
+    // Same connecting-peer guard as _final: a peer whose 'connect' has
+    // not fired yet (deferred burst tail) must not see EOF before its
+    // connect callback attaches listeners.
+    if (peer.connecting) peer.once("connect", notifyPeer);
+    else nextTick(notifyPeer);
   }
 
   cb(exception);
@@ -2925,8 +2944,21 @@ Server.prototype._acceptConnection = function _acceptConnection(
     client.emit("ready");
     // Mirrors lib/net.js: start the first read after connect, unless paused.
     // A paused socket never activates its read watcher (inactive handle).
+    // Call read(0) rather than just setting the flag: the first read()
+    // clears the readable state's sync guard, so a response that arrives
+    // in the same tick chain emits 'data' synchronously (addChunk's
+    // sync-emit path) instead of buffering it a tick — otherwise a server
+    // that finishes and destroys the socket in that tick beats the
+    // client's reply to the response (test-http-server-unconsume: the
+    // deferred burst items' connects ran a macrotask after the drain, so
+    // their resume nextTick had not run when the response arrived). On
+    // real Node the read watcher is already active at 'connect' (libuv
+    // readStart), so the sync guard is always clear by the time network
+    // data can arrive; the virtual transport has no such RTT. _read is
+    // trivial (sets _readStarted, engages the loop keeper), and push
+    // clears the reading flag, so later reads are unaffected.
     if (client.readable && !client.isPaused()) {
-      client._readStarted = true;
+      client.read(0);
     }
     client._refreshLoopKeeper();
   };

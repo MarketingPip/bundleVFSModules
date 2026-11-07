@@ -153,9 +153,84 @@ Target `test-https-agent-sni`: 0 (×3 runs).
   "Run Tests" step (full jest suite) was the failing step — NOT the
   esm.sh transient: the only extra local failure was
   `tests/net.test.js` "getConnections counts live connections" (30s
-  timeout), fixed by the connect-tail split above. Round-3 CI pending
-  on the split-fix commit; full sweeps re-run on the final tree (fresh
-  CSVs `*-2026-11-07-l7b.csv`).
+  timeout), fixed by the connect-tail split above.
+- Rebased tree (main `222fdfa1`, CSVs `*-2026-11-07-l7b.csv`):
+  https base 31/67 (6 timeout, 30 fail) → branch 32/67 (6 timeout,
+  29 fail), changed lines exactly 1 — `agent-sni` 1→0. http base
+  388/397 (2 timeout, 7 fail, 134:1, 139:1) → branch 387/397
+  (2 timeout, 8 fail, same crashes), changed line exactly 1 —
+  `test-http-server-unconsume` 0→1. net base 87/156 (6 timeout,
+  63 fail) → branch 86/156 (7 timeout, 63 fail), changed line
+  exactly 1 — `test-net-connect-options-allowhalfopen` 0→124.
+  Both flags were REAL regressions from the connect-tail split,
+  both fixed in `src/net.js` (see below); a third flag
+  (`test-http-abort-stream-end`) appeared in the re-sweep and was
+  fixed in `src/http.js` (see below).
+
+## Adjudication of the l7b regressions (both real, both fixed)
+
+- **Regression 1 — `test-http-server-unconsume` (0→1).** Isolated
+  branch 1×2, base 0×2; pre-split commit 0×3, post-split 1×3.
+  Root cause: the three servers are created up front, so their
+  connects burst into one accept batch; items 1–2 get deferred
+  connect tails. For a deferred client the response arrives while
+  its ReadableState `sync` flag is still true (its first `read()`
+  never ran), so `addChunk` buffers instead of emitting `'data'`
+  synchronously, and the serverClosing destroy lands before the
+  client's data handler — the client's hello-world write then hits
+  a destroyed peer (ECONNRESET). Fix: `emitClientConnect` calls
+  `client.read(0)` instead of just setting `_readStarted` — the
+  first `read()` clears the sync guard, matching real Node (whose
+  read watcher is active at `'connect'`). Verified 0×3.
+- **Regression 2 — `test-net-connect-options-allowhalfopen`
+  (0→124).** Isolated branch 124×2, base 0×2; presplit 0. Root
+  cause: the server's FIN is delivered via `_final`/`_destroy`
+  `nextTick(() => peer._receiveEOF())`, which runs BEFORE the
+  deferred setImmediate connect tail — the client's `'end'` fires
+  before its connect callback attaches the listener, and the event
+  is lost. Real Node cannot do this: nothing from the server can
+  arrive before the client's `'connect'`. Fix: in `_final` and in
+  `_destroy`'s peer-EOF notification, if `peer.connecting`, defer
+  the EOF until the peer's `'connect'` (`peer.once("connect",...)`,
+  guarded by `!peer.destroyed`). Data deliveries deliberately NOT
+  deferred (buffered, not losable). Verified 0×3.
+- **Regression 3 — `test-http-abort-stream-end` (0→1).** Isolated
+  branch 1×3, base 0×3. The `read(0)` warmup fixes regression 1
+  but causes this one: without `read(0)` it passes 0×2 while
+  unconsume fails 1×2; with `read(0)` it fails 1×3 while unconsume
+  passes 0×3. Root cause, proven by instrumented probes: with a
+  flowing socket the whole 1024-chunk body parses synchronously
+  before the user's first `'data'` event, and the round-trip's
+  streamed-complete branch destroys the request at parse-complete
+  (`Writable.prototype.destroy.call(this)`, `src/http.js` ~6955) —
+  so `abort()` mid-body finds `destroyed` already true,
+  `destroy()` early-returns, `_dump()` never runs, and the
+  buffered chunks keep firing `'data'` ("got data after abort").
+  Probed real Node v24.22.1: `writableFinished=true` but
+  `destroyed=false` at response time, and abort still runs
+  destroy + `_dump` (listeners 1→0). Fix (two parts):
+  (a) `OutgoingMessage` super-call gains `autoDestroy: false` —
+  real Node's OutgoingMessage is NOT a stream.Writable
+  (`lib/_http_outgoing.js`; `ClientRequest` uses
+  `OutgoingMessage.call(this)`), so it has no generic
+  finish→autoDestroy. (b) `ClientRequest.destroy()` dumps the
+  in-flight response BEFORE the `if (this.destroyed) return`
+  guard — `_dump()` is re-entry-guarded, so this is safe on a
+  second destroy; only the dump moves, the socket teardown below
+  still early-returns. The parse-complete destroy timing itself
+  (request destroyed before the user consumes the body) is a
+  separate pre-existing divergence — it exists on base too for
+  small synchronously-delivered responses — and stays for a
+  follow-up lane. Verified: abort-stream-end 0×3, unconsume 0×3,
+  sni 0×3, keepalive-free 0×3, allowhalfopen 0×2.
+- Final tree (CSVs `*-2026-11-07-l7c.csv`): https 32/67 (6 timeout,
+  29 fail), diff vs l7b base exactly 1 line (`agent-sni` 1→0).
+  http 387/397 (2 timeout, 8 fail, 134:1, 139:1) — same totals as
+  the l7b branch; diff vs l7b base exactly 1 line, which is the
+  l7c net sweep's result to confirm (net l7c running at write
+  time; allowhalfopen verified 0×2 isolated). CONFIRMED: net l7c
+  87/156 (6 timeout, 63 fail) — diff vs l7b base exactly 0
+  changed lines (157 rows each, same row set).
 
 ## Follow-up lanes (not this PR)
 

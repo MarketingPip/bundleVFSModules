@@ -811,7 +811,16 @@ const HTTP_PARSER_K_ON_TIMEOUT = 6;
 // ---------------------------------------------------------------------------
 export class OutgoingMessage extends Writable {
   constructor(options) {
-    super({ highWaterMark: options?.highWaterMark });
+    // Real Node's OutgoingMessage is NOT a stream.Writable
+    // (lib/_http_outgoing.js), so it has no generic finish ->
+    // autoDestroy: probed v24.22.1, writableFinished=true but
+    // destroyed=false while the response is in flight, and abort()
+    // mid-response still runs destroy() + _dump(). The Writable
+    // default (autoDestroy: true) destroyed the request at finish,
+    // so destroy() early-returned and _dump() never ran — whether
+    // an abort stopped the response drain then depended on
+    // finish/response interleaving (test-http-abort-stream-end).
+    super({ highWaterMark: options?.highWaterMark, autoDestroy: false });
     // Node: the symbol always reads a value — the default when no option
     // is given (probed real Node v24.22.1: server res and client req both
     // read getDefaultHighWaterMark(), 65536, with no option).
@@ -4275,18 +4284,24 @@ export class ClientRequest extends OutgoingMessage {
     // second destroy() (e.g. req.destroy() after the response already
     // completed and destroyed the request — test-http-keepalive-free)
     // killed the pooled socket the first destroy had preserved.
-    if (this.destroyed) return;
-    // Node lib/_http_client.js:686-692: destroy() dumps the in-flight
-    // response first — "If we're aborting, we don't care about any more
-    // response data." _dump() removes the response's 'data' listeners
-    // and resumes it, so chunks already buffered in the message stop
-    // firing 'data' (test-http-abort-stream-end: the whole body is
-    // pushed before the first 'data' handler runs, so the onBody
-    // _aborted guard alone cannot stop the drain). Placed before the
-    // socket destroy, like Node.
+    // EXCEPTION: the in-flight response is still dumped first. The
+    // round-trip destroys the request at response parse-complete
+    // (streamed-complete branch below), which with synchronous virtual
+    // delivery lands before the user consumes the first body chunk —
+    // so abort() mid-body finds destroyed already true. Without the
+    // dump, the buffered chunks keep firing 'data' after the abort
+    // (test-http-abort-stream-end). Node lib/_http_client.js:686-692:
+    // destroy() dumps the in-flight response first — "If we're
+    // aborting, we don't care about any more response data." _dump()
+    // removes the response's 'data' listeners and resumes it, so
+    // chunks already buffered in the message stop firing 'data'.
+    // _dump() is re-entry-guarded (_dumped), so this is safe on a
+    // second destroy(). Only the dump moves above the guard; the
+    // socket teardown below still early-returns.
     if (this.res) {
       this.res._dump();
     }
+    if (this.destroyed) return;
     // Teardown-initiated failure (see run()): a later round-trip
     // rejection from this teardown must not report through the end
     // callback — the request was torn down, not failed on flush.
