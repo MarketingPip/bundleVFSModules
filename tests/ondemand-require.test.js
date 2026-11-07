@@ -680,7 +680,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // in-flight response via this.res (assigned at response creation)
     // (src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-http-abort-mid-stream.md", "src/http.js"].sort(),
+      ["NOTES-http-fake-handle-connect.md", "src/net.js"].sort(),
     );
   });
 
