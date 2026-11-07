@@ -676,12 +676,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/http-trailing-bytes branch: trailing bytes after a completed
     // response must not surface as data (src/http.js +
     // src/_http_parser.js + working note).
+    // fix/http-agent-listener-leak branch: destroy-immediately agent
+    // listener leak (destroyed-request socket released to the free pool
+    // instead of deferred destroy; src/http.js + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-http-trailing-bytes.md",
-        "src/_http_parser.js",
-        "src/http.js",
-      ].sort(),
+      ["NOTES-http-agent-listener-leak.md", "src/http.js"].sort(),
     );
   });
 
