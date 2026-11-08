@@ -1324,6 +1324,19 @@ Socket.prototype.getPeerCertificate = function getPeerCertificate() {
   return this._tlsPeerCertificate ?? {};
 };
 
+// The peer X.509 certificate of the virtual TLS handshake, as a plain
+// object carrying the real fingerprint256 of the presented cert bytes
+// (stashed by the https peer verifier in src/http.js). Undefined when
+// no certificate was presented or verified on this socket — same default
+// as TLSSocket.getPeerX509Certificate in src/tls.js. A full
+// X509Certificate needs a real X.509 implementation; only fingerprint256
+// has a test behind it (test-https-snicallback-override), so only it is
+// surfaced. ponytail: ceiling — subject/issuer/validity would come from
+// the DER walker in src/internals/tls-verify.js if a test ever needs them.
+Socket.prototype.getPeerX509Certificate = function getPeerX509Certificate() {
+  return this._tlsPeerX509Certificate ?? undefined;
+};
+
 Socket.prototype.ref = function ref() {
   this._socketUnrefed = false;
   if (this._loopTimer !== null && typeof this._loopTimer.ref === "function") {
