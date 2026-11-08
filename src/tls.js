@@ -349,12 +349,18 @@ export class TLSSocket extends EventEmitter {
       this._tlsSession = options.session;
       this._tlsSessionReused = true;
     } else {
+      // Synthetic session: 16 bytes (Date.now || counter). Built on
+      // Uint8Array/DataView so connect() works with no host Buffer (the
+      // browser-fallback lane nulls globalThis.Buffer); wrapped in a
+      // Buffer only when one exists.
       _tlsSessionCounter += 1;
-      const issued = Buffer.allocUnsafe(16);
-      issued.writeBigUInt64BE(BigInt(Date.now()), 0);
-      issued.writeUInt32BE(_tlsSessionCounter, 8);
-      issued.writeUInt32BE(0, 12);
-      this._tlsSession = issued;
+      const bytes = new Uint8Array(16);
+      const view = new DataView(bytes.buffer);
+      view.setBigUint64(0, BigInt(Date.now()));
+      view.setUint32(8, _tlsSessionCounter);
+      view.setUint32(12, 0);
+      this._tlsSession =
+        typeof Buffer !== "undefined" ? Buffer.from(bytes) : bytes;
       this._tlsSessionReused = false;
     }
 

@@ -248,8 +248,25 @@ describe("tls browser port — TLSSocket", () => {
 });
 
 describe("tls browser port — connect()", () => {
+  // L12: connect() dials the virtual network (src/net.js) — a listening
+  // virtual tls.Server answers; an unlistened port fails ECONNREFUSED
+  // (honest error, AGENTS.md rule 7). The old emulated-handshake tests
+  // dialled example.com:443 / 192.0.2.1:9 and expected success; they now
+  // run against a local fixture server instead.
+  let server;
+  let port;
+  beforeEach(async () => {
+    server = tls.createServer({});
+    port = await new Promise((resolve) =>
+      server.listen(0, () => resolve(server.address().port)),
+    );
+  });
+  afterEach(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
   test("returns TLSSocket with encrypted=false, emits connect then secureConnect", async () => {
-    const s = tls.connect({ port: 443, host: "example.com" });
+    const s = tls.connect({ port });
     expect(s).toBeInstanceOf(tls.TLSSocket);
     expect(s.encrypted).toBe(false);
     const order = [];
@@ -262,7 +279,7 @@ describe("tls browser port — connect()", () => {
 
   test("callback fires on secureConnect (async)", async () => {
     const cb = jest.fn();
-    const s = tls.connect(443, "example.com", cb);
+    const s = tls.connect(port, "127.0.0.1", cb);
     expect(cb).not.toHaveBeenCalled();
     await flush(10);
     expect(cb).toHaveBeenCalledTimes(1);
@@ -271,9 +288,9 @@ describe("tls browser port — connect()", () => {
 
   test("supports port/host/callback and options forms", async () => {
     const forms = [
-      () => tls.connect(443),
-      () => tls.connect(443, "localhost"),
-      () => tls.connect({ port: 443 }),
+      () => tls.connect(port),
+      () => tls.connect(port, "localhost"),
+      () => tls.connect({ port }),
     ];
     for (const make of forms) {
       const s = make(); // create inside the iteration: listeners attach before any await
@@ -286,12 +303,19 @@ describe("tls browser port — connect()", () => {
     }
   });
 
-  test("never emits error for unreachable hosts (no real TCP)", async () => {
-    const s = tls.connect({ port: 9, host: "192.0.2.1" });
+  test("emits ECONNREFUSED for an unlistened virtual port", async () => {
+    const probe = tls.createServer({});
+    const deadPort = await new Promise((resolve) =>
+      probe.listen(0, () => resolve(probe.address().port)),
+    );
+    await new Promise((resolve) => probe.close(resolve));
+    const s = tls.connect({ port: deadPort, host: "127.0.0.1" });
     const onError = jest.fn();
     s.on("error", onError);
     await flush(10);
-    expect(onError).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "ECONNREFUSED" }),
+    );
     s.destroy();
   });
 
@@ -309,14 +333,14 @@ describe("tls browser port — connect()", () => {
 
   test("TLSSocket#connect keeps encrypted=true on direct construction", async () => {
     const s = new tls.TLSSocket();
-    s.connect({ port: 443 });
+    s.connect({ port });
     expect(s.encrypted).toBe(true);
     await flush(10);
     s.destroy();
   });
 
   test("servername option is picked up", async () => {
-    const s = tls.connect({ port: 443, servername: "example.com" });
+    const s = tls.connect({ port, servername: "example.com" });
     expect(s.servername).toBe("example.com");
     await flush(10);
     s.destroy();
