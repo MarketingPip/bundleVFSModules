@@ -727,8 +727,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/https-joint-session-sni branch: SNI cert selection in the
     // virtual peer verifier + getPeerX509Certificate fingerprint
     // (src/http.js + src/net.js + working note).
+    // docs/https-hitlist-59 branch: HITLIST + measured-rates sync
+    // (https 20 -> 27 restated pre-wave baseline -> 59, wave 3).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-https-l13.md", "src/http.js", "src/net.js"].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
