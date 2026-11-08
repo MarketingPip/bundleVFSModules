@@ -92,9 +92,9 @@
       "total": 277
     },
     "https": {
-      "date": "2026-10-11",
-      "passed": 20,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-07",
+      "passed": 59,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11 (20/67). Full re-sweep 2026-11-07 on main 2079bca0 (fast-sweep --target https; raw CSV in the parity-sweep goal workspace) restates the count at 27/67: six unattributed side-effect flips + two from PR #354 (https kCI twins, merged main e81523d7) minus three regressions from PR #366's listener wrapper (agent-sockets-leak, argument-of-creating, host-headers). + verified flips in PR #383 (argument-of-creating, host-headers, merged main 7a82db0e), PR #388 (pfx, merged main 8fb264e5), PR #389 (hwm, merged main 222fdfa1), PR #387 (options-boolean-check, merged main c6b3cc6d), PR #392 (client-checkServerIdentity, client-reject, simple, agent-session-injection, strict, merged main 652746d8), PR #385 (agent-getname, merged main 4f98f142), PR #393 (server-options-incoming-message, merged main e34a9347), PR #391 (agent-sni, merged main 244353da), PR #394 (agent-additional-options, agent-sockets-leak, merged main 7debd5c8), PR #395 (client-override-global-agent, merged main bf42dc05), PR #390 (agent-session-reuse, agent-disable-session-reuse, agent-checkserveridentity-reuse, agent-pfx-object-array-reuse, merged main 319317ca), PR #396 (server-close-all, server-close-idle, keep-alive-drop-requests, eof-for-eom, client-resume, insecure-parse-per-stream, max-header-size-per-stream, set-timeout-server, timeout-server, timeout-server-2, merged main a3d98f95), PR #397 (session-reuse-different-servername, snicallback-override, merged main c2f047c3); all thirty-two re-verified exit 0 on their merged mains. Remaining 8 are triage NO-FIX.",
       "total": 67
     },
     "inspector": {
