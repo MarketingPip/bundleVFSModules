@@ -90,3 +90,14 @@ the server's default cert.
   there is no cache hit — the full handshake runs, which is exactly
   what the test needs (server can't resume a ticket issued under a
   different servername).
+
+## CI retrigger (notes-only)
+
+- First CI run on 390713bf: Parity success, build failure — sole
+  failure was `tests/timers.test.js` "interval fires repeatedly until
+  cleared" (10 ms interval fired once, not 3 times, in the 50 ms
+  window — load starvation under the CI runner; the `expect` throw
+  then also tripped the 30 s `done()` timeout). Untouched module
+  (this lane changes http.js/net.js only) and the test passes locally
+  in the serial run with the same flags. Transient flake; retriggered
+  with this notes-only commit.
