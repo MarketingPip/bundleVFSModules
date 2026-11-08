@@ -58,6 +58,10 @@ import {
   parseCertificate as tlsParseCertificate,
   verifyPeerCertificate as tlsVerifyPeerCertificate,
 } from "./internals/tls-verify.js";
+// SHA-256 for the presented cert's fingerprint256 (getPeerX509Certificate).
+// crypto.js is a leaf here — nothing under src/crypto/ imports http.js —
+// and https.js already imports the same binding.
+import { createHash } from "./crypto.js";
 
 // ---------------------------------------------------------------------------
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
@@ -6308,7 +6312,14 @@ export class ClientRequest extends OutgoingMessage {
     return servername;
   }
 
-  _verifyHttpsPeer(server, sock) {
+  // SNI (Node lib/internal/tls/wrap.js:292-315 loadSNI): when the client
+  // sends a servername and the server has an SNICallback, the callback
+  // selects the secure context whose certificate the handshake presents.
+  // The callback may answer synchronously or asynchronously; an error or
+  // a throw aborts the handshake (owner.destroy(err)). No servername or
+  // no callback means the server's default context stands. Returns the
+  // selected cert PEM, or null to use the default.
+  async _verifyHttpsPeer(server, sock) {
     // A resumed TLS session presents no new certificate (abbreviated
     // handshake), so there is nothing to verify — the peer was verified
     // when the session was established. The https agent owns the cache;
@@ -6319,10 +6330,6 @@ export class ClientRequest extends OutgoingMessage {
       sock.authorizationError = null;
       return true;
     }
-    const certPem = server._tlsOptions?.cert;
-    const leafPem = Array.isArray(certPem) ? certPem[0] : certPem;
-    const peerCert = tlsParseCertificate(leafPem);
-    if (peerCert === null) return true;
     const reqTls = this._tlsOptions ?? {};
     const agentTls = this.agent?.options ?? {};
     const ca = reqTls.ca ?? agentTls.ca;
@@ -6333,6 +6340,32 @@ export class ClientRequest extends OutgoingMessage {
       reqTls.rejectUnauthorized ??
       agentTls.rejectUnauthorized ??
       !_tlsAllowUnauthorized();
+    // SNI: the presented cert is the SNICallback-selected context's cert
+    // for the servername this request actually sends (the effective SNI
+    // name — the same value the round trip queues onto the socket).
+    let certPem = server._tlsOptions?.cert;
+    const sni = await _selectSniCert(server, _effectiveServername(this));
+    if (sni?.error) {
+      sock.authorized = false;
+      sock.authorizationError = sni.error.code || sni.error.message;
+      sock.destroy(sni.error);
+      return false;
+    }
+    if (sni?.context) {
+      const ctxCert = sni.context.options?.cert ?? sni.context.cert;
+      if (ctxCert !== undefined) certPem = ctxCert;
+    }
+    const leafPem = Array.isArray(certPem) ? certPem[0] : certPem;
+    const peerCert = tlsParseCertificate(leafPem);
+    if (peerCert === null) return true;
+    // The presented cert's fingerprint rides the socket for
+    // getPeerX509Certificate() — stashed regardless of the verify outcome
+    // (rejectUnauthorized: false still delivers a response whose socket
+    // must report the peer cert it actually saw).
+    const fingerprint = _tlsFingerprint256(leafPem);
+    if (fingerprint !== null) {
+      sock._tlsPeerX509Certificate = { fingerprint256: fingerprint };
+    }
     const checkIdentity =
       reqTls.checkServerIdentity ??
       agentTls.checkServerIdentity ??
@@ -6526,7 +6559,7 @@ export class ClientRequest extends OutgoingMessage {
     // socket is destroyed with the verify error and the round trip
     // never starts.
     if (this.protocol === "https:" && server != null) {
-      if (!this._verifyHttpsPeer(server, sock)) return;
+      if (!(await this._verifyHttpsPeer(server, sock))) return;
     }
     this._roundTripStarted = true;
     // The agent assigned the socket; onSocket() already set this.socket
@@ -7969,6 +8002,67 @@ function _serializeRequestHead(
 }
 
 // Port of Node's normalizeServerName/calculateServerName
+// SNI context selection (Node lib/internal/tls/wrap.js loadSNI): invoke
+// the server's SNICallback with the ClientHello servername and resolve
+// the selected secure context (or the callback's error). A callback that
+// fires twice settles only once; a throw becomes the error. Never rejects.
+function _selectSniCert(server, sniName) {
+  const cb = server._tlsOptions?.SNICallback;
+  if (!sniName || typeof cb !== "function") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    try {
+      // Method-style on the server, as Node invokes it on the handshake
+      // owner; the tests' callbacks ignore `this`, but a method-shaped
+      // callback that reads server state must not get undefined.
+      cb.call(server, sniName, (err, context) => {
+        if (err) return done({ error: err });
+        done({ context });
+      });
+    } catch (err) {
+      done({ error: err });
+    }
+  });
+}
+
+// X509Certificate.fingerprint256 for the virtual handshake: SHA-256 of
+// the DER encoding, colon-separated uppercase hex (format probed on real
+// Node v24.22.1). The presented cert's bytes are real, so the fingerprint
+// is real data — getPeerX509Certificate() returns it without claiming a
+// full X.509 implementation.
+// ponytail: ceiling — subject/issuer/validity need the DER walker in
+// src/internals/tls-verify.js; only fingerprint256 has a test behind it.
+function _tlsFingerprint256(pem) {
+  // A Buffer may hold PEM text (fixtures.readKey returns the PEM file) or
+  // raw DER — sniff the header, don't assume (same rule as
+  // src/internals/tls-verify.js _pemToDer).
+  const pemTextToDer = (text) => {
+    const b64 = text.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+    return b64 ? Buffer.from(b64, "base64") : null;
+  };
+  let der = null;
+  if (typeof pem === "string") {
+    der = pemTextToDer(pem);
+  } else if (pem instanceof Uint8Array) {
+    const head = Buffer.from(pem.subarray(0, 10)).toString("latin1");
+    der = head.startsWith("-----BEGIN")
+      ? pemTextToDer(Buffer.from(pem).toString("latin1"))
+      : Buffer.from(pem);
+  }
+  if (!der) return null;
+  return createHash("sha256")
+    .update(der)
+    .digest("hex")
+    .toUpperCase()
+    .match(/../g)
+    .join(":");
+}
+
 // (lib/_http_agent.js:474-504): the SNI name for one request. An explicit
 // servername option wins (including "" = send no SNI); otherwise the Host
 // header's host part, else the request host; an IP literal means no SNI.

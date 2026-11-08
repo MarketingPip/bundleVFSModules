@@ -724,15 +724,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (parity/preload.mjs + parity/hooks.mjs + parity/tls-harness.mjs),
     // https server handshakeTimeout + 'secureConnection' emission
     // (src/https.js) + working note.
+    // fix/https-joint-session-sni branch: SNI cert selection in the
+    // virtual peer verifier + getPeerX509Certificate fingerprint
+    // (src/http.js + src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-https-tls-transport.md",
-        "parity/hooks.mjs",
-        "parity/preload.mjs",
-        "parity/tls-harness.mjs",
-        "src/https.js",
-        "src/tls.js",
-      ].sort(),
+      ["NOTES-https-l13.md", "src/http.js", "src/net.js"].sort(),
     );
   });
 
