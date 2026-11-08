@@ -137,6 +137,12 @@ function isExtraRedirect(name) {
   // http — two classes, same name. Mirrors the https redirect above
   // (PR #232 precedent).
   if (target === "https" && name === "http") return true;
+  // https tests that require('tls')/'net' need the shims: tls.connect()
+  // dials the virtual server (real tls ECONNREFUSEs on virtual ports),
+  // and dropRequest asserts `socket instanceof net.Socket` against the
+  // shim's class. 0 passing tests require either, so the redirect cannot
+  // regress a passer. Mirrors the http redirect above (PR #232 precedent).
+  if (target === "https" && (name === "tls" || name === "net")) return true;
   // http tests that require('perf_hooks') need the shim's observer
   // registry: test-http-perf_hooks observes {type:"http"} and the entries
   // are emitted by the shim's http instrumentation through the shared
@@ -208,6 +214,20 @@ function polyfillPath(request) {
   // so net.createConnection() reaches the http shim's virtual server.
   // src/net.js itself is untouched.
   if (target === "http" && name === "net") {
+    return path.join(repoRoot, "parity", "net-harness.mjs");
+  }
+  // Harness-only timer-globals restore for tls under the https target
+  // (parity/tls-harness.mjs): https tests that require('tls') get the shim
+  // so tls.connect() reaches the virtual server. src/tls.js itself is
+  // untouched.
+  if (target === "https" && name === "tls") {
+    return path.join(repoRoot, "parity", "tls-harness.mjs");
+  }
+  // Harness-only timer-globals restore for net under the https target
+  // (parity/net-harness.mjs): https tests that require('net') get the shim
+  // so `socket instanceof net.Socket` reads the shim's class.
+  // src/net.js itself is untouched.
+  if (target === "https" && name === "net") {
     return path.join(repoRoot, "parity", "net-harness.mjs");
   }
   // Harness-only timer-globals restore for http2 parity

@@ -32,6 +32,13 @@ function isExtraRedirect(name) {
   // name. CJS require path is in preload.mjs. Mirrors the net redirect
   // above (PR #232 precedent).
   if (target === "https" && name === "http") return true;
+  // https tests that import 'tls'/'net' need the shims: tls.connect()
+  // dials the virtual server (real tls ECONNREFUSEs on virtual ports),
+  // and dropRequest asserts `socket instanceof net.Socket` against the
+  // shim's class. 0 passing tests require either, so the redirect cannot
+  // regress a passer. ESM import path is in hooks.mjs. Mirrors the http
+  // redirect above (PR #232 precedent).
+  if (target === "https" && (name === "tls" || name === "net")) return true;
   // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
   // zlib must read the same cell (mirrors Node's load-time capture).
   return target === "zlib" && name === "buffer";
@@ -107,6 +114,18 @@ function polyfillURL(specifier) {
   // net.createConnection() reaches the http shim's virtual server.
   // src/net.js itself is untouched.
   if (target === "http" && name === "net") {
+    return pathToFileURL(path.join(repoRoot, "parity", "net-harness.mjs")).href;
+  }
+  // Harness-only timer-globals restore for tls under the https target
+  // (parity/tls-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs.
+  if (target === "https" && name === "tls") {
+    return pathToFileURL(path.join(repoRoot, "parity", "tls-harness.mjs")).href;
+  }
+  // Harness-only timer-globals restore for net under the https target
+  // (parity/net-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs.
+  if (target === "https" && name === "net") {
     return pathToFileURL(path.join(repoRoot, "parity", "net-harness.mjs")).href;
   }
   // Harness-only timer-globals restore for net parity

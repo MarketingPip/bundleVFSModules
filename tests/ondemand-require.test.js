@@ -718,8 +718,21 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/https-session-surface branch: TLS session surface
     // (Agent._sessionCache + getSession/getPeerCertificate/isSessionReused
     // + ticket-epoch + pfx client-cert extraction).
+    // fix/https-tls-transport branch: raw TLS transport — TLSSocket
+    // dials through the virtual network + tls.Server backing net server
+    // (src/tls.js), tls/net extra redirects under PARITY_TARGET=https
+    // (parity/preload.mjs + parity/hooks.mjs + parity/tls-harness.mjs),
+    // https server handshakeTimeout + 'secureConnection' emission
+    // (src/https.js) + working note.
     expect(nonDist.sort()).toEqual(
-      ["src/http.js", "src/https.js", "src/net.js"].sort(),
+      [
+        "NOTES-https-tls-transport.md",
+        "parity/hooks.mjs",
+        "parity/preload.mjs",
+        "parity/tls-harness.mjs",
+        "src/https.js",
+        "src/tls.js",
+      ].sort(),
     );
   });
 

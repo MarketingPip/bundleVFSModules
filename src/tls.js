@@ -11,9 +11,11 @@
 // Browser strategy:
 // - TLSSocket extends the project's EventEmitter (src/events.js) with
 //   net.Socket-compatible method shapes (connect/write/end/destroy/sets).
-// - connect() performs an *emulated* handshake: asynchronously emits
-//   'connect' then 'secureConnect' and invokes the callback. It never
-//   attempts real TCP and never emits 'error' for unreachable hosts.
+// - connect() dials through the virtual network (src/net.js): the bytes
+//   are real in-process bytes to a virtual server (https, tls, or net),
+//   and the server's bytes arrive back as 'data'. There is no TLS record
+//   layer — no handshake bytes, no cipher negotiation — so the
+//   'secureConnect'/'session' events are emulated on top of the pairing.
 // - Handshake-derived getters (getCipher, getProtocol, getPeerCertificate,
 //   getSession, ...) return null/empty/undefined — never made-up data.
 // - getCiphers() returns Node's real static cipher list (compile-time data).
@@ -29,12 +31,26 @@
 
 import { EventEmitter } from "./events.js";
 import { SecureContext, createSecureContext } from "./_tls_common.js";
+// Raw transport (L12): a TLSSocket dials through the virtual network —
+// net.connect pairs it with the server-side socket in the shared
+// registry, so bytes written here arrive at the server and bytes the
+// server writes arrive back as 'data'. net.js does not import tls.js,
+// so there is no cycle.
+import {
+  Socket as NetSocket,
+  connect as netConnect,
+  createServer as netCreateServer,
+} from "./net.js";
 
 const RT =
   typeof globalThis._RUNTIME_ !== "undefined"
     ? globalThis._RUNTIME_
     : undefined;
 void RT;
+
+// Counter for synthetic sessions issued by connect() (L12): each fresh
+// connection gets a distinct session Buffer.
+let _tlsSessionCounter = 0;
 
 // ---------------------------------------------------------------------------
 // Static data (compile-time facts from Node v24.20.0, not fabricated)
@@ -195,6 +211,20 @@ export class TLSSocket extends EventEmitter {
     this[kOptions] = { ...options };
     this._parentSocket = socket instanceof EventEmitter ? socket : null;
 
+    // Raw transport (L12): the underlying net.Socket that carries the
+    // bytes. Set by connect() (client side) or by wrapping an accepted
+    // socket (server side); null until then, in which case write/end
+    // keep the old black-hole counting behavior.
+    this._socket = null;
+    this._encoding = null;
+    // Session state (Node lib/internal/tls/wrap.js:1238-1253): the
+    // session this connection resumed (options.session) or was issued,
+    // and whether it was a resumption. Set at connect() time so
+    // isSessionReused() answers inside the 'secureConnect' callback.
+    this._tlsSession = undefined;
+    this._tlsSessionReused = false;
+    this.secureConnecting = false;
+
     // net.Socket-compatible state fields.
     this.connecting = false;
     this.pending = true;
@@ -214,6 +244,53 @@ export class TLSSocket extends EventEmitter {
     this.alpnProtocol = null;
     this.servername = options.servername ?? null;
     this._secureEstablished = false;
+
+    // Server-side wrap: an accepted net.Socket (tls.Server's backing
+    // server) becomes the transport immediately. The handshake is
+    // emulated, so 'secureConnect' fires on the next microtask — the
+    // 'secureConnection' handler runs synchronously first and can still
+    // attach its listener.
+    if (this._parentSocket instanceof NetSocket) {
+      this._attachTransport(this._parentSocket);
+      this.connecting = false;
+      this.pending = false;
+      queueMicrotask(() => {
+        if (this.destroyed) return;
+        this._secureEstablished = true;
+        this.emit("secureConnect");
+      });
+    }
+  }
+
+  // Wire a net.Socket as this socket's transport: its data/end/close/
+  // error/timeout re-emit here, and its state drives ours. One
+  // attachment per TLSSocket — connect() and the server-side wrap both
+  // funnel through here.
+  _attachTransport(sock) {
+    this._socket = sock;
+    if (this._encoding != null && typeof sock.setEncoding === "function") {
+      try {
+        sock.setEncoding(this._encoding);
+      } catch {
+        /* best effort */
+      }
+    }
+    sock.on("data", (chunk) => {
+      this.bytesRead +=
+        typeof chunk === "string" ? chunk.length : (chunk.length ?? 0);
+      this.emit("data", chunk);
+    });
+    sock.on("end", () => this.emit("end"));
+    sock.on("timeout", () => this.emit("timeout"));
+    sock.on("error", (err) => this.emit("error", err));
+    sock.on("close", (hadError) => {
+      this.destroyed = true;
+      this.readable = false;
+      this.writable = false;
+      this.connecting = false;
+      this.secureConnecting = false;
+      this.emit("close", hadError);
+    });
   }
 
   // -- connection ---------------------------------------------------------
@@ -259,24 +336,65 @@ export class TLSSocket extends EventEmitter {
     this.writable = true;
     this.connecting = true;
     this.pending = true;
+    this.secureConnecting = true;
+
+    // Session (Node lib/internal/tls/wrap.js:1854 getSessionForReuse +
+    // :1806-1811): a session supplied in options resumes this connection
+    // (isSessionReused() is true inside the 'secureConnect' callback);
+    // otherwise a fresh session is issued and carried by the 'session'
+    // event after 'secureConnect'. The bytes are synthetic — the virtual
+    // handshake has no TLS records — but the shape (Buffer, stable per
+    // connection, distinct across connections) is what the tests read.
+    if (options.session != null) {
+      this._tlsSession = options.session;
+      this._tlsSessionReused = true;
+    } else {
+      // Synthetic session: 16 bytes (Date.now || counter). Built on
+      // Uint8Array/DataView so connect() works with no host Buffer (the
+      // browser-fallback lane nulls globalThis.Buffer); wrapped in a
+      // Buffer only when one exists.
+      _tlsSessionCounter += 1;
+      const bytes = new Uint8Array(16);
+      const view = new DataView(bytes.buffer);
+      view.setBigUint64(0, BigInt(Date.now()));
+      view.setUint32(8, _tlsSessionCounter);
+      view.setUint32(12, 0);
+      this._tlsSession =
+        typeof Buffer !== "undefined" ? Buffer.from(bytes) : bytes;
+      this._tlsSessionReused = false;
+    }
 
     if (options.signal != null && options.signal.aborted) {
       queueMicrotask(() => this.destroy(options.signal.reason));
       return this;
     }
 
-    // Emulated handshake. No TCP/TLS packets are ever sent: the browser has
-    // no API for a raw TLS handshake. We asynchronously report the
-    // connection as established so callback/event-driven code works.
-    queueMicrotask(() => {
+    // Real dial through the virtual network: net.connect pairs this
+    // socket with the server-side socket in the shared registry (an
+    // https server, a tls.Server's backing server, or any net server).
+    // A port with no listener fails with ECONNREFUSED on the socket,
+    // like real Node — never a fake 'connect'. Bytes written before
+    // the handshake completes queue in the net socket's pending writes
+    // and flush at 'connect', so client.write() in the 'connect'
+    // handler (or right after tls.connect() returns) reaches the
+    // server. ponytail: ceiling — there is no TLS record layer here,
+    // so the "handshake" is the TCP pairing + the async secureConnect;
+    // a real TLS stack would negotiate before emitting either event.
+    const sock = netConnect(options);
+    this._attachTransport(sock);
+    sock.once("connect", () => {
       if (this.destroyed) return;
       this.connecting = false;
       this.pending = false;
       this.emit("connect");
       queueMicrotask(() => {
         if (this.destroyed) return;
+        this.secureConnecting = false;
         this._secureEstablished = true;
         this.emit("secureConnect");
+        if (this._tlsSession !== undefined) {
+          this.emit("session", this._tlsSession);
+        }
       });
     });
     return this;
@@ -299,6 +417,10 @@ export class TLSSocket extends EventEmitter {
           ? chunk.length
           : (chunk.length ?? chunk.byteLength ?? 0);
     }
+    // With a transport, bytes go to the peer (queued by the net socket
+    // while still connecting); without one (never connected) keep the
+    // old counting behavior.
+    if (this._socket) return this._socket.write(chunk, encoding, callback);
     if (typeof callback === "function") queueMicrotask(() => callback(null));
     return true;
   }
@@ -312,6 +434,7 @@ export class TLSSocket extends EventEmitter {
       callback = encoding;
       encoding = undefined;
     }
+    if (this._socket) return this._socket.end(data, encoding, callback);
     queueMicrotask(() => {
       this.emit("end");
       if (typeof callback === "function") callback();
@@ -328,6 +451,14 @@ export class TLSSocket extends EventEmitter {
     this.readable = false;
     this.writable = false;
     this.connecting = false;
+    this.secureConnecting = false;
+    if (this._socket) {
+      // The transport's 'close' re-emit (attached in _attachTransport)
+      // delivers this socket's 'close'; its 'error' re-emit delivers
+      // the destroy error — no double emission here.
+      this._socket.destroy(err);
+      return this;
+    }
     queueMicrotask(() => {
       if (err != null) this.emit("error", err);
       this.emit("close", err != null);
@@ -336,41 +467,71 @@ export class TLSSocket extends EventEmitter {
   }
 
   // -- socket options (noops with correct shapes) --------------------------
-  setNoDelay(_enable = true) {
+  setNoDelay(enable = true) {
+    if (this._socket) this._socket.setNoDelay(enable);
     return this;
   }
-  setKeepAlive(_enable = false, _initialDelay = 0) {
+  setKeepAlive(enable = false, initialDelay = 0) {
+    if (this._socket) this._socket.setKeepAlive(enable, initialDelay);
     return this;
   }
   setTimeout(timeout, callback) {
     this._idleTimeout = timeout;
     if (typeof callback === "function") this.once("timeout", callback);
+    if (this._socket) this._socket.setTimeout(timeout);
+    return this;
+  }
+  setEncoding(encoding) {
+    this._encoding = encoding;
+    if (this._socket && typeof this._socket.setEncoding === "function") {
+      this._socket.setEncoding(encoding);
+    }
+    return this;
+  }
+  // Stream flow control: delegate to the transport when it exists (the
+  // net socket is a real stream); without one, a no-op returning this.
+  pause() {
+    if (this._socket && typeof this._socket.pause === "function") {
+      this._socket.pause();
+    }
+    return this;
+  }
+  resume() {
+    if (this._socket && typeof this._socket.resume === "function") {
+      this._socket.resume();
+    }
     return this;
   }
   ref() {
+    if (this._socket && typeof this._socket.ref === "function") {
+      this._socket.ref();
+    }
     return this;
   }
   unref() {
+    if (this._socket && typeof this._socket.unref === "function") {
+      this._socket.unref();
+    }
     return this;
   }
 
   address() {
-    return null;
+    return this._socket ? this._socket.address() : null;
   }
   get remoteAddress() {
-    return undefined;
+    return this._socket ? this._socket.remoteAddress : undefined;
   }
   get remotePort() {
-    return undefined;
+    return this._socket ? this._socket.remotePort : undefined;
   }
   get localAddress() {
-    return undefined;
+    return this._socket ? this._socket.localAddress : undefined;
   }
   get localPort() {
-    return undefined;
+    return this._socket ? this._socket.localPort : undefined;
   }
   get remoteFamily() {
-    return undefined;
+    return this._socket ? this._socket.remoteFamily : undefined;
   }
 
   // -- TLS-specific API ----------------------------------------------------
@@ -404,10 +565,13 @@ export class TLSSocket extends EventEmitter {
     return null;
   }
   getSession() {
-    return undefined;
+    // The session issued at connect() (synthetic) or resumed from
+    // options.session; undefined before any connection — the stub
+    // default the https-agent path already matches (src/net.js).
+    return this._tlsSession ?? undefined;
   }
   isSessionReused() {
-    return false;
+    return this._tlsSessionReused;
   }
   getSharedSigalgs() {
     return [];
@@ -442,7 +606,7 @@ export class TLSSocket extends EventEmitter {
 // Server
 // ---------------------------------------------------------------------------
 
-export class Server extends EventEmitter {
+class TLSServerBase extends EventEmitter {
   constructor(options, connectionListener) {
     super();
     if (typeof options === "function") {
@@ -455,6 +619,11 @@ export class Server extends EventEmitter {
     createSecureContext(this._options);
     this.listening = false;
     this._connections = 0;
+    // Backing virtual-network server (L12): listen() binds it on the
+    // port so tls.connect (and https clients) reach this server through
+    // the shared registry; null until listen() runs.
+    this._netServer = null;
+    this._port = null;
     if (typeof connectionListener === "function") {
       this.on("secureConnection", connectionListener);
     }
@@ -462,26 +631,87 @@ export class Server extends EventEmitter {
 
   listen(...args) {
     const last = args[args.length - 1];
-    if (typeof last === "function") this.once("listening", last);
-    // No real listener is bound: the browser cannot accept raw TCP/TLS.
-    queueMicrotask(() => {
-      this.listening = true;
+    let cb = null;
+    let port;
+    let host;
+    let pipePath = null;
+    if (typeof last === "function") cb = args.pop();
+    if (args.length === 1 && typeof args[0] === "object" && args[0] !== null) {
+      port = args[0].port;
+      host = args[0].host;
+      if (typeof args[0].path === "string") pipePath = args[0].path;
+    } else if (typeof args[0] === "number" || typeof args[0] === "string") {
+      if (typeof args[0] === "string" && Number.isNaN(Number(args[0]))) {
+        pipePath = args[0];
+      } else {
+        port = Number(args[0]);
+        if (typeof args[1] === "string") host = args[1];
+      }
+    } else if (args.length === 0) {
+      port = 0;
+    }
+    if (port === undefined && !pipePath) port = 0;
+
+    // Real virtual-network bind (ServerBase shape in src/http.js):
+    // each accepted socket is wrapped in a TLSSocket and delivered as
+    // 'secureConnection'. The backing server owns the registry slot,
+    // so a dial to this port pairs with it; a dial to an unlistened
+    // port fails ECONNREFUSED in net.connect, like real Node.
+    const netServer = netCreateServer();
+    netServer.on("connection", (socket) => {
+      const tlsSocket = new TLSSocket(socket);
+      this._connections++;
+      tlsSocket.on("close", () => {
+        this._connections--;
+      });
+      this.emit("secureConnection", tlsSocket);
+    });
+    netServer.on("error", (err) => this.emit("error", err));
+    this._netServer = netServer;
+    if (pipePath) netServer.listen(pipePath);
+    else netServer.listen(port, host);
+    this._port = port;
+    this.listening = true;
+    // The backing server binds on a nextTick: only fire 'listening' (and
+    // the callback, which reads address().port) once it is actually
+    // bound — a microtask here would run before the bind and address()
+    // would still be null.
+    netServer.once("listening", () => {
       this.emit("listening");
+      if (typeof cb === "function") cb.call(this);
     });
     return this;
   }
 
   close(callback) {
-    queueMicrotask(() => {
-      this.listening = false;
-      this.emit("close");
-      if (typeof callback === "function") callback();
-    });
+    if (typeof callback === "function") {
+      if (!this.listening) {
+        const err = new Error("Server is not running.");
+        err.code = "ERR_SERVER_NOT_RUNNING";
+        queueMicrotask(() => callback(err));
+      } else {
+        this.once("close", callback);
+      }
+    }
+    if (this._netServer) {
+      const netServer = this._netServer;
+      this._netServer = null;
+      netServer.once("close", () => {
+        this.listening = false;
+        this.emit("close");
+      });
+      netServer.close();
+    } else {
+      queueMicrotask(() => {
+        this.listening = false;
+        this.emit("close");
+      });
+    }
     return this;
   }
 
   address() {
-    return null;
+    return this._netServer ? this._netServer.address() : null;
   }
 
   getConnections(callback) {
@@ -503,8 +733,19 @@ export class Server extends EventEmitter {
   addContext(_hostname, _context) {}
 }
 
+/**
+ * Node's tls.Server is callable without `new`
+ * (lib/internal/tls/wrap.js: `if (!(this instanceof Server)) return
+ * new Server(...)`). Same Reflect.construct wrapper as src/https.js.
+ */
+export function Server(...args) {
+  return Reflect.construct(TLSServerBase, args, new.target ?? Server);
+}
+Object.setPrototypeOf(Server, TLSServerBase);
+Server.prototype = TLSServerBase.prototype;
+
 export function createServer(options, connectionListener) {
-  return new Server(options, connectionListener);
+  return new TLSServerBase(options, connectionListener);
 }
 
 // ---------------------------------------------------------------------------

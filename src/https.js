@@ -8,7 +8,10 @@
 
 import http, { Agent as HttpAgent } from "./http.js";
 import { createSecureContext } from "./_tls_common.js";
-import { checkServerIdentity as tlsCheckServerIdentity } from "./tls.js";
+import {
+  checkServerIdentity as tlsCheckServerIdentity,
+  TLSSocket,
+} from "./tls.js";
 // 3DES + SHA-1 for PKCS#12 PBE decryption in _extractClientCertificate
 // below: the repo's crypto layer (native OpenSSL bridge under genuine
 // Node, pure-JS hash fallback + honest "requires OpenSSL" error for
@@ -78,6 +81,41 @@ class HttpsServerBase extends http.Server {
       // client agent can read its ticket epoch at connect time (the
       // session cache refuses resumption after setTicketKeys rotates).
       socket._tlsServer = this;
+      // Node lib/internal/tls/wrap.js:1057-1058: the server-side socket
+      // gets a handshake timeout (default 120s, wrap.js:1491); on expiry
+      // _handleTimeout emits ERR_TLS_HANDSHAKE_TIMEOUT and the server
+      // emits 'clientError' with the cleartext socket. A raw-TCP peer
+      // that never sends a ClientHello (test-https-timeout-server) trips
+      // it; a real request dispatch clears it (wrap.js:1201-1202).
+      // Standalone timer, NOT socket.setTimeout: the net socket has ONE
+      // timeout slot, shared with the server's own setTimeout — arming
+      // or clearing the handshake timer through it would clobber the
+      // server timeout (test-https-set-timeout-server regressed 1→124).
+      const hsTimeout = this._tlsOptions.handshakeTimeout || 120 * 1000;
+      if (typeof hsTimeout === "number" && hsTimeout > 0) {
+        const onHandshakeTimeout = () => {
+          socket._handshakeTimer = null;
+          const err = new Error("TLS handshake timeout");
+          err.code = "ERR_TLS_HANDSHAKE_TIMEOUT";
+          this.emit("clientError", err, socket);
+          socket.destroy();
+        };
+        socket._handshakeTimer = setTimeout(onHandshakeTimeout, hsTimeout);
+        socket.once("close", () => {
+          if (socket._handshakeTimer) {
+            clearTimeout(socket._handshakeTimer);
+            socket._handshakeTimer = null;
+          }
+        });
+      }
+      // Node: https.Server inherits tls.Server, which emits
+      // 'secureConnection' per accepted connection with the TLSSocket
+      // (test-https-timeout-server-2 asserts instanceof tls.TLSSocket).
+      // The wrap shares the net socket with the http dispatch — it only
+      // re-emits events, never consumes bytes.
+      const tlsSocket = new TLSSocket(socket);
+      tlsSocket._secureEstablished = false;
+      this.emit("secureConnection", tlsSocket);
     });
     // Session-ticket epoch: bumped by setTicketKeys. A client session
     // cached under an older epoch cannot be resumed (Node: the ticket
@@ -91,6 +129,12 @@ class HttpsServerBase extends http.Server {
       const wrapped = (req, res) => {
         if (req.socket) {
           req.socket._secureEstablished = true;
+          // Handshake "completes" at first dispatch: clear the handshake
+          // timeout (Node lib/internal/tls/wrap.js:1201-1202).
+          if (req.socket._handshakeTimer) {
+            clearTimeout(req.socket._handshakeTimer);
+            req.socket._handshakeTimer = null;
+          }
           _setSocketAuthSurface(this, req.socket);
           // The client certificate the peer presented (if any) is the
           // server socket's peer certificate (Node: TLSSocket
