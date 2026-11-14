@@ -729,8 +729,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (src/http.js + src/net.js + working note).
     // docs/https-hitlist-59 branch: HITLIST + measured-rates sync
     // (https 20 -> 27 restated pre-wave baseline -> 59, wave 3).
+    // fix/net-state-getters branch: net state getters — bufferSize gates
+    // on _handle (Node lib/net.js:980) + _connecting legacy alias
+    // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      ["NOTES-net-state-getters.md", "src/net.js"].sort(),
     );
   });
 
