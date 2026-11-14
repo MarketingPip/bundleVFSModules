@@ -37,14 +37,23 @@ import { Duplex } from "./stream.js";
 import { EventEmitter } from "./events.js";
 import { undestroy as undestroyStream } from "./stream/destroy.js";
 import { constants as osConstants } from "./os.js";
-// ponytail: node:fs is imported ONLY for existsSync on pipe-bind parent
-// dirs (BoundSocket EACCES case). In the parity harness this resolves to
-// real fs, so the check sees the real tmpdir; in the browser build esbuild
+// ponytail: node:fs is imported ONLY for pipe-bind filesystem effects
+// (existsSync on pipe-bind parent dirs, statSync on the bind path/parent,
+// writeFileSync/chmodSync/unlinkSync for the placeholder socket file — see
+// Server.prototype._doListenPipe). In the parity harness this resolves to
+// real fs, so the checks see the real tmpdir and the placeholder is visible
+// to the tests' native fs.statSync; in the browser build esbuild
 // externalizes node: builtins (same precedent as src/url.js importing
 // node:path), so the sandbox resolves it to the memfs-backed shim fs and
-// the check runs against the visible virtual filesystem. No other fs API
+// the checks run against the visible virtual filesystem. No other fs API
 // is used here — the virtual transport never reads real disk.
-import { existsSync as fsExistsSync } from "node:fs";
+import {
+  existsSync as fsExistsSync,
+  statSync as fsStatSync,
+  writeFileSync as fsWriteFileSync,
+  chmodSync as fsChmodSync,
+  unlinkSync as fsUnlinkSync,
+} from "node:fs";
 
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
@@ -881,6 +890,12 @@ function _boundPipes() {
 function serverKey(host, port) {
   return `${host}:${port}`;
 }
+
+// sun_path limit: libuv binds pipes with UV_PIPE_NO_TRUNCATE, so a path
+// longer than 107 chars is EINVAL, not truncation (BoundSocket._bindPipe
+// enforces the same bound at construction time; probed real Node v24.22.1
+// errors EINVAL on both listen and connect past it).
+const SUN_PATH_MAX = 107;
 
 // Whether a virtual TCP server is registered for (host, port), using the
 // same lookup keys as Socket connect: an IP-literal host checks its own
@@ -2176,6 +2191,25 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
 
   let server = null;
   if (pipe) {
+    // sun_path limit, same bound as the listen side (libuv
+    // UV_PIPE_NO_TRUNCATE): probed real Node v24.22.1 errors EINVAL on
+    // connect to an over-long pipe path. Windows named pipes
+    // (\\?\pipe\...) have no sun_path limit and no filesystem file.
+    if (
+      typeof options.path === "string" &&
+      !options.path.startsWith("\\\\") &&
+      options.path.length > SUN_PATH_MAX
+    ) {
+      defer(() =>
+        this._connectFailed(
+          errnoError("EINVAL", "connect", `connect EINVAL ${options.path}`, {
+            errno: -22,
+            path: options.path,
+          }),
+        ),
+      );
+      return;
+    }
     server = _pipeServers().get(options.path);
     if (!server) {
       defer(() => this._connectFailed(errConnRefusedPipe(options.path)));
@@ -2700,6 +2734,7 @@ function Server(options, connectionListener) {
   self._bindPending = false;
   self._bindAddress = null;
   self._pipeName = null;
+  self._pipeFileCreated = false;
   self._unref = false;
   self._backlog = undefined;
   self._loopTimer = null;
@@ -2836,7 +2871,14 @@ Server.prototype.listen = function listen(...args) {
   if (options.path && typeof options.path === "string") {
     validateString(options.path, "options.path");
     this._bindPending = true;
-    nextTick(() => this._doListenPipe(options.path, backlog));
+    nextTick(() =>
+      this._doListenPipe(
+        options.path,
+        backlog,
+        options.readableAll,
+        options.writableAll,
+      ),
+    );
     return this;
   }
 
@@ -2899,19 +2941,103 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
   this.emit("listening");
 };
 
-Server.prototype._doListenPipe = function _doListenPipe(path, backlog) {
+Server.prototype._doListenPipe = function _doListenPipe(
+  path,
+  backlog,
+  readableAll,
+  writableAll,
+) {
   if (!this._bindPending) return;
-  if (_pipeServers().has(path)) {
+  const fail = (err) => {
     this._bindPending = false;
-    nextTick(() =>
-      this.emit(
-        "error",
-        errnoError(
-          "EADDRINUSE",
-          "listen",
-          `listen EADDRINUSE: address already in use ${path}`,
-          { errno: -98, path },
-        ),
+    nextTick(() => this.emit("error", err));
+  };
+  // Windows named pipes (\\?\pipe\...) and abstract Unix sockets (\0...)
+  // have no filesystem socket file; only the virtual registry tracks them.
+  const isWindowsPipe = path.startsWith("\\\\");
+  const isAbstract = path[0] === "\0";
+  if (!isWindowsPipe && path.length > SUN_PATH_MAX) {
+    fail(
+      errnoError(
+        "EINVAL",
+        "listen",
+        `listen EINVAL: invalid argument ${path}`,
+        {
+          errno: -22,
+          path,
+        },
+      ),
+    );
+    return;
+  }
+  if (!isWindowsPipe && !isAbstract) {
+    // Parent directory must exist in the filesystem this runtime sees
+    // (real disk in the parity harness, memfs in the browser). Probed real
+    // Node v24.22.1: missing parent -> EACCES, parent-not-a-directory ->
+    // ENOTDIR (same EACCES shape BoundSocket._bindPipe already uses).
+    const slash = path.lastIndexOf("/");
+    const parent = slash > 0 ? path.slice(0, slash) : slash === 0 ? "/" : "";
+    if (parent !== "") {
+      let parentStat = null;
+      try {
+        parentStat = fsStatSync(parent);
+      } catch {
+        /* missing parent */
+      }
+      if (parentStat === null) {
+        fail(
+          errnoError(
+            "EACCES",
+            "listen",
+            `listen EACCES: permission denied ${path}`,
+            { errno: -13, address: path },
+          ),
+        );
+        return;
+      }
+      if (!parentStat.isDirectory()) {
+        fail(
+          errnoError(
+            "ENOTDIR",
+            "listen",
+            `listen ENOTDIR: not a directory ${path}`,
+            { errno: -20, path },
+          ),
+        );
+        return;
+      }
+    }
+    // An existing non-socket file already owns the pathname (probed real
+    // Node: EADDRINUSE); a stale socket file is unlinked first, as libuv
+    // does before bind().
+    let existing = null;
+    try {
+      existing = fsStatSync(path);
+    } catch {
+      /* no file at the path */
+    }
+    if (existing !== null) {
+      if (!existing.isSocket()) {
+        fail(
+          errnoError(
+            "EADDRINUSE",
+            "listen",
+            `listen EADDRINUSE: address already in use ${path}`,
+            { errno: -98, path },
+          ),
+        );
+        return;
+      }
+      fsUnlinkSync(path);
+    }
+  }
+  if (_pipeServers().has(path)) {
+    fail(
+      errnoError(
+        "EADDRINUSE",
+        "listen",
+        `listen EADDRINUSE: address already in use ${path}`,
+        { errno: -98, path },
       ),
     );
     return;
@@ -2922,6 +3048,43 @@ Server.prototype._doListenPipe = function _doListenPipe(path, backlog) {
   this._backlog = backlog;
   this._pipeName = path;
   this._bindAddress = { address: path };
+  if (!isWindowsPipe && !isAbstract) {
+    // Real Node creates a socket file on bind; the shim stands a regular
+    // placeholder file in its place so fs.statSync/existsSync see it.
+    // Mode 0o777 lets the umask shape it exactly like bind() does (0770
+    // under the harness umask 0007); readableAll/writableAll replace the
+    // mode (libuv uv_pipe_chmod: readable 0444, writable 0222, both 0666).
+    // ponytail: ceiling — a real socket file reports isSocket() true; the
+    // placeholder is a regular file. No vendored test asserts isSocket()
+    // on a shim-bound pipe; a socket-typed placeholder needs a real
+    // bind() the browser cannot do.
+    try {
+      fsWriteFileSync(path, "", { mode: 0o777, flag: "wx" });
+      let mode = 0;
+      if (readableAll === true) mode |= 0o444;
+      if (writableAll === true) mode |= 0o222;
+      if (mode !== 0) fsChmodSync(path, mode);
+    } catch (e) {
+      if (_pipeServers().get(path) === this) _pipeServers().delete(path);
+      this._listening = false;
+      this._pipeName = null;
+      this._bindAddress = null;
+      const code =
+        e.code === "EEXIST"
+          ? "EADDRINUSE"
+          : typeof e.code === "string"
+            ? e.code
+            : "EACCES";
+      fail(
+        errnoError(code, "listen", `listen ${code} ${path}`, {
+          errno: typeof e.errno === "number" ? e.errno : -13,
+          path,
+        }),
+      );
+      return;
+    }
+    this._pipeFileCreated = true;
+  }
   this._keepLoopAlive();
   this.emit("listening");
 };
@@ -3252,6 +3415,17 @@ Server.prototype.close = function close(cb) {
       if (this._pipeName) {
         if (_pipeServers().get(this._pipeName) === this)
           _pipeServers().delete(this._pipeName);
+        // Remove the placeholder socket file this server created on
+        // listen (real Node unlinks the socket file on close); a file
+        // removed externally already is not an error.
+        if (this._pipeFileCreated) {
+          this._pipeFileCreated = false;
+          try {
+            fsUnlinkSync(this._pipeName);
+          } catch {
+            /* already gone */
+          }
+        }
       } else if (
         _tcpServers().get(
           serverKey(this._bindAddress.address, this._bindAddress.port),
