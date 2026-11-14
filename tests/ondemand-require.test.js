@@ -733,7 +733,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // on _handle (Node lib/net.js:980) + _connecting legacy alias
     // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-state-getters.md", "src/net.js"].sort(),
+      ["NOTES-net-fd-adoption.md", "src/net.js"].sort(),
     );
   });
 
