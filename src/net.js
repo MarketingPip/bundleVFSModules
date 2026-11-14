@@ -1166,6 +1166,14 @@ Object.defineProperties(Socket.prototype, {
     enumerable: true,
     configurable: true,
   },
+  // Legacy alias for `connecting` (Node lib/net.js:947-951).
+  _connecting: {
+    get() {
+      return this.connecting;
+    },
+    enumerable: true,
+    configurable: true,
+  },
   readyState: {
     get() {
       if (this.connecting) return "opening";
@@ -1214,7 +1222,10 @@ Object.defineProperties(Socket.prototype, {
   },
   bufferSize: {
     get() {
-      return this._connected ? this.writableLength : undefined;
+      // Node lib/net.js:980 gates on the handle, not on _connected:
+      // writes issued pre-connect (while `connecting`) are buffered and
+      // must read back through writableLength.
+      return this._handle ? this.writableLength : undefined;
     },
     enumerable: true,
     configurable: true,
