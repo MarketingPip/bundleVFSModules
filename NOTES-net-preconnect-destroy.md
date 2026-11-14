@@ -58,8 +58,12 @@ Targets (all `PARITY_TARGET=net`): `test-net-connect-abort-controller`,
   `listen-exclusive-random-ports` 1 → 124, `throttle` 134 → 124,
   `write-fully-async-buffer` 137 → 124).
 - Branch CSV: `hidden_files/fast-sweep/net-n1-branch-2026-11-14.csv`
-  (full sweep on this branch).
-- Matched changed-value lines (sorted, deduped): TBD after branch sweep.
+  (full sweep on this branch: 156 rows, 89 pass / 8 timeout / 59 fail).
+- Matched changed-value lines (sorted, deduped) — exactly 3, 0 regressions,
+  0 mode changes:
+  - `test-net-connect-abort-controller.js,1->0`
+  - `test-net-connect-reset.js,1->0`
+  - `test-net-write-cb-on-destroy-before-connect.js,1->0`
 - Claimed flips (each re-run isolated 2× on the branch, all 0):
   - `test-net-connect-abort-controller.js`: 1 → 0
   - `test-net-connect-reset.js`: 1 → 0
