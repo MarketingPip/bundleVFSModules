@@ -3162,7 +3162,19 @@ Server.prototype.listen = function listen(...args) {
     const port = validatePort(options.port, "options.port");
     const host = options.host;
     this._bindPending = true;
-    nextTick(() => this._doListenTCP(port, host, backlog));
+    // ponytail: bind synchronously like Node's setupListenHandle
+    // (node-src lib/net.js:2272) so address() reads the port in-tick;
+    // only the 'listening' event stays async (nextTick, guarded like
+    // emitListeningNT, lib/net.js:2416-2419: skipped if the server
+    // closed first). Errors stay async 'error' events, as in Node.
+    const err = this._bindTCP(port, host, backlog);
+    if (err) {
+      nextTick(() => this.emit("error", err));
+    } else {
+      nextTick(() => {
+        if (this._listening) this.emit("listening");
+      });
+    }
     return this;
   }
 
@@ -3196,8 +3208,13 @@ function toNumber(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
-Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
-  if (!this._bindPending) return;
+// Synchronous TCP bind core, split out of _doListenTCP so listen() can
+// bind in-tick like Node's setupListenHandle (node-src lib/net.js:2272):
+// port allocation + registry claim + _listening/_bindAddress. Returns the
+// error to emit asynchronously on failure, or null on success. The
+// 'listening' event is NOT emitted here — callers schedule it on nextTick
+// (Node: setupListenHandle schedules emitListeningNT, lib/net.js:2353).
+Server.prototype._bindTCP = function _bindTCP(port, host, backlog) {
   let bindHost;
   let family;
   if (host === undefined || host === null) {
@@ -3211,8 +3228,7 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
     family = "IPv4";
   } else {
     this._bindPending = false;
-    nextTick(() => this.emit("error", errNotFound(host)));
-    return;
+    return errNotFound(host);
   }
 
   const actualPort = port === 0 ? allocPort() : port;
@@ -3225,8 +3241,7 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
     // listens with its own _bindAddress.
     if (!(this._reusePortAdopted && existing._reusePortAdopted)) {
       this._bindPending = false;
-      nextTick(() => this.emit("error", errAddrInUse(bindHost, actualPort)));
-      return;
+      return errAddrInUse(bindHost, actualPort);
     }
   } else {
     _tcpServers().set(key, this);
@@ -3240,6 +3255,18 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
   // port (listen(0) keys '6::::0', not the allocated ephemeral port).
   this._connectionKey = `${family === "IPv6" ? 6 : 4}:${bindHost}:${port}`;
   this._keepLoopAlive();
+  return null;
+};
+
+Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
+  if (!this._bindPending) return;
+  // Deferred (BoundSocket-adopt) path: already on a nextTick, so the
+  // 'listening' emit stays synchronous here, as before.
+  const err = this._bindTCP(port, host, backlog);
+  if (err) {
+    nextTick(() => this.emit("error", err));
+    return;
+  }
   this.emit("listening");
 };
 
