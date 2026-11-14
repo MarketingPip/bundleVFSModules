@@ -727,23 +727,20 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/https-joint-session-sni branch: SNI cert selection in the
     // virtual peer verifier + getPeerX509Certificate fingerprint
     // (src/http.js + src/net.js + working note).
-    // docs/https-hitlist-59 branch: HITLIST + measured-rates sync
-    // (https 20 -> 27 restated pre-wave baseline -> 59, wave 3).
-    // fix/net-state-getters branch: net state getters — bufferSize gates
-    // on _handle (Node lib/net.js:980) + _connecting legacy alias
-    // (src/net.js + working note).
-    // fix/net-server-handle branch: fake server._handle + onconnection
-    // accept routing + setNoDelay/setKeepAlive handle dedupe (src/net.js
-    // + working note).
-    // fix/net-socket-options branch: Socket.setKeepAlive verbatim port
-    // (object form, ms->s, 4-arg forward, dedupe) + setTypeOfService /
-    // getTypeOfService (src/net.js + working note).
-    // fix/net-byteswritten-sync branch: bytesWritten sync accounting
-    // (getter sums _pendingWrites + writableBuffer + unconstructed
-    // guard, connect() resets the byte counters, pre-connect flush
-    // after 'connect'/'ready') (src/net.js + working note).
+    // fix/net-connect-args branch: connect-arg validation/normalization
+    // (per-key objectMode throws + host/port/hints validation in
+    // Socket.prototype.connect, refused-error detail shape,
+    // _normalizeArgs symbol on every return path, internal/net parity
+    // adapter) (src/net.js + src/internals/net-symbols.js +
+    // parity/internal-net-adapter.mjs + parity/preload.mjs + note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-byteswritten-sync.md", "src/net.js"].sort(),
+      [
+        "NOTES-net-connect-args.md",
+        "parity/internal-net-adapter.mjs",
+        "parity/preload.mjs",
+        "src/internals/net-symbols.js",
+        "src/net.js",
+      ].sort(),
     );
   });
 

@@ -54,6 +54,7 @@ import {
   chmodSync as fsChmodSync,
   unlinkSync as fsUnlinkSync,
 } from "node:fs";
+import { normalizedArgsSymbol } from "./internals/net-symbols.js";
 
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
@@ -273,11 +274,23 @@ function errnoError(code, syscall, message, fields) {
   return e;
 }
 function errConnRefused(address, port) {
+  // Node lib/internal/errors.js ExceptionWithHostPort: the port is
+  // appended (and set on the error) only when truthy — a port-0 refusal
+  // reads "connect ECONNREFUSED 127.0.0.1" with no port field (probed
+  // real Node v24.22.1, test-net-connect-options-port asyncFailToConnect).
+  let details = "";
+  if (port && port > 0) {
+    details = ` ${address}:${port}`;
+  } else if (address) {
+    details = ` ${address}`;
+  }
+  const fields = { errno: -111, address };
+  if (port) fields.port = port;
   return errnoError(
     "ECONNREFUSED",
     "connect",
-    `connect ECONNREFUSED ${address}:${port}`,
-    { errno: -111, address, port },
+    `connect ECONNREFUSED${details}`,
+    fields,
   );
 }
 
@@ -1136,12 +1149,23 @@ function Socket(options = {}) {
   }
   options = { ...options };
 
-  if (
-    options.objectMode ||
-    options.readableObjectMode ||
-    options.writableObjectMode
-  ) {
-    throw errInvalidArgValue("options", options, "objectMode is not supported");
+  // Node lib/net.js:554-568: one throw per key, naming the key and its
+  // value (test-net-connect-options-invalid) — a single throw naming the
+  // whole options object reports the wrong property and value.
+  if (options.objectMode) {
+    throw errInvalidArgValue(
+      "options.objectMode",
+      options.objectMode,
+      "is not supported",
+    );
+  } else if (options.readableObjectMode || options.writableObjectMode) {
+    throw errInvalidArgValue(
+      `options.${
+        options.readableObjectMode ? "readableObjectMode" : "writableObjectMode"
+      }`,
+      options.readableObjectMode || options.writableObjectMode,
+      "is not supported",
+    );
   }
 
   this.connecting = false;
@@ -1791,11 +1815,17 @@ Socket.prototype.getTypeOfService = function getTypeOfService() {
 
 // --- Connection setup ----------------------------------------------------
 
-// _normalizeArgs port (also exported for compat).
-const normalizedArgsSymbol = Symbol("normalizedArgs");
+// _normalizeArgs port (also exported for compat). Every return path marks
+// the tuple with normalizedArgsSymbol, like Node lib/net.js:297-335 —
+// the test calls net._normalizeArgs directly, so the wrapper's marking
+// in normalizeArgs is not enough (test-net-normalize-args).
 function _normalizeArgs(args) {
   let options;
-  if (args.length === 0) return [{}, null];
+  if (args.length === 0) {
+    const empty = [{}, null];
+    empty[normalizedArgsSymbol] = true;
+    return empty;
+  }
   const arg0 = args[0];
   let cb = null;
   if (typeof args[args.length - 1] === "function") {
@@ -1808,8 +1838,10 @@ function _normalizeArgs(args) {
   // validateObject(arg0) threw ERR_INVALID_ARG_TYPE for those forms, so
   // listen(undefined)/listen(null) and shouldFailToListen(false) never
   // reached Node's port validation / ERR_INVALID_ARG_VALUE.
-  // ponytail: mirrors Node's three branches exactly; no symbol is set
-  // here — normalizeArgs() still owns normalizedArgsSymbol (lane 6).
+  // ponytail: mirrors Node's three branches exactly; the symbol is set
+  // on every return path (Node lib/net.js:297-335) — _normalizeArgs is
+  // the exported entry the test calls directly, so it must mark the
+  // tuple itself (normalizeArgs re-marks its own return too).
   if (typeof arg0 === "object" && arg0 !== null) {
     options = { ...arg0 };
   } else if (isPipeName(arg0)) {
@@ -1818,7 +1850,10 @@ function _normalizeArgs(args) {
     options = { port: arg0 };
     if (args.length > 1 && typeof args[1] === "string") options.host = args[1];
   }
-  return [options, cb];
+  options = { ...options };
+  const normalized = [options, cb];
+  normalized[normalizedArgsSymbol] = true;
+  return normalized;
 }
 function normalizeArgs(args) {
   // createConnection passes the already-normalized tuple straight
@@ -1947,7 +1982,43 @@ Socket.prototype.connect = function connect(...args) {
   if (pipe) {
     validateString(path, "options.path");
   } else {
+    // Node lib/net.js lookupAndConnect (TCP path only — a pipe connect
+    // never reaches it): the host is validated first, then the port type,
+    // then the port range, then the hints mask (dns.lookup validates hints
+    // when it runs the lookup; an IP host or a custom lookup never reaches
+    // dns.lookup, so neither validates hints).
+    // test-net-connect-options-invalid, test-net-connect-options-port.
+    const host = options.host || "localhost";
+    if (typeof host !== "string") {
+      throw errInvalidArgType("options.host", "string", host);
+    }
+    if (host.includes("\0")) {
+      throw errInvalidArgValue(
+        "options.host",
+        host,
+        "must be a string without null bytes",
+      );
+    }
+    if (
+      options.port !== undefined &&
+      typeof options.port !== "number" &&
+      typeof options.port !== "string"
+    ) {
+      throw errInvalidArgType(
+        "options.port",
+        ["number", "string"],
+        options.port,
+      );
+    }
     validatePort(options.port, "Port");
+    if (options.hints != null && options.lookup == null && isIP(host) === 0) {
+      validateNumber(options.hints, "options.hints");
+      const hints = options.hints >>> 0;
+      // c-ares mask: AI_ADDRCONFIG | AI_ALL | AI_V4MAPPED = 32 | 16 | 8.
+      if ((hints & ~(32 | 16 | 8)) !== 0) {
+        throw errInvalidArgValue("hints", hints);
+      }
+    }
   }
 
   // Happy eyeballs options (node-src lib/net.js:1693-1705, lookupAndConnect):
@@ -2546,18 +2617,21 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
       if (server) break;
     }
     if (!server) {
-      // Matches Node: IP-literal hosts get a detailed ECONNREFUSED; anything
-      // else (DNS path) surfaces a bare ECONNREFUSED with an empty message.
-      // A happy-eyeballs attempt always dials a resolved IP, so it gets
-      // the detailed form too (Node's createConnectionError in
-      // internalConnectMultiple) — the all-fail AggregateError's messages
-      // are `connect ECONNREFUSED <ip>:<port>` per address. The same holds
-      // for a single lookup-resolved address: Node's lookupAndConnect hands
-      // internalConnect the resolved IP, whose refusal is detailed
-      // (test-net-autoselectfamily-default / -commandline-option expect
-      // `connect ECONNREFUSED ::1:<port>` with autoSelectFamily off).
+      // Matches Node (probed v24.22.1 + lib/net.js:1755): the refused
+      // error is detailed when the dial went through the single path —
+      // an IP-literal host, a lookup-resolved address, a happy-eyeballs
+      // attempt in flight, or a pinned family (4/6 skips the multiple
+      // path) — and bare when it went through the DNS / autoSelectFamily
+      // (multiple) path with no family pinned. The two tests that pin
+      // the split: test-net-connect-options-port asyncFailToConnect(0)
+      // ({port: 0, family: 4} → `connect ECONNREFUSED 127.0.0.1`) and
+      // tests/net.test.js `connect(9)` (no family → bare).
       const err =
-        ipLiteral || resolved || multiIndex !== -1
+        ipLiteral ||
+        resolved ||
+        multiIndex !== -1 ||
+        options.family === 4 ||
+        options.family === 6
           ? errConnRefused(address, port)
           : errConnRefusedBare();
       defer(() => this._connectFailed(err, multiIndex));

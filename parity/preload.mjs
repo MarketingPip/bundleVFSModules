@@ -499,6 +499,21 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // test-net-normalize-args reads normalizedArgsSymbol from
+    // `internal/net`. Same treatment: without a redirect the require
+    // falls through to native Node's `internal/net`, whose symbol never
+    // matches the shim's slot, so the test's strictEqual on the symbol
+    // always reads undefined. The adapter re-exports real Node's module
+    // with the shim's normalizedArgsSymbol (see
+    // src/internals/net-symbols.js). See parity/internal-net-adapter.mjs.
+    if (target === "net" && bare === "internal/net") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-net-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
   }
   return origLoad.call(this, request, parent, isMain);
 };
