@@ -735,8 +735,13 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-socket-options branch: Socket.setKeepAlive verbatim port
     // (object form, ms->s, 4-arg forward, dedupe) + setTypeOfService /
     // getTypeOfService (src/net.js + working note).
+    // fix/net-preconnect-destroy branch: pre-connect destroy/abort —
+    // delete connect()'s duplicate abort listener, resetAndDestroy
+    // ERR_SOCKET_CLOSED with no handle, connecting-write close listener
+    // (ERR_SOCKET_CLOSED_BEFORE_CONNECTION), server-socket handle
+    // assigned before the connection emit (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-socket-options.md", "src/net.js"].sort(),
+      ["NOTES-net-preconnect-destroy.md", "src/net.js"].sort(),
     );
   });
 

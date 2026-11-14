@@ -312,6 +312,19 @@ function errConnRefusedPipe(path) {
 function errConnReset() {
   return errnoError("ECONNRESET", "read", "read ECONNRESET", { errno: -104 });
 }
+function errSocketClosed() {
+  // Node lib/internal/errors.js:1795: 'Socket is closed'.
+  const e = new Error("Socket is closed");
+  e.code = "ERR_SOCKET_CLOSED";
+  return e;
+}
+function errSocketClosedBeforeConnection() {
+  // Node lib/internal/errors.js:1796: 'Socket closed before the
+  // connection was established'.
+  const e = new Error("Socket closed before the connection was established");
+  e.code = "ERR_SOCKET_CLOSED_BEFORE_CONNECTION";
+  return e;
+}
 function errNotFound(host) {
   return errnoError(
     "ENOTFOUND",
@@ -1848,9 +1861,14 @@ Socket.prototype.connect = function connect(...args) {
       nextTick(() => this.destroy(signal.reason));
       return this;
     }
-    signal.addEventListener("abort", () => this.destroy(signal.reason), {
-      once: true,
-    });
+    // ponytail: no second abort listener here — the Duplex ctor already
+    // attached one (src/stream/duplex.js:122, mirroring Node
+    // lib/internal/streams/duplex.js:124 + lib/net.js:717); a second
+    // registration doubled listenerCount(signal, 'abort')
+    // (test-net-connect-abort-controller). The ctor's listener destroys
+    // with an AbortError; this branch only handles the already-aborted
+    // case, where the ctor already destroyed the socket and connect()
+    // must not resurrect it into a real connection.
   }
 
   this.connecting = true;
@@ -2214,7 +2232,16 @@ Socket.prototype._write = function _write(chunk, encoding, cb) {
   if (!this._connected || !peer || peer.destroyed) {
     if (this.connecting) {
       // Buffer until the connection completes, like Node's write queue.
-      this._pendingWrites.push({ chunk, encoding, cb });
+      // Node lib/net.js:1228-1239: a connecting write also registers
+      // once('close') so destroy-before-connect fails the callback
+      // with ERR_SOCKET_CLOSED_BEFORE_CONNECTION instead of dropping
+      // it silently (test-net-write-cb-on-destroy-before-connect).
+      // _flushPendingWrites removes the listener before delivering,
+      // mirroring Node's off('close') in the connect handler — without
+      // that a later close would call the callback a second time.
+      const onClose = () => cb(errSocketClosedBeforeConnection());
+      this.once("close", onClose);
+      this._pendingWrites.push({ chunk, encoding, cb, onClose });
       return;
     }
     // A write to a peer that destroyed its socket is ECONNRESET
@@ -2255,12 +2282,18 @@ Socket.prototype._writev = function _writev(chunks, cb) {
   // state.onwrite as the pending item's cb).
   if (!this._connected || !this._peer || this._peer.destroyed) {
     if (this.connecting) {
+      // Same connecting-write close listener as _write (Node
+      // lib/net.js:1228-1239): a corked batch buffered pre-connect
+      // fails with ERR_SOCKET_CLOSED_BEFORE_CONNECTION on destroy.
+      const onClose = () => cb(errSocketClosedBeforeConnection());
+      this.once("close", onClose);
       this._pendingWrites.push({
         chunk: Buffer.concat(
           chunks.map((item) => toBytes(item.chunk, item.encoding)),
         ),
         encoding: "",
         cb,
+        onClose,
       });
       return;
     }
@@ -2354,6 +2387,11 @@ Socket.prototype._flushPendingWrites = function _flushPendingWrites() {
   const pending = this._pendingWrites;
   this._pendingWrites = [];
   for (const item of pending) {
+    // The connecting-write close listener (registered in _write/_writev)
+    // comes off now that the write is settling: without this a later
+    // close would invoke the callback a second time (Node removes it in
+    // its connect handler, lib/net.js:1231).
+    if (item.onClose) this.off("close", item.onClose);
     // A peer that died while an earlier flushed item was delivered
     // (e.g. the server destroyed its socket during the request head's
     // delivery) must error later items exactly like a post-connect
@@ -2584,6 +2622,13 @@ Object.defineProperty(Socket.prototype, "autoDestroy", {
 
 // Abortive close: the peer sees ECONNRESET instead of a graceful FIN.
 Socket.prototype.resetAndDestroy = function resetAndDestroy(err) {
+  // Node lib/net.js:1029: with no handle there is nothing to reset —
+  // destroy with ERR_SOCKET_CLOSED so the socket emits 'error'
+  // (test-net-connect-reset). Falling through to destroy(err) with
+  // err === undefined emitted no error at all.
+  if (!this._handle) {
+    return this.destroy(errSocketClosed());
+  }
   const peer = this._peer;
   this._peer = null;
   this._connected = false;
@@ -3099,10 +3144,14 @@ Server.prototype._acceptConnection = function _acceptConnection(
 
   this._connections++;
 
-  this.emit("connection", serverSocket);
-
-  // Server-side socket gets a handle too (Node creates TCPWrap on accept).
+  // Server-side socket gets a handle too (Node creates TCPWrap on accept,
+  // before the connection handler runs — a handler that calls
+  // resetAndDestroy() synchronously must see a handle, or the no-handle
+  // branch destroys with ERR_SOCKET_CLOSED instead of resetting the peer
+  // (test-net-server-reset)).
   if (!serverSocket._handle) serverSocket._handle = new VirtualHandle();
+
+  this.emit("connection", serverSocket);
   // The client-side 'connect' is the handshake completion: pre-connect
   // writes flush, options apply, and 'connect' + 'ready' fire here. In a
   // burst the drain defers this tail for every accept after the first, so
