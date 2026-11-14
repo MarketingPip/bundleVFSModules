@@ -1000,6 +1000,8 @@ const kTimeout = Symbol.for("bundleVFSModules.net.kTimeout");
 
 function Socket(options = {}) {
   if (!(this instanceof Socket)) return new Socket(options);
+  // Node lib/net.js:596 — legacy interface: a bare number is an fd.
+  if (typeof options === "number") options = { fd: options };
   if (options !== null && typeof options !== "object") {
     throw errInvalidArgType("options", "object", options);
   }
@@ -1087,6 +1089,20 @@ function Socket(options = {}) {
         port: addr.port,
       };
     }
+  }
+
+  // Adopt an fd as the handle (Node lib/net.js:636-644: createHandle does
+  // validateInt32(fd, 'fd', 0) then opens the fd; a bad fd throws here, so
+  // fd:-1 throws ERR_OUT_OF_RANGE and fd:'foo' ERR_INVALID_ARG_TYPE).
+  // ponytail: the virtual transport stores the fd on the VirtualHandle so
+  // `socket._handle.fd` reads back, and connect() reuses the adopted handle
+  // (it only creates one when none exists). Ceiling: no OS fd-type
+  // verification is possible in-browser — guessHandleType needs fstat, so
+  // ERR_INVALID_FD_TYPE for a non-pipe/non-TCP fd cannot be emulated.
+  if (options.fd !== undefined && !this._handle) {
+    validateInt32(options.fd, "fd", 0);
+    this._handle = new VirtualHandle();
+    this._handle.fd = options.fd;
   }
 
   if (options.timeout) this.setTimeout(options.timeout);
