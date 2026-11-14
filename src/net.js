@@ -968,9 +968,29 @@ function VirtualHandle() {
   this._keepAliveDelay = 0;
   this._noDelay = true;
 }
-VirtualHandle.prototype.setKeepAlive = function setKeepAlive(enable, delay) {
+VirtualHandle.prototype.setKeepAlive = function setKeepAlive(
+  enable,
+  delay,
+  interval,
+  count,
+) {
   this._keepAlive = Boolean(enable);
   this._keepAliveDelay = delay | 0;
+  this._keepAliveInterval = interval;
+  this._keepAliveCount = count;
+};
+// No real setsockopt exists in the browser: TOS is a cached value, stored
+// here so getTypeOfService reads back what was set (mirroring libuv's
+// getsockopt(IP_TOS) on a real handle). Return 0 = success, matching the
+// libuv errno convention Node's Socket layer checks.
+// ponytail: cached-value semantics is the ceiling — a test asserting the
+// OS-level DSCP bits on the wire cannot pass through this transport.
+VirtualHandle.prototype.setTypeOfService = function setTypeOfService(tos) {
+  this._typeOfService = tos;
+  return 0;
+};
+VirtualHandle.prototype.getTypeOfService = function getTypeOfService() {
+  return this._typeOfService !== undefined ? this._typeOfService : 0;
 };
 VirtualHandle.prototype.setNoDelay = function setNoDelay(enable) {
   this._noDelay = Boolean(enable);
@@ -997,6 +1017,10 @@ VirtualHandle.prototype.close = function close() {};
 // cannot pass through this bridge — that would need a harness-injected
 // symbol, and no vendored test asserts it.
 const kTimeout = Symbol.for("bundleVFSModules.net.kTimeout");
+
+// Mirrors Node lib/net.js:374 — module-level slot for the cached TOS value
+// (set pre-connect, applied to the handle at connect).
+const kSetTOS = Symbol("kSetTOS");
 
 function Socket(options = {}) {
   if (!(this instanceof Socket)) return new Socket(options);
@@ -1030,8 +1054,15 @@ function Socket(options = {}) {
   this._idleTimer = null;
   this[kTimeout] = null;
   this._noDelay = false;
-  this._keepAlive = false;
-  this._keepAliveInitialDelay = 0;
+  // Mirrors lib/net.js:687-689: ctor options seed the keepalive cache, in
+  // whole seconds (~~(ms / 1000)); interval/count start unset, like Node's
+  // kSetKeepAliveInterval/kSetKeepAliveCount slots.
+  this._keepAlive = Boolean(options.keepAlive);
+  this._keepAliveInitialDelay = ~~(options.keepAliveInitialDelay / 1000);
+  this._keepAliveInterval = undefined;
+  this._keepAliveCount = undefined;
+  // Mirrors lib/net.js:693.
+  this[kSetTOS] = options.typeOfService;
   this._localPortEphemeral = 0;
   // Event-loop keep-alive: a real open socket holds the Node loop (unless
   // unref'd). The virtual socket does the same with a long, harmless timer
@@ -1517,15 +1548,118 @@ Socket.prototype.setNoDelay = function setNoDelay(enable) {
   return this;
 };
 
+// Port of Node lib/net.js:844-882 Socket.prototype.setKeepAlive. The JS API
+// takes milliseconds; the handle takes whole seconds (uv_tcp_keepalive_ex),
+// and interval/count forward through. The cached slots hold seconds, and
+// the dedupe (call the handle only when the effective values changed) is
+// observable: test-net-server-keepalive expects the accept-time apply to
+// swallow a repeat setKeepAlive(true, 1000).
 Socket.prototype.setKeepAlive = function setKeepAlive(
   enable,
-  initialDelayMsecs = 0,
+  initialDelayMsecs,
+  intervalMsecs,
+  count,
 ) {
-  this._keepAlive = Boolean(enable);
-  this._keepAliveInitialDelay = initialDelayMsecs;
-  // Mirrors lib/net.js: delegate to the handle when connected.
-  if (this._handle) this._handle.setKeepAlive(enable, initialDelayMsecs);
+  if (enable !== null && typeof enable === "object") {
+    const options = enable;
+    enable = options.enable;
+    initialDelayMsecs = options.initialDelay;
+    intervalMsecs = options.interval;
+    count = options.count;
+  }
+  enable = Boolean(enable);
+  const initialDelay = ~~(initialDelayMsecs / 1000);
+  const interval =
+    intervalMsecs === undefined ? undefined : ~~(intervalMsecs / 1000);
+
+  if (!this._handle) {
+    this._keepAlive = enable;
+    this._keepAliveInitialDelay = initialDelay;
+    this._keepAliveInterval = interval;
+    this._keepAliveCount = count;
+    return this;
+  }
+
+  if (!this._handle.setKeepAlive) {
+    return this;
+  }
+
+  if (
+    enable !== this._keepAlive ||
+    (enable &&
+      (this._keepAliveInitialDelay !== initialDelay ||
+        this._keepAliveInterval !== interval ||
+        this._keepAliveCount !== count))
+  ) {
+    this._keepAlive = enable;
+    this._keepAliveInitialDelay = initialDelay;
+    this._keepAliveInterval = interval;
+    this._keepAliveCount = count;
+    this._handle.setKeepAlive(enable, initialDelay, interval, count);
+  }
+
   return this;
+};
+
+// Port of Node lib/net.js:889-940. No real setsockopt exists in the browser,
+// so the value is cached (kSetTOS) and applied to the handle at connect;
+// getTypeOfService reads the handle's stored value back, which is what the
+// vendored test asserts (validation errors + cached get-back).
+Socket.prototype.setTypeOfService = function setTypeOfService(tos) {
+  if (Number.isNaN(tos)) {
+    throw errInvalidArgType("tos", "number", tos);
+  }
+  validateInt32(tos, "tos", 0, 255);
+
+  if (!this._handle) {
+    this[kSetTOS] = tos;
+    return this;
+  }
+
+  if (!this._handle.setTypeOfService) {
+    this[kSetTOS] = tos;
+    return this;
+  }
+
+  if (tos !== this[kSetTOS]) {
+    this[kSetTOS] = tos;
+    const err = this._handle.setTypeOfService(tos);
+    // On Windows, setting TOS is often restricted or returns error codes
+    // even if partially applied — best effort, do not throw there.
+    if (err && !_isWindows) {
+      const code = errnoNameForUv(err) ?? `Unknown system error ${err}`;
+      throw errnoError(code, "setTypeOfService", `setTypeOfService ${code}`, {
+        errno: err,
+      });
+    }
+  }
+
+  return this;
+};
+
+Socket.prototype.getTypeOfService = function getTypeOfService() {
+  if (!this._handle) {
+    // Return cached value if set, otherwise default to 0.
+    return this[kSetTOS] !== undefined ? this[kSetTOS] : 0;
+  }
+
+  if (!this._handle.getTypeOfService) {
+    return this[kSetTOS] !== undefined ? this[kSetTOS] : 0;
+  }
+
+  const res = this._handle.getTypeOfService();
+  if (typeof res === "number" && res < 0) {
+    // On Windows, getsockopt(IP_TOS) often fails — fall back to the cached
+    // value we attempted to set, or 0.
+    if (_isWindows) {
+      return this[kSetTOS] !== undefined ? this[kSetTOS] : 0;
+    }
+    const code = errnoNameForUv(res) ?? `Unknown system error ${res}`;
+    throw errnoError(code, "getTypeOfService", `getTypeOfService ${code}`, {
+      errno: res,
+    });
+  }
+  return res;
 };
 
 // --- Connection setup ----------------------------------------------------
@@ -1666,7 +1800,9 @@ Socket.prototype.connect = function connect(...args) {
     this._keepAlive = Boolean(options.keepAlive);
   if (options.keepAliveInitialDelay !== undefined) {
     const d = Number(options.keepAliveInitialDelay);
-    this._keepAliveInitialDelay = d < 0 ? 0 : Math.floor(d);
+    // Cached in whole seconds, like Node's kSetKeepAliveInitialDelay
+    // (lib/net.js:689); the handle takes seconds.
+    this._keepAliveInitialDelay = d < 0 ? 0 : ~~(d / 1000);
   }
   // BlockList for connection filtering (checked in _doConnect).
   if (options.blockList !== undefined) this.blockList = options.blockList;
@@ -2979,18 +3115,36 @@ Server.prototype._acceptConnection = function _acceptConnection(
     client.connecting = false;
     client._flushPendingWrites();
     client._refreshTimeout();
-    // Mirrors lib/net.js: apply socket options to the handle on connect.
-    // The handle may have been mocked by tests (e.g. test-net-connect-keepalive
-    // replaces _handle.setKeepAlive to verify it's called).
-    // Node's C++ TCPWrap takes keepalive delay in SECONDS; the JS API takes
-    // milliseconds — convert here (tests assert the converted value).
+    // Mirrors lib/net.js afterConnect: apply socket options to the handle
+    // on connect. The handle may have been mocked by tests (e.g.
+    // test-net-connect-keepalive replaces _handle.setKeepAlive to verify
+    // it's called). The cached keepalive values are whole seconds — the
+    // handle takes seconds, the JS API takes milliseconds.
     if (client._handle) {
       if (client._noDelay) client._handle.setNoDelay(true);
       if (client._keepAlive)
         client._handle.setKeepAlive(
           true,
-          Math.floor(client._keepAliveInitialDelay / 1000),
+          client._keepAliveInitialDelay,
+          client._keepAliveInterval,
+          client._keepAliveCount,
         );
+      // A TOS set before connect is applied once the handle exists.
+      if (client[kSetTOS] !== undefined && client._handle.setTypeOfService) {
+        const err = client._handle.setTypeOfService(client[kSetTOS]);
+        // On Windows, setting TOS is best-effort. If it fails, we shouldn't
+        // destroy the connection or emit an error, as the socket is
+        // otherwise healthy.
+        if (err && !_isWindows) {
+          const code = errnoNameForUv(err) ?? `Unknown system error ${err}`;
+          client.emit(
+            "error",
+            errnoError(code, "setTypeOfService", `setTypeOfService ${code}`, {
+              errno: err,
+            }),
+          );
+        }
+      }
     }
     client.emit("connect");
     // Real Node emits 'ready' immediately after 'connect' on a client socket
