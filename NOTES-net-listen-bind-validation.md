@@ -42,10 +42,27 @@ No preload / hooks / shared-file changes. No docs-number changes.
   message; `192.168.1.99` also EADDRNOTAVAIL; `127.0.0.1`, `127.0.0.2`,
   `0.0.0.0`, `::1`, `::`, `localhost` all still listen; retry after a
   failed bind listens OK (`_bindPending` reset proven).
-- Guards re-run (isolated, branch): TBD.
+- Guards re-run (isolated, branch, all 0): listen-after-destroying-stdin,
+  listen-close-server-callback-is-not-function, listen-close-server,
+  listen-handle-in-cluster-2, listening, server-call-listen-multiple-times,
+  server-close-before-calling-lookup-callback, server-close,
+  server-listen-remove-callback, connect-immediate-finish.
+- Footprint test: tests/ondemand-require.test.js 29/29 on the branch.
 - Differential (fast-sweep --target net, base
   net-sweep-2026-11-14.csv vs branch
-  net-n1-listen-bind-branch-2026-11-14.csv): TBD.
+  net-n1-listen-bind-branch-2026-11-14.csv, 156 rows each, pass 87 → 89):
+  matched changed-value lines (sorted, deduped), exactly 4 —
+  `test-net-better-error-messages-listen.js,1,0`,
+  `test-net-listen-error.js,1,0`,
+  `test-net-throttle.js,134,124`,
+  `test-net-write-fully-async-buffer.js,137,124`.
+  The two 134/137 → 124 mode changes are the known pre-existing spinner
+  artifacts (triage: throttle 134 sweep / 124 isolated,
+  write-fully-async-buffer 137 sweep / 124 isolated) — same spin, different
+  kill code, not regressions. All other known flakes identical on both
+  sides (listen-twice 124, server-close-before-ipc-response 124,
+  socket-write-after-close 124, write-fully-async-hex-string 124,
+  connect-memleak 1). Regressions: 0.
 
 ## Ceiling / leftovers
 
