@@ -729,14 +729,14 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (src/http.js + src/net.js + working note).
     // docs/https-hitlist-59 branch: HITLIST + measured-rates sync
     // (https 20 -> 27 restated pre-wave baseline -> 59, wave 3).
-    // fix/net-state-getters branch: net state getters — bufferSize gates
-    // on _handle (Node lib/net.js:980) + _connecting legacy alias
+    // fix/net-listen-bind-validation branch: listen bind validation
+    // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
     // fix/net-socket-options branch: Socket.setKeepAlive verbatim port
     // (object form, ms->s, 4-arg forward, dedupe) + setTypeOfService /
     // getTypeOfService (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-socket-options.md", "src/net.js"].sort(),
+      ["NOTES-net-listen-bind-validation.md", "src/net.js"].sort(),
     );
   });
 

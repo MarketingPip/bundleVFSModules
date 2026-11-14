@@ -328,6 +328,15 @@ function errAddrInUse(address, port) {
     { errno: -98, address, port },
   );
 }
+function errAddrNotAvail(address, port) {
+  // Node setupListenHandle -> UVExceptionWithHostPort(..., 'listen', ...).
+  return errnoError(
+    "EADDRNOTAVAIL",
+    "listen",
+    `listen EADDRNOTAVAIL: address not available ${address}:${port}`,
+    { errno: -99, address, port },
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Validators (mirror internal/validators messages used by net).
@@ -2819,6 +2828,18 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
     bindHost = "::";
     family = "IPv6";
   } else if (isIP(host)) {
+    // The virtual layer has no real interfaces: only loopback and the
+    // wildcards can bind (same predicate as BoundSocket._bind). Anything
+    // else fails like Node's setupListenHandle -> UVException EADDRNOTAVAIL,
+    // emitted async; the listen callback / 'listening' never fire.
+    // ponytail: ceiling is the host's real interface list, unknowable
+    // in-browser; loopback/wildcard covers every address the virtual
+    // registry can ever serve.
+    if (!isLoopbackAddress(host) && host !== "0.0.0.0" && host !== "::") {
+      this._bindPending = false;
+      nextTick(() => this.emit("error", errAddrNotAvail(host, port)));
+      return;
+    }
     bindHost = host;
     family = isIPv4(host) ? "IPv4" : "IPv6";
   } else if (isLoopbackName(host)) {
