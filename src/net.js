@@ -1157,7 +1157,14 @@ VirtualHandle.prototype.setNoDelay = function setNoDelay(enable) {
 // Methods tests may call; honest no-ops for the virtual transport.
 VirtualHandle.prototype.ref = function ref() {};
 VirtualHandle.prototype.unref = function unref() {};
-VirtualHandle.prototype.close = function close() {};
+// ponytail: close() records the fact and nothing else — a closed handle
+// is not a destroyed socket (the Socket keeps its peer until a write or
+// destroy observes it), but the next write must fail like the syscall
+// would (EBADF/EPIPE), not deliver into the void. No internal flow calls
+// this (only tests do); _destroy nulls _handle instead.
+VirtualHandle.prototype.close = function close() {
+  this._closed = true;
+};
 
 // ---------------------------------------------------------------------------
 // Socket — port of the virtual-transport half of lib/net.js Socket.
@@ -2739,6 +2746,27 @@ Socket.prototype._write = function _write(chunk, encoding, cb) {
     cb(er);
     return;
   }
+  // Node lib/net.js _writeGeneric (:1247-1250): a write with no handle
+  // fails the callback with ERR_SOCKET_CLOSED; a write to a handle the
+  // test (or user) closed fails the way the syscall would — EBADF on
+  // POSIX, EPIPE on Windows (the handle's fd is gone). Same shape as the
+  // not-connected branch above: destroy with the error (emits 'error'),
+  // then the callback.
+  if (!this._handle) {
+    const er = errSocketClosed();
+    if (!this.destroyed) this.destroy(er);
+    cb(er);
+    return;
+  }
+  if (this._handle._closed) {
+    const code = _isWindows ? "EPIPE" : "EBADF";
+    const er = errnoError(code, "write", `write ${code}`, {
+      errno: -osConstants.errno[code],
+    });
+    if (!this.destroyed) this.destroy(er);
+    cb(er);
+    return;
+  }
   this._deliverToPeer(chunk, encoding, cb);
 };
 
@@ -2788,6 +2816,24 @@ Socket.prototype._writev = function _writev(chunks, cb) {
       : this._peer && this._peer.destroyed
         ? errConnReset()
         : new Error("Socket is not connected");
+    if (!this.destroyed) this.destroy(er);
+    cb(er);
+    return;
+  }
+  // Same closed-handle checks as _write (Node lib/net.js _writeGeneric):
+  // no handle → ERR_SOCKET_CLOSED; closed handle → EBADF/EPIPE syscall
+  // error. A corked batch must fail as one call, not per chunk.
+  if (!this._handle) {
+    const er = errSocketClosed();
+    if (!this.destroyed) this.destroy(er);
+    cb(er);
+    return;
+  }
+  if (this._handle._closed) {
+    const code = _isWindows ? "EPIPE" : "EBADF";
+    const er = errnoError(code, "write", `write ${code}`, {
+      errno: -osConstants.errno[code],
+    });
     if (!this.destroyed) this.destroy(er);
     cb(er);
     return;
