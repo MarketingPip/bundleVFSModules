@@ -219,8 +219,31 @@ const DEFAULT_FILENAME = "evalmachine.<anonymous>";
 const contextified = new WeakSet();
 let contextNameIndex = 0;
 
+// One synthetic per-context memory entry: sizes are 0 (the shim cannot
+// measure the real V8 heap); measureMemory's tests assert shape, key
+// presence and types, not values.
+function syntheticMemoryShape() {
+  return { jsMemoryEstimate: 0, jsMemoryRange: [0, 0] };
+}
+
+// Enumerable registry of live contextified contexts, for measureMemory's
+// `other` list (a WeakSet cannot enumerate). Entries are plain synthetic
+// shapes holding no reference to their context, so contexts can still be
+// GC'd; a FinalizationRegistry drops the entry when its context dies.
+// ponytail: real Node reports live V8 contexts from the heap profiler —
+// unreachable here; the honest ceiling is "live = created and not yet GC'd".
+const liveContexts = new Set();
+const contextFinalization =
+  typeof FinalizationRegistry !== "undefined"
+    ? new FinalizationRegistry((entry) => liveContexts.delete(entry))
+    : null;
+
 function markContext(obj) {
+  if (contextified.has(obj)) return obj;
   contextified.add(obj);
+  const entry = syntheticMemoryShape();
+  liveContexts.add(entry);
+  if (contextFinalization !== null) contextFinalization.register(obj, entry);
   return obj;
 }
 
@@ -1848,22 +1871,58 @@ export function compileFunction(code, params = [], options = {}) {
 // 13. measureMemory (synthetic; no V8 heap access from here)
 // ---------------------------------------------------------------------------
 
-export async function measureMemory(options = {}) {
+let measureMemoryWarningEmitted = false;
+function emitMeasureMemoryWarning() {
+  // Node lib/vm.js:382 emits the experimental warning BEFORE validation,
+  // once per process (lib/internal/util.js emitExperimentalWarning).
+  if (measureMemoryWarningEmitted) return;
+  measureMemoryWarningEmitted = true;
+  try {
+    if (
+      typeof process !== "undefined" &&
+      typeof process.emitWarning === "function"
+    ) {
+      process.emitWarning(
+        "vm.measureMemory is an experimental feature and might change at any time",
+        "ExperimentalWarning",
+      );
+    }
+  } catch {}
+}
+
+export function measureMemory(options = {}) {
+  emitMeasureMemoryWarning();
   if (options === undefined) options = {};
   validateObject(options, "options");
   const { mode = "summary", execution = "default" } = options;
   validateOneOf(mode, "options.mode", ["summary", "detailed"]);
   validateOneOf(execution, "options.execution", ["default", "eager"]);
-  return {
-    total: {
-      jsMemoryEstimate: 0,
-      jsMemoryRange: [0, 0],
-    },
-    WebAssembly: {
-      code: 0,
-      metadata: 0,
-    },
+  // NOT async: real Node (lib/vm.js:382) is a plain function returning a
+  // promise, so validation throws synchronously (assert.throws relies on
+  // it) — the old `async` form turned the throws into rejections.
+  const current = syntheticMemoryShape();
+  const other = [...liveContexts];
+  const total = {
+    jsMemoryEstimate:
+      current.jsMemoryEstimate +
+      other.reduce((sum, entry) => sum + entry.jsMemoryEstimate, 0),
+    jsMemoryRange: [
+      current.jsMemoryRange[0] +
+        other.reduce((sum, entry) => sum + entry.jsMemoryRange[0], 0),
+      current.jsMemoryRange[1] +
+        other.reduce((sum, entry) => sum + entry.jsMemoryRange[1], 0),
+    ],
   };
+  // Key order matches real Node: total, WebAssembly, current, other.
+  const result = {
+    total,
+    WebAssembly: { code: 0, metadata: 0 },
+  };
+  if (mode === "detailed") {
+    result.current = current;
+    result.other = other;
+  }
+  return Promise.resolve(result);
 }
 
 // ---------------------------------------------------------------------------

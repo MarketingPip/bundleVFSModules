@@ -372,12 +372,15 @@ describe("vm shim", () => {
       expect(
         await vm.measureMemory().then((m) => m.total.jsMemoryRange),
       ).toEqual([0, 0]);
-      await expect(vm.measureMemory(null)).rejects.toMatchObject({
-        code: "ERR_INVALID_ARG_TYPE",
-      });
-      await expect(vm.measureMemory({ mode: "bogus" })).rejects.toMatchObject({
-        code: "ERR_INVALID_ARG_VALUE",
-      });
+      // Real Node throws synchronously here (lib/vm.js:382 is a plain
+      // function returning a promise, not async) — the old `.rejects`
+      // form encoded the shim's wrong async shape (PR: fix/vm-measure-memory).
+      expect(() => vm.measureMemory(null)).toThrow(
+        expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }),
+      );
+      expect(() => vm.measureMemory({ mode: "bogus" })).toThrow(
+        expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }),
+      );
     });
 
     test("ESM module classes are not exported (matches Node without --experimental-vm-modules)", () => {
