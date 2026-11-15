@@ -3185,14 +3185,44 @@ Socket.prototype._destroy = function _destroy(exception, cb) {
   // path above owns the notification.) Delivery is deferred a tick because
   // a real network never signals the peer synchronously. The peer's link is
   // torn down — this socket is gone, so further peer writes fail.
+  // Kernel RST rule: closing a TCP socket with unread data in its receive
+  // buffer sends RST, not FIN — Node lib/net.js:1095 _destroy just closes
+  // the handle and the kernel decides. Probed on real Node v24.22.1: a
+  // client that pauses after the first chunk and destroys with ~18MB
+  // unread makes the server emit 'error' ECONNRESET (test-net-stream),
+  // while a client that reads everything first leaves the server a clean
+  // 'end' + 'close' (hadError false), and an unread-data destroy with no
+  // server end() still resets the peer. The unread count is captured
+  // here: nothing can add to the buffer after destroy.
+  // ponytail: no new state — reuses readableLength + the #416
+  // _pausedReadQueue; the peer's writable state is deliberately NOT a
+  // carve-out (test-net-stream's server had already end()ed and still
+  // errors on real Node). The queue sum is the #416-interaction fix:
+  // paused chunks are unread too, even though they were never pushed.
   if (peer && !peer.destroyed && !this._finSent) {
+    // Unread data is the pushed-but-unconsumed readable buffer PLUS the
+    // paused-read queue (#416): while explicitly paused, inbound chunks
+    // wait in _pausedReadQueue uncounted and unpushed — they are still
+    // unread kernel data, and destroying with them queued must RST.
+    // (test-net-stream regressed on the #416 rebase: readableLength alone
+    // read ~0 while ~18MB sat in the queue, so the peer got EOF.)
+    const queued = Array.isArray(this._pausedReadQueue)
+      ? this._pausedReadQueue.reduce((n, b) => n + (b ? b.length : 0), 0)
+      : 0;
+    const unread =
+      (typeof this.readableLength === "number" ? this.readableLength : 0) +
+      queued;
     const notifyPeer = () => {
       if (peer.destroyed) return;
       if (peer._peer === this) peer._peer = null;
       // Abortive close: the peer's EOF came from a destroy, not a
       // graceful FIN — a later write fails ECONNRESET (see writeAfterFIN).
       peer._peerReset = true;
-      peer._receiveEOF();
+      if (unread > 0) {
+        peer.destroy(errConnReset());
+      } else {
+        peer._receiveEOF();
+      }
     };
     // Same connecting-peer guard as _final: a peer whose 'connect' has
     // not fired yet (deferred burst tail) must not see EOF before its
