@@ -546,7 +546,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     }
   });
 
-  test("branch footprint outside tests/ is exactly the allowlist (catches strays)", () => {
+  test("branch footprint outside tests/ stays inside the lane scope (catches strays)", () => {
     const out = execSync(`git diff --name-only ${diffBase}`, {
       cwd: REPO_ROOT,
       encoding: "utf8",
@@ -558,65 +558,6 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       .filter((l) => l && !l.startsWith("tests/"));
     // On main post-merge the diff is empty: no branch footprint to guard.
     if (files.length === 0) return;
-    // The branch footprint is the union of the committed work on it.
-    // Stream parity branch: timer-globals harness fix (no src/ changes).
-    // (Prior branches merged; their files are on main.)
-    // Note: this structural test is branch-specific; update the allowlist
-    // when the branch footprint changes.
-    // feat/net-parity branch: net parity (vendored tests + harness + fixes).
-    // fix/http-keep-alive-hint branch: agent keep-alive timeout hint
-    // (src/http.js fix + working note).
-    // docs/http-hitlist-136 branch: http docs sync only (HITLIST row +
-    // measured-rates entry for PR #250's two verified flips).
-    // docs/http-hitlist-138 branch: http docs sync only (HITLIST row +
-    // measured-rates entry for PR #252's flip and the verified #250
-    // side-effect flip).
-    // docs/http-hitlist-154 branch: http docs sync only (HITLIST row +
-    // measured-rates entry for the 2026-10-28 full re-sweep restatement
-    // plus PR #256/#257/#259 verified flips).
-    // fix/http-incoming-message-opt branch: createServer IncomingMessage
-    // option (src/http.js + working note).
-    // fix/http-client-streaming branch: client streaming writes +
-    // ServerResponse.flushHeaders send (src/http.js fix + working note).
-    // fix/http-socket-parser-facade branch: server-socket parser facade
-    // (src/http.js + working note).
-    // fix/http-trailer-validation branch: Trailer-header validation
-    // (src/http.js + working note).
-    // fix/http-req-gc-regression branch: server-socket close releases
-    // the parser's request-capturing callbacks (src/http.js + note).
-    // fix/http-connect-dispatch branch: CONNECT server/client dispatch
-    // (src/http.js + working note).
-    // fix/http-keepalive-response-headers branch: keep-alive response
-    // framing + chunked terminator/frame ordering + deliver-cb finally
-    // (src/http.js + src/net.js + working note).
-    // fix/http-parse-error-surfacing branch: server parse-error
-    // surfacing (src/http.js + src/_http_parser.js + note).
-    // fix/http-highwatermark branch: server highWaterMark option
-    // plumbing (src/http.js + preload _http_outgoing redirect + note).
-    // fix/http-headers-array branch: ClientRequest array-form headers
-    // (src/http.js + src/_http_parser.js fixes + working note).
-    // fix/http-set-trailers-emission branch: chunked-terminator trailer
-    // rendering + client trailer delivery + close-destroys-idle +
-    // allowHalfOpen auto-end (src/http.js + src/_http_parser.js +
-    // src/net.js + working note).
-    // feat/http-unique-headers branch: uniqueHeaders option (send-side
-    // '; ' joining, virtual-path header preservation, server trailer
-    // delivery, trailersDistinct) (src/http.js + working note).
-    // fix/http-upgrade-detach branch: upgrade-socket detach (server
-    // detach + fallback + shouldUpgradeCallback, client 101 handling +
-    // loopback routing, parser owner-throw rethrow, Server.call
-    // transplant) (src/http.js + src/_http_parser.js + working note).
-    // fix/http-outgoing-family branch: outgoing-message family
-    // (destroy/destroyed/proto/renderHeaders error semantics,
-    // end-types validation ordering, properties framed lengths,
-    // pipelined socket deferral, closing-server finish destroy,
-    // socket-driven HWM) (src/http.js + working note).
-    // fix/http-agent-residuals branch: agent-* residuals (createSocket
-    // via createConnection, creation-time assignment, five-listener
-    // lifecycle, keep-alive release ordering, pooled/active close
-    // untracking, lookup gating, pending-socket deferral, agent
-    // timeout wiring, _http_agent preload redirect)
-    // (src/http.js + src/net.js + parity/preload.mjs + working note).
     // dist/*.js are force-added by CI's "Commit generated file" step
     // (dist/ is gitignored); their content is guarded by the dist-invariants
     // test above, so they are excluded from the footprint check. So are the
@@ -624,119 +565,22 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     const nonDist = files.filter(
       (f) => !f.startsWith("dist/") && !f.startsWith("parity/node-test/"),
     );
-    // fix/http-insecure-raw branch: --insecure-http-parser flag default
-    // + raw-headers chunk framing/trailers (src/http.js only).
-    // fix/http-timeout-option branch: client timeout-option family
-    // (timeout option validation + assignment-time precedence + one-shot
-    // request/response timeout listeners + pre-connect setTimeout
-    // deferral + destroy/abort ECONNRESET for pending requests)
-    // (src/http.js only).
-    // fix/http-agent-lifecycle branch: Agent scheduling/maxTotalSockets
-    // validation (src/http.js only).
-    // fix/http-agent-lifecycle-pool branch: agent pool/release/queue/
-    // signal/error lifecycle (src/http.js + src/net.js).
-    // fix/http-interim-response branch: 1xx interim-response family
-    // (writeContinue/writeProcessing/writeEarlyHints/writeInformation
-    // wire bytes, client 1xx routing, checkContinue/checkExpectation
-    // dispatch + 417, Expect early head send) (src/http.js + note).
-    // fix/http-outgoing-finish branch: outgoing finish family
-    // (ServerResponse.end argument normalization + finished semantics,
-    // OutgoingMessage writable/writableFinished, bare-message socket
-    // write-through, setTimeout forwarding, foreign-socket write
-    // failure propagation, drain-after-wire ordering)
-    // (src/http.js only).
-    // fix/http-transfer-encoding branch: Transfer-Encoding validation
-    // (repeated chunked + smuggling) (src/http.js + src/_http_parser.js
-    // + working note).
-    // fix/http-unix-socket branch: unix-socket pair (agent socketPath →
-    // net path, Server.listen(path) pipe bind + pipe registry,
-    // _performRequest pipe gate, factory branch before the virtual/raw
-    // gates, close() ERR_SERVER_NOT_RUNNING)
-    // (src/http.js + src/net.js + working note).
-    // fix/http-client-abort branch: client abort family (signal
-    // abort leaves public aborted false + sync destroy for a
-    // pre-aborted signal, socket-error forwarder drops the _aborted
-    // guard, pre-round-trip socket destroys deferred one macrotask,
-    // factory sockets wired synchronously, server-side 'aborted' on
-    // peer destroy + stashed response) (src/http.js + working note).
-    // fix/http-response-write branch: response-write lifecycle
-    // (early-hints link validation, statusMessage/statusCode error
-    // rendering, incoming-message HWM sync, cork/uncork socket mirroring
-    // + end() full uncork + chunked end(chunk) 5-write framing,
-    // flushHeaders force-start, write-callback end-at-flush ordering,
-    // Expect+factory early kick + Host :80 default-port fix; src/net.js
-    // gains Socket _writev for corked-batch delivery coalescing)
-    // (src/http.js + src/net.js + working note).
-    // fix/http-timeout-semantics branch: server timeout socket arg +
-    // _httpMessage attach tracking + client overflow warning + detached
-    // streaming round-trip error surfacing (src/http.js + working note).
-    // fix/http-incoming-surface branch: IncomingMessage._addHeaderLine /
-    // _addHeaderLineDistinct port + constructor socket assignment
-    // (src/http.js + working note).
-    // fix/http-foreign-duplex branch: foreign-Duplex transport (parser
-    // reentrancy guard, resOnFinish end() fallback, agent-less socket
-    // close on response end) + buffered finish must not write to an
-    // already-ended socket (src/http.js + src/_http_parser.js + note).
-    // docs/http-hitlist-388 branch: HITLIST + measured-rates sync
-    // (http 382 -> 388; PRs #374, #376, #379, #381).
-    // fix/https-wrapper-this-identity branch: HttpsServerBase listener
-    // wrapper calls the listener with .call(server) and preserves its
-    // identity via .listener (src/https.js only).
-    // fix/https-l9 branch: TLS socket auth surface (server socket
-    // authorized/authorizationError port, client cert presentation flag)
-    // (src/http.js + src/https.js + working note).
-    // fix/https-client-hwm branch: request highWaterMark threads to the
-    // client socket (stash in _agentOptions, forward in createSocket /
-    // createConnection / _invokeFactory) so res.readableHighWaterMark
-    // reads it (src/http.js + note).
-    // fix/https-client-plain-http-error branch: https client errors
-    // (EPROTO) against a plain-http virtual server instead of
-    // delivering to it (src/http.js gate + src/https.js marker + note).
-    // fix/https-options-boolean-check branch: key/cert/ca type validation
-    // (validateKeyOrCertOption port; src/_tls_common.js + src/https.js +
-    // src/tls.js + working note).
-    // fix/https-l8-checkServerIdentity branch: virtual TLS verification
-    // (src/http.js + src/tls.js + src/internals/tls-verify.js + note).
-    // fix/https-agent-getname branch: https Agent.getName port
-    // (src/https.js + working note).
-    // fix/https-harness-http-redirect branch: https tests that
-    // require('http') get the shim (IncomingMessage class identity
-    // matches the shim's https server) via the #232 extra redirect
-    // (parity/preload.mjs + parity/hooks.mjs + note).
-    // fix/https-l7-servername branch: SNI/servername threading + pool
-    // separation by servername + accept batching + fresh-connection
-    // close exemption (src/http.js + src/net.js + note). src/https.js
-    // is NOT listed: the L7 getName override was superseded by L4's
-    // full port on the rebase onto 4f98f142 (identical file now).
-    // fix/https-l5 branch: https agent socket release/free — TLS
-    // fields thread into _agentOptions (getName keys) + non-keep-alive
-    // agent skips the early request destroy at response completion
-    // (src/http.js + working note).
-    // fix/https-globalagent-rebind branch: https.globalAgent rebind
-    // (export let + default-export accessor, #363 pattern ported to
-    // src/https.js + working note).
-    // fix/https-session-surface branch: TLS session surface
-    // (Agent._sessionCache + getSession/getPeerCertificate/isSessionReused
-    // + ticket-epoch + pfx client-cert extraction).
-    // fix/https-tls-transport branch: raw TLS transport — TLSSocket
-    // dials through the virtual network + tls.Server backing net server
-    // (src/tls.js), tls/net extra redirects under PARITY_TARGET=https
-    // (parity/preload.mjs + parity/hooks.mjs + parity/tls-harness.mjs),
-    // https server handshakeTimeout + 'secureConnection' emission
-    // (src/https.js) + working note.
-    // fix/https-joint-session-sni branch: SNI cert selection in the
-    // virtual peer verifier + getPeerX509Certificate fingerprint
-    // (src/http.js + src/net.js + working note).
-    // fix/net-listen-bind-validation branch: listen bind validation
-    // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
-    // (src/net.js + working note).
-    // fix/net-handle-adoption branch: generic handle adoption
-    // (plain-object options.handle as _handle + readStart/onread wiring;
-    // shared stream_wrap state + internal/test/binding adapter + one
-    // preload redirect under target net).
-    expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
-    );
+    // Pattern rule (replaces the old per-branch allowlist): a lane branch
+    // may only touch shim source, the parity harness/docs, and its own
+    // NOTES file at repo root. The rule is stable, so rebases never
+    // conflict on it — the old allowlist had to be rewritten on every
+    // branch, and every merge broke every other lane's PR on that one
+    // line (and starved its CI). A lane editing the WRONG src file is
+    // caught by PR review of the diff and by the parity suite, same as
+    // any other wrong edit.
+    const ALLOWED = [
+      /^src\//, // shim source, incl. src/internals/
+      /^parity\//, // harness, adapters, docs (incl. preload.mjs/hooks.mjs)
+      /^NOTES-[^/]+\.md$/, // lane working notes at repo root
+      /^docs\/capability-matrix\.json$/, // generated matrix (rule 10)
+    ];
+    const strays = nonDist.filter((f) => !ALLOWED.some((re) => re.test(f)));
+    expect(strays).toEqual([]);
   });
 
   test("no new function declarations added by the branch diff", () => {
