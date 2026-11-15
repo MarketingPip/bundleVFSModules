@@ -298,9 +298,31 @@ function validateContext(contextifiedObject) {
   }
 }
 
+// DONT_CONTEXTIFY: a vanilla context — the standard globals as
+// non-enumerable own properties, WITHOUT Node globals (process, Buffer,
+// console stay absent — the test asserts their absence).
+// ponytail: values are the host intrinsics (a browser has no per-context
+// intrinsics to mint); the ceiling is cross-context identity — in real
+// Node context.Array is a different Array than the host's — no vendored
+// test asserts it.
+function makeVanillaContext() {
+  const obj = {};
+  const globals = standardGlobals();
+  for (const name of Object.keys(globals)) {
+    if (name === "console") continue;
+    Object.defineProperty(obj, name, {
+      value: globals[name],
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return obj;
+}
+
 export function createContext(contextObject = {}, options = {}) {
   if (contextObject === constants.DONT_CONTEXTIFY) {
-    return markContext({});
+    return markContext(makeVanillaContext());
   }
   if (contextified.has(contextObject)) return contextObject;
   validateSandbox(contextObject, "sandbox");
@@ -1200,12 +1222,6 @@ function scanScript(code) {
 // 7. Scope proxy: the `with` statement's object
 // ---------------------------------------------------------------------------
 
-// Sentinel for sloppy-mode silent assignment failure on non-writable
-// properties. The Proxy `set` trap cannot return true for a non-configurable
-// non-writable target property (invariant violation), so we throw this and
-// the runner swallows it when not in strict mode.
-class SloppyAssignSilent extends Error {}
-
 function makeScope(target, strict = false, claimed = null) {
   const globals = standardGlobals();
   const sandbox = target;
@@ -1234,14 +1250,12 @@ function makeScope(target, strict = false, claimed = null) {
         // Lazily-claimed assigned names (see runWithContext): the scanner saw
         // a top-level bare assignment to this name, so claim it here instead
         // of pre-defining it — the `set` trap defines it on first assignment,
-        // so insertion order follows execution order, not scan order. The
-        // extensibility guard keeps the trap invariant on frozen targets.
-        if (
-          claimed !== null &&
-          claimed.has(prop) &&
-          Reflect.isExtensible(sandbox)
-        )
-          return true;
+        // so insertion order follows execution order, not scan order.
+        // No extensibility guard: returning true from `has` is always
+        // spec-legal, and a frozen target MUST still be claimed — otherwise
+        // the assignment falls through and creates a host global (lane 8:
+        // `bar = 1` on a frozen context leaked globalThis.bar).
+        if (claimed !== null && claimed.has(prop)) return true;
         if (prop in globals) return true;
         // Block host globals from leaking into the sandbox: claim them so the
         // `with` never falls through to the real global scope.
@@ -1286,15 +1300,16 @@ function makeScope(target, strict = false, claimed = null) {
         const ok = Reflect.set(sandbox, prop, value);
         if (!ok) {
           // In strict mode, throw Node's "Cannot assign to read only property"
-          // message. In sloppy mode, V8 silently fails — but the Proxy
-          // invariant forbids returning true here, so throw a sentinel that
-          // the runner swallows.
+          // message. In sloppy mode, return false: the engine fails the
+          // assignment silently AND KEEPS EVALUATING (a throw here used to
+          // abort the whole eval — e.g. `qux = 2; qux` on a getter-only
+          // property returned undefined instead of 1).
           if (strict) {
             throw new TypeError(
               `Cannot assign to read only property '${String(prop)}' of object '${Object.prototype.toString.call(sandbox)}'`,
             );
           }
-          throw new SloppyAssignSilent(String(prop));
+          return false;
         }
         return true;
       },
@@ -1531,7 +1546,6 @@ function runWithContext(code, target, opts) {
   try {
     return runner.call(target, scope, evalCode, noEval, noWasm);
   } catch (e) {
-    if (e instanceof SloppyAssignSilent) return undefined; // sloppy silent fail
     if (e instanceof SyntaxError) throw e; // nothing position-mappable
     throw enrichScriptError(e, {
       filename: opts.filename,
