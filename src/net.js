@@ -57,6 +57,11 @@ import {
 import { normalizedArgsSymbol } from "./internals/net-symbols.js";
 import cluster from "node:cluster";
 import { perfObserveBridge } from "./internals/perf-observe.js";
+import {
+  kReadBytesOrError,
+  streamBaseState,
+  UV_EOF,
+} from "./internals/stream-wrap-state.js";
 
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
@@ -1361,6 +1366,27 @@ function Socket(options = {}) {
         port: addr.port,
       };
     }
+  }
+
+  // Adopt a plain-object handle (Node lib/net.js:612-633: `this._handle =
+  // options.handle` for any non-BoundSocket handle). The test fakes in
+  // test-net-socket-setnodelay ({setNoDelay, readStart}) and
+  // test-net-end-close ({readStart, close}) are plain objects the old
+  // instanceof-only check ignored, so their mocks never ran. A live
+  // VirtualHandle is NOT adopted here: test-net-socket-constructor passes
+  // the server socket's live VirtualHandle for readable/writable asserts
+  // only, and adopting it would alias a live handle. initSocketHandle
+  // equivalent (lib/net.js:334-341): wire handle.onread so a fake
+  // readStart's EOF — written into the shared stream_wrap state — reaches
+  // this socket.
+  if (
+    options.handle &&
+    typeof options.handle === "object" &&
+    !(options.handle instanceof BoundSocket) &&
+    !(options.handle instanceof VirtualHandle)
+  ) {
+    this._handle = options.handle;
+    this._handle.onread = () => onStreamReadFor(this);
   }
 
   // Adopt an fd as the handle (Node lib/net.js:636-644: createHandle does
@@ -2817,6 +2843,25 @@ Socket.prototype._read = function _read(_size) {
   // active (mirrors libuv readStart) so the loop keeper engages.
   this._readStarted = true;
   this._keepLoopAlive();
+  // Generic adopted handle (test-net-end-close): start the fake read
+  // watcher like Node's tryReadStart (lib/net.js:997-1004) — _read fires
+  // on resume(), and the handle's readStart schedules the EOF delivery
+  // via the shared stream_wrap state. VirtualHandle has no readStart, so
+  // this is inert for virtual sockets; the `reading` flag is Node's
+  // re-entry guard (a read(0) after EOF must not re-arm the watcher).
+  if (
+    this._handle &&
+    !this.connecting &&
+    typeof this._handle.readStart === "function" &&
+    !this._handle.reading
+  ) {
+    this._handle.reading = true;
+    const err = this._handle.readStart();
+    if (err) {
+      const code = errnoNameForUv(err) ?? `Unknown system error ${err}`;
+      this.destroy(errnoError(code, "read", `read ${code}`, { errno: err }));
+    }
+  }
 };
 
 // Node lib/net.js:1046-1073: with a user buffer, pause()/resume() stop
@@ -2838,6 +2883,29 @@ Socket.prototype.resume = function resume() {
   this._drainPausedReads();
   return this;
 };
+
+// onStreamRead port (Node lib/internal/stream_base_commons.js:166): the
+// read callback a handle's readStart flow invokes. nread comes from the
+// shared stream_wrap state (src/internals/stream-wrap-state.js) — the same
+// cell the test's fake readStart writes UV_EOF into via the parity
+// adapter for internal/test/binding. Data (nread > 0) has no buffer to
+// deliver through a fake handle, so only the EOF/error paths are ported;
+// the virtual data path stays push-driven via _receiveFromPeer.
+// ponytail: ceiling — a fake handle delivering real bytes would need the
+// arrayBuffer argument Node's onStreamRead receives; no vendored test
+// does that.
+function onStreamReadFor(socket) {
+  const nread = streamBaseState[kReadBytesOrError];
+  if (nread >= 0) return;
+  if (nread !== UV_EOF) {
+    const code = errnoNameForUv(nread) ?? `Unknown system error ${nread}`;
+    socket.destroy(errnoError(code, "read", `read ${code}`, { errno: nread }));
+    return;
+  }
+  // Mirrors onStreamRead's EOF path: push(null) then read(0) so 'end' is
+  // emitted even when paused, then autoDestroy closes the socket.
+  socket._receiveEOF();
+}
 
 Socket.prototype._write = function _write(chunk, encoding, cb) {
   const peer = this._peer;

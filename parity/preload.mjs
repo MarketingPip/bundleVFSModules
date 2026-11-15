@@ -531,6 +531,25 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // test-net-end-close's fake handle writes UV_EOF into the
+    // `stream_wrap` binding's streamBaseState, and the shim's onStreamRead
+    // must read that same cell — but the shim cannot import Node internals
+    // (browser build). Same treatment: the adapter re-exports real Node's
+    // internal/test/binding with `internalBinding('stream_wrap')`
+    // returning real Node's stream_wrap whose streamBaseState /
+    // kReadBytesOrError cells are the shim's shared state (see
+    // src/internals/stream-wrap-state.js). Every other binding
+    // (tcp_wrap, pipe_wrap, uv) is real Node's, so the other five net
+    // tests requiring internal/test/binding are unaffected. See
+    // parity/internal-test-binding-adapter.mjs.
+    if (target === "net" && bare === "internal/test/binding") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-test-binding-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
   }
   return origLoad.call(this, request, parent, isMain);
 };
