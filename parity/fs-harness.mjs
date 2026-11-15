@@ -117,6 +117,28 @@ const underSyncRoot = (p) =>
   p.startsWith(repoRoot + realPath.sep + "test" + realPath.sep);
 const syncedDirs = new Map(); // real dir path -> real mtimeMs at sync time
 
+// A throwing setter on Object.prototype for a property the C++ error
+// constructor assigns (errno, code, syscall, path) makes ANY failing native
+// fs call FATAL the process (v8::FromJust in node::UVException) — the throw
+// inside C++ is uncatchable from JS. test-fs-writesync-crash poisons `errno`
+// and then calls openSync on a memfs-only path; the mirror's native lstatSync
+// would fail ENOENT and abort before the shim runs. When such a setter is
+// present, skip the native mirror calls entirely and let the shim's own
+// errors stand. No legitimate code defines these setters (Object.prototype
+// has none of them by default), so the guard never fires in normal operation.
+// ponytail: the guard checks for a setter, it never INVOKES one — calling an
+// unknown setter to test whether it throws could have side effects. Ceiling:
+// a poisoned setter on any OTHER property the C++ constructor sets (e.g.
+// `dest`) would still FATAL; no test in the suite poisons one.
+const _NATIVE_ERR_PROPS = ["errno", "code", "syscall", "path"];
+function nativeErrorUnsafe() {
+  for (const p of _NATIVE_ERR_PROPS) {
+    const d = Object.getOwnPropertyDescriptor(Object.prototype, p);
+    if (d && typeof d.set === "function") return true;
+  }
+  return false;
+}
+
 function syncPath(p) {
   // Redirect Node.js repo-layout paths (test/...) to the parity mirror
   // (parity/node-test/...). Official tests assume the Node.js repo root.
@@ -126,6 +148,7 @@ function syncPath(p) {
     srcPath = realPath.join(testRoot, p.slice(repoTestPrefix.length));
   }
   let st;
+  if (nativeErrorUnsafe()) return; // poisoned setter: native lstat would FATAL
   try {
     st = realFs.lstatSync(srcPath);
   } catch {
