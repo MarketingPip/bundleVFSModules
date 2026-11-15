@@ -196,7 +196,17 @@ function syncArgs(args, methodName) {
     const a = args[i];
     let p = null;
     if (typeof a === "string") p = a;
-    else if (typeof Buffer !== "undefined" && Buffer.isBuffer(a))
+    else if (
+      typeof Buffer !== "undefined" &&
+      Buffer.isBuffer(a) &&
+      // ponytail: only a small Buffer can be a path (PATH_MAX is 4096) — a
+      // data Buffer must never be toString()'d here. test-fs-write-buffer-large
+      // passes a 2GB write buffer and the stringify threw ERR_STRING_TOO_LONG
+      // before the shim's own length validation could throw ERR_OUT_OF_RANGE.
+      // A Buffer longer than PATH_MAX can never be a valid path (the shim
+      // rejects it with ENAMETOOLONG), so skipping it loses no sync.
+      a.byteLength <= 4096
+    )
       p = a.toString();
     else if (a instanceof URL && a.protocol === "file:") p = fileURLToPath(a);
     // Skip null-byte paths: they're invalid (ERR_INVALID_ARG_VALUE), let the
