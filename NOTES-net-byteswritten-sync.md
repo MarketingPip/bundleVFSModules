@@ -115,3 +115,17 @@ All 0 on the branch (isolated, `PARITY_TARGET` as noted):
   `TLSSocket` is a separate EventEmitter class with an instance
   `bytesWritten = 0` field (no inherited net getter), tty streams extend
   `Readable`/`Writable` directly.
+
+## Ship log
+
+- PR #408 opened (head `68b976be`); zero check runs in ~30 min (API
+  intermittently unreachable throughout; successful reads consistently
+  showed 0 runs — genuine CI no-show, not a read failure).
+- Rebased onto main `32c4d5c6` (sibling lanes #399/#402/#404 merged);
+  allowlist-only conflict, resolved to this branch's own pair;
+  re-verified 6/6 targets + footprint 29/29 on the rebased tree.
+  Force-pushed (remote head `950ae2ad`); still zero runs after ~11 min.
+  PR #408 closed; fresh PR #411 opened from the same branch/head
+  (proven unstick for #384 → #395) — still zero runs after ~5 min.
+- This notes-only commit is a synchronize-push retrigger.
+
