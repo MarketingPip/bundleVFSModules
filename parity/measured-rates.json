@@ -224,10 +224,10 @@
       "total": 22
     },
     "vm": {
-      "date": "2026-10-11",
-      "passed": 48,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
-      "total": 97
+      "date": "2026-11-15",
+      "passed": 62,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11. + verified flips in wave V1 (2026-11-15): PR #431 (global-contextual-store; merged 94340521); PR #432 (global-define-property; merged 626ee62b); PR #430 (options-validation; merged 17849a59); PR #437 (measure-memory, measure-memory-lazy, measure-memory-multi-context; merged a8fd24d7); PR #439 (proxy-failure-CP; merged 6f2d03f3); PR #434 (not-strict; merged 510f2fd4); PR #440 (cached-data; merged d7db78f1); PR #436 (basic; merged 20560b65); PR #433 (codegen; merged 77fed54c); PR #438 (context-dont-contextify partial — builtins + vendored fixture; merged 83df7c14) + PR #435 (dynamic-import-callback-missing-flag, no-dynamic-import-callback, context-dont-contextify; merged 543852af); all fourteen re-verified exit 0 on merged main. Total corrected 97 -> 96 (2026-10-11 counting error; triage + wave-end full sweep 2026-11-15 both prove 96).",
+      "total": 96
     },
     "wasi": {
       "date": "2026-10-11",
