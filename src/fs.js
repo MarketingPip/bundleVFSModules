@@ -1034,15 +1034,84 @@ function validateMode(mode, def = undefined) {
   err.code = "ERR_INVALID_ARG_TYPE";
   throw err;
 }
+// ── Byte-faithful Buffer paths (readdir-ucs2) ───────────────────────────────
+// Node paths are raw bytes: a Buffer path reaches the filesystem as-is, and
+// readdir decodes the stored raw bytes with the requested encoding. memfs keys
+// are JS strings, so a Buffer path must be decoded — but UTF-8 decoding is
+// LOSSY for byte sequences that are not valid UTF-8 (e.g. a filename given
+// as UTF-16LE bytes), and the raw bytes are then unrecoverable: readdir
+// 'ucs2' can never reproduce them.
+// Invariant: a Buffer path whose bytes are valid UTF-8 decodes as UTF-8
+// (status quo — string paths and their UTF-8 Buffer equivalents still
+// coincide). A Buffer path whose bytes are NOT valid UTF-8 decodes as latin1
+// (a byte→code-unit bijection, lossless) and every segment is recorded in
+// _nonUtf8PathSegments, so readdir can recover the raw bytes for the encoding
+// conversion.
+// ponytail: the Set is per-process and never pruned — a segment lingers after
+// its file is deleted, so a later normal file with the identical segment
+// string would be misdecoded on non-utf8 readdir. Only readdir consults the
+// Set; readlink/realpath/glob/opendir still surface the lossy UTF-8 form for
+// such names (same as before this fix, not a regression). A full fix would
+// store every path latin1 and decode on every name-out site — a much larger
+// blast radius than this one-test lane warrants.
+const _nonUtf8PathSegments = new Set();
+function _bytesAreValidUtf8(bytes) {
+  if (typeof Buffer !== "undefined") {
+    const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    return Buffer.from(buf.toString("utf8"), "utf8").equals(buf);
+  }
+  if (typeof TextDecoder !== "undefined") {
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return true; // no decoder at all: assume valid (old behavior)
+}
+function _latin1Decode(bytes) {
+  if (typeof Buffer !== "undefined") {
+    const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    return buf.toString("latin1");
+  }
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return s;
+}
+// Decode one raw memfs-stored name with the requested readdir encoding —
+// the way Node's binding decodes the raw directory bytes. Normal names are
+// UTF-8 strings (bytes = utf8(name)); names recorded in
+// _nonUtf8PathSegments were stored latin1 (bytes = latin1(name)).
+function decodeFsName(name, encoding) {
+  const enc = typeof encoding === "string" ? encoding : "utf8";
+  if (!_nonUtf8PathSegments.has(name)) {
+    if (enc === "utf8") return name;
+    if (enc === "buffer") return Buffer.from(name);
+    return Buffer.from(name).toString(enc);
+  }
+  const bytes = Buffer.from(name, "latin1");
+  if (enc === "utf8") return bytes.toString("utf8");
+  if (enc === "buffer") return bytes;
+  return bytes.toString(enc);
+}
 function toPathString(p) {
   if (typeof p === "string") return p;
   if (isURLLike(p)) return fileURLToPathString(p);
   if (isUint8ArrayLike(p)) {
-    if (typeof Buffer !== "undefined" && Buffer.isBuffer(p))
-      return p.toString("utf8");
-    if (typeof TextDecoder !== "undefined") return new TextDecoder().decode(p);
-    let s = "";
-    for (let i = 0; i < p.length; i++) s += String.fromCharCode(p[i]);
+    if (_bytesAreValidUtf8(p)) {
+      if (typeof Buffer !== "undefined" && Buffer.isBuffer(p))
+        return p.toString("utf8");
+      if (typeof TextDecoder !== "undefined")
+        return new TextDecoder().decode(p);
+      let s = "";
+      for (let i = 0; i < p.length; i++) s += String.fromCharCode(p[i]);
+      return s;
+    }
+    // Not valid UTF-8: latin1 preserves the raw bytes; record the segments
+    // so readdir can recover them for the encoding conversion.
+    const s = _latin1Decode(p);
+    for (const seg of s.split("/")) if (seg) _nonUtf8PathSegments.add(seg);
     return s;
   }
   return String(p);
@@ -1970,13 +2039,20 @@ function buildApi(vol) {
 
   // ── readdir/readdirSync: Dirent shape + recursive ──
   function readdirImpl(p, options, wantDirent) {
+    const enc =
+      typeof options === "string"
+        ? options
+        : options !== null && typeof options === "object"
+          ? options.encoding
+          : undefined;
     const names = vol.readdirSync(p);
     if (options && options.recursive) {
       const out = [];
       const walk = (dir, rel) => {
         for (const name of vol.readdirSync(dir)) {
           const full = dir + "/" + name;
-          const rp = rel ? rel + "/" + name : name;
+          const disp = decodeFsName(name, enc);
+          const rp = rel ? rel + "/" + disp : disp;
           let st;
           try {
             st = vol.lstatSync(full);
@@ -1984,7 +2060,7 @@ function buildApi(vol) {
             continue;
           }
           if (wantDirent)
-            out.push(new Dirent(name, modeToDirentType(st.mode), dir));
+            out.push(new Dirent(disp, modeToDirentType(st.mode), dir));
           else out.push(rp);
           if (st.isDirectory()) walk(full, rp);
         }
@@ -2000,15 +2076,15 @@ function buildApi(vol) {
         } catch {
           /* ignore */
         }
-        return new Dirent(name, modeToDirentType(mode), p);
+        return new Dirent(decodeFsName(name, enc), modeToDirentType(mode), p);
       });
     }
-    return names;
+    return names.map((name) => decodeFsName(name, enc));
   }
   {
     const orig = fs.readdirSync;
     fs.readdirSync = function (p, options) {
-      validateEncodingOpt(options);
+      validateEncodingOpt(options, true);
       validatePath(p);
       const ps = toPathString(p);
       let result;
@@ -2016,7 +2092,24 @@ function buildApi(vol) {
         if (options && (options.withFileTypes || options.recursive)) {
           result = readdirImpl(ps, options, !!options.withFileTypes);
         } else {
-          result = orig.call(this, ps, options);
+          // memfs applies the encoding conversion itself
+          // (Buffer.from(name).toString(enc)) — wrong for latin1-stored
+          // names, whose raw bytes it cannot see. Force memfs to return the
+          // raw stored names and convert here.
+          const enc =
+            typeof options === "string"
+              ? options
+              : options !== null && typeof options === "object"
+                ? options.encoding
+                : undefined;
+          const memfsOpts =
+            typeof options === "string"
+              ? "utf8"
+              : options !== null && typeof options === "object"
+                ? { ...options, encoding: "utf8" }
+                : undefined;
+          result = orig.call(this, ps, memfsOpts);
+          result = result.map((n) => decodeFsName(n, enc));
         }
       } catch (e) {
         throw enrichErr(e, "readdirSync");
@@ -2034,7 +2127,7 @@ function buildApi(vol) {
       }
       if (typeof callback !== "function")
         throw errInvalidArgType("cb", "function", callback);
-      validateEncodingOpt(options);
+      validateEncodingOpt(options, true);
       validatePath(p);
       const ps = toPathString(p);
       const done = (err, result) => {
@@ -2050,9 +2143,26 @@ function buildApi(vol) {
         }
         return;
       }
-      orig.call(this, ps, options, (err, result) => {
+      // See readdirSync above: memfs must not apply the encoding conversion
+      // itself — force raw stored names and convert here.
+      const enc =
+        typeof options === "string"
+          ? options
+          : options !== null && typeof options === "object"
+            ? options.encoding
+            : undefined;
+      const memfsOpts =
+        typeof options === "string"
+          ? "utf8"
+          : options !== null && typeof options === "object"
+            ? { ...options, encoding: "utf8" }
+            : undefined;
+      orig.call(this, ps, memfsOpts, (err, result) => {
         if (err) return done(err);
-        done(null, result);
+        done(
+          null,
+          result.map((n) => decodeFsName(n, enc)),
+        );
       });
     };
   }
