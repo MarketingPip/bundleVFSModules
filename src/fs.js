@@ -7775,6 +7775,46 @@ function buildApi(vol) {
   fs.FileWriteStream = WriteStreamFactory;
 
   // ── FileHandle (internal; never exposed publicly) ──
+  // Node closes an unclosed FileHandle when it is GC'd (src/node_file.cc
+  // FileHandle::Close): the fd is closed synchronously and a process warning
+  // is emitted from an unref'd setImmediate — a per-fd Warning plus a
+  // once-per-process DEP0137 DeprecationWarning. The registry holds only the
+  // fd number, never the handle, so registration cannot keep it alive; the
+  // handle itself is the unregister token, so an explicit close() (which
+  // always funnels through _closeSync) silences the GC path.
+  // ponytail: the close here is best-effort — if the fd was already closed
+  // out from under the handle (e.g. fs.closeSync(fh.fd)), the EBADF is
+  // swallowed and the warning still fires; real Node fatals that edge in
+  // C++, which a browser shim cannot (and should not) reproduce.
+  let fileHandleCloseWarningEmitted = false;
+  const fileHandleGcRegistry =
+    typeof FinalizationRegistry !== "undefined"
+      ? new FinalizationRegistry((fd) => {
+          try {
+            vol.closeSync(fd);
+          } catch {}
+          if (
+            typeof process !== "undefined" &&
+            typeof process.emitWarning === "function"
+          ) {
+            process.emitWarning(
+              `Closing file descriptor ${fd} on garbage collection`,
+            );
+            if (!fileHandleCloseWarningEmitted) {
+              fileHandleCloseWarningEmitted = true;
+              process.emitWarning(
+                "Closing a FileHandle object on garbage collection is " +
+                  "deprecated. Please close FileHandle objects explicitly " +
+                  "using FileHandle.prototype.close(). In the future, an " +
+                  "error will be thrown if a file descriptor is closed " +
+                  "during garbage collection.",
+                "DeprecationWarning",
+                "DEP0137",
+              );
+            }
+          }
+        })
+      : null;
   const MemFileHandle = fs.promises.FileHandle;
   class FileHandle extends MemFileHandle {
     constructor(fd) {
@@ -7782,6 +7822,8 @@ function buildApi(vol) {
       // EventEmitter state init (the class itself can't be .call()ed).
       _FsEventEmitter.init.call(this);
       this.fd = fd;
+      if (fileHandleGcRegistry !== null)
+        fileHandleGcRegistry.register(this, fd, this);
     }
     async stat(options) {
       try {
@@ -8018,6 +8060,8 @@ function buildApi(vol) {
       // writer fail()/endSync() need the sync form (Node's kCloseSync).
       if (this._closed) return;
       this._closed = true;
+      // Explicit close silences the GC-close warning (see registry above).
+      if (fileHandleGcRegistry !== null) fileHandleGcRegistry.unregister(this);
       const fd = this.fd;
       try {
         vol.closeSync(fd);
