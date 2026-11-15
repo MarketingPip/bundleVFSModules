@@ -730,11 +730,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-listen-bind-validation branch: listen bind validation
     // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
-    // fix/net-perf-hooks branch: net perf_hooks entries (startPerf in
-    // _doConnect, stopPerf at the connect emits; preload perf_hooks
-    // redirect under target=net + working note).
+    // fix/net-pause-on-connect branch: paused-read queue (pauseOnConnect /
+    // pause() holds inbound chunks uncounted until resume())
+    // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-perf-hooks.md", "parity/preload.mjs", "src/net.js"].sort(),
+      ["NOTES-net-pause-on-connect.md", "src/net.js"].sort(),
     );
   });
 

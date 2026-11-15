@@ -1271,6 +1271,12 @@ function Socket(options = {}) {
   this._finSent = false;
   this._bytesRead = 0;
   this._bytesWritten = 0;
+  // Paused-read queue (pauseOnConnect / pause()): while the readable side
+  // is paused, inbound chunks wait here uncounted — real Node stops the
+  // libuv read on pause, so onStreamRead (and the bytesRead increment)
+  // never runs until resume(). Drained by resume(); see _receiveFromPeer.
+  this._pausedReadQueue = [];
+  this._pausedEOF = false;
   this._idleTimer = null;
   this[kTimeout] = null;
   this._noDelay = false;
@@ -3015,14 +3021,64 @@ Socket.prototype._receiveFromPeer = function _receiveFromPeer(buf) {
     this.destroy();
     return;
   }
+  // Paused read (pauseOnConnect / pause()): real Node stops the libuv
+  // read on an EXPLICIT pause, so onStreamRead — and the bytesRead
+  // increment — never runs until resume(). The queue keys on the
+  // explicit-pause bit (`_readableState.paused`, set only by pause() and
+  // cleared by resume()), NOT on isPaused(): isPaused() is also true for
+  // any paused-mode socket — e.g. one with only a 'readable' listener —
+  // and those keep reading + counting in real Node (test-net-buffersize
+  // hangs if they are queued). Hold the chunk uncounted; resume() drains.
+  // ponytail: ceiling — the queue is unbounded, like the kernel receive
+  // buffer it stands in for; the virtual transport has no backpressure
+  // to push back on the peer with.
+  if (this._readableState.paused) {
+    this._pausedReadQueue.push(buf);
+    return;
+  }
   this._bytesRead += buf ? buf.length : 0;
   this._refreshTimeout();
   this.push(buf);
 };
 
+// Drain the paused-read queue: count + deliver each held chunk in arrival
+// order, then a deferred EOF. Called from resume() only — a bare read()
+// on a paused socket must NOT drain (real Node leaves kernel data unread
+// until the read watcher restarts).
+Socket.prototype._drainPausedReads = function _drainPausedReads() {
+  const queue = this._pausedReadQueue;
+  if (queue.length === 0) return;
+  this._pausedReadQueue = [];
+  for (const buf of queue) {
+    if (this.destroyed) return;
+    this._bytesRead += buf ? buf.length : 0;
+    this._refreshTimeout();
+    this.push(buf);
+  }
+  if (this._pausedEOF) {
+    this._pausedEOF = false;
+    this._receiveEOF();
+  }
+};
+
+// resume() restarts the read watcher (lib/net.js pauseOnCreate /
+// lib/internal/stream_base_commons readStart on resume) — the held
+// chunks are read then, so they count and flow now.
+Socket.prototype.resume = function resume() {
+  Duplex.prototype.resume.call(this);
+  this._drainPausedReads();
+  return this;
+};
+
 Socket.prototype._receiveEOF = function _receiveEOF() {
   if (this.destroyed) return;
   this._eofReceived = true;
+  // EOF behind queued paused data: deliver the data first — a push(null)
+  // now would end the readable side before the held chunks ever flow.
+  if (this._readableState.paused && this._pausedReadQueue.length > 0) {
+    this._pausedEOF = true;
+    return;
+  }
   // Mirrors onStreamRead's EOF path: push(null) then read(0) so 'end' is
   // emitted even when the socket is paused.
   this.push(null);
