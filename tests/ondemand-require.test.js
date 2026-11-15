@@ -743,8 +743,16 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-pipe-bind branch: pipe bind creates a real placeholder
     // socket file + parent/existing-path validation + EINVAL past 107
     // chars (src/net.js + working note).
+    // fix/net-happy-eyeballs branch: happy eyeballs / autoSelectFamily —
+    // lookupAndConnectMultiple port + CLI-flag defaults + connect()
+    // validation + net redirect for common/index.js (src/net.js +
+    // parity/preload.mjs + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-pipe-bind.md", "src/net.js"].sort(),
+      [
+        "NOTES-net-happy-eyeballs.md",
+        "parity/preload.mjs",
+        "src/net.js",
+      ].sort(),
     );
   });
 

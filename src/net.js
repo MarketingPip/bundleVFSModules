@@ -112,6 +112,19 @@ function queueAccept(server, client, req) {
     for (let i = 0; i < batch.length; i++) {
       const { server: s, client: c, req: r } = batch[i];
       if (c.destroyed || !c.connecting) continue;
+      // A happy-eyeballs attempt the attempt-timeout already abandoned
+      // must not complete: its accept belongs to a stale address (Node
+      // closes the timed-out handle instead of emitting 'connect' for
+      // it — afterConnectMultiple ignores a success whose index is no
+      // longer current).
+      if (
+        c._autoSelectCtx &&
+        r.multiIndex !== undefined &&
+        r.multiIndex !== -1 &&
+        r.multiIndex !== c._autoSelectCtx.inFlight
+      ) {
+        continue;
+      }
       // The first accept connects synchronously (single-connect timing
       // unchanged); later ones defer the client 'connect' tail, so a
       // microtask can run between two clients' 'connect' events — while
@@ -821,6 +834,33 @@ BlockList.prototype._parseIPInfo = function _parseIPInfo(data) {
 let defaultAutoSelectFamily = true;
 let defaultAutoSelectFamilyAttemptTimeout = 250;
 
+// Node CLI flags --network-family-autoselection /
+// --no-network-family-autoselection and
+// --network-family-autoselection-attempt-timeout=<ms> seed these defaults
+// (node-src lib/net.js:159-160, getOptionValue). Read once at module load
+// from process.execArgv — the same shape as http.js's
+// --insecure-http-parser flag — so the parity harness (which passes the
+// test's `// Flags:` through) and the browser sandbox (RT process config)
+// both land here. Invalid/missing values keep the Node defaults.
+(function _readAutoSelectFamilyFlags() {
+  const p = typeof globalThis !== "undefined" ? globalThis.process : undefined;
+  const argv = p && Array.isArray(p.execArgv) ? p.execArgv : [];
+  if (argv.includes("--no-network-family-autoselection")) {
+    defaultAutoSelectFamily = false;
+  } else if (argv.includes("--network-family-autoselection")) {
+    defaultAutoSelectFamily = true;
+  }
+  for (const arg of argv) {
+    const m = /^--network-family-autoselection-attempt-timeout=(\d+)$/.exec(
+      arg,
+    );
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n)) defaultAutoSelectFamilyAttemptTimeout = n;
+    }
+  }
+})();
+
 function getDefaultAutoSelectFamily() {
   return defaultAutoSelectFamily;
 }
@@ -835,6 +875,39 @@ function setDefaultAutoSelectFamilyAttemptTimeout(value) {
   validateInt32(value, "value", 1);
   if (value < 10) value = 10;
   defaultAutoSelectFamilyAttemptTimeout = value;
+}
+
+// Happy-eyeballs address ordering (node-src lib/net.js:1830-1880): keep
+// only valid (IP, family 4/6) addresses, deduplicated, grouped by family
+// with the first valid address's family preferred, then interleaved
+// preferred/alternate. Returns null when no address is valid.
+function _happyEyeballsOrder(addresses) {
+  const groups = { 4: [], 6: [] };
+  let firstFamily = null;
+  const seen = new Set();
+  for (const entry of addresses) {
+    if (
+      !entry ||
+      typeof entry.address !== "string" ||
+      isIP(entry.address) === 0 ||
+      (entry.family !== 4 && entry.family !== 6)
+    ) {
+      continue;
+    }
+    if (seen.has(entry.address)) continue;
+    seen.add(entry.address);
+    if (firstFamily === null) firstFamily = entry.family;
+    groups[entry.family].push(entry);
+  }
+  if (firstFamily === null) return null;
+  const preferred = groups[firstFamily];
+  const alternate = groups[firstFamily === 6 ? 4 : 6];
+  const ordered = [];
+  for (let i = 0; i < Math.max(preferred.length, alternate.length); i++) {
+    if (i < preferred.length) ordered.push(preferred[i]);
+    if (i < alternate.length) ordered.push(alternate[i]);
+  }
+  return ordered;
 }
 
 // ---------------------------------------------------------------------------
@@ -1843,6 +1916,36 @@ Socket.prototype.connect = function connect(...args) {
     validatePort(options.port, "Port");
   }
 
+  // Happy eyeballs options (node-src lib/net.js:1693-1705, lookupAndConnect):
+  // autoSelectFamily is validateBoolean, autoSelectFamilyAttemptTimeout is
+  // validateInt32 min 1 with values < 10 clamped to 10 — both validated
+  // here, synchronously, in Node's order (after the port check), whether or
+  // not the family actually ends up selected. An unset option falls back to
+  // the module default (seeded from the CLI flags above, mutated by
+  // setDefaultAutoSelectFamily*).
+  let autoSelectFamily = options.autoSelectFamily;
+  if (autoSelectFamily != null) {
+    validateBoolean(autoSelectFamily, "options.autoSelectFamily");
+  } else {
+    autoSelectFamily = defaultAutoSelectFamily;
+  }
+  let autoSelectFamilyAttemptTimeout = options.autoSelectFamilyAttemptTimeout;
+  if (autoSelectFamilyAttemptTimeout != null) {
+    validateInt32(
+      autoSelectFamilyAttemptTimeout,
+      "options.autoSelectFamilyAttemptTimeout",
+      1,
+    );
+    if (autoSelectFamilyAttemptTimeout < 10) {
+      autoSelectFamilyAttemptTimeout = 10;
+    }
+  } else {
+    autoSelectFamilyAttemptTimeout = defaultAutoSelectFamilyAttemptTimeout;
+  }
+
+  // A previous happy-eyeballs run must not leak its timer into a reconnect.
+  this._autoSelectCleanup();
+
   // Host-runtime hook: Jared's runtime can take over connect() with
   // emulated/host networking. Returning true means the hook drives this
   // socket from here (it will emit connect/error/close itself).
@@ -1903,102 +2006,146 @@ Socket.prototype.connect = function connect(...args) {
   // a never-resolving lookup hangs the process instead of draining).
   if (typeof options.lookup === "function") {
     const lookupHost = options.host === undefined ? "localhost" : options.host;
+    // Node's lookupAndConnectMultiple gate (lib/net.js:1755): happy
+    // eyeballs only when autoSelectFamily is on, no family is pinned, and
+    // no localAddress is set. Pipes never eyeball. The lookup then runs
+    // with `all: true` so the resolver returns every address (the mocked
+    // lookup in the tests keys off `options.all`).
+    const useMulti =
+      autoSelectFamily &&
+      !pipe &&
+      options.family !== 4 &&
+      options.family !== 6 &&
+      options.localAddress === undefined;
     let lookupDone = false;
     try {
-      options.lookup(lookupHost, options, (err, ip, addressType) => {
-        if (lookupDone || this.destroyed || !this.connecting) return;
-        lookupDone = true;
-        // Node's emitLookup (lib/net.js:1778, 1815): the socket emits
-        // 'lookup' for every lookup outcome — once per address in the
-        // `all` form, once otherwise.
-        if (Array.isArray(ip)) {
-          for (const entry of ip) {
-            this.emit(
-              "lookup",
-              err,
-              entry && entry.address,
-              entry && entry.family,
-              lookupHost,
-            );
-          }
-        } else {
-          this.emit("lookup", err, ip, addressType, lookupHost);
-        }
-        if (err) {
-          // A custom-lookup failure is authoritative (real Node fails
-          // the connect outright). Flag it on the socket: the http
-          // layer's fetch-path guard must still forward it — a lookup
-          // error is the request's outcome, unlike the background
-          // ENOTFOUND of the agent socket for a fetched host
-          // (test-http-client-req-error-dont-double-fire).
-          this._lookupError =
-            err instanceof Error ? err : new Error(String(err));
-          this._connectFailed(this._lookupError);
-          return;
-        }
-        // Node validates the resolved address (lib/net.js:1788-1796):
-        // a non-string or non-IP result is ERR_INVALID_IP_ADDRESS,
-        // and a family other than 4/6 is ERR_INVALID_ADDRESS_FAMILY.
-        // The `all` form returns an array: the first entry with a
-        // valid IP and family wins, else the first entry decides the
-        // error — invalid IP first, bad family second
-        // (lookupAndConnectMultiple, lib/net.js:1811+).
-        // (test-net-dns-custom-lookup, test-net-options-lookup).
-        let resolvedIp = ip;
-        let resolvedFamily = addressType;
-        if (Array.isArray(ip)) {
-          const first = ip[0];
-          const valid = ip.find(
-            (entry) =>
-              entry &&
-              typeof entry.address === "string" &&
-              isIP(entry.address) !== 0 &&
-              (entry.family === 4 || entry.family === 6),
-          );
-          if (!valid) {
-            const firstIp = first && first.address;
-            if (typeof firstIp !== "string" || isIP(firstIp) === 0) {
-              this._lookupError = errInvalidIpAddress(firstIp);
-            } else {
-              this._lookupError = errInvalidAddressFamily(
-                first && first.family,
+      options.lookup(
+        lookupHost,
+        useMulti ? { ...options, all: true } : options,
+        (err, ip, addressType) => {
+          if (lookupDone || this.destroyed || !this.connecting) return;
+          lookupDone = true;
+          // Node's emitLookup (lib/net.js:1778, 1815): the socket emits
+          // 'lookup' for every lookup outcome — once per address in the
+          // `all` form, once otherwise.
+          if (Array.isArray(ip)) {
+            for (const entry of ip) {
+              this.emit(
+                "lookup",
+                err,
+                entry && entry.address,
+                entry && entry.family,
                 lookupHost,
-                options.port | 0,
               );
             }
+          } else {
+            this.emit("lookup", err, ip, addressType, lookupHost);
+          }
+          if (err) {
+            // A custom-lookup failure is authoritative (real Node fails
+            // the connect outright). Flag it on the socket: the http
+            // layer's fetch-path guard must still forward it — a lookup
+            // error is the request's outcome, unlike the background
+            // ENOTFOUND of the agent socket for a fetched host
+            // (test-http-client-req-error-dont-double-fire).
+            this._lookupError =
+              err instanceof Error ? err : new Error(String(err));
             this._connectFailed(this._lookupError);
             return;
           }
-          resolvedIp = valid.address;
-          resolvedFamily = valid.family;
-        }
-        if (typeof resolvedIp !== "string" || isIP(resolvedIp) === 0) {
-          this._lookupError = errInvalidIpAddress(resolvedIp);
-          this._connectFailed(this._lookupError);
-          return;
-        }
-        if (resolvedFamily !== 4 && resolvedFamily !== 6) {
-          this._lookupError = errInvalidAddressFamily(
-            resolvedFamily,
-            lookupHost,
-            options.port | 0,
-          );
-          this._connectFailed(this._lookupError);
-          return;
-        }
-        this._keepLoopAlive();
-        // Node's lookupAndConnect hands internalConnect the RESOLVED
-        // ip (lib/net.js:1778 emitLookup -> internalConnect): the
-        // blockList check and the address derivation run against it,
-        // not the hostname — a blocked resolved IP must ERR_IP_BLOCKED
-        // even when the hostname itself is not an IP literal
-        // (test-http-request-lookup-error-catchable).
-        const resolved = {
-          address: resolvedIp,
-          family: resolvedFamily === 6 || isIPv6(resolvedIp) ? "IPv6" : "IPv4",
-        };
-        defer(() => this._doConnect(options, pipe, resolved));
-      });
+          // Happy eyeballs (node-src lib/net.js:1755-1770, 1811+): with
+          // autoSelectFamily the lookup returned every address; attempt
+          // them in turn until one connects. Zero or one valid addresses
+          // fall through to the single-connect path below — Node switches
+          // back to a single connection for one address (and never sets
+          // autoSelectFamilyAttemptedAddresses for it), and the
+          // no-valid-address error comes from the first entry there.
+          if (useMulti && Array.isArray(ip)) {
+            const toAttempt = _happyEyeballsOrder(ip);
+            if (toAttempt && toAttempt.length > 1) {
+              this._keepLoopAlive();
+              this.autoSelectFamilyAttemptedAddresses = [];
+              this._autoSelectCtx = {
+                addresses: toAttempt,
+                port: options.port | 0,
+                options,
+                pipe,
+                timeout: autoSelectFamilyAttemptTimeout,
+                next: 0,
+                inFlight: -1,
+                errors: [],
+                timer: null,
+              };
+              this.once("connect", () => this._autoSelectCleanup());
+              this._connectMultipleNext();
+              return;
+            }
+          }
+          // Node validates the resolved address (lib/net.js:1788-1796):
+          // a non-string or non-IP result is ERR_INVALID_IP_ADDRESS,
+          // and a family other than 4/6 is ERR_INVALID_ADDRESS_FAMILY.
+          // The `all` form returns an array: the first entry with a
+          // valid IP and family wins, else the first entry decides the
+          // error — invalid IP first, bad family second
+          // (lookupAndConnectMultiple, lib/net.js:1811+).
+          // (test-net-dns-custom-lookup, test-net-options-lookup).
+          let resolvedIp = ip;
+          let resolvedFamily = addressType;
+          if (Array.isArray(ip)) {
+            const first = ip[0];
+            const valid = ip.find(
+              (entry) =>
+                entry &&
+                typeof entry.address === "string" &&
+                isIP(entry.address) !== 0 &&
+                (entry.family === 4 || entry.family === 6),
+            );
+            if (!valid) {
+              const firstIp = first && first.address;
+              if (typeof firstIp !== "string" || isIP(firstIp) === 0) {
+                this._lookupError = errInvalidIpAddress(firstIp);
+              } else {
+                this._lookupError = errInvalidAddressFamily(
+                  first && first.family,
+                  lookupHost,
+                  options.port | 0,
+                );
+              }
+              this._connectFailed(this._lookupError);
+              return;
+            }
+            resolvedIp = valid.address;
+            resolvedFamily = valid.family;
+          }
+          if (typeof resolvedIp !== "string" || isIP(resolvedIp) === 0) {
+            this._lookupError = errInvalidIpAddress(resolvedIp);
+            this._connectFailed(this._lookupError);
+            return;
+          }
+          if (resolvedFamily !== 4 && resolvedFamily !== 6) {
+            this._lookupError = errInvalidAddressFamily(
+              resolvedFamily,
+              lookupHost,
+              options.port | 0,
+            );
+            this._connectFailed(this._lookupError);
+            return;
+          }
+          this._keepLoopAlive();
+          // Node's lookupAndConnect hands internalConnect the RESOLVED
+          // ip (lib/net.js:1778 emitLookup -> internalConnect): the
+          // blockList check and the address derivation run against it,
+          // not the hostname — a blocked resolved IP must ERR_IP_BLOCKED
+          // even when the hostname itself is not an IP literal
+          // (test-http-request-lookup-error-catchable).
+          const resolved = {
+            address: resolvedIp,
+            family:
+              resolvedFamily === 6 || isIPv6(resolvedIp) ? "IPv6" : "IPv4",
+          };
+          defer(() => this._doConnect(options, pipe, resolved));
+        },
+      );
     } catch (err) {
       // A synchronously-throwing lookup fails the connect async (Node
       // surfaces it as a connection error, not a connect() throw).
@@ -2017,11 +2164,128 @@ Socket.prototype.connect = function connect(...args) {
   return this;
 };
 
-Socket.prototype._connectFailed = function _connectFailed(err) {
+Socket.prototype._connectFailed = function _connectFailed(err, multiIndex) {
   if (this.destroyed) return;
+  const ctx = this._autoSelectCtx;
+  if (ctx && multiIndex !== undefined) {
+    // Happy-eyeballs attempt outcome (see _connectMultipleNext): a
+    // failure for the in-flight attempt advances to the next address
+    // instead of destroying the socket; a stale failure from an attempt
+    // the attempt-timeout already abandoned is swallowed.
+    if (multiIndex === ctx.inFlight) {
+      this._connectMultipleNext(multiIndex, err);
+      return;
+    }
+    return;
+  }
   this.connecting = false;
   this._clearIdleTimer();
   this.destroy(err);
+};
+
+// Happy-eyeballs driver (node-src lib/net.js internalConnectMultiple,
+// afterConnectMultiple, internalConnectMultipleTimeout). One attempt runs
+// at a time; a fast refusal advances immediately, a hung attempt advances
+// when the attempt-timeout fires. Attempt outcomes arrive through
+// _connectFailed(err, multiIndex); the index guards against stale
+// outcomes from attempts the timeout already abandoned.
+Socket.prototype._autoSelectCleanup = function _autoSelectCleanup() {
+  const ctx = this._autoSelectCtx;
+  if (ctx) {
+    if (ctx.timer !== null) {
+      clearTimeout(ctx.timer);
+      ctx.timer = null;
+    }
+    this._autoSelectCtx = undefined;
+  }
+};
+
+Socket.prototype._connectMultipleNext = function _connectMultipleNext(
+  failedIndex,
+  err,
+  emitFailed = true,
+) {
+  const ctx = this._autoSelectCtx;
+  if (!ctx || this.destroyed || !this.connecting) return;
+  // A stale failure from an attempt the attempt-timeout already abandoned.
+  if (failedIndex !== undefined && failedIndex !== ctx.inFlight) return;
+  if (ctx.timer !== null) {
+    clearTimeout(ctx.timer);
+    ctx.timer = null;
+  }
+  if (err !== undefined) {
+    ctx.errors.push(err);
+    if (emitFailed) {
+      // Node emits 'connectionAttemptFailed' per failed attempt — but
+      // not for an attempt-timeout (internalConnectMultipleTimeout only
+      // emits 'connectionAttemptTimeout').
+      const failed = ctx.addresses[failedIndex];
+      this.emit(
+        "connectionAttemptFailed",
+        failed.address,
+        ctx.port,
+        failed.family,
+        err,
+      );
+    }
+  }
+  if (ctx.next >= ctx.addresses.length) {
+    // Every address failed: Node destroys with a NodeAggregateError of the
+    // per-attempt errors (test-net-autoselectfamily.js all-fail block).
+    // NodeAggregateError carries the FIRST error's code (node-src
+    // lib/internal/errors.js:199-203: `this.code = errors[0]?.code`) — a
+    // blocked multi run still surfaces ERR_IP_BLOCKED
+    // (test-net-blocklist.js) — and its `constructor` getter returns
+    // AggregateError, so the all-fail `constructor.name` check still holds.
+    const errors = ctx.errors;
+    const aggregate = new AggregateError(errors);
+    aggregate.code = errors[0]?.code;
+    this._autoSelectCleanup();
+    this._connectFailed(aggregate);
+    return;
+  }
+  const index = ctx.next++;
+  ctx.inFlight = index;
+  const entry = ctx.addresses[index];
+  this.autoSelectFamilyAttemptedAddresses.push(`${entry.address}:${ctx.port}`);
+  // If this attempt has not settled by the attempt timeout, abandon it
+  // and start the next address (emitting 'connectionAttemptTimeout', like
+  // Node's internalConnectMultipleTimeout). The abandoned attempt's late
+  // outcome is stale-guarded by its index in _connectFailed and in the
+  // queueAccept drain. The timer is unref'd: the connecting socket's own
+  // loop keeper holds the loop, and a destroyed socket must not be kept
+  // alive by an orphaned attempt timer.
+  if (index < ctx.addresses.length - 1) {
+    ctx.timer = setTimeout(() => {
+      if (
+        this._autoSelectCtx !== ctx ||
+        this.destroyed ||
+        !this.connecting ||
+        ctx.inFlight !== index
+      ) {
+        return;
+      }
+      const timeoutErr = errnoError(
+        "ETIMEDOUT",
+        "connect",
+        `connect ETIMEDOUT ${entry.address}:${ctx.port}`,
+        { errno: -110, address: entry.address, port: ctx.port },
+      );
+      this.emit(
+        "connectionAttemptTimeout",
+        entry.address,
+        ctx.port,
+        entry.family,
+      );
+      this._connectMultipleNext(index, timeoutErr, false);
+    }, ctx.timeout);
+    if (typeof ctx.timer.unref === "function") ctx.timer.unref();
+  }
+  const resolved = {
+    address: entry.address,
+    family: entry.family === 6 || isIPv6(entry.address) ? "IPv6" : "IPv4",
+  };
+  defer(() => this._doConnect(ctx.options, ctx.pipe, resolved));
 };
 
 // Error for a refused/over-capacity/blocked connection attempt, mirroring
@@ -2035,6 +2299,13 @@ Socket.prototype._refusedError = function _refusedError(req) {
 
 Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
   if (this.destroyed || !this.connecting) return;
+
+  // Happy-eyeballs attempt index for this dial (-1 outside a multi run):
+  // failure defers below tag their _connectFailed call with it so the
+  // driver can tell a live attempt's failure from a stale one (an attempt
+  // the attempt-timeout already abandoned), and the accept req carries it
+  // for the same guard in the queueAccept drain.
+  const multiIndex = this._autoSelectCtx ? this._autoSelectCtx.inFlight : -1;
 
   const host = options.host === undefined ? "localhost" : options.host;
 
@@ -2068,7 +2339,7 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
       // the error, then the socket error).
       const err = errNotFound(host);
       this.emit("lookup", err, undefined, undefined, host);
-      defer(() => this._connectFailed(err));
+      defer(() => this._connectFailed(err, multiIndex));
       return;
     }
   }
@@ -2097,7 +2368,7 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
           port: options.localPort,
         },
       );
-      defer(() => this._connectFailed(err));
+      defer(() => this._connectFailed(err, multiIndex));
       return;
     }
   }
@@ -2122,7 +2393,7 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
         `bind EADDRINUSE ${bindHost}:${options.localPort}`,
         { errno: -98, address: bindHost, port: options.localPort },
       );
-      defer(() => this._connectFailed(err));
+      defer(() => this._connectFailed(err, multiIndex));
       return;
     }
   }
@@ -2139,7 +2410,7 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
       blocked = false;
     }
     if (blocked) {
-      defer(() => this._connectFailed(errIpBlocked(address)));
+      defer(() => this._connectFailed(errIpBlocked(address), multiIndex));
       return;
     }
   }
@@ -2162,7 +2433,10 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
       port,
       oncomplete(status) {
         if (status) {
-          self._connectFailed(connectFailureToError(status, address, port));
+          self._connectFailed(
+            connectFailureToError(status, address, port),
+            multiIndex,
+          );
         }
       },
     };
@@ -2175,13 +2449,16 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
       // A throwing fake fails the connect async, like a sync-throwing lookup
       // — never a connect() throw.
       defer(() =>
-        this._connectFailed(e instanceof Error ? e : new Error(String(e))),
+        this._connectFailed(
+          e instanceof Error ? e : new Error(String(e)),
+          multiIndex,
+        ),
       );
       return;
     }
     if (err) {
       const connectErr = connectFailureToError(err, address, port);
-      defer(() => this._connectFailed(connectErr));
+      defer(() => this._connectFailed(connectErr, multiIndex));
       return;
     }
     return;
@@ -2212,7 +2489,9 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
     }
     server = _pipeServers().get(options.path);
     if (!server) {
-      defer(() => this._connectFailed(errConnRefusedPipe(options.path)));
+      defer(() =>
+        this._connectFailed(errConnRefusedPipe(options.path), multiIndex),
+      );
       return;
     }
   } else {
@@ -2235,15 +2514,31 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
     if (!server) {
       // Matches Node: IP-literal hosts get a detailed ECONNREFUSED; anything
       // else (DNS path) surfaces a bare ECONNREFUSED with an empty message.
-      const err = ipLiteral
-        ? errConnRefused(address, port)
-        : errConnRefusedBare();
-      defer(() => this._connectFailed(err));
+      // A happy-eyeballs attempt always dials a resolved IP, so it gets
+      // the detailed form too (Node's createConnectionError in
+      // internalConnectMultiple) — the all-fail AggregateError's messages
+      // are `connect ECONNREFUSED <ip>:<port>` per address. The same holds
+      // for a single lookup-resolved address: Node's lookupAndConnect hands
+      // internalConnect the resolved IP, whose refusal is detailed
+      // (test-net-autoselectfamily-default / -commandline-option expect
+      // `connect ECONNREFUSED ::1:<port>` with autoSelectFamily off).
+      const err =
+        ipLiteral || resolved || multiIndex !== -1
+          ? errConnRefused(address, port)
+          : errConnRefusedBare();
+      defer(() => this._connectFailed(err, multiIndex));
       return;
     }
   }
 
-  const req = { address, family, port, pipe, path: options.path };
+  const req = {
+    address,
+    family,
+    port,
+    pipe,
+    path: options.path,
+    multiIndex,
+  };
   // One more event-loop turn before the handshake completes, like a real
   // TCP handshake: handlers attached after an `await` still catch 'connect'.
   // Accepts are batched (queueAccept) so a burst of connects is accepted
@@ -3181,7 +3476,14 @@ Server.prototype._acceptConnection = function _acceptConnection(
   // may have closed in between (close() nulls _bindAddress and clears
   // _listening). Refuse cleanly instead of throwing on the nulled address.
   if (!this._listening || !bindAddr) {
-    client._connectFailed(client._refusedError(req));
+    // A happy-eyeballs attempt dials a resolved IP, so its refusal is
+    // the detailed form (as in _doConnect's no-server branch), tagged
+    // with the attempt index for the driver's stale guard.
+    const refused =
+      req.multiIndex !== undefined && req.multiIndex !== -1
+        ? errConnRefused(req.address, req.port)
+        : client._refusedError(req);
+    client._connectFailed(refused, req.multiIndex);
     return;
   }
 
