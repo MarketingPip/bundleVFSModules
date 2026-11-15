@@ -69,4 +69,12 @@ new paths; syncs existing real-disk paths so EEXIST still works).
 
 ## Ship
 
-PR #___ / Merge SHA: ___ (filled at ship time)
+- Round 1 CI GREEN on code SHA 2b9b2d2d (base eca141cf); round 2 CI GREEN on
+  0b2f975f (base ee0a2490) — both invalidated by sibling merges + dist-regen
+  bot commits moving the head (merge race, not conflicts).
+- Round 3 CI on e2f61233 (base 42f7bd56): Parity success, build failure at
+  step "Build VFS" — proven transient: all three local build steps clean on
+  the same tree (build-vfs exit 0, build-sandbox --check 0, build-runtime
+  --check 0). Retriggered with this notes-only commit (round 4).
+
+PR #452 / Merge SHA: ___ (filled at ship time)
