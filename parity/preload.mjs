@@ -318,7 +318,20 @@ Module._load = function (request, parent, isMain) {
       // test_up_multiple EEXIST).
       parentFile ===
         path.join(repoRoot, "parity", "node-test", "common", "tmpdir.js"));
-  if (parentFile.startsWith(testsDir) || isFsHelper) {
+  // For the net target, common/index.js also needs the shim: at load it
+  // mutates the autoSelectFamily defaults (setDefaultAutoSelectFamily
+  // AttemptTimeout(getDefault...() * 10)), and the tests read those
+  // defaults back through the shim's net. The redirect gate below only
+  // covers parents under testsDir (parallel/), but common/ lives
+  // outside it — so the ×10 landed on native net while the test read the
+  // shim's untouched 250 (test-net-autoselectfamily-attempt-timeout-
+  // default-value, probe-proven in triage-net-2026-11-14). common/index.js
+  // uses net for nothing else at load, so this stays a one-file gate.
+  const isNetHelper =
+    target === "net" &&
+    parentFile ===
+      path.join(repoRoot, "parity", "node-test", "common", "index.js");
+  if (parentFile.startsWith(testsDir) || isFsHelper || isNetHelper) {
     // Mirror real CJS builtins: require('path') is module.exports (the
     // default export), and require('path/posix') / require('path/win32')
     // are the identical objects as require('path').posix / .win32.
