@@ -1300,10 +1300,22 @@ function runWithContext(code, target, opts) {
   // Note: lexical (let/const/class) names are NOT pre-declared on the target;
   // they live in the eval's declarative scope and must not become context
   // properties (Node keeps them off globalThis too).
-  for (const name of scanned.assigned) {
-    if (!seen.has(name)) {
-      seen.add(name);
-      ensureDeclared(target, name);
+  // Strict-mode scripts must NOT pre-declare bare-assignment targets: in
+  // real Node `"use strict"; z = 42` throws ReferenceError for an undeclared
+  // `z`, but pre-declaring it on the context makes the assignment succeed
+  // (test-vm-global-contextual-store). Skipping the pre-declaration lets the
+  // scope proxy's `has` trap return false, so the strict eval throws before
+  // any property is created. Sloppy scripts still pre-declare (bare
+  // assignment creates the global). ponytail: names already on the target
+  // (context properties like `x`, or standard globals claimed by the scope
+  // proxy) are unaffected — assignment to them stays legal in both modes,
+  // exactly as in Node.
+  if (!strict) {
+    for (const name of scanned.assigned) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        ensureDeclared(target, name);
+      }
     }
   }
 
