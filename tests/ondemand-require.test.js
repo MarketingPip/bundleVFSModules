@@ -730,11 +730,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-listen-bind-validation branch: listen bind validation
     // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
-    // fix/net-destroy-rst branch: destroy-with-unread-data RST
-    // (_destroy delivers ECONNRESET to the peer, test-net-stream)
-    // (src/net.js + working note).
+    // fix/net-allocport branch: randomized ephemeral-port start +
+    // registry skip in allocPort (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-onread-static-buffer.md", "src/net.js"].sort(),
+      ["NOTES-net-allocport.md", "src/net.js"].sort(),
     );
   });
 
