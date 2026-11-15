@@ -71,4 +71,6 @@ parent threw ENOENT at `[kFSWatchStart]`
   `rmSync(dir/sub, {recursive: true})` now succeeds.
 
 ## Ship
-- PR #___ / Merge SHA: ___ (filled at ship time)
+- PR #451 — https://github.com/MarketingPip/bundleVFSModules/pull/451
+- Code SHA: `aadc1875` (local commit `5eb12321` re-created by the git-database API)
+- Merge SHA: ___ (filled at merge time)
