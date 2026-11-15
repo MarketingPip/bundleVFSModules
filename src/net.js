@@ -1125,12 +1125,27 @@ const _isLinux = typeof process !== "undefined" && process.platform === "linux";
 
 // Ephemeral port pool for both listen(0) and client-side local ports,
 // kept out of the real ephemeral range to avoid confusion.
-let nextEphemeral = 40000;
+// ponytail: the start is randomized per process — cluster workers are
+// separate processes sharing no counter, so a fixed 40000 start made every
+// worker listen on 40000 (test-net-listen-exclusive-random-ports). Ports
+// already held in the _tcpServers registry are skipped, so a wrapped-around
+// counter can never hand out a live listener's port. Ceiling: cross-process
+// uniqueness is probabilistic (~1/20000 collision), not deterministic —
+// there is no shared registry between processes; real Node gets its
+// uniqueness from the kernel instead.
+let nextEphemeral = 40000 + Math.floor(Math.random() * 20000);
 function allocPort() {
   for (let i = 0; i < 20000; i++) {
     const p = nextEphemeral;
     nextEphemeral = nextEphemeral >= 59999 ? 40000 : nextEphemeral + 1;
-    return p;
+    let held = false;
+    for (const key of _tcpServers().keys()) {
+      if (key.endsWith(`:${p}`)) {
+        held = true;
+        break;
+      }
+    }
+    if (!held) return p;
   }
   return nextEphemeral++;
 }
