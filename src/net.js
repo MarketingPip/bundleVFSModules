@@ -1776,19 +1776,22 @@ function _normalizeArgs(args) {
     cb = args[args.length - 1];
     args = args.slice(0, -1);
   }
-  if (typeof arg0 === "number" || typeof arg0 === "string") {
-    if (isPipeName(arg0)) {
-      options = { path: arg0 };
-    } else {
-      options = { port: arg0 };
-      if (args.length > 1 && typeof args[1] === "string")
-        options.host = args[1];
-    }
-  } else {
-    validateObject(arg0, "options");
+  // Node lib/net.js normalizeArgs (:297): a non-object arg0 is a port (or
+  // a pipe path), never an options object — undefined/null/false become
+  // { port: arg0 } and listen() defaults/validates from there. The old
+  // validateObject(arg0) threw ERR_INVALID_ARG_TYPE for those forms, so
+  // listen(undefined)/listen(null) and shouldFailToListen(false) never
+  // reached Node's port validation / ERR_INVALID_ARG_VALUE.
+  // ponytail: mirrors Node's three branches exactly; no symbol is set
+  // here — normalizeArgs() still owns normalizedArgsSymbol (lane 6).
+  if (typeof arg0 === "object" && arg0 !== null) {
     options = { ...arg0 };
+  } else if (isPipeName(arg0)) {
+    options = { path: arg0 };
+  } else {
+    options = { port: arg0 };
+    if (args.length > 1 && typeof args[1] === "string") options.host = args[1];
   }
-  options = { ...options };
   return [options, cb];
 }
 function normalizeArgs(args) {
@@ -3232,6 +3235,10 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
   this._listening = true;
   this._backlog = backlog;
   this._bindAddress = { address: bindHost, family, port: actualPort };
+  // Node lib/net.js setupListenHandle (:2345): _connectionKey is
+  // addressType + ':' + address + ':' + port, built from the REQUESTED
+  // port (listen(0) keys '6::::0', not the allocated ephemeral port).
+  this._connectionKey = `${family === "IPv6" ? 6 : 4}:${bindHost}:${port}`;
   this._keepLoopAlive();
   this.emit("listening");
 };

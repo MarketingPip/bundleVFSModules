@@ -732,27 +732,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-state-getters branch: net state getters — bufferSize gates
     // on _handle (Node lib/net.js:980) + _connecting legacy alias
     // (src/net.js + working note).
-    // fix/net-socket-options branch: Socket.setKeepAlive verbatim port
-    // (object form, ms->s, 4-arg forward, dedupe) + setTypeOfService /
-    // getTypeOfService (src/net.js + working note).
-    // fix/net-preconnect-destroy branch: pre-connect destroy/abort —
-    // delete connect()'s duplicate abort listener, resetAndDestroy
-    // ERR_SOCKET_CLOSED with no handle, connecting-write close listener
-    // (ERR_SOCKET_CLOSED_BEFORE_CONNECTION), server-socket handle
-    // assigned before the connection emit (src/net.js + working note).
-    // fix/net-pipe-bind branch: pipe bind creates a real placeholder
-    // socket file + parent/existing-path validation + EINVAL past 107
-    // chars (src/net.js + working note).
-    // fix/net-happy-eyeballs branch: happy eyeballs / autoSelectFamily —
-    // lookupAndConnectMultiple port + CLI-flag defaults + connect()
-    // validation + net redirect for common/index.js (src/net.js +
-    // parity/preload.mjs + working note).
+    // fix/net-listen-normalize branch: listen normalize — _connectionKey
+    // in _doListenTCP + _normalizeArgs mirroring Node's normalizeArgs
+    // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-net-happy-eyeballs.md",
-        "parity/preload.mjs",
-        "src/net.js",
-      ].sort(),
+      ["NOTES-net-listen-normalize.md", "src/net.js"].sort(),
     );
   });
 
