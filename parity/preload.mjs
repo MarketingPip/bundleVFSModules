@@ -587,6 +587,37 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // test-fs-watch-recursive-delete-race requires `internal/fs/watchers`
+    // (kFSWatchStart) and `internal/fs/recursive_watch` (FSWatcher). Same
+    // treatment: without a redirect the requires fall through to native
+    // Node's internals, whose FSWatcher stats the real-disk parent
+    // (memfs-only) and throws ENOENT at [kFSWatchStart]. The watchers
+    // adapter re-exports real Node's module (symbol identity for
+    // kFSWatchStart); the recursive_watch adapter is a port of Node's JS
+    // recursive FSWatcher whose fs operations run through the shim (so
+    // the test's monkey-patched fs.watch is honored). See
+    // parity/internal-fs-watchers-adapter.mjs and
+    // parity/internal-fs-recursive-watch-adapter.mjs. (#232 precedent)
+    if (target === "fs" && bare === "internal/fs/watchers") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-fs-watchers-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
+    if (target === "fs" && bare === "internal/fs/recursive_watch") {
+      return origLoad.call(
+        this,
+        path.join(
+          repoRoot,
+          "parity",
+          "internal-fs-recursive-watch-adapter.mjs",
+        ),
+        parent,
+        isMain,
+      );
+    }
   }
   return origLoad.call(this, request, parent, isMain);
 };

@@ -6714,8 +6714,8 @@ function buildApi(vol) {
           return origEmit(event, ...args);
         };
       }
-      // ── memfs recursive-watch hardening ──
-      // memfs's recursive FSWatcher has two defects we must work around:
+      // ── memfs watch hardening ──
+      // memfs's FSWatcher has two defects we must work around:
       // 1. Deleting a watched subtree throws RangeError (its
       //    removeLinkNodeListeners recurses through the '.'/'..' links).
       // 2. Its re-attach after a 'child:add' is deferred a tick, so a file
@@ -6723,11 +6723,13 @@ function buildApi(vol) {
       // Replace memfs's per-link 'child:add'/'child:delete' handlers with
       // fixed versions (node 'change' watchers memfs attached during
       // start() are fine and are left alone).
-      const recursiveOpt =
-        options !== null && typeof options === "object"
-          ? options.recursive
-          : undefined;
-      if (recursiveOpt && w && w._link) {
+      // Defect 1 bites NON-recursive watchers too: plain fs.watch(dir) +
+      // rmSync(dir/sub) throws RangeError (probe-proven on base) because
+      // the parent watcher's memfs child:delete handler recurses the same
+      // way — so the hardening applies to every watcher, not just
+      // recursive ones (test-fs-watch-recursive-delete-race needs it for
+      // its plain parent watch).
+      if (w && w._link) {
         hardenRecursiveWatcher(w);
       }
       if (signal) {
