@@ -727,20 +727,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/https-joint-session-sni branch: SNI cert selection in the
     // virtual peer verifier + getPeerX509Certificate fingerprint
     // (src/http.js + src/net.js + working note).
-    // fix/net-connect-args branch: connect-arg validation/normalization
-    // (per-key objectMode throws + host/port/hints validation in
-    // Socket.prototype.connect, refused-error detail shape,
-    // _normalizeArgs symbol on every return path, internal/net parity
-    // adapter) (src/net.js + src/internals/net-symbols.js +
-    // parity/internal-net-adapter.mjs + parity/preload.mjs + note).
+    // fix/net-listen-bind-validation branch: listen bind validation
+    // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
+    // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-net-connect-args.md",
-        "parity/internal-net-adapter.mjs",
-        "parity/preload.mjs",
-        "src/internals/net-symbols.js",
-        "src/net.js",
-      ].sort(),
+      ["NOTES-net-listen-bind-validation.md", "src/net.js"].sort(),
     );
   });
 
