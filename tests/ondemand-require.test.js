@@ -740,8 +740,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // ERR_SOCKET_CLOSED with no handle, connecting-write close listener
     // (ERR_SOCKET_CLOSED_BEFORE_CONNECTION), server-socket handle
     // assigned before the connection emit (src/net.js + working note).
+    // fix/net-pipe-bind branch: pipe bind creates a real placeholder
+    // socket file + parent/existing-path validation + EINVAL past 107
+    // chars (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-preconnect-destroy.md", "src/net.js"].sort(),
+      ["NOTES-net-pipe-bind.md", "src/net.js"].sort(),
     );
   });
 
