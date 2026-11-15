@@ -64,7 +64,17 @@ No preload / hooks / shared-file changes. No docs-number changes.
   socket-write-after-close 124, write-fully-async-hex-string 124,
   connect-memleak 1). Regressions: 0.
 
-## Ceiling / leftovers
+## Ship log
+
+- PR #400 (head d4e46894, then rebased ef311594): zero CI check runs
+  across 26 + 119 waiter polls — CI no-show; rebase + force-push did
+  not unstick it. Closed.
+- PR #412 (fresh, same head ef311594): zero runs in 120 polls (~80 min);
+  close + reopen also produced no runs. Synchronize push (this commit)
+  is the next retrigger.
+- Local build-vfs exits 1 twice on the known esm.sh acorn/acorn-walk
+  fetch transient (untouched src/specials/bundler.js); sandbox +
+  runtime checks 0.
 
 - Expanded IPv6 loopback (`0:0:0:0:0:0:0:1`) and IPv4-mapped loopback
   (`::ffff:127.0.0.1`) are rejected by the shared predicate where real
