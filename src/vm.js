@@ -1392,10 +1392,217 @@ function enrichScriptError(err, ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// 8b. Dynamic import() interception (Node's rule, lib/internal/modules/esm/
+// utils.js importModuleDynamicallyCallback + lib/internal/vm.js
+// getHostDefinedOptionId). The host ESM loader must never see a script's
+// import() — it resolves instead of rejecting with the coded errors.
+// ---------------------------------------------------------------------------
+
+// 6 chars, same length as `import`, so the rewrite below preserves every
+// line/column position in the evaluated source.
+const DYNIMPORT_HELPER = "__vdim";
+
+/** True when the host was started with --experimental-vm-modules. */
+function vmModulesFlagOn() {
+  const p = globalThis.process;
+  return (
+    typeof p === "object" &&
+    p !== null &&
+    Array.isArray(p.execArgv) &&
+    p.execArgv.includes("--experimental-vm-modules")
+  );
+}
+
+/**
+ * Per-script dynamic-import handler. `getReferrer` is a thunk: compileFunction
+ * builds its handler before the compiled function exists, so the referrer is
+ * only read when a callback is actually invoked.
+ */
+function makeDynamicImportHandler(callback, getReferrer) {
+  return async function __vdim(specifier, options) {
+    if (callback === constants.USE_MAIN_CONTEXT_DEFAULT_LOADER) {
+      return import(specifier); // host default loader
+    }
+    if (callback !== undefined) {
+      if (!vmModulesFlagOn()) {
+        throw codedError(
+          TypeError,
+          "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG",
+          "A dynamic import callback was invoked without --experimental-vm-modules",
+        );
+      }
+      const attributes = options?.with ?? options?.assert ?? {};
+      return callback(specifier, getReferrer(), attributes, "evaluation");
+    }
+    throw codedError(
+      TypeError,
+      "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING",
+      "A dynamic import callback was not specified.",
+    );
+  };
+}
+
+/** Skip whitespace and //- / /*-comments starting at j. */
+function skipWsAndComments(code, j) {
+  const n = code.length;
+  while (j < n) {
+    const c = code[j];
+    if (
+      c === " " ||
+      c === "\t" ||
+      c === "\n" ||
+      c === "\r" ||
+      c === "\v" ||
+      c === "\f"
+    ) {
+      j++;
+      continue;
+    }
+    if (c === "/" && code[j + 1] === "/") {
+      j += 2;
+      while (j < n && code[j] !== "\n" && code[j] !== "\r") j++;
+      continue;
+    }
+    if (c === "/" && code[j + 1] === "*") {
+      j += 2;
+      while (j < n && !(code[j] === "*" && code[j + 1] === "/")) j++;
+      j += 2;
+      continue;
+    }
+    break;
+  }
+  return j;
+}
+
+/**
+ * Rewrites genuine dynamic `import(` calls to `__vdim(`. Strings, templates
+ * (recursing into ${} interpolations, where import() is real code), comments,
+ * and regexes are skipped via the shared lexer. Left alone: `import.meta`,
+ * member calls (`x.import(`), and object methods named `import` (detected by
+ * a `{` on the same line after the balanced parens).
+ * Returns the input unchanged when there is nothing to rewrite.
+ * Known limits (ponytail: a full parser is out of scope): `import("x")`
+ * immediately followed by a `{` block on the same line is misread as a
+ * method (ASI case); a regex containing the literal text `import(` after an
+ * object-literal `}` is misread as a call.
+ */
+function rewriteDynamicImports(code) {
+  if (!code.includes("import")) return code;
+  const n = code.length;
+  const spans = [];
+  // Scan one range, appending rewrite spans; template ${} interiors recurse.
+  function scanRange(start, end) {
+    let i = start;
+    let operand = false;
+    let prevSig = "";
+    // Walk one template literal starting at i (code[i] === "`").
+    function scanTemplate() {
+      let j = i + 1;
+      while (j < n && j < end) {
+        const c = code[j];
+        if (c === "\\") {
+          j += 2;
+          continue;
+        }
+        if (c === "`") return j + 1;
+        if (c === "$" && code[j + 1] === "{") {
+          const close = matchBalanced(code, j + 1);
+          scanRange(j + 2, Math.min(close - 1, end));
+          j = close;
+          continue;
+        }
+        j++;
+      }
+      return j;
+    }
+    while (i < end) {
+      const c = code[i];
+      if (c === '"' || c === "'") {
+        i = Math.min(skipStringLex(code, i), end);
+        operand = true;
+        prevSig = "x";
+        continue;
+      }
+      if (c === "`") {
+        i = scanTemplate();
+        operand = true;
+        prevSig = "x";
+        continue;
+      }
+      if (c === "/" && code[i + 1] === "/") {
+        i += 2;
+        while (i < end && code[i] !== "\n" && code[i] !== "\r") i++;
+        continue;
+      }
+      if (c === "/" && code[i + 1] === "*") {
+        i += 2;
+        while (i < end && !(code[i] === "*" && code[i + 1] === "/")) i++;
+        i += 2;
+        continue;
+      }
+      if (c === "/" && !operand) {
+        i = Math.min(skipRegexLex(code, i), end);
+        operand = true;
+        prevSig = "x";
+        continue;
+      }
+      if (isIdStartChar(c)) {
+        const { word, end: idEnd } = readId(code, i);
+        if (word === "import" && prevSig !== ".") {
+          const j = skipWsAndComments(code, idEnd);
+          if (code[j] === "(") {
+            const after = matchBalanced(code, j);
+            let k = after;
+            while (k < n && (code[k] === " " || code[k] === "\t")) k++;
+            if (code[k] !== "{") spans.push([i, i + 6]);
+          }
+        }
+        operand = !KEYWORDS.has(word);
+        prevSig = "x";
+        i = idEnd;
+        continue;
+      }
+      if (c >= "0" && c <= "9") {
+        i = Math.min(skipNumberLex(code, i), end);
+        operand = true;
+        prevSig = "x";
+        continue;
+      }
+      if (
+        c === " " ||
+        c === "\t" ||
+        c === "\n" ||
+        c === "\r" ||
+        c === "\v" ||
+        c === "\f"
+      ) {
+        i++;
+        continue;
+      }
+      if (c === ")" || c === "]") operand = true;
+      else if (c === "}")
+        operand = false; // statement position: / starts a regex
+      else operand = false;
+      prevSig = c;
+      i++;
+    }
+  }
+  scanRange(0, n);
+  if (spans.length === 0) return code;
+  let out = "";
+  let last = 0;
+  for (const [s, e] of spans) {
+    out += code.slice(last, s) + DYNIMPORT_HELPER;
+    last = e;
+  }
+  return out + code.slice(last);
+}
+
+// ---------------------------------------------------------------------------
 // 9. Core execution engine
 // ---------------------------------------------------------------------------
 
-function runWithContext(code, target, opts) {
+function runWithContext(code, target, opts, dynImport) {
   const strict = isStrictPrologue(code);
   const scanned = scanScript(code);
 
@@ -1508,6 +1715,13 @@ function runWithContext(code, target, opts) {
   // Lines before the user's code inside the eval'd source.
   const headLines = (strict ? 1 : 0) + cgLines + scanned.functions.length;
 
+  // Route dynamic import() through the script's handler. The rewrite is
+  // column- and line-preserving, so error positions still map to the
+  // original code. When nothing was rewritten the helper stays out of scope
+  // entirely (a factory parameter would shadow user code that mentions the
+  // name).
+  const rewritten = rewriteDynamicImports(evalCode);
+  const hasDynImport = rewritten !== evalCode;
   // Direct eval inside the `with` keeps the scope chain and yields the
   // completion value as the return value. `eval` resolves through the scope
   // proxy to the intrinsic, so this stays a direct eval.
@@ -1515,13 +1729,22 @@ function runWithContext(code, target, opts) {
   const scope = makeScope(target, strict, claimed);
   let runner;
   try {
-    runner = new Function(
-      "__vm_p__",
-      "__vm_c__",
-      "__vm_e__",
-      "__vm_w__",
-      factoryBody,
-    );
+    runner = hasDynImport
+      ? new Function(
+          "__vm_p__",
+          "__vm_c__",
+          "__vm_e__",
+          "__vm_w__",
+          "__vdim",
+          factoryBody,
+        )
+      : new Function(
+          "__vm_p__",
+          "__vm_c__",
+          "__vm_e__",
+          "__vm_w__",
+          factoryBody,
+        );
   } catch (e) {
     throw e;
   }
@@ -1544,7 +1767,9 @@ function runWithContext(code, target, opts) {
     else Reflect.defineProperty(target, prop, saved);
   };
   try {
-    return runner.call(target, scope, evalCode, noEval, noWasm);
+    return hasDynImport
+      ? runner.call(target, scope, rewritten, noEval, noWasm, dynImport)
+      : runner.call(target, scope, evalCode, noEval, noWasm);
   } catch (e) {
     if (e instanceof SyntaxError) throw e; // nothing position-mappable
     throw enrichScriptError(e, {
@@ -1776,6 +2001,7 @@ export class Script {
   #columnOffset;
   #cachedDataRejected;
   #cachedData;
+  #importModuleDynamically;
 
   constructor(code, options = {}) {
     code = `${code}`;
@@ -1795,7 +2021,12 @@ export class Script {
       validateCachedData(cachedData, "options.cachedData");
     }
     validateBoolean(produceCachedData, "options.produceCachedData");
-    if (importModuleDynamically !== undefined) {
+    // Node's getHostDefinedOptionId accepts the USE_MAIN_CONTEXT_DEFAULT_LOADER
+    // symbol as-is (it is not a function); anything else must be one.
+    if (
+      importModuleDynamically !== undefined &&
+      importModuleDynamically !== constants.USE_MAIN_CONTEXT_DEFAULT_LOADER
+    ) {
       validateFunction(
         importModuleDynamically,
         "options.importModuleDynamically",
@@ -1813,6 +2044,7 @@ export class Script {
     this.#cachedData = produceCachedData
       ? synthesizeCachedData(code)
       : undefined;
+    this.#importModuleDynamically = importModuleDynamically;
 
     // Extract //# sourceMappingURL= magic comment from the end of the source.
     let sourceMapURL;
@@ -1876,6 +2108,7 @@ export class Script {
       this.#code,
       contextifiedObject,
       this.#runOptions(options),
+      makeDynamicImportHandler(this.#importModuleDynamically, () => this),
     );
   }
 
@@ -1896,7 +2129,15 @@ export class Script {
     // globalThis as non-configurable, and implicit globals fall through
     // to the real global scope (see the `assigned` skip in
     // runWithContext), so `delete` behaves like Node.
-    return runWithContext(this.#code, globalThis, runOpts);
+    // Dynamic import() is intercepted by runWithContext via the handler
+    // (lane 1): the rewrite happens on the eval code there, so no
+    // temporary-global install is needed on this path.
+    return runWithContext(
+      this.#code,
+      globalThis,
+      runOpts,
+      makeDynamicImportHandler(this.#importModuleDynamically, () => this),
+    );
   }
 }
 
@@ -2024,7 +2265,12 @@ export function compileFunction(code, params = [], options = {}) {
       );
     }
   }
-  if (importModuleDynamically !== undefined) {
+  // Node's getHostDefinedOptionId accepts the USE_MAIN_CONTEXT_DEFAULT_LOADER
+  // symbol as-is (it is not a function); anything else must be one.
+  if (
+    importModuleDynamically !== undefined &&
+    importModuleDynamically !== constants.USE_MAIN_CONTEXT_DEFAULT_LOADER
+  ) {
     validateFunction(
       importModuleDynamically,
       "options.importModuleDynamically",
@@ -2062,10 +2308,18 @@ export function compileFunction(code, params = [], options = {}) {
     }
   }
 
+  // Route dynamic import() through the script's handler (same rewrite as
+  // runWithContext; the compiled function closes over the factory's helper
+  // parameter). toString/cachedData/error positions keep the original code.
+  const rewritten = rewriteDynamicImports(code);
+  const hasDynImport = rewritten !== code;
+  const dynImport = hasDynImport
+    ? makeDynamicImportHandler(importModuleDynamically, () => compiled)
+    : undefined;
   const factoryBody =
     "with(__vm_s__){\n" +
     `return function(${params.join(",")}) {\n` +
-    code +
+    rewritten +
     "\n};\n}";
   const scope = makeScope(target);
   // Surface the raw body's SyntaxError before the wrapper shifts the token
@@ -2074,7 +2328,9 @@ export function compileFunction(code, params = [], options = {}) {
   preParseFunctionBody(code);
   let fn;
   try {
-    fn = new Function("__vm_s__", factoryBody)(scope);
+    fn = hasDynImport
+      ? new Function("__vm_s__", "__vdim", factoryBody)(scope, dynImport)
+      : new Function("__vm_s__", factoryBody)(scope);
   } catch (e) {
     // Param-name errors surface here (the pre-parse runs without params);
     // body errors are already surfaced above with the raw message.
