@@ -7815,6 +7815,15 @@ function buildApi(vol) {
         })
       : null;
   const MemFileHandle = fs.promises.FileHandle;
+  // Node's FileHandle.fd is a prototype getter over an internal slot
+  // (lib/internal/fs/promises.js:208); the shim must match so a test
+  // patching FileHandle.prototype.fd (test-fs-promises-file-handle-*-errors)
+  // lands on the same accessor the shim's ops read. The setter exists only
+  // because memfs's constructor and our _closeSync assign this.fd — Node's
+  // fd is getter-only, so no passing test assigns it (verified by grep).
+  // ponytail: ceiling is the setter divergence; dropping it needs memfs's
+  // constructor to stop assigning this.fd (upstream change, not ours).
+  const kFd = Symbol("fs.FileHandle.fd");
   class FileHandle extends MemFileHandle {
     constructor(fd) {
       super(fd);
@@ -7823,6 +7832,12 @@ function buildApi(vol) {
       this.fd = fd;
       if (fileHandleGcRegistry !== null)
         fileHandleGcRegistry.register(this, fd, this);
+    }
+    get fd() {
+      return this[kFd];
+    }
+    set fd(v) {
+      this[kFd] = v;
     }
     async stat(options) {
       try {
@@ -8057,11 +8072,17 @@ function buildApi(vol) {
     _closeSync() {
       // Synchronous close core. close() delegates; pullSync autoClose and
       // writer fail()/endSync() need the sync form (Node's kCloseSync).
+      // Reads the fd from the internal slot, NOT the fd accessor: Node's
+      // close reads this[kFd] directly (lib/internal/fs/promises.js), so a
+      // patched FileHandle.prototype.fd must not re-fire during close —
+      // otherwise the op error that triggered the close would be thrown
+      // again instead of the close's own outcome (test-fs-promises-file-
+      // handle-aggregate-errors / op-errors).
       if (this._closed) return;
       this._closed = true;
       // Explicit close silences the GC-close warning (see registry above).
       if (fileHandleGcRegistry !== null) fileHandleGcRegistry.unregister(this);
-      const fd = this.fd;
+      const fd = this[kFd];
       try {
         vol.closeSync(fd);
         emitFs("fs", "promises.close", fd, undefined);
@@ -8146,7 +8167,10 @@ function buildApi(vol) {
     // the handle lock (_iterLocked) at a time; it releases when the stream
     // is fully consumed / writer ends or fails.
     _checkIterUsable() {
-      if (this.fd === -1) throw errInvalidState("The FileHandle is closed");
+      // Closed-state check reads the internal slot, not the fd accessor
+      // (same reason as _closeSync: a patched prototype fd must not re-fire
+      // on a state check — Node reads this[kFd] here too).
+      if (this[kFd] === -1) throw errInvalidState("The FileHandle is closed");
       if (this._iterLocked) throw errInvalidState("The FileHandle is locked");
     }
     // Read one chunk for pull/pullSync: explicit position reads must not
@@ -8680,6 +8704,69 @@ function buildApi(vol) {
     }
   }
 
+  // Node's handleFdClose (lib/internal/fs/promises.js:1079-1091) + the
+  // aggregateTwoErrors it uses (lib/internal/errors.js:168-194): path-based
+  // promises ops open a FileHandle, run the op, and always close it —
+  // surfacing the close error when the op succeeds, the op error when the
+  // close succeeds, and an AggregateError ([op, close], code = op code)
+  // when both throw. Ported verbatim except Node's stackTraceLimit dance
+  // in aggregateTwoErrors (cosmetic) and the close call: Node passes
+  // `fd.close` unbound because its close is an own arrow property; the
+  // shim's close is a prototype method, so call sites pass a closure
+  // `() => handle.close()` (read at invocation time, so a test-installed
+  // instance close is picked up).
+  function aggregateTwoErrors(innerError, outerError) {
+    if (innerError && outerError && innerError !== outerError) {
+      if (Array.isArray(outerError.errors)) {
+        outerError.errors.push(innerError);
+        return outerError;
+      }
+      const err = new AggregateError(
+        [outerError, innerError],
+        outerError.message,
+      );
+      err.code = outerError.code;
+      return err;
+    }
+    return innerError || outerError;
+  }
+  async function handleFdClose(fileOpPromise, closeFunc) {
+    return fileOpPromise.then(
+      (result) => closeFunc().then(() => result),
+      (opError) =>
+        closeFunc().then(
+          () => Promise.reject(opError),
+          (closeError) =>
+            Promise.reject(aggregateTwoErrors(closeError, opError)),
+        ),
+    );
+  }
+  // Node's handleFdSync (lib/internal/fs/promises.js:1093-1104): writeFile
+  // with options.flush syncs the handle after a successful write (a sync
+  // error replaces the result); an op error skips the sync. The fd is
+  // closed afterwards by handleFdClose, as in Node's writeFile.
+  async function handleFdSync(fileOpPromise, handle) {
+    return fileOpPromise.then(
+      (result) =>
+        handle.sync().then(
+          () => result,
+          (syncError) => Promise.reject(syncError),
+        ),
+      (opError) => Promise.reject(opError),
+    );
+  }
+  // Internal open returning our FileHandle (what definePromise("open")
+  // does, factored out so path-based ops can open + handleFdClose exactly
+  // like Node's truncate/readFile/writeFile).
+  function openHandle(p, flags, mode) {
+    return new Promise((resolve, reject) => {
+      fs.open(p, flags, mode, (err, fd) => {
+        if (err) return reject(err);
+        resolve(new FileHandle(fd));
+      });
+    });
+  }
+
   // ── promises assembly ──
   const promises = {};
   const definePromise = (name, fn) => {
@@ -8725,23 +8812,20 @@ function buildApi(vol) {
         fs.access(p, mode, (err) => (err ? reject(err) : resolve()));
       }),
   );
-  definePromise(
-    "open",
-    (p, flags, mode) =>
-      new Promise((resolve, reject) => {
-        fs.open(p, flags, mode, (err, fd) => {
-          if (err) return reject(err);
-          resolve(new FileHandle(fd));
-        });
-      }),
-  );
-  definePromise("readFile", (p, options) => {
+  definePromise("open", (p, flags, mode) => openHandle(p, flags, mode));
+  definePromise("readFile", async (p, options) => {
     if (p instanceof FileHandle) return p.readFile(options);
-    return new Promise((resolve, reject) => {
-      fs.readFile(p, options, (err, data) =>
-        err ? reject(err) : resolve(data),
-      );
-    });
+    // Node opens the path and closes the handle (lib/internal/fs/promises.js
+    // readFile:1997); the op runs on the handle so a patched
+    // FileHandle.prototype.fd surfaces exactly like Node's.
+    const signal = promiseSignal(options);
+    await throwIfAborted(signal);
+    const flag =
+      options !== null && typeof options === "object"
+        ? options.flag || "r"
+        : "r";
+    const handle = await openHandle(p, flag, 0o666);
+    return handleFdClose(handle.readFile(options), () => handle.close());
   });
   definePromise("writeFile", async (p, data, options) => {
     const signal = promiseSignal(options);
@@ -8749,9 +8833,25 @@ function buildApi(vol) {
     const encoding = typeof options === "string" ? options : options?.encoding;
     const buf = await coerceWriteData(data, encoding, signal);
     if (p instanceof FileHandle) return p.writeFile(buf, options);
-    return new Promise((resolve, reject) => {
-      fs.writeFile(p, buf, options, (err) => (err ? reject(err) : resolve()));
-    });
+    // Node opens the path and closes the handle (lib/internal/fs/promises.js
+    // writeFile:1972); flush syncs before the close (handleFdSync).
+    const flag =
+      options !== null && typeof options === "object"
+        ? options.flag || "w"
+        : "w";
+    const mode =
+      options !== null && typeof options === "object"
+        ? (options.mode ?? 0o666)
+        : 0o666;
+    const flush =
+      options !== null && typeof options === "object"
+        ? (options.flush ?? false)
+        : false;
+    validateBoolean(flush, "options.flush");
+    const handle = await openHandle(p, flag, mode);
+    let writeOp = handle.writeFile(buf, options);
+    if (flush) writeOp = handleFdSync(writeOp, handle);
+    return handleFdClose(writeOp, () => handle.close());
   });
   definePromise("appendFile", async (p, data, options) => {
     const signal = promiseSignal(options);
@@ -8763,13 +8863,14 @@ function buildApi(vol) {
       fs.appendFile(p, buf, options, (err) => (err ? reject(err) : resolve()));
     });
   });
-  definePromise(
-    "truncate",
-    (p, len) =>
-      new Promise((resolve, reject) => {
-        fs.truncate(p, len, (err) => (err ? reject(err) : resolve()));
-      }),
-  );
+  definePromise("truncate", async (p, len) => {
+    // Node opens the path ('r+') and closes the handle
+    // (lib/internal/fs/promises.js truncate:1499). A FileHandle argument
+    // is NOT accepted here (Node's open validates the path); handles use
+    // handle.truncate() directly.
+    const handle = await openHandle(p, "r+", 0o666);
+    return handleFdClose(handle.truncate(len), () => handle.close());
+  });
   definePromise(
     "copyFile",
     (src, dest, mode) =>
@@ -9148,7 +9249,18 @@ function buildApi(vol) {
     return Promise.reject(err);
   };
   promises.constants = null; // set below after constants are attached
-  // FileHandle stays internal: never published on fs or fs.promises.
+  // FileHandle stays internal: never published on fs or fs.promises — but
+  // the parity adapter for internal/fs/promises needs the class identity
+  // so a test patching FileHandle.prototype lands on the same class the
+  // shim's path-based ops use. Non-enumerable data property (invisible to
+  // Object.keys and to the oracle export-surface test, which only collects
+  // enumerable keys plus getters/setters), underscore-prefixed like fs._vol.
+  Object.defineProperty(fs, "_FileHandle", {
+    value: FileHandle,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
 
   fs.promises = promises;
   fs.Utf8Stream = Utf8Stream;
