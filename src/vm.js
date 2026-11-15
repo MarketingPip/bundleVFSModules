@@ -1184,80 +1184,114 @@ class SloppyAssignSilent extends Error {}
 
 function makeScope(target, strict = false, claimed = null) {
   const globals = standardGlobals();
-  return new Proxy(target, {
-    has(t, prop) {
-      if (typeof prop === "symbol") return Reflect.has(t, prop);
-      if (prop === "globalThis") return true;
-      if (Reflect.has(t, prop)) return true;
-      // Lazily-claimed assigned names (see runWithContext): the scanner saw
-      // a top-level bare assignment to this name, so claim it here instead
-      // of pre-defining it — the `set` trap defines it on first assignment,
-      // so insertion order follows execution order, not scan order. The
-      // extensibility guard keeps the trap invariant on frozen targets.
-      if (claimed !== null && claimed.has(prop) && Reflect.isExtensible(t))
-        return true;
-      if (prop in globals) return true;
-      // Block host globals from leaking into the sandbox: claim them so the
-      // `with` never falls through to the real global scope.
-      return prop in globalThis;
-    },
-    get(t, prop, receiver) {
-      if (typeof prop === "symbol") return Reflect.get(t, prop);
-      if (prop === "globalThis") {
-        return Reflect.has(t, prop) ? Reflect.get(t, prop) : t;
-      }
-      if (Reflect.has(t, prop)) return Reflect.get(t, prop, receiver);
-      if (prop in globals) return globals[prop];
-      // Host-blocked or unknown name: `has` claimed host globals so the
-      // `with` never falls through to the real global scope. Return undefined
-      // so `typeof` yields 'undefined' (matching Node); this also keeps the
-      // host value from leaking. (A value read gives undefined rather than
-      // Node's ReferenceError — documented gap.)
-      return undefined;
-    },
-    set(t, prop, value) {
-      if (typeof prop === "symbol") return Reflect.set(t, prop, value);
-      // First assignment to a lazily-claimed name: define it now (same
-      // non-configurable descriptor ensureDeclared used to install eagerly),
-      // so the property is created in execution order. Reads before the
-      // assignment still see undefined via the `get` trap.
-      if (claimed !== null && claimed.has(prop) && !Reflect.has(t, prop)) {
-        ensureDeclared(t, prop);
-      }
-      // `has` already returned true: the name is either on the target or a
-      // standard global. Standard globals shadow onto the sandbox global.
-      const ok = Reflect.set(t, prop, value);
-      if (!ok) {
-        // In strict mode, throw Node's "Cannot assign to read only property"
-        // message. In sloppy mode, V8 silently fails — but the Proxy
-        // invariant forbids returning true here, so throw a sentinel that
-        // the runner swallows.
-        if (strict) {
-          throw new TypeError(
-            `Cannot assign to read only property '${String(prop)}' of object '${Object.prototype.toString.call(t)}'`,
-          );
+  const sandbox = target;
+  // ponytail: the scope proxy's target MUST be a fresh plain object, not
+  // the sandbox. Proxy [[Get]] validation unconditionally calls
+  // target.[[GetOwnProperty]] after the `get` trap returns — so with the
+  // sandbox as the target, the `with` statement's Symbol.unscopables lookup
+  // re-enters a Proxy sandbox's throwing getOwnPropertyDescriptor trap even
+  // when the `get` trap answers without touching the target (proven: the
+  // triage's get-only short-circuit still throws "whoops"). With a
+  // plain-object target the validation queries are inert, and every trap
+  // forwards to the closed-over sandbox instead of `t`. Ceiling: validation
+  // is now checked against `{}` — reporting a non-configurable descriptor
+  // (getOwnPropertyDescriptor) or defining a non-configurable property
+  // (defineProperty) through the scope would fail invariant checks that
+  // passed against the sandbox target. No vm test reaches those paths
+  // through the `with` object (user code cannot reference the scope), and
+  // the full passing vm suite guards the shared paths.
+  return new Proxy(
+    {},
+    {
+      has(t, prop) {
+        if (typeof prop === "symbol") return Reflect.has(sandbox, prop);
+        if (prop === "globalThis") return true;
+        if (Reflect.has(sandbox, prop)) return true;
+        // Lazily-claimed assigned names (see runWithContext): the scanner saw
+        // a top-level bare assignment to this name, so claim it here instead
+        // of pre-defining it — the `set` trap defines it on first assignment,
+        // so insertion order follows execution order, not scan order. The
+        // extensibility guard keeps the trap invariant on frozen targets.
+        if (
+          claimed !== null &&
+          claimed.has(prop) &&
+          Reflect.isExtensible(sandbox)
+        )
+          return true;
+        if (prop in globals) return true;
+        // Block host globals from leaking into the sandbox: claim them so the
+        // `with` never falls through to the real global scope.
+        return prop in globalThis;
+      },
+      get(t, prop, receiver) {
+        // Real Node never consults the sandbox's @@unscopables (a context
+        // global is not a `with` object); answer it without touching the
+        // sandbox so a throwing Proxy trap cannot fail the run.
+        if (prop === Symbol.unscopables) return undefined;
+        if (typeof prop === "symbol") return Reflect.get(sandbox, prop);
+        if (prop === "globalThis") {
+          return Reflect.has(sandbox, prop)
+            ? Reflect.get(sandbox, prop)
+            : sandbox;
         }
-        throw new SloppyAssignSilent(String(prop));
-      }
-      return true;
+        if (Reflect.has(sandbox, prop))
+          return Reflect.get(sandbox, prop, receiver);
+        if (prop in globals) return globals[prop];
+        // Host-blocked or unknown name: `has` claimed host globals so the
+        // `with` never falls through to the real global scope. Return undefined
+        // so `typeof` yields 'undefined' (matching Node); this also keeps the
+        // host value from leaking. (A value read gives undefined rather than
+        // Node's ReferenceError — documented gap.)
+        return undefined;
+      },
+      set(t, prop, value) {
+        if (typeof prop === "symbol") return Reflect.set(sandbox, prop, value);
+        // First assignment to a lazily-claimed name: define it now (same
+        // non-configurable descriptor ensureDeclared used to install eagerly),
+        // so the property is created in execution order. Reads before the
+        // assignment still see undefined via the `get` trap.
+        if (
+          claimed !== null &&
+          claimed.has(prop) &&
+          !Reflect.has(sandbox, prop)
+        ) {
+          ensureDeclared(sandbox, prop);
+        }
+        // `has` already returned true: the name is either on the target or a
+        // standard global. Standard globals shadow onto the sandbox global.
+        const ok = Reflect.set(sandbox, prop, value);
+        if (!ok) {
+          // In strict mode, throw Node's "Cannot assign to read only property"
+          // message. In sloppy mode, V8 silently fails — but the Proxy
+          // invariant forbids returning true here, so throw a sentinel that
+          // the runner swallows.
+          if (strict) {
+            throw new TypeError(
+              `Cannot assign to read only property '${String(prop)}' of object '${Object.prototype.toString.call(sandbox)}'`,
+            );
+          }
+          throw new SloppyAssignSilent(String(prop));
+        }
+        return true;
+      },
+      defineProperty(t, prop, desc) {
+        if (prop === "__proto__") return false;
+        return Reflect.defineProperty(sandbox, prop, desc);
+      },
+      deleteProperty(t, prop) {
+        return Reflect.deleteProperty(sandbox, prop);
+      },
+      getOwnPropertyDescriptor(t, prop) {
+        return Reflect.getOwnPropertyDescriptor(sandbox, prop);
+      },
+      ownKeys() {
+        return Reflect.ownKeys(sandbox);
+      },
+      getPrototypeOf() {
+        return Reflect.getPrototypeOf(sandbox);
+      },
     },
-    defineProperty(t, prop, desc) {
-      if (prop === "__proto__") return false;
-      return Reflect.defineProperty(t, prop, desc);
-    },
-    deleteProperty(t, prop) {
-      return Reflect.deleteProperty(t, prop);
-    },
-    getOwnPropertyDescriptor(t, prop) {
-      return Reflect.getOwnPropertyDescriptor(t, prop);
-    },
-    ownKeys(t) {
-      return Reflect.ownKeys(t);
-    },
-    getPrototypeOf(t) {
-      return Reflect.getPrototypeOf(t);
-    },
-  });
+  );
 }
 
 // ---------------------------------------------------------------------------
