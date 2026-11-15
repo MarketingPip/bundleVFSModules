@@ -618,6 +618,23 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // test-fs-promises-file-handle-aggregate-errors/close-errors/op-errors
+    // patch FileHandle.prototype.fd and expect the shim's path-based
+    // promises ops to use the patched class. Same treatment: without a
+    // redirect the require falls through to native Node's
+    // internal/fs/promises, whose FileHandle the shim never sees. The
+    // adapter exports the shim's FileHandle class (see
+    // parity/internal-fs-promises-adapter.mjs and src/fs.js _FileHandle).
+    // Only these three tests require it. Mirrors the internal/net redirect
+    // above (PR #232 precedent).
+    if (target === "fs" && bare === "internal/fs/promises") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-fs-promises-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
   }
   return origLoad.call(this, request, parent, isMain);
 };
