@@ -135,6 +135,10 @@ function validateStringArray(value, name) {
   }
 }
 
+// Port of Node lib/internal/validators.js validateInt32: a non-number is a
+// TYPE error; only a number outside the int32 range (or a non-integer) is a
+// RANGE error. The old single-branch version conflated them, so
+// `lineOffset: null` threw ERR_OUT_OF_RANGE instead of ERR_INVALID_ARG_TYPE.
 function validateInt32(value, name) {
   // Node (lib/internal/validators.js) splits the failure: a non-number is a
   // type error, a non-integer or out-of-range number is a range error.
@@ -146,11 +150,18 @@ function validateInt32(value, name) {
       `The "${name}" ${argOrProp(name)} must be of type number. ${receivedText(value)}`,
     );
   }
-  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+  if (!Number.isInteger(value)) {
     throw codedError(
       RangeError,
       "ERR_OUT_OF_RANGE",
-      `The value of "${name}" is out of range. It must be >= -2147483648 and <= 2147483647. ${receivedText(value)}`,
+      `The value of "${name}" is out of range. It must be an integer. ${receivedText(value)}`,
+    );
+  }
+  if (value < -2147483648 || value > 2147483647) {
+    throw codedError(
+      RangeError,
+      "ERR_OUT_OF_RANGE",
+      `The value of "${name}" is out of range. It must be >= -2147483648 && <= 2147483647. ${receivedText(value)}`,
     );
   }
 }
@@ -165,11 +176,18 @@ function validateUint32(value, name) {
       `The "${name}" ${argOrProp(name)} must be of type number. ${receivedText(value)}`,
     );
   }
-  if (!Number.isInteger(value) || value < 0 || value > 4294967295) {
+  if (!Number.isInteger(value)) {
     throw codedError(
       RangeError,
       "ERR_OUT_OF_RANGE",
-      `The value of "${name}" is out of range. It must be >= 0 and <= 4294967295. ${receivedText(value)}`,
+      `The value of "${name}" is out of range. It must be an integer. ${receivedText(value)}`,
+    );
+  }
+  if (value < 0 || value > 4294967295) {
+    throw codedError(
+      RangeError,
+      "ERR_OUT_OF_RANGE",
+      `The value of "${name}" is out of range. It must be >= 0 && <= 4294967295. ${receivedText(value)}`,
     );
   }
 }
@@ -1468,6 +1486,9 @@ function normalizeTopOptions(options) {
   return { ...options };
 }
 
+// Port of Node lib/internal/validators.js validateUint32(positive=true),
+// which lib/vm.js uses for `options.timeout`: same three-arm split as
+// validateInt32 above (non-number -> ERR_INVALID_ARG_TYPE).
 function validateTimeout(value) {
   // Node validates vm timeouts with validateUint32(timeout, ..., true)
   // (lib/vm.js:172): a non-number is a type error; a non-integer or a number
@@ -1479,7 +1500,14 @@ function validateTimeout(value) {
       `The "options.timeout" property must be of type number. ${receivedText(value)}`,
     );
   }
-  if (!Number.isInteger(value) || value < 1 || value > 4294967295) {
+  if (!Number.isInteger(value)) {
+    throw codedError(
+      RangeError,
+      "ERR_OUT_OF_RANGE",
+      `The value of "options.timeout" is out of range. It must be an integer. ${receivedText(value)}`,
+    );
+  }
+  if (value < 1 || value > 4294967295) {
     throw codedError(
       RangeError,
       "ERR_OUT_OF_RANGE",
@@ -1547,7 +1575,7 @@ function validateCachedData(value, name) {
     throw codedError(
       TypeError,
       "ERR_INVALID_ARG_TYPE",
-      `The "${name}" argument must be an instance of Buffer, TypedArray, or DataView. ${receivedText(value)}`,
+      `The "${name}" ${argOrProp(name)} must be an instance of Buffer, TypedArray, or DataView. ${receivedText(value)}`,
     );
   }
 }
@@ -1794,6 +1822,56 @@ export function runInThisContext(code, options) {
   return createScript(code, options).runInThisContext(options);
 }
 
+// Pre-parse a compileFunction body as a bare function body, surfacing the
+// RAW SyntaxError before the wrapped factory below can shift the token
+// context. Real Node parses the raw code as a function body
+// (ScriptCompiler::CompileFunction, lib/vm.js compileFunction -> binding),
+// while the factory wraps it as `function(params){ code }` — so a malformed
+// body reports the WRAPPER's token context (e.g. `});` closes the wrapper
+// and V8 reports the `)` instead of the `}`).
+//
+// Host `new Function(code)` parses the same body grammar and agrees with
+// vm.compileFunction on most inputs, but its parser diverges twice: it
+// reports "Single function literal required" when the body closes the
+// synthetic function early AND trails off unclosed, and it reports the
+// wrapper's next token (e.g. `else`) for a leading `}`. In those cases the
+// raw program parse ((0, eval)(code)) sees the same first offending token
+// vm does, so its SyntaxError is preferred — except "Illegal return
+// statement", which only means eval is program-scoped and blind to the
+// body's top-level `return`.
+// Pre-parse WITHOUT params: with params, a bad param name would fail the
+// parse while the code itself is valid, and the eval fallback would then
+// EXECUTE the valid code. Params are still validated by the factory parse
+// below, exactly as today. The eval is only consulted after new Function
+// already failed, i.e. the code is invalid as a body (hence also invalid
+// as a program — the body grammar is a superset for syntax purposes), and
+// only a SyntaxError from it is ever used, so nothing executes.
+// ponytail: ceiling — a body with BOTH a top-level `return` and an
+// early-`}` + unclosed tail (e.g. `return 1;\n});\n\n(function() {`)
+// still reports "Single function literal required": eval is blind past the
+// `return` and new Function hits its quirk. Fixing that needs a real
+// parser (acorn is dev-only here, and its messages don't match V8's
+// either). Verified matrix: 13/14 probe inputs match vm exactly (see
+// NOTES-vm-syntax-error.md).
+function preParseFunctionBody(code) {
+  let fnErr;
+  try {
+    new Function(code);
+    return; // valid body; the factory below validates params + scope
+  } catch (e) {
+    if (!(e instanceof SyntaxError)) throw e;
+    fnErr = e;
+  }
+  try {
+    (0, eval)(code);
+  } catch (e) {
+    if (e instanceof SyntaxError && e.message !== "Illegal return statement") {
+      throw e;
+    }
+  }
+  throw fnErr;
+}
+
 // ---------------------------------------------------------------------------
 // 12. compileFunction
 // ---------------------------------------------------------------------------
@@ -1860,6 +1938,15 @@ export function compileFunction(code, params = [], options = {}) {
   // mirroring Node where extensions become part of the context's global), or
   // a fresh object when no parsing context is given.
   const target = parsingContext !== undefined ? parsingContext : {};
+  if (parsingContext === undefined) {
+    // Without a parsing context the compiled function runs in the host realm,
+    // so the host global's self-references must resolve: `global` (and
+    // `globalThis`) read as the host global object. Without this, makeScope's
+    // host-block trap claims `global` (it is a host global) and its getter
+    // returns undefined. Extensions below still win if they define `global`.
+    target.global = globalThis;
+    target.globalThis = globalThis;
+  }
   for (const ext of contextExtensions) {
     for (const key of Reflect.ownKeys(ext)) {
       if (key === "__proto__") continue;
@@ -1884,13 +1971,16 @@ export function compileFunction(code, params = [], options = {}) {
     code +
     "\n};\n}";
   const scope = makeScope(target);
+  // Surface the raw body's SyntaxError before the wrapper shifts the token
+  // context (see preParseFunctionBody). Only after the raw parse succeeds
+  // is the wrapped form used.
+  preParseFunctionBody(code);
   let fn;
   try {
     fn = new Function("__vm_s__", factoryBody)(scope);
   } catch (e) {
-    // Note: SyntaxError messages/positions reflect the scoped wrapper, not
-    // the raw code (V8's Function constructor also reports some malformed
-    // bodies differently than vm.compileFunction). Documented gap.
+    // Param-name errors surface here (the pre-parse runs without params);
+    // body errors are already surfaced above with the raw message.
     throw e;
   }
 
