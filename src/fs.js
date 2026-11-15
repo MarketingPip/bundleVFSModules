@@ -35,11 +35,16 @@ import {
   errArgType,
   errOutOfRangeFmt,
   modeToDirentType,
+  S_IFMT,
+  S_IFREG,
   Stats,
+  stringToFlags,
+  UV_DIRENT_UNKNOWN,
   validateInteger,
   validateOffsetLengthRead,
   validateOffsetLengthWrite,
 } from "./internals/fs-utils.js";
+import { fsBindingState } from "./internals/fs-binding-state.js";
 
 // Browser-safe nextTick (process.nextTick under Node, queueMicrotask otherwise).
 function nextTick(fn, ...args) {
@@ -2001,7 +2006,185 @@ function buildApi(vol) {
       return origAppendFile.call(this, path, data, options, callback);
     }, 2);
 
-    const origWriteFileSync = fs.writeFileSync;
+    // ── fs binding cell (internalBinding('fs')) ───────────────────────
+    // Vendored fs tests patch binding.fstat / binding.readdir /
+    // binding.writeFileUtf8 and expect the shim to call the patched
+    // function — so the shim's readFile-fstat, readdir, and
+    // writeFileSync-utf8-fast-path calls go through the shared cell
+    // (src/internals/fs-binding-state.js), looked up by property on
+    // every call. The defaults below are the memfs-backed
+    // implementations, in Node's shapes (lib/fs.js,
+    // lib/internal/fs/promises.js, lib/internal/fs/utils.js, Node
+    // v24.20.0). They are installed into the cell once, here — buildApi
+    // runs exactly once (buildSingleton).
+    const toUtf8Bytes = (s) =>
+      typeof Buffer !== "undefined"
+        ? Buffer.from(s, "utf8")
+        : new TextEncoder().encode(s);
+    // Real binding fstat returns a 36-field array: [dev, mode, nlink,
+    // uid, gid, rdev, blksize, ino, size, blocks, atimeSec, atimeNs,
+    // mtimeSec, mtimeNs, ctimeSec, ctimeNs, birthtimeSec, birthtimeNs,
+    // 0 × 18] (probed against real Node v24.22.1).
+    function statFieldsOf(st, bigint) {
+      const sec = (ms) => Math.floor(ms / 1000);
+      const ns = (ms) => Math.floor((ms % 1000) * 1e6);
+      const fields = [
+        st.dev,
+        st.mode,
+        st.nlink,
+        st.uid,
+        st.gid,
+        st.rdev,
+        st.blksize,
+        st.ino,
+        st.size,
+        st.blocks,
+        sec(st.atimeMs),
+        ns(st.atimeMs),
+        sec(st.mtimeMs),
+        ns(st.mtimeMs),
+        sec(st.ctimeMs),
+        ns(st.ctimeMs),
+        sec(st.birthtimeMs),
+        ns(st.birthtimeMs),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+      ];
+      return bigint ? fields.map((v, i) => (i < 18 ? BigInt(v) : 0n)) : fields;
+    }
+    function bindingFstat(fd, bigint, req) {
+      const deliver = (err, fields) => {
+        if (req === fsBindingState.kUsePromises) {
+          return err ? Promise.reject(err) : Promise.resolve(fields);
+        }
+        if (req && typeof req.oncomplete === "function") {
+          if (err) req.oncomplete(err);
+          else req.oncomplete(null, fields);
+          return undefined;
+        }
+        if (err) throw err;
+        return fields;
+      };
+      let fields;
+      try {
+        fields = statFieldsOf(vol.fstatSync(fd), !!bigint);
+      } catch (e) {
+        return deliver(e);
+      }
+      return deliver(null, fields);
+    }
+    function bindingReaddir(path, encoding, withFileTypes, req) {
+      const deliver = (err, result) => {
+        if (req && typeof req.oncomplete === "function") {
+          if (err) req.oncomplete(err);
+          else req.oncomplete(null, result);
+          return undefined;
+        }
+        if (err) throw err;
+        return result;
+      };
+      let result;
+      try {
+        const names = vol.readdirSync(path);
+        // Names come back in the requested encoding via decodeFsName —
+        // the way Node's binding decodes the raw directory bytes. Normal
+        // names are UTF-8 strings; names recorded in
+        // _nonUtf8PathSegments were stored latin1 and decodeFsName
+        // recovers their raw bytes first (test-fs-readdir-ucs2, L12).
+        // 'buffer' → Buffers, 'utf8'/'utf-8' → as stored, anything else
+        // (hex, base64, ucs2, …) → re-encoded (test-fs-buffer.js reads
+        // a dir as 'hex' and decodes each entry back).
+        const outNames = names.map((n) => decodeFsName(n, encoding));
+        if (!withFileTypes) {
+          result = outNames;
+        } else {
+          const types = names.map((n) => {
+            let mode = 0;
+            try {
+              mode = vol.lstatSync(path + "/" + n).mode;
+            } catch {
+              /* unresolvable → UV_DIRENT_UNKNOWN; the caller re-stats */
+            }
+            return modeToDirentType(mode);
+          });
+          result = [outNames, types];
+        }
+      } catch (e) {
+        return deliver(e);
+      }
+      return deliver(null, result);
+    }
+    function bindingWriteFileUtf8(path, data, flags, mode) {
+      // lib/fs.js writeFileUtf8 fast path: open/write/close, no fsync.
+      if (typeof path === "number") {
+        const buf = toUtf8Bytes(data);
+        return vol.writeSync(path, buf, 0, buf.byteLength, null);
+      }
+      const fd = vol.openSync(path, flags, mode);
+      try {
+        const buf = toUtf8Bytes(data);
+        let offset = 0;
+        let remaining = buf.byteLength;
+        while (remaining > 0) {
+          const written = vol.writeSync(fd, buf, offset, remaining, null);
+          offset += written;
+          remaining -= written;
+        }
+      } finally {
+        try {
+          vol.closeSync(fd);
+        } catch {
+          /* close errors are invisible to the caller here */
+        }
+      }
+      return undefined;
+    }
+    // parseFileMode — Node port (lib/internal/validators.js:73) for the
+    // writeFileSync utf8 fast path. (stringToFlags comes from
+    // src/internals/fs-utils.js — L3's fuller port; do not re-add a
+    // local copy.)
+    const kOctStr = /^(?:0o)?[0-7]+$/;
+    function parseFileMode(value, name, def) {
+      if (value === undefined || value === null) value = def;
+      if (typeof value === "string") {
+        if (!kOctStr.test(value)) {
+          throw errInvalidArgValue(
+            name,
+            value,
+            "must be a 32-bit unsigned integer or an octal string",
+          );
+        }
+        value = parseInt(value, 8);
+      }
+      validateInteger(value, name, 0, 4294967295);
+      return value + 0;
+    }
+    fsBindingState.fstat = bindingFstat;
+    fsBindingState.readdir = bindingReaddir;
+    fsBindingState.writeFileUtf8 = bindingWriteFileUtf8;
+
+    // Re-entrancy guard for the writeFileSync non-fast path (see the
+    // comment there): the harness's syncPath re-enters this wrapper via
+    // raw.writeFileSync, and a nested call must not route through the
+    // harness-wrapped fs.openSync again.
+    let writeFileSyncActive = false;
+
     fs.writeFileSync = function (file, data, options) {
       const flush = validateFlushOpt(options);
       // fd variant: current-position write, no truncation (memfs truncates).
@@ -2035,12 +2218,105 @@ function buildApi(vol) {
         }
         return;
       }
-      return origWriteFileSync.call(
-        this,
-        file,
-        dataToBuffer(data, options),
-        options,
-      );
+      const writeFlag =
+        options !== null &&
+        typeof options === "object" &&
+        options.flag !== undefined
+          ? options.flag
+          : "w";
+      const writeMode =
+        options !== null &&
+        typeof options === "object" &&
+        options.mode !== undefined
+          ? options.mode
+          : 0o666;
+      const writeEncoding =
+        options === undefined
+          ? "utf8"
+          : typeof options === "string"
+            ? options
+            : (options?.encoding ?? "utf8");
+      // Node fast path (lib/fs.js writeFileSync): a string with a utf8
+      // encoding goes straight to binding.writeFileUtf8 — no open/write/
+      // close through the fs object, so test mocks of fs.openSync /
+      // fs.writeSync / fs.closeSync never fire on this path.
+      if (
+        typeof data === "string" &&
+        (writeEncoding === "utf8" || writeEncoding === "utf-8")
+      ) {
+        return fsBindingState.writeFileUtf8(
+          file,
+          data,
+          stringToFlags(writeFlag),
+          parseFileMode(writeMode, "mode", 0o666),
+        );
+      }
+      // Non-fast path (lib/fs.js writeFileSync): open via the fs object
+      // (so mocks are observed), write loop, close in finally. `data`
+      // is already normalized to a Buffer/Uint8Array by the outer
+      // wrapper (strings take the fast path above).
+      //
+      // Re-entrancy guard: the harness's syncPath copies real files into
+      // memfs via raw.writeFileSync (this wrapper). If that nested call
+      // routed through the harness-wrapped fs.openSync, the wrapper's
+      // syncArgs would re-enter syncPath for the same file, which copies
+      // it again — unbounded recursion, bounded only by stack overflow
+      // per file, so a full-tree sync (e.g. the exit-time chdir) hangs.
+      // While a non-fast write is already in flight, a nested call uses
+      // the vol-level primitives directly (exactly the old memfs-fallback
+      // shape). A test call is never nested, so it takes the fs.* path
+      // and its mocks are observed.
+      if (writeFileSyncActive) {
+        const buf = dataToBuffer(data, options);
+        const fd = vol.openSync(file, writeFlag, writeMode);
+        try {
+          vol.writeSync(fd, buf, 0, buf.byteLength, null);
+        } finally {
+          try {
+            vol.closeSync(fd);
+          } catch {
+            /* close errors are invisible to the caller here */
+          }
+        }
+        return;
+      }
+      writeFileSyncActive = true;
+      try {
+        const buf = dataToBuffer(data, options);
+        const fd = fs.openSync(file, writeFlag, writeMode);
+        try {
+          let offset = 0;
+          let length = buf.byteLength;
+          while (length > 0) {
+            const written = fs.writeSync(fd, buf, offset, length);
+            offset += written;
+            length -= written;
+          }
+          emitFs("fs", "writeFileSync", file, buf.byteLength);
+        } finally {
+          fs.closeSync(fd);
+        }
+      } finally {
+        writeFileSyncActive = false;
+      }
+      return;
+    };
+    // Node (lib/fs.js appendFileSync): force append, delegate to
+    // writeFileSync — so the utf8 fast path and the open/write/close
+    // structure apply here too. Previously appendFileSync was memfs's
+    // (only the outer validation wrapper), which never called the
+    // binding fast path.
+    fs.appendFileSync = function (file, data, options) {
+      let opts;
+      if (typeof options === "string") {
+        opts = { encoding: options, mode: 0o666, flag: "a" };
+      } else if (options === null || options === undefined) {
+        opts = { encoding: "utf8", mode: 0o666, flag: "a" };
+      } else {
+        opts = { encoding: "utf8", mode: 0o666, flag: "a", ...options };
+      }
+      if (!opts.flag || typeof file === "number") opts.flag = "a";
+      return fs.writeFileSync(file, data, opts);
     };
   }
 
@@ -2088,35 +2364,50 @@ function buildApi(vol) {
     }
     return names.map((name) => decodeFsName(name, enc));
   }
+  // Node getDirents port (lib/internal/fs/utils.js:245): build Dirents
+  // from a binding readdir result [names, types]; UNKNOWN entries are
+  // re-statted (DirentFromStats) instead of keeping type 0 — so a
+  // patched readdir rewriting every type to UNKNOWN still yields real
+  // Dirents (test-fs-readdir-types).
+  function getDirentsFromBinding(path, result) {
+    const [names, types] = result;
+    return names.map((name, i) => {
+      const type = types[i];
+      if (type !== UV_DIRENT_UNKNOWN) {
+        return new Dirent(name, type, path);
+      }
+      let mode = 0;
+      try {
+        mode = vol.lstatSync(path + "/" + name).mode;
+      } catch {
+        /* unresolvable stays UNKNOWN */
+      }
+      return new Dirent(name, modeToDirentType(mode), path);
+    });
+  }
   {
-    const orig = fs.readdirSync;
     fs.readdirSync = function (p, options) {
       validateEncodingOpt(options, true);
       validatePath(p);
       const ps = toPathString(p);
       let result;
       try {
-        if (options && (options.withFileTypes || options.recursive)) {
+        if (options && options.recursive) {
+          // Recursive stays vol-based (readdirImpl walk); Node recurses
+          // through binding.readdir per directory, which no vendored
+          // test patches.
           result = readdirImpl(ps, options, !!options.withFileTypes);
         } else {
-          // memfs applies the encoding conversion itself
-          // (Buffer.from(name).toString(enc)) — wrong for latin1-stored
-          // names, whose raw bytes it cannot see. Force memfs to return the
-          // raw stored names and convert here.
+          // options may be a bare encoding string ("hex", "buffer", …);
+          // options?.encoding would miss it (test-fs-buffer.js).
           const enc =
             typeof options === "string"
               ? options
-              : options !== null && typeof options === "object"
-                ? options.encoding
-                : undefined;
-          const memfsOpts =
-            typeof options === "string"
-              ? "utf8"
-              : options !== null && typeof options === "object"
-                ? { ...options, encoding: "utf8" }
-                : undefined;
-          result = orig.call(this, ps, memfsOpts);
-          result = result.map((n) => decodeFsName(n, enc));
+              : (options?.encoding ?? "utf8");
+          const raw = fsBindingState.readdir(ps, enc, !!options?.withFileTypes);
+          result = options?.withFileTypes
+            ? getDirentsFromBinding(ps, raw)
+            : raw;
         }
       } catch (e) {
         throw enrichErr(e, "readdirSync");
@@ -2126,7 +2417,6 @@ function buildApi(vol) {
     };
   }
   {
-    const orig = fs.readdir;
     fs.readdir = function (p, options, callback) {
       if (typeof options === "function") {
         callback = options;
@@ -2142,7 +2432,7 @@ function buildApi(vol) {
         emitFs("fs", "readdir", p, result);
         callback(null, result);
       };
-      if (options && (options.withFileTypes || options.recursive)) {
+      if (options && options.recursive) {
         try {
           done(null, readdirImpl(ps, options, !!options.withFileTypes));
         } catch (e) {
@@ -2150,27 +2440,32 @@ function buildApi(vol) {
         }
         return;
       }
-      // See readdirSync above: memfs must not apply the encoding conversion
-      // itself — force raw stored names and convert here.
+      // options may be a bare encoding string ("hex", "buffer", …);
+      // options?.encoding would miss it (test-fs-buffer.js).
       const enc =
-        typeof options === "string"
-          ? options
-          : options !== null && typeof options === "object"
-            ? options.encoding
-            : undefined;
-      const memfsOpts =
-        typeof options === "string"
-          ? "utf8"
-          : options !== null && typeof options === "object"
-            ? { ...options, encoding: "utf8" }
-            : undefined;
-      orig.call(this, ps, memfsOpts, (err, result) => {
-        if (err) return done(err);
-        done(
-          null,
-          result.map((n) => decodeFsName(n, enc)),
-        );
-      });
+        typeof options === "string" ? options : (options?.encoding ?? "utf8");
+      // Node (lib/fs.js readdir): binding.readdir with a req whose
+      // oncomplete builds the Dirents (getDirents) before the callback.
+      const req = {
+        oncomplete: (err, result) => {
+          if (err) return done(err);
+          try {
+            done(
+              null,
+              options?.withFileTypes
+                ? getDirentsFromBinding(ps, result)
+                : result,
+            );
+          } catch (e) {
+            done(e);
+          }
+        },
+      };
+      try {
+        fsBindingState.readdir(ps, enc, !!options?.withFileTypes, req);
+      } catch (e) {
+        done(e);
+      }
     };
   }
 
@@ -4525,22 +4820,38 @@ function buildApi(vol) {
   // Manual readFile core: fd (reads from the CURRENT position, unlike
   // memfs's position-0 read) or path, with Node v24's `buffer` option
   // (Buffer or (size) => Buffer). `fp` is a validated fd or path string.
-  function readFileSyncManual(fp, options) {
+  function readFileSyncManual(fp, options, statFields) {
     options = normalizeReadFileOptions(options);
     validateReadFileBufferOptions(options);
     const isUserFd = typeof fp === "number";
     const fd = isUserFd ? fp : vol.openSync(fp, options.flag || "r");
     try {
       checkFdReadable(fd, "read");
-      const st = vol.fstatSync(fd);
-      if (st.size > 2 ** 31 - 1) {
-        const err = new RangeError(
-          `File size (${st.size}) is greater than 2 GiB`,
-        );
-        err.code = "ERR_FS_FILE_TOO_LARGE";
-        throw err;
+      // With statFields (FileHandle.readFile via binding.fstat), the
+      // size/mode come from the binding, not a second fstat — Node's
+      // readFileHandle uses the binding's fields; a patched fstat
+      // reporting size 0 reads to EOF (unknown-size loop below).
+      let size;
+      if (statFields) {
+        size = (statFields[1] & S_IFMT) === S_IFREG ? statFields[8] : 0;
+        if (size > 2 ** 31 - 1) {
+          const err = new RangeError(
+            `File size (${size}) is greater than 2 GiB`,
+          );
+          err.code = "ERR_FS_FILE_TOO_LARGE";
+          throw err;
+        }
+      } else {
+        const st = vol.fstatSync(fd);
+        if (st.size > 2 ** 31 - 1) {
+          const err = new RangeError(
+            `File size (${st.size}) is greater than 2 GiB`,
+          );
+          err.code = "ERR_FS_FILE_TOO_LARGE";
+          throw err;
+        }
+        size = st.isFile() ? st.size : 0;
       }
-      const size = st.isFile() ? st.size : 0;
       const hasUserBuffer = options.buffer !== undefined;
       let buffer;
       let buffers;
@@ -7978,9 +8289,20 @@ function buildApi(vol) {
       await throwIfAborted(signal);
       validateEncodingOpt(options);
       try {
+        // Node (lib/internal/fs/promises.js readFileHandle) stats the fd
+        // through binding.fstat(fd, false, kUsePromises) and drives the
+        // read loop from the binding's size/mode — a patched fstat
+        // reporting size 0 still reads to EOF, and the too-small-buffer
+        // probe fires (test-fs-promises-readfile validateZeroByteLiar).
+        const statFields = await fsBindingState.fstat(
+          this.fd,
+          false,
+          fsBindingState.kUsePromises,
+        );
+        await throwIfAborted(signal);
         // Reads from the fd's current position (memfs reads from 0) and
         // honors the `buffer` option — see readFileSyncManual.
-        const data = readFileSyncManual(this.fd, options);
+        const data = readFileSyncManual(this.fd, options, statFields);
         emitFs("fs", "promises.readFile", this.fd, data);
         return data;
       } catch (e) {
