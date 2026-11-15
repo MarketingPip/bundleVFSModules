@@ -329,6 +329,44 @@ function syncArgs(args, methodName) {
   }
 }
 
+function firstPathArg(args) {
+  const a = args[0];
+  if (typeof a === "string") return a;
+  if (
+    typeof Buffer !== "undefined" &&
+    Buffer.isBuffer(a) &&
+    a.byteLength <= 4096
+  )
+    return a.toString();
+  if (a instanceof URL && a.protocol === "file:") return fileURLToPath(a);
+  return null;
+}
+
+// Deletion propagation (memfs -> real disk), the mirror image of L6's
+// mirrorMemfsTmpdirToDisk: the mirror copies memfs files to real disk
+// before native spawns, but nothing ever removed a real file after a
+// memfs rm — syncPath then resurrects it on the next access
+// (test-fs-rm.js:166: the async rm callback's existsSync saw the mirrored
+// file come back; zz probe: no-spawn false / mirrored-async true /
+// mirrored-sync true before this fix). Propagate only under the test
+// tmpdir (never fixtures or the repo tree: a real fixture must never be
+// deleted by a shim rm) and only on success (sync: no throw; async: err
+// null), before the user's callback observes the deletion.
+// ponytail: callback + sync forms only — fs.promises.rm returns a promise,
+// so it gets no propagation here; if a test ever observes a promises.rm
+// resurrection, hook the returned promise's .then. Ceiling: rename is not
+// a deletion — a renamed-away real file can still be resurrected by
+// syncPath; no test in the suite observes it.
+const _DELETE_SYNC = new Set(["rmSync", "unlinkSync", "rmdirSync"]);
+const _DELETE_ASYNC = new Set(["rm", "unlink", "rmdir"]);
+function deleteRealPath(p) {
+  if (!p || p.includes("\0")) return;
+  if (p !== tmpdir && !p.startsWith(tmpdir + realPath.sep)) return;
+  try {
+    realFs.rmSync(p, { recursive: true, force: true });
+  } catch {}
+}
+
 function wrapFn(fn, methodName) {
   // new-aware: classes (Dir, ReadStream, …) are constructed in the tests
   // (`new fs.Dir()`, `new ReadStream(tmpfile)`), so route construction
@@ -395,7 +433,28 @@ function wrapFn(fn, methodName) {
       }
     }
     if (new.target) return Reflect.construct(fn, args, new.target);
-    return Reflect.apply(fn, this, args);
+    // Propagate a successful memfs deletion to real disk (see
+    // deleteRealPath above) before the caller can observe the path again:
+    // for async methods the user's callback runs after this wrapper, so
+    // wrap it; for sync methods delete after the call returns.
+    const isDeleteSync = _DELETE_SYNC.has(methodName);
+    const isDeleteAsync = _DELETE_ASYNC.has(methodName);
+    let deletePath = null;
+    if (isDeleteSync || isDeleteAsync) deletePath = firstPathArg(args);
+    if (
+      isDeleteAsync &&
+      deletePath &&
+      typeof args[args.length - 1] === "function"
+    ) {
+      const userCb = args[args.length - 1];
+      args[args.length - 1] = function (...cbArgs) {
+        if (!cbArgs[0]) deleteRealPath(deletePath);
+        return userCb.apply(this, cbArgs);
+      };
+    }
+    const result = Reflect.apply(fn, this, args);
+    if (isDeleteSync && deletePath) deleteRealPath(deletePath);
+    return result;
   }
   Object.setPrototypeOf(wrapped, Object.getPrototypeOf(fn));
   if (fn.prototype) wrapped.prototype = fn.prototype;
