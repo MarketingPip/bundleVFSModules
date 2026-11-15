@@ -3019,17 +3019,43 @@ function buildApi(vol) {
       );
     }
   }
+  // Real Node lstats first (lib/internal/fs/utils.js validateRmOptions /
+  // validateRmOptionsSync): the target's existence — and whether it is a
+  // directory — is decided by lstat, never by following the link. Returns
+  // the lstat stats (null when the target is missing) for the caller's
+  // symlink dispatch. Throws the lstat ENOENT itself when the target is
+  // missing and force is off, so the error reports syscall 'lstat'.
+  // ponytail: lstat-first covers the top-level path only; errors raised
+  // mid-walk inside a recursive removal still surface with memfs's syscall
+  // surface (canonicalized to 'rm' by enrichErr) — a fully lstat-faithful
+  // recursive walk would need the shim to walk the tree itself (like
+  // rmdirRecursiveSync) instead of delegating to memfs.
   function checkRm(p, options, syscallName) {
     const ps = toPathString(p);
     const opts = options || {};
     let st = null;
     try {
-      st = vol.statSync(ps);
-    } catch {
-      /* ignore */
+      st = vol.lstatSync(ps);
+    } catch (e) {
+      if (e && e.code === "ENOENT" && !opts.force) {
+        const err = makeFsError(
+          "ENOENT",
+          "lstat",
+          ps,
+          "no such file or directory",
+        );
+        // Sticky override: enrichErr's canonical 'rm' rewrite must not undo
+        // the lstat syscall (its message is already written with 'lstat').
+        err._syscallOverride = "lstat";
+        throw err;
+      }
+      // force + ENOENT: Node returns silently and memfs rmSync with force
+      // also no-ops, so fall through. Other lstat errors fall through to
+      // memfs, which raises them itself.
     }
     // rmdir expects a directory; only rm rejects non-recursive directory
-    // removal with ERR_FS_EISDIR.
+    // removal with ERR_FS_EISDIR. (lstat, not stat: a symlink to a directory
+    // is unlinked, not rejected.)
     if (
       syscallName !== "rmdir" &&
       st &&
@@ -3047,6 +3073,7 @@ function buildApi(vol) {
       err.path = ps;
       throw err;
     }
+    return st;
   }
   {
     const origSync = fs.unlinkSync,
@@ -3124,8 +3151,15 @@ function buildApi(vol) {
     fs[syncName] = function (p, options) {
       validatePath(p);
       try {
-        checkRm(p, options, syncName.replace("Sync", ""));
-        origSync.call(this, toPathString(p), options);
+        const st = checkRm(p, options, syncName.replace("Sync", ""));
+        if (st && st.isSymbolicLink()) {
+          // Real Node unlinks the link itself (rimraf lstats first); memfs's
+          // rmSync stats the top-level path, so a dangling link (ENOENT) or
+          // a link to a directory (EISDIR) fails there. Unlink the link.
+          vol.unlinkSync(toPathString(p));
+        } else {
+          origSync.call(this, toPathString(p), options);
+        }
       } catch (e) {
         throw enrichErr(e, syncName);
       }
@@ -3141,12 +3175,22 @@ function buildApi(vol) {
       validatePath(p);
       nextTick(() => {
         try {
-          checkRm(p, options, cbName);
-          origCb.call(this, toPathString(p), options, (err) => {
-            if (err) return callback(enrichErr(err, cbName));
-            emitFs("fs", cbName, p, undefined);
-            callback(null);
-          });
+          const st = checkRm(p, options, cbName);
+          if (st && st.isSymbolicLink()) {
+            // As the sync wrapper: unlink the link itself (memfs's rm
+            // stats the top-level path and fails dangling/dir links).
+            vol.unlink(toPathString(p), (err) => {
+              if (err) return callback(enrichErr(err, cbName));
+              emitFs("fs", cbName, p, undefined);
+              callback(null);
+            });
+          } else {
+            origCb.call(this, toPathString(p), options, (err) => {
+              if (err) return callback(enrichErr(err, cbName));
+              emitFs("fs", cbName, p, undefined);
+              callback(null);
+            });
+          }
         } catch (e) {
           callback(enrichErr(e, cbName));
         }
