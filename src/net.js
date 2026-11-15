@@ -1068,6 +1068,10 @@ function VirtualHandle() {
   this._keepAlive = false;
   this._keepAliveDelay = 0;
   this._noDelay = true;
+  // Back-link to the Socket built around this handle on accept (set by
+  // Server._acceptConnection); the server handle's onconnection reads it
+  // to find the server-side socket for an accepted handle.
+  this._socket = null;
 }
 VirtualHandle.prototype.setKeepAlive = function setKeepAlive(
   enable,
@@ -1643,9 +1647,19 @@ Socket.prototype.setTimeout = function setTimeout(msecs, callback) {
 Socket.prototype.setNoDelay = function setNoDelay(enable) {
   // Backwards compatibility: assume true when `enable` is omitted.
   enable = Boolean(enable === undefined ? true : enable);
-  this._noDelay = enable;
-  // Mirrors lib/net.js: delegate to the handle when connected.
-  if (this._handle) this._handle.setNoDelay(enable);
+  // Port of lib/net.js:826 — the handle is only told when the value
+  // changes vs the cached kSetNoDelay (init false at :687 / shim :1030).
+  // A repeat setNoDelay(true) after the server already applied noDelay at
+  // accept must not re-call the handle (test-net-server-nodelay replaces
+  // socket._handle.setNoDelay with mustNotCall, then calls setNoDelay(true)).
+  if (!this._handle) {
+    this._noDelay = enable;
+    return this;
+  }
+  if (this._handle.setNoDelay && enable !== this._noDelay) {
+    this._noDelay = enable;
+    this._handle.setNoDelay(enable);
+  }
   return this;
 };
 
@@ -3031,6 +3045,7 @@ function Server(options, connectionListener) {
   self._listening = false;
   self._bindPending = false;
   self._bindAddress = null;
+  self._handle = null;
   self._pipeName = null;
   self._pipeFileCreated = false;
   self._unref = false;
@@ -3127,11 +3142,26 @@ Server.prototype._adoptBoundSocket = function _adoptBoundSocket(bound) {
   }
 };
 
+// Port of Node's setupListenHandle (lib/net.js:2297-2315): listening creates
+// the server handle synchronously, with onconnection wired to the accept
+// path. Tests wrap server._handle.onconnection right after listen() returns
+// (test-net-server-keepalive / test-net-server-nodelay), so the handle must
+// exist at listen() return — not in the deferred _doListenTCP/_doListenPipe.
+Server.prototype._createListenHandle = function _createListenHandle() {
+  if (!this._handle) {
+    this._handle = {
+      onconnection: (err, clientHandle) =>
+        this._onconnection(err, clientHandle),
+    };
+  }
+};
+
 Server.prototype.listen = function listen(...args) {
   if (args.length > 0 && args[0] instanceof BoundSocket) {
     if (this._listening || this._bindPending) throw errServerAlreadyListening();
     const cb = typeof args[1] === "function" ? args[1] : null;
     if (cb !== null) this.once("listening", cb);
+    this._createListenHandle();
     this._adoptBoundSocket(args[0]);
     return this;
   }
@@ -3162,6 +3192,7 @@ Server.prototype.listen = function listen(...args) {
     const port = validatePort(options.port, "options.port");
     const host = options.host;
     this._bindPending = true;
+    this._createListenHandle();
     // ponytail: bind synchronously like Node's setupListenHandle
     // (node-src lib/net.js:2272) so address() reads the port in-tick;
     // only the 'listening' event stays async (nextTick, guarded like
@@ -3169,6 +3200,7 @@ Server.prototype.listen = function listen(...args) {
     // closed first). Errors stay async 'error' events, as in Node.
     const err = this._bindTCP(port, host, backlog);
     if (err) {
+      this._handle = null;
       nextTick(() => this.emit("error", err));
     } else {
       nextTick(() => {
@@ -3181,6 +3213,7 @@ Server.prototype.listen = function listen(...args) {
   if (options.path && typeof options.path === "string") {
     validateString(options.path, "options.path");
     this._bindPending = true;
+    this._createListenHandle();
     nextTick(() =>
       this._doListenPipe(
         options.path,
@@ -3228,6 +3261,7 @@ Server.prototype._bindTCP = function _bindTCP(port, host, backlog) {
     family = "IPv4";
   } else {
     this._bindPending = false;
+    this._handle = null;
     return errNotFound(host);
   }
 
@@ -3241,6 +3275,7 @@ Server.prototype._bindTCP = function _bindTCP(port, host, backlog) {
     // listens with its own _bindAddress.
     if (!(this._reusePortAdopted && existing._reusePortAdopted)) {
       this._bindPending = false;
+      this._handle = null;
       return errAddrInUse(bindHost, actualPort);
     }
   } else {
@@ -3279,6 +3314,7 @@ Server.prototype._doListenPipe = function _doListenPipe(
   if (!this._bindPending) return;
   const fail = (err) => {
     this._bindPending = false;
+    this._handle = null;
     nextTick(() => this.emit("error", err));
   };
   // Windows named pipes (\\?\pipe\...) and abstract Unix sockets (\0...)
@@ -3498,6 +3534,32 @@ Server.prototype._dropPairedConnection = function _dropPairedConnection(
   serverSocket.destroy();
 };
 
+// Port of Node's lib/net.js onconnection (:2691): the server handle's
+// callback for an accepted handle. Applies the server's socket options to
+// the accepted handle (seconds, not milliseconds — server.keepAliveInitialDelay
+// is already seconds, lib/net.js:2199), counts the connection, and emits
+// 'connection'. The server-side Socket is the accepted handle's _socket
+// link, built around it in _acceptConnection.
+Server.prototype._onconnection = function _onconnection(err, clientHandle) {
+  if (err) {
+    this.emit("error", err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
+  const serverSocket = clientHandle._socket;
+  if (!serverSocket) return;
+  if (this.noDelay && clientHandle.setNoDelay) {
+    serverSocket._noDelay = true;
+    clientHandle.setNoDelay(true);
+  }
+  if (this.keepAlive && clientHandle.setKeepAlive) {
+    serverSocket._keepAlive = true;
+    serverSocket._keepAliveInitialDelay = this.keepAliveInitialDelay;
+    clientHandle.setKeepAlive(true, this.keepAliveInitialDelay);
+  }
+  this._connections++;
+  this.emit("connection", serverSocket);
+};
+
 // Pairs an incoming client with a server-side Socket (virtual accept).
 Server.prototype._acceptConnection = function _acceptConnection(
   client,
@@ -3587,9 +3649,6 @@ Server.prototype._acceptConnection = function _acceptConnection(
     writableHighWaterMark: this.highWaterMark,
   });
   if (this.pauseOnConnect) serverSocket.pause();
-  serverSocket.setNoDelay(this.noDelay);
-  if (this.keepAlive)
-    serverSocket.setKeepAlive(true, this.keepAliveInitialDelay * 1000);
 
   const clientPort = client._bindLocalPort ?? allocPort();
   client._localPortEphemeral = clientPort;
@@ -3641,16 +3700,20 @@ Server.prototype._acceptConnection = function _acceptConnection(
   serverSocket.server = this;
   serverSocket._keepLoopAlive();
 
-  this._connections++;
-
-  // Server-side socket gets a handle too (Node creates TCPWrap on accept,
-  // before the connection handler runs — a handler that calls
-  // resetAndDestroy() synchronously must see a handle, or the no-handle
-  // branch destroys with ERR_SOCKET_CLOSED instead of resetting the peer
-  // (test-net-server-reset)).
+  // Node creates the accepted handle before 'connection' fires (the
+  // onconnection callback receives the accepted TCPWrap); the server-side
+  // socket's handle exists by the time the connection listener runs, so
+  // tests can wrap socket._handle.setKeepAlive/setNoDelay inside it.
   if (!serverSocket._handle) serverSocket._handle = new VirtualHandle();
+  serverSocket._handle._socket = serverSocket;
 
-  this.emit("connection", serverSocket);
+  // Route the accept through the server handle, like the kernel delivering
+  // an accepted handle to TCPWrap's onconnection (lib/net.js:2315, :2691):
+  // a test may have wrapped server._handle.onconnection to observe the
+  // accepted handle before 'connection' fires. _onconnection applies the
+  // server options to the handle, counts, and emits 'connection'.
+  this._handle.onconnection(null, serverSocket._handle);
+
   // The client-side 'connect' is the handshake completion: pre-connect
   // writes flush, options apply, and 'connect' + 'ready' fire here. In a
   // burst the drain defers this tail for every accept after the first, so
@@ -3776,6 +3839,10 @@ Server.prototype.close = function close(cb) {
     this._bindPending = false;
     this._bindAddress = null;
     this._pipeName = null;
+    // The listening handle is gone with the listener (lib/net.js close():
+    // this._handle.close(); this._handle = null). A later listen() creates
+    // a fresh one via _createListenHandle.
+    this._handle = null;
     // The listening handle is gone: like real net, the server no longer
     // keeps the loop alive. Outstanding connections keep their own
     // keep-alive; 'close' still waits for them via _emitCloseIfDrained.
