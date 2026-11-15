@@ -167,6 +167,14 @@ function isExtraRedirect(name) {
   // see shim entries. Only test-net-perf_hooks requires it under the net
   // target. Mirrors the http redirect above (PR #232 precedent).
   if (target === "net" && name === "perf_hooks") return true;
+  // fs tests that require('child_process') need the native-spawn wrapper:
+  // the tests stage fixtures in the shim's memfs but spawn NATIVE children
+  // (git, /bin/sh redirections) that cannot see memfs. The wrapper
+  // (parity/child_process-fs-harness.mjs) mirrors the memfs tmpdir subtree
+  // to real disk before every spawn, then delegates to native child_process
+  // with identical semantics. This is NOT the child_process shim — native
+  // spawn is required. Mirrors the net redirect above (PR #232 precedent).
+  if (target === "fs" && name === "child_process") return true;
   // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
   // zlib must read the same cell (mirrors Node's load-time capture).
   return target === "zlib" && name === "buffer";
@@ -183,6 +191,16 @@ function polyfillPath(request) {
   // access. src/fs.js itself is untouched.
   if (target === "fs" && name === "fs") {
     return path.join(repoRoot, "parity", "fs-harness.mjs");
+  }
+  // Harness-only native child_process wrapper for fs parity
+  // (parity/child_process-fs-harness.mjs): the official tests stage
+  // fixtures in memfs, but spawn NATIVE children (git, /bin/sh
+  // redirections) that cannot see memfs. The wrapper mirrors the memfs
+  // tmpdir subtree to real disk before every spawn, then delegates to
+  // native child_process. This is NOT the child_process shim — native
+  // spawn is required here. src/child_process.js itself is untouched.
+  if (target === "fs" && name === "child_process") {
+    return path.join(repoRoot, "parity", "child_process-fs-harness.mjs");
   }
   // Harness-only timer-globals restore for stream parity
   // (parity/stream-harness.mjs): the stream shim (via async_hooks → events)

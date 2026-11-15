@@ -204,6 +204,76 @@ function syncPath(p) {
   // sockets, fifos, etc: leave to the shim
 }
 
+// Mirror the memfs tmpdir subtree to real disk (memfs -> real), for native
+// child processes that cannot see memfs: `git init` needs its cwd to exist
+// on real disk, and /bin/sh redirections (`< file`) open real-disk paths.
+// Harness-only; src/ is untouched.
+// ponytail: one-way, tmpdir-scoped, never clobbers a newer real file — the
+// mirror image of syncPath's rule (real -> memfs copies only when disk is
+// newer). Run only right before a native spawn (see
+// parity/child_process-fs-harness.mjs), never on every fs call: a full
+// two-way sync would change what every fs test observes. Ceiling: files
+// staged in memfs AFTER the last spawn stay invisible until the next spawn,
+// and memfs deletions are NOT propagated — a stale real file can survive a
+// memfs rm (the same gap syncPath already has in the reverse direction).
+export function mirrorMemfsTmpdirToDisk() {
+  mirrorDirToDisk(tmpdir);
+}
+
+function mirrorDirToDisk(memfsDir) {
+  let names;
+  try {
+    names = raw.readdirSync(memfsDir);
+  } catch {
+    return; // memfs dir absent: nothing to mirror
+  }
+  for (const n of names) {
+    const p = realPath.join(memfsDir, n);
+    let st;
+    try {
+      st = raw.lstatSync(p);
+    } catch {
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      // Mirror the link itself, never follow it (memfs holds link loops,
+      // e.g. test-fs-rm.js loop-link-async-a <-> loop-link-async-b).
+      let cur = null;
+      try {
+        cur = realFs.lstatSync(p);
+      } catch {}
+      if (!cur) {
+        try {
+          realFs.mkdirSync(realPath.dirname(p), { recursive: true });
+          realFs.symlinkSync(raw.readlinkSync(p), p);
+        } catch {}
+      }
+      continue;
+    }
+    if (st.isDirectory()) {
+      try {
+        realFs.mkdirSync(p, { recursive: true });
+      } catch {}
+      mirrorDirToDisk(p);
+      continue;
+    }
+    if (st.isFile()) {
+      let cur = null;
+      try {
+        cur = realFs.statSync(p);
+      } catch {}
+      if (!cur || st.mtimeMs > cur.mtimeMs) {
+        try {
+          realFs.mkdirSync(realPath.dirname(p), { recursive: true });
+          realFs.writeFileSync(p, raw.readFileSync(p));
+          realFs.utimesSync(p, st.atime, st.mtime);
+        } catch {}
+      }
+    }
+    // sockets, fifos, etc: leave alone
+  }
+}
+
 function syncArgs(args, methodName) {
   // For link/symlink, args[0] is the TARGET: its parent chain must not be
   // eagerly created (the target's parent may itself be a symlink the test
