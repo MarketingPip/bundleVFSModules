@@ -635,6 +635,18 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // fs target: same adapter, `fs` binding side — the shim routes its
+    // readFile-fstat, readdir, and writeFileSync-utf8-fast-path calls
+    // through the shared fs binding cell, and the vendored fs tests
+    // patch internalBinding('fs') to observe them (net #425 shape).
+    if (target === "fs" && bare === "internal/test/binding") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-test-binding-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
   }
   return origLoad.call(this, request, parent, isMain);
 };

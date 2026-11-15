@@ -244,7 +244,7 @@ export function stringToFlags(flags, name = "flags") {
   throw err;
 }
 
-const S_IFMT = 0o170000,
+export const S_IFMT = 0o170000,
   S_IFREG = 0o100000,
   S_IFDIR = 0o040000,
   S_IFLNK = 0o120000,
@@ -254,7 +254,7 @@ const S_IFMT = 0o170000,
   S_IFSOCK = 0o140000;
 
 // UV_DIRENT_* type constants (stable ABI, mirror src/constants.js).
-const UV_DIRENT_UNKNOWN = 0,
+export const UV_DIRENT_UNKNOWN = 0,
   UV_DIRENT_FILE = 1,
   UV_DIRENT_DIR = 2,
   UV_DIRENT_LINK = 3,
