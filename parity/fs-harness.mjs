@@ -333,6 +333,42 @@ function wrapInPlace(obj) {
 wrapInPlace(shimFs);
 wrapInPlace(shimFs.promises);
 
+// `.native` is the native implementation in Node: it resolves against the
+// REAL disk, not the shim's memfs volume. The shim's own `.native`
+// (makeRealpath(true) / makeRealpathSync(true)) resolves in memfs, so a
+// real-disk path reached through the repo-root `test/` symlink
+// (test-fs-realpath-native.js: `./test/parallel/...` must equal __filename)
+// fails with ENOENT. Delegate to realFs, falling back to the shim's memfs
+// `.native` when the path is not on real disk — test fixtures staged in
+// memfs only (test-fs-realpath.js runs every subtest through `.native` too,
+// on tmpdir entries that exist only in memfs). Harness-only; src/ is
+// untouched.
+// ponytail: the fallback keeps previously-passing memfs-only `.native` uses
+// green; if the harness ever materializes memfs onto real disk (lane L6),
+// the fallback becomes dead code and can be dropped.
+const _shimRealpathNative = shimFs.realpath.native;
+const _shimRealpathSyncNative = shimFs.realpathSync.native;
+shimFs.realpath.native = function (...args) {
+  const cb = args[args.length - 1];
+  if (typeof cb !== "function") return _shimRealpathNative.apply(this, args);
+  realFs.realpath(...args.slice(0, -1), (err, result) => {
+    if (err && err.code === "ENOENT") {
+      _shimRealpathNative.apply(this, args);
+      return;
+    }
+    cb(err, result);
+  });
+};
+shimFs.realpathSync.native = function (...args) {
+  try {
+    return realFs.realpathSync(...args);
+  } catch (e) {
+    if (e && e.code === "ENOENT")
+      return _shimRealpathSyncNative.apply(this, args);
+    throw e;
+  }
+};
+
 export default shimFs;
 
 // src/fs.js's non-function named exports (classes / utils): re-export raw.
