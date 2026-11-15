@@ -4353,6 +4353,25 @@ Server.prototype.getConnections = function getConnections(cb) {
   return this;
 };
 
+// ponytail: Node lib/net.js:2879 — Server[captureRejectionSymbol]: a rejected
+// 'connection' listener destroys the socket with the error (so its 'error'
+// listeners fire with the same object); any other event re-emits as 'error'
+// on the server. Wired by the events.js addCatch/emitUnhandledRejectionOrErr
+// machinery, which calls ee[kRejection](err, type, ...args) when defined.
+Server.prototype[EventEmitter.captureRejectionSymbol] = function (
+  err,
+  event,
+  sock,
+) {
+  switch (event) {
+    case "connection":
+      sock.destroy(err);
+      break;
+    default:
+      this.emit("error", err);
+  }
+};
+
 // ---------------------------------------------------------------------------
 // connect / createConnection / createServer.
 // ---------------------------------------------------------------------------

@@ -39,6 +39,16 @@ function isExtraRedirect(name) {
   // regress a passer. ESM import path is in hooks.mjs. Mirrors the http
   // redirect above (PR #232 precedent).
   if (target === "https" && (name === "tls" || name === "net")) return true;
+  // net tests that require('events') need the shim's EventEmitter:
+  // test-net-server-capture-rejection sets events.captureRejections = true
+  // and expects the shim Server's [captureRejectionSymbol] handler to fire
+  // via the shim's addCatch machinery — the native flag lives on a
+  // different module instance and the shim never sees it (probe-proven:
+  // server[kCapture] stayed false while the test's flag read true).
+  // Only two net tests require('events'); the differential guards the
+  // other (test-net-connect-abort-controller). Mirrors the net redirect
+  // above (PR #232 precedent).
+  if (target === "net" && name === "events") return true;
   // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
   // zlib must read the same cell (mirrors Node's load-time capture).
   return target === "zlib" && name === "buffer";

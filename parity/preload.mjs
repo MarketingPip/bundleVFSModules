@@ -143,6 +143,16 @@ function isExtraRedirect(name) {
   // shim's class. 0 passing tests require either, so the redirect cannot
   // regress a passer. Mirrors the http redirect above (PR #232 precedent).
   if (target === "https" && (name === "tls" || name === "net")) return true;
+  // net tests that require('events') need the shim's EventEmitter:
+  // test-net-server-capture-rejection sets events.captureRejections = true
+  // and expects the shim Server's [captureRejectionSymbol] handler to fire
+  // via the shim's addCatch machinery — the native flag lives on a
+  // different module instance and the shim never sees it (probe-proven:
+  // server[kCapture] stayed false while the test's flag read true).
+  // Only two net tests require('events'); the differential guards the
+  // other (test-net-connect-abort-controller). Mirrors the net redirect
+  // above (PR #232 precedent).
+  if (target === "net" && name === "events") return true;
   // http tests that require('perf_hooks') need the shim's observer
   // registry: test-http-perf_hooks observes {type:"http"} and the entries
   // are emitted by the shim's http instrumentation through the shared
