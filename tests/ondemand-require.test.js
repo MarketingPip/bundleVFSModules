@@ -735,13 +735,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // shared stream_wrap state + internal/test/binding adapter + one
     // preload redirect under target net).
     expect(nonDist.sort()).toEqual(
-      [
-        "NOTES-net-handle-adoption.md",
-        "parity/internal-test-binding-adapter.mjs",
-        "parity/preload.mjs",
-        "src/internals/stream-wrap-state.js",
-        "src/net.js",
-      ].sort(),
+      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
     );
   });
 
