@@ -6526,6 +6526,45 @@ function buildApi(vol) {
   }
 
   // ── watch/watchFile: add ref()/unref(), emit events ──
+  // memfs's FSWatcher.start throws `watch <path> ENOENT` with a string
+  // errno and no path/filename; Node's kFSWatchStart throws a UVException
+  // shaped `ENOENT: no such file or directory, watch '<path>'` with a
+  // numeric errno and path + filename set (lib/internal/fs/watchers.js).
+  function normalizeWatchStartError(e, ps) {
+    if (e && e.code === "ENOENT") {
+      const err = makeFsError(
+        "ENOENT",
+        "watch",
+        ps,
+        "no such file or directory",
+      );
+      err.filename = ps;
+      err.errno = ERRNO_BY_CODE.ENOENT;
+      return err;
+    }
+    const err = enrichErr(e, "watch");
+    if (err && typeof err === "object") {
+      if (err.path === undefined) {
+        try {
+          err.path = ps;
+        } catch {}
+      }
+      if (err.filename === undefined) {
+        try {
+          err.filename = ps;
+        } catch {}
+      }
+      if (
+        typeof err.errno !== "number" &&
+        ERRNO_BY_CODE[err.code] !== undefined
+      ) {
+        try {
+          err.errno = ERRNO_BY_CODE[err.code];
+        } catch {}
+      }
+    }
+    return err;
+  }
   function patchWatcher(w, path) {
     if (w && typeof w === "object") {
       // memfs's FSWatcher keeps the event loop alive via a 1e6ms ref'd
@@ -6557,7 +6596,10 @@ function buildApi(vol) {
           const cb = args.find((a) => typeof a === "function");
           if (cb) w.once("close", cb);
           const r = origClose(...args);
-          if (!closeEmitted) {
+          // A never-started watcher (throwIfNoEntry: false on a missing
+          // path) fires no 'close' event in Node: close() returns early
+          // (lib/internal/fs/watchers.js).
+          if (!closeEmitted && !w._neverStarted) {
             closeEmitted = true;
             nextTick(() => {
               try {
@@ -6733,7 +6775,10 @@ function buildApi(vol) {
           ? options.ignore
           : undefined;
       validateIgnoreOption(ignore);
-      validateEncodingOpt(options);
+      // Node's getOptions skips the encoding assertion for 'buffer'
+      // (lib/internal/fs/utils.js:332-333): watch accepts it and delivers
+      // Buffer filenames.
+      validateEncodingOpt(options, true);
       // On platforms without a native recursive watcher (Linux: libuv has
       // none, Node uses internal/fs/recursive_watch), truthy non-boolean
       // `recursive` throws ERR_INVALID_ARG_TYPE (validateBoolean).
@@ -6749,7 +6794,30 @@ function buildApi(vol) {
       try {
         w = orig.call(this, ps, options, listener);
       } catch (e) {
-        throw enrichErr(e, "watch");
+        // Node's kFSWatchStart (lib/internal/fs/watchers.js:319): when
+        // throwIfNoEntry is false and the path is missing, the watcher is
+        // returned unstarted instead of throwing; close() is a no-op and
+        // no 'close' event fires.
+        const throwIfNoEntry =
+          options !== null &&
+          typeof options === "object" &&
+          options.throwIfNoEntry !== undefined
+            ? options.throwIfNoEntry
+            : true;
+        if (e && e.code === "ENOENT" && throwIfNoEntry === false) {
+          w = new _FsEventEmitter();
+          w._filename = ps;
+          w._neverStarted = true;
+          w.close = function () {};
+          w.ref = function () {
+            return w;
+          };
+          w.unref = function () {
+            return w;
+          };
+        } else {
+          throw normalizeWatchStartError(e, ps);
+        }
       }
       patchWatcher(w, ps);
       // Filter change events whose filename matches the ignore option, like
@@ -6760,6 +6828,32 @@ function buildApi(vol) {
         w.emit = function (event, ...args) {
           if (event === "change" && args[1] != null && ignoreMatcher(args[1])) {
             return false;
+          }
+          return origEmit(event, ...args);
+        };
+      }
+      // Node encodes 'change' filenames per options.encoding in the
+      // binding ('buffer' -> Buffer, 'hex' -> hex string); memfs always
+      // emits plain strings. Transform here, outside the ignore wrap, so
+      // the ignore matcher sees the encoded name like Node's does
+      // (lib/internal/fs/watchers.js onchange).
+      const watchEncoding =
+        typeof options === "string"
+          ? options
+          : options !== null &&
+              typeof options === "object" &&
+              options.encoding !== undefined &&
+              options.encoding !== null
+            ? options.encoding
+            : "utf8";
+      if (watchEncoding !== "utf8" && watchEncoding !== "utf-8") {
+        const origEmit = w.emit.bind(w);
+        w.emit = function (event, ...args) {
+          if (event === "change" && typeof args[1] === "string") {
+            args[1] =
+              watchEncoding === "buffer"
+                ? Buffer.from(args[1], "utf8")
+                : Buffer.from(args[1], "utf8").toString(watchEncoding);
           }
           return origEmit(event, ...args);
         };
