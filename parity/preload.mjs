@@ -549,6 +549,25 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // test-fs-utils-get-dirents / test-fs-watchfile-bigint need the shim's
+    // memfs-backed `internal/fs/utils`: native getDirent lstats the
+    // real-disk path (the fixtures live only in memfs → ENOENT) and native
+    // toStats returns Stats, not BigIntStats. Same treatment as
+    // `internal/net` above: the adapter ports Node's functions over the
+    // shim's fs (see parity/internal-fs-utils-adapter.mjs). The redirect
+    // also covers the four guard tests that already pass against
+    // internal/fs/utils (filehandle/open-flags stringToFlags,
+    // rmdir-recursive validateRmdirOptions, util-validateoffsetlength
+    // validateOffsetLengthRead/Write) — the adapter re-exports the shim's
+    // faithful ports of those. #232 precedent, fs target only.
+    if (target === "fs" && bare === "internal/fs/utils") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-fs-utils-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
     // test-net-end-close's fake handle writes UV_EOF into the
     // `stream_wrap` binding's streamBaseState, and the shim's onStreamRead
     // must read that same cell — but the shim cannot import Node internals
