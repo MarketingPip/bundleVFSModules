@@ -3727,6 +3727,13 @@ Server.prototype.listen = function listen(...args) {
     }
     this._bindPending = true;
     this._createListenHandle();
+    // ponytail: Node sets UV_TCP_REUSEPORT on the bind when
+    // options.reusePort === true (node-src lib/net.js:189-191, :2549);
+    // record it per listen() call so _bindTCP can allow kernel-style
+    // sharing. A fresh TCP listen supersedes any earlier BoundSocket
+    // adoption, so the adopted slot is cleared here.
+    this._reusePort = options.reusePort === true;
+    this._reusePortAdopted = false;
     // ponytail: bind synchronously like Node's setupListenHandle
     // (node-src lib/net.js:2272) so address() reads the port in-tick;
     // only the 'listening' event stays async (nextTick, guarded like
@@ -3815,11 +3822,17 @@ Server.prototype._bindTCP = function _bindTCP(port, host, backlog) {
   const key = serverKey(bindHost, actualPort);
   const existing = _tcpServers().get(key);
   if (existing) {
-    // SO_REUSEPORT: two servers adopted from reusePort BoundSockets may
-    // share one port. The first entry stays for routing (the kernel
+    // SO_REUSEPORT: servers may share one port only when BOTH ends asked
+    // for it — via listen({ reusePort: true }) (Node sets UV_TCP_REUSEPORT,
+    // node-src lib/net.js:189-191) or an adopted reusePort BoundSocket.
+    // The kernel requires every socket on the shared addr:port to carry
+    // the flag. The first entry stays for routing (the kernel
     // load-balances; this test never connects); the second server still
     // listens with its own _bindAddress.
-    if (!(this._reusePortAdopted && existing._reusePortAdopted)) {
+    const reusePort =
+      (this._reusePortAdopted || this._reusePort) &&
+      (existing._reusePortAdopted || existing._reusePort);
+    if (!reusePort) {
       this._bindPending = false;
       this._handle = null;
       return errAddrInUse(bindHost, actualPort);
