@@ -235,6 +235,9 @@ const DEFAULT_FILENAME = "evalmachine.<anonymous>";
 // ---------------------------------------------------------------------------
 
 const contextified = new WeakSet();
+// codeGeneration flags per context (createContext stores them; runWithContext
+// enforces them). Absent entry = default { strings: true, wasm: true }.
+const contextCodeGeneration = new WeakMap();
 let contextNameIndex = 0;
 
 // One synthetic per-context memory entry: sizes are 0 (the shim cannot
@@ -310,11 +313,13 @@ export function createContext(contextObject = {}, options = {}) {
   } = options;
   validateString(name, "options.name");
   if (origin !== undefined) validateString(origin, "options.origin");
+  let codeGen = { strings: true, wasm: true };
   if (codeGeneration !== undefined) {
     validateObject(codeGeneration, "options.codeGeneration");
     const { strings = true, wasm = true } = codeGeneration;
     validateBoolean(strings, "options.codeGeneration.strings");
     validateBoolean(wasm, "options.codeGeneration.wasm");
+    codeGen = { strings, wasm };
   }
   if (microtaskMode !== undefined) {
     validateOneOf(microtaskMode, "options.microtaskMode", [
@@ -322,6 +327,7 @@ export function createContext(contextObject = {}, options = {}) {
       undefined,
     ]);
   }
+  contextCodeGeneration.set(contextObject, codeGen);
   return markContext(contextObject);
 }
 
@@ -1432,10 +1438,60 @@ function runWithContext(code, target, opts) {
     code,
     scanned.functions.map((f) => [f.start, f.end]),
   );
+  // codeGeneration enforcement: a context created with strings:false /
+  // wasm:false must throw its own EvalError / WebAssembly.CompileError when
+  // user code calls eval() / new WebAssembly.Module(). The flags live on the
+  // context (createContext stores them); the throwing bindings are installed
+  // by a prefix INSIDE the evaluated code — the runner's own direct eval()
+  // resolves through the same scope proxy, so installing them host-side
+  // before the run would break the runner itself. The prefix runs first, so
+  // user code sees the throwing bindings; the previous own-property state
+  // is restored afterwards, but only if untouched — user code may have
+  // overwritten the binding, and that assignment must persist, as in Node.
+  // ponytail: the throwing values come from standardGlobals() — the
+  // context's own intrinsics (what runInContext("EvalError", ctx) returns),
+  // not hardcoded host references. Ceiling: only eval() and
+  // WebAssembly.Module are blocked; new Function() and
+  // WebAssembly.compile/instantiate are not (no test covers them).
+  const codeGen = contextCodeGeneration.get(target) || {
+    strings: true,
+    wasm: true,
+  };
+  const globals = standardGlobals();
+  const noEval =
+    !codeGen.strings &&
+    function __vm_noEval() {
+      throw new globals.EvalError(
+        "Code generation from strings disallowed for this context",
+      );
+    };
+  const noWasm =
+    !codeGen.wasm &&
+    globals.WebAssembly &&
+    (() => {
+      const override = Object.create(globals.WebAssembly);
+      Object.defineProperty(override, "Module", {
+        value: function __vm_noWasmModule() {
+          throw new globals.WebAssembly.CompileError(
+            "WebAssembly.Module(): Wasm code generation disallowed by embedder",
+          );
+        },
+        writable: true,
+        enumerable: false,
+        configurable: true,
+      });
+      return override;
+    })();
+  let cgPrefix = "";
+  if (noEval) cgPrefix += "globalThis.eval = __vm_e__;\n";
+  if (noWasm) cgPrefix += "globalThis.WebAssembly = __vm_w__;\n";
+  const cgLines = (noEval ? 1 : 0) + (noWasm ? 1 : 0);
+
   // The prefix must come after a strict prologue so the eval stays strict.
-  const evalCode = (strict ? '"use strict";\n' : "") + prefix + bodyCode;
+  const evalCode =
+    (strict ? '"use strict";\n' : "") + cgPrefix + prefix + bodyCode;
   // Lines before the user's code inside the eval'd source.
-  const headLines = (strict ? 1 : 0) + scanned.functions.length;
+  const headLines = (strict ? 1 : 0) + cgLines + scanned.functions.length;
 
   // Direct eval inside the `with` keeps the scope chain and yields the
   // completion value as the return value. `eval` resolves through the scope
@@ -1444,12 +1500,36 @@ function runWithContext(code, target, opts) {
   const scope = makeScope(target, strict, claimed);
   let runner;
   try {
-    runner = new Function("__vm_p__", "__vm_c__", factoryBody);
+    runner = new Function(
+      "__vm_p__",
+      "__vm_c__",
+      "__vm_e__",
+      "__vm_w__",
+      factoryBody,
+    );
   } catch (e) {
     throw e;
   }
+  // Save the context's own eval/WebAssembly bindings (if any) so the codegen
+  // prefix can be undone after the run — but ONLY when an override will
+  // actually be installed. Touching the target unconditionally trips
+  // throwing Proxy traps (test-vm-proxy-failure-CP: its
+  // getOwnPropertyDescriptor trap throws on any access), so a default
+  // context must never reach this line. Reflect.* never throws here.
+  const savedEval = noEval
+    ? Object.getOwnPropertyDescriptor(target, "eval")
+    : undefined;
+  const savedWasm = noWasm
+    ? Object.getOwnPropertyDescriptor(target, "WebAssembly")
+    : undefined;
+  const restore = (prop, saved, installed) => {
+    const current = Object.getOwnPropertyDescriptor(target, prop);
+    if (!current || current.value !== installed) return;
+    if (saved === undefined) Reflect.deleteProperty(target, prop);
+    else Reflect.defineProperty(target, prop, saved);
+  };
   try {
-    return runner.call(target, scope, evalCode);
+    return runner.call(target, scope, evalCode, noEval, noWasm);
   } catch (e) {
     if (e instanceof SloppyAssignSilent) return undefined; // sloppy silent fail
     if (e instanceof SyntaxError) throw e; // nothing position-mappable
@@ -1462,6 +1542,9 @@ function runWithContext(code, target, opts) {
       lineBias: 0, // eval positions are relative to the eval'd source
       header: true,
     });
+  } finally {
+    if (noEval) restore("eval", savedEval, noEval);
+    if (noWasm) restore("WebAssembly", savedWasm, noWasm);
   }
 }
 
