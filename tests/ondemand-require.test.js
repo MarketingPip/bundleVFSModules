@@ -730,12 +730,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-listen-bind-validation branch: listen bind validation
     // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
-    // docs/net-wave-n1-sync branch: net docs sync only (HITLIST row +
-    // measured-rates entry for wave N1, 87 -> 127 verified flips).
-    // fix/net-write-after-close branch: write after handle close
-    // (VirtualHandle close flag + _write/_writev handle checks + note).
+    // fix/net-remote-peer branch: client _peername from the resolved
+    // connect target instead of the server bind address
+    // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-write-after-close.md", "src/net.js"].sort(),
+      ["NOTES-net-remote-peer.md", "src/net.js"].sort(),
     );
   });
 

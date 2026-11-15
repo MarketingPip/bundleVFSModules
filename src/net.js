@@ -3879,10 +3879,15 @@ Server.prototype._acceptConnection = function _acceptConnection(
       family: srcFamily,
       port: clientPort,
     };
+    // ponytail: the client's peer is the endpoint it dialed — the resolved
+    // connect target (req.address/req.port, Node: uv_tcp_getpeername on the
+    // client handle) — not the server's bind address, which is the ::/0.0.0.0
+    // wildcard when listen() had no host. The server-side socket keeps the
+    // bind address as its local endpoint (its _sockname below).
     client._peername = {
-      address: bindAddr.address,
-      family: bindAddr.family,
-      port: bindAddr.port,
+      address: req.address,
+      family: req.family,
+      port: req.port,
     };
     serverSocket._sockname = {
       address: bindAddr.address,
