@@ -1394,7 +1394,19 @@ function runWithContext(code, target, opts) {
   // standard globals claimed by the scope proxy) are unaffected — assignment
   // to them stays legal in both modes, exactly as in Node. A read of a
   // claimed-but-unassigned name still yields undefined via the `get` trap.
-  const claimed = strict ? new Set() : new Set(scanned.assigned);
+  // Host-global passthrough (runInThisContext, lane 7): the host global
+  // claims nothing either — implicit globals fall through the `with` to the
+  // real global scope, where sloppy assignment creates them configurable,
+  // exactly like Node, so `delete globalThis.vmResult` still works. A
+  // claimed host-global name would be defined non-configurable by the `set`
+  // trap, and `delete` would wrongly fail. Sandbox targets still need the
+  // claim: without it the assignment would fall through to the REAL global
+  // scope (a leak). ponytail: `new Function` bodies see only the global
+  // scope, so the fall-through cannot reach shim internals.
+  const claimed =
+    !strict && target !== globalThis
+      ? new Set(scanned.assigned)
+      : new Set();
 
   // Remove the original top-level function declarations (they are installed
   // by the prefix instead); blanking preserves line numbers.
@@ -1722,21 +1734,15 @@ export class Script {
   runInThisContext(options = {}) {
     options = normalizeMethodOptions(options);
     const runOpts = this.#runOptions(options);
-    let result;
-    try {
-      result = (0, eval)(this.#code);
-    } catch (e) {
-      throw enrichScriptError(e, {
-        filename: runOpts.filename,
-        lineOffset: runOpts.lineOffset,
-        columnOffset: runOpts.columnOffset,
-        code: this.#code,
-        headLines: 0,
-        lineBias: 0,
-        header: true,
-      });
-    }
-    return result;
+    // Route through runWithContext with the host global as the target.
+    // Indirect eval cannot create the non-configurable global `var`
+    // bindings real runInThisContext creates: after `(0, eval)`, `var b`
+    // is deletable, so `delete b; data.push(b)` throws ReferenceError
+    // (probe P2). The scanner pre-declares top-level `var`/`function` on
+    // globalThis as non-configurable, and implicit globals fall through
+    // to the real global scope (see the `assigned` skip in
+    // runWithContext), so `delete` behaves like Node.
+    return runWithContext(this.#code, globalThis, runOpts);
   }
 }
 
