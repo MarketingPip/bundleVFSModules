@@ -34,7 +34,7 @@
 // lane must work with native builtins disabled.
 
 import { Duplex } from "./stream.js";
-import { EventEmitter } from "./events.js";
+import { EventEmitter, addAbortListener } from "./events.js";
 import { undestroy as undestroyStream } from "./stream/destroy.js";
 import { constants as osConstants } from "./os.js";
 // ponytail: node:fs is imported ONLY for pipe-bind filesystem effects
@@ -3448,6 +3448,34 @@ Server.prototype._createListenHandle = function _createListenHandle() {
   }
 };
 
+// Port of Node lib/net.js:2126 addServerAbortSignalOption: validates
+// options.signal (ERR_INVALID_ARG_TYPE unless an AbortSignal), closes the
+// server when the signal aborts, and closes on nextTick when the signal is
+// already aborted.
+function addServerAbortSignalOption(self, options) {
+  if (options?.signal === undefined) {
+    return;
+  }
+  const signal = options.signal;
+  if (signal === null || typeof signal !== "object" || !("aborted" in signal)) {
+    throw errInvalidArgType("options.signal", "AbortSignal", signal);
+  }
+  const onAborted = () => {
+    self.close();
+  };
+  if (signal.aborted) {
+    nextTick(onAborted);
+  } else {
+    addAbortListener(signal, onAborted);
+    // ponytail: Node disposes the abort listener on 'close'
+    // (lib/net.js:2140); the shim's addAbortListener registers via
+    // addEventListener, and Node's disposable is exactly
+    // signal.removeEventListener('abort', listener) — so this is the
+    // same disposal without needing the SymbolDispose key.
+    self.once("close", () => signal.removeEventListener("abort", onAborted));
+  }
+}
+
 Server.prototype.listen = function listen(...args) {
   if (args.length > 0 && args[0] instanceof BoundSocket) {
     if (this._listening || this._bindPending) throw errServerAlreadyListening();
@@ -3464,6 +3492,10 @@ Server.prototype.listen = function listen(...args) {
 
   if (this._listening || this._bindPending) throw errServerAlreadyListening();
   if (cb !== null) this.once("listening", cb);
+
+  // Node validates/wires options.signal before the port/path dispatch
+  // (lib/net.js:2526), so a bad signal throws synchronously here.
+  addServerAbortSignalOption(this, options);
 
   const backlog =
     toNumber(args.length > 1 && args[1]) ||
