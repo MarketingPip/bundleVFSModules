@@ -730,10 +730,18 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-listen-bind-validation branch: listen bind validation
     // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
-    // fix/net-reuseport branch: listen({ reusePort: true }) sharing
-    // (src/net.js + working note).
+    // fix/net-handle-adoption branch: generic handle adoption
+    // (plain-object options.handle as _handle + readStart/onread wiring;
+    // shared stream_wrap state + internal/test/binding adapter + one
+    // preload redirect under target net).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-reuseport.md", "src/net.js"].sort(),
+      [
+        "NOTES-net-handle-adoption.md",
+        "parity/internal-test-binding-adapter.mjs",
+        "parity/preload.mjs",
+        "src/internals/stream-wrap-state.js",
+        "src/net.js",
+      ].sort(),
     );
   });
 
