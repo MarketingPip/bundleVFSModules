@@ -150,6 +150,13 @@ function isExtraRedirect(name) {
   // see shim entries. Only test-http-perf_hooks requires it under the http
   // target. Mirrors the net redirect above (PR #232 precedent).
   if (target === "http" && name === "perf_hooks") return true;
+  // net tests that require('perf_hooks') need the shim's observer
+  // registry: test-net-perf_hooks observes {type:"net"} and the entries
+  // are emitted by the shim's net instrumentation through the shared
+  // bridge (src/internals/perf-observe.js) — the native observer can never
+  // see shim entries. Only test-net-perf_hooks requires it under the net
+  // target. Mirrors the http redirect above (PR #232 precedent).
+  if (target === "net" && name === "perf_hooks") return true;
   // zlib tests mutate require("buffer").kMaxLength before requiring zlib;
   // zlib must read the same cell (mirrors Node's load-time capture).
   return target === "zlib" && name === "buffer";

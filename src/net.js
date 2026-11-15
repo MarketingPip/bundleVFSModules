@@ -55,16 +55,8 @@ import {
   unlinkSync as fsUnlinkSync,
 } from "node:fs";
 import { normalizedArgsSymbol } from "./internals/net-symbols.js";
-// ponytail: node:cluster is imported ONLY for the cluster-worker listen
-// path (Server.prototype._listenClusterWorker): a worker's handle arrives
-// asynchronously from the primary via cluster._getServer, like Node's
-// listenInCluster. Dual resolution, same precedent as node:fs above: in
-// the parity harness this is native cluster (preload does not redirect
-// it); in the browser build esbuild externalizes node: builtins and the
-// sandbox resolves node:cluster to src/cluster.js, whose honest stub
-// always reports isWorker false and has no _getServer — so the worker
-// path never runs in a browser. No other cluster API is used here.
 import cluster from "node:cluster";
+import { perfObserveBridge } from "./internals/perf-observe.js";
 
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
@@ -72,6 +64,36 @@ const RT =
   typeof globalThis._RUNTIME_ !== "undefined"
     ? globalThis._RUNTIME_
     : undefined;
+
+// perf_hooks `net` entries (Node lib/net.js internalConnect :1404-1405 and
+// afterConnect :2009-2010): slots holding the startPerf context until the
+// matching stopPerf emits the entry. Thin wrappers over the perf-observe
+// bridge (src/internals/perf-observe.js), mirroring Node's call-site
+// gating: start only when the TCP dial is issued and a `net` observer
+// exists right now; stop only when a start context exists and an observer
+// still exists. When perf_hooks.js was never loaded the bridge is empty
+// and both are no-ops — instrumentation must never slow down or break
+// plain connects. Pipes never get an entry (Node's addressType 4/6 gate).
+const kPerfHooksNetConnectContext = Symbol("kPerfHooksNetConnectContext");
+
+function _netPerfStart(socket, address, port) {
+  if (perfObserveBridge.hasObserver?.("net")) {
+    perfObserveBridge.startPerf(socket, kPerfHooksNetConnectContext, {
+      type: "net",
+      name: "connect",
+      detail: { host: address, port },
+    });
+  }
+}
+
+function _netPerfStop(socket) {
+  if (
+    socket[kPerfHooksNetConnectContext] &&
+    perfObserveBridge.hasObserver?.("net")
+  ) {
+    perfObserveBridge.stopPerf(socket, kPerfHooksNetConnectContext);
+  }
+}
 
 // Buffer when available (Node global, or installed by RUNTIME_NODE_GLOBALS in
 // the sandbox). Used so 'data' chunks are real Buffers like Node's net.
@@ -2716,6 +2738,10 @@ Socket.prototype._doConnect = function _doConnect(options, pipe, resolved) {
     path: options.path,
     multiIndex,
   };
+  // Node lib/net.js internalConnect (:1404-1405): start the `net`/`connect`
+  // perf entry when the TCP dial is issued (here: the virtual server lookup
+  // found a listener), gated on addressType 4/6 — pipes never get one.
+  if (!pipe) _netPerfStart(this, address, port);
   // One more event-loop turn before the handshake completes, like a real
   // TCP handshake: handlers attached after an `await` still catch 'connect'.
   // Accepts are batched (queueAccept) so a burst of connects is accepted
@@ -3874,6 +3900,9 @@ Server.prototype._dropPairedConnection = function _dropPairedConnection(
   if (client.readable && !client.isPaused()) {
     client._readStarted = true;
   }
+  // Node lib/net.js afterConnect (:2009-2010): stop the `net`/`connect`
+  // perf entry after 'connect' + 'ready' (and the first read, above).
+  _netPerfStop(client);
   client._refreshLoopKeeper();
   serverSocket.destroy();
 };
@@ -4138,6 +4167,9 @@ Server.prototype._acceptConnection = function _acceptConnection(
     if (client.readable && !client.isPaused()) {
       client.read(0);
     }
+    // Node lib/net.js afterConnect (:2009-2010): stop the `net`/`connect`
+    // perf entry after 'connect' + 'ready' (and the first read, above).
+    _netPerfStop(client);
     client._refreshLoopKeeper();
   };
   if (deferConnect) defer(emitClientConnect);

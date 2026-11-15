@@ -730,11 +730,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-listen-bind-validation branch: listen bind validation
     // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
-    // fix/net-listen-twice branch: cluster-worker listen-twice
-    // (deferred primary-query bind, _listeningId dedupe)
-    // (src/net.js + working note).
+    // fix/net-perf-hooks branch: net perf_hooks entries (startPerf in
+    // _doConnect, stopPerf at the connect emits; preload perf_hooks
+    // redirect under target=net + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-listen-twice.md", "src/net.js"].sort(),
+      ["NOTES-net-perf-hooks.md", "parity/preload.mjs", "src/net.js"].sort(),
     );
   });
 
