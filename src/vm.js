@@ -136,12 +136,17 @@ function validateStringArray(value, name) {
 }
 
 function validateInt32(value, name) {
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    value < -2147483648 ||
-    value > 2147483647
-  ) {
+  // Node (lib/internal/validators.js) splits the failure: a non-number is a
+  // type error, a non-integer or out-of-range number is a range error.
+  // The old single check threw ERR_OUT_OF_RANGE for both.
+  if (typeof value !== "number") {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" ${argOrProp(name)} must be of type number. ${receivedText(value)}`,
+    );
+  }
+  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
     throw codedError(
       RangeError,
       "ERR_OUT_OF_RANGE",
@@ -151,12 +156,16 @@ function validateInt32(value, name) {
 }
 
 function validateUint32(value, name) {
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    value < 0 ||
-    value > 4294967295
-  ) {
+  // Same type/range split as validateInt32 (no callers in vm.js today; kept
+  // consistent with the family so a future caller gets Node's codes).
+  if (typeof value !== "number") {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" ${argOrProp(name)} must be of type number. ${receivedText(value)}`,
+    );
+  }
+  if (!Number.isInteger(value) || value < 0 || value > 4294967295) {
     throw codedError(
       RangeError,
       "ERR_OUT_OF_RANGE",
@@ -1391,12 +1400,17 @@ function normalizeTopOptions(options) {
 }
 
 function validateTimeout(value) {
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    value < 1 ||
-    value > 4294967295
-  ) {
+  // Node validates vm timeouts with validateUint32(timeout, ..., true)
+  // (lib/vm.js:172): a non-number is a type error; a non-integer or a number
+  // outside 1..4294967295 is a range error.
+  if (typeof value !== "number") {
+    throw codedError(
+      TypeError,
+      "ERR_INVALID_ARG_TYPE",
+      `The "options.timeout" property must be of type number. ${receivedText(value)}`,
+    );
+  }
+  if (!Number.isInteger(value) || value < 1 || value > 4294967295) {
     throw codedError(
       RangeError,
       "ERR_OUT_OF_RANGE",
