@@ -730,12 +730,16 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-listen-bind-validation branch: listen bind validation
     // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
-    // docs/net-wave-n1-sync branch: net docs sync only (HITLIST row +
-    // measured-rates entry for wave N1, 87 -> 127 verified flips).
-    // fix/net-listen-signal branch: listen options.signal (port of
-    // addServerAbortSignalOption; src/net.js + working note).
+    // fix/net-capture-rejection branch: Server[captureRejectionSymbol]
+    // handler (src/net.js) + events extra redirect under target=net
+    // (parity/preload.mjs + parity/hooks.mjs) + working note.
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-listen-signal.md", "src/net.js"].sort(),
+      [
+        "NOTES-net-capture-rejection.md",
+        "parity/hooks.mjs",
+        "parity/preload.mjs",
+        "src/net.js",
+      ].sort(),
     );
   });
 
