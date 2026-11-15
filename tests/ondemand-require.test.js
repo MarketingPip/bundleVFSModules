@@ -730,11 +730,10 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-listen-bind-validation branch: listen bind validation
     // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
-    // fix/net-pipe-connect-errors branch: pipe connect distinguishes
-    // existing-path ECONNREFUSED from missing-path ENOENT
+    // fix/net-listen-fd0 branch: listen({fd}) async EINVAL/ENOTSOCK
     // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-pipe-connect-errors.md", "src/net.js"].sort(),
+      ["NOTES-net-listen-fd0.md", "src/net.js"].sort(),
     );
   });
 

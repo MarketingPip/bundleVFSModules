@@ -401,6 +401,22 @@ function errAddrNotAvail(address, port) {
     { errno: -99, address, port },
   );
 }
+function errFdNotSocket() {
+  // Node setupListenHandle -> UVExceptionWithHostPort(..., 'listen', ...);
+  // probed real Node v24.22.1: an open non-socket fd (0, stdin) -> ENOTSOCK.
+  return errnoError(
+    "ENOTSOCK",
+    "listen",
+    "listen ENOTSOCK: socket operation on non-socket",
+    { errno: -88 },
+  );
+}
+function errFdInvalid() {
+  // Probed real Node v24.22.1: a non-integer fd (1.5) -> EINVAL.
+  return errnoError("EINVAL", "listen", "listen EINVAL: invalid argument", {
+    errno: -22,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Validators (mirror internal/validators messages used by net).
@@ -3309,6 +3325,20 @@ Server.prototype.listen = function listen(...args) {
     options.port === null
   ) {
     options.port = 0;
+  }
+
+  if (typeof options.fd === "number" && options.fd >= 0) {
+    // ponytail: Node's fd path (node-src lib/net.js:2528) hands the fd to
+    // libuv, which errors async; a browser has no fd table, so no fd can
+    // ever be adopted — integer fds read as ENOTSOCK (an open non-socket,
+    // e.g. stdin, probed real Node v24.22.1), non-integers as EINVAL.
+    // Ceiling: a closed integer fd reads EINVAL in real Node, ENOTSOCK
+    // here — indistinguishable without a real fd table.
+    const err = Number.isInteger(options.fd)
+      ? errFdNotSocket()
+      : errFdInvalid();
+    nextTick(() => this.emit("error", err));
+    return this;
   }
 
   if (typeof options.port === "number" || typeof options.port === "string") {
