@@ -205,6 +205,10 @@ function errInvalidArgType(name, expected, received) {
     what = `an instance of ${
       received.constructor ? received.constructor.name : "Object"
     }`;
+  } else if (typeof received === "function") {
+    // Node's determineSpecificType (lib/internal/errors.js): functions render
+    // as `function ${name}` — no "type" prefix, no parens (anonymous → "function ").
+    what = `function ${received.name || ""}`;
   } else {
     const inspected =
       typeof received === "string"
@@ -329,6 +333,9 @@ function errInvalidArgTypeProp(name, expected, received) {
     what = `an instance of ${
       received.constructor ? received.constructor.name : "Object"
     }`;
+  } else if (typeof received === "function") {
+    // Same as errInvalidArgType: Node renders functions as `function ${name}`.
+    what = `function ${received.name || ""}`;
   } else {
     const inspected =
       typeof received === "string"

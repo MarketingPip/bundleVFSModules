@@ -310,7 +310,16 @@ function syncArgs(args, methodName) {
       // real disk): make sure its parent chain exists in memfs first.
       // Exception: mkdtemp/mkdtempSync must fail with ENOENT when the parent
       // doesn't exist — don't create it for them (test-fs-error-messages).
-      if (methodName !== "mkdtemp" && methodName !== "mkdtempSync") {
+      // mkdir/mkdirSync likewise: the shim creates parents itself for
+      // recursive mkdir (and must report the FIRST created dir), and
+      // non-recursive mkdir must fail ENOENT on a missing parent —
+      // pre-creating the parent breaks both (test-fs-mkdir.js).
+      if (
+        methodName !== "mkdtemp" &&
+        methodName !== "mkdtempSync" &&
+        methodName !== "mkdir" &&
+        methodName !== "mkdirSync"
+      ) {
         try {
           raw.mkdirSync(realPath.dirname(p), { recursive: true });
         } catch {}
