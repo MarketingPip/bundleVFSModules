@@ -730,11 +730,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-listen-bind-validation branch: listen bind validation
     // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
-    // fix/net-remote-peer branch: client _peername from the resolved
-    // connect target instead of the server bind address
+    // fix/net-listen-twice branch: cluster-worker listen-twice
+    // (deferred primary-query bind, _listeningId dedupe)
     // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-remote-peer.md", "src/net.js"].sort(),
+      ["NOTES-net-listen-twice.md", "src/net.js"].sort(),
     );
   });
 

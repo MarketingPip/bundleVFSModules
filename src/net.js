@@ -55,6 +55,16 @@ import {
   unlinkSync as fsUnlinkSync,
 } from "node:fs";
 import { normalizedArgsSymbol } from "./internals/net-symbols.js";
+// ponytail: node:cluster is imported ONLY for the cluster-worker listen
+// path (Server.prototype._listenClusterWorker): a worker's handle arrives
+// asynchronously from the primary via cluster._getServer, like Node's
+// listenInCluster. Dual resolution, same precedent as node:fs above: in
+// the parity harness this is native cluster (preload does not redirect
+// it); in the browser build esbuild externalizes node: builtins and the
+// sandbox resolves node:cluster to src/cluster.js, whose honest stub
+// always reports isWorker false and has no _getServer — so the worker
+// path never runs in a browser. No other cluster API is used here.
+import cluster from "node:cluster";
 
 // 1. Runtime bridge (guarded: rewritten to the sandbox scope at load time,
 //    undefined under real Node / direct import).
@@ -415,6 +425,17 @@ function errFdInvalid() {
   // Probed real Node v24.22.1: a non-integer fd (1.5) -> EINVAL.
   return errnoError("EINVAL", "listen", "listen EINVAL: invalid argument", {
     errno: -22,
+  });
+}
+
+// Node lib/net.js listenOnPrimaryHandle: a primary bind failure surfaces
+// as ExceptionWithHostPort(errno, 'bind', address, port).
+function errBindErrno(errno, address, port) {
+  const code = errnoNameForUv(errno) ?? `Unknown system error ${errno}`;
+  return errnoError(code, "bind", `bind ${code} ${address}:${port}`, {
+    errno,
+    address,
+    port,
   });
 }
 
@@ -3230,6 +3251,10 @@ function Server(options, connectionListener) {
   self._listening = false;
   self._bindPending = false;
   self._bindAddress = null;
+  // Node lib/net.js: this._listeningId is bumped on every listen() and the
+  // cluster query callback discards stale replies (listeningId mismatch).
+  // Node inits it to 1 (lib/net.js:2192).
+  self._listeningId = 1;
   self._handle = null;
   self._pipeName = null;
   self._pipeFileCreated = false;
@@ -3390,6 +3415,17 @@ Server.prototype.listen = function listen(...args) {
   if (typeof options.port === "number" || typeof options.port === "string") {
     const port = validatePort(options.port, "options.port");
     const host = options.host;
+    // ponytail: cluster-worker listen (Node lib/net.js listenInCluster):
+    // a worker's handle arrives asynchronously from the primary, so the
+    // local bind is deferred to the query callback and the sync guard
+    // above stays clear (no _listening/_bindPending yet) — a 2nd listen()
+    // in flight does not throw, and the primary round-trip dedupes it via
+    // _listeningId. In a browser cluster is the honest stub (isWorker
+    // false) and this path never runs.
+    if (isClusterWorker()) {
+      this._listenClusterWorker(port, host, backlog);
+      return this;
+    }
     this._bindPending = true;
     this._createListenHandle();
     // ponytail: bind synchronously like Node's setupListenHandle
@@ -3514,6 +3550,103 @@ Server.prototype._doListenTCP = function _doListenTCP(port, host, backlog) {
     return;
   }
   this.emit("listening");
+};
+
+// True only for a real cluster worker: native cluster reports isWorker
+// and offers _getServer (lib/internal/cluster/child.js). In a browser
+// the cluster import resolves to src/cluster.js, whose honest stub
+// always reports isWorker false and has no _getServer.
+function isClusterWorker() {
+  return (
+    cluster !== null &&
+    typeof cluster === "object" &&
+    cluster.isWorker === true &&
+    typeof cluster._getServer === "function"
+  );
+}
+
+// Cluster-worker TCP listen: port of Node's listenInCluster
+// (node-src lib/net.js:2423) + the worker path of listen(). The primary
+// owns the real bind; each listen() issues exactly one queryServer
+// round-trip, and the reply's ack is what a worker counts on. The local
+// virtual bind runs only for the winning (latest) query — a stale reply
+// just closes its handle (Node listenOnPrimaryHandle, lib/net.js:2449),
+// so 'listening' fires exactly once and a 2nd listen() in flight never
+// throws (the sync guard keys on _listening/_bindPending, both still
+// clear until the winning reply binds).
+Server.prototype._listenClusterWorker = function _listenClusterWorker(
+  port,
+  host,
+  backlog,
+) {
+  const listeningId = ++this._listeningId;
+  // Resolve the query address like Node's lookupAndListen: no host →
+  // address null / addressType 4; IP literal / loopback name → that
+  // address + family. A hostname needing DNS cannot be resolved here —
+  // fall back to the local path, whose _bindTCP reports ENOTFOUND async
+  // (and leaves nothing bound, so a re-listen still does not throw).
+  let address = null;
+  let addressType = 4;
+  if (host !== undefined && host !== null) {
+    if (isIP(host)) {
+      address = host;
+      addressType = isIPv4(host) ? 4 : 6;
+    } else if (isLoopbackName(host)) {
+      address = "127.0.0.1";
+      addressType = 4;
+    } else {
+      this._bindPending = true;
+      this._createListenHandle();
+      const err = this._bindTCP(port, host, backlog);
+      if (err) {
+        this._handle = null;
+        nextTick(() => this.emit("error", err));
+      } else {
+        nextTick(() => {
+          if (this._listening) this.emit("listening");
+        });
+      }
+      return;
+    }
+  }
+  this._createListenHandle();
+  // flags mirrors Node's getFlags (lib/net.js): 0 for plain options
+  // (ipv6Only/reusePort are not plumbed by the shim's _bindTCP).
+  const serverQuery = {
+    address,
+    port: port | 0,
+    addressType,
+    fd: undefined,
+    flags: 0,
+    backlog,
+  };
+  cluster._getServer(this, serverQuery, (err, handle) => {
+    if (listeningId !== this._listeningId) {
+      if (handle && typeof handle.close === "function") handle.close();
+      return;
+    }
+    // Closed while the query was in flight: close() already nulled the
+    // handle — do not resurrect the server.
+    if (this._handle === null) {
+      if (handle && typeof handle.close === "function") handle.close();
+      return;
+    }
+    if (err) {
+      this._handle = null;
+      nextTick(() => this.emit("error", errBindErrno(err, address, port)));
+      return;
+    }
+    this._bindPending = true;
+    const bindErr = this._bindTCP(port, host, backlog);
+    if (bindErr) {
+      this._handle = null;
+      nextTick(() => this.emit("error", bindErr));
+    } else {
+      nextTick(() => {
+        if (this._listening) this.emit("listening");
+      });
+    }
+  });
 };
 
 Server.prototype._doListenPipe = function _doListenPipe(
@@ -4018,6 +4151,13 @@ Server.prototype._emitCloseIfDrained = function _emitCloseIfDrained() {
 };
 
 Server.prototype.close = function close(cb) {
+  // Node lib/net.js:2811: close() refreshes the id FIRST, invalidating
+  // any in-flight cluster query — the primary reply's callback then
+  // closes its handle and returns instead of binding
+  // (listenOnPrimaryHandle, lib/net.js:2450). Without this, a worker
+  // that closes right after listen() would still bind and emit
+  // 'listening' when the reply arrived.
+  this._listeningId++;
   if (typeof cb === "function") {
     if (!this._listening && !this._bindPending) {
       // Never listening: 'close' still fires; the callback gets
@@ -4069,6 +4209,13 @@ Server.prototype.close = function close(cb) {
     // keeps the loop alive. Outstanding connections keep their own
     // keep-alive; 'close' still waits for them via _emitCloseIfDrained.
     this._releaseLoop();
+  } else if (this._handle) {
+    // Cluster-worker listen in flight (no local bind yet, so neither
+    // flag is set): the virtual handle was created by _createListenHandle
+    // but never bound — drop it so a later listen() gets a fresh one
+    // (N1-9 invariant: nulled on close()). The in-flight query itself
+    // is invalidated by the _listeningId bump above, not by this.
+    this._handle = null;
   }
 
   this._emitCloseIfDrained();
