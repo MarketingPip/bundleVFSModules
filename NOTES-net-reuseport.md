@@ -42,7 +42,16 @@ the port instead of the cluster master.
   `test-net-listen-exclusive-random-ports` 1 (lane 19's target),
   `test-net-boundsocket` 0.
 
-## Differential
+## CI
+- PR #420. First code run (head `afe5d01d`): 0 check runs for ~2.5h —
+  CI-starved because the branch was behind main (mergeable: unknown);
+  rebase onto `fbc4d995` + force-push unblocked it immediately
+  (mergeable: True). New head `64ebdfd7`: Parity success, build
+  failure at the "Build VFS" step — the known esm.sh acorn/acorn-walk
+  fetch transient (local build-vfs fails identically on this branch,
+  and the transient is recorded as hitting branch AND base; the
+  failing file is src/specials/bundler.js, untouched by this lane).
+  Retriggered with this notes-only commit.
 - Branch CSV: `hidden_files/fast-sweep/net-n2-reuseport-branch-2026-11-15.csv`
   (124 pass / 13 timeout / 19 fail).
 - Base CSV: `hidden_files/fast-sweep/net-n2-reuseport-base-2026-11-15.csv`
