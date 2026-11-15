@@ -1150,13 +1150,20 @@ function scanScript(code) {
 // the runner swallows it when not in strict mode.
 class SloppyAssignSilent extends Error {}
 
-function makeScope(target, strict = false) {
+function makeScope(target, strict = false, claimed = null) {
   const globals = standardGlobals();
   return new Proxy(target, {
     has(t, prop) {
       if (typeof prop === "symbol") return Reflect.has(t, prop);
       if (prop === "globalThis") return true;
       if (Reflect.has(t, prop)) return true;
+      // Lazily-claimed assigned names (see runWithContext): the scanner saw
+      // a top-level bare assignment to this name, so claim it here instead
+      // of pre-defining it — the `set` trap defines it on first assignment,
+      // so insertion order follows execution order, not scan order. The
+      // extensibility guard keeps the trap invariant on frozen targets.
+      if (claimed !== null && claimed.has(prop) && Reflect.isExtensible(t))
+        return true;
       if (prop in globals) return true;
       // Block host globals from leaking into the sandbox: claim them so the
       // `with` never falls through to the real global scope.
@@ -1178,6 +1185,13 @@ function makeScope(target, strict = false) {
     },
     set(t, prop, value) {
       if (typeof prop === "symbol") return Reflect.set(t, prop, value);
+      // First assignment to a lazily-claimed name: define it now (same
+      // non-configurable descriptor ensureDeclared used to install eagerly),
+      // so the property is created in execution order. Reads before the
+      // assignment still see undefined via the `get` trap.
+      if (claimed !== null && claimed.has(prop) && !Reflect.has(t, prop)) {
+        ensureDeclared(t, prop);
+      }
       // `has` already returned true: the name is either on the target or a
       // standard global. Standard globals shadow onto the sandbox global.
       const ok = Reflect.set(t, prop, value);
@@ -1300,24 +1314,21 @@ function runWithContext(code, target, opts) {
   // Note: lexical (let/const/class) names are NOT pre-declared on the target;
   // they live in the eval's declarative scope and must not become context
   // properties (Node keeps them off globalThis too).
-  // Strict-mode scripts must NOT pre-declare bare-assignment targets: in
-  // real Node `"use strict"; z = 42` throws ReferenceError for an undeclared
-  // `z`, but pre-declaring it on the context makes the assignment succeed
-  // (test-vm-global-contextual-store). Skipping the pre-declaration lets the
-  // scope proxy's `has` trap return false, so the strict eval throws before
-  // any property is created. Sloppy scripts still pre-declare (bare
-  // assignment creates the global). ponytail: names already on the target
-  // (context properties like `x`, or standard globals claimed by the scope
-  // proxy) are unaffected — assignment to them stays legal in both modes,
-  // exactly as in Node.
-  if (!strict) {
-    for (const name of scanned.assigned) {
-      if (!seen.has(name)) {
-        seen.add(name);
-        ensureDeclared(target, name);
-      }
-    }
-  }
+  // Bare-assignment targets (scanned.assigned) are NOT pre-declared: eager
+  // definition fixed their insertion order at scan time (e.g. `g = f`
+  // landed before a `defineProperty(this, "f", …)` that runs first).
+  // Instead they are lazily claimed in sloppy scripts: the scope proxy's
+  // `has` trap claims them, and its `set` trap defines them
+  // (non-configurable, as ensureDeclared would have) on first assignment,
+  // so insertion order follows execution order. Strict-mode scripts claim
+  // nothing: in real Node `"use strict"; z = 42` throws ReferenceError for
+  // an undeclared `z`, and an unclaimed `has` lets the strict eval throw
+  // before any property is created (test-vm-global-contextual-store, lane 5).
+  // ponytail: names already on the target (context properties like `x`, or
+  // standard globals claimed by the scope proxy) are unaffected — assignment
+  // to them stays legal in both modes, exactly as in Node. A read of a
+  // claimed-but-unassigned name still yields undefined via the `get` trap.
+  const claimed = strict ? new Set() : new Set(scanned.assigned);
 
   // Remove the original top-level function declarations (they are installed
   // by the prefix instead); blanking preserves line numbers.
@@ -1334,7 +1345,7 @@ function runWithContext(code, target, opts) {
   // completion value as the return value. `eval` resolves through the scope
   // proxy to the intrinsic, so this stays a direct eval.
   const factoryBody = "with(__vm_p__){\nreturn eval(__vm_c__);\n}";
-  const scope = makeScope(target, strict);
+  const scope = makeScope(target, strict, claimed);
   let runner;
   try {
     runner = new Function("__vm_p__", "__vm_c__", factoryBody);
