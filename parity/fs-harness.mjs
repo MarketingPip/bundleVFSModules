@@ -361,6 +361,14 @@ const _DELETE_SYNC = new Set(["rmSync", "unlinkSync", "rmdirSync"]);
 const _DELETE_ASYNC = new Set(["rm", "unlink", "rmdir"]);
 function deleteRealPath(p) {
   if (!p || p.includes("\0")) return;
+  // Never propagate deletion of the tmpdir root itself: common.refresh()
+  // rmSyncs the root and recreates it in memfs, but nothing re-creates the
+  // real dir — native operations needing a real path inside it (a unix socket
+  // listen in test-fs-readdir-recursive) then fail EACCES. File and
+  // subdirectory deletions inside the root still propagate (the #455 fix).
+  // ponytail: root-only carve-out; if a test ever needs the real root itself
+  // gone, re-create it on real disk after the memfs mkdir instead.
+  if (realPath.resolve(p) === tmpdir) return;
   if (p !== tmpdir && !p.startsWith(tmpdir + realPath.sep)) return;
   try {
     realFs.rmSync(p, { recursive: true, force: true });
