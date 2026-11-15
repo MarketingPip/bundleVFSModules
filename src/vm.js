@@ -1589,6 +1589,19 @@ function synthesizeCachedData(source) {
   return bytes;
 }
 
+/**
+ * Real V8 code-cache magic (the first 8 bytes of what real Node's
+ * produceCachedData emits): 89 06 de c0 fa 8c 33 dc. The source length sits
+ * as a LE uint32 at offset 8. The full source text is NOT embedded verbatim
+ * (only its string constants are), so magic + source length is the
+ * validation available here.
+ * ponytail: ceiling — a wrong source of the SAME length is not distinguished
+ * (V8 stores an internal source hash at offset 12/16 that this shim does
+ * not replicate); no vendored test covers that shape. A cache sliced by 4
+ * breaks the magic and is rejected deterministically.
+ */
+const V8_CACHE_MAGIC = [0x89, 0x06, 0xde, 0xc0, 0xfa, 0x8c, 0x33, 0xdc];
+
 function cachedDataMatches(source, cachedData) {
   let bytes = null;
   if (cachedData instanceof Uint8Array) bytes = cachedData;
@@ -1600,6 +1613,22 @@ function cachedDataMatches(source, cachedData) {
     );
   }
   if (bytes === null || bytes.length < 12) return false;
+  // Real V8 cache bytes (the harness's produce() spawns a real Node child,
+  // so consume sees genuine V8 bytes, never the synthetic VMCD marker):
+  // accept on magic + source-length field.
+  let isV8 = true;
+  for (let k = 0; k < 8; k++) {
+    if (bytes[k] !== V8_CACHE_MAGIC[k]) {
+      isV8 = false;
+      break;
+    }
+  }
+  if (isV8) {
+    const storedLen =
+      (bytes[8] | (bytes[9] << 8) | (bytes[10] << 16) | (bytes[11] << 24)) >>>
+      0;
+    return storedLen === source.length >>> 0;
+  }
   if (
     bytes[0] !== 0x56 ||
     bytes[1] !== 0x4d ||
