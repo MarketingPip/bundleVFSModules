@@ -62,3 +62,13 @@ shape that test could never pass once lane 9 lands `_handle.onconnection`.
 
 - `src/net.js` (only)
 - `NOTES-net-socket-options.md` (this file)
+
+## CI history
+
+- Round 1 (head `680f8ad5`): Parity success + build success (poll 4).
+- Round 2 (head `7ed57442`, after rebase onto #402): Parity success, build
+  failure at the "Build VFS" step. Same `src/net.js` content as round 1
+  (rebase only moved the base + allowlist); local `build-vfs` fails
+  identically twice on the esm.sh acorn/acorn-walk fetch for the untouched
+  `src/specials/bundler.js`, while `net.js` itself builds clean — the known
+  esm.sh fetch transient, not a code failure. Retriggered notes-only.
