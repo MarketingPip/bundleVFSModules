@@ -1241,28 +1241,40 @@ Object.defineProperties(Socket.prototype, {
   },
   bytesWritten: {
     get() {
-      // Streaming coalescing (#279) pends response frames in the
-      // message's _pendingFrame instead of writing them to the socket
-      // at once, so _bytesWritten lags until the flush runs — but the
-      // shim delivers synchronously by design, and
-      // test-http-byteswritten asserts bytesWritten > 0 mid-loop,
-      // while the frame is still pended (it passed before #279, when
-      // streaming writes went straight to the socket). Count the
-      // current response's framed-pending bytes alongside the
-      // delivered count: the dispatch stash on _httpState already
-      // tracks the live response per server socket, and framedPending
-      // drains to 0 at flush (or the stash is cleared), so the sum
-      // never double-counts. ponytail: the getter reads the stash
-      // rather than a new socket→response link; a pipelined deferred
-      // response overwrites lastResponse while its predecessor is
-      // unfinished, so the predecessor's pends are briefly invisible
-      // here — they land in _bytesWritten at its finish flush.
-      // Ceiling: if a future test reads bytesWritten mid-pipeline on
-      // a deferred socket, the stash needs per-response accounting.
-      return (
-        this._bytesWritten +
-        (this._httpState?.lastResponse?._framedPending || 0)
-      );
+      // Node lib/net.js:1280 — the getter sums dispatched bytes +
+      // Writable-buffered bytes + the in-flight connecting write, and
+      // returns undefined on an unconstructed prototype (no writable
+      // state, so writableBuffer is falsy). The shim's _pendingWrites
+      // is the connecting-write queue (Node's _pendingData): writes
+      // land there while connecting, and corked writes sit in the
+      // Writable buffer until uncork, so both must count here or
+      // bytesWritten reads 0 until 'connect' fires
+      // (test-net-connect-buffer, test-net-socket-byteswritten,
+      // test-net-bytes-written-large). The framed-pending term stays
+      // (test-http-byteswritten). ponytail: no new queue — reuses
+      // _pendingWrites and the Writable's own writableBuffer; a chunk
+      // lives in exactly one of the three buckets at a time, so the
+      // sum never double-counts. Ceiling: Node's _pendingData is a
+      // single write, the shim's queue can hold several — the sum is
+      // the same shape either way.
+      const writableBuffer = this.writableBuffer;
+      if (!writableBuffer) return undefined;
+      let bytes =
+        (this._bytesWritten || 0) +
+        (this._httpState?.lastResponse?._framedPending || 0);
+      for (const el of writableBuffer) {
+        bytes +=
+          el.chunk instanceof Buffer
+            ? el.chunk.length
+            : Buffer.byteLength(el.chunk, el.encoding);
+      }
+      for (const item of this._pendingWrites || []) {
+        bytes +=
+          item.chunk instanceof Buffer
+            ? item.chunk.length
+            : Buffer.byteLength(item.chunk, item.encoding);
+      }
+      return bytes;
     },
     enumerable: true,
     configurable: true,
@@ -1776,6 +1788,11 @@ Socket.prototype.connect = function connect(...args) {
   this._peer = null;
   this._pendingWrites = [];
   this._finSent = false;
+  // Node gets a fresh handle per connect, so its byte counters restart
+  // (test-net-bytes-stats: a reconnected socket's bytesWritten must read
+  // the new connection's 6, not the cumulative 12+6).
+  this._bytesWritten = 0;
+  this._bytesRead = 0;
   this._localPortEphemeral = 0;
 
   // An adopted bound socket's local endpoint resolves synchronously:
@@ -2351,9 +2368,16 @@ Socket.prototype._deliverToPeer = function _deliverToPeer(chunk, encoding, cb) {
 };
 
 Socket.prototype._flushPendingWrites = function _flushPendingWrites() {
-  const pending = this._pendingWrites;
-  this._pendingWrites = [];
-  for (const item of pending) {
+  // Drain one item at a time, shifting from the live queue instead of
+  // detaching it wholesale: a write callback fired mid-flush must still
+  // see the not-yet-flushed bytes in bytesWritten (Node counts them via
+  // writableBuffer while the first write's callback runs —
+  // test-net-connect-buffer asserts a+b in the first write's callback).
+  // ponytail: same loop body, only the queue handling changes; items can
+  // only join _pendingWrites while connecting, and connecting is false
+  // by the time this runs, so the loop cannot grow.
+  while (this._pendingWrites.length > 0) {
+    const item = this._pendingWrites.shift();
     // A peer that died while an earlier flushed item was delivered
     // (e.g. the server destroyed its socket during the request head's
     // delivery) must error later items exactly like a post-connect
@@ -3113,7 +3137,6 @@ Server.prototype._acceptConnection = function _acceptConnection(
   // connect-then-destroy (atomic by design); only the normal tail defers.
   const emitClientConnect = () => {
     client.connecting = false;
-    client._flushPendingWrites();
     client._refreshTimeout();
     // Mirrors lib/net.js afterConnect: apply socket options to the handle
     // on connect. The handle may have been mocked by tests (e.g.
@@ -3154,6 +3177,13 @@ Server.prototype._acceptConnection = function _acceptConnection(
     // accepted sockets do not observably emit 'ready' after 'connection', so
     // only the client side gets it here.
     client.emit("ready");
+    // Pre-connect writes flush AFTER 'connect' + 'ready' (Node
+    // lib/net.js:2002-2003 emits both in afterConnect; the connecting
+    // write is re-issued by a once('connect') listener and its callback
+    // fires only once the write completes — so a write callback must
+    // see connected=true, test-net-connect-buffer:64). Flushing before
+    // the emits fired write callbacks with connected still false.
+    client._flushPendingWrites();
     // Mirrors lib/net.js: start the first read after connect, unless paused.
     // A paused socket never activates its read watcher (inactive handle).
     // Call read(0) rather than just setting the flag: the first read()

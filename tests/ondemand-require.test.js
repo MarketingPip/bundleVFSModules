@@ -735,8 +735,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-socket-options branch: Socket.setKeepAlive verbatim port
     // (object form, ms->s, 4-arg forward, dedupe) + setTypeOfService /
     // getTypeOfService (src/net.js + working note).
+    // fix/net-byteswritten-sync branch: bytesWritten sync accounting
+    // (getter sums _pendingWrites + writableBuffer + unconstructed
+    // guard, connect() resets the byte counters, pre-connect flush
+    // after 'connect'/'ready') (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-socket-options.md", "src/net.js"].sort(),
+      ["NOTES-net-byteswritten-sync.md", "src/net.js"].sort(),
     );
   });
 
