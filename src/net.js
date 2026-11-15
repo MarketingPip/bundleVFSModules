@@ -338,7 +338,23 @@ function errConnRefusedBare() {
   return errnoError("ECONNREFUSED", undefined, "", { errno: -111 });
 }
 function errConnRefusedPipe(path) {
-  // Matches Node: connecting to a missing pipe surfaces ENOENT.
+  // Matches Node (probed real Node v24.22.1): connecting to a missing pipe
+  // surfaces ENOENT, but a path that exists surfaces ECONNREFUSED — a plain
+  // file refuses (-111), and a socket with no listener refuses the same way.
+  // ponytail: fsExistsSync alone settles it; no isSocket() split is needed
+  // because the existing-path outcome is ECONNREFUSED either way, and the
+  // test accepts ENOTSOCK or ECONNREFUSED.
+  if (fsExistsSync(path)) {
+    return errnoError(
+      "ECONNREFUSED",
+      "connect",
+      `connect ECONNREFUSED ${path}`,
+      {
+        errno: -111,
+        path,
+      },
+    );
+  }
   return errnoError("ENOENT", "connect", `connect ENOENT ${path}`, {
     errno: -2,
     path,

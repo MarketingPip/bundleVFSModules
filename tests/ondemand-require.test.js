@@ -730,10 +730,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-listen-bind-validation branch: listen bind validation
     // (non-loopback/non-wildcard IP listen errors async EADDRNOTAVAIL)
     // (src/net.js + working note).
-    // docs/net-wave-n1-sync branch: net docs sync only (HITLIST row +
-    // measured-rates entry for wave N1, 87 -> 127 verified flips).
+    // fix/net-pipe-connect-errors branch: pipe connect distinguishes
+    // existing-path ECONNREFUSED from missing-path ENOENT
+    // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["parity/HITLIST.md", "parity/measured-rates.json"].sort(),
+      ["NOTES-net-pipe-connect-errors.md", "src/net.js"].sort(),
     );
   });
 
