@@ -1362,6 +1362,45 @@ function Socket(options = {}) {
     this._handle.fd = options.fd;
   }
 
+  // Node lib/net.js:674-684: options.onread delivers reads into a
+  // user-supplied buffer via callback instead of 'data' events. The
+  // shape is validated, not thrown on: a buffer (Uint8Array or a
+  // function returning one per read) plus a callback function.
+  const onread = options.onread;
+  if (
+    onread !== null &&
+    typeof onread === "object" &&
+    (onread.buffer instanceof Uint8Array ||
+      typeof onread.buffer === "function") &&
+    typeof onread.callback === "function"
+  ) {
+    this._onreadCallback = onread.callback;
+    this._onreadReading = true;
+    this._onreadPending = [];
+    this._onreadEofPending = false;
+    if (typeof onread.buffer === "function") {
+      this._onreadBufferGen = onread.buffer;
+      // Mirrors initSocketHandle (lib/net.js:344-353): resolve the first
+      // user buffer eagerly so the generator is called once up front.
+      const first = onread.buffer();
+      this._onreadBuffer = first instanceof Uint8Array ? first : null;
+    } else {
+      this._onreadBufferGen = null;
+      this._onreadBuffer = onread.buffer;
+    }
+    // ponytail: ceiling — if a generator's first buffer isn't a
+    // Uint8Array, Node keeps kBuffer truthy and still calls the callback
+    // with it; the shim can't deliver into a non-buffer, so onread is
+    // dropped and the socket falls back to 'data'. No vendored test
+    // covers a non-Uint8Array generator result.
+    if (this._onreadBuffer === null) {
+      this._onreadCallback = null;
+      this._onreadReading = false;
+      this._onreadPending = null;
+      this._onreadBufferGen = null;
+    }
+  }
+
   if (options.timeout) this.setTimeout(options.timeout);
 }
 Object.setPrototypeOf(Socket.prototype, Duplex.prototype);
@@ -2765,6 +2804,26 @@ Socket.prototype._read = function _read(_size) {
   this._keepLoopAlive();
 };
 
+// Node lib/net.js:1046-1073: with a user buffer, pause()/resume() stop
+// and restart the handle directly (not just the stream's flowing state),
+// so delivery must stop mid-chunk, not just between chunks.
+Socket.prototype.pause = function pause() {
+  if (this._onreadCallback) this._onreadReading = false;
+  return Duplex.prototype.pause.call(this);
+};
+
+Socket.prototype.resume = function resume() {
+  if (this._onreadCallback) {
+    this._onreadReading = true;
+    this._onreadDrain();
+  }
+  Duplex.prototype.resume.call(this);
+  // N2-17: drain the paused-read queue after the stream resumes flowing.
+  // (No-op for onread sockets: their chunks never enter that queue.)
+  this._drainPausedReads();
+  return this;
+};
+
 Socket.prototype._write = function _write(chunk, encoding, cb) {
   const peer = this._peer;
   if (!this._connected || !peer || peer.destroyed) {
@@ -3032,6 +3091,17 @@ Socket.prototype._receiveFromPeer = function _receiveFromPeer(buf) {
   // ponytail: ceiling — the queue is unbounded, like the kernel receive
   // buffer it stands in for; the virtual transport has no backpressure
   // to push back on the peer with.
+  // onread owns the socket's read path entirely: a paused onread socket
+  // must keep inbound chunks in the onread queue (_onreadPending), never
+  // divert them to the 'data' paused queue below — in real Node the bytes
+  // stay in the kernel and arrive via the callback on resume.
+  if (this._onreadCallback) {
+    this._bytesRead += buf ? buf.length : 0;
+    this._refreshTimeout();
+    if (this._onreadReading) this._onreadDrain();
+    if (buf && buf.length > 0) this._onreadDeliver(buf);
+    return;
+  }
   if (this._readableState.paused) {
     this._pausedReadQueue.push(buf);
     return;
@@ -3061,16 +3131,86 @@ Socket.prototype._drainPausedReads = function _drainPausedReads() {
   }
 };
 
-// resume() restarts the read watcher (lib/net.js pauseOnCreate /
-// lib/internal/stream_base_commons readStart on resume) — the held
-// chunks are read then, so they count and flow now.
-Socket.prototype.resume = function resume() {
-  Duplex.prototype.resume.call(this);
-  this._drainPausedReads();
-  return this;
+// Deliver one received chunk through the onread user buffer (Node:
+// onStreamRead, lib/internal/stream_base_commons.js:166). Splits the
+// chunk to the current user buffer's length, calls the callback with
+// (nread, userBuffer) — `this` is the socket, like Node's method call
+// — and fetches the next buffer from the generator after each call.
+// Returns false when delivery must stop (callback returned false, or
+// pause() ran inside the callback) with the undelivered remainder
+// queued for resume()/read().
+Socket.prototype._onreadDeliver = function _onreadDeliver(buf) {
+  let off = 0;
+  while (off < buf.length) {
+    if (!this._onreadReading) {
+      this._onreadPending.push(buf.subarray(off));
+      return false;
+    }
+    let userBuf = this._onreadBuffer;
+    if (userBuf.length === 0 && this._onreadBufferGen) {
+      const next = this._onreadBufferGen();
+      if (next instanceof Uint8Array) {
+        this._onreadBuffer = userBuf = next;
+      }
+    }
+    if (userBuf.length === 0) {
+      this._onreadPending.push(buf.subarray(off));
+      this._onreadReading = false;
+      return false;
+    }
+    const n = Math.min(userBuf.length, buf.length - off);
+    userBuf.set(buf.subarray(off, off + n));
+    off += n;
+    const cont = this._onreadCallback.call(this, n, userBuf) !== false;
+    if (this._onreadBufferGen) {
+      const next = this._onreadBufferGen();
+      if (next instanceof Uint8Array) this._onreadBuffer = next;
+    }
+    if (!cont) {
+      // Mirrors onStreamRead: callback false stops the handle
+      // (readStop); the rest stays queued until resume()/read().
+      this._onreadReading = false;
+      if (off < buf.length) this._onreadPending.push(buf.subarray(off));
+      return false;
+    }
+  }
+  return true;
+};
+
+// Drain queued onread bytes, then a held EOF, in arrival order.
+// Returns true if it delivered a held EOF (so the caller must not deliver
+// EOF a second time).
+Socket.prototype._onreadDrain = function _onreadDrain() {
+  if (!this._onreadCallback || !this._onreadReading) return false;
+  while (this._onreadPending.length > 0) {
+    if (!this._onreadDeliver(this._onreadPending.shift())) return false;
+  }
+  if (this._onreadEofPending) {
+    this._onreadEofPending = false;
+    this._deliverEof();
+    return true;
+  }
+  return false;
 };
 
 Socket.prototype._receiveEOF = function _receiveEOF() {
+  if (this.destroyed) return;
+  // With onread, EOF follows the data: while delivery is stopped, hold
+  // the EOF until resume() drains, or 'end' would fire before the last
+  // callbacks (real Node only sees UV_EOF after the final read). While
+  // reading is active, drain any queued bytes first so 'end' still
+  // follows the last callback.
+  if (this._onreadCallback) {
+    if (!this._onreadReading) {
+      this._onreadEofPending = true;
+      return;
+    }
+    if (this._onreadDrain()) return; // drain already delivered a held EOF
+  }
+  this._deliverEof();
+};
+
+Socket.prototype._deliverEof = function _deliverEof() {
   if (this.destroyed) return;
   this._eofReceived = true;
   // EOF behind queued paused data: deliver the data first — a push(null)

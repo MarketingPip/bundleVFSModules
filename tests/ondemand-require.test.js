@@ -734,7 +734,7 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // (_destroy delivers ECONNRESET to the peer, test-net-stream)
     // (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-destroy-rst.md", "src/net.js"].sort(),
+      ["NOTES-net-onread-static-buffer.md", "src/net.js"].sort(),
     );
   });
 
