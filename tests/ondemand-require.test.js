@@ -732,8 +732,11 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
     // fix/net-state-getters branch: net state getters — bufferSize gates
     // on _handle (Node lib/net.js:980) + _connecting legacy alias
     // (src/net.js + working note).
+    // fix/net-socket-options branch: Socket.setKeepAlive verbatim port
+    // (object form, ms->s, 4-arg forward, dedupe) + setTypeOfService /
+    // getTypeOfService (src/net.js + working note).
     expect(nonDist.sort()).toEqual(
-      ["NOTES-net-fd-adoption.md", "src/net.js"].sort(),
+      ["NOTES-net-socket-options.md", "src/net.js"].sort(),
     );
   });
 
