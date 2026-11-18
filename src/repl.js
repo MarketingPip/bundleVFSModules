@@ -25,6 +25,7 @@ import {
   _extensions,
 } from "./module";
 import * as acorn from "acorn";
+import * as walk from "acorn-walk";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -264,17 +265,286 @@ function toDynamicImport(line) {
   return `await import(/* ${line.trim()} */);`;
 }
 
-const HAS_AWAIT = /(?:^|[^.\w$])await[\s(]/;
+// Node lib/internal/repl/await.js, ported to the acorn + acorn-walk npm
+// packages (both direct deps, already imported by src/runtime/*).
+// Rewrites top-level await so it can run inside an async IIFE: top-level
+// declarations are hoisted (let/var) and rewritten to assignments, the
+// last expression statement becomes `return { value: (...) }` so the
+// caller can retrieve the awaited value without awaiting it twice
+// (a bare `await p` whose value IS a Promise must print as a Promise).
+// Returns null when there is no top-level await (or a top-level return),
+// throws a caret-formatted SyntaxError for unparseable input.
+// The old shim version wrapped code as `(async()=>{...})()` with NO
+// return — it always resolved to undefined (the value-drop the triage
+// correction names); the `new Function` validity check also swallowed
+// the caret error by returning null on SyntaxError.
 
-function processTopLevelAwait(code) {
-  if (!HAS_AWAIT.test(code)) return null;
+function isTopLevelDeclaration(state) {
+  return state.ancestors[state.ancestors.length - 2] === state.body;
+}
+
+const visitorsWithoutAncestors = {
+  ClassDeclaration(node, state, c) {
+    if (isTopLevelDeclaration(state)) {
+      state.prepend(node, `${node.id.name}=`);
+      state.hoistedDeclarationStatements.push(`let ${node.id.name}; `);
+    }
+
+    walk.base.ClassDeclaration(node, state, c);
+  },
+  ForOfStatement(node, state, c) {
+    if (node.await === true) {
+      state.containsAwait = true;
+    }
+    walk.base.ForOfStatement(node, state, c);
+  },
+  FunctionDeclaration(node, state) {
+    // No walk.base call (unlike the other visitors): the body of a
+    // nested function is not top-level, so its awaits must not set
+    // containsAwait. (Node's version keeps a vestigial `c` param.)
+    state.prepend(node, `this.${node.id.name} = ${node.id.name}; `);
+    state.hoistedDeclarationStatements.push(`var ${node.id.name}; `);
+  },
+  FunctionExpression: () => {},
+  ArrowFunctionExpression: () => {},
+  MethodDefinition: () => {},
+  AwaitExpression(node, state, c) {
+    state.containsAwait = true;
+    walk.base.AwaitExpression(node, state, c);
+  },
+  ReturnStatement(node, state, c) {
+    state.containsReturn = true;
+    walk.base.ReturnStatement(node, state, c);
+  },
+  VariableDeclaration(node, state, c) {
+    const variableKind = node.kind;
+    const isIterableForDeclaration = [
+      "ForOfStatement",
+      "ForInStatement",
+    ].includes(state.ancestors[state.ancestors.length - 2].type);
+
+    if (variableKind === "var" || isTopLevelDeclaration(state)) {
+      state.replace(
+        node.start,
+        node.start + variableKind.length + (isIterableForDeclaration ? 1 : 0),
+        variableKind === "var" && isIterableForDeclaration
+          ? ""
+          : "void" + (node.declarations.length === 1 ? "" : " ("),
+      );
+
+      if (!isIterableForDeclaration) {
+        for (const decl of node.declarations) {
+          state.prepend(decl, "(");
+          state.append(decl, decl.init ? ")" : "=undefined)");
+        }
+
+        if (node.declarations.length !== 1) {
+          state.append(node.declarations[node.declarations.length - 1], ")");
+        }
+      }
+
+      const variableIdentifiersToHoist = [
+        ["var", []],
+        ["let", []],
+      ];
+      function registerVariableDeclarationIdentifiers(node) {
+        switch (node.type) {
+          case "Identifier":
+            variableIdentifiersToHoist[variableKind === "var" ? 0 : 1][1].push(
+              node.name,
+            );
+            break;
+          case "ObjectPattern":
+            for (const property of node.properties) {
+              registerVariableDeclarationIdentifiers(
+                property.value || property.argument,
+              );
+            }
+            break;
+          case "ArrayPattern":
+            for (const element of node.elements) {
+              registerVariableDeclarationIdentifiers(element);
+            }
+            break;
+        }
+      }
+
+      for (const decl of node.declarations) {
+        registerVariableDeclarationIdentifiers(decl.id);
+      }
+
+      for (const [kind, identifiers] of variableIdentifiersToHoist) {
+        if (identifiers.length > 0) {
+          state.hoistedDeclarationStatements.push(
+            `${kind} ${identifiers.join(", ")}; `,
+          );
+        }
+      }
+    }
+
+    walk.base.VariableDeclaration(node, state, c);
+  },
+};
+
+const visitors = {};
+for (const nodeType of Object.keys(walk.base)) {
+  const callback = visitorsWithoutAncestors[nodeType] || walk.base[nodeType];
+  visitors[nodeType] = (node, state, c) => {
+    const isNew = node !== state.ancestors[state.ancestors.length - 1];
+    if (isNew) {
+      state.ancestors.push(node);
+    }
+    callback(node, state, c);
+    if (isNew) {
+      state.ancestors.pop();
+    }
+  };
+}
+
+// Whether `code` contains a `return` outside any function (a top-level
+// return is "Illegal return statement" as a script). Parses with
+// allowReturnOutsideFunction so the return is visible in the AST;
+// function boundaries are not descended into, so a `return` inside a
+// nested function does not count. A bare block / `if` at the top level
+// DOES count (V8 rejects `return` there too). Returns false when the
+// code does not parse — the caller then falls through to the normal
+// path, which reports its own error.
+function hasTopLevelReturn(code) {
+  let ast;
   try {
-    new Function(`return (async()=>{\n${code}\n})()`);
-  } catch (e) {
-    // eslint-disable-line no-new-func
-    if (e instanceof SyntaxError) return null;
+    ast = acorn.parse(code, {
+      ecmaVersion: "latest",
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+    });
+  } catch {
+    return false;
   }
-  return `(async()=>{\n${code}\n})()`;
+  const stack = [...ast.body];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node.type !== "string") continue;
+    if (node.type === "ReturnStatement") return true;
+    if (
+      node.type === "FunctionDeclaration" ||
+      node.type === "FunctionExpression" ||
+      node.type === "ArrowFunctionExpression"
+    )
+      continue;
+    for (const key of Object.keys(node)) {
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const c of child)
+          if (c && typeof c.type === "string") stack.push(c);
+      } else if (child && typeof child.type === "string") {
+        stack.push(child);
+      }
+    }
+  }
+  return false;
+}
+
+function processTopLevelAwait(src) {
+  const wrapPrefix = "(async () => { ";
+  const wrapped = `${wrapPrefix}${src} })()`;
+  const wrappedArray = wrapped.split("");
+  let root;
+  try {
+    root = acorn.parse(wrapped, { ecmaVersion: "latest" });
+  } catch (e) {
+    if (e.message.startsWith("Unterminated ")) throw new Recoverable(e);
+    // If the parse error is before the first "await", then use the execution
+    // error. Otherwise we must emit this parse error, making it look like a
+    // proper syntax error.
+    const awaitPos = src.indexOf("await");
+    const errPos = e.pos - wrapPrefix.length;
+    if (awaitPos > errPos) return null;
+    // Convert keyword parse errors on await into their original errors when
+    // possible.
+    if (
+      errPos === awaitPos + 6 &&
+      e.message.includes("Expecting Unicode escape sequence")
+    )
+      return null;
+    if (errPos === awaitPos + 7 && e.message.includes("Unexpected token"))
+      return null;
+    const line = e.loc.line;
+    const column = line === 1 ? e.loc.column - wrapPrefix.length : e.loc.column;
+    let message =
+      "\n" +
+      src.split("\n", line)[line - 1] +
+      "\n" +
+      " ".repeat(column) +
+      "^\n\n" +
+      e.message.replace(/ \([^)]+\)/, "");
+    // V8 unexpected token errors include the token string.
+    if (message.endsWith("Unexpected token"))
+      message +=
+        " '" + (src[e.pos - wrapPrefix.length] ?? src[src.length - 1]) + "'";
+    throw new SyntaxError(message);
+  }
+  const body = root.body[0].expression.callee.body;
+  const state = {
+    body,
+    ancestors: [],
+    hoistedDeclarationStatements: [],
+    replace(from, to, str) {
+      for (let i = from; i < to; i++) {
+        wrappedArray[i] = "";
+      }
+      if (from === to) str += wrappedArray[from];
+      wrappedArray[from] = str;
+    },
+    prepend(node, str) {
+      wrappedArray[node.start] = str + wrappedArray[node.start];
+    },
+    append(node, str) {
+      wrappedArray[node.end - 1] += str;
+    },
+    containsAwait: false,
+    containsReturn: false,
+  };
+
+  walk.recursive(body, state, visitors);
+
+  // Do not transform if
+  // 1. False alarm: there isn't actually an await expression.
+  // 2. There is a top-level return, which is not allowed.
+  if (!state.containsAwait || state.containsReturn) {
+    return null;
+  }
+
+  for (let i = body.body.length - 1; i >= 0; i--) {
+    const node = body.body[i];
+    if (node.type === "EmptyStatement") continue;
+    if (node.type === "ExpressionStatement") {
+      // For an expression statement of the form
+      // ( expr ) ;
+      // ^^^^^^^^^^   // node
+      //   ^^^^       // node.expression
+      //
+      // We do not want the left parenthesis before the `return` keyword;
+      // therefore we prepend the `return (` to `node`.
+      //
+      // On the other hand, we do not want the right parenthesis after the
+      // semicolon. Since there can only be more right parentheses between
+      // node.expression.end and the semicolon, appending one more to
+      // node.expression should be fine.
+      //
+      // We also create a wrapper object around the result of the expression.
+      // Consider an expression of the form `(await x).y`. If we just return
+      // this expression from an async function, the caller will await `y`, too,
+      // if it evaluates to a Promise. Instead, we return
+      // `{ value: ((await x).y) }`, which allows the caller to retrieve the
+      // awaited value correctly.
+      state.prepend(node.expression, "{ value: (");
+      state.prepend(node, "return ");
+      state.append(node.expression, ") }");
+    }
+    break;
+  }
+
+  return state.hoistedDeclarationStatements.join("") + wrappedArray.join("");
 }
 
 // ---------------------------------------------------------------------------
@@ -741,6 +1011,70 @@ export class REPLServerImpl extends Interface {
     this.lines.level = [];
   }
 
+  // The `with` scope for sandboxed eval: `has` claims every name in
+  // sloppy mode so undeclared assignments land on the context
+  // (vm-global semantics); in strict mode it answers honestly, or
+  // `x = 3` would set a proxy property instead of throwing
+  // ReferenceError (R1). Shared by the sync expression wrapper and
+  // the top-level-await evaluator below.
+  _scopeProxy() {
+    const strict = this.replMode === REPL_MODE_STRICT;
+    return new Proxy(this.context, {
+      has: strict ? (t, k) => k in t || k in globalThis : () => true,
+      get: (t, k) => (k in t ? t[k] : globalThis[k]),
+      set: (t, k, v) => {
+        t[k] = v;
+        return true;
+      },
+    });
+  }
+
+  // Evaluate ported top-level-await code (a statement list: hoisted
+  // declarations + the async IIFE as an expression statement). The
+  // sandboxed expression wrapper cannot take statements, so this is a
+  // separate evaluator, used only by the await branch of _defaultEval.
+  // useGlobal: indirect eval handles statement lists natively (Node
+  // parity: a hoisted `let` persists in the global lexical environment
+  // and a redeclaration throws by itself).
+  // Sandboxed: split the hoisted declarations from the IIFE, DROP the
+  // hoists, and return the IIFE's promise. Dropping is what makes the
+  // assignments land on the context: a hoisted `let k;` kept in the
+  // Function body would be function-local, so the IIFE's `k = ...`
+  // would update the local and be discarded. With the hoist dropped,
+  // the assignment resolves through the `with` proxy's set trap onto
+  // the context. The one thing dropping loses is redeclaration: a
+  // hoisted `let` name already on the context throws
+  // `Identifier 'x' has already been declared` first (Node's error for
+  // the `const k` redeclare case). Hoisted `var` names are freely
+  // redeclared, as in Node — no check. The Function is invoked with
+  // `.call(proxy, proxy)` so the transform's `this.foo = foo`
+  // (FunctionDeclaration visitor) lands on the context, not globalThis.
+  // ponytail: the check answers `n in this.context`, which also matches
+  // builtin libs and getters installed on the context (a `let Buffer`
+  // would falsely throw — Node allows a lexical to shadow a global
+  // property). No test covers it; a precise check needs a lexical
+  // store the shim does not have.
+  _evalAwait(code) {
+    if (this.useGlobal) return (0, eval)(code); // eslint-disable-line no-eval
+    const iifeStart = code.indexOf("(async () => { ");
+    const hoisted = iifeStart === -1 ? "" : code.slice(0, iifeStart);
+    const iife = iifeStart === -1 ? code : code.slice(iifeStart);
+    for (const m of hoisted.matchAll(/\blet ([^;]+);/g)) {
+      for (const name of m[1].split(",")) {
+        const n = name.trim();
+        if (n && n in this.context) {
+          throw new SyntaxError(`Identifier '${n}' has already been declared`);
+        }
+      }
+    }
+    const proxy = this._scopeProxy();
+    // eslint-disable-next-line no-new-func
+    return new Function(
+      "__ctx__",
+      `with(__ctx__){return (${iife.trim()});}`,
+    ).call(proxy, proxy);
+  }
+
   // ── Default eval ─────────────────────────────────────────────────────────
 
   async _defaultEval(code, context, file, cb) {
@@ -780,12 +1114,51 @@ export class REPLServerImpl extends Interface {
 
     if (code.trim() === "") return cb(null);
 
+    // Node lib/repl.js defaultEval — processTopLevelAwait (port of
+    // lib/internal/repl/await.js) rewrites top-level await into an
+    // async IIFE whose last expression statement becomes
+    // `return { value: (...) }`; the await branch below unwraps `.value`
+    // (Node lib/repl.js:612). A throw from the transform is the error:
+    // strip the awaits and re-parse — if the stripped code is itself
+    // unparseable AND recoverable, the repl buffers (Recoverable);
+    // otherwise the caret-formatted SyntaxError is returned as-is.
     let awaitPromise = false;
-    const wrapped = processTopLevelAwait(code);
-    if (wrapped) {
-      code = wrapped;
-      wrappedCmd = true;
-      awaitPromise = true;
+    if (code.includes("await")) {
+      try {
+        const potentialWrappedCode = processTopLevelAwait(code);
+        if (potentialWrappedCode !== null) {
+          code = potentialWrappedCode;
+          wrappedCmd = true;
+          awaitPromise = true;
+        } else if (hasTopLevelReturn(code)) {
+          // Node parses the untransformed code as a script next, where
+          // a top-level `return` is "Illegal return statement" — but
+          // the shim's expression wrapper would report "Unexpected
+          // token 'return'" instead. Surface the authentic V8 error:
+          // indirect-eval the code — the parse fails before anything
+          // executes, and the error's `at eval` first frame is what
+          // _handleError needs for the source/caret arrow.
+          try {
+            (0, eval)(code); // eslint-disable-line no-eval
+          } catch (e) {
+            return cb(e);
+          }
+        }
+      } catch (e) {
+        let recoverableError = false;
+        if (e.name === "SyntaxError") {
+          const fallbackCode = code.replace(/\bawait\b/g, "");
+          try {
+            acorn.parse(fallbackCode, { ecmaVersion: "latest" });
+          } catch (fallbackError) {
+            if (isRecoverableError(fallbackError, fallbackCode)) {
+              recoverableError = true;
+              return cb(new Recoverable(e));
+            }
+          }
+        }
+        if (!recoverableError) return cb(e);
+      }
     }
 
     // Execute code with context variables in scope via a with-block.
@@ -804,18 +1177,7 @@ export class REPLServerImpl extends Interface {
           // architecture ceiling (a real script eval would be needed to
           // fix it); not this lane.
           const strict = this.replMode === REPL_MODE_STRICT;
-          const proxy = new Proxy(this.context, {
-            // In sloppy mode `has` claims every name so undeclared
-            // assignments land on the context (vm-global semantics). In
-            // strict mode it must answer honestly, or `x = 3` would set
-            // a proxy property instead of throwing ReferenceError.
-            has: strict ? (t, k) => k in t || k in globalThis : () => true,
-            get: (t, k) => (k in t ? t[k] : globalThis[k]),
-            set: (t, k, v) => {
-              t[k] = v;
-              return true;
-            },
-          });
+          const proxy = this._scopeProxy();
           if (strict) {
             // The 'use strict' directive cannot be prefixed onto the
             // code string here: inside return(...) it is a SyntaxError.
@@ -842,13 +1204,16 @@ export class REPLServerImpl extends Interface {
     restoreRegExpStatics(this[kRegExpStatics]);
 
     try {
-      const raw = runFn(code);
+      const raw = awaitPromise ? this._evalAwait(code) : runFn(code);
 
       if (awaitPromise) {
+        // Node lib/repl.js:612 — unwrap `.value` exactly once. No
+        // second await: a value that IS a Promise (the last expression
+        // of `await p1, p2`) must print as a Promise, not as its
+        // resolution. The old code awaited twice, so every await
+        // expression printed its resolution (or undefined).
         try {
-          result = await raw;
-          if (result && typeof result.then === "function")
-            result = await result;
+          result = (await raw)?.value;
         } catch (e) {
           err = e;
         }
@@ -860,8 +1225,19 @@ export class REPLServerImpl extends Interface {
       }
     } catch (e) {
       err = e;
-      // Retry without wrapper on SyntaxError
-      if (wrappedCmd && e instanceof SyntaxError) {
+      // Retry without wrapper on SyntaxError — but not for the
+      // top-level-await redeclaration error: that error is already the
+      // real error (the retry would re-run the original input through
+      // the expression wrapper and clobber it with a wrapper
+      // SyntaxError about `const`/`let`).
+      if (
+        wrappedCmd &&
+        e instanceof SyntaxError &&
+        !(
+          awaitPromise &&
+          /^Identifier '.*' has already been declared$/.test(e.message)
+        )
+      ) {
         try {
           const r2 = runFn(input);
           err = null;
