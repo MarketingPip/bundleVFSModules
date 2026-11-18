@@ -236,10 +236,10 @@
       "total": 2
     },
     "worker_threads": {
-      "date": "2026-10-11",
-      "passed": 134,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
-      "total": 141
+      "date": "2026-11-18",
+      "passed": 141,
+      "source": "Wave W 2026-11-18: 137 -> 141 via PR #479 (96682075) + runner fix W-B (absolute --import path in fast-sweep.py/sweep-mjs.py run_one, flips process-cwd); wave-end sweep confirms 141/144 on main 96682075",
+      "total": 144
     },
     "zlib": {
       "date": "2026-11-18",

@@ -110,4 +110,4 @@ process-env).
 
 ## Ship
 
-- PR #___ / merge SHA ___
+- PR #479 / merge SHA 96682075 (squash-merged 2026-11-18)
