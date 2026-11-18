@@ -186,6 +186,18 @@ expected `.exit` third. Now guarded by `if (this.terminal)`. (The
   (124), mode, preview, require, tab-complete-import,
   tab-complete-require, top-level-await.
 - Footprint test: 29/29 PASS.
+- CI (PR #472, code SHA `77b832f6`): Parity **success**, build **failure**
+  at the "Run Tests" (jest) step — Build VFS skipped. No log via API
+  (logs endpoint returns an auth error). Local reproduction: full jest
+  suite serial (`--runInBand`, as CI runs it) on the branch shows ONLY
+  the 7 known pre-existing version-skew failures (constants,
+  perf_hooks, sys, oracle-export-surface — identical on pristine main
+  on host v24.22.1, pass on CI's pinned v24.20.0), 3060 passed; and
+  build-vfs / build-sandbox --check / build-runtime --check all exit 0
+  (acorn bundles into dist/repl.js cleanly). This matches the
+  documented transient pattern (Parity green + build red + no log via
+  API + local build clean), so retriggering with a footprint-preserving
+  notes-only commit.
 
 ## Blocked (needs the parent's require scope decision — NOT silently expanded)
 
