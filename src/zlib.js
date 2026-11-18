@@ -1315,11 +1315,62 @@ class MiniTransform extends MiniEmitter {
     this._wQueuedBytes = 0;
     this._needDrain = false;
     const self = this;
-    this._writableState = {};
+    // ponytail: native stream/promises finished() (eos) reads these states,
+    // not a plain stream property — lib/internal/streams/utils.js:
+    // isReadableErrored/isWritableErrored read stream._readableState.errored
+    // / stream._writableState.errored, isReadableNodeStream requires a
+    // _readableState on a stream that also has _writableState, and
+    // willEmitClose reads state.emitClose/autoDestroy/closed. Without them
+    // eos() takes its "!readable" immediate branch and resolves clean on
+    // nextTick before the async destroy(err) ever runs (the
+    // test-zlib-reject-garbage-after-end collect() shape). Fields are kept
+    // in sync at the transition points below; length/buffer/pendingcb are
+    // live getters over the MiniTransform bookkeeping.
+    this._writableState = {
+      ended: false,
+      finished: false,
+      errored: null,
+      errorEmitted: false,
+      closed: false,
+      emitClose: true,
+      autoDestroy: true,
+      destroyed: false,
+    };
     Object.defineProperty(this._writableState, "needDrain", {
       enumerable: true,
       get: () => self._needDrain,
     });
+    Object.defineProperty(this._writableState, "length", {
+      enumerable: true,
+      get: () => self._wQueuedBytes,
+    });
+    Object.defineProperty(this._writableState, "pendingcb", {
+      enumerable: true,
+      get: () => self._wqueue.length + (self._wprocessing ? 1 : 0),
+    });
+    this._readableState = {
+      ended: false,
+      endEmitted: false,
+      errored: null,
+      errorEmitted: false,
+      closed: false,
+      emitClose: true,
+      autoDestroy: true,
+      destroyed: false,
+    };
+    Object.defineProperty(this._readableState, "length", {
+      enumerable: true,
+      get: () => self._rlen,
+    });
+    // ponytail: NO `buffer` getter here on purpose. It is not read by
+    // eos()/finished() (the L4 mechanism), and exposing the live _rbuf
+    // array changes test-zlib-brotli-16GB (NO-FIX) from a fast TypeError
+    // failure into an unbounded setImmediate spin: the test waits for the
+    // readable buffer to reach 4 chunks (the 64 KiB HWM), which the
+    // passthrough stub never fills (it echoes the 13 KiB input as 1 chunk).
+    // The test still fails either way; a hang is strictly worse than a
+    // fast failure for every sweep. Re-add `buffer` (one getter over _rbuf)
+    // if a future lane ships a real streaming decoder.
     this._onNewListener = (ev) => {
       if (ev === "data" && !this._flowing) {
         this._flowing = true;
@@ -1346,6 +1397,19 @@ class MiniTransform extends MiniEmitter {
   }
   get readableLength() {
     return this._rlen;
+  }
+  // Node surface (lib/internal/streams/readable.js, writable.js, utils.js):
+  // readableEnded is endEmitted, not ended; errored/readableErrored/
+  // writableErrored read the states' .errored; closed reads the readable
+  // state's .closed. eos()/finished() consult all of these.
+  get readableEnded() {
+    return this._readableState.endEmitted;
+  }
+  get errored() {
+    return this._readableState.errored ?? this._writableState.errored ?? null;
+  }
+  get closed() {
+    return this._readableState.closed;
   }
 
   _normalizeChunk(chunk, encoding) {
@@ -1406,6 +1470,7 @@ class MiniTransform extends MiniEmitter {
     }
     if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
     this._wended = true;
+    this._writableState.ended = true;
     if (cb) this._endCb = cb;
     queueMicrotask(() => this._pumpWrites());
     return this;
@@ -1424,6 +1489,7 @@ class MiniTransform extends MiniEmitter {
       }
       if (this._wended && !this._wfinished) {
         this._wfinished = true;
+        this._writableState.finished = true;
         this._wprocessing = true;
         queueMicrotask(() => {
           if (this._destroyed) {
@@ -1487,6 +1553,7 @@ class MiniTransform extends MiniEmitter {
     if (this._destroyed) return false;
     if (chunk === null || chunk === undefined) {
       this._eof = true;
+      this._readableState.ended = true;
       this._maybeEmitEnd();
       return false;
     }
@@ -1525,6 +1592,7 @@ class MiniTransform extends MiniEmitter {
       !this._destroyed
     ) {
       this._endEmitted = true;
+      this._readableState.endEmitted = true;
       queueMicrotask(() => {
         if (this._destroyed) return;
         this.emit("end");
@@ -1537,7 +1605,12 @@ class MiniTransform extends MiniEmitter {
   _emitClose() {
     if (this._closeEmitted) return;
     this._closeEmitted = true;
-    queueMicrotask(() => this.emit("close"));
+    queueMicrotask(() => {
+      // Node sets state.closed in emitCloseNT just before emitting 'close'.
+      this._readableState.closed = true;
+      this._writableState.closed = true;
+      this.emit("close");
+    });
   }
 
   read(n) {
@@ -1604,11 +1677,25 @@ class MiniTransform extends MiniEmitter {
   destroy(err) {
     if (this._destroyed) return this;
     this._destroyed = true;
+    this._readableState.destroyed = true;
+    this._writableState.destroyed = true;
     this._wqueue = [];
     this._wQueuedBytes = 0;
     this._needDrain = false;
     this._rbuf = [];
-    if (err) queueMicrotask(() => this.emit("error", err));
+    if (err) {
+      // Node's destroy() records the error on BOTH states, first error
+      // wins (lib/internal/streams/destroy.js: checkError) — eos() reads
+      // exactly these fields, so finished() rejects on close even when it
+      // attaches after the error event already fired.
+      if (!this._readableState.errored) this._readableState.errored = err;
+      if (!this._writableState.errored) this._writableState.errored = err;
+      queueMicrotask(() => {
+        this._readableState.errorEmitted = true;
+        this._writableState.errorEmitted = true;
+        this.emit("error", err);
+      });
+    }
     this._emitClose();
     return this;
   }
