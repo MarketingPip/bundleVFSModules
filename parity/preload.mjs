@@ -332,6 +332,29 @@ function getWrappedCrypto(request, parent, isMain) {
   return wrappedCrypto;
 }
 Module._load = function (request, parent, isMain) {
+  // ponytail: under `--import`, the ESM translator pre-creates the CJS
+  // entry via cjsEmplaceModuleCacheEntry(filename) with parent undefined
+  // (translators.js:289,404) BEFORE _load is called, and native _load
+  // returns that cached instance — so the parent argument never reaches
+  // a constructor, and the native `parent` getter keeps reading the
+  // translator's undefined instead of null
+  // (test-module-parent-deprecation; run_main passes null explicitly).
+  // Drop the translator's entry so native _load constructs a fresh
+  // Module with parent null (mirroring run_main): the constructor sets
+  // both parent slots directly, so no deprecation warning fires (a
+  // public `cached.parent = null` set would consume the test's one
+  // DEP0144 warning — proven: it flips test-repl-options.js and
+  // test-process-env-deprecation.js). Side benefit: the fresh module
+  // also gets `id === '.'` and `process.mainModule` like a plain
+  // run_main entry, instead of the translator's full-path id. The
+  // translator still mirrors exports onto its orphaned instance after
+  // _load returns, so the ESM namespace is unaffected. Regular
+  // require() calls always pass a real parent with isMain false, so
+  // they are untouched.
+  if (isMain && parent === undefined) {
+    parent = null;
+    delete Module._cache[request];
+  }
   const parentFile = parent?.filename ?? "";
   // Buffer target: redirect require('crypto') from the vendored test tree
   // to the wrapped version so randomBytes returns polyfill Buffers.
