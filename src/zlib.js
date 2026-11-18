@@ -26,7 +26,7 @@
 //   performed (documented gap; the `brotli` npm package was evaluated and
 //   rejected — its encoder silently fails on some inputs — and no pure-JS
 //   brotli compressor exists at all).
-import { decompress as brochaDecompress } from "brocha";
+import { decompress as brochaDecompress } from "./vendor/brocha/dist/index.js";
 // - Stream semantics are provided by a minimal built-in Transform
 //   implementation (no node:stream import, so this stays browser-loadable).
 
