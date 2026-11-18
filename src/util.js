@@ -592,6 +592,34 @@ function reindentBridgeResult(ctx, s) {
   return s.replace(/\n/g, `\n${pad}`);
 }
 
+/**
+ * ponytail: normalize the `[Promise]` tag the native bridge adds to Promise
+ * subclasses. Node v24.20.0 `getPrefix` (lib/internal/util/inspect.js:775-795)
+ * suppresses the tag when the constructor name already contains "Promise"
+ * followed by an uppercase letter or end-of-name (`PromiseSubclass`,
+ * `MyPromise`); the host bridge (v24.22.1+) always tags subclasses, so the
+ * shim would print `PromiseSubclass [Promise] { <pending> }` where v24.20.0
+ * prints `PromiseSubclass { <pending> }`. Reuses the shim's own `getPrefix`
+ * (the v24.20.0 rule) to decide. Plain `Promise` never carries the tag on
+ * either version, so it passes through untouched, and on a v24.20.0 host the
+ * bridge output has no tag to strip (no-op). The bridge never ANSI-styles
+ * the constructor/tag (probe: colored output styles only the state), so the
+ * prefix is plain text; the match tolerates ANSI escapes defensively.
+ * Ceiling: only the leading ` [Promise] ` token is stripped; nested values
+ * are untouched.
+ * @param {string} out
+ */
+function normalizeBridgePromiseTag(out) {
+  const m =
+    /^((?:\u001b\[[0-9;]*m)*[^\s\u001b\[]+(?:\u001b\[[0-9;]*m)*) \[Promise\] /.exec(
+      out,
+    );
+  if (m === null) return out;
+  const ctor = m[1].replace(/\u001b\[[0-9;]*m/g, "");
+  if (getPrefix(ctor, "Promise", "Promise").includes("[Promise]")) return out;
+  return out.slice(0, m[1].length) + out.slice(m[1].length + " [Promise]".length);
+}
+
 // ---------------------------------------------------------------------------
 // toUSVString
 // ---------------------------------------------------------------------------
@@ -2565,7 +2593,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           compact: ctx.options.compact,
           showHidden: ctx.options.showHidden,
         });
-        return reindentBridgeResult(ctx, nativeOut);
+        return reindentBridgeResult(ctx, normalizeBridgePromiseTag(nativeOut));
       } catch {
         /* fall through */
       }
