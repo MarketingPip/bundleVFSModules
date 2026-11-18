@@ -98,5 +98,5 @@ window-size).
 
 ## Ship
 
-- PR #___
-- Merge SHA: ___
+- PR #500
+- Merge SHA: c72e53bf

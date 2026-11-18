@@ -1,6 +1,6 @@
 # NOTES-http2-array-headers-v6.md — H2-V6: array-form headers + rawHeaders
 
-Ship section: PR #___ / merge SHA ___ (docs sync fills it).
+Ship section: PR #498 / merge SHA 2ea75e5c.
 
 ## What changed
 

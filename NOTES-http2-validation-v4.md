@@ -1,6 +1,6 @@
 # NOTES — http2 validation hardening (H2-V4)
 
-Ship: PR #___ / merge SHA ___ (docs sync fills this in).
+Ship: PR #499 / merge SHA b5770fa5.
 Base: `2ea75e5c` (PR #498, H2-V6). Banked count at base: **50/277**.
 Result: **78/277** (+28 flips, 0 regressions).
 

@@ -1,6 +1,6 @@
 # H2-V1 — http2 request-body delivery
 
-Ship: PR #___ / merge SHA ___
+Ship: PR #496 / merge SHA c7cc2bb5
 
 ## Problem
 
