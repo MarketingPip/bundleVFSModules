@@ -148,8 +148,8 @@ class.
 ## Ship
 
 - Branch: `fix/repl-setup-history`
-- PR #___
-- Merge SHA: ___
+- PR #471
+- Merge SHA: c76a10f0 (squash-merged 2026-11-18)
 - Repl count: 91/102 on main after R1 (90 glob-pass in sweep;
   reverse-search passes isolated but flakes in sweep, `test-repl.js`
   fails) -> 93/102 after this merge (92 glob-pass in sweep).

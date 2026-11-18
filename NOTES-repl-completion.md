@@ -257,7 +257,7 @@ and the port introduces ZERO new regressions under the gate.
 
 ## Ship
 
-- PR #___ / merge SHA: ___ (fill at merge time)
+- PR #476 / merge SHA: d1584ac8 (squash-merged 2026-11-18)
 - Branch: `fix/repl-completion`, base `95671045` (rebased from
   `99fdc0cc` after R4c #475 merged; one conflict in the constructor,
   resolved keeping R4c's `breakEvalOnSigint` line + this lane's

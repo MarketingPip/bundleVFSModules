@@ -137,7 +137,7 @@ through that arrow).
 
 ## Ship
 
-- PR #___ / merge SHA: ___
+- PR #473 / merge SHA: af051744 (squash-merged 2026-11-18; R4b await.js port)
 - Branch: `fix/repl-top-level-await` (base `9b1ba043`).
 - Files: `src/repl.js` only + this NOTES file.
 - Count: repl stays **94/102** (no flip; convergent).
