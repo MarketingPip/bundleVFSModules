@@ -26,8 +26,13 @@
 //   IP[:port] servers verbatim, but raw UDP/TCP DNS is impossible in the
 //   browser, so IP[:port] entries cannot be used as transports. getServers()
 //   always echoes back exactly what was set.
-// - dns.resolveAny() is ENOTIMP in real Node too (c-ares deprecated ANY
-//   queries); the shim mirrors that.
+// - dns.resolveAny() is ENOTIMP here, but NOT because real Node does it
+//   too: Node's lib/internal/dns/utils.js:311 defines
+//   Resolver.prototype.resolveAny = resolver('queryAny') — a real query.
+//   The shim returns ENOTIMP because public DoH resolvers refuse ANY per
+//   RFC 8482 (Cloudflare answers NOTIMP, Google answers NOERROR with a
+//   single HINFO record instead of real records), so no DoH implementation
+//   can return the mixed record set ANY promises.
 // - DNSSEC is validated by delegation (deliberate divergence from
 //   node:dns, which never validates). Queries go to validating DoH
 //   resolvers (Cloudflare, Google) WITHOUT the CD (checking-disabled) bit,
@@ -851,9 +856,11 @@ async function lookupImpl(state, hostname, options) {
         : state.resultOrder);
 
   // 0. Falsy hostname (DEP0118 path): getaddrinfo(NULL) → { address: null, family: 4 }.
+  // With all:true real Node returns [] for a falsy hostname (probe-verified
+  // for false, '', null, undefined), not [{ address: null, family: 4 }].
   if (hostname == null) {
     const rec = { address: null, family: 4 };
-    return options.all ? [rec] : rec;
+    return options.all ? [] : rec;
   }
 
   // 1. Literal IPs resolve locally, family is ignored (matches Node).
@@ -1320,7 +1327,10 @@ export function resolve(hostname, rrtype, callback) {
     TLSA: resolveTlsa,
   };
   if (t === "ANY") {
-    // Real Node: resolveAny is ENOTIMP (c-ares deprecated ANY queries).
+    // ENOTIMP is the shim's honest DoH answer, not Node's: real Node sends
+    // a real queryAny (lib/internal/dns/utils.js:311), but public DoH
+    // resolvers refuse ANY per RFC 8482 (Cloudflare NOTIMP, Google
+    // HINFO-only), so no DoH implementation can return the mixed set.
     asyncTracked(defaultState, cb, async (done) =>
       done(dnsError("queryAny", NOTIMP, h)),
     );
@@ -1361,7 +1371,8 @@ export function reverse(ip, callback) {
 }
 
 // ---------------------------------------------------------------------------
-// Resolver class (mirrors node:dns Resolver minus the C++ channel handle)
+// Resolver class (mirrors node:dns Resolver, with a JS stand-in for the
+// C++ channel handle — see the constructor)
 // ---------------------------------------------------------------------------
 
 const MAX_TIMEOUT = 2147483647;
@@ -1449,6 +1460,17 @@ export class Resolver {
   constructor(options) {
     const opts = validateResolverOptions(options);
     this._servers = DEFAULT_DOH_SERVERS.slice();
+    // JS stand-in for the C++ ChannelWrap handle: Node's
+    // lib/internal/dns/utils.js [kInitializeHandle] sets
+    // `this._handle = new ChannelWrap(...)`, and getServers() reads
+    // `this._handle.getServers() || []`. A browser has no channel, so the
+    // handle is a plain object delegating to this resolver's own state —
+    // which also lets callers replace `_handle.getServers`, as real Node's
+    // test-dns-get-server does.
+    this._handle = {
+      getServers: () => this._servers.slice(),
+      setServers: (servers) => this.setServers(servers),
+    };
     this._timeout = opts.timeout;
     this._tries = opts.tries;
     this._maxTimeout = opts.maxTimeout;
@@ -1458,7 +1480,7 @@ export class Resolver {
   }
 
   getServers() {
-    return this._servers.slice();
+    return this._handle.getServers() || [];
   }
 
   setServers(servers) {
