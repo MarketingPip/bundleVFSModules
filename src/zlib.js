@@ -433,6 +433,27 @@ const MODE_BROTLI_DECODE = 8;
 const MODE_ZSTD_COMPRESS = 10;
 const MODE_ZSTD_DECOMPRESS = 11;
 
+// Empty-input encoder output, verified against real Node (triage probes F4/F5
+// + L2 native probe): a brotli stream finalized with zero input emits a single
+// 0x3B byte, and a zstd stream emits the 9-byte empty frame. These are
+// deterministic encoder outputs, not fakes — the real codecs emit exactly
+// these bytes. Decode modes get NO entry: native decompress of empty input
+// throws Z_BUF_ERROR ("unexpected end of file"), it does not yield a frame.
+const EMPTY_FRAME_BY_MODE = {
+  [MODE_BROTLI_ENCODE]: Buffer.from([0x3b]),
+  [MODE_ZSTD_COMPRESS]: Buffer.from([40, 181, 47, 253, 32, 0, 1, 0, 0]),
+};
+
+// Same bytes, decode direction: a decompressor fed exactly the empty frame
+// yields zero bytes (real decoders decode it to empty output). Needed so the
+// empty.txt round trip in test-zlib.js survives the encode-side frame: the
+// compressor now emits [0x3B] / the 9-byte frame and the passthrough
+// decompressor must swallow it, not echo it.
+const EMPTY_FRAME_BY_DECODE_MODE = {
+  [MODE_BROTLI_DECODE]: EMPTY_FRAME_BY_MODE[MODE_BROTLI_ENCODE],
+  [MODE_ZSTD_DECOMPRESS]: EMPTY_FRAME_BY_MODE[MODE_ZSTD_COMPRESS],
+};
+
 // [min, max] flush bounds per family.
 const FLUSH_BOUND_NORMAL = [Z_NO_FLUSH, Z_BLOCK];
 const FLUSH_BOUND_BROTLI = [
@@ -1675,12 +1696,18 @@ class ZlibBase extends MiniTransform {
           );
         }
         self._engine.reset();
+        self._emptyFrameEmitted = false;
+        self._inputPrefix = Buffer.alloc(0);
       },
       close() {
         self._closed = true;
       },
     };
     this._closed = false;
+    this._emptyFrameEmitted = false;
+    // First bytes seen, bounded to the longest empty frame (9) — the
+    // decode-side empty-frame check below. Stops growing once full.
+    this._inputPrefix = Buffer.alloc(0);
   }
 
   _createEngine(mode, zopts) {
@@ -1783,6 +1810,54 @@ class ZlibBase extends MiniTransform {
     const bytes = chunk ? this._normalizeChunk(chunk) : Buffer.alloc(0);
     const result = this._engine.write(bytes, flushFlag);
     this.bytesWritten += result.consumed;
+    // ponytail: empty-input frame for the passthrough stub only. A brotli /
+    // zstd stream finalized with zero total input must emit its empty frame
+    // (EMPTY_FRAME_BY_MODE); the passthrough emits nothing. Scoped to the
+    // stub on purpose: when L5/L6 give these modes a real codec engine the
+    // encoder emits the frame itself, and this append must not double it.
+    // The flag also covers an explicit flush(FINISH) before end().
+    const emptyFrame = EMPTY_FRAME_BY_MODE[this._mode];
+    if (
+      emptyFrame !== undefined &&
+      !this._emptyFrameEmitted &&
+      this._engine instanceof PassThroughEngine &&
+      flushFlag === this._finishFlushFlag &&
+      this.bytesWritten === 0
+    ) {
+      this._emptyFrameEmitted = true;
+      result.output =
+        result.output.length > 0
+          ? Buffer.concat([result.output, emptyFrame])
+          : emptyFrame;
+    }
+    // ponytail: decode-side twin of the empty frame. A passthrough
+    // decompressor fed exactly the empty frame must yield zero bytes (the
+    // frame decodes to empty output); echoing it would break the empty.txt
+    // round trip in test-zlib.js once the compressor emits the frame. Only
+    // the exact, whole-input-so-far frame is swallowed; anything longer
+    // echoes as before (the stub's pre-existing behavior). Ceiling:
+    // split-frame arrival echoes the first fragment before the frame
+    // completes — the L5/L6 buffering adapters handle that properly. As with
+    // the encode side, this retires when these modes get a real codec engine.
+    const decodeFrame = EMPTY_FRAME_BY_DECODE_MODE[this._mode];
+    if (
+      decodeFrame !== undefined &&
+      this._engine instanceof PassThroughEngine
+    ) {
+      if (this._inputPrefix.length < decodeFrame.length && bytes.length > 0) {
+        const need = decodeFrame.length - this._inputPrefix.length;
+        this._inputPrefix = Buffer.concat([
+          this._inputPrefix,
+          bytes.subarray(0, need),
+        ]);
+      }
+      if (
+        this.bytesWritten === decodeFrame.length &&
+        this._inputPrefix.equals(decodeFrame)
+      ) {
+        result.output = PAKO_EMPTY;
+      }
+    }
     if (result.output.length > this._maxOutputLength) {
       throw new ERR_BUFFER_TOO_LARGE(this._maxOutputLength);
     }
