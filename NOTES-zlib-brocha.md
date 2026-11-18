@@ -213,3 +213,49 @@ multi-metablock, 200 KB zeroes):
   Treated as a slow-run outlier, not a hang.
 - Rebased onto main `41a4e4cb` (Z4) cleanly; re-verified on the rebased head:
   3 flips [0,0], 4 regressions all exit 1, guards all 0, jest 40/40.
+
+## Rework — vendor brocha, rebase onto Z6 (2026-11-18)
+
+- **CI failure, cause proven:** PR #466's first CI run went build=failure on
+  the jest step. The footprint test fails on the branch with strays EXACTLY
+  `["package.json"]` — the `"brocha": "0.1.1"` dep line. Full-suite
+  adjudication on that head: 3059 passed / 8 failed = the 7 known host-skew
+  failures (constants ×3, oracle util+crypto ×2, perf_hooks ×1, sys ×1)
+  PLUS the footprint test — the footprint failure was the ONLY new failure.
+  The L0 brief and lane template were wrong to say "add the dep by hand";
+  the footprint rule (PR #429) forbids `package.json` outright.
+- **Fix (this rework):** brocha 0.1.1 vendored under `src/vendor/brocha/`
+  (upstream `dist/index.js` verbatim, non-minified ESM build, + LICENSE +
+  own README.md with provenance/regeneration; no patch; the
+  `//# sourceMappingURL=` line stripped, maps not vendored). Import in
+  `src/zlib.js` repointed to `./vendor/brocha/dist/index.js` (same relative
+  form as Z6's zstdify imports). `package.json` reverted — byte-identical
+  to main (`git diff origin/main -- package.json` empty). Precedent: Z6's
+  `src/vendor/zstdify/` (its README flagged the same conflict first).
+  `.gitignore` hides `dist/` paths, so the vendored file needed
+  `git add -f` (explicit paths only).
+- **Rebase onto `12532c04` (Z6, PR #467):** 2 conflicts in `src/zlib.js`,
+  both resolved keeping both engines — header comment (Zstd real via
+  vendored zstdify + Brotli decompression real via vendored brocha +
+  Brotli compression still a stub) and the `_createEngine` default comment
+  (Brotli encode falls through; Brotli decode and Zstd have real engines
+  above). New head `c7b71ad8` on top of `12532c04`.
+- **Count path, corrected:** main is already 52/65 (Z6's 6 flips incl.
+  `test-zlib-zstd.js`, parent-verified on live main) — the addendum above
+  predates Z6's merge. Z5's merge dips it 52 → 51; `invalid-input` (+1,
+  brotli half via this lane + zstd half via Z6) brings it back to 52 at
+  the wave end. `reject-garbage-after-end` is NOT claimed here: its zstd
+  halves all pass post-Z6 (incl. stream-collect-reject), so after this
+  lane it is blocked only on its brotli half — the wave-end sweep
+  adjudicates whether it flips (its brotli case may use stub-compressed
+  input like type-error/premature-end).
+- **Re-verified on the rebased head `c7b71ad8`:** footprint test PASS;
+  3 flips [0,0] (maxOutputLength, brotli-kmaxlength-rangeerror,
+  brotli-from-brotli); 4 regressions all exit 1; guards const/crc32/
+  zero-byte/from-concatenated-gzip/zstd-pledged-src-size all 0; Z6
+  cross-lane guards (all 6 zstd flips) still 0; jest zlib suites 40/40;
+  `node src/build-vfs.mjs` exit 0; `node --check src/zlib.js` clean.
+  Full suite (`--runInBand`, rebased head): 3060 passed / 7 failed / 1
+  skipped — the 7 are EXACTLY the known host-skew failures (constants ×3,
+  oracle util+crypto ×2, perf_hooks ×1, sys ×1); the footprint test is
+  green and there are zero other failures.
