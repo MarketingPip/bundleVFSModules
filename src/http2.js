@@ -1973,12 +1973,7 @@ export function connect(authority, options, listener) {
     options = {};
   }
   options = options || {};
-  let url;
-  try {
-    url = new URL(authority);
-  } catch {
-    throw http2Error("ERR_INVALID_URL", `Invalid URL: ${authority}`);
-  }
+  const url = normalizeConnectAuthority(authority, options);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw http2Error(
       "ERR_HTTP2_UNSUPPORTED_PROTOCOL",
@@ -1996,10 +1991,89 @@ export function connect(authority, options, listener) {
   if (options.settings) session.settings(options.settings);
   if (listener) session.once("connect", listener);
   queueMicrotask(() => {
+    // TLS/plain mismatch: real Node fails the handshake when an encrypted
+    // client connects to a plain server (probe-proven: ECONNRESET, then
+    // 'close'). Checked against an exactly-registered port only — the
+    // registry's first-server fallback must not misfire here.
+    const server = serverRegistry.has(session._virtualPort)
+      ? serverRegistry.get(session._virtualPort)
+      : undefined;
+    if (
+      server &&
+      (server instanceof Http2SecureServer) !== session.encrypted
+    ) {
+      const err = http2Error("ECONNRESET", "read ECONNRESET");
+      err.code = "ECONNRESET";
+      err.errno = -104;
+      err.syscall = "read";
+      session.destroy(err);
+      return;
+    }
     session._connecting = false;
     session.emit("connect", session, null);
   });
   return session;
+}
+
+// Authority normalization, mirroring Node lib/internal/http2/core.js
+// connect(): a string or URL instance is parsed as a URL; a url.parse()
+// result or plain { port[, hostname|host][, protocol] } object is built
+// into one from its fields (protocol falls back to options.protocol,
+// then 'https:').
+function normalizeConnectAuthority(authority, options) {
+  if (typeof authority === "string" || authority instanceof URL) {
+    try {
+      return new URL(authority);
+    } catch {
+      throw http2Error("ERR_INVALID_URL", `Invalid URL: ${authority}`);
+    }
+  }
+  if (authority && typeof authority === "object") {
+    const protocol = authority.protocol || options.protocol || "https:";
+    if (protocol !== "http:" && protocol !== "https:") {
+      throw http2Error(
+        "ERR_HTTP2_UNSUPPORTED_PROTOCOL",
+        `The protocol "${protocol}" is not supported`,
+      );
+    }
+    // Node's port line is `'' + (authority.port !== '' ? authority.port :
+    // (authority.protocol === 'http:' ? 80 : 443))` — a url.parse() result
+    // or plain object with no port yields the strings "null"/"undefined",
+    // which net.connect rejects synchronously (probe-proven:
+    // ERR_SOCKET_BAD_PORT, "Port should be >= 0 and < 65536. Received
+    // type string ('null').").
+    let port;
+    if (authority.port === "") {
+      port = authority.protocol === "http:" ? 80 : 443;
+    } else if (authority.port !== undefined && authority.port !== null) {
+      port = authority.port;
+    } else {
+      throw http2Error(
+        "ERR_SOCKET_BAD_PORT",
+        `Port should be >= 0 and < 65536. Received type string ('${authority.port}').`,
+      );
+    }
+    let hostname = authority.hostname;
+    if (hostname === undefined || hostname === null) {
+      const host = authority.host;
+      if (typeof host === "string") {
+        // Split "name", "name:port", "[::1]", "[::1]:port".
+        const m = host.match(/^(?:\[([^\]]+)\]|([^:]+))(?::(\d+))?$/);
+        if (m) hostname = m[1] || m[2];
+      }
+    }
+    hostname = hostname || "localhost";
+    if (hostname[0] === "[") hostname = hostname.slice(1, -1);
+    const hostport = hostname.includes(":")
+      ? `[${hostname}]:${port}`
+      : `${hostname}:${port}`;
+    try {
+      return new URL(`${protocol}//${hostport}`);
+    } catch {
+      throw http2Error("ERR_INVALID_URL", `Invalid URL: ${authority}`);
+    }
+  }
+  throw http2Error("ERR_INVALID_URL", `Invalid URL: ${authority}`);
 }
 
 export function performServerHandshake(socket, options) {
