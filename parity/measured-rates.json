@@ -212,9 +212,9 @@
       "total": 16
     },
     "util": {
-      "date": "2026-10-11",
-      "passed": 28,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-18",
+      "passed": 31,
+      "source": "Wave U 2026-11-18: 28 -> 31 via PR #483 (82257ac4), PR #484 (cec33d53), PR #485 (50bee41f); wave-end sweep confirms 31/31 on main 50bee41f",
       "total": 31
     },
     "v8": {

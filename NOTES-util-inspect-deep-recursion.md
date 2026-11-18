@@ -305,5 +305,5 @@ Margin over the 500 bar: +504. Shallow case unchanged:
 
 ## Ship
 
-- PR #___
-- Merge SHA: ___
+- PR #485
+- Merge SHA: 50bee41f
