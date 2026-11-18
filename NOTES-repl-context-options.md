@@ -107,4 +107,4 @@ Three fixes, all in `src/repl.js` (+290/−8):
 ## Ship
 
 - Branch: `fix/repl-context-options`
-- PR #___ / Merge SHA: ___ (fill at ship time)
+- PR #470 / Merge SHA: 92b5e369 (squash-merged 2026-11-18)

@@ -235,7 +235,7 @@ preserving the `code`/`requireStack` props block only makes sense once
 
 ## Ship
 
-- PR #___ / merge SHA: (fill at merge time).
+- PR #472 / merge SHA: 9b1ba043 (squash-merged 2026-11-18).
 - Commits: `f0da1ae3` (legacy-stream, positional start, sync prompt,
   multiline prompt, finish arity), `ff7439c3` (Acorn recoverability,
   object-wrap, let persistence, RegExp statics, DEP0185,

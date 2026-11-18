@@ -91,6 +91,6 @@ NOTES file).
 
 ## Ship
 
-- PR #___ / merge SHA: ___ (fill at ship time)
+- PR #469 / merge SHA: 48ec4216 (squash-merged 2026-11-18)
 - Repl: 80 → 89/102 (9 flips; the 2 programmatic-history tests are owed
   to a setupHistory-port lane).

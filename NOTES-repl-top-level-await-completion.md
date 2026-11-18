@@ -239,7 +239,7 @@ test-repl.js) exit 0 on the merged head.
 
 ## Ship
 
-- PR #___ / merge SHA: ___
+- PR #475 / merge SHA: 95671045 (squash-merged 2026-11-18)
 - Branch: `fix/repl-top-level-await-completion`
 - Commits: `6edfd507` (main R4c change) + `4cfd26e8` (props-block fix)
 - Repl count: 94 → 95/102 on live main (base `99fdc0cc` is 96/102 with

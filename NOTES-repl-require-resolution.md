@@ -316,7 +316,7 @@ No `package.json` change. No new dependency (acorn was already imported by
 ## 6. Ship
 
 - PR: #474
-- Merge commit: ___
+- Merge commit: 99fdc0cc (squash-merged 2026-11-18)
 - Branch: `fix/repl-require-resolution`
 - Count after merge: 94 → 96/102 (true pre-R7 count on live main is 94, not
   the recorded 95 — R4b's top-level-await flip does not hold on live main,

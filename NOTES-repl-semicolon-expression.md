@@ -106,4 +106,4 @@ fixed here: bare `global` still resolves to the host global.
 
 ## Ship
 
-- PR #___ / merge SHA ___
+- PR #477 / merge SHA 1262290a (squash-merged 2026-11-18)

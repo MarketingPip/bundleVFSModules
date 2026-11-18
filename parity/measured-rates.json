@@ -152,9 +152,9 @@
       "total": 22
     },
     "repl": {
-      "date": "2026-10-11",
-      "passed": 78,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-18",
+      "passed": 97,
+      "source": "Wave R 2026-11-18: 80 -> 97 via PR #469 (48ec4216), PR #470 (92b5e369), PR #471 (c76a10f0), PR #472 (9b1ba043), PR #473 (af051744), PR #474 (99fdc0cc), PR #475 (95671045), PR #476 (d1584ac8), PR #477 (1262290a); wave-end sweep confirms 97/102 on main 1262290a",
       "total": 102
     },
     "sea": {
