@@ -19,10 +19,14 @@
 // - The Zstd codec is real: ZstdCompress/ZstdDecompress run on the vendored
 //   `zstdify` package (src/vendor/zstdify/, pure JS, 1.4.0 + a 3-site
 //   dictionary patch — see its README.md).
-// - Brotli is an honest pass-through stub: option validation, constants and
-//   stream plumbing match Node, but no actual Brotli coding is performed
-//   (documented gap; the `brotli` npm package was evaluated and rejected —
-//   its encoder silently fails on some inputs).
+// - Brotli DECOMPRESSION is real (via vendored `brocha`, a pure-TS port of
+//   Google's brotli decoder — see src/vendor/brocha/README.md); Brotli
+//   COMPRESSION remains an honest pass-through stub: option validation,
+//   constants and stream plumbing match Node, but no actual coding is
+//   performed (documented gap; the `brotli` npm package was evaluated and
+//   rejected — its encoder silently fails on some inputs — and no pure-JS
+//   brotli compressor exists at all).
+import { decompress as brochaDecompress } from "brocha";
 // - Stream semantics are provided by a minimal built-in Transform
 //   implementation (no node:stream import, so this stays browser-loadable).
 
@@ -2161,6 +2165,217 @@ class MiniTransform extends MiniEmitter {
 // ZlibBase and public classes
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Brotli decompression via the maintained `brocha` package (pure-TS port of
+// Google's brotli decoder; sync whole-buffer API only, zero dependencies).
+// ---------------------------------------------------------------------------
+//
+// brocha has no incremental API that reports "needs more input" faithfully,
+// and its top-level `decompress()` throws NEEDS_MORE_OUTPUT (code 3) on ANY
+// trailing data instead of stopping after the first frame. This engine is
+// therefore a buffering adapter: input is accumulated and a decode is
+// attempted on every write.
+//
+// Decode outcomes on a write:
+// - success: the accumulated buffer is exactly one frame; emit it, finish.
+// - code 3 (trailing data): binary-search the first clean prefix (the frame
+//   boundary), emit the first frame, mark trailingGarbage; ZlibBase turns
+//   that into ERR_TRAILING_JUNK_AFTER_STREAM_END when rejectGarbageAfterEnd
+//   is set, and otherwise ends the stream cleanly.
+// - codes 2 (NEEDS_MORE_INPUT) / -22 (ALLOC_TREE_GROUPS): input exhaustion.
+//   Mid-stream, buffer and wait for more input; at the final flush it is a
+//   genuine truncation ("unexpected end of file", like native).
+// - any other negative code: a real format violation; throw immediately,
+//   mapped to Node's ERR__ERROR_<NAME> shape.
+//
+// ponytail: brocha conflates truncation with invalidity for very short
+// inputs (it reports FORMAT_EXUBERANT_NIBBLE for "aa", where native reports
+// truncation), and ~27% of random 1-6 byte garbage throws -22 (probed), so
+// the 2/-22 "buffer" rule defers the error on short invalid input until
+// end() — where it surfaces as Z_BUF_ERROR instead of the format error
+// native would raise. No vendored test feeds short garbage that must error
+// mid-stream (invalid-input's garbage is 34 bytes and throws a FORMAT code),
+// so the rule is exact for the suite; the ceiling is a bit-exact incremental
+// decoder, which brocha's State class does not expose (its introspection
+// fields stay undefined on the min build — L0's finding).
+// ponytail: the adapter decodes the accumulated buffer on every write, so
+// many small writes are O(n^2); test-scale inputs are a handful of chunks.
+// A true streaming decoder (brocha State, once its boundary reporting is
+// usable, or a chunked port) is the upgrade path.
+
+const BROCHA_NEEDS_MORE_INPUT = 2;
+const BROCHA_NEEDS_MORE_OUTPUT = 3;
+const BROCHA_ALLOC_TREE_GROUPS = -22;
+
+function brochaDecodeError(err) {
+  // Map a brocha throw to Node's error shape (probed against native
+  // v24.22.1): truncation -> Z_BUF_ERROR "unexpected end of file"; a real
+  // format violation -> ERR__ERROR_<NAME> "Decompression failed" (native:
+  // ERR__ERROR_FORMAT_PADDING_1 for garbage).
+  if (
+    err &&
+    (err.code === BROCHA_NEEDS_MORE_INPUT ||
+      err.code === BROCHA_ALLOC_TREE_GROUPS)
+  ) {
+    return zlibError(
+      "Z_BUF_ERROR",
+      constants.Z_BUF_ERROR,
+      "unexpected end of file",
+    );
+  }
+  const name =
+    err && typeof err.name === "string"
+      ? err.name.replace(/^BROTLI_DECODER_ERROR_/, "")
+      : "UNKNOWN";
+  return zlibError(
+    `ERR__ERROR_${name}`,
+    err && typeof err.code === "number" ? err.code : 0,
+    "Decompression failed",
+  );
+}
+
+function brochaFirstFrameEnd(buf) {
+  // Binary-search the first clean prefix of buf: the smallest n such that
+  // decompress(buf[0..n]) succeeds (n is the frame length) or throws code 3
+  // (n is past the frame). Prefixes shorter than the frame throw codes
+  // 2/-22 (input exhaustion). Returns the frame length, or -1 if no prefix
+  // decodes. Called only when the whole buffer threw code 3, so P(len) is
+  // true and the search is well-founded. Verified on the doubled 5-byte
+  // frame (n=5) and the doubled 45,173-byte person.jpg.br (n=45173).
+  const isPastOrAt = (n) => {
+    if (n === 0) return false;
+    try {
+      brochaDecompress(buf.subarray(0, n));
+      return true;
+    } catch (e) {
+      return e && e.code === BROCHA_NEEDS_MORE_OUTPUT;
+    }
+  };
+  let lo = 0;
+  let hi = buf.length;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (isPastOrAt(mid)) hi = mid;
+    else lo = mid;
+  }
+  try {
+    brochaDecompress(buf.subarray(0, hi));
+    return hi;
+  } catch {
+    return -1;
+  }
+}
+
+class BrochaDecodeEngine {
+  constructor({ rejectGarbageAfterEnd, finishFlush }) {
+    this._rejectGarbageAfterEnd = !!rejectGarbageAfterEnd;
+    this._finishFlush = finishFlush;
+    this._buf = Buffer.alloc(0);
+    // Bytes of input already reported as consumed (Node's bytesWritten
+    // counts only bytes the codec consumed; trailing bytes don't count).
+    this._counted = 0;
+    this.finished = false;
+    this.trailingGarbage = false;
+    this.error = null;
+  }
+  reset() {
+    this._buf = Buffer.alloc(0);
+    this._counted = 0;
+    this.finished = false;
+    this.trailingGarbage = false;
+    this.error = null;
+    return this;
+  }
+  setParams() {}
+  write(chunk, flushFlag) {
+    if (this.error) throw this.error;
+    const bytes =
+      chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk || 0);
+    if (this.finished) {
+      // Input after stream end is trailing garbage, never a new stream.
+      if (bytes.length > 0) this.trailingGarbage = true;
+      return {
+        output: PAKO_EMPTY,
+        finished: true,
+        consumed: 0,
+        trailing: this.trailingGarbage,
+      };
+    }
+    const isFinal = flushFlag === this._finishFlush || flushFlag === Z_FINISH;
+    if (bytes.length > 0) {
+      this._buf =
+        this._buf.length === 0
+          ? Buffer.from(bytes)
+          : Buffer.concat([this._buf, Buffer.from(bytes)]);
+    }
+    if (this._buf.length === 0) {
+      // No input yet. At a final flush with zero input, native reports
+      // truncation ("unexpected end of file"); mid-stream, nothing to do.
+      if (isFinal) {
+        throw zlibError(
+          "Z_BUF_ERROR",
+          constants.Z_BUF_ERROR,
+          "unexpected end of file",
+        );
+      }
+      return {
+        output: PAKO_EMPTY,
+        finished: false,
+        consumed: 0,
+        trailing: false,
+      };
+    }
+    let out;
+    try {
+      out = brochaDecompress(this._buf);
+    } catch (err) {
+      if (err && err.code === BROCHA_NEEDS_MORE_OUTPUT) {
+        // Trailing data after a complete first frame.
+        const frameLen = brochaFirstFrameEnd(this._buf);
+        if (frameLen < 0) throw brochaDecodeError(err);
+        out = brochaDecompress(this._buf.subarray(0, frameLen));
+        this.trailingGarbage = true;
+        this.finished = true;
+        const consumed = frameLen - this._counted;
+        this._counted = frameLen;
+        return {
+          output: Buffer.from(out),
+          finished: true,
+          consumed,
+          trailing: true,
+        };
+      }
+      // Input exhaustion: mid-stream, buffer and wait for more input; at
+      // the final flush it is a genuine truncation.
+      if (
+        !isFinal &&
+        err &&
+        (err.code === BROCHA_NEEDS_MORE_INPUT ||
+          err.code === BROCHA_ALLOC_TREE_GROUPS)
+      ) {
+        const consumed = bytes.length;
+        this._counted += consumed;
+        return {
+          output: PAKO_EMPTY,
+          finished: false,
+          consumed,
+          trailing: false,
+        };
+      }
+      throw brochaDecodeError(err);
+    }
+    this.finished = true;
+    const consumed = this._buf.length - this._counted;
+    this._counted = this._buf.length;
+    return {
+      output: Buffer.from(out),
+      finished: true,
+      consumed,
+      trailing: false,
+    };
+  }
+}
+
 class PassThroughEngine {
   constructor() {
     this.finished = false;
@@ -2290,9 +2505,14 @@ class ZlibBase extends MiniTransform {
           dictionary: zopts.dictionary,
           rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
+      case MODE_BROTLI_DECODE:
+        return new BrochaDecodeEngine({
+          rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
+          finishFlush: this._finishFlushFlag,
+        });
       default:
-        // Brotli: honest pass-through fallback (no codec available).
-        // Zstd has a real engine above; anything else is a stub too.
+        // Brotli encode: honest pass-through fallback (no compressor exists).
+        // Brotli decode and Zstd have real engines above.
         return new PassThroughEngine();
     }
   }

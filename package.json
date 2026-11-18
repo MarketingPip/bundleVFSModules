@@ -17,6 +17,7 @@
     "@noble/hashes": "^2.4.0",
     "acorn-walk": "^8.3.5",
     "als-browser": "^1.0.1",
+    "brocha": "0.1.1",
     "dns-packet": "^5.6.1",
     "magic-string": "^1.4.1",
     "memfs": "^3.4.0",
