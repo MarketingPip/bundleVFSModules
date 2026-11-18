@@ -1392,8 +1392,14 @@ function getRequireStack(parent) {
   const seen = new Set();
   while (p && !seen.has(p)) {
     seen.add(p);
+    // Node lib/internal/modules/helpers.js:482 — pushes
+    // `cursor.filename || cursor.id` unconditionally, so the `<repl>`
+    // module contributes '<repl>' (its filename is null). The old
+    // `p.id !== "<repl>"` exclusion emptied the stack for every
+    // repl require error (moduleNotFound prints no "Require stack:"
+    // lines and requireStack: []).
     if (p.filename) stack.push(p.filename);
-    else if (p.id && p.id !== "<repl>") stack.push(p.id);
+    else if (p.id) stack.push(p.id);
     p = p[kFirstModuleParent];
   }
   return stack;
