@@ -48,4 +48,4 @@ it in its `sources` entry (`"sources": ["get-call-sites-original.js"]`, no
 
 ## Ship
 
-- PR #___ / merge SHA ___ (squash-merged 2026-11-18)
+- PR #483 / merge SHA 82257ac4 (squash-merged 2026-11-18)

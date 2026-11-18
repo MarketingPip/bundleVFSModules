@@ -84,7 +84,7 @@ follow their own `getPrefix` paths. The deep-recursion machinery
 
 ## Ship
 
-- PR #484 / merge SHA ___ (squash-merged 2026-11-18)
+- PR #484 / merge SHA cec33d53 (squash-merged 2026-11-18)
 
 ## CI notes
 
