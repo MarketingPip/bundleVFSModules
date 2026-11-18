@@ -973,13 +973,20 @@ export class REPLServerImpl extends Interface {
     this.commands[keyword] = cmd;
   }
 
-  setupHistory(historyConfig, cb) {
-    const callback =
-      typeof historyConfig === "object" && historyConfig !== null
-        ? historyConfig.onHistoryFileLoaded || cb
-        : cb;
-    if (typeof callback === "function")
-      Promise.resolve().then(() => callback(null, this));
+  // Node: lib/repl.js:1052 — historyConfig may be a string (file path) for
+  // backwards compatibility; an explicit callback overrides
+  // options.onHistoryFileLoaded. The history manager (src/readline.js
+  // ReplHistory, via setupHistoryManager) owns the file load, the
+  // disabled-history message and the flush-on-line behavior.
+  setupHistory(historyConfig = {}, cb) {
+    const options =
+      typeof historyConfig === "string"
+        ? { filePath: historyConfig }
+        : historyConfig;
+    if (typeof cb === "function") {
+      options.onHistoryFileLoaded = cb;
+    }
+    this.setupHistoryManager(options);
   }
 
   // ── Internal helpers ─────────────────────────────────────────────────────
