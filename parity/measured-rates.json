@@ -86,9 +86,9 @@
       "total": 397
     },
     "http2": {
-      "date": "2026-10-11",
-      "passed": 35,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-18",
+      "passed": 87,
+      "source": "Wave H2 2026-11-18: 35 -> 87 via PR #493 (cb7e82aa), PR #494 (b60a5401), PR #495 (40db00f5), PR #496 (c7cc2bb5), PR #497 (40e3df7a), PR #498 (2ea75e5c), PR #499 (b5770fa5), PR #500 (c72e53bf); wave-end sweeps confirm 87/277 on main c72e53bf",
       "total": 277
     },
     "https": {

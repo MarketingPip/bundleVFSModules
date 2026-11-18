@@ -109,5 +109,5 @@ The shim mirrors the throw (same code + message shape).
 
 ## Ship
 
-- PR #___
-- Merge SHA: ___
+- PR #497
+- Merge SHA: 40e3df7a

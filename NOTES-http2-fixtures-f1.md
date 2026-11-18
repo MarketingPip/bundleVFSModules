@@ -48,5 +48,5 @@ in the same lane so the test is measurable.
 
 ## Ship
 
-- PR #___
-- Merge SHA: ___
+- PR #493
+- Merge SHA: cb7e82aa
