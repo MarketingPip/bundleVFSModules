@@ -105,6 +105,149 @@ function statusMessageWarn() {
   }
 }
 
+// H2-V6: header normalization, mirroring Node
+// lib/internal/http2/util.js prepareRequestHeadersArray/Object and
+// lib/internal/http2/core.js prepareResponseHeadersArray/Object
+// (v24.20.0). Flat [k, v, ...] arrays and objects both normalize to a
+// null-prototype object (duplicate exact-name keys fold to arrays, case
+// preserved, symbol keys copied verbatim); the flat pairs list is kept
+// alongside because the folded object loses interleaved duplicate order,
+// which rawHeaders must preserve. The wire order (buildNgHeaderString)
+// is pseudo-headers first (input relative order), then regular headers
+// (input relative order), every name lowercased, every value stringified.
+function foldHeaderPairs(pairs) {
+  const obj = { __proto__: null };
+  for (const [k, v] of pairs) {
+    const existing = obj[k];
+    if (existing === undefined) obj[k] = v;
+    else if (Array.isArray(existing)) existing.push(v);
+    else obj[k] = [existing, v];
+  }
+  return obj;
+}
+
+function pairsFromObject(obj) {
+  const pairs = [];
+  for (const [k, v] of Object.entries(obj)) {
+    if (Array.isArray(v)) for (const el of v) pairs.push([k, el]);
+    else pairs.push([k, v]);
+  }
+  return pairs;
+}
+
+function toWireRawHeaders(rawPairs) {
+  const out = [];
+  const push = ([k, v]) => {
+    out.push(typeof k === "string" ? k.toLowerCase() : k, String(v));
+  };
+  for (const p of rawPairs)
+    if (typeof p[0] === "string" && p[0].startsWith(":")) push(p);
+  for (const p of rawPairs)
+    if (!(typeof p[0] === "string" && p[0].startsWith(":"))) push(p);
+  return out;
+}
+
+function requestPseudoDefaults(session) {
+  const authority =
+    (session && session._authority) ||
+    `localhost:${(session && session._virtualPort) || 80}`;
+  const scheme = (session && session._scheme) || "http";
+  return [
+    [":method", "GET"],
+    [":authority", authority],
+    [":scheme", scheme],
+    [":path", "/"],
+  ];
+}
+
+function normalizeRequestHeaders(headers, session) {
+  const defaults = requestPseudoDefaults(session);
+  if (Array.isArray(headers)) {
+    // Node prepareRequestHeadersArray: missing pseudo-headers are
+    // PREPENDED to the raw array in canonical order; sentHeaders folds
+    // from the raw array in order.
+    const pairs = [];
+    for (let i = 0; i < headers.length; i += 2)
+      pairs.push([headers[i], headers[i + 1]]);
+    const present = new Set();
+    for (const [k] of pairs)
+      if (typeof k === "string") present.add(k.toLowerCase());
+    const missing = defaults.filter(([k]) => !present.has(k));
+    const rawPairs = [...missing, ...pairs];
+    const obj = foldHeaderPairs(rawPairs);
+    for (const s of Object.getOwnPropertySymbols(headers))
+      obj[s] = headers[s];
+    return { headersObject: obj, rawPairs };
+  }
+  // Object path (Node prepareRequestHeadersObject): verbatim copy, then
+  // missing pseudo-headers are APPENDED by assignment. :authority is
+  // skipped when a Host header is present (getAuthority semantics).
+  const obj = { __proto__: null };
+  Object.assign(obj, headers);
+  for (const [k, v] of defaults) {
+    if (k === ":authority") {
+      if (obj[":authority"] === undefined && obj["host"] === undefined)
+        obj[":authority"] = v;
+    } else if (obj[k] === undefined) {
+      obj[k] = v;
+    }
+  }
+  return { headersObject: obj, rawPairs: pairsFromObject(obj) };
+}
+
+function normalizeResponseHeaders(headers, options = {}) {
+  const sendDate = options.sendDate == null || options.sendDate;
+  if (Array.isArray(headers)) {
+    // Node prepareResponseHeadersArray: scan for :status/:date
+    // (case-insensitive); a missing :status 200 is UNSHIFTED to the
+    // front, a missing date is PUSHED to the end; sentHeaders folds
+    // from the final array.
+    const pairs = [];
+    for (let i = 0; i < headers.length; i += 2)
+      pairs.push([headers[i], headers[i + 1]]);
+    let statusCode = 0;
+    let isDateSet = false;
+    for (const [k, v] of pairs) {
+      const name = typeof k === "string" ? k.toLowerCase() : "";
+      if (name === ":status") statusCode = v | 0;
+      else if (name === "date") isDateSet = true;
+    }
+    if (!statusCode) {
+      statusCode = 200;
+      pairs.unshift([":status", 200]);
+    }
+    if (!isDateSet && sendDate)
+      pairs.push(["date", new Date().toUTCString()]);
+    const obj = foldHeaderPairs(pairs);
+    for (const s of Object.getOwnPropertySymbols(headers))
+      obj[s] = headers[s];
+    return { headersObject: obj, rawPairs: pairs };
+  }
+  // Object path (Node prepareResponseHeadersObject): verbatim copy;
+  // :status coerced to a number (default 200, appended if missing);
+  // date appended unless an exact 'date' key is present.
+  if (headers === null || headers === undefined) headers = {};
+  if (typeof headers !== "object") {
+    throw http2Error(
+      "ERR_INVALID_ARG_TYPE",
+      'The "headers" argument must be of type object',
+    );
+  }
+  const obj = { __proto__: null };
+  Object.assign(obj, headers);
+  let statusCode;
+  let hasDate = false;
+  for (const k of Object.keys(obj)) {
+    if (k === ":status") statusCode = obj[k];
+    else if (k === "date") hasDate = obj[k] != null;
+  }
+  obj[":status"] = (statusCode | 0) || 200;
+  if (!hasDate && sendDate) obj["date"] = new Date().toUTCString();
+  for (const s of Object.getOwnPropertySymbols(headers))
+    obj[s] = headers[s];
+  return { headersObject: obj, rawPairs: pairsFromObject(obj) };
+}
+
 // ---------------------------------------------------------------------------
 // 3. constants — the real values from Node v24.20.0 (static, safe to embed).
 // ---------------------------------------------------------------------------
@@ -880,17 +1023,22 @@ class ClientHttp2Session extends Http2Session {
 
   request(headers = {}, options = {}) {
     this._assertUsable();
-    if (
-      headers === null ||
-      typeof headers !== "object" ||
-      Array.isArray(headers)
-    ) {
+    if (headers === null || typeof headers !== "object") {
       throw http2Error(
         "ERR_INVALID_ARG_TYPE",
         'The "headers" argument must be of type object',
       );
     }
-    const stream = new Http2Stream(this, { ...headers });
+    // H2-V6: flat [k, v, ...] arrays normalize like objects (Node
+    // prepareRequestHeadersArray/Object); the normalized object is the
+    // client's sentHeaders and the raw pairs feed the server rawHeaders.
+    const { headersObject, rawPairs } = normalizeRequestHeaders(
+      headers,
+      this,
+    );
+    const stream = new Http2Stream(this, headersObject);
+    stream._requestSentHeaders = headersObject;
+    stream._requestRawPairs = rawPairs;
     stream._id = this._nextStreamID;
     this._nextStreamID += 2; // client-initiated streams use odd ids
     // Dispatch to the virtual server on the next microtask, mirroring the
@@ -931,6 +1079,17 @@ class Http2Stream extends EventEmitter {
     this._aborted = false;
     this._rstCode = constants.NGHTTP2_NO_ERROR;
     this._sentHeaders = null;
+    // H2-V6: the client's request headers, kept apart from _sentHeaders
+    // (the response headers) — _responseStarted keys on _sentHeaders
+    // being non-null, so storing the request headers there would make
+    // the client's end() take the server branch and deliver a response
+    // made of request headers. sentHeaders returns the response
+    // headers once respond() has run, else the request headers.
+    this._requestSentHeaders = null;
+    // H2-V6: flat [k, v, ...] pairs as given (request) / as normalized
+    // (response); the wire-order rawHeaders are derived from these.
+    this._requestRawPairs = null;
+    this._responseRawPairs = null;
     this._sentInfoHeaders = [];
     this._sentTrailers = null;
     this._requestChunks = []; // client -> server
@@ -980,7 +1139,14 @@ class Http2Stream extends EventEmitter {
     return false;
   } // push is impossible in the emulation
   get sentHeaders() {
-    return this._sentHeaders ? { ...this._sentHeaders } : null;
+    // H2-V6: real Node returns a null-prototype object (deepStrictEqual
+    // against { __proto__: null, ... } in the official tests). The
+    // response headers win once respond() has run; before that the
+    // client's request headers are the sent headers.
+    const src = this._sentHeaders || this._requestSentHeaders;
+    if (!src) return null;
+    const copy = { __proto__: null };
+    return Object.assign(copy, src);
   }
   get sentInfoHeaders() {
     return this._sentInfoHeaders.map((h) => ({ ...h }));
@@ -1065,8 +1231,15 @@ class Http2Stream extends EventEmitter {
   respond(headers = {}, options = {}) {
     // Noop on the wire: records response headers locally. The virtual
     // server delivers them when the response is ended.
-    this._sentHeaders = { ...headers };
-    void options;
+    // H2-V6: array-form headers normalize like objects (Node
+    // prepareResponseHeadersArray/Object); :status defaults to 200 and
+    // a date is added unless one is present or options.sendDate is false.
+    const { headersObject, rawPairs } = normalizeResponseHeaders(
+      headers,
+      options || {},
+    );
+    this._sentHeaders = headersObject;
+    this._responseRawPairs = rawPairs;
   }
 
   respondWithFD(fd, headers = {}, options = {}) {
@@ -1335,8 +1508,14 @@ class Http2Stream extends EventEmitter {
     this._responseDelivered = true;
     const headers = this._sentHeaders || { ":status": 200 };
     const body = Buffer.concat(this._responseChunks);
+    // H2-V6: the 'response' event carries rawHeaders as its 3rd
+    // argument (Node: pseudo-headers first, then regulars, names
+    // lowercased, duplicates in order, date last when auto-added).
+    const rawHeaders = this._responseRawPairs
+      ? toWireRawHeaders(this._responseRawPairs)
+      : toWireRawHeaders(pairsFromObject(headers));
     // Client-side observable events, in real order.
-    this.emit("response", { ...headers }, 0);
+    this.emit("response", { ...headers }, 0, rawHeaders);
     if (body.length > 0 && !this.headRequest) {
       this.emit("data", this._encoding ? body.toString(this._encoding) : body);
     }
@@ -1370,11 +1549,19 @@ export class Http2ServerRequest extends EventEmitter {
     this.method = headers[":method"] || "GET";
     this.url = headers[":path"] || "/";
     this.scheme = headers[":scheme"] || "http";
-    this.authority = headers[":authority"];
-    this.rawHeaders = [];
-    for (const [k, v] of Object.entries(this.headers)) {
-      if (!k.startsWith(":")) this.rawHeaders.push(k, v);
-    }
+    // H2-V6: Node's authority getter falls back to the Host header
+    // (lib/internal/http2/util.js getAuthority).
+    this.authority =
+      headers[":authority"] !== undefined
+        ? headers[":authority"]
+        : headers["host"];
+    // H2-V6: rawHeaders is the wire-order flat list — pseudo-headers
+    // first, then regulars, names lowercased, duplicates in order
+    // (Node buildNgHeaderString). The stream carries the request's raw
+    // pairs; without them (host-bridge streams) derive from headers.
+    this.rawHeaders = stream && stream._requestRawPairs
+      ? toWireRawHeaders(stream._requestRawPairs)
+      : toWireRawHeaders(pairsFromObject(this.headers));
     this._body = stream ? stream.requestBody : Buffer.alloc(0);
   }
 
@@ -1588,7 +1775,10 @@ export class Http2ServerResponse extends EventEmitter {
       for (const [k, v] of Object.entries(headers)) this.setHeader(k, v);
     }
     const out = { ":status": statusCode, ...this._headers };
-    this.stream.respond(out);
+    // H2-V6: the compat response's sendDate flag flows into respond()
+    // (Node lib/internal/http2/compat.js:900) — a handler that sets
+    // response.sendDate = false must get no auto date.
+    this.stream.respond(out, { sendDate: this.sendDate });
     this._headersSent = true;
     return this;
   }
@@ -1861,10 +2051,13 @@ class Http2Server extends EventEmitter {
     this._getServerSession(); // ensure exactly one server session per server
     const headers = { ...stream._requestHeaders };
     const flags = 0;
-    const rawHeaders = [];
-    for (const [k, v] of Object.entries(headers)) {
-      if (!k.startsWith(":")) rawHeaders.push(k, v);
-    }
+    // H2-V6: rawHeaders is the wire-order flat list (pseudo-headers
+    // first, names lowercased, duplicates in order) — the stream
+    // carries the request's raw pairs; without them (host-bridge
+    // streams) derive from the headers object.
+    const rawHeaders = stream._requestRawPairs
+      ? toWireRawHeaders(stream._requestRawPairs)
+      : toWireRawHeaders(pairsFromObject(headers));
     queueMicrotask(() => {
       // Snapshot the client-side 'data' listeners: any 'data' listener
       // added from here on is a server-side request-body consumer (H2-V1).
@@ -1988,6 +2181,10 @@ export function connect(authority, options, listener) {
     : url.protocol === "https:"
       ? 443
       : 80;
+  // H2-V6: request() defaults :authority/:scheme from the session
+  // (Node prepareRequestHeadersObject).
+  session._authority = url.host;
+  session._scheme = url.protocol.slice(0, -1);
   if (options.settings) session.settings(options.settings);
   if (listener) session.once("connect", listener);
   queueMicrotask(() => {
