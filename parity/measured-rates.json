@@ -242,9 +242,9 @@
       "total": 141
     },
     "zlib": {
-      "date": "2026-10-19",
-      "passed": 43,
-      "source": "PR #237 (zlib parity); supersedes the 33/65 in parity/HITLIST.md's full-ranking table",
+      "date": "2026-11-18",
+      "passed": 52,
+      "source": "PR #237 (zlib parity); wave Z 2026-11-18: 43 -> 52 via PR #462 (6ad8f058), PR #463 (dda6f976), PR #464 (931951bf), PR #465 (41a4e4cb), PR #466 (7b8cdaef), PR #467 (12532c04); supersedes the 33/65 in parity/HITLIST.md's full-ranking table",
       "total": 65
     }
   }

@@ -174,7 +174,7 @@ copy (`~/workspace/worktrees/zlib-l0-codec-probe/node_modules/zstdify`).
 
 ## Ship
 
-- PR: (fill at ship time)
-- Merge SHA: (fill at ship time)
-- Branch ref deletion: (confirm at ship time)
-- Worktrees removed: (confirm at ship time)
+- PR: #467
+- Merge SHA: 12532c04
+- Branch ref deletion: confirmed (ls-remote empty)
+- Worktrees removed: confirmed

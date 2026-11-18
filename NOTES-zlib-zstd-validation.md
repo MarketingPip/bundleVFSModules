@@ -98,8 +98,7 @@ was NO THROW. Fix, all in `src/zlib.js` (118 insertions, 4 deletions):
 
 ## Ship
 
-- PR #464 / Merge SHA: ___ (fold the ship-section wart into the wave docs
-  sync, per the P1/P2/P3 precedent)
+- PR #464 / Merge SHA: 931951bf
 - Branch: `fix/zlib-zstd-validation`
 - Worktree: `~/workspace/worktrees/zlib-z3-zstd-validation`
 - Rebased 2026-11-18 onto main `dda6f97` (Z1 #462 + Z2 #463 landed first);

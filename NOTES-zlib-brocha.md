@@ -180,14 +180,13 @@ multi-metablock, 200 KB zeroes):
 
 ## Ship section
 
-- PR: opened by parent after the SHIP decision (see addendum below).
-- Merge SHA: (filled at merge time).
+- PR: #466, merged.
+- Merge SHA: 7b8cdaef.
 - Branch: `fix/zlib-brocha`, pushed to origin (verify the remote SHA with
   `git ls-remote origin fix/zlib-brocha` — the API push re-creates the
   commit object, so the remote SHA differs from the local one); the local
   commit is on the branch.
-- Worktree: `~/workspace/worktrees/zlib-z5-brocha` (kept, do not delete
-  until the parent decides A vs B).
+- Worktree: `~/workspace/worktrees/zlib-z5-brocha` (removed after merge).
 
 ## Parent addendum — SHIP decision (2026-11-18, reason-and-choose)
 

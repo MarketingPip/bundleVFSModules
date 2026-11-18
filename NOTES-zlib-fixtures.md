@@ -33,6 +33,6 @@ Files vendored (sizes verified against triage):
 
 ## Ship
 
-- PR #___ / Merge SHA: ___
+- PR #462 / Merge SHA: 6ad8f058
 - Branch: `fix/zlib-fixtures` (fold the ship-section wart into the wave docs sync,
   per the P1/P2/P3 precedent)
