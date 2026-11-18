@@ -164,7 +164,8 @@ multi-metablock, 200 KB zeroes):
 
 ## Ship decision (parent's call — DO NOT MERGE without it)
 
-- **No PR opened, no CI waiter run, no merge.** Branch `fix/zlib-brocha`
+- **Parent decision (2026-11-18): SHIP — see addendum at the end of this file.**
+  Branch `fix/zlib-brocha`
   is committed locally and pushed (see below); the work is preserved for
   the day a compressor exists or for a fidelity-first decision.
 - Option A (ship for fidelity): merge this lane; zlib goes 46 → 45
@@ -179,11 +180,36 @@ multi-metablock, 200 KB zeroes):
 
 ## Ship section
 
-- PR: none (HELD — see above).
-- Merge SHA: none.
+- PR: opened by parent after the SHIP decision (see addendum below).
+- Merge SHA: (filled at merge time).
 - Branch: `fix/zlib-brocha`, pushed to origin (verify the remote SHA with
   `git ls-remote origin fix/zlib-brocha` — the API push re-creates the
   commit object, so the remote SHA differs from the local one); the local
   commit is on the branch.
 - Worktree: `~/workspace/worktrees/zlib-z5-brocha` (kept, do not delete
   until the parent decides A vs B).
+
+## Parent addendum — SHIP decision (2026-11-18, reason-and-choose)
+
+- **Decision: Option A (ship for fidelity).** Repo rule 7 (no silent fakes)
+  decides it: the stub decoder is a fake success; a real decoder that
+  exposes the fake compressor is the honest state. Both paths total 52/65,
+  so holding buys nothing in the end and leaves invalid-input blocked and
+  real brotli decode unshipped. Count dips 46 → 45 on merge, then L6/L6b/
+  dict climb it to 52.
+- **CI correction:** the lane's "CI would go red" assumption was wrong. The
+  Parity job runs `parity/run.mjs` only for path/punycode/querystring/
+  string_decoder/events/assert — zlib is not in the loop — and the jest job
+  runs the repo's own tests, which are green here (40/40 after the test
+  update below). The PR can go green on its code SHA like any other lane.
+- **Repo-test update (this commit):** `tests/zlib.test.js`
+  "brotliDecompressSync passes through" pinned the obsolete stub and failed
+  on the real decoder (38/39 before the update). Replaced with two tests
+  pinning the new behavior: decode of the exact maxOutputLength frame
+  (`G38A+CXCIrFAIAM=` → 128× 'a') and throw on non-brotli input. Jest now
+  40/40 (3 suites).
+- **random-byte-pipes 124:** one parent run hit the 60 s timeout; three later
+  runs (worker sweep + 2 isolated, parent 180 s run) all exit 1 fast.
+  Treated as a slow-run outlier, not a hang.
+- Rebased onto main `41a4e4cb` (Z4) cleanly; re-verified on the rebased head:
+  3 flips [0,0], 4 regressions all exit 1, guards all 0, jest 40/40.

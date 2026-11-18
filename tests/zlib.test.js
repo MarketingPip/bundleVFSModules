@@ -185,19 +185,28 @@ describe("zlib (pako-backed ESM)", () => {
     });
   });
 
-  describe("brotli and zstd (pass-through, not real codecs)", () => {
-    // These are honest pass-throughs, not real Brotli/Zstd implementations.
-    // They accept input and return it unchanged (no compression).
+  describe("brotli and zstd (brotli decode is real; the rest pass-through)", () => {
+    // BrotliCompress is still an honest pass-through stub (no pure-JS brotli
+    // compressor exists); BrotliDecompress is now a real decoder (brocha).
+    // Zstd is still pass-through on both sides.
     test("brotliCompressSync passes through", () => {
       const input = Buffer.from("hello brotli");
       const output = zlib.brotliCompressSync(input);
       expect(Buffer.compare(input, output)).toBe(0);
     });
 
-    test("brotliDecompressSync passes through", () => {
-      const input = Buffer.from("hello brotli");
-      const output = zlib.brotliDecompressSync(input);
-      expect(Buffer.compare(input, output)).toBe(0);
+    test("brotliDecompressSync decodes a real brotli frame", () => {
+      // Exact test vector: 128 bytes of 'a' (the same frame the official
+      // maxOutputLength test uses).
+      const frame = Buffer.from("G38A+CXCIrFAIAM=", "base64");
+      const output = zlib.brotliDecompressSync(frame);
+      expect(output.toString()).toBe("a".repeat(128));
+    });
+
+    test("brotliDecompressSync throws on non-brotli input", () => {
+      expect(() =>
+        zlib.brotliDecompressSync(Buffer.from("hello brotli")),
+      ).toThrow();
     });
   });
 
