@@ -84,4 +84,17 @@ follow their own `getPrefix` paths. The deep-recursion machinery
 
 ## Ship
 
-- PR #___ / merge SHA ___ (squash-merged 2026-11-18)
+- PR #484 / merge SHA ___ (squash-merged 2026-11-18)
+
+## CI notes
+
+- Round 1 (code SHA `6f16254c`, base `2de10fc4`): poll 6 BOTH GREEN.
+- Rebased onto `82257ac4` (U1 #483 merged first) → code SHA `d8927dec`.
+- Round 2 (code SHA `d8927dec`): poll 5 Parity success, build FAILURE, no log
+  via API. Adjudicated transient, not caused by this change: local
+  `build-vfs` / `build-sandbox --check` / `build-runtime --check` all exit 0;
+  full local jest serial shows exactly the 7 known host-skew failures
+  (constants ×3, oracle crypto/util ×2, perf_hooks ×1, sys ×1 — failing
+  identically on pristine main under host v24.22.1); and the change is
+  provably a no-op on CI's pinned v24.20.0 (the bridge never emits the tag
+  there). Retriggered with this NOTES-only commit per the R2 #472 precedent.
