@@ -8,9 +8,9 @@
       "total": 18
     },
     "async_hooks": {
-      "date": "2026-10-11",
+      "date": "2026-11-18",
       "passed": 29,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "source": "Wave A 2026-11-18: triage only, no code change; ceiling re-verified 29/36; wave-end sweep confirms 29/36 on main c0c0c4a6",
       "total": 36
     },
     "buffer": {
