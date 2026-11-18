@@ -1,0 +1,194 @@
+/**
+ * Decompress a single zstd frame.
+ */
+import { readU32LE } from '../bitstream/littleEndian.js';
+import { ZstdError } from '../errors.js';
+import { validateContentChecksum } from '../frame/checksum.js';
+import { parseBlockHeader } from './block.js';
+import { decodeAndExecuteSequencesInto } from './fusedSequences.js';
+import { decodeCompressedLiterals, decodeRawLiterals, decodeRLELiterals, decodeTreelessLiterals, parseLiteralsSectionHeader, } from './literals.js';
+import { appendRangeToHistoryWindow, appendRLEToHistoryWindow, appendToHistoryWindow, getOrCreateHistoryWindow, } from './reconstruct.js';
+export function decompressFrame(data, offset, header, dictionary, maxSize, validateChecksum = true, reuseContext, debugTrace) {
+    let pos = offset + 4 + header.headerSize;
+    const knownOutputSize = header.contentSize ?? null;
+    if (knownOutputSize !== null && maxSize !== undefined && knownOutputSize > maxSize) {
+        throw new ZstdError('Decompressed size exceeds maxSize', 'parameter_unsupported');
+    }
+    let outputBuffer = knownOutputSize !== null ? new Uint8Array(knownOutputSize) : new Uint8Array(0);
+    let totalSize = 0;
+    const repOffsets = dictionary?.repOffsets
+        ? [dictionary.repOffsets[0], dictionary.repOffsets[1], dictionary.repOffsets[2]]
+        : [1, 4, 8];
+    const history = getOrCreateHistoryWindow(header.windowSize, dictionary?.historyPrefix, reuseContext);
+    let prevHuffmanTable = dictionary?.huffmanTable ?? null;
+    let prevSeqTables = dictionary?.sequenceTables ?? null;
+    const ensureOutputCapacity = (additional) => {
+        const needed = totalSize + additional;
+        if (needed <= outputBuffer.length) {
+            return;
+        }
+        let nextCapacity = outputBuffer.length === 0 ? 64 * 1024 : outputBuffer.length;
+        while (nextCapacity < needed) {
+            nextCapacity *= 2;
+        }
+        const grown = new Uint8Array(nextCapacity);
+        if (totalSize > 0) {
+            grown.set(outputBuffer.subarray(0, totalSize), 0);
+        }
+        outputBuffer = grown;
+    };
+    const appendOutput = (chunk) => {
+        if (chunk.length === 0) {
+            return;
+        }
+        ensureOutputCapacity(chunk.length);
+        outputBuffer.set(chunk, totalSize);
+        totalSize += chunk.length;
+    };
+    let blockIndex = 0;
+    const onBlockDecoded = debugTrace?.onBlockDecoded;
+    while (true) {
+        if (pos + 3 > data.length) {
+            throw new ZstdError('Block header truncated', 'corruption_detected');
+        }
+        const blockHeaderPos = pos;
+        const block = parseBlockHeader(data, pos);
+        pos += 3;
+        const blockOutputStart = totalSize;
+        let blockLiteralsInfo;
+        let blockSequencesInfo;
+        if (block.blockType === 0) {
+            if (pos + block.blockSize > data.length) {
+                throw new ZstdError('Raw literals truncated', 'corruption_detected');
+            }
+            ensureOutputCapacity(block.blockSize);
+            outputBuffer.set(data.subarray(pos, pos + block.blockSize), totalSize);
+            if (!block.lastBlock) {
+                appendRangeToHistoryWindow(history, data, pos, block.blockSize);
+            }
+            totalSize += block.blockSize;
+            pos += block.blockSize;
+        }
+        else if (block.blockType === 1) {
+            if (pos >= data.length) {
+                throw new ZstdError('RLE literals truncated', 'corruption_detected');
+            }
+            const byte = data[pos];
+            ensureOutputCapacity(block.blockSize);
+            outputBuffer.fill(byte, totalSize, totalSize + block.blockSize);
+            if (!block.lastBlock) {
+                appendRLEToHistoryWindow(history, byte, block.blockSize);
+            }
+            totalSize += block.blockSize;
+            pos += 1;
+        }
+        else if (block.blockType === 2) {
+            if (pos + block.blockSize > data.length) {
+                throw new ZstdError('Compressed block truncated', 'corruption_detected');
+            }
+            const blockContent = data.subarray(pos, pos + block.blockSize);
+            const { header: litHeader, dataOffset: litDataOffset } = parseLiteralsSectionHeader(blockContent, 0);
+            if (onBlockDecoded) {
+                blockLiteralsInfo = {
+                    blockType: litHeader.blockType,
+                    regeneratedSize: litHeader.regeneratedSize,
+                    compressedSize: litHeader.compressedSize,
+                    numStreams: litHeader.numStreams,
+                    headerSize: litHeader.headerSize,
+                };
+            }
+            let literals;
+            let litBytesConsumed;
+            if (litHeader.blockType === 0) {
+                literals = decodeRawLiterals(blockContent, litDataOffset, litHeader.regeneratedSize);
+                litBytesConsumed = litHeader.headerSize + litHeader.regeneratedSize;
+            }
+            else if (litHeader.blockType === 1) {
+                literals = decodeRLELiterals(blockContent, litDataOffset, litHeader.regeneratedSize);
+                litBytesConsumed = litHeader.headerSize + 1;
+            }
+            else if (litHeader.blockType === 2) {
+                const comp = decodeCompressedLiterals(blockContent, litDataOffset, litHeader.compressedSize, litHeader.regeneratedSize, litHeader.numStreams);
+                literals = comp.literals;
+                prevHuffmanTable = comp.huffmanTable;
+                litBytesConsumed = litHeader.headerSize + comp.bytesRead;
+            }
+            else {
+                if (!prevHuffmanTable) {
+                    throw new ZstdError('Treeless literals without previous Huffman table', 'corruption_detected');
+                }
+                const comp = decodeTreelessLiterals(blockContent, litDataOffset, litHeader.compressedSize, litHeader.regeneratedSize, litHeader.numStreams, prevHuffmanTable);
+                literals = comp.literals;
+                litBytesConsumed = litHeader.headerSize + comp.bytesRead;
+            }
+            const seqSectionSize = block.blockSize - litBytesConsumed;
+            if (seqSectionSize <= 0) {
+                appendOutput(literals);
+                if (!block.lastBlock) {
+                    appendToHistoryWindow(history, literals);
+                }
+            }
+            else {
+                // Decoded block output is bounded by zstd block max size (128 KiB).
+                ensureOutputCapacity(128 * 1024);
+                const start = totalSize;
+                const { written, tables, metadata } = decodeAndExecuteSequencesInto(blockContent, litBytesConsumed, seqSectionSize, prevSeqTables, literals, header.windowSize, outputBuffer, start, repOffsets, history, !block.lastBlock, !!onBlockDecoded);
+                prevSeqTables = tables;
+                if (onBlockDecoded) {
+                    blockSequencesInfo = {
+                        numSequences: metadata.numSequences,
+                        llMode: metadata.llMode,
+                        ofMode: metadata.ofMode,
+                        mlMode: metadata.mlMode,
+                        llTableLog: metadata.llTableLog,
+                        ofTableLog: metadata.ofTableLog,
+                        mlTableLog: metadata.mlTableLog,
+                        repeatOffsetCandidateCount: metadata.repeatOffsetCandidateCount,
+                    };
+                }
+                totalSize += written;
+            }
+            pos += block.blockSize;
+        }
+        else {
+            throw new ZstdError('Unsupported block type', 'corruption_detected');
+        }
+        if (onBlockDecoded) {
+            onBlockDecoded({
+                blockIndex,
+                blockType: block.blockType,
+                blockSize: block.blockSize,
+                lastBlock: block.lastBlock,
+                inputOffset: blockHeaderPos,
+                outputStart: blockOutputStart,
+                outputEnd: totalSize,
+                literals: blockLiteralsInfo,
+                sequences: blockSequencesInfo,
+            });
+        }
+        blockIndex++;
+        if (maxSize !== undefined && totalSize > maxSize) {
+            throw new ZstdError('Decompressed size exceeds maxSize', 'parameter_unsupported');
+        }
+        if (block.lastBlock)
+            break;
+    }
+    const output = outputBuffer.subarray(0, totalSize);
+    if (header.contentSize !== null && output.length !== header.contentSize) {
+        throw new ZstdError('Frame content size mismatch', 'corruption_detected');
+    }
+    if (header.hasContentChecksum) {
+        if (pos + 4 > data.length) {
+            throw new ZstdError('Content checksum truncated', 'corruption_detected');
+        }
+        if (validateChecksum) {
+            const storedChecksum = readU32LE(data, pos);
+            if (!validateContentChecksum(output, storedChecksum)) {
+                throw new ZstdError('Content checksum mismatch', 'corruption_detected');
+            }
+        }
+        pos += 4;
+        return { output, bytesConsumed: pos - offset };
+    }
+    return { output, bytesConsumed: pos - offset };
+}
