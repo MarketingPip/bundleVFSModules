@@ -461,11 +461,15 @@ describe("Http2Session", () => {
     const s = new Http2Session();
     s.setNextStreamID(5);
     expect(s.state.nextStreamID).toBe(5);
+    // H2-V4: real Node validates the id with validateInteger(id, 'id',
+    // 1, 2**32-1) (lib/internal/http2/core.js setNextStreamID) — 0 and
+    // negatives are ERR_OUT_OF_RANGE, not ERR_HTTP2_INVALID_STREAM;
+    // the old expectation pinned the shim's generic throw (probe-proven).
     expect(catchCode(() => s.setNextStreamID(0))).toBe(
-      "ERR_HTTP2_INVALID_STREAM",
+      "ERR_OUT_OF_RANGE",
     );
     expect(catchCode(() => s.setNextStreamID(-3))).toBe(
-      "ERR_HTTP2_INVALID_STREAM",
+      "ERR_OUT_OF_RANGE",
     );
   });
 
@@ -536,12 +540,16 @@ describe("Http2Stream", () => {
     });
   });
 
-  test("pushStream() reports ERR_HTTP2_PUSH_DISABLED asynchronously", async () => {
+  test("pushStream() throws ERR_HTTP2_PUSH_DISABLED when push is disabled", () => {
     const stream = new Http2Stream();
-    const code = await new Promise((resolve) => {
-      stream.pushStream({ ":path": "/" }, (err) => resolve(err && err.code));
-    });
-    expect(code).toBe("ERR_HTTP2_PUSH_DISABLED");
+    // H2-V4: real Node (lib/internal/http2/core.js:2948-2950) checks
+    // pushAllowed FIRST and throws ERR_HTTP2_PUSH_DISABLED
+    // synchronously when the peer disabled push; the old expectation
+    // pinned the shim's async-callback stub. A bare stream has no
+    // server session, so push is disabled.
+    expect(
+      catchCode(() => stream.pushStream({ ":path": "/" }, () => {})),
+    ).toBe("ERR_HTTP2_PUSH_DISABLED");
   });
 
   test("write()/end() buffer the request body", () => {
