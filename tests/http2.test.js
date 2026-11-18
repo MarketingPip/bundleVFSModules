@@ -526,7 +526,14 @@ describe("Http2Stream", () => {
     const stream = new Http2Stream();
     stream.respond({ ":status": 201, "x-a": "b" });
     expect(stream.headersSent).toBe(true);
-    expect(stream.sentHeaders).toEqual({ ":status": 201, "x-a": "b" });
+    // H2-V6: real Node's respond() auto-adds a date header (and :status
+    // is coerced to a number); the old expectation pinned the shim's
+    // incomplete behavior.
+    expect(stream.sentHeaders).toEqual({
+      ":status": 201,
+      "x-a": "b",
+      date: expect.any(String),
+    });
   });
 
   test("pushStream() reports ERR_HTTP2_PUSH_DISABLED asynchronously", async () => {
