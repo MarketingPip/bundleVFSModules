@@ -8,13 +8,17 @@
  * Limitations:
  *   - History is in-memory only (no .node_repl_history persistence)
  *   - .save/.load map to VFS via fs shim; silently fail if unavailable
- *   - breakEvalOnSigint accepted but inert (no SIGINT watchdog)
+ *   - breakEvalOnSigint interrupts a pending top-level-await (async) eval
+ *     via a SIGINT race (Node lib/repl.js:596-623); a synchronous eval
+ *     cannot be interrupted in a browser (no V8 watchdog) — see
+ *     makeScriptInterruptedError / _onSigint.
  *   - domain option throws (removed in Node 24)
  */
 
 import { Interface } from "./readline";
 import vm from "./vm";
 import { inspect } from "./util";
+import { Console } from "./console";
 import {
   Module as CJSModule,
   builtinModules as nodeBuiltinModules,
@@ -38,6 +42,65 @@ const kBufferedCommand = Symbol("bufferedCommand");
 const kLoading = Symbol("loading");
 const kContextId = Symbol("contextId"); // inspector stub — no-op
 const kRegExpStatics = Symbol("regexpStatics"); // snapshot of RegExp.$1..$9
+const kSigintQueue = Symbol("sigintQueue"); // prioritized SIGINT tasks (Node lib/repl.js:821)
+
+// Node lib/repl.js:334 — the repl creates a domain, whose async_hooks
+// tracking stamps every promise with async ids; that is what makes
+// util.inspect render a Promise multi-line (`Promise {\n  456,\n
+// Symbol(async_id_symbol): ...`). The shim stubs the domain, so the
+// tracking is enabled here instead, once per process, on first
+// REPLServer construction. The hook is a no-op with an `init` callback
+// — an empty callbacks object does NOT activate the promise hook
+// (probed: createHook({}).enable() stamps nothing, createHook({init(){} })
+// .enable() does). Under Node the ids are real host async ids, not
+// fabricated. In the browser/sandbox there is no native module and the
+// tracking stays off (the stub hook cannot stamp real promises); the
+// repl still works, promises just inspect single-line.
+// The native module is reached through the bare global process's
+// getBuiltinModule — the same probe src/async_hooks.js uses — NOT by
+// importing ./async_hooks: that module statically imports `als-browser`,
+// which replaces globalThis.setTimeout/setInterval/setImmediate/
+// queueMicrotask at import time and trips the official test harness's
+// global-leak check (see src/readline.js:18 — the same reason the
+// readline shim avoids the shared events.js).
+// ponytail: this is process-wide by design — Node pays the same cost via
+// domain.create(). Best-effort: if async_hooks is unavailable the repl
+// must still construct, so a failure here is swallowed.
+let _promiseTrackingEnabled = false;
+function enablePromiseTrackingOnce() {
+  if (_promiseTrackingEnabled) return;
+  _promiseTrackingEnabled = true;
+  try {
+    const proc = typeof process !== "undefined" ? process : undefined;
+    const getBuiltin =
+      proc && typeof proc.getBuiltinModule === "function"
+        ? proc.getBuiltinModule
+        : undefined;
+    if (getBuiltin === undefined) return;
+    const mod = getBuiltin.call(proc, "async_hooks");
+    if (mod && typeof mod.createHook === "function") {
+      mod.createHook({ init() {} }).enable();
+    }
+  } catch {
+    // async_hooks unavailable — promises stay single-line (see NOTES).
+  }
+}
+
+// Node lib/repl.js:599-602 creates the interruption error with
+// stackTraceLimit 0, so its stack is just the message line — and the
+// message line carries the [CODE] infix from the internal error
+// toString (lib/internal/errors.js:384). The shim's inspect renders the
+// first stack line, so reproducing that observable stack directly is
+// what makes the printed form
+// `[Error [ERR_SCRIPT_EXECUTION_INTERRUPTED]: ...] {` (probed against
+// the shim writer: first line 90 chars, props multi-line, ends `}`).
+function makeScriptInterruptedError() {
+  const err = new Error("Script execution was interrupted by `SIGINT`");
+  err.code = "ERR_SCRIPT_EXECUTION_INTERRUPTED";
+  err.stack =
+    "Error [ERR_SCRIPT_EXECUTION_INTERRUPTED]: Script execution was interrupted by `SIGINT`";
+  return err;
+}
 
 // ---------------------------------------------------------------------------
 // NullStream
@@ -600,6 +663,80 @@ function processTopLevelAwait(src) {
   return state.hoistedDeclarationStatements.join("") + wrappedArray.join("");
 }
 
+// Sync-statement evaluation (R4c): the sandboxed expression wrapper can
+// only take a single expression, so a top-level declaration (`let dd;`,
+// `function foo() {}`, `class Foo {}`) or any other non-expression
+// statement is a SyntaxError there. Node evaluates the input as a script
+// and persists the declarations in the context. Reuse the declaration
+// rewriting from Node's lib/internal/repl/await.js visitors (the same
+// hoist-and-assign rewrite the await branch uses): top-level declarations
+// become assignments that land on the context through the `with` proxy's
+// set trap, the hoisted declarations are dropped (see _evalAwait), and
+// the last expression statement becomes the return value (Node's
+// completion value). Returns null when the input is a single expression
+// (the expression wrapper owns it) or does not parse (the wrapper reports
+// the SyntaxError / Recoverable as before).
+// ponytail: a bare `var` redeclare (`var x = 5;` then `var x;`) is
+// rewritten to `void (x=undefined)` by the shared visitor — Node's own
+// await transform does the same, but a sync script leaves the value
+// alone. No test covers the sync case; the await behavior is verbatim.
+function processTopLevelSync(src) {
+  let root;
+  try {
+    root = acorn.parse(src, {
+      ecmaVersion: "latest",
+      allowAwaitOutsideFunction: true,
+    });
+  } catch {
+    return null;
+  }
+  const srcArray = src.split("");
+  const state = {
+    body: root,
+    ancestors: [],
+    hoistedDeclarationStatements: [],
+    replace(from, to, str) {
+      for (let i = from; i < to; i++) srcArray[i] = "";
+      if (from === to) str += srcArray[from];
+      srcArray[from] = str;
+    },
+    prepend(node, str) {
+      srcArray[node.start] = str + srcArray[node.start];
+    },
+    append(node, str) {
+      srcArray[node.end - 1] += str;
+    },
+    containsAwait: false,
+    containsReturn: false,
+  };
+  walk.recursive(root, state, visitors);
+  // A single expression statement needs no statement evaluation.
+  const nonEmpty = root.body.filter((n) => n.type !== "EmptyStatement");
+  if (
+    nonEmpty.length === 1 &&
+    nonEmpty[0].type === "ExpressionStatement" &&
+    state.hoistedDeclarationStatements.length === 0
+  ) {
+    return null;
+  }
+  // The last expression statement is the result (Node's completion
+  // value); a trailing declaration yields undefined.
+  for (let i = root.body.length - 1; i >= 0; i--) {
+    const node = root.body[i];
+    if (node.type === "EmptyStatement") continue;
+    if (node.type === "ExpressionStatement") {
+      state.prepend(node.expression, "(");
+      state.prepend(node, "return ");
+      state.append(node.expression, ")");
+    }
+    break;
+  }
+  return {
+    code: srcArray.join(""),
+    hoists: state.hoistedDeclarationStatements.join(""),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Deprecation warnings — Node's deprecate() emits once per process.
 // ---------------------------------------------------------------------------
@@ -870,7 +1007,7 @@ export class REPLServerImpl extends Interface {
     this.writer = options.writer || writer;
     this.editorMode = false;
     this.commands = Object.create(null);
-    this.breakEvalOnSigint = !!options.breakEvalOnSigint; // accepted, inert
+    this.breakEvalOnSigint = !!options.breakEvalOnSigint;
     this[kContextId] = undefined;
 
     this.underscoreAssigned = false;
@@ -896,6 +1033,18 @@ export class REPLServerImpl extends Interface {
         return this;
       },
     };
+
+    // Node's domain.create() (lib/repl.js:334) is what enables async_hooks
+    // promise tracking; the shim stubs the domain, so the tracking is
+    // enabled here instead (once per process — see
+    // enablePromiseTrackingOnce).
+    enablePromiseTrackingOnce();
+
+    // Prioritized SIGINT queue (Node lib/repl.js:821): a pending
+    // breakEvalOnSigint await registers its interrupt here; _onSigint
+    // runs the queue first, else the idle behavior.
+    this[kSigintQueue] = new Set();
+    this._sawSIGINT = false;
 
     if (this.writer === writer) writer.options.colors = this.useColors;
 
@@ -928,6 +1077,10 @@ export class REPLServerImpl extends Interface {
     // NOT through NullStream / input directly.
     this.on("line", (cmd) => this._onLine(cmd));
     this.on("close", () => this.emit("exit"));
+    // The readline Interface emits "SIGINT" on Ctrl+C when a listener is
+    // registered (otherwise it closes); _onSigint implements Node's
+    // onSigInt (lib/repl.js:821-847).
+    this.on("SIGINT", () => this._onSigint());
 
     // ── Initial prompt, synchronously (Node lib/repl.js:1040) ───────────
     // The prompt precedes any input the caller writes right after start()
@@ -1039,6 +1192,18 @@ export class REPLServerImpl extends Interface {
           } catch (_) {}
         }
       }
+      // Node lib/repl.js:1109 — the context gets its own Console writing
+      // to the repl output, so `console.log` inside evaluated code goes
+      // to the repl output (not process.stdout). Only for the sandboxed
+      // context: with useGlobal the context IS globalThis and Node does
+      // not replace its console. this._output is set in the constructor
+      // before resetContext() runs.
+      Object.defineProperty(context, "console", {
+        __proto__: null,
+        configurable: true,
+        writable: true,
+        value: new Console(this._output),
+      });
       context.global = context;
     }
 
@@ -1117,12 +1282,45 @@ export class REPLServerImpl extends Interface {
     const strict = this.replMode === REPL_MODE_STRICT;
     return new Proxy(this.context, {
       has: strict ? (t, k) => k in t || k in globalThis : () => true,
-      get: (t, k) => (k in t ? t[k] : globalThis[k]),
+      // Sloppy reads of undeclared names throw ReferenceError (Node),
+      // not `undefined`: with `has: () => true` claiming every name,
+      // the read resolves here, so the check lives in `get`. Symbol
+      // keys are exempt — `with` reads `Symbol.unscopables` on every
+      // evaluation, and a throw there would break all evals.
+      // ponytail: `typeof <undeclared>` now throws instead of returning
+      // "undefined" (a `get` trap cannot tell a typeof read from a value
+      // read); no vendored test covers it.
+      get: (t, k) => {
+        if (k in t) return t[k];
+        if (k in globalThis) return globalThis[k];
+        if (typeof k === "string")
+          throw new ReferenceError(`${k} is not defined`);
+        return undefined;
+      },
       set: (t, k, v) => {
         t[k] = v;
         return true;
       },
     });
+  }
+
+  // Shared by _evalAwait and _evalSyncStatements: a hoisted `let` name
+  // already on the context throws (Node's error for the `const k`
+  // redeclare case). Hoisted `var` names are freely redeclared, as in
+  // Node — no check. ponytail: the check answers `n in this.context`,
+  // which also matches builtin libs/getters installed on the context (a
+  // `let Buffer` would falsely throw — Node allows a lexical to shadow a
+  // global property). No test covers it; a precise check needs a lexical
+  // store the shim does not have.
+  _checkHoistedRedeclare(hoisted) {
+    for (const m of hoisted.matchAll(/\blet ([^;]+);/g)) {
+      for (const name of m[1].split(",")) {
+        const n = name.trim();
+        if (n && n in this.context) {
+          throw new SyntaxError(`Identifier '${n}' has already been declared`);
+        }
+      }
+    }
   }
 
   // Evaluate ported top-level-await code (a statement list: hoisted
@@ -1155,20 +1353,30 @@ export class REPLServerImpl extends Interface {
     const iifeStart = code.indexOf("(async () => { ");
     const hoisted = iifeStart === -1 ? "" : code.slice(0, iifeStart);
     const iife = iifeStart === -1 ? code : code.slice(iifeStart);
-    for (const m of hoisted.matchAll(/\blet ([^;]+);/g)) {
-      for (const name of m[1].split(",")) {
-        const n = name.trim();
-        if (n && n in this.context) {
-          throw new SyntaxError(`Identifier '${n}' has already been declared`);
-        }
-      }
-    }
+    this._checkHoistedRedeclare(hoisted);
     const proxy = this._scopeProxy();
     // eslint-disable-next-line no-new-func
     return new Function(
       "__ctx__",
       `with(__ctx__){return (${iife.trim()});}`,
     ).call(proxy, proxy);
+  }
+
+  // Evaluate a sync statement list (see processTopLevelSync): the hoisted
+  // declarations are dropped so the rewritten assignments land on the
+  // context through the `with` proxy's set trap (same trick as
+  // _evalAwait). Only the sandboxed path uses it — the useGlobal path
+  // evaluates statement lists natively via indirect eval (and its
+  // rewritten code carries a top-level `return`, which indirect eval
+  // would reject). ponytail: strict + declarations runs the body sloppy
+  // (the Function has no directive), the same documented gap as
+  // _evalAwait — the assignments still land on the context via the set
+  // trap in sloppy mode.
+  _evalSyncStatements({ code, hoists }) {
+    this._checkHoistedRedeclare(hoists);
+    const proxy = this._scopeProxy();
+    // eslint-disable-next-line no-new-func
+    return new Function("__ctx__", `with(__ctx__){${code}}`).call(proxy, proxy);
   }
 
   // ── Default eval ─────────────────────────────────────────────────────────
@@ -1279,10 +1487,9 @@ export class REPLServerImpl extends Interface {
           // Wrap in with-block; new vars declared with var land on context
           // via the Proxy below which traps set.
           // ponytail: the expression wrapper only accepts a single
-          // expression — declarations (const/let) are statements and
-          // buffer as Recoverable instead of evaluating. Pre-existing
-          // architecture ceiling (a real script eval would be needed to
-          // fix it); not this lane.
+          // expression — declarations (const/let) are statements, so
+          // _defaultEval routes statement lists to _evalSyncStatements
+          // (processTopLevelSync) before this wrapper is reached.
           const strict = this.replMode === REPL_MODE_STRICT;
           const proxy = this._scopeProxy();
           if (strict) {
@@ -1310,8 +1517,29 @@ export class REPLServerImpl extends Interface {
     // user's code runs, so no shim regex can clobber them in between.
     restoreRegExpStatics(this[kRegExpStatics]);
 
+    // Sync statement lists (top-level declarations, etc.) cannot go
+    // through the expression wrapper; the statement evaluator owns them
+    // (sandboxed path only — useGlobal evaluates statements natively via
+    // indirect eval). Errors from it are the real errors: the wrappedCmd
+    // retry below is skipped for them.
+    let syncStatements = null;
+    if (!awaitPromise && !this.useGlobal) {
+      try {
+        syncStatements = processTopLevelSync(code);
+      } catch {
+        syncStatements = null; // parse error → expression wrapper reports it
+      }
+    }
+    let statementEvaluated = false;
+
     try {
-      const raw = awaitPromise ? this._evalAwait(code) : runFn(code);
+      // A sync statement list never goes through the expression wrapper
+      // (it would throw before the statement branch below is reached).
+      const raw = awaitPromise
+        ? this._evalAwait(code)
+        : syncStatements
+          ? undefined
+          : runFn(code);
 
       if (awaitPromise) {
         // Node lib/repl.js:612 — unwrap `.value` exactly once. No
@@ -1319,11 +1547,34 @@ export class REPLServerImpl extends Interface {
         // of `await p1, p2`) must print as a Promise, not as its
         // resolution. The old code awaited twice, so every await
         // expression printed its resolution (or undefined).
+        //
+        // Node lib/repl.js:596-623 — with breakEvalOnSigint the promise
+        // races an interrupt promise whose reject is registered in the
+        // prioritized SIGINT queue; Ctrl+C then rejects with
+        // ERR_SCRIPT_EXECUTION_INTERRUPTED instead of waiting forever.
+        // The task is removed once the await settles, either way.
+        let interruptTask = null;
+        let awaited = raw;
+        if (this.breakEvalOnSigint) {
+          const interrupt = new Promise((_, reject) => {
+            interruptTask = () => reject(makeScriptInterruptedError());
+            this[kSigintQueue].add(interruptTask);
+          });
+          awaited = Promise.race([raw, interrupt]);
+        }
         try {
-          result = (await raw)?.value;
+          result = (await awaited)?.value;
         } catch (e) {
           err = e;
+        } finally {
+          if (interruptTask) this[kSigintQueue].delete(interruptTask);
         }
+      } else if (syncStatements) {
+        // Statement list (top-level declarations, ...): the statement
+        // evaluator (see processTopLevelSync). Its errors are the real
+        // errors — the wrappedCmd retry below is skipped for them.
+        statementEvaluated = true;
+        result = this._evalSyncStatements(syncStatements);
       } else {
         // No .value unwrap here: runFn returns the user's value
         // directly, and no {value, syncError} wrapper producer exists
@@ -1342,6 +1593,7 @@ export class REPLServerImpl extends Interface {
       // the expression wrapper and clobber it with a wrapper
       // SyntaxError about `const`/`let`).
       if (
+        !statementEvaluated &&
         wrappedCmd &&
         e instanceof SyntaxError &&
         !(
@@ -1401,10 +1653,43 @@ export class REPLServerImpl extends Interface {
     cb(null, result);
   }
 
+  // ── SIGINT ─────────────────────────────────────────────────────────────
+  // Node lib/repl.js:821-847 (onSigInt): a pending breakEvalOnSigint await
+  // is interrupted first (its task is in the prioritized queue — see
+  // _defaultEval); otherwise the idle behavior — clear the line, print
+  // "(To exit, ...)" on the first Ctrl+C at an empty prompt, close on the
+  // second. ponytail: there is no editor-mode exit here (Node calls
+  // _turnOffEditorMode); the shim exits editor mode via its own path.
+  _onSigint() {
+    if (this[kSigintQueue].size > 0) {
+      for (const task of this[kSigintQueue]) task();
+      return;
+    }
+    const empty = this.line.length === 0;
+    this.clearLine();
+    const cmd = this[kBufferedCommand];
+    if (!(cmd && cmd.length > 0) && empty) {
+      if (this._sawSIGINT) {
+        this.close();
+        this._sawSIGINT = false;
+        return;
+      }
+      this._write("(To exit, press Ctrl+C again or Ctrl+D or type .exit)\n");
+      this._sawSIGINT = true;
+    } else {
+      this._sawSIGINT = false;
+    }
+    this.clearBufferedCommand();
+    this.lines.level = [];
+    if (!this.closed) this.displayPrompt();
+  }
+
   // ── Line handler ─────────────────────────────────────────────────────────
 
   _onLine(cmd) {
     cmd = cmd || "";
+    // Node lib/repl.js onLine: a new line clears the sawSIGINT state.
+    this._sawSIGINT = false;
 
     if (this.editorMode) {
       this[kBufferedCommand] += cmd + "\n";
@@ -1555,29 +1840,99 @@ export class REPLServerImpl extends Interface {
 
     // Frame cut (non-SyntaxError only — SyntaxError stacks were already
     // stripped above): drop the eval-dispatch frame and everything below
-    // it. The dispatch wrapper is the `at eval (<anonymous>)` line
-    // (indirect-eval path); the frame just before it is the dispatch
-    // frame itself. Frames before it are user code and are kept (their
-    // locations stay `<anonymous>:line:col` — Node rewrites them to
-    // `REPLn:*:*`, which the shim does not track; no shim-exercising
-    // test asserts the rewritten form).
-    // (Sandboxed `new Function` frames keep their full stack — no
-    //  shim-exercising test asserts them. A trailing props block
-    //  (` {` ... `}`) that inspect appends for errors with extra
-    //  enumerable properties is dropped with the machinery frames for
-    //  the same reason — pretty-custom-stack runs against the native
-    //  repl via common/repl.js, not the shim.)
+    // it. Two dispatch shapes:
+    // - Indirect eval (useGlobal): the dispatch is `at eval (<anonymous>)`
+    //   — the frame just before it is the dispatch frame itself; frames
+    //   before it are user code and are kept (their locations stay
+    //   `<anonymous>:line:col` — Node rewrites them to `REPLn:*:*`, which
+    //   the shim does not track; no shim-exercising test asserts the
+    //   rewritten form).
+    // - Sandboxed `new Function` (runFn / _evalAwait / _evalSyncStatements):
+    //   the dispatch is `at eval (eval at runFn (...), <anonymous>:L:C)`;
+    //   keep the message lines plus any user-function frames above it
+    //   matching `at <name> (<anonymous>:L:C)` and drop the rest (the
+    //   proxy get-trap frame has a real file location, so it is dropped;
+    //   the dispatch + machinery below it are dropped). Without this cut
+    //   the sandboxed path prints the full stack (e.g. a sloppy
+    //   undeclared read prints its get-trap frame), where Node prints a
+    //   single line.
+    // A trailing props block (` {` ... `}`) that inspect appends for
+    // errors with extra enumerable properties is dropped with the
+    // machinery frames for the same reason — pretty-custom-stack runs
+    // against the native repl via common/repl.js, not the shim.
+    // ponytail: for a one-line stack (e.g. the SIGINT interruption
+    // error, whose stack is just its message line) neither cut triggers,
+    // so the props block is preserved.
     if (!isSyntax) {
       const wlines = errStack.split(/(?<=\n)/);
       let cut = -1;
+      let sandboxed = false;
       for (let i = 0; i < wlines.length; i++) {
         if (/^    at eval \(<anonymous>\)/.test(wlines[i])) {
           cut = i;
           break;
         }
+        if (/^    at eval \(eval at /.test(wlines[i])) {
+          cut = i;
+          sandboxed = true;
+          break;
+        }
       }
       if (cut > 0) {
-        errStack = wlines.slice(0, cut - 1).join("");
+        if (sandboxed) {
+          const kept = [];
+          let i = 0;
+          // Message lines (everything before the first frame).
+          while (i < cut && !/^    at /.test(wlines[i])) {
+            kept.push(wlines[i]);
+            i++;
+          }
+          // User-function frames at <anonymous> locations.
+          for (; i < cut; i++) {
+            if (
+              /^    at (?:async )?(?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]* \(<anonymous>:\d+:\d+\)/.test(
+                wlines[i],
+              )
+            ) {
+              kept.push(wlines[i]);
+            }
+          }
+          // Trailing props block: inspect appends ` { ... }` for errors
+          // with extra enumerable properties (e.g. code/requireStack on
+          // a MODULE_NOT_FOUND), the ` {` riding on the last frame line.
+          // The cut above would drop it — but test-repl-require asserts
+          // /code: 'MODULE_NOT_FOUND'/ and /requireStack: \[ '<repl>' \]/,
+          // so re-attach it to the last kept line (the same suffix move
+          // R7's cut === -1 branch does for its new last frame). Native
+          // keeps the require-machinery frames too; the shim drops them
+          // (they are src/module.js paths, not Node's) — no test asserts
+          // them, and the props are what the tests check.
+          let lastFrame = -1;
+          for (let j = 0; j < wlines.length; j++) {
+            if (/^    at /.test(wlines[j])) lastFrame = j;
+          }
+          if (lastFrame >= 0) {
+            const brace = wlines[lastFrame].indexOf(" {");
+            if (brace !== -1) {
+              const propsText =
+                wlines[lastFrame].slice(brace) +
+                wlines.slice(lastFrame + 1).join("");
+              const nl = propsText.indexOf("\n");
+              const first = nl === -1 ? propsText : propsText.slice(0, nl + 1);
+              const rest = nl === -1 ? "" : propsText.slice(nl + 1);
+              const last = kept[kept.length - 1];
+              if (last.endsWith("\n")) {
+                kept[kept.length - 1] = last.slice(0, -1) + first;
+              } else {
+                kept.push(first);
+              }
+              if (rest) kept.push(rest);
+            }
+          }
+          errStack = kept.join("");
+        } else {
+          errStack = wlines.slice(0, cut - 1).join("");
+        }
       } else if (cut === -1) {
         // Node lib/repl.js:643 overrideStackTrace — the repl slices the
         // captured frames to before the last null-named frame (the eval
