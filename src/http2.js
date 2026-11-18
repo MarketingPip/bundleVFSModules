@@ -1646,9 +1646,14 @@ class Http2Stream extends EventEmitter {
     this._clientWantTrailers = null;
     this._requestTrailers = null;
     this._requestTrailerPairs = null;
-    // H2-V4: 'end' is emitted at most once per stream (guarded across
-    // _deliverRequestBody, _deliverResponse, destroy() and end()).
-    this._endEmitted = false;
+    // H2-V4b: 'end' is emitted at most once PER SIDE on the shared
+    // stream (guarded across _deliverRequestBody, _deliverResponse,
+    // destroy() and end()). The server's 'end' fires when the request
+    // body lands; the client's fires when the response is delivered —
+    // a plain emit("end") fires the client's handler first
+    // (registration order), before the server has piped the response
+    // (test-http2-zero-length-write).
+    this._responseEndEmitted = false;
   }
 
   get id() {
@@ -1860,11 +1865,36 @@ class Http2Stream extends EventEmitter {
     });
   }
 
-  // Emit 'end' at most once (shared by close(), destroy() and end()).
+  // Emit 'end' to one side only (same shared-object split as 'data' /
+  // 'trailers' in H2-V4). Server-side listeners are the ones the
+  // handler registered at dispatch (_serverEndListeners); the rest are
+  // the client's (including ones registered in its 'response' handler).
+  _emitEndForSide(side) {
+    const serverListeners = this._serverEndListeners || [];
+    const all = this.listeners("end");
+    const targets =
+      side === "request"
+        ? serverListeners
+        : all.filter((fn) => !serverListeners.includes(fn));
+    for (const fn of [...targets]) fn.call(this);
+  }
+
+  // Emit 'end' at most once per side (shared by close(), destroy() and
+  // end()). H2-V4b: the old single-guard emit fired the client's 'end'
+  // handler before the server's (registration order), so a client
+  // assertion ran before the server had piped the response
+  // (test-http2-zero-length-write). Each side's flag is set by its own
+  // delivery (_deliverRequestBody for the server, _deliverResponse for
+  // the client); a teardown only wakes the sides that have not had it.
   _emitEndOnce() {
-    if (this._endEmitted) return;
-    this._endEmitted = true;
-    this.emit("end");
+    if (!this._requestEndEmitted) {
+      this._requestEndEmitted = true;
+      this._emitEndForSide("request");
+    }
+    if (!this._responseEndEmitted) {
+      this._responseEndEmitted = true;
+      this._emitEndForSide("response");
+    }
   }
 
   destroy(error) {
@@ -2215,8 +2245,10 @@ class Http2Stream extends EventEmitter {
     pushStream._isPush = true;
     pushStream._serverSession = serverSession;
     // A push stream has no request body to wait for: mark the body
-    // delivery as complete (a dedicated flag — _requestEndEmitted
-    // must stay false so _deliverResponse still emits 'end').
+    // delivery as complete. _requestEndEmitted stays false (it is the
+    // server-side 'end' flag now) so _deliverResponse's per-side emit
+    // still fires the client's 'end'; a push stream has no
+    // _serverEndListeners, so the server-side branch is a no-op.
     pushStream._requestBodyDeliveryStarted = true;
     pushStream._requestBodyComplete = true;
     this.session.emit("stream", pushStream, headersObject, 0, rawPairs);
@@ -2421,7 +2453,12 @@ class Http2Stream extends EventEmitter {
       }
       this._requestEndEmitted = true;
       this._requestBodyComplete = true;
-      this._emitEndOnce();
+      // H2-V4b: server-side 'end' only — the client's 'end' fires from
+      // _deliverResponse, after the response lands. A plain emit here
+      // fires the client's handler first (registration order), before
+      // the server's 'end' handler has piped the response
+      // (test-http2-zero-length-write).
+      this._emitEndForSide("request");
       // H2-V4: the client's trailers arrive after the body (Node emits
       // 'trailers' on the server stream once the request ends).
       // Side-scoped: only the server's listeners see request trailers.
@@ -2517,9 +2554,11 @@ class Http2Stream extends EventEmitter {
     // trailers and must not fire again here).
     if (this._sentTrailers)
       this._emitTrailers({ ...this._sentTrailers }, "response");
-    // The request body already emitted 'end' (lazy delivery above); a
-    // second one would double-fire the client's 'end' mustCalls.
-    if (!this._requestEndEmitted) this._emitEndOnce();
+    // H2-V4b: the client's 'end' fires here, after the response lands.
+    // _emitEndOnce is per-side now: the server's 'end' already fired
+    // when the request body landed, unless the body was never delivered
+    // (no consumer), in which case it fires here too.
+    this._emitEndOnce();
     this._closed = true;
     this._emitCloseOnce(constants.NGHTTP2_NO_ERROR);
   }
@@ -3070,7 +3109,12 @@ function dispatchVirtualRequest(session, stream) {
   // handler must see it, so it can observe the reset (its 'error'
   // fires there). The old _closed check swallowed it.
   if (stream._destroyed) return;
-  const server = lookupServer(session._virtualPort);
+  // H2-V4b: fall back to the session's established peer when the
+  // registry lookup finds nothing at all — the server closed after
+  // this session connected (see connect()). Only when lookupServer
+  // returns undefined, so a connect to a never-registered port still
+  // refuses.
+  const server = lookupServer(session._virtualPort) || session._virtualServer;
   if (!server) {
     const err = http2Error(
       "ECONNREFUSED",
@@ -3324,9 +3368,13 @@ class Http2Server extends EventEmitter {
       // before the handlers run so the server-side ones can be told
       // apart (they are registered by the 'stream'/'request' handlers).
       // The same split applies to 'data': the request body goes to the
-      // server's consumers, the response body to the client's.
+      // server's consumers, the response body to the client's. H2-V4b:
+      // the same split applies to 'end' — the server's 'end' fires when
+      // the request body lands, the client's when the response is
+      // delivered.
       const trailersBefore = stream.listeners("trailers");
       const dataBefore = stream.listeners("data");
+      const endBefore = stream.listeners("end");
       this.emit("stream", stream, headers, flags, rawHeaders);
       if (
         this.listenerCount("request") > 0 ||
@@ -3349,6 +3397,9 @@ class Http2Server extends EventEmitter {
       stream._serverDataListeners = stream
         .listeners("data")
         .filter((fn) => !dataBefore.includes(fn));
+      stream._serverEndListeners = stream
+        .listeners("end")
+        .filter((fn) => !endBefore.includes(fn));
       // If the handler attached a server-side request-body consumer but
       // never responded, start lazy delivery anyway so its 'end' still
       // fires (a response already delivered means 'end' already fired).
@@ -3522,6 +3573,13 @@ export function connect(authority, options, listener) {
     const server = serverRegistry.has(session._virtualPort)
       ? serverRegistry.get(session._virtualPort)
       : undefined;
+    // H2-V4b: record the established peer. server.close() stops NEW
+    // connections, but an already-connected session's requests still
+    // complete in real Node — so a dispatch that finds the registry
+    // empty (the server closed after connect, e.g. in the first
+    // request's 'end' handler) falls back to this server instead of
+    // refusing (test-http2-async-local-storage).
+    session._virtualServer = server;
     if (
       server &&
       (server instanceof Http2SecureServer) !== session.encrypted
