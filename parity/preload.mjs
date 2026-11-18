@@ -699,6 +699,27 @@ const workersAllowed =
   typeof process.permission?.has !== "function" ||
   process.permission.has("worker");
 const isForkedChild = typeof process.send === "function";
-if (workersAllowed && !(isForkedChild && !entryPointNeedsEsmHooks())) {
+const needsEsmHooks = entryPointNeedsEsmHooks();
+// W-A (worker_threads threadId offset): each register() spawns a loader-hook
+// worker thread that takes the next threadId (Node lib/internal/modules/esm/
+// hooks.js: AsyncLoaderHookWorker, one hooks thread per thread; probe-proven:
+// first worker gets 2/4/6 under register, 1/2/3 without). For the
+// worker_threads target, CJS entries skip register() so spawned workers get
+// native IDs (test-worker-event.js, test-worker-messaging.js). The skip is
+// safe for this target only: src/worker_threads.js imports just
+// "./_cloak.js" (extension present — resolves natively, no hooks needed),
+// no worker test uses dynamic import(), and .mjs entries still register
+// (needsEsmHooks true). Other targets are untouched — their shims rely on
+// the hooks for extensionless relative imports (e.g. src/repl.js "./readline").
+// ponytail: target-scoped gate, same shape as isFsHelper/isNetHelper; if a
+// future worker_threads test needs ESM redirects from a CJS entry, that test
+// needs its own carve-out, not a global re-register (which would re-take ID 1).
+const skipRegisterForWorkerThreads =
+  target === "worker_threads" && !needsEsmHooks;
+if (
+  workersAllowed &&
+  !(isForkedChild && !needsEsmHooks) &&
+  !skipRegisterForWorkerThreads
+) {
   register("./hooks.mjs", import.meta.url);
 }
