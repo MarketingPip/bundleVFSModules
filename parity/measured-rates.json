@@ -134,9 +134,9 @@
       "total": 15
     },
     "process": {
-      "date": "2026-10-11",
-      "passed": 81,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-18",
+      "passed": 92,
+      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11 + wave P1 2026-11-18: PR #458 (execve-permission-fail, execve-permission-granted, external-stdio-close, merged main 6f16c7dc), PR #460 (default, merged main 71cb3eb5), PR #459 (dlopen-error-message-crash, redirect-warnings, redirect-warnings-env, finalization, warnings, merged main 723327d5); all nine re-verified exit 0 on their merged mains; wave-end full sweep on 723327d5 confirms 92/97 (redirect-warnings-env adjudicated via isolated re-runs)",
       "total": 97
     },
     "querystring": {

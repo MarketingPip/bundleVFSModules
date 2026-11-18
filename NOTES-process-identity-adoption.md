@@ -103,6 +103,6 @@ re-triages get-builtin.mjs under a harness change.
 
 ## Ship
 
-- PR #___ / Merge SHA: ___
+- PR #460 / Merge SHA: 71cb3eb5
 - CI waiter: `hidden_files/pr___-ci-wait.py` pinned to code SHA ___.
 - Push: git-push-api.py first try / fallback (record here).
