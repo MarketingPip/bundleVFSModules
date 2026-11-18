@@ -935,12 +935,14 @@ function inspectError(err) {
 }
 
 // ---------------------------------------------------------------------------
-// ReplHistory — in-memory port of Node's internal/repl/history.js.
+// ReplHistory — port of Node's internal/repl/history.js.
 //
-// The file-persistence half of Node's ReplHistory (history file load/flush)
-// needs fs/path/os; in a browser that surface is an honest no-op while the
-// navigation API (addHistory, navigateToNext/Previous, history, index, size,
-// isFlushing) behaves identically.
+// The file-persistence half (history file load/flush) runs on native
+// fs/os/path reached via process.getBuiltinModule, gated to genuine Node
+// (no globalThis._RUNTIME_); under the browser sandbox it stays the
+// in-memory no-op it was. The navigation API (addHistory,
+// navigateToNext/Previous, history, index, size, isFlushing) behaves
+// identically on both paths.
 // ---------------------------------------------------------------------------
 
 const kHSize = Symbol("kSize");
@@ -948,6 +950,84 @@ const kHHistory = Symbol("kHistory");
 const kHIndex = Symbol("kIndex");
 const kHRemoveDuplicates = Symbol("kRemoveHistoryDuplicates");
 const kHIsFlushing = Symbol("kIsFlushing");
+// File-persistence half of ReplHistory (setupHistory port): the history
+// file path, its open handle, the flush debounce timer and the write state.
+const kHHistoryPath = Symbol("kHistoryPath");
+const kHHistoryHandle = Symbol("kHistoryHandle");
+const kHTimer = Symbol("kTimer");
+const kHWriting = Symbol("kWriting");
+const kHPending = Symbol("kPending");
+const kHNative = Symbol("kNative");
+// Node: lib/internal/repl/history.js — flush debounce between 'line' events.
+const kDebounceHistoryMS = 15;
+
+// Native fs/os/path for the history file — genuine Node only. Mirrors
+// src/os.js: process.getBuiltinModule bypasses the loader (bare `require` is
+// undefined in ESM shims under the harness) and the object returned is the
+// native singleton, so a test mocking os.homedir() on require('os') is
+// visible here (Node: lib/internal/repl/history.js uses fs/promises +
+// os.homedir).
+//
+// GATE CORRECTION (probe-proven 2026-11-18): a plain "no _RUNTIME_" gate
+// does NOT work — the parity harness defines globalThis._RUNTIME_ itself
+// (parity/preload.mjs:37-42) as the marker { parityForceShim: true }, which
+// exists precisely to switch native bridges OFF. That marker is
+// distinguishable from Jared's sandbox runtime (which carries loadModule,
+// process, globals, … and never parityForceShim), so the bridge is ON
+// exactly when _RUNTIME_ is absent OR is the parity marker. In the sandbox
+// the bridge stays OFF and the in-memory no-op below is the behavior.
+// The browser-navigator check mirrors src/os.js (browser-fallback lanes
+// with a real UA stay on the in-memory path); the shape check guards
+// against a VFS-resolving getBuiltinModule handing back a partial shim.
+let _historyNative = null;
+let _historyNativeProbed = false;
+function _historyNativeModules() {
+  if (_historyNativeProbed) return _historyNative;
+  _historyNativeProbed = true;
+  const rt =
+    typeof globalThis !== "undefined" ? globalThis._RUNTIME_ : undefined;
+  const isParityMarker =
+    rt !== undefined && rt !== null && rt.parityForceShim === true;
+  if (rt !== undefined && !isParityMarker) {
+    return null;
+  }
+  const ua =
+    typeof navigator !== "undefined"
+      ? String(navigator.userAgent || "")
+      : "";
+  if (ua !== "" && !ua.startsWith("Node.js/")) {
+    return null;
+  }
+  if (
+    typeof process === "undefined" ||
+    process.versions == null ||
+    typeof process.versions.node !== "string" ||
+    typeof process.getBuiltinModule !== "function"
+  ) {
+    return null;
+  }
+  try {
+    const fs = process.getBuiltinModule("fs");
+    const os = process.getBuiltinModule("os");
+    const path = process.getBuiltinModule("path");
+    if (
+      !fs ||
+      !fs.promises ||
+      typeof fs.promises.open !== "function" ||
+      typeof fs.promises.readFile !== "function" ||
+      !os ||
+      typeof os.homedir !== "function" ||
+      !path ||
+      typeof path.join !== "function"
+    ) {
+      return null;
+    }
+    _historyNative = { fs, os, path };
+  } catch {
+    _historyNative = null;
+  }
+  return _historyNative;
+}
 
 class ReplHistory {
   constructor(context, options) {
@@ -969,18 +1049,263 @@ class ReplHistory {
     }
     this[kHHistory] = options.history ?? [];
     this[kHIndex] = -1;
+    this[kHHistoryPath] = ReplHistory.getHistoryPath(options);
+    this[kHHistoryHandle] = null;
+    this[kHTimer] = null;
+    this[kHWriting] = false;
+    this[kHPending] = false;
+    this[kHNative] = null;
     this._context = context;
   }
 
-  // No history file in the browser: immediately ready, in-memory only.
+  // Node: lib/internal/repl/history.js — ReplHistory.getHistoryPath:
+  // a string filePath is trimmed (a blank path disables history).
+  static getHistoryPath(options) {
+    let historyPath = options.filePath;
+    if (typeof historyPath === "string") {
+      historyPath = historyPath.trim();
+    }
+    return historyPath;
+  }
+
+  // Port of Node's ReplHistory#initialize (lib/internal/repl/history.js):
+  // resolves the history file, loads it, and flushes on 'line'. With no
+  // native fs (browser sandbox) this stays the in-memory no-op it was.
+  // ORDERING: Node calls the ready callback synchronously on the disabled
+  // and homedir-error paths — safe there because Node prints the initial
+  // prompt synchronously in the constructor. The shim defers its prompt
+  // to a Promise microtask (src/repl.js), so the ready callback (and, on
+  // the homedir-error path, the error message itself) must be deferred to
+  // a Promise microtask too: microtasks run FIFO, and the prompt's was
+  // queued first, so the prompt prints before the callback starts input.
+  // A process.nextTick callback would jump ahead of the prompt and
+  // scramble chunk order (the old stub's Promise.resolve().then existed
+  // for exactly this reason).
   initialize(onReadyCallback) {
-    if (typeof onReadyCallback === "function") {
-      nextTick(onReadyCallback, null, this._context);
+    const cb =
+      typeof onReadyCallback === "function" ? onReadyCallback : () => {};
+    const native = _historyNativeModules();
+    if (!native) {
+      // No history file in the browser: immediately ready, in-memory only.
+      Promise.resolve().then(() => cb(null, this._context));
+      return;
+    }
+    this[kHNative] = native;
+    // Empty string disables persistent history.
+    if (this[kHHistoryPath] === "") {
+      this._disableHistoryWithMessage();
+      Promise.resolve().then(() => cb(null, this._context));
+      return;
+    }
+    const resolvedPath = this._resolveHistoryPath(native);
+    if (!resolvedPath) {
+      // Deferred as one microtask: the error message must print after the
+      // initial prompt, and the callback must start input after that.
+      Promise.resolve().then(() => {
+        this._writeHistoryMessage(
+          "\nError: Could not get the home directory.\n" +
+            "REPL session history will not be persisted.\n",
+        );
+        this._disableHistoryWithMessage();
+        cb(null, this._context);
+      });
+      return;
+    }
+    this._context.pause();
+    this._initializeHistory(cb).catch((err) =>
+      this._handleHistoryInitError(err, cb),
+    );
+  }
+
+  // Resolve the history file path; with no explicit filePath this is
+  // <homedir>/.node_repl_history (Node: lib/internal/repl/history.js,
+  // ReplHistory#getHistoryPath — homedir failure resolves to null here).
+  _resolveHistoryPath(native) {
+    if (!this[kHHistoryPath]) {
+      try {
+        this[kHHistoryPath] = native.path.join(
+          native.os.homedir(),
+          ".node_repl_history",
+        );
+        return this[kHHistoryPath];
+      } catch {
+        return null;
+      }
+    }
+    return this[kHHistoryPath];
+  }
+
+  // Node: ReplHistory initialize — open (mode 0600, creating the file),
+  // load its lines, open for writing and truncate, register the flush-on-
+  // 'line' and close-on-'exit' listeners, then flush once and call back.
+  async _initializeHistory(onReadyCallback) {
+    const native = this[kHNative];
+    const fsp = native.fs.promises;
+    try {
+      // Open and close first to ensure the file exists.
+      const hnd = await fsp.open(this[kHHistoryPath], "a+", 0o600);
+      await hnd.close();
+
+      let data;
+      try {
+        data = await fsp.readFile(this[kHHistoryPath], "utf8");
+      } catch (err) {
+        return this._handleHistoryInitError(err, onReadyCallback);
+      }
+
+      if (data) {
+        this[kHHistory] = data.split(/\r?\n+/, this[kHSize]);
+      } else {
+        this[kHHistory] = [];
+      }
+
+      const handle = await fsp.open(this[kHHistoryPath], "r+");
+      this[kHHistoryHandle] = handle;
+
+      await handle.truncate(0);
+
+      this._context.on("line", this._onHistoryLine.bind(this));
+      this._context.once("exit", this._onHistoryExit.bind(this));
+
+      this._context.once("flushHistory", () => {
+        if (!this._context.closed) {
+          this._context.resume();
+          onReadyCallback(null, this._context);
+        }
+      });
+
+      await this._flushHistory();
+    } catch (err) {
+      return this._handleHistoryInitError(err, onReadyCallback);
+    }
+  }
+
+  // Node: ReplHistory[kHandleHistoryInitError] — cannot open the history
+  // file; don't crash, just don't persist history.
+  _handleHistoryInitError(err, onReadyCallback) {
+    this._writeHistoryMessage(
+      "\nError: Could not open history file.\n" +
+        "REPL session history will not be persisted.\n",
+    );
+    this._disableHistoryWithMessage();
+    this._context.resume();
+    return onReadyCallback(null, this._context);
+  }
+
+  // Save the original _historyPrev and replace it with the
+  // disabled-message function (Node: ReplHistory initialize /
+  // kReplHistoryMessage). The override takes effect on the UP-keypress
+  // path because Interface.prototype[kHistoryPrev] is a getter returning
+  // the instance-own _historyPrev.
+  _disableHistoryWithMessage() {
+    this.historyPrev = this._context._historyPrev;
+    this._context._historyPrev = this._replHistoryMessage.bind(this);
+  }
+
+  // Node: ReplHistory[kReplHistoryMessage] — on the first UP when history
+  // is empty, print the disabled message, then restore the original
+  // method and call it.
+  _replHistoryMessage() {
+    if (this[kHHistory].length === 0) {
+      this._writeHistoryMessage(
+        "\nPersistent history support disabled. " +
+          "Set the NODE_REPL_HISTORY environment\nvariable to a valid, " +
+          "user-writable path to enable.\n",
+      );
+    }
+    // First restore the original method on the context, then call it.
+    this._context._historyPrev = this.historyPrev;
+    return this._context._historyPrev();
+  }
+
+  // Node: ReplHistory[kWriteToOutput] — write the message, then refresh
+  // the line so the prompt is reprinted.
+  _writeHistoryMessage(message) {
+    if (typeof this._context._writeToOutput === "function") {
+      this._context._writeToOutput(message);
+      if (typeof this._context._refreshLine === "function") {
+        this._context._refreshLine();
+      }
+    }
+  }
+
+  // Node: ReplHistory[kOnLine] — mark flushing and debounce the flush.
+  // The 'line' listener registered in _initializeHistory covers plain
+  // Interfaces (where [kOnLine] emits 'line'); on the REPL path this
+  // method is ALSO called from addHistory below, because the shim's
+  // [kOnLine] is a getter returning this._onLine — and REPLServerImpl
+  // overrides _onLine with the eval method — so [kLine] calls the eval
+  // directly and 'line' is never emitted for a REPL server.
+  _onHistoryLine() {
+    // No open handle (in-memory mode, or the disabled path): nothing to
+    // flush — Node only registers this listener after a successful open.
+    if (this[kHHistoryHandle] === null) {
+      return;
+    }
+    this[kHIsFlushing] = true;
+    if (this[kHTimer]) {
+      clearTimeout(this[kHTimer]);
+    }
+    this[kHTimer] = setTimeout(() => this._flushHistory(), kDebounceHistoryMS);
+  }
+
+  // Node: ReplHistory[kFlushHistory] — write the joined history at offset
+  // 0, coalescing a write already in flight, and emit 'flushHistory'
+  // when the queue drains.
+  async _flushHistory() {
+    this[kHTimer] = null;
+    if (this[kHWriting]) {
+      this[kHPending] = true;
+      return;
+    }
+    this[kHWriting] = true;
+    const historyData = this[kHHistory].join("\n");
+    try {
+      await this[kHHistoryHandle].write(historyData, 0, "utf8");
+      this[kHWriting] = false;
+      if (this[kHPending]) {
+        this[kHPending] = false;
+        this._onHistoryLine();
+      } else {
+        this[kHIsFlushing] = Boolean(this[kHTimer]);
+        if (!this[kHIsFlushing]) {
+          this._context.emit("flushHistory");
+        }
+      }
+    } catch {
+      // Node debuglogs a flush error; the shim stays silent.
+      this[kHWriting] = false;
+    }
+  }
+
+  // Node: ReplHistory[kOnExit] — if a flush is in flight, wait for it
+  // before closing the handle; otherwise close it now.
+  async _onHistoryExit() {
+    if (this[kHIsFlushing]) {
+      this._context.once("flushHistory", this._onHistoryExit.bind(this));
+      return;
+    }
+    // Node removes the 'line' listener with a fresh bound function, which
+    // never matches the registered one (upstream quirk, mirrored here).
+    this._context.off("line", this._onHistoryLine.bind(this));
+    if (this[kHHistoryHandle] !== null) {
+      try {
+        await this[kHHistoryHandle].close();
+      } catch {
+        // Ignore close errors (mirrors Node's debug-only handling).
+      }
     }
   }
 
   addHistory(isMultiline, lastCommandErrored) {
     const line = this._context.line;
+
+    // Flush trigger: [kLine] calls addHistory immediately before the line
+    // is evaluated, so scheduling the debounced flush here is equivalent
+    // to Node's flush-on-'line' (the 'line' listener above covers plain
+    // Interfaces; on the REPL path 'line' never emits — see _onHistoryLine).
+    // Scheduled first so even empty/whitespace lines flush, as in Node.
+    this._onHistoryLine();
 
     if (line.length === 0) return "";
 
