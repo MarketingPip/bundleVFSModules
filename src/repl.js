@@ -742,6 +742,57 @@ function processTopLevelSync(src) {
   };
 }
 
+// A lone expression statement with a trailing semicolon (`x.a = 1;`)
+// cannot go through the sandboxed expression wrapper: `return (x.a = 1;)`
+// is a SyntaxError, while Node evaluates it as a script and prints the
+// value. The statement evaluator owns multi-statement input, but a single
+// expression is routed to the wrapper (see processTopLevelSync) — so strip
+// exactly the statement-terminating `;` and let the wrapper see the bare
+// expression, which it already handles with the right semantics in both
+// modes (strict undeclared assignment still throws ReferenceError through
+// the strict inner function; sloppy assignment and member assignment land
+// on the context). Routing the input to the statement evaluator instead
+// would lose that: its Function is sloppy `with` (a 'use strict' directive
+// cannot live inside `with`), so strict `x = 3;` would silently create a
+// global instead of throwing.
+// Parse-grounded: only when the input is exactly one ExpressionStatement
+// (plus empty statements) whose span extends past its expression — acorn
+// ends the statement after the `;`, so the span between the expression
+// end and the statement end holds the terminator(s). Each `;` is replaced
+// with a space to keep later character positions stable.
+// Returns the input unchanged otherwise (including on parse failure).
+function stripLoneExpressionSemicolon(src) {
+  let root;
+  try {
+    root = acorn.parse(src, {
+      ecmaVersion: "latest",
+      allowAwaitOutsideFunction: true,
+    });
+  } catch {
+    return src;
+  }
+  const nonEmpty = root.body.filter((n) => n.type !== "EmptyStatement");
+  if (nonEmpty.length !== 1 || nonEmpty[0].type !== "ExpressionStatement") {
+    return src;
+  }
+  const stmt = nonEmpty[0];
+  if (stmt.end <= stmt.expression.end) return src; // no semicolon
+  // Every `;` between the expression and the end of the statement list
+  // is a terminator (or inside a comment, where a space is equally
+  // inert) — `x.a = 1;;` has two, as a second EmptyStatement; `x.a = 1;`
+  // has one. Blank them all so the wrapper sees the bare expression.
+  // The span runs to the last body node's end so trailing empty
+  // statements' `;`s are included; only `;`, whitespace, and comments
+  // can appear there (the expression has already ended).
+  const tailEnd = root.body[root.body.length - 1].end;
+  const span = src.slice(stmt.expression.end, tailEnd);
+  return (
+    src.slice(0, stmt.expression.end) +
+    span.replaceAll(";", " ") +
+    src.slice(tailEnd)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Deprecation warnings — Node's deprecate() emits once per process.
 // ---------------------------------------------------------------------------
@@ -2173,6 +2224,13 @@ export class REPLServerImpl extends Interface {
       // read); no vendored test covers it.
       get: (t, k) => {
         if (k in t) return t[k];
+        // `globalThis` inside a repl eval is the repl context itself
+        // (Node: a vm context's global is its own globalThis), not the
+        // host globalThis — `globalThis.counter = 0;` must land on the
+        // context, or `replServer.context.counter` stays undefined (R8:
+        // the tab-complete-nosideeffects setup line). Same shape, not
+        // fixed here: bare `global` still resolves to the host global.
+        if (k === "globalThis") return t;
         if (k in globalThis) return globalThis[k];
         if (typeof k === "string")
           throw new ReferenceError(`${k} is not defined`);
@@ -2371,6 +2429,11 @@ export class REPLServerImpl extends Interface {
           // expression — declarations (const/let) are statements, so
           // _defaultEval routes statement lists to _evalSyncStatements
           // (processTopLevelSync) before this wrapper is reached.
+          // A lone expression statement's terminating `;` is stripped
+          // here (see stripLoneExpressionSemicolon): `return (x;)` is a
+          // SyntaxError, but the bare expression is exactly what the
+          // wrapper already evaluates correctly in both modes.
+          c = stripLoneExpressionSemicolon(c);
           const strict = this.replMode === REPL_MODE_STRICT;
           const proxy = this._scopeProxy();
           if (strict) {
@@ -2381,16 +2444,21 @@ export class REPLServerImpl extends Interface {
             // honest `has` above, undeclared assignment throws
             // ReferenceError. Known gap: strict + top-level-await runs
             // the await body sloppy (the async IIFE has no directive).
+            // ponytail: the `\n` before the closing paren ends a
+            // trailing `//` comment, which would otherwise comment out
+            // the `)` and the `}` (`x.a = 1 // c` failed as
+            // "Unexpected token '}'" before this).
             // eslint-disable-next-line no-new-func
             return new Function(
               "__ctx__",
-              `with(__ctx__){return (function(){'use strict'; return (${c.trim()});})()}`,
+              `with(__ctx__){return (function(){'use strict'; return (${c.trim()}\n);})()}`,
             )(proxy);
           }
           // eslint-disable-next-line no-new-func
-          return new Function("__ctx__", `with(__ctx__){return(${c.trim()})}`)(
-            proxy,
-          );
+          return new Function(
+            "__ctx__",
+            `with(__ctx__){return(${c.trim()}\n)}`,
+          )(proxy);
         };
 
     // Restore the RegExp statics snapshot from the previous user eval
