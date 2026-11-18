@@ -86,6 +86,25 @@ function invalidArgTypeHelper(input) {
   return ` Received type ${typeof input} (${inspected})`;
 }
 
+// H2-V3: Node (lib/internal/http2/compat.js:75,112-120,698-706) warns once
+// per process when Http2ServerResponse.statusMessage is read or set — the
+// getter always returns '' and the setter discards the value. Module-level
+// guard, like Node's `statusMessageWarned`.
+let statusMessageWarned = false;
+function statusMessageWarn() {
+  if (statusMessageWarned) return;
+  statusMessageWarned = true;
+  // process.emitWarning where available (Node, sandbox); silent elsewhere
+  // (same guard shape as src/dns.js emitDeprecationWarning).
+  const proc = globalThis.process;
+  if (proc && typeof proc.emitWarning === "function") {
+    proc.emitWarning(
+      "Status message is not supported by HTTP/2 (RFC7540 8.1.2.4)",
+      "UnsupportedWarning",
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 3. constants — the real values from Node v24.20.0 (static, safe to embed).
 // ---------------------------------------------------------------------------
@@ -1318,7 +1337,10 @@ export class Http2ServerResponse extends EventEmitter {
     super();
     this.stream = stream;
     this._statusCode = 200;
-    this.statusMessage = undefined;
+    // H2-V3: no `this.statusMessage = undefined` here — Node
+    // (lib/internal/http2/compat.js:698-706) defines statusMessage as a
+    // prototype getter/setter pair; assigning in the constructor would burn
+    // the warn-once guard before any test read.
     this._headers = {};
     this._headersSent = false;
     this.sendDate = true;
@@ -1346,6 +1368,21 @@ export class Http2ServerResponse extends EventEmitter {
       );
     }
     this._statusCode = code;
+  }
+
+  // H2-V3: Node (lib/internal/http2/compat.js:698-706) — the getter warns
+  // once and always returns ''; the setter warns once and discards the
+  // value. writeHead's `this.statusMessage = statusMessage` assignment
+  // routes through this setter, matching Node's writeHead warning on a
+  // string statusMessage (compat.js:722-723).
+  get statusMessage() {
+    statusMessageWarn();
+    return "";
+  }
+
+  set statusMessage(msg) {
+    void msg;
+    statusMessageWarn();
   }
 
   setHeader(name, value) {
