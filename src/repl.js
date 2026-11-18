@@ -1897,6 +1897,38 @@ export class REPLServerImpl extends Interface {
               kept.push(wlines[i]);
             }
           }
+          // Trailing props block: inspect appends ` { ... }` for errors
+          // with extra enumerable properties (e.g. code/requireStack on
+          // a MODULE_NOT_FOUND), the ` {` riding on the last frame line.
+          // The cut above would drop it — but test-repl-require asserts
+          // /code: 'MODULE_NOT_FOUND'/ and /requireStack: \[ '<repl>' \]/,
+          // so re-attach it to the last kept line (the same suffix move
+          // R7's cut === -1 branch does for its new last frame). Native
+          // keeps the require-machinery frames too; the shim drops them
+          // (they are src/module.js paths, not Node's) — no test asserts
+          // them, and the props are what the tests check.
+          let lastFrame = -1;
+          for (let j = 0; j < wlines.length; j++) {
+            if (/^    at /.test(wlines[j])) lastFrame = j;
+          }
+          if (lastFrame >= 0) {
+            const brace = wlines[lastFrame].indexOf(" {");
+            if (brace !== -1) {
+              const propsText =
+                wlines[lastFrame].slice(brace) +
+                wlines.slice(lastFrame + 1).join("");
+              const nl = propsText.indexOf("\n");
+              const first = nl === -1 ? propsText : propsText.slice(0, nl + 1);
+              const rest = nl === -1 ? "" : propsText.slice(nl + 1);
+              const last = kept[kept.length - 1];
+              if (last.endsWith("\n")) {
+                kept[kept.length - 1] = last.slice(0, -1) + first;
+              } else {
+                kept.push(first);
+              }
+              if (rest) kept.push(rest);
+            }
+          }
           errStack = kept.join("");
         } else {
           errStack = wlines.slice(0, cut - 1).join("");
