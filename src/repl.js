@@ -314,8 +314,17 @@ export class REPLServerImpl extends Interface {
       const s =
         stream ||
         (typeof process !== "undefined" && process?.stdin ? process : null);
-      input = input || s?.stdin || s?.input || new NullStream();
-      output = output || s?.stdout || s?.output || new NullStream();
+      // Node lib/repl.js:274-282 (legacy-stream rule): a Duplex stream IS
+      // both input and output (stream.stdin || stream / stream.stdout ||
+      // stream). The old chain fell through to NullStream for a plain
+      // Duplex (net.Socket, ArrayStream), so emitted data never reached
+      // the eval (recoverable/require/test-repl.js hung; the R4
+      // listenerCount throw was the NullStream input, not a missing guard).
+      // ponytail: the s?.input/s?.output steps are the shim's pre-existing
+      // extension for {input, output} pair objects; they stay ahead of the
+      // bare-stream fallback.
+      input = input || s?.stdin || s?.input || s || new NullStream();
+      output = output || s?.stdout || s?.output || s || new NullStream();
     }
 
     const promptStr = typeof prompt === "string" ? prompt : "> ";
@@ -411,13 +420,15 @@ export class REPLServerImpl extends Interface {
     this.on("line", (cmd) => this._onLine(cmd));
     this.on("close", () => this.emit("exit"));
 
-    // ── Defer initial prompt until after constructor returns ─────────────
-    // Critical: if we call displayPrompt() synchronously here, Interface.write()
-    // will re-emit 'line' with the prompt string before the constructor exits,
-    // causing _onLine → eval → crash.
-    Promise.resolve().then(() => {
-      if (!this.closed) this.displayPrompt();
-    });
+    // ── Initial prompt, synchronously (Node lib/repl.js:1040) ───────────
+    // The prompt precedes any input the caller writes right after start()
+    // (the mode test asserts it synchronously). The old code deferred it
+    // via Promise.resolve() for fear Interface.write() would re-emit 'line'
+    // with the prompt string; the Interface's prompt path only writes to
+    // output ([kWriteToOutput] → output.write, no echo back to input), so
+    // no re-entrancy occurs — verified by the mode/recoverable/require
+    // flips + the full repl differential.
+    this.displayPrompt();
   }
 
   // ── Context ─────────────────────────────────────────────────────────────
@@ -746,7 +757,9 @@ export class REPLServerImpl extends Interface {
         if (this._parseREPLKeyword(keyword, rest)) return;
         if (!this[kBufferedCommand]) {
           this._write("Invalid REPL keyword\n");
-          this._finish(null, undefined, cmd);
+          // Node lib/repl.js:891 — finish(null): one argument, so no
+          // result is printed (only the keyword message above).
+          this._finish(null, undefined, cmd, 1);
           return;
         }
       }
@@ -755,12 +768,26 @@ export class REPLServerImpl extends Interface {
     const evalCmd = this[kBufferedCommand] + cmd + "\n";
     this._memoryUpdate(cmd);
 
-    this.eval(evalCmd, this.context, "repl", (e, ret) => {
-      this._finish(e, ret, cmd);
-    });
+    // Node lib/repl.js:853 — finish IS the eval callback, so its
+    // arguments.length is the callback arity: 1 for cb(null) on a bare
+    // newline (nothing printed), 2 for a real result. The old arrow
+    // wrapper always passed 3 args to _finish, so _finish's
+    // arguments.length check was dead and a bare newline printed
+    // "undefined" — which then polluted the next line a socket test read
+    // (test-repl.js "message" case got the previous case's "undefined").
+    // A bound function expression (not an arrow) so arguments.length is
+    // the callback's own arity.
+    this.eval(
+      evalCmd,
+      this.context,
+      "repl",
+      function (e, ret) {
+        this._finish(e, ret, cmd, arguments.length);
+      }.bind(this),
+    );
   }
 
-  _finish(e, ret, cmd = "") {
+  _finish(e, ret, cmd = "", argc = 2) {
     if (
       e &&
       !this[kBufferedCommand] &&
@@ -788,7 +815,7 @@ export class REPLServerImpl extends Interface {
 
     this.clearBufferedCommand();
 
-    if (arguments.length >= 2 && (!this.ignoreUndefined || ret !== undefined)) {
+    if (argc >= 2 && (!this.ignoreUndefined || ret !== undefined)) {
       if (!this.underscoreAssigned) this.last = ret;
       this._write(this.writer(ret) + "\n");
     }
@@ -951,7 +978,10 @@ export class REPLServerImpl extends Interface {
   // ── Public API ───────────────────────────────────────────────────────────
 
   displayPrompt(preserveCursor) {
-    const p = this[kBufferedCommand].length ? "|" : this._initialPrompt;
+    // Node lib/internal/readline/interface.js:101 — kMultilinePrompt is
+    // Symbol('| '): the continuation prompt is pipe + SPACE. The old "|"
+    // (no space) never matched the recoverable test's `msg === "| "` check.
+    const p = this[kBufferedCommand].length ? "| " : this._initialPrompt;
     // Use Interface.prototype.setPrompt directly so we don't stomp _initialPrompt
     Interface.prototype.setPrompt.call(this, p);
     this.prompt(preserveCursor);
@@ -1110,16 +1140,41 @@ function _tryRequireFs() {
 
 /**
  * Creates and starts a REPLServer.
- * @param {string|object} [options='> ']
+ * @param {string|object} [prompt='> '] prompt string or options object
+ * @param {object} [source] stream to use for I/O (positional form)
+ * @param {Function} [eval_] custom eval function (positional form)
+ * @param {boolean} [useGlobal]
+ * @param {boolean} [ignoreUndefined]
+ * @param {symbol} [replMode]
  * @returns {REPLServer}
+ *
+ * Node lib/repl.js:1047 — start() forwards positionally:
+ * start(prompt, source, eval_, useGlobal, ignoreUndefined, replMode).
+ * The old one-argument form dropped the stream + eval, so
+ * repl.start("", putIn, customEval) and repl.start(prompt, socket) never
+ * wired any input (recoverable/require/test-repl.js).
  *
  * @example
  * import { start } from 'repl';
  * const r = start({ prompt: '> ', useColors: true });
  * r.context.hello = 'world';
  */
-export function start(options = "> ") {
-  return new REPLServer(options);
+export function start(
+  prompt = "> ",
+  source,
+  eval_,
+  useGlobal,
+  ignoreUndefined,
+  replMode,
+) {
+  return new REPLServer(
+    prompt,
+    source,
+    eval_,
+    useGlobal,
+    ignoreUndefined,
+    replMode,
+  );
 }
 
 // ---------------------------------------------------------------------------
