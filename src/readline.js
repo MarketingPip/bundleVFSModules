@@ -3374,6 +3374,12 @@ export {
   moveCursor,
   promises,
   Readline,
+  // R3: reused by src/repl.js — commonPrefix for completeOnEditorMode,
+  // _historyNativeModules for the completion fs/isProxy bridge (the gate
+  // itself is R6's probe-proven "genuine Node?" check; the name is
+  // historical, the check is generic).
+  commonPrefix,
+  _historyNativeModules,
 };
 
 export default readline;
