@@ -228,7 +228,8 @@ function persistTopLevelLexical(code) {
   // check (no regex), so it cannot clobber the statics. (Residual edge:
   // a `let`/`const` declaration whose initializer itself reads RegExp
   // statics would see Acorn-clobbered values — no test covers it.)
-  if (!code.includes("let") && !code.includes("const")) return code;
+  if (!code.includes("let") && !code.includes("const"))
+    return { code, names: [] };
   let ast;
   try {
     ast = acorn.parse(code, {
@@ -236,33 +237,85 @@ function persistTopLevelLexical(code) {
       allowAwaitOutsideFunction: true,
     });
   } catch {
-    return code;
+    return { code, names: [] };
   }
   const spans = [];
+  const names = [];
+  const collectNames = (pattern) => {
+    if (!pattern) return;
+    if (pattern.type === "Identifier") names.push(pattern.name);
+    else if (pattern.type === "ObjectPattern") {
+      for (const prop of pattern.properties) {
+        if (prop.type === "RestElement") collectNames(prop.argument);
+        else collectNames(prop.value);
+      }
+    } else if (pattern.type === "ArrayPattern") {
+      for (const el of pattern.elements) collectNames(el);
+    } else if (pattern.type === "RestElement") collectNames(pattern.argument);
+    else if (pattern.type === "AssignmentPattern") collectNames(pattern.left);
+  };
   for (const node of ast.body) {
     if (
       node.type === "VariableDeclaration" &&
       (node.kind === "let" || node.kind === "const")
     ) {
       spans.push([node.start, node.kind]);
+      for (const decl of node.declarations) collectNames(decl.id);
     }
   }
-  if (spans.length === 0) return code;
+  if (spans.length === 0) return { code, names: [] };
   spans.sort((a, b) => b[0] - a[0]);
   for (const [start, kind] of spans) {
     const replacement = kind === "let" ? "var" : "var  ";
     code = code.slice(0, start) + replacement + code.slice(start + kind.length);
   }
-  return code;
+  return { code, names };
 }
 
+// Port of Node lib/repl.js:228 toDynamicImport (acorn-based): converts
+// a static import statement into the dynamic-import suggestion printed in
+// the "Cannot use import statement inside the Node.js REPL" error. The
+// old regex version was wrong for default imports — it printed
+// `const comeOn = await import('fhqwhgads');` where Node prints
+// `const { default: comeOn } = await import("fhqwhgads");` (default
+// specifiers destructure the default export; the source is JSON-quoted,
+// so double quotes). Namespace imports keep the plain `const name = ...`
+// form; bare side-effect imports print just `await import(...);`.
 function toDynamicImport(line) {
   if (!line) return "";
-  const m = line.match(/^\s*import\s+(\S+)\s+from\s+(['"`][^'"`]+['"`])/);
-  if (m) return `const ${m[1]} = await import(${m[2]});`;
-  const m2 = line.match(/^\s*import\s+(['"`][^'"`]+['"`])/);
-  if (m2) return `await import(${m2[1]});`;
-  return `await import(/* ${line.trim()} */);`;
+  try {
+    const ast = acorn.parse(line, {
+      sourceType: "module",
+      ecmaVersion: "latest",
+    });
+    const node = ast.body && ast.body[0];
+    if (!node || node.type !== "ImportDeclaration") return "";
+    const awaitDynamicImport = `await import(${JSON.stringify(node.source.value)});`;
+    if (node.specifiers.length === 0) {
+      return awaitDynamicImport;
+    }
+    if (
+      node.specifiers.length === 1 &&
+      node.specifiers[0].type === "ImportNamespaceSpecifier"
+    ) {
+      return `const ${node.specifiers[0].local.name} = ${awaitDynamicImport}`;
+    }
+    const importNames = node.specifiers
+      .map(({ local, imported }) =>
+        local.name === imported?.name
+          ? local.name
+          : `${imported?.name ?? "default"}: ${local.name}`,
+      )
+      .join(", ");
+    return `const { ${importNames} } = ${awaitDynamicImport}`;
+  } catch {
+    // Not a parseable import line (Node would throw here; the shim's
+    // call site is inside _defaultEval, so fall back to the old shape
+    // instead of masking the original error).
+    const m2 = line.match(/^\s*import\s*(['"`][^'"`]+['"`])/);
+    if (m2) return `await import(${m2[1]});`;
+    return `await import(/* ${line.trim()} */);`;
+  }
 }
 
 // Node lib/internal/repl/await.js, ported to the acorn + acorn-walk npm
@@ -612,7 +665,12 @@ function addBuiltinLibsToObject(object, replModule) {
     Object.defineProperty(object, name, {
       __proto__: null,
       get: () => {
-        const lib = replModule.require(name);
+        // 'repl' itself must be THIS module's exports, not the loader's
+        // (see makeReplRequire: the loader returns the native repl
+        // under the harness, a second instance whose writer the server
+        // never consults — the bare `repl` identifier in user code goes
+        // through this getter, not through context.require).
+        const lib = name === "repl" ? replExports : replModule.require(name);
         try {
           // Override the getter with the loaded lib (still
           // non-enumerable, still re-assignable), exactly as Node does.
@@ -640,6 +698,18 @@ function addBuiltinLibsToObject(object, replModule) {
 // REPL resolves through the shim's CJS loader.
 function makeReplRequire(mod) {
   function require(id) {
+    // Node identity: require('repl') inside the repl returns the repl
+    // module itself — the SAME instance that owns this server, so a
+    // mutation the user makes (repl.writer.options.showProxy) is
+    // observed by the server's writer (test-repl.js). The shim's CJS
+    // loader cannot provide that identity: loadBuiltinModule prefers
+    // process.getBuiltinModule under the harness, which returns the
+    // NATIVE repl — a second instance whose writer the server never
+    // consults (probe-proven: context repl.start !== server start).
+    // Return this module's own exports instead. (The loader-wide
+    // native-vs-shim identity gap for OTHER builtins is out of scope
+    // here; only 'repl' itself is identity-asserted by a repl test.)
+    if (id === "repl" || id === "node:repl") return replExports;
     return mod.require(id);
   }
   require.resolve = (request, options) => {
@@ -682,11 +752,28 @@ writer.options = { ...inspect.defaultOptions, showProxy: true, colors: false };
 // (kSource exact, kArrow = /^ *\^+ *$/), so a misplaced caret is a
 // fidelity wart, not a test failure.
 function syntaxArrow(src, message) {
-  // The arrow source is the FIRST line of the (possibly multi-line)
-  // buffered input: test-repl.js's multiline-object error case expects
-  // `"{}),({}"`, the first line, not the last line `"}"`. Single-line
-  // inputs are unaffected.
-  const line = src.split("\n")[0];
+  // The arrow source is the source LINE containing the error position —
+  // not the first line of the buffered input. Node's arrow comes from V8
+  // (via vm.Script), which points at the error's line: the multiline
+  // object case `x = {\nfield\n{` errors on the `{` at line 3, so its
+  // source is `{`; the `{}),({}` case errors on line 1, so its source is
+  // the first line. The shim has no V8 frame objects, so the position is
+  // re-derived with acorn (already a direct dep, already imported):
+  // its SyntaxError carries loc. If acorn cannot locate the error
+  // (parses fine — the failure came from a wrapped form — or no loc),
+  // fall back to the first line.
+  const lines = src.split("\n");
+  let line = lines[0];
+  try {
+    acorn.parse(src, {
+      ecmaVersion: "latest",
+      allowAwaitOutsideFunction: true,
+    });
+  } catch (e) {
+    if (e && e.loc && typeof e.loc.line === "number") {
+      line = lines[Math.min(Math.max(e.loc.line, 1), lines.length) - 1];
+    }
+  }
   let index = 0,
     length = 1;
   const candidates = [];
@@ -960,8 +1047,17 @@ export class REPLServerImpl extends Interface {
     // builtin module (addBuiltinLibsToObject). Runs for both branches:
     // with useGlobal the context IS globalThis (Node does the same).
     const replModule = new CJSModule("<repl>");
-    replModule.paths = []; // No lookup paths in a browser; builtin
-    // requires never consult paths, and relative requires fail honestly.
+    // Node lib/repl.js:1119 — replModule.paths =
+    // CJSModule._resolveLookupPaths('<repl>', parentModule), where
+    // parentModule is the repl builtin module itself, so the paths walk
+    // up from `<cwd>/repl` (probe-proven: `<cwd>/repl/node_modules`,
+    // `<cwd>/node_modules`, … + the global paths, which
+    // _resolveLookupPaths appends at lookup time). The shim equivalent
+    // is _nodeModulePaths("repl") — "repl" resolves against CWD.
+    // ponytail: in the browser sandbox CWD is "/", so this degrades to
+    // ["/repl/node_modules", "/node_modules"] — relative requires still
+    // fail honestly (the REPL ["."] rule in _resolveLookupPaths).
+    replModule.paths = CJSModule._nodeModulePaths("repl");
     Object.defineProperty(context, "module", {
       __proto__: null,
       configurable: true,
@@ -1110,9 +1206,20 @@ export class REPLServerImpl extends Interface {
 
     // Top-level `let`/`const` persistence, useGlobal only (see
     // persistTopLevelLexical): indirect eval discards lexical bindings.
-    if (this.useGlobal) code = persistTopLevelLexical(code);
+    let lexicalNames = [];
+    if (this.useGlobal) {
+      const persisted = persistTopLevelLexical(code);
+      code = persisted.code;
+      lexicalNames = persisted.names;
+    }
 
-    if (code.trim() === "") return cb(null);
+    // Node lib/repl.js defaultEval: a BARE newline (code === "\n") calls
+    // back with one argument, so finish prints nothing; a WHITESPACE-ONLY
+    // line (" \t  \n") goes through normal eval and prints `undefined`
+    // (test-repl.js "Whitespace is not evaluated" case — probe-proven
+    // natively: bare "\n" -> prompt only, " \t  \n" -> "undefined\n").
+    // The old `code.trim() === ""` check suppressed both.
+    if (code === "\n") return cb(null);
 
     // Node lib/repl.js defaultEval — processTopLevelAwait (port of
     // lib/internal/repl/await.js) rewrites top-level await into an
@@ -1218,10 +1325,14 @@ export class REPLServerImpl extends Interface {
           err = e;
         }
       } else {
-        // SyncPromise: .value is populated synchronously for pure-sync code
-        result =
-          raw && typeof raw === "object" && "value" in raw ? raw.value : raw;
-        if (raw?.syncError) err = raw.syncError;
+        // No .value unwrap here: runFn returns the user's value
+        // directly, and no {value, syncError} wrapper producer exists
+        // anywhere in the codebase — the old unwrap misfired on genuine
+        // user results (a generator's {value: undefined, done: true}
+        // printed as "undefined", test-repl.js). The .value unwrap
+        // belongs ONLY to the await branch (R4b: Node's await.js rewrites
+        // the last expression to `return {value: (...)}`).
+        result = raw;
       }
     } catch (e) {
       err = e;
@@ -1241,9 +1352,7 @@ export class REPLServerImpl extends Interface {
         try {
           const r2 = runFn(input);
           err = null;
-          result =
-            r2 && typeof r2 === "object" && "value" in r2 ? r2.value : r2;
-          if (r2?.syncError) err = r2.syncError;
+          result = r2;
         } catch (e2) {
           err = e2;
         }
@@ -1262,6 +1371,31 @@ export class REPLServerImpl extends Interface {
           toDynamicImport(lastLine);
       }
       return cb(isRecoverableError(err, input) ? new Recoverable(err) : err);
+    }
+
+    // Top-level let/const are LEXICAL in Node's repl: they never appear
+    // on globalThis, and the vendored tests' exit-time leakedGlobals
+    // check (for...in over globalThis) fails if they do (test-repl.js
+    // `let npm = () => {};` leaked `npm`). The var rewrite above that
+    // persists them creates enumerable globals, so hide them again after
+    // a successful eval. Bare-identifier resolution is unaffected
+    // (enumerability does not gate property lookup); only for...in /
+    // Object.keys visibility changes, which is exactly Node's shape.
+    // (Fidelity wart: globalThis.<name> still resolves, where Node's is
+    // undefined — no test asserts that; the alternative is a persistent
+    // lexical scope, a redesign of the eval path.)
+    for (const name of lexicalNames) {
+      try {
+        const desc = Object.getOwnPropertyDescriptor(globalThis, name);
+        if (desc && desc.enumerable) {
+          Object.defineProperty(globalThis, name, {
+            ...desc,
+            enumerable: false,
+          });
+        }
+      } catch {
+        // Non-configurable (a real global of the same name) — leave it.
+      }
     }
 
     cb(null, result);
@@ -1442,7 +1576,39 @@ export class REPLServerImpl extends Interface {
           break;
         }
       }
-      if (cut > 0) errStack = wlines.slice(0, cut - 1).join("");
+      if (cut > 0) {
+        errStack = wlines.slice(0, cut - 1).join("");
+      } else if (cut === -1) {
+        // Node lib/repl.js:643 overrideStackTrace — the repl slices the
+        // captured frames to before the last null-named frame (the eval
+        // dispatch); with NO null-named frame the slice index is -1, so
+        // the LAST captured frame is dropped. That is exactly the
+        // `Error.stackTraceLimit = 5; require("internal/repl")` case
+        // (test-repl.js): the limit truncates the stack before the eval
+        // dispatch frame, so no eval line exists and the deepest captured
+        // frame (the repl's own require dispatch) must go — 5 frames
+        // captured, 4 printed — while the trailing props block
+        // (code/requireStack) is kept. The new last frame line takes over
+        // the ` {` suffix inspect puts on the frame before the props.
+        let lastFrame = -1;
+        for (let i = 0; i < wlines.length; i++) {
+          if (/^    at /.test(wlines[i])) lastFrame = i;
+        }
+        if (lastFrame > 0) {
+          wlines.splice(lastFrame, 1);
+          const next = wlines[lastFrame];
+          if (
+            next !== undefined &&
+            (/^  [^ ]/.test(next) || next.replace(/\n$/, "") === "}")
+          ) {
+            wlines[lastFrame - 1] = wlines[lastFrame - 1].replace(
+              /\n$/,
+              " {\n",
+            );
+          }
+          errStack = wlines.join("");
+        }
+      }
     }
 
     if (arrow) errStack = arrow + errStack;
