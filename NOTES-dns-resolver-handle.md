@@ -63,4 +63,4 @@
 
 ## Ship
 
-- PR #___ / merge SHA ___ (squash-merged 2026-11-18)
+- PR #481 / merge SHA f3077d4d (squash-merged 2026-11-18)
