@@ -56,9 +56,9 @@
       "total": 26
     },
     "dns": {
-      "date": "2026-10-11",
-      "passed": 10,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-18",
+      "passed": 11,
+      "source": "Wave D 2026-11-18: 10 -> 11 via PR #481 (f3077d4d); wave-end sweep confirms 11/31 on main f3077d4d",
       "total": 31
     },
     "domain": {
