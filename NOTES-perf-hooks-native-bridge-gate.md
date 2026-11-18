@@ -116,5 +116,6 @@ first evaluation.
 
 ## Ship
 
-- PR #___
-- Merge SHA: ___
+- PR #489
+- Merge SHA: b132dbb4
+- CI note (docs sync PR #490, round 1): build red on code SHA 074bdaa2 while Parity was green; no log via API and local build steps clean (build-vfs 0, sandbox --check ok, runtime --check ok) — adjudicated transient per the wave rule; retriggered with this NOTES-only commit.

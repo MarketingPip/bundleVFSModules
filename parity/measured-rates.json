@@ -128,9 +128,9 @@
       "total": 16
     },
     "perf_hooks": {
-      "date": "2026-10-11",
-      "passed": 13,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-18",
+      "passed": 15,
+      "source": "Wave P 2026-11-18: 13 -> 15 via PR #489 (b132dbb4); wave-end sweep confirms 15/15 on main b132dbb4",
       "total": 15
     },
     "process": {
