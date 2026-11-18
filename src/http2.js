@@ -1370,6 +1370,22 @@ export class Http2ServerResponse extends EventEmitter {
   }
 
   writeHead(statusCode, statusMessage, headers) {
+    // H2-V2: Node (lib/internal/http2/compat.js:719-720) throws
+    // ERR_HTTP2_HEADERS_SENT on a second writeHead — unless the stream is
+    // already closed/destroyed, in which case writeHead is a noop
+    // (compat.js:717-718). The gate matters: the compat writehead test
+    // calls writeHead(300) again after 'finish' and asserts it does NOT
+    // throw — by then _deliverResponse has set stream._closed = true.
+    if (
+      this._headersSent &&
+      !this.stream._closed &&
+      !this.stream._destroyed
+    ) {
+      throw http2Error(
+        "ERR_HTTP2_HEADERS_SENT",
+        "Response has already been initiated.",
+      );
+    }
     if (typeof statusMessage === "object" && statusMessage !== null) {
       headers = statusMessage;
       statusMessage = undefined;
