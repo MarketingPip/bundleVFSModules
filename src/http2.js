@@ -915,8 +915,9 @@ class ServerHttp2Session extends Http2Session {
 // 6. Http2Stream — real method shapes. In the virtual loop one stream object
 //    is shared between the client and server sides (documented
 //    simplification); the whole response body is delivered as one 'data'
-//    chunk. Not a real Duplex: no backpressure, no 'data' flow on the server
-//    side.
+//    chunk. Not a real Duplex: no backpressure. Request-side 'data'/'end'
+//    are delivered lazily once the client ends the request (see
+//    _deliverRequestBody, H2-V1); before that the body is still in flight.
 // ---------------------------------------------------------------------------
 
 class Http2Stream extends EventEmitter {
@@ -937,6 +938,21 @@ class Http2Stream extends EventEmitter {
     this._requestEnded = false;
     this._responseDelivered = false;
     this._timeout = 0;
+    // Request-body lazy delivery (H2-V1): the virtual loop dispatches on a
+    // microtask, before the client has written anything, so a server-side
+    // body consumer must wait for the client stream's 'finish' and then
+    // read requestBody live. _dataListenersAtDispatch snapshots the
+    // client-side 'data' listeners so a server-side consumer added by the
+    // handler can be told apart from them.
+    this._dataListenersAtDispatch = 0;
+    this._requestBodyDeliveryStarted = false;
+    this._requestEndEmitted = false;
+    this._responsePending = false;
+    // H2-V1: the server has ended the response (stream.end() classified
+    // as the server's end, or Http2ServerResponse.end() via _endResponse).
+    // _deliverResponse waits for this once the body was awaited, so a
+    // response body piped in the body-end handler is not lost.
+    this._responseEnded = false;
   }
 
   get id() {
@@ -1094,9 +1110,15 @@ class Http2Stream extends EventEmitter {
   }
 
   // -- shared write/end: route by side ------------------------------------
-  // Client side (request body) until respond() starts the response; after
-  // that, writes go to the response body. Server 'stream' handlers must call
-  // respond() before end(), as in real Node.
+  // The client writes the request body strictly before it ends the
+  // request, so until _requestEnded any write is a request chunk — even
+  // after the server has responded. (The old _responseStarted test routed
+  // a piped upload written after respond() into the response body, so
+  // requestBody stayed empty and the body arrived as 0 bytes — H2-V1
+  // probe-proven.) Once the request has ended, writes are response data.
+  // Known shared-stream limit: a server early-response write while the
+  // request is still in flight would land in the request body; the compat
+  // res.write() path bypasses this router via _writeResponse directly.
   get _responseStarted() {
     return this._sentHeaders !== null || this._responseDelivered;
   }
@@ -1106,7 +1128,7 @@ class Http2Stream extends EventEmitter {
       callback = encoding;
       encoding = undefined;
     }
-    if (this._responseStarted) {
+    if (this._requestEnded) {
       this._writeResponse(chunk, encoding);
     } else {
       const buf =
@@ -1128,8 +1150,47 @@ class Http2Stream extends EventEmitter {
       callback = encoding;
       encoding = undefined;
     }
-    if (data !== undefined && data !== null) this.write(data, encoding);
+    if (data !== undefined && data !== null) {
+      // Route the end() payload by side, not via write(): the server ends
+      // with response data once respond() has run (test-http2-async-local-
+      // storage calls stream.end("data") while the client request is still
+      // un-ended), while the client ends with request data. write() routes
+      // by _requestEnded; end() must route by _responseStarted.
+      if (this._responseStarted) this._writeResponse(data, encoding);
+      else this.write(data, encoding);
+    }
     if (this._responseStarted) {
+      // Shared stream: distinguish the client's end() (completes the
+      // request) from the server's end() (completes the response). The
+      // client ends exactly once, so once _requestEnded is set any later
+      // end() is the server's. For the first end():
+      // - If the response already ended or was delivered, this can only
+      //   be the client's end (the server already ended once).
+      // - Else, a first end() with request bytes buffered is the client's
+      //   end: the server's first end() lands synchronously in the
+      //   dispatch handler, before the client has written anything
+      //   (test-http2-zero-length-write: the client ends first after
+      //   piping a file; the server ends later, via pipe in the body-end
+      //   handler). The server's first end() must NOT mark the request
+      //   ended — the client may still be writing.
+      // Known shared-stream limits: a client end() with an empty body
+      // that lands before any server end() is not distinguishable from
+      // the server's own first end(); a server end() that lands after
+      // the client wrote (but before it ended) is not distinguishable
+      // from the client's end().
+      const clientEnd =
+        !this._requestEnded &&
+        (this._responseEnded ||
+          this._responseDelivered ||
+          this._requestChunks.length > 0);
+      if (clientEnd) {
+        if (!this._requestEnded) {
+          this._requestEnded = true;
+          this.emit("finish");
+        }
+      } else {
+        this._responseEnded = true;
+      }
       this._deliverResponse();
     } else {
       this._requestEnded = true;
@@ -1195,6 +1256,37 @@ class Http2Stream extends EventEmitter {
   }
 
   // -- server side (used by Http2ServerResponse): response body -----------
+  // Request-body lazy delivery (H2-V1): the virtual loop dispatches before
+  // the client has written anything, so the body must be read live once
+  // the client stream ends ('finish') and delivered as 'data' + 'end' on
+  // this shared stream. Real Node does this per DATA frame
+  // (lib/internal/http2/compat.js onStreamData/onStreamEnd); the shim
+  // delivers the whole body as one chunk, like _deliverResponse does for
+  // the response. If a response was already requested, it is delivered
+  // right after the body (see _deliverResponse's _responsePending gate),
+  // so the stream emits exactly one 'end'.
+  _deliverRequestBody() {
+    if (this._requestBodyDeliveryStarted) return;
+    this._requestBodyDeliveryStarted = true;
+    const deliver = () => {
+      const body = this.requestBody;
+      if (body.length > 0) {
+        this.emit(
+          "data",
+          this._encoding ? body.toString(this._encoding) : body,
+        );
+      }
+      this._requestEndEmitted = true;
+      this.emit("end");
+      if (this._responsePending) {
+        this._responsePending = false;
+        this._deliverResponse();
+      }
+    };
+    if (this._requestEnded) queueMicrotask(deliver);
+    else this.once("finish", () => queueMicrotask(deliver));
+  }
+
   _writeResponse(chunk, encoding) {
     const buf =
       typeof chunk === "string"
@@ -1206,11 +1298,40 @@ class Http2Stream extends EventEmitter {
   _endResponse(data, encoding) {
     if (data !== undefined && data !== null)
       this._writeResponse(data, encoding);
+    // Compat res.end(): the server has ended the response.
+    this._responseEnded = true;
     this._deliverResponse();
   }
 
   _deliverResponse() {
     if (this._responseDelivered) return;
+    // Request body still in flight; deliver the response once it lands.
+    if (this._requestBodyDeliveryStarted && !this._requestEndEmitted) {
+      this._responsePending = true;
+      return;
+    }
+    if (!this._requestBodyDeliveryStarted) {
+      // A server-side request-body consumer attached after dispatch (any
+      // 'data' listener beyond the client-side ones snapshotted at
+      // dispatch) means the handler wants the body: start lazy delivery
+      // and hold the response until it lands, so 'end' fires after the
+      // body instead of on an empty snapshot.
+      const serverDataConsumers =
+        this.listenerCount("data") - (this._dataListenersAtDispatch || 0);
+      if (serverDataConsumers > 0) {
+        this._deliverRequestBody();
+        this._responsePending = true;
+        return;
+      }
+    }
+    // The body was awaited and has now landed, but the server has not
+    // ended the response yet: it may still pipe a response body in the
+    // body-end handler (test-http2-zero-length-write), so wait for the
+    // server's end instead of delivering an empty response now.
+    if (this._requestBodyDeliveryStarted && !this._responseEnded) {
+      this._responsePending = true;
+      return;
+    }
     this._responseDelivered = true;
     const headers = this._sentHeaders || { ":status": 200 };
     const body = Buffer.concat(this._responseChunks);
@@ -1220,7 +1341,9 @@ class Http2Stream extends EventEmitter {
       this.emit("data", this._encoding ? body.toString(this._encoding) : body);
     }
     if (this._sentTrailers) this.emit("trailers", { ...this._sentTrailers }, 0);
-    this.emit("end");
+    // The request body already emitted 'end' (lazy delivery above); a
+    // second one would double-fire the client's 'end' mustCalls.
+    if (!this._requestEndEmitted) this.emit("end");
     this._closed = true;
     this.emit("close", constants.NGHTTP2_NO_ERROR);
   }
@@ -1256,7 +1379,10 @@ export class Http2ServerRequest extends EventEmitter {
   }
 
   get body() {
-    return this._body;
+    // Read live: the virtual loop dispatches before the client has written
+    // anything, so the construction-time snapshot is empty for streamed
+    // bodies (H2-V1). The stream's requestBody is the current truth.
+    return this.stream ? this.stream.requestBody : this._body;
   }
   get aborted() {
     return this.stream ? this.stream.aborted : false;
@@ -1266,26 +1392,43 @@ export class Http2ServerRequest extends EventEmitter {
   }
 
   // -- Readable-side stream compatibility ---------------------------------
-  // Http2ServerRequest is an EventEmitter, not a real Readable. The request
-  // body is captured at construction (the virtual loop dispatches after the
-  // client ends the request). resume() delivers it as 'data' + 'end'.
+  // Http2ServerRequest is an EventEmitter, not a real Readable. The virtual
+  // loop dispatches before the client has written anything, so the request
+  // body is NOT captured at construction: resume()/pipe() wait for the
+  // client stream's 'finish' and then read stream.requestBody live (H2-V1).
+  // Real Node streams the body in as DATA frames arrive
+  // (lib/internal/http2/compat.js onStreamData/onStreamEnd); the shim
+  // delivers the whole body as one chunk once the client ends.
   setEncoding(encoding) {
     this._encoding = encoding || null;
     return this;
   }
 
+  // Wait for the client stream to end, then deliver the live body.
+  // Returns the deliver callback so resume()/pipe() share the wait.
+  _deliverWhenEnded(deliver) {
+    if (!this.stream || this.stream._requestEnded) {
+      queueMicrotask(deliver);
+    } else {
+      this.stream.once("finish", () => queueMicrotask(deliver));
+    }
+  }
+
   resume() {
     if (!this._resumed) {
       this._resumed = true;
-      const body = this._body && this._body.length ? this._body : null;
-      queueMicrotask(() => {
-        if (body) {
-          this.emit(
-            "data",
-            this._encoding ? body.toString(this._encoding) : body,
-          );
-        }
-        this.emit("end");
+      this._deliverWhenEnded(() => {
+        const body = this.stream ? this.stream.requestBody : this._body;
+        const b = body && body.length ? body : null;
+        queueMicrotask(() => {
+          if (b) {
+            this.emit(
+              "data",
+              this._encoding ? b.toString(this._encoding) : b,
+            );
+          }
+          this.emit("end");
+        });
       });
     }
     return this;
@@ -1306,10 +1449,13 @@ export class Http2ServerRequest extends EventEmitter {
 
   pipe(dest, options) {
     const doEnd = !options || options.end !== false;
-    const body = this._body && this._body.length ? this._body : null;
-    queueMicrotask(() => {
-      if (body && typeof dest.write === "function") dest.write(body);
-      if (doEnd && typeof dest.end === "function") dest.end();
+    this._deliverWhenEnded(() => {
+      const body = this.stream ? this.stream.requestBody : this._body;
+      queueMicrotask(() => {
+        if (body && body.length && typeof dest.write === "function")
+          dest.write(body);
+        if (doEnd && typeof dest.end === "function") dest.end();
+      });
     });
     return dest;
   }
@@ -1486,7 +1632,7 @@ export class Http2ServerResponse extends EventEmitter {
 
   writeContinue() {
     // Noop: 100 Continue is not transmitted; the virtual loop delivers the
-    // request body regardless.
+    // request body lazily once the client ends it (see _deliverRequestBody).
     this.emit("continue");
     return this;
   }
@@ -1720,6 +1866,9 @@ class Http2Server extends EventEmitter {
       if (!k.startsWith(":")) rawHeaders.push(k, v);
     }
     queueMicrotask(() => {
+      // Snapshot the client-side 'data' listeners: any 'data' listener
+      // added from here on is a server-side request-body consumer (H2-V1).
+      stream._dataListenersAtDispatch = stream.listenerCount("data");
       this.emit("stream", stream, headers, flags, rawHeaders);
       if (
         this.listenerCount("request") > 0 ||
@@ -1735,6 +1884,18 @@ class Http2Server extends EventEmitter {
         } else {
           this.emit("request", req, res);
         }
+      }
+      // If the handler attached a server-side request-body consumer but
+      // never responded, start lazy delivery anyway so its 'end' still
+      // fires (a response already delivered means 'end' already fired).
+      if (
+        !stream._requestBodyDeliveryStarted &&
+        !stream._responseDelivered &&
+        stream.listenerCount("data") -
+          (stream._dataListenersAtDispatch || 0) >
+          0
+      ) {
+        stream._deliverRequestBody();
       }
     });
   }
