@@ -116,5 +116,5 @@ first evaluation.
 
 ## Ship
 
-- PR #___
-- Merge SHA: ___
+- PR #489
+- Merge SHA: b132dbb4
