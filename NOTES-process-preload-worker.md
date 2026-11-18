@@ -89,6 +89,6 @@ Guards (ESM redirect must survive):
 
 ## Ship
 
-- PR #___ / Merge SHA: ___ (fill at ship time)
+- PR #458 / Merge SHA: 6f16c7dc
 - Branch: `fix/process-preload-worker`; files: `parity/preload.mjs`,
   `NOTES-process-preload-worker.md`.

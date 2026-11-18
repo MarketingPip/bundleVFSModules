@@ -112,4 +112,4 @@ serially); any test pair sharing `.tmp.0` and a filename races the same way.
 
 ## Ship
 - Branch: `fix/process-fixture-vendoring`
-- PR #___ / Merge SHA: ___
+- PR #459 / Merge SHA: 723327d5
