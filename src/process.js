@@ -768,12 +768,19 @@ const process2 = (function () {
    * globalThis.__bvm_process_final__. This shim delegates ONLY to that
    * template process — never to the native Node bridge. Under direct Node
    * import (no bundleVFS runtime) there is no preloaded cache, so this
-   * returns undefined (honest noop, not a native bridge call).
+   * returns undefined (honest noop, not a native bridge call) — except for
+   * "process" itself, which must return this module's processFinal so
+   * getBuiltinModule("process") === require("process") (Node's identity
+   * contract), checked before the template whose cache holds the prior,
+   * pre-shim process.
    * @since Node.js v22.3.0
    */
   function getBuiltinModule(id) {
     if (typeof id !== "string")
       throw _invalidArgType("id", "of type string", id);
+    // Identity: "process" must be this module's processFinal, not the
+    // template's cached prior process.
+    if (id === "process" || id === "node:process") return processFinal;
     // Only the bundleVFS sandbox runtime provides the preloaded sync cache.
     // The template saves its authoritative process (with getBuiltinModule)
     // as globalThis.__bvm_process_final__.
@@ -1152,6 +1159,33 @@ const process2 = (function () {
     );
   }
 
+  // Adopt expandos set on the global process before this module loaded
+  // (e.g. `process.default = 1`): descriptor-preserving copy of the prior
+  // global's own properties NOT already on processFinal, so shim-defined
+  // properties win (notably `versions`, whose node must stay "0.0.0-shim").
+  // ponytail: the copy is one-way and load-time only — later expandos on
+  // the prior global do not propagate, and processFinal stays a fresh
+  // object. In-place adoption (making processFinal BE the prior global)
+  // was probed and rejected: the native global's argv0/features/exitCode
+  // are non-configurable, so only a fresh object keeps the shim's argv0
+  // "", exitCode undefined, and features key set pinned by
+  // tests/process.test.js — and only identity (process2 === prior global)
+  // would flip test-process-get-builtin.mjs, which that same pin forbids.
+  if (
+    _priorGlobalProcess &&
+    (typeof _priorGlobalProcess === "object" ||
+      typeof _priorGlobalProcess === "function")
+  ) {
+    for (const key of Object.getOwnPropertyNames(_priorGlobalProcess)) {
+      if (Object.prototype.hasOwnProperty.call(processFinal, key)) continue;
+      Object.defineProperty(
+        processFinal,
+        key,
+        Object.getOwnPropertyDescriptor(_priorGlobalProcess, key),
+      );
+    }
+  }
+
   // Deprecated-flag toggles (absent on real Node unless flags are passed;
   // kept as data properties because emitWarning consults them).
   processFinal.noDeprecation = false;
@@ -1161,11 +1195,16 @@ const process2 = (function () {
 
   if (typeof globalThis !== "undefined") {
     try {
+      // enumerable: false matches real Node: the native globalThis.process
+      // is a non-enumerable accessor (enumerable: false, configurable:
+      // true). An enumerable install trips the official tests' global-leak
+      // check (common/index.js leakedGlobals), which flags any for-in
+      // visible global whose value is not a known builtin.
       Object.defineProperty(globalThis, "process", {
         value: processFinal,
         writable: true,
         configurable: true,
-        enumerable: true,
+        enumerable: false,
       });
     } catch {
       // Host already owns a non-configurable process property.
