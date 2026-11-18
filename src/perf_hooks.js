@@ -48,20 +48,33 @@ void RT;
 //   cannot hook the structured serializer, so the native histograms are used.
 // - `eventLoopUtilization()`: needs libuv's idle/active loop counters.
 // - `performance.nodeTiming`: `loopStart`/`idleTime` come from libuv.
-// Browsers (and any host with `globalThis._RUNTIME_`) keep the dependency-free
-// pure-JS fallbacks below, so the shim works with zero native delegation.
-// Set `globalThis.__PERF_HOOKS_NO_NATIVE__ = true` before importing to force
+// Browsers keep the dependency-free pure-JS fallbacks below, so the shim
+// works with zero native delegation: there is no `process.getBuiltinModule`
+// in a browser, and in Jared's sandbox the template's getBuiltinModule
+// throws ERR_REQUIRE_ASYNC_MODULE for a builtin still being evaluated (its
+// cache/registry only resolve completed loads), so the bridge stays off
+// there too. Set `globalThis.__PERF_HOOKS_NO_NATIVE__ = true` before importing to force
 // the pure-JS implementations (used by the browser-fallback test lane).
 let nativePerfHooks = null;
 try {
   if (
-    typeof globalThis._RUNTIME_ === "undefined" &&
     globalThis.__PERF_HOOKS_NO_NATIVE__ !== true &&
     typeof process !== "undefined" &&
     typeof process.getBuiltinModule === "function"
   ) {
     const candidate = process.getBuiltinModule("perf_hooks");
-    if (candidate && typeof candidate.createHistogram === "function") {
+    if (
+      candidate &&
+      typeof candidate.createHistogram === "function" &&
+      // Self-delegation guard: a VFS-resolving getBuiltinModule can hand
+      // this module its own exports back as "native" (the same trap
+      // src/child_process.js loadNativeChildProcess guards with _RUNTIME_).
+      // The genuine builtin's createHistogram is a different function
+      // object, so this rejects only the shim itself — never the real thing.
+      // Without it, createHistogram/eventLoopUtilization would recurse
+      // into themselves in any host whose getBuiltinModule resolves the shim.
+      candidate.createHistogram !== createHistogram
+    ) {
       nativePerfHooks = candidate;
     }
   }
