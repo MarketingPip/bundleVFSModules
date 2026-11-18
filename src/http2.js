@@ -74,7 +74,9 @@ function invalidArgTypeHelper(input) {
   if (input === null || input === undefined)
     return ` Received ${String(input)}`;
   if (typeof input === "function") {
-    return ` Received function ${input.name || "anonymous"}`;
+    // Node's helper uses input.name verbatim — an anonymous function
+    // gives "Received function " (probe-proven), not "anonymous".
+    return ` Received function ${input.name}`;
   }
   if (typeof input === "object") {
     const name = input.constructor && input.constructor.name;
@@ -84,6 +86,305 @@ function invalidArgTypeHelper(input) {
   let inspected = typeof input === "string" ? `'${input}'` : String(input);
   if (inspected.length > 28) inspected = `${inspected.slice(0, 25)}...`;
   return ` Received type ${typeof input} (${inspected})`;
+}
+
+// H2-V4: Node validator shapes (lib/internal/validators.js) + the
+// http2 header-validation core (lib/internal/http2/util.js
+// buildNgHeaderString, lib/internal/http2/compat.js assertValidHeader).
+// All messages are the exact Node v24.20.0 strings, probe-verified
+// against real Node where the oracle is unclear.
+
+// HTTP token: !#$%&'*+-.^_`|~ + alphanumerics (Node checkIsHttpToken).
+const HTTP_TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+function checkIsHttpToken(name) {
+  return typeof name === "string" && HTTP_TOKEN_RE.test(name);
+}
+
+// Approximation of util.inspect for the scalar/container values the
+// official tests put in ERR_INVALID_ARG_VALUE messages (probe-verified:
+// function -> "[Function: function]", string -> "'   '", {} -> "{}").
+function inspectValue(value) {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value === "string")
+    return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+  if (typeof value === "function")
+    return value.name ? `[Function: ${value.name}]` : "[Function (anonymous)]";
+  if (typeof value === "symbol" || typeof value === "number" ||
+      typeof value === "boolean" || typeof value === "bigint")
+    return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    return `[ ${value.map(inspectValue).join(", ")} ]`;
+  }
+  if (typeof value === "object") {
+    const keys = Object.keys(value);
+    if (keys.length === 0) return "{}";
+    return `{ ${keys.map((k) => `${k}: ${inspectValue(value[k])}`).join(", ")} }`;
+  }
+  return String(value);
+}
+
+function invalidArgValue(name, value) {
+  let inspected = inspectValue(value);
+  if (inspected.length > 128) inspected = `${inspected.slice(0, 128)}...`;
+  const type = name.includes(".") ? "property" : "argument";
+  return typeError(
+    "ERR_INVALID_ARG_VALUE",
+    `The ${type} '${name}' is invalid. Received ${inspected}`,
+  );
+}
+
+function validateString(value, name) {
+  if (typeof value !== "string") {
+    throw typeError(
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument must be of type string.${invalidArgTypeHelper(value)}`,
+    );
+  }
+}
+function validateNumber(value, name, min, max) {
+  if (typeof value !== "number") {
+    throw typeError(
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument must be of type number.${invalidArgTypeHelper(value)}`,
+    );
+  }
+  if (min !== undefined && value < min) {
+    throw rangeError(
+      "ERR_OUT_OF_RANGE",
+      `The value of "${name}" is out of range. It must be >= ${min}. Received ${value}`,
+    );
+  }
+  if (max !== undefined && value > max) {
+    throw rangeError(
+      "ERR_OUT_OF_RANGE",
+      `The value of "${name}" is out of range. It must be <= ${max}. Received ${value}`,
+    );
+  }
+}
+function validateBoolean(value, name) {
+  if (typeof value !== "boolean") {
+    throw typeError(
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument must be of type boolean.${invalidArgTypeHelper(value)}`,
+    );
+  }
+}
+function validateFunction(value, name) {
+  if (typeof value !== "function") {
+    throw typeError(
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument must be of type function.${invalidArgTypeHelper(value)}`,
+    );
+  }
+}
+function validateBuffer(value, name) {
+  if (!Buffer.isBuffer(value) && !ArrayBuffer.isView(value)) {
+    throw typeError(
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument must be an instance of Buffer, TypedArray, or DataView.${invalidArgTypeHelper(value)}`,
+    );
+  }
+}
+// Node validateInteger: non-number -> ERR_INVALID_ARG_TYPE; non-integer
+// -> ERR_OUT_OF_RANGE ("It must be an integer"); out of [min, max] ->
+// ERR_OUT_OF_RANGE with the caller's range wording (rangeMsg).
+function validateInteger(value, name, min, max, rangeMsg) {
+  if (typeof value !== "number") {
+    throw typeError(
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument must be of type number.${invalidArgTypeHelper(value)}`,
+    );
+  }
+  if (!Number.isInteger(value)) {
+    throw rangeError(
+      "ERR_OUT_OF_RANGE",
+      `The value of "${name}" is out of range. It must be an integer. Received ${value}`,
+    );
+  }
+  if (value < min || value > max) {
+    throw rangeError(
+      "ERR_OUT_OF_RANGE",
+      `The value of "${name}" is out of range. ${rangeMsg || `It must be >= ${min} && <= ${max}.`} Received ${value}`,
+    );
+  }
+}
+
+// Node lib/internal/http2/compat.js:82-96 assertValidHeader (used by
+// setHeader / writeEarlyHints / trailers): empty, non-string or spaced
+// names -> ERR_INVALID_HTTP_TOKEN; pseudo-headers -> the
+// NOT_ALLOWED error (not the buildNgHeaderString one); undefined/null
+// values -> ERR_HTTP2_INVALID_HEADER_VALUE. Connection headers are only
+// warned about here, never thrown (unlike the request path).
+function assertValidHeader(name, value) {
+  if (name === "" || typeof name !== "string" || name.includes(" ")) {
+    throw typeError(
+      "ERR_INVALID_HTTP_TOKEN",
+      `Header name must be a valid HTTP token ["${name}"]`,
+    );
+  }
+  if (name[0] === ":") {
+    throw typeError(
+      "ERR_HTTP2_PSEUDOHEADER_NOT_ALLOWED",
+      "Cannot set HTTP/2 pseudo-headers",
+    );
+  }
+  if (value === undefined || value === null) {
+    throw typeError(
+      "ERR_HTTP2_INVALID_HEADER_VALUE",
+      `Invalid value "${String(value)}" for header "${name}"`,
+    );
+  }
+}
+
+// Node lib/internal/http2/util.js kValidPseudoHeaders / kSingleValueFields.
+const kValidPseudoHeaders = new Set([
+  ":status", ":method", ":authority", ":scheme", ":path", ":protocol",
+]);
+const kSingleValueFields = new Set([
+  ":status", ":method", ":authority", ":scheme", ":path", ":protocol",
+  "access-control-allow-credentials", "access-control-max-age",
+  "access-control-request-method", "age", "authorization",
+  "content-encoding", "content-language", "content-length",
+  "content-location", "content-md5", "content-range", "content-type",
+  "date", "dnt", "etag", "expires", "from", "host", "if-match",
+  "if-modified-since", "if-none-match", "if-range",
+  "if-unmodified-since", "last-modified", "location", "max-forwards",
+  "proxy-authorization", "range", "referer", "retry-after", "tk",
+  "upgrade-insecure-requests", "user-agent", "x-content-type-options",
+]);
+// Node lib/internal/http2/util.js kNoPayloadMethods.
+const kNoPayloadMethods = new Set(["DELETE", "GET", "HEAD"]);
+
+function assertValidPseudoHeader(key) {
+  if (!kValidPseudoHeaders.has(key)) {
+    throw typeError(
+      "ERR_HTTP2_INVALID_PSEUDOHEADER",
+      `"${key}" is an invalid pseudoheader or is used incorrectly`,
+    );
+  }
+}
+function assertValidPseudoHeaderResponse(key) {
+  if (key !== ":status") {
+    throw typeError(
+      "ERR_HTTP2_INVALID_PSEUDOHEADER",
+      `"${key}" is an invalid pseudoheader or is used incorrectly`,
+    );
+  }
+}
+function assertValidPseudoHeaderTrailer(key) {
+  throw typeError(
+    "ERR_HTTP2_INVALID_PSEUDOHEADER",
+    `"${key}" is an invalid pseudoheader or is used incorrectly`,
+  );
+}
+
+// Node lib/internal/http2/util.js isIllegalConnectionSpecificHeader.
+function isIllegalConnectionSpecificHeader(name, value) {
+  switch (name) {
+    case "connection":
+    case "upgrade":
+    case "http2-settings":
+    case "keep-alive":
+    case "proxy-connection":
+    case "transfer-encoding":
+      return true;
+    case "te":
+      return value !== "trailers";
+    default:
+      return false;
+  }
+}
+
+// The validation half of Node's buildNgHeaderString
+// (lib/internal/http2/util.js:767-860): keys are lowercased first;
+// single-value fields (strict, the session default) throw on a second
+// instance or an array with >1 element; ':' keys go through the
+// caller-supplied pseudo validator; other keys must be valid HTTP tokens
+// and not connection-specific. Undefined values and '' keys are skipped,
+// like Node. pseudoValidator is assertValidPseudoHeader (requests),
+// assertValidPseudoHeaderResponse (responses) or
+// assertValidPseudoHeaderTrailer (trailers).
+function validateHeaderList(pairs, pseudoValidator, strict = true) {
+  const singles = new Set();
+  for (const [rawKey, value] of pairs) {
+    if (value === undefined || rawKey === "") continue;
+    const key = typeof rawKey === "string" ? rawKey.toLowerCase() : rawKey;
+    const isSingle = typeof key === "string" && kSingleValueFields.has(key);
+    // H2-V4: the single-value rule applies only when the session's
+    // strictSingleValueFields is true (the default). With
+    // strictSingleValueFields: false, duplicate single-value headers
+    // (user-agent twice, an expires pair) are allowed.
+    if (strict && isSingle) {
+      if (Array.isArray(value)) {
+        if (value.length === 0) continue;
+        if (value.length > 1) {
+          throw typeError(
+            "ERR_HTTP2_HEADER_SINGLE_VALUE",
+            `Header field "${key}" must only have a single value`,
+          );
+        }
+      }
+      if (singles.has(key)) {
+        throw typeError(
+          "ERR_HTTP2_HEADER_SINGLE_VALUE",
+          `Header field "${key}" must only have a single value`,
+        );
+      }
+      singles.add(key);
+    }
+    if (typeof key === "string" && key[0] === ":") {
+      pseudoValidator(key);
+      continue;
+    }
+    if (!isSingle) {
+      if (typeof key !== "string" || !checkIsHttpToken(key)) {
+        throw typeError(
+          "ERR_INVALID_HTTP_TOKEN",
+          `Header name must be a valid HTTP token ["${key}"]`,
+        );
+      }
+      if (isIllegalConnectionSpecificHeader(key, value)) {
+        throw typeError(
+          "ERR_HTTP2_INVALID_CONNECTION_HEADERS",
+          `HTTP/1 Connection specific headers are forbidden: "${key}"`,
+        );
+      }
+    }
+  }
+}
+
+// Fold flat [name, value] pairs into a header object the way Node's
+// toHeaderObject does: duplicate names join with ", " (set-cookie stays
+// an array). Names are already lowercased, values already strings.
+function foldToHeaderObject(pairs) {
+  const obj = { __proto__: null };
+  for (const [k, v] of pairs) {
+    const existing = obj[k];
+    if (existing === undefined) obj[k] = k === "set-cookie" ? [v] : v;
+    else if (Array.isArray(existing)) existing.push(v);
+    else obj[k] = `${existing}, ${v}`;
+  }
+  return obj;
+}
+
+// Normalize a trailers object/array to flat [lowercased-name, string]
+// pairs, in order (Node buildNgHeaderString stringifies values).
+function normalizeTrailerPairs(headers) {
+  const pairs = [];
+  if (Array.isArray(headers)) {
+    for (let i = 0; i < headers.length; i += 2)
+      pairs.push([headers[i], headers[i + 1]]);
+  } else if (headers && typeof headers === "object") {
+    for (const [k, v] of Object.entries(headers)) {
+      if (Array.isArray(v)) for (const el of v) pairs.push([k, el]);
+      else pairs.push([k, v]);
+    }
+  }
+  return pairs.map(([k, v]) => [
+    typeof k === "string" ? k.toLowerCase() : k,
+    String(v),
+  ]);
 }
 
 // H2-V3: Node (lib/internal/http2/compat.js:75,112-120,698-706) warns once
@@ -162,6 +463,27 @@ function requestPseudoDefaults(session) {
 
 function normalizeRequestHeaders(headers, session) {
   const defaults = requestPseudoDefaults(session);
+  // H2-V4: Node prepareRequestHeadersArray/Object
+  // (lib/internal/http2/util.js:621-766) — CONNECT with no :protocol
+  // requires :authority and forbids :scheme/:path; otherwise the missing
+  // pseudo-headers are filled from the session defaults.
+  const checkConnect = (authority, scheme, path) => {
+    if (authority === undefined)
+      throw http2Error(
+        "ERR_HTTP2_CONNECT_AUTHORITY",
+        ":authority header is required for CONNECT requests",
+      );
+    if (scheme !== undefined)
+      throw http2Error(
+        "ERR_HTTP2_CONNECT_SCHEME",
+        "The :scheme header is forbidden for CONNECT requests",
+      );
+    if (path !== undefined)
+      throw http2Error(
+        "ERR_HTTP2_CONNECT_PATH",
+        "The :path header is forbidden for CONNECT requests",
+      );
+  };
   if (Array.isArray(headers)) {
     // Node prepareRequestHeadersArray: missing pseudo-headers are
     // PREPENDED to the raw array in canonical order; sentHeaders folds
@@ -172,8 +494,26 @@ function normalizeRequestHeaders(headers, session) {
     const present = new Set();
     for (const [k] of pairs)
       if (typeof k === "string") present.add(k.toLowerCase());
-    const missing = defaults.filter(([k]) => !present.has(k));
+    const lower = (name) => {
+      for (const [k, v] of pairs)
+        if (typeof k === "string" && k.toLowerCase() === name) return v;
+      return undefined;
+    };
+    const method = lower(":method");
+    const protocol = lower(":protocol");
+    if (method === "CONNECT" && protocol === undefined) {
+      checkConnect(lower(":authority"), lower(":scheme"), lower(":path"));
+    }
+    const missing =
+      method === "CONNECT" && protocol === undefined
+        ? []
+        : defaults.filter(([k]) => !present.has(k));
     const rawPairs = [...missing, ...pairs];
+    validateHeaderList(
+      rawPairs,
+      assertValidPseudoHeader,
+      session._strictSingleValueFields !== false,
+    );
     const obj = foldHeaderPairs(rawPairs);
     for (const s of Object.getOwnPropertySymbols(headers))
       obj[s] = headers[s];
@@ -184,18 +524,28 @@ function normalizeRequestHeaders(headers, session) {
   // skipped when a Host header is present (getAuthority semantics).
   const obj = { __proto__: null };
   Object.assign(obj, headers);
-  for (const [k, v] of defaults) {
-    if (k === ":authority") {
-      if (obj[":authority"] === undefined && obj["host"] === undefined)
-        obj[":authority"] = v;
-    } else if (obj[k] === undefined) {
-      obj[k] = v;
+  if (obj[":method"] === "CONNECT" && obj[":protocol"] === undefined) {
+    checkConnect(obj[":authority"], obj[":scheme"], obj[":path"]);
+  } else {
+    for (const [k, v] of defaults) {
+      if (k === ":authority") {
+        if (obj[":authority"] === undefined && obj["host"] === undefined)
+          obj[":authority"] = v;
+      } else if (obj[k] === undefined) {
+        obj[k] = v;
+      }
     }
   }
-  return { headersObject: obj, rawPairs: pairsFromObject(obj) };
+  const rawPairs = pairsFromObject(obj);
+  validateHeaderList(
+    rawPairs,
+    assertValidPseudoHeader,
+    session._strictSingleValueFields !== false,
+  );
+  return { headersObject: obj, rawPairs };
 }
 
-function normalizeResponseHeaders(headers, options = {}) {
+function normalizeResponseHeaders(headers, options = {}, strict = true) {
   const sendDate = options.sendDate == null || options.sendDate;
   if (Array.isArray(headers)) {
     // Node prepareResponseHeadersArray: scan for :status/:date
@@ -216,8 +566,20 @@ function normalizeResponseHeaders(headers, options = {}) {
       statusCode = 200;
       pairs.unshift([":status", 200]);
     }
+    // H2-V4: Node validatePreparedResponseHeaders
+    // (lib/internal/http2/core.js:2719-2727) — respond() rejects any
+    // status outside 200-599 (probe-proven: writeHead(103) throws too,
+    // via respond()).
+    if (statusCode < 200 || statusCode > 599) {
+      throw http2Error(
+        "ERR_HTTP2_STATUS_INVALID",
+        `Invalid status code: ${statusCode}`,
+        RangeError,
+      );
+    }
     if (!isDateSet && sendDate)
       pairs.push(["date", new Date().toUTCString()]);
+    validateHeaderList(pairs, assertValidPseudoHeaderResponse, strict);
     const obj = foldHeaderPairs(pairs);
     for (const s of Object.getOwnPropertySymbols(headers))
       obj[s] = headers[s];
@@ -242,10 +604,23 @@ function normalizeResponseHeaders(headers, options = {}) {
     else if (k === "date") hasDate = obj[k] != null;
   }
   obj[":status"] = (statusCode | 0) || 200;
+  // H2-V4: Node validatePreparedResponseHeaders
+  // (lib/internal/http2/core.js:2719-2727) — respond() rejects any status
+  // outside 200-599 (probe-proven: writeHead(103) throws too, via
+  // respond()).
+  if (obj[":status"] < 200 || obj[":status"] > 599) {
+    throw http2Error(
+      "ERR_HTTP2_STATUS_INVALID",
+      `Invalid status code: ${obj[":status"]}`,
+      RangeError,
+    );
+  }
   if (!hasDate && sendDate) obj["date"] = new Date().toUTCString();
   for (const s of Object.getOwnPropertySymbols(headers))
     obj[s] = headers[s];
-  return { headersObject: obj, rawPairs: pairsFromObject(obj) };
+  const rawPairs = pairsFromObject(obj);
+  validateHeaderList(rawPairs, assertValidPseudoHeaderResponse, strict);
+  return { headersObject: obj, rawPairs };
 }
 
 // ---------------------------------------------------------------------------
@@ -801,6 +1176,23 @@ class Http2Session extends EventEmitter {
     this._pendingSettingsAck = false;
     this._nextStreamID = 1;
     this._timeout = 0;
+    // H2-V4: window sizes tracked for real (probe-proven: local is the
+    // high-water mark of the initial 65535 and every setLocalWindowSize
+    // value; effective is the last set value).
+    this._localWindowSize = 65535;
+    this._effectiveLocalWindowSize = 65535;
+    // H2-V4: server-initiated (push) stream ids are even, starting at
+    // 2 (Node lib/internal/http2/core.js). Only server sessions use it.
+    this._nextPushStreamID = 2;
+    // H2-V4: snapshots of this session's local settings waiting to be
+    // delivered to the paired server session as 'remoteSettings'
+    // (flushed at first dispatch, or promptly once the server session
+    // exists). One snapshot per settings() call, plus one for the
+    // connect-time initial settings.
+    this._pendingRemoteSettings = [];
+    // H2-V4: streams owned by this session, so destroy() can tear
+    // them down (a destroyed session closes its streams in Node).
+    this._streams = new Set();
   }
 
   get closed() {
@@ -837,12 +1229,13 @@ class Http2Session extends EventEmitter {
     return { ...this._remoteSettings };
   }
   get state() {
-    // Emulated: plausible static values, nextStreamID is tracked for real.
+    // H2-V4: nextStreamID and the window sizes are tracked for real;
+    // the rest stay plausible static values (documented gap).
     return {
-      effectiveLocalWindowSize: 65535,
+      effectiveLocalWindowSize: this._effectiveLocalWindowSize,
       effectiveReceiveDataLength: 0,
       nextStreamID: this._nextStreamID,
-      localWindowSize: 65535,
+      localWindowSize: this._localWindowSize,
       lastProcStreamID: 0,
       remoteWindowSize: 65535,
       outboundQueueSize: 0,
@@ -882,11 +1275,27 @@ class Http2Session extends EventEmitter {
       this._connecting = false;
       if (error) this.emit("error", error);
       this.emit("close", code);
+      // H2-V4: destroying a session tears down its streams (Node
+      // closes the session's streams with 'close'). Only destroy()
+      // does this — close() leaves streams alone.
+      for (const stream of [...(this._streams || [])]) {
+        if (!stream._destroyed) stream._destroy();
+      }
     }
   }
 
   goaway(code = constants.NGHTTP2_NO_ERROR, lastStreamID = 0, opaqueData) {
-    // Noop: nothing is sent on the wire in the browser emulation.
+    // H2-V4: Node lib/internal/http2/core.js:1588-1596 goaway() validates
+    // even though nothing is sent on the wire in the browser emulation.
+    if (this._destroyed) {
+      throw http2Error(
+        "ERR_HTTP2_INVALID_SESSION",
+        "The session has been destroyed",
+      );
+    }
+    if (opaqueData !== undefined) validateBuffer(opaqueData, "opaqueData");
+    validateNumber(code, "code");
+    validateNumber(lastStreamID, "lastStreamID");
     void code;
     void lastStreamID;
     void opaqueData;
@@ -921,6 +1330,10 @@ class Http2Session extends EventEmitter {
   }
 
   settings(settings, callback) {
+    // H2-V4: Node validates the callback like every other callback
+    // (validateFunction); the settings values were already validated by
+    // readSettingsEntries in earlier lanes.
+    if (callback !== undefined) validateFunction(callback, "callback");
     const entries = readSettingsEntries(settings === undefined ? {} : settings);
     if (entries !== undefined) {
       for (const [id, value] of entries) {
@@ -941,6 +1354,39 @@ class Http2Session extends EventEmitter {
     const snapshot = { ...this._localSettings };
     queueMicrotask(() => this.emit("localSettings", snapshot));
     if (callback) setTimeout(() => callback(null, snapshot, 0), 0);
+    // H2-V4: the peer learns these settings as its remoteSettings
+    // (virtual SETTINGS exchange). Queued until the paired server
+    // session exists, then applied + emitted in order.
+    this._queueRemoteSettingsSnapshot(snapshot);
+  }
+
+  // H2-V4: queue one remoteSettings snapshot for the paired server
+  // session (one per settings() call, plus the connect-time initial
+  // settings). The snapshot is applied to the server session's
+  // _remoteSettings synchronously once it exists (so pushAllowed reads
+  // the right value in the stream handler) and the 'remoteSettings'
+  // event is emitted on a microtask after that (so the server's
+  // 'session' handler, queued first, has attached its listener).
+  _queueRemoteSettingsSnapshot(snapshot) {
+    if (!this._pendingRemoteSettings) this._pendingRemoteSettings = [];
+    this._pendingRemoteSettings.push(snapshot);
+    this._flushRemoteSettings();
+  }
+
+  _flushRemoteSettings() {
+    const pending = this._pendingRemoteSettings;
+    if (!pending || pending.length === 0) return;
+    const server =
+      this._virtualPort !== undefined
+        ? serverRegistry.get(this._virtualPort)
+        : undefined;
+    const serverSession = server && server._serverSession;
+    if (!serverSession) return;
+    const snapshots = pending.splice(0, pending.length);
+    for (const snapshot of snapshots) {
+      Object.assign(serverSession._remoteSettings, snapshot);
+      queueMicrotask(() => serverSession.emit("remoteSettings", snapshot));
+    }
   }
 
   rstStream(stream, code = constants.NGHTTP2_NO_ERROR) {
@@ -956,25 +1402,36 @@ class Http2Session extends EventEmitter {
   }
 
   setLocalWindowSize(windowSize) {
-    // Noop: no WINDOW_UPDATE frame is sent. But validate like Node.
-    if (
-      !Number.isInteger(windowSize) ||
-      windowSize < 0 ||
-      windowSize > 2147483647
-    ) {
-      throw http2Error(
-        "ERR_OUT_OF_RANGE",
-        `The value of "windowSize" is out of range. It must be an integer between 0 and 2147483647. Received ${windowSize}`,
-        RangeError,
-      );
-    }
-    void windowSize;
+    // H2-V4: Node lib/internal/http2/core.js setLocalWindowSize()
+    // validates exactly: non-number -> ERR_INVALID_ARG_TYPE,
+    // non-integer -> ERR_OUT_OF_RANGE ("It must be an integer"),
+    // outside [0, 2147483647] -> ERR_OUT_OF_RANGE
+    // ("It must be >= 0 && <= 2147483647"). Probe-proven messages.
+    // No WINDOW_UPDATE frame is sent, but the state is tracked:
+    // effective is the last set value, local is the high-water mark.
+    validateInteger(
+      windowSize,
+      "windowSize",
+      0,
+      2147483647,
+      "It must be >= 0 && <= 2147483647.",
+    );
+    this._effectiveLocalWindowSize = windowSize;
+    if (windowSize > this._localWindowSize)
+      this._localWindowSize = windowSize;
   }
 
   setNextStreamID(id) {
-    if (!Number.isInteger(id) || id <= 0) {
-      throw http2Error("ERR_HTTP2_INVALID_STREAM", `Invalid stream id: ${id}`);
-    }
+    // H2-V4: Node validateInteger(id, 'id', 1, 2**32-1) with the
+    // '> 0 and <=' wording (probe-proven); the old shim threw
+    // ERR_HTTP2_INVALID_STREAM for every bad id.
+    validateInteger(
+      id,
+      "id",
+      1,
+      4294967295,
+      "It must be > 0 and <= 4294967295.",
+    );
     this._nextStreamID = id;
   }
 
@@ -1036,11 +1493,67 @@ class ClientHttp2Session extends Http2Session {
       headers,
       this,
     );
+    // H2-V4: Node lib/internal/http2/core.js request() validates the
+    // options after the headers (assertIsObject + priority options +
+    // endStream boolean). Header preparation throws first, like Node.
+    if (
+      options !== undefined &&
+      (options === null ||
+        typeof options !== "object" ||
+        Array.isArray(options))
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "options" argument must be of type object.${invalidArgTypeHelper(options)}`,
+      );
+    }
+    options = options || {};
+    if (options.endStream !== undefined)
+      validateBoolean(options.endStream, "options.endStream");
+    if (options.parent !== undefined)
+      validateNumber(options.parent, "options.parent", 0);
+    if (options.exclusive !== undefined)
+      validateBoolean(options.exclusive, "options.exclusive");
+    if (options.silent !== undefined)
+      validateBoolean(options.silent, "options.silent");
     const stream = new Http2Stream(this, headersObject);
     stream._requestSentHeaders = headersObject;
     stream._requestRawPairs = rawPairs;
     stream._id = this._nextStreamID;
     this._nextStreamID += 2; // client-initiated streams use odd ids
+    this._streams.add(stream);
+    if (options.waitForTrailers) stream._requestWaitForTrailers = true;
+    // H2-V4: a content-length on a payload-meaningless method (GET/HEAD/
+    // DELETE) is rejected by nghttp2 with PROTOCOL_ERROR (probe-proven:
+    // the stream errors and never reaches the server; content-length: 0
+    // is fine). Emulated here because there is no real nghttp2.
+    const contentLength = headersObject["content-length"];
+    const clNum =
+      contentLength === undefined ? NaN : Number(contentLength);
+    const method = headersObject[":method"];
+    if (
+      kNoPayloadMethods.has(method) &&
+      contentLength !== undefined &&
+      (Number.isNaN(clNum) || clNum > 0)
+    ) {
+      queueMicrotask(() => {
+        if (!stream._destroyed) {
+          stream._destroyed = true;
+          stream._closed = true;
+        }
+        if (stream.listenerCount("error") > 0) {
+          stream.emit(
+            "error",
+            http2Error(
+              "ERR_HTTP2_STREAM_ERROR",
+              "Stream closed with error code NGHTTP2_PROTOCOL_ERROR",
+            ),
+          );
+        }
+        stream._emitCloseOnce(constants.NGHTTP2_NO_ERROR);
+      });
+      return stream;
+    }
     // Dispatch to the virtual server on the next microtask, mirroring the
     // async nature of real HEADERS transmission.
     queueMicrotask(() => dispatchVirtualRequest(this, stream));
@@ -1078,6 +1591,8 @@ class Http2Stream extends EventEmitter {
     this._destroyed = false;
     this._aborted = false;
     this._rstCode = constants.NGHTTP2_NO_ERROR;
+    // H2-V4: 'close' fires exactly once (see _emitCloseOnce).
+    this._closeEmitted = false;
     this._sentHeaders = null;
     // H2-V6: the client's request headers, kept apart from _sentHeaders
     // (the response headers) — _responseStarted keys on _sentHeaders
@@ -1112,6 +1627,28 @@ class Http2Stream extends EventEmitter {
     // _deliverResponse waits for this once the body was awaited, so a
     // response body piped in the body-end handler is not lost.
     this._responseEnded = false;
+    // H2-V4: trailers state. The virtual loop shares one stream object
+    // between client and server, so the two sides' trailers are tracked
+    // separately: _requestTrailers (client -> server, read by the server
+    // as request.trailers / the stream 'trailers' event) and
+    // _sentTrailers (server -> client, read by _deliverResponse).
+    // _requestWaitForTrailers / _responseWaitForTrailers record which
+    // side asked for trailers; _trailersReady is per side; _trailersSide
+    // is the side whose 'wantTrailers' is currently being emitted (so
+    // sendTrailers knows which store to write); _clientWantTrailers
+    // snapshots the 'wantTrailers' listeners registered before dispatch
+    // (the client's) so the server-side emit does not re-invoke them.
+    this._requestWaitForTrailers = false;
+    this._responseWaitForTrailers = false;
+    this._trailersReady = { request: false, response: false };
+    this._trailersSent = { request: false, response: false };
+    this._trailersSide = null;
+    this._clientWantTrailers = null;
+    this._requestTrailers = null;
+    this._requestTrailerPairs = null;
+    // H2-V4: 'end' is emitted at most once per stream (guarded across
+    // _deliverRequestBody, _deliverResponse, destroy() and end()).
+    this._endEmitted = false;
   }
 
   get id() {
@@ -1136,7 +1673,16 @@ class Http2Stream extends EventEmitter {
     return this._sentHeaders !== null;
   }
   get pushAllowed() {
-    return false;
+    // H2-V4: push is allowed only when the peer (client) has not
+    // disabled it — read from the paired server session's remote
+    // settings, which the virtual SETTINGS exchange keeps current.
+    // Before dispatch (no server session yet) this is false: a client
+    // stream cannot push.
+    return !!(
+      this._serverSession &&
+      this._serverSession._remoteSettings &&
+      this._serverSession._remoteSettings.enablePush === true
+    );
   } // push is impossible in the emulation
   get sentHeaders() {
     // H2-V6: real Node returns a null-prototype object (deepStrictEqual
@@ -1180,7 +1726,55 @@ class Http2Stream extends EventEmitter {
   }
 
   additionalHeaders(headers) {
-    // Noop: informational headers are recorded locally only.
+    // H2-V4: Node lib/internal/http2/core.js additionalHeaders() —
+    // destroyed/closed -> ERR_HTTP2_INVALID_STREAM; after respond ->
+    // ERR_HTTP2_HEADERS_AFTER_RESPOND; a :status must be 1xx (101 is
+    // its own error); other headers go through the response validator.
+    if (this._destroyed || this._closed) {
+      throw http2Error(
+        "ERR_HTTP2_INVALID_STREAM",
+        "The stream has been destroyed",
+      );
+    }
+    if (this.headersSent) {
+      throw http2Error(
+        "ERR_HTTP2_HEADERS_AFTER_RESPOND",
+        "Cannot specify additional headers after response initiated",
+      );
+    }
+    if (
+      headers !== undefined &&
+      (headers === null ||
+        typeof headers !== "object" ||
+        Array.isArray(headers))
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "headers" argument must be of type object.${invalidArgTypeHelper(headers)}`,
+      );
+    }
+    headers = headers || {};
+    if (headers[":status"] != null) {
+      const statusCode = headers[":status"] | 0;
+      if (statusCode === 101) {
+        throw http2Error(
+          "ERR_HTTP2_STATUS_101",
+          "HTTP status code 101 (Switching Protocols) is forbidden in HTTP/2",
+        );
+      }
+      if (statusCode < 100 || statusCode >= 200) {
+        throw http2Error(
+          "ERR_HTTP2_INVALID_INFO_STATUS",
+          `Invalid informational status code: ${headers[":status"]}`,
+          RangeError,
+        );
+      }
+    }
+    validateHeaderList(
+      pairsFromObject(headers),
+      assertValidPseudoHeaderResponse,
+    );
+    // Informational headers are recorded locally only.
     if (headers && typeof headers === "object") {
       this._sentInfoHeaders.push({ ...headers });
     }
@@ -1190,24 +1784,97 @@ class Http2Stream extends EventEmitter {
     this.additionalHeaders(headers);
   }
 
+  // H2-V4: the real destroy implementation, exposed as _destroy so the
+  // official tests can wrap it (test-http2-client-rststream-before-
+  // connect replaces req._destroy with a mustCall wrapper and expects
+  // the close flow to call it). Idempotent: a second call is a noop.
+  _destroy(err, callback) {
+    if (this._destroyed) {
+      if (typeof callback === "function") callback();
+      return this;
+    }
+    this._destroyed = true;
+    this._closed = true;
+    // H2-V4: drop out of the owning sessions' stream sets (destroy()
+    // iterates them; deleting during iteration is safe for a Set).
+    if (this.session && this.session._streams)
+      this.session._streams.delete(this);
+    if (this._serverSession && this._serverSession._streams)
+      this._serverSession._streams.delete(this);
+    if (err) this.emit("error", err);
+    this._emitCloseOnce(this._rstCode);
+    if (typeof callback === "function") callback();
+    return this;
+  }
+
+  // H2-V4: a stream emits 'close' exactly once (Node). _deliverResponse
+  // and _destroy both close the stream, and a close() racing a delivery
+  // used to emit it twice (test-http2-misused-pseudoheaders).
+  _emitCloseOnce(code) {
+    if (this._closeEmitted) return;
+    this._closeEmitted = true;
+    this.emit("close", code);
+  }
+
   close(code = constants.NGHTTP2_NO_ERROR, callback) {
     if (typeof code === "function") {
       callback = code;
       code = constants.NGHTTP2_NO_ERROR;
     }
-    if (!this._closed) {
-      this._closed = true;
-      this.emit("close", code);
-    }
-    if (callback) setTimeout(callback, 0);
+    // H2-V4: Node lib/internal/http2/core.js close() — validateInteger
+    // (code in [0, 2^32-1]) then validateFunction (callback). A second
+    // close is a no-op, like Node.
+    validateInteger(
+      code,
+      "code",
+      0,
+      4294967295,
+      "It must be >= 0 && <= 4294967295.",
+    );
+    if (callback !== undefined) validateFunction(callback, "callback");
+    if (this._closed) return;
+    this._rstCode = code;
+    this._closed = true;
+    if (callback !== undefined) this.once("close", callback);
+    // The RST_STREAM reaches the peer asynchronously (probe-proven:
+    // the server's stream handler still runs after a client close(),
+    // and its 'error'/'close' fire after the client's). So the close
+    // completes on a microtask: NO_ERROR ends the readable side
+    // gracefully ('end' then 'close'); PROTOCOL_ERROR errors both sides
+    // ('error' then 'close'); other codes just close.
+    queueMicrotask(() => {
+      if (code === constants.NGHTTP2_NO_ERROR) this._emitEndOnce();
+      if (
+        code === constants.NGHTTP2_PROTOCOL_ERROR &&
+        this.listenerCount("error") > 0
+      ) {
+        this.emit(
+          "error",
+          http2Error(
+            "ERR_HTTP2_STREAM_ERROR",
+            "Stream closed with error code NGHTTP2_PROTOCOL_ERROR",
+          ),
+        );
+      }
+      this._destroy();
+    });
+  }
+
+  // Emit 'end' at most once (shared by close(), destroy() and end()).
+  _emitEndOnce() {
+    if (this._endEmitted) return;
+    this._endEmitted = true;
+    this.emit("end");
   }
 
   destroy(error) {
     if (!this._destroyed) {
-      this._destroyed = true;
-      this._closed = true;
-      if (error) this.emit("error", error);
-      this.emit("close", this._rstCode);
+      // H2-V4: destroying a stream with no error ends its readable side
+      // too (the client 'end' fires when the server destroys the stream
+      // before responding, as in test-http2-respond-errors); destroying
+      // with an error emits 'error' instead, like a real stream.
+      if (!error) this._emitEndOnce();
+      this._destroy(error);
     }
   }
 
@@ -1229,6 +1896,35 @@ class Http2Stream extends EventEmitter {
   }
 
   respond(headers = {}, options = {}) {
+    // H2-V4: Node lib/internal/http2/core.js respond() — destroyed or
+    // closed -> ERR_HTTP2_INVALID_STREAM (checked first: after a
+    // destroy() the headers-sent flag is also set); headers already sent
+    // -> ERR_HTTP2_HEADERS_SENT; options must be an object. The :status
+    // range and header validation live in normalizeResponseHeaders.
+    if (this._destroyed || this._closed) {
+      throw http2Error(
+        "ERR_HTTP2_INVALID_STREAM",
+        "The stream has been destroyed",
+      );
+    }
+    if (this.headersSent) {
+      throw http2Error(
+        "ERR_HTTP2_HEADERS_SENT",
+        "Response has already been initiated.",
+      );
+    }
+    if (
+      options !== undefined &&
+      (options === null ||
+        typeof options !== "object" ||
+        Array.isArray(options))
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "options" argument must be of type object.${invalidArgTypeHelper(options)}`,
+      );
+    }
+    options = options || {};
     // Noop on the wire: records response headers locally. The virtual
     // server delivers them when the response is ended.
     // H2-V6: array-form headers normalize like objects (Node
@@ -1236,29 +1932,223 @@ class Http2Stream extends EventEmitter {
     // a date is added unless one is present or options.sendDate is false.
     const { headersObject, rawPairs } = normalizeResponseHeaders(
       headers,
-      options || {},
+      options,
+      this._serverSession
+        ? this._serverSession._strictSingleValueFields !== false
+        : true,
     );
     this._sentHeaders = headersObject;
     this._responseRawPairs = rawPairs;
+    if (options.waitForTrailers) this._responseWaitForTrailers = true;
   }
 
   respondWithFD(fd, headers = {}, options = {}) {
-    // Noop: no file descriptors in the browser.
+    // H2-V4: Node lib/internal/http2/core.js respondWithFD() validates
+    // (destroyed/closed, headers-sent, options types, fd type, then
+    // the response headers incl. the 204/205/304 payload rule) and only
+    // then reads the file. No file descriptors exist in the browser, so
+    // after validation this stays a noop — every official test that
+    // reaches a successful call expects the validation to throw first.
+    if (this._destroyed || this._closed) {
+      throw http2Error(
+        "ERR_HTTP2_INVALID_STREAM",
+        "The stream has been destroyed",
+      );
+    }
+    if (this.headersSent) {
+      throw http2Error(
+        "ERR_HTTP2_HEADERS_SENT",
+        "Response has already been initiated.",
+      );
+    }
+    this._validateRespondWithOptions(options);
+    if (typeof fd !== "number") {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "fd" argument must be of type number or an instance of FileHandle.${invalidArgTypeHelper(fd)}`,
+      );
+    }
+    const { statusCode } = this._prepareFileResponseHeaders(
+      headers,
+      options,
+    );
+    void statusCode;
     void fd;
-    void headers;
-    void options;
   }
 
   respondWithFile(path, headers = {}, options = {}) {
-    // Noop: no filesystem file delivery in the browser.
+    // H2-V4: Node lib/internal/http2/core.js respondWithFile() — same
+    // validation order as respondWithFD (minus the fd check), then the
+    // file is opened. No filesystem file delivery in the browser, so
+    // after validation this stays a noop.
+    if (this._destroyed || this._closed) {
+      throw http2Error(
+        "ERR_HTTP2_INVALID_STREAM",
+        "The stream has been destroyed",
+      );
+    }
+    if (this.headersSent) {
+      throw http2Error(
+        "ERR_HTTP2_HEADERS_SENT",
+        "Response has already been initiated.",
+      );
+    }
+    this._validateRespondWithOptions(options);
+    const { statusCode } = this._prepareFileResponseHeaders(
+      headers,
+      options,
+    );
+    void statusCode;
     void path;
-    void headers;
-    void options;
+  }
+
+  // Shared by respondWithFD/respondWithFile: the options type checks
+  // (offset/length numbers, statCheck a function) and the response
+  // headers, including the 204/205/304 payload-forbidden rule (Node
+  // lib/internal/http2/core.js:3155-3163 / 3215-3223). The :status range
+  // check is inside normalizeResponseHeaders.
+  _validateRespondWithOptions(options) {
+    if (
+      options !== undefined &&
+      (options === null ||
+        typeof options !== "object" ||
+        Array.isArray(options))
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "options" argument must be of type object.${invalidArgTypeHelper(options)}`,
+      );
+    }
+    options = options || {};
+    if (options.offset !== undefined && typeof options.offset !== "number")
+      throw invalidArgValue("options.offset", options.offset);
+    if (options.length !== undefined && typeof options.length !== "number")
+      throw invalidArgValue("options.length", options.length);
+    if (
+      options.statCheck !== undefined &&
+      typeof options.statCheck !== "function"
+    )
+      throw invalidArgValue("options.statCheck", options.statCheck);
+    if (options.waitForTrailers) this._responseWaitForTrailers = true;
+  }
+
+  _prepareFileResponseHeaders(headers, options) {
+    const { headersObject } = normalizeResponseHeaders(
+      headers,
+      options,
+      this._serverSession
+        ? this._serverSession._strictSingleValueFields !== false
+        : true,
+    );
+    const statusCode = headersObject[":status"];
+    if (
+      statusCode === 204 ||
+      statusCode === 205 ||
+      statusCode === 304 ||
+      this.headRequest
+    ) {
+      throw http2Error(
+        "ERR_HTTP2_PAYLOAD_FORBIDDEN",
+        `Responses with ${statusCode} status must not have a payload`,
+      );
+    }
+    return { headersObject, statusCode };
   }
 
   sendTrailers(headers) {
-    // Recorded locally; no trailers are transmitted.
-    this._sentTrailers = { ...headers };
+    // H2-V4: Node lib/internal/http2/core.js sendTrailers() — the
+    // trailers state machine. Destroyed/closed -> INVALID_STREAM;
+    // before the side's 'wantTrailers' fires -> NOT_READY; a second
+    // send for the same side -> ALREADY_SENT. Pseudo-headers are never
+    // valid in trailers (assertValidPseudoHeaderTrailer). Names are
+    // lowercased and values stringified (Node buildNgHeaderString).
+    // The side is the one whose 'wantTrailers' is being emitted
+    // (_trailersSide, set by _emitWantTrailers); the two sides keep
+    // separate stores on this shared stream object.
+    if (this._destroyed || this._closed) {
+      throw http2Error(
+        "ERR_HTTP2_INVALID_STREAM",
+        "The stream has been destroyed",
+      );
+    }
+    const side = this._trailersSide;
+    if (!side || !this._trailersReady[side]) {
+      throw http2Error(
+        "ERR_HTTP2_TRAILERS_NOT_READY",
+        "Trailing headers cannot be sent until after the wantTrailers event is emitted",
+      );
+    }
+    if (this._trailersSent[side]) {
+      throw http2Error(
+        "ERR_HTTP2_TRAILERS_ALREADY_SENT",
+        "Trailing headers have already been sent",
+      );
+    }
+    const pairs = normalizeTrailerPairs(headers);
+    validateHeaderList(pairs, assertValidPseudoHeaderTrailer);
+    if (side === "request") {
+      this._requestTrailerPairs = pairs;
+      this._requestTrailers = foldToHeaderObject(pairs);
+    } else {
+      this._sentTrailers = foldToHeaderObject(pairs);
+    }
+    this._trailersSent[side] = true;
+  }
+
+  // H2-V4: emit 'wantTrailers' for one side only. The virtual loop
+  // shares one stream object between client and server, but the two
+  // sides register their 'wantTrailers' listeners at different times:
+  // the client's before dispatch, the server's in the stream handler.
+  // _clientWantTrailers snapshots the pre-dispatch listeners; the
+  // request-side emit invokes those, the response-side emit invokes
+  // the rest. Invoked directly (not via emit()) so the other side's
+  // listeners do not fire. Sets _trailersSide + the side's ready flag
+  // first, so a synchronous sendTrailers in the handler is accepted.
+  _emitWantTrailers(side) {
+    this._trailersSide = side;
+    this._trailersReady[side] = true;
+    const snapshot = this._clientWantTrailers;
+    let targets;
+    if (side === "request") {
+      targets = snapshot || this.listeners("wantTrailers");
+    } else {
+      const all = this.listeners("wantTrailers");
+      targets = snapshot ? all.filter((fn) => !snapshot.includes(fn)) : [];
+    }
+    for (const fn of [...targets]) fn.call(this);
+    this._trailersSide = null;
+  }
+
+  // H2-V4: emit 'data' to one side only (same shared-object split as
+  // 'trailers'). Request-body chunks go to the server's consumers
+  // (registered at dispatch); response chunks go to the rest (the
+  // client's pre-dispatch listeners plus any it registered in its
+  // 'response' handler).
+  _emitData(chunk, side) {
+    const serverListeners = this._serverDataListeners || [];
+    const all = this.listeners("data");
+    const targets =
+      side === "request"
+        ? serverListeners
+        : all.filter((fn) => !serverListeners.includes(fn));
+    for (const fn of [...targets]) fn.call(this, chunk);
+  }
+
+  // H2-V4: emit 'trailers' to one side only. The virtual loop shares
+  // one stream object, but request trailers belong to the server and
+  // response trailers to the client. _serverTrailersListeners holds the
+  // listeners the server registered at dispatch ('stream'/'request'
+  // handlers); request trailers go to those, response trailers to the
+  // rest (the client's pre-dispatch listeners plus any it registered
+  // in its 'response' handler).
+  _emitTrailers(headers, side) {
+    const serverListeners = this._serverTrailersListeners || [];
+    const all = this.listeners("trailers");
+    const targets =
+      side === "request"
+        ? serverListeners
+        : all.filter((fn) => !serverListeners.includes(fn));
+    for (const fn of [...targets]) fn.call(this, headers, 0);
   }
 
   pushStream(headers, options, callback) {
@@ -1266,18 +2156,73 @@ class Http2Stream extends EventEmitter {
       callback = options;
       options = {};
     }
-    // Push is impossible in the browser emulation; report it asynchronously
-    // rather than throwing, per the noop-over-throw rule.
+    // H2-V4: Node lib/internal/http2/core.js pushStream() checks
+    // pushAllowed FIRST (sync throw when the client disabled push),
+    // then the callback, then the headers (connection-specific headers
+    // throw ERR_HTTP2_INVALID_CONNECTION_HEADERS via the request
+    // validator). Push itself is impossible in the browser emulation,
+    // so a fully valid call still reports ERR_HTTP2_PUSH_DISABLED
+    // asynchronously, as before.
+    if (!this.pushAllowed) {
+      throw http2Error(
+        "ERR_HTTP2_PUSH_DISABLED",
+        "HTTP/2 client has disabled push streams",
+      );
+    }
+    validateFunction(callback, "callback");
+    if (
+      options !== undefined &&
+      (options === null ||
+        typeof options !== "object" ||
+        Array.isArray(options))
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "options" argument must be of type object.${invalidArgTypeHelper(options)}`,
+      );
+    }
+    if (
+      headers !== undefined &&
+      (headers === null ||
+        typeof headers !== "object" ||
+        Array.isArray(headers))
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "headers" argument must be of type object.${invalidArgTypeHelper(headers)}`,
+      );
+    }
+    validateHeaderList(
+      normalizeTrailerPairs(headers || {}),
+      assertValidPseudoHeader,
+    );
+    // H2-V4: when push is allowed, this actually creates the push
+    // stream (Node lib/internal/http2/core.js pushStream()): an
+    // even-id stream on the client session, delivered via the client's
+    // 'stream' event. The server's callback fires asynchronously with
+    // (null, pushStream, headers, options), like Node. When push is
+    // disabled the sync throw above already fired, so a fully valid
+    // call never reaches the old async PUSH_DISABLED callback.
+    const serverSession = this._serverSession;
+    const pushId = serverSession._nextPushStreamID;
+    serverSession._nextPushStreamID += 2;
+    const { headersObject, rawPairs } = normalizeRequestHeaders(
+      headers || {},
+      this.session,
+    );
+    const pushStream = new Http2Stream(this.session, headersObject);
+    pushStream._id = pushId;
+    pushStream._isPush = true;
+    pushStream._serverSession = serverSession;
+    // A push stream has no request body to wait for: mark the body
+    // delivery as complete (a dedicated flag — _requestEndEmitted
+    // must stay false so _deliverResponse still emits 'end').
+    pushStream._requestBodyDeliveryStarted = true;
+    pushStream._requestBodyComplete = true;
+    this.session.emit("stream", pushStream, headersObject, 0, rawPairs);
     if (callback) {
-      setTimeout(
-        () =>
-          callback(
-            http2Error(
-              "ERR_HTTP2_PUSH_DISABLED",
-              "Push streams are not supported in the browser emulation",
-            ),
-          ),
-        0,
+      queueMicrotask(() =>
+        callback(null, pushStream, headersObject, {}),
       );
     }
   }
@@ -1323,6 +2268,12 @@ class Http2Stream extends EventEmitter {
       callback = encoding;
       encoding = undefined;
     }
+    // H2-V4: the client ends exactly once, so an end() that lands after
+    // the client already ended — with response data but no respond()
+    // call yet — is the server's end (test-http2-server-push-stream-
+    // errors-args: stream.end("test") with no respond() must deliver a
+    // 200 + the data). Route its payload as a response and deliver.
+    const wasRequestEnded = this._requestEnded;
     if (data !== undefined && data !== null) {
       // Route the end() payload by side, not via write(): the server ends
       // with response data once respond() has run (test-http2-async-local-
@@ -1362,12 +2313,29 @@ class Http2Stream extends EventEmitter {
           this.emit("finish");
         }
       } else {
+        // The server's end: if it asked for trailers, emit
+        // 'wantTrailers' first so its handler can send them before the
+        // response is delivered.
+        if (this._responseWaitForTrailers) this._emitWantTrailers("response");
         this._responseEnded = true;
       }
       this._deliverResponse();
+    } else if (wasRequestEnded) {
+      // H2-V4: the client already ended, so this end() is the server's
+      // (it just never called respond()): deliver the default 200 +
+      // whatever response data was written.
+      this._responseEnded = true;
+      this._deliverResponse();
     } else {
+      // The client's end: if it asked for trailers, emit 'wantTrailers'
+      // first so its handler can send them before the request completes.
+      if (this._requestWaitForTrailers) this._emitWantTrailers("request");
       this._requestEnded = true;
       this.emit("finish");
+      // H2-V4: ending a stream that was already reset closes its
+      // readable side (test-http2-client-rststream-before-connect:
+      // req.end() after req.close(1) still emits 'end').
+      if (this._closed || this._destroyed) this._emitEndOnce();
     }
     if (callback) setTimeout(callback, 0);
     return this;
@@ -1444,13 +2412,22 @@ class Http2Stream extends EventEmitter {
     const deliver = () => {
       const body = this.requestBody;
       if (body.length > 0) {
-        this.emit(
-          "data",
+        // H2-V4: side-scoped — the request body goes to the server's
+        // consumers only, not the client's 'data' listener.
+        this._emitData(
           this._encoding ? body.toString(this._encoding) : body,
+          "request",
         );
       }
       this._requestEndEmitted = true;
-      this.emit("end");
+      this._requestBodyComplete = true;
+      this._emitEndOnce();
+      // H2-V4: the client's trailers arrive after the body (Node emits
+      // 'trailers' on the server stream once the request ends).
+      // Side-scoped: only the server's listeners see request trailers.
+      if (this._requestTrailers) {
+        this._emitTrailers({ ...this._requestTrailers }, "request");
+      }
       if (this._responsePending) {
         this._responsePending = false;
         this._deliverResponse();
@@ -1471,7 +2448,10 @@ class Http2Stream extends EventEmitter {
   _endResponse(data, encoding) {
     if (data !== undefined && data !== null)
       this._writeResponse(data, encoding);
-    // Compat res.end(): the server has ended the response.
+    // Compat res.end(): the server has ended the response. If it asked
+    // for trailers, emit 'wantTrailers' first so its handler can send
+    // them before the response is delivered.
+    if (this._responseWaitForTrailers) this._emitWantTrailers("response");
     this._responseEnded = true;
     this._deliverResponse();
   }
@@ -1479,7 +2459,7 @@ class Http2Stream extends EventEmitter {
   _deliverResponse() {
     if (this._responseDelivered) return;
     // Request body still in flight; deliver the response once it lands.
-    if (this._requestBodyDeliveryStarted && !this._requestEndEmitted) {
+    if (this._requestBodyDeliveryStarted && !this._requestBodyComplete) {
       this._responsePending = true;
       return;
     }
@@ -1515,16 +2495,33 @@ class Http2Stream extends EventEmitter {
       ? toWireRawHeaders(this._responseRawPairs)
       : toWireRawHeaders(pairsFromObject(headers));
     // Client-side observable events, in real order.
-    this.emit("response", { ...headers }, 0, rawHeaders);
-    if (body.length > 0 && !this.headRequest) {
-      this.emit("data", this._encoding ? body.toString(this._encoding) : body);
+    if (this._isPush) {
+      // H2-V4: a push stream signals its response with a 'push' event
+      // (Node Http2Stream 'push'), and the headers always carry a date.
+      const pushHeaders = { ...headers };
+      if (!pushHeaders.date) pushHeaders.date = new Date().toUTCString();
+      this.emit("push", pushHeaders, 0);
+    } else {
+      this.emit("response", { ...headers }, 0, rawHeaders);
     }
-    if (this._sentTrailers) this.emit("trailers", { ...this._sentTrailers }, 0);
+    if (body.length > 0 && !this.headRequest) {
+      // H2-V4: side-scoped — the response body goes to the client's
+      // listeners only, not the server's request-body consumers.
+      this._emitData(
+        this._encoding ? body.toString(this._encoding) : body,
+        "response",
+      );
+    }
+    // H2-V4: side-scoped — only the client's listeners see response
+    // trailers (the server's 'trailers' listener is for request
+    // trailers and must not fire again here).
+    if (this._sentTrailers)
+      this._emitTrailers({ ...this._sentTrailers }, "response");
     // The request body already emitted 'end' (lazy delivery above); a
     // second one would double-fire the client's 'end' mustCalls.
-    if (!this._requestEndEmitted) this.emit("end");
+    if (!this._requestEndEmitted) this._emitEndOnce();
     this._closed = true;
-    this.emit("close", constants.NGHTTP2_NO_ERROR);
+    this._emitCloseOnce(constants.NGHTTP2_NO_ERROR);
   }
 
   get requestBody() {
@@ -1546,15 +2543,12 @@ export class Http2ServerRequest extends EventEmitter {
     this.httpVersion = "2.0";
     this.httpVersionMajor = 2;
     this.httpVersionMinor = 0;
-    this.method = headers[":method"] || "GET";
-    this.url = headers[":path"] || "/";
-    this.scheme = headers[":scheme"] || "http";
-    // H2-V6: Node's authority getter falls back to the Host header
-    // (lib/internal/http2/util.js getAuthority).
-    this.authority =
-      headers[":authority"] !== undefined
-        ? headers[":authority"]
-        : headers["host"];
+    // H2-V4: method/url/scheme/authority are prototype accessors now
+    // (Node lib/internal/http2/compat.js:407-435) — the constructor
+    // must NOT assign them (the method setter validates, and the
+    // authority/scheme getters are read-only). The getters read the
+    // live headers object, so a handler that sets request.method sees
+    // it reflected in request.headers, like Node.
     // H2-V6: rawHeaders is the wire-order flat list — pseudo-headers
     // first, then regulars, names lowercased, duplicates in order
     // (Node buildNgHeaderString). The stream carries the request's raw
@@ -1563,6 +2557,49 @@ export class Http2ServerRequest extends EventEmitter {
       ? toWireRawHeaders(stream._requestRawPairs)
       : toWireRawHeaders(pairsFromObject(this.headers));
     this._body = stream ? stream.requestBody : Buffer.alloc(0);
+  }
+
+  // H2-V4: Node lib/internal/http2/compat.js:407-435. method is a
+  // validating setter (non-string -> ERR_INVALID_ARG_TYPE, blank after
+  // trim -> ERR_INVALID_ARG_VALUE); url is a plain setter onto :path;
+  // authority falls back to the Host header (util.js getAuthority);
+  // scheme is a getter. There is no `path` property (it is undefined).
+  get method() {
+    return this.headers[":method"];
+  }
+  set method(method) {
+    validateString(method, "method");
+    if (method.trim() === "")
+      throw invalidArgValue("method", method);
+    this.headers[":method"] = method;
+  }
+  get url() {
+    return this.headers[":path"];
+  }
+  set url(url) {
+    this.headers[":path"] = url;
+  }
+  get scheme() {
+    return this.headers[":scheme"];
+  }
+  get authority() {
+    if (this.headers[":authority"] !== undefined)
+      return this.headers[":authority"];
+    return this.headers["host"];
+  }
+  // H2-V4: the request trailers the client sent (folded object) and
+  // their wire-order flat list (Node Http2ServerRequest.trailers /
+  // rawTrailers, read live from the stream).
+  get trailers() {
+    return this.stream && this.stream._requestTrailers
+      ? { ...this.stream._requestTrailers }
+      : {};
+  }
+  get rawTrailers() {
+    if (!this.stream || !this.stream._requestTrailerPairs) return [];
+    const out = [];
+    for (const [k, v] of this.stream._requestTrailerPairs) out.push(k, v);
+    return out;
   }
 
   get body() {
@@ -1719,7 +2756,42 @@ export class Http2ServerResponse extends EventEmitter {
   }
 
   setHeader(name, value) {
-    this._headers[name.toLowerCase()] = value;
+    // H2-V4: Node lib/internal/http2/compat.js setHeader /
+    // [kSetHeader]: validateString first, throw if headers are already
+    // sent, then the name is trimmed + lowercased BEFORE
+    // assertValidHeader — so " test" is accepted (it becomes "test")
+    // while "t est" throws ERR_INVALID_HTTP_TOKEN and ":path" throws
+    // ERR_HTTP2_PSEUDOHEADER_NOT_ALLOWED. A connection header is
+    // dropped silently with a warning (Node isConnectionHeaderAllowed),
+    // not stored.
+    validateString(name, "name");
+    if (this._headersSent) {
+      throw http2Error(
+        "ERR_HTTP2_HEADERS_SENT",
+        "Response has already been initiated.",
+      );
+    }
+    const lowered = name.trim().toLowerCase();
+    assertValidHeader(lowered, value);
+    if (
+      lowered === "connection" ||
+      lowered === "upgrade" ||
+      lowered === "http2-settings" ||
+      lowered === "keep-alive" ||
+      lowered === "proxy-connection" ||
+      lowered === "transfer-encoding" ||
+      (lowered === "te" && value !== "trailers")
+    ) {
+      return this;
+    }
+    if (lowered[0] === ":") assertValidPseudoHeader(lowered);
+    else if (!checkIsHttpToken(lowered)) {
+      throw typeError(
+        "ERR_INVALID_HTTP_TOKEN",
+        `Header name must be a valid HTTP token ["${lowered}"]`,
+      );
+    }
+    this._headers[lowered] = value;
     return this;
   }
 
@@ -1740,6 +2812,11 @@ export class Http2ServerResponse extends EventEmitter {
   }
 
   writeHead(statusCode, statusMessage, headers) {
+    // H2-V4: Node (lib/internal/http2/compat.js:717-718) — a closed or
+    // destroyed stream makes writeHead a silent noop (return this),
+    // checked BEFORE the headers-sent throw. The V2 gate below only
+    // throws when the stream is still open.
+    if (this.stream._closed || this.stream._destroyed) return this;
     // H2-V2: Node (lib/internal/http2/compat.js:719-720) throws
     // ERR_HTTP2_HEADERS_SENT on a second writeHead — unless the stream is
     // already closed/destroyed, in which case writeHead is a noop
@@ -1812,10 +2889,64 @@ export class Http2ServerResponse extends EventEmitter {
   }
 
   // -- Writable-side compatibility ----------------------------------------
+  createPushResponse(headers, callback) {
+    // H2-V4: Node lib/internal/http2/compat.js:878-891 — validate the
+    // callback FIRST (a missing/non-function callback throws
+    // ERR_INVALID_ARG_TYPE synchronously); a closed stream reports
+    // ERR_HTTP2_INVALID_STREAM to the callback asynchronously;
+    // otherwise delegate to the stream's pushStream, which creates
+    // the push stream and wraps it in a new Http2ServerResponse.
+    validateFunction(callback, "callback");
+    if (this.stream._closed || this.stream._destroyed) {
+      queueMicrotask(() =>
+        callback(
+          http2Error(
+            "ERR_HTTP2_INVALID_STREAM",
+            "The stream has been destroyed",
+          ),
+        ),
+      );
+      return;
+    }
+    this.stream.pushStream(headers, {}, (err, pushStream) => {
+      if (err) {
+        callback(err);
+        return;
+      }
+      callback(null, new Http2ServerResponse(pushStream));
+    });
+  }
+
   writeEarlyHints(hints, callback) {
-    // Noop: 103 Early Hints are not transmitted in the emulation, but the
-    // callback contract is honored asynchronously.
-    void hints;
+    // H2-V4: Node lib/internal/http2/compat.js writeEarlyHints() —
+    // hints must be an object; every non-link key is trimmed +
+    // lowercased and validated with assertValidHeader (empty/spaced
+    // names -> ERR_INVALID_HTTP_TOKEN, undefined/null values ->
+    // ERR_HTTP2_INVALID_HEADER_VALUE) plus the token check. The hints
+    // themselves are not transmitted in the emulation, but the callback
+    // contract is honored asynchronously.
+    if (
+      hints === undefined ||
+      hints === null ||
+      typeof hints !== "object" ||
+      Array.isArray(hints)
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "hints" argument must be of type object.${invalidArgTypeHelper(hints)}`,
+      );
+    }
+    for (const key of Object.keys(hints)) {
+      if (key === "link") continue;
+      const name = key.trim().toLowerCase();
+      assertValidHeader(name, hints[key]);
+      if (!checkIsHttpToken(name)) {
+        throw typeError(
+          "ERR_INVALID_HTTP_TOKEN",
+          `Header name must be a valid HTTP token ["${name}"]`,
+        );
+      }
+    }
     if (typeof callback === "function") setTimeout(callback, 0);
     return this;
   }
@@ -1835,33 +2966,47 @@ export class Http2ServerResponse extends EventEmitter {
   }
 
   addTrailers(headers) {
-    // Compat alias for sendTrailers on the underlying stream.
-    if (this.stream && typeof this.stream.sendTrailers === "function") {
-      this.stream.sendTrailers(headers);
+    // H2-V4: the compat layer stores trailers on the response and
+    // delivers them with the response body (Node compat.js stores them
+    // in [kTrailers] and sends them on 'wantTrailers'). Unlike the
+    // low-level stream.sendTrailers, this does NOT require a prior
+    // 'wantTrailers' — it validates names/values and writes straight
+    // into the stream's response-trailer store (lowercased, stringified).
+    const pairs = normalizeTrailerPairs(headers);
+    for (const [name, value] of pairs) {
+      // Node's addTrailers delegates to setTrailer, whose only checks
+      // are assertValidHeader (empty/spaced names, pseudo-headers,
+      // undefined/null values) — no separate token check.
+      assertValidHeader(name, value);
     }
+    const current = this.stream ? this.stream._sentTrailers || {} : {};
+    const merged = foldToHeaderObject([
+      ...Object.entries(current).flatMap(([k, v]) =>
+        Array.isArray(v) ? v.map((el) => [k, el]) : [[k, v]],
+      ),
+      ...pairs,
+    ]);
+    if (this.stream) this.stream._sentTrailers = merged;
     return this;
   }
 
   setTrailer(name, value) {
-    // http1-style singular trailer setter; validates like Node.
-    if (typeof name !== "string" || name.length === 0) {
-      throw http2Error(
-        "ERR_HTTP2_INVALID_HEADER_VALUE",
-        `Invalid trailer name: ${String(name)}`,
-        TypeError,
-      );
-    }
-    if (value === undefined || value === null) {
-      throw http2Error(
-        "ERR_HTTP2_INVALID_HEADER_VALUE",
-        `Invalid trailer value for "${name}"`,
-        TypeError,
-      );
-    }
-    if (this.stream && typeof this.stream.sendTrailers === "function") {
-      // Merge with any existing trailers.
-      const current = this.stream._sentTrailers || {};
-      this.stream.sendTrailers({ ...current, [name]: value });
+    // H2-V4: Node lib/internal/http2/compat.js setTrailer() — the
+    // http1-style singular setter. validateString first (a missing name
+    // is ERR_INVALID_ARG_TYPE), then trim + lowercase, then
+    // assertValidHeader ("" is ERR_INVALID_HTTP_TOKEN, undefined/null
+    // values are ERR_HTTP2_INVALID_HEADER_VALUE with the 'Invalid value
+    // "x" for header "y"' message). No separate token check, like Node.
+    // Stored like addTrailers.
+    validateString(name, "name");
+    const lowered = name.trim().toLowerCase();
+    assertValidHeader(lowered, value);
+    const current = this.stream ? this.stream._sentTrailers || {} : {};
+    if (this.stream) {
+      this.stream._sentTrailers = {
+        ...current,
+        [lowered]: String(value),
+      };
     }
     return this;
   }
@@ -1920,7 +3065,11 @@ function lookupServer(port) {
 }
 
 function dispatchVirtualRequest(session, stream) {
-  if (stream._closed || stream._destroyed) return;
+  // H2-V4: only a DESTROYED stream never dispatches (its request is
+  // gone). An RST-closed stream still dispatches — the server's
+  // handler must see it, so it can observe the reset (its 'error'
+  // fires there). The old _closed check swallowed it.
+  if (stream._destroyed) return;
   const server = lookupServer(session._virtualPort);
   if (!server) {
     const err = http2Error(
@@ -1936,7 +3085,7 @@ function dispatchVirtualRequest(session, stream) {
     });
     return;
   }
-  server._dispatchVirtualStream(session, stream);
+  server._dispatchVirtualStream(session, stream, true);
 }
 
 class Http2Server extends EventEmitter {
@@ -1946,7 +3095,62 @@ class Http2Server extends EventEmitter {
       requestListener = options;
       options = {};
     }
-    this._options = { ...(options || {}) };
+    // H2-V4: Node lib/internal/http2/core.js initializeOptions() —
+    // options and options.settings must be objects (undefined is
+    // allowed); maxSessionInvalidFrames / maxSessionRejectedStreams /
+    // unknownProtocolTimeout must be uint32s. The ALPNCallback +
+    // ALPNProtocols combination is rejected by the TLS layer
+    // (createSecureServer only — see below).
+    if (
+      options !== undefined &&
+      (options === null ||
+        typeof options !== "object" ||
+        Array.isArray(options))
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "options" argument must be of type object.${invalidArgTypeHelper(options)}`,
+      );
+    }
+    options = options || {};
+    if (
+      options.settings !== undefined &&
+      (options.settings === null ||
+        typeof options.settings !== "object" ||
+        Array.isArray(options.settings))
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "options.settings" property must be of type object.${invalidArgTypeHelper(options.settings)}`,
+      );
+    }
+    for (const name of [
+      "maxSessionInvalidFrames",
+      "maxSessionRejectedStreams",
+      "unknownProtocolTimeout",
+    ]) {
+      if (options[name] !== undefined) {
+        validateInteger(
+          options[name],
+          `options.${name}`,
+          0,
+          4294967295,
+          "It must be >= 0 && <= 4294967295.",
+        );
+      }
+    }
+    // H2-V4: strictSingleValueFields is a boolean session option
+    // (Node lib/internal/http2/core.js:3429-3435), default true.
+    if (
+      options.strictSingleValueFields !== undefined &&
+      typeof options.strictSingleValueFields !== "boolean"
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "options.strictSingleValueFields" property must be of type boolean.${invalidArgTypeHelper(options.strictSingleValueFields)}`,
+      );
+    }
+    this._options = { ...options };
     // Custom request/response classes (Node supports overriding via
     // options.Http2ServerRequest / options.Http2ServerResponse).
     this._RequestClass = this._options.Http2ServerRequest || Http2ServerRequest;
@@ -1996,7 +3200,16 @@ class Http2Server extends EventEmitter {
   }
 
   setTimeout(msecs, callback) {
+    // H2-V4: Node lib/net.js setTimeout() — a callback that is not a
+    // function (and not undefined) throws ERR_INVALID_ARG_TYPE; a valid
+    // call returns the server so setTimeout(...).timeout is settable.
     // Noop: no real sockets, so no socket timeouts; documented gap.
+    if (callback !== undefined && typeof callback !== "function") {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "callback" argument must be of type function.${invalidArgTypeHelper(callback)}`,
+      );
+    }
     this.timeout = msecs;
     if (callback) this.on("timeout", callback);
     return this;
@@ -2040,6 +3253,11 @@ class Http2Server extends EventEmitter {
       this._serverSession = new ServerHttp2Session({
         encrypted: this instanceof Http2SecureServer,
       });
+      // H2-V4: the server's strictSingleValueFields option (default
+      // true) flows to the server session, so respond() validates
+      // response headers against it.
+      this._serverSession._strictSingleValueFields =
+        this._options.strictSingleValueFields !== false;
       this._serverSession._connecting = false;
       this._sessions.add(this._serverSession);
       queueMicrotask(() => this.emit("session", this._serverSession));
@@ -2047,8 +3265,14 @@ class Http2Server extends EventEmitter {
     return this._serverSession;
   }
 
-  _dispatchVirtualStream(clientSession, stream) {
+  _dispatchVirtualStream(clientSession, stream, immediate = false) {
     this._getServerSession(); // ensure exactly one server session per server
+    // H2-V4: the stream needs the paired server session so pushAllowed
+    // can read the peer's remote enablePush (set here, before the
+    // handler runs — the SETTINGS flush in _emitVirtualStream keeps
+    // the session's _remoteSettings current).
+    stream._serverSession = this._serverSession;
+    this._serverSession._streams.add(stream);
     const headers = { ...stream._requestHeaders };
     const flags = 0;
     // H2-V6: rawHeaders is the wire-order flat list (pseudo-headers
@@ -2058,10 +3282,51 @@ class Http2Server extends EventEmitter {
     const rawHeaders = stream._requestRawPairs
       ? toWireRawHeaders(stream._requestRawPairs)
       : toWireRawHeaders(pairsFromObject(headers));
-    queueMicrotask(() => {
+    // H2-V4: the normal path (dispatchVirtualRequest) runs the emit
+    // synchronously — it is already one microtask after request(), and
+    // a second queued microtask lets a client close() (one microtask)
+    // overtake the dispatch, so the server never sees an RST'd stream
+    // (test-http2-client-rststream-before-connect). The host-bridge
+    // path keeps the queued emit (it calls this synchronously).
+    if (immediate) {
+      this._emitVirtualStream(clientSession, stream, headers, flags, rawHeaders);
+    } else {
+      queueMicrotask(() =>
+        this._emitVirtualStream(
+          clientSession,
+          stream,
+          headers,
+          flags,
+          rawHeaders,
+        ),
+      );
+    }
+  }
+
+  _emitVirtualStream(clientSession, stream, headers, flags, rawHeaders) {
+    {
+      // Snapshot the client's pre-dispatch 'wantTrailers' listeners:
+      // the request side's wantTrailers goes to those, the response
+      // side's to the ones the server registers later (H2-V4).
+      stream._clientWantTrailers = stream.listeners("wantTrailers");
       // Snapshot the client-side 'data' listeners: any 'data' listener
       // added from here on is a server-side request-body consumer (H2-V1).
       stream._dataListenersAtDispatch = stream.listenerCount("data");
+      // H2-V4: deliver any pending remote-settings snapshot to this
+      // session now (the server's 'session' handler, queued first,
+      // attaches 'remoteSettings' before the microtask flush emits).
+      // Guarded: the host-bridge's fake session object has no method.
+      if (typeof clientSession._flushRemoteSettings === "function")
+        clientSession._flushRemoteSettings();
+      // H2-V4: the 'trailers' event is side-scoped on the shared stream
+      // object — request trailers go to the server's listeners, response
+      // trailers to the client's. Snapshot the client's listeners
+      // before the handlers run so the server-side ones can be told
+      // apart (they are registered by the 'stream'/'request' handlers).
+      // The same split applies to 'data': the request body goes to the
+      // server's consumers, the response body to the client's.
+      const trailersBefore = stream.listeners("trailers");
+      const dataBefore = stream.listeners("data");
       this.emit("stream", stream, headers, flags, rawHeaders);
       if (
         this.listenerCount("request") > 0 ||
@@ -2078,19 +3343,28 @@ class Http2Server extends EventEmitter {
           this.emit("request", req, res);
         }
       }
+      stream._serverTrailersListeners = stream
+        .listeners("trailers")
+        .filter((fn) => !trailersBefore.includes(fn));
+      stream._serverDataListeners = stream
+        .listeners("data")
+        .filter((fn) => !dataBefore.includes(fn));
       // If the handler attached a server-side request-body consumer but
       // never responded, start lazy delivery anyway so its 'end' still
       // fires (a response already delivered means 'end' already fired).
+      // H2-V4: a 'trailers' listener counts as a body consumer too —
+      // its handler expects the body to complete so the trailers fire.
       if (
         !stream._requestBodyDeliveryStarted &&
         !stream._responseDelivered &&
-        stream.listenerCount("data") -
+        (stream.listenerCount("data") -
           (stream._dataListenersAtDispatch || 0) >
-          0
+          0 ||
+          stream.listenerCount("trailers") > 0)
       ) {
         stream._deliverRequestBody();
       }
-    });
+    }
   }
 
   // Host-delivered inbound request (used by the __http2ServerRunTime bridge).
@@ -2146,7 +3420,40 @@ class Http2Server extends EventEmitter {
   }
 }
 
-class Http2SecureServer extends Http2Server {}
+class Http2SecureServer extends Http2Server {
+  constructor(options = {}, requestListener) {
+    // H2-V4: Node lib/internal/http2/core.js Http2SecureServer extends
+    // TLSServer and runs initializeTLSOptions(options) FIRST — a
+    // function first arg throws ERR_INVALID_ARG_TYPE (probe-proven),
+    // unlike the plain server where a function is the request handler.
+    // The ALPNCallback + ALPNProtocols combination is rejected by the
+    // TLS layer (ERR_TLS_ALPN_CALLBACK_WITH_PROTOCOLS, probe-proven
+    // message). After that the base constructor validates settings /
+    // maxSession* the same as the plain server.
+    if (
+      options !== undefined &&
+      (options === null ||
+        typeof options !== "object" ||
+        Array.isArray(options))
+    ) {
+      throw typeError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "options" argument must be of type object.${invalidArgTypeHelper(options)}`,
+      );
+    }
+    if (
+      options &&
+      options.ALPNCallback !== undefined &&
+      options.ALPNProtocols !== undefined
+    ) {
+      throw typeError(
+        "ERR_TLS_ALPN_CALLBACK_WITH_PROTOCOLS",
+        "The ALPNCallback and ALPNProtocols TLS options are mutually exclusive",
+      );
+    }
+    super(options, requestListener);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 9. Factories.
@@ -2176,6 +3483,20 @@ export function connect(authority, options, listener) {
   const session = new ClientHttp2Session({
     encrypted: url.protocol === "https:",
   });
+  // H2-V4: connect() options.strictSingleValueFields (default true,
+  // Node lib/internal/http2/core.js:3657-3663) flows to the session,
+  // so request() validates request headers against it.
+  if (
+    options.strictSingleValueFields !== undefined &&
+    typeof options.strictSingleValueFields !== "boolean"
+  ) {
+    throw typeError(
+      "ERR_INVALID_ARG_TYPE",
+      `The "options.strictSingleValueFields" property must be of type boolean.${invalidArgTypeHelper(options.strictSingleValueFields)}`,
+    );
+  }
+  session._strictSingleValueFields =
+    options.strictSingleValueFields !== false;
   session._virtualPort = url.port
     ? Number(url.port)
     : url.protocol === "https:"
@@ -2186,6 +3507,12 @@ export function connect(authority, options, listener) {
   session._authority = url.host;
   session._scheme = url.protocol.slice(0, -1);
   if (options.settings) session.settings(options.settings);
+  else {
+    // H2-V4: a fresh connection carries the peer's default settings
+    // (Node emits 'remoteSettings' on connect with the defaults when
+    // no options.settings were given); one snapshot per connect.
+    session._queueRemoteSettingsSnapshot();
+  }
   if (listener) session.once("connect", listener);
   queueMicrotask(() => {
     // TLS/plain mismatch: real Node fails the handshake when an encrypted
