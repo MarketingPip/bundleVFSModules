@@ -1,10 +1,11 @@
 // src/zlib.js — Browser-first port of Node.js zlib (Node v24 API surface).
 //
 // Implements the Node v24 zlib API surface (deflate/inflate/gzip/gunzip,
-// deflateRaw/inflateRaw/unzip, Brotli and Zstd facades, crc32) on top of the
-// maintained `pako` package (a faithful JavaScript port of zlib) and a
-// minimal stream implementation. No native delegation: the same code runs in
-// the browser sandbox and under Node.
+// deflateRaw/inflateRaw/unzip, Brotli facades, Zstd via the vendored
+// `zstdify` package, crc32) on top of the maintained `pako` package (a
+// faithful JavaScript port of zlib) and a minimal stream implementation.
+// No native delegation: the same code runs in the browser sandbox and
+// under Node.
 //
 // Fidelity notes:
 // - DEFLATE/inflate/gzip/gunzip/deflateRaw/inflateRaw/unzip are byte-
@@ -15,15 +16,24 @@
 //   a fresh raw phase seeded with recent history; the wrapper trailer is
 //   computed over the full input, so the byte-exact framing Node emits is
 //   preserved.
-// - Brotli and Zstd codecs are honest pass-through stubs: option validation,
-//   constants and stream plumbing match Node, but no actual Brotli/Zstd
-//   coding is performed (documented gap; the `brotli` npm package was
-//   evaluated and rejected — its encoder silently fails on some inputs).
+// - The Zstd codec is real: ZstdCompress/ZstdDecompress run on the vendored
+//   `zstdify` package (src/vendor/zstdify/, pure JS, 1.4.0 + a 3-site
+//   dictionary patch — see its README.md).
+// - Brotli is an honest pass-through stub: option validation, constants and
+//   stream plumbing match Node, but no actual Brotli coding is performed
+//   (documented gap; the `brotli` npm package was evaluated and rejected —
+//   its encoder silently fails on some inputs).
 // - Stream semantics are provided by a minimal built-in Transform
 //   implementation (no node:stream import, so this stays browser-loadable).
 
 import { Deflate as PakoDeflate, Inflate as PakoInflate } from "pako";
 import bufferExports from "./buffer.js";
+// Vendored zstd codec (zstdify 1.4.0, pure JS — see src/vendor/zstdify/
+// README.md for provenance and the 3-site dictionary patch). Imported
+// relatively: the footprint test forbids a package.json dep line, so the
+// codec is vendored under src/ instead of installed.
+import { compress as zstdifyCompress } from "./vendor/zstdify/dist/compress.js";
+import { decompress as zstdifyDecompress } from "./vendor/zstdify/dist/decompress.js";
 
 // Node captures buffer.kMaxLength at load (const { kMaxLength } =
 // require('buffer')) and uses it as the default maxOutputLength. Read the
@@ -1207,6 +1217,442 @@ class PakoDeflateEngine {
 }
 
 // ---------------------------------------------------------------------------
+// Zstd engines backed by the vendored `zstdify` package (1.4.0, pure JS —
+// see src/vendor/zstdify/README.md). zstdify exposes whole-buffer
+// compress/decompress only, so both engines are buffering adapters:
+//
+// - ZstdCompressEngine accumulates input and compresses once, at the
+//   finalizing flush (ZSTD_e_end). Non-finalizing flushes (e_continue /
+//   e_flush) return no output and stay unfinished.
+// - ZstdDecompressEngine accumulates input and decodes eagerly on every
+//   write, so invalid input errors surface on write() with no end() call.
+//   A complete first frame emits its output and finishes the stream; a
+//   truncated frame holds (empty output) on non-finalizing writes and
+//   throws Z_BUF_ERROR at the finalizing flush; bytes after the first
+//   frame set trailingGarbage, which ZlibBase turns into
+//   ERR_TRAILING_JUNK_AFTER_STREAM_END when rejectGarbageAfterEnd is set.
+//
+// ponytail: zstdify decodes ALL frames and has no first-frame-only mode,
+// so first-frame-only is enforced here with a small RFC 8878 frame walker
+// (parseZstdFrameEnd). The walker is the authority for where the first
+// frame ends; whole-buffer decode is only the fallback that distinguishes
+// a truncated frame (hold) from a corrupt one (throw) and the safety net
+// for a frame shape the walker does not cover. Ceiling: a truncated frame
+// yields NO partial output on a non-finalizing flush (native returns the
+// completed blocks' prefix); the truncated test only asserts the result
+// is a prefix of the input, and empty is a valid prefix. A block-level
+// streaming decoder would be needed to emit the prefix.
+// ponytail: zstdify 1.4.0's decoder caps match offsets at the frame window
+// size, which rejects valid dictionary frames (a real encoder emits
+// dictionary matches past the window). The vendored copy carries a 3-site
+// patch (marked z6-patch) extending the cap by the dictionary length;
+// non-dictionary behavior is unchanged.
+// ponytail: zstdify has no streaming encoder, so a mid-stream flush
+// cannot emit a flushed frame — test-zlib-zstd-flush stays NO-FIX
+// (it needs a streaming encoder with flush support, not a size gap).
+// ponytail: only `level` is applied (params[100] overrides opts.level,
+// default 3 = Node's ZSTD_CLEVEL_DEFAULT). Other zstd params are
+// validated (validateZstdOptions) but have no zstdify equivalent and are
+// not applied; params() stays a validated no-op (no setParams).
+// ---------------------------------------------------------------------------
+
+const ZSTD_MAGIC = 0xfd2fb528;
+const ZSTD_SKIPPABLE_MAGIC_MIN = 0x184d2a50;
+const ZSTD_SKIPPABLE_MAGIC_MAX = 0x184d2a5f;
+
+function readU32LEBytes(buf, pos) {
+  return (
+    (buf[pos] |
+      (buf[pos + 1] << 8) |
+      (buf[pos + 2] << 16) |
+      (buf[pos + 3] << 24)) >>>
+    0
+  );
+}
+
+// Parse one zstd frame starting at `start`. Returns { end, isSkippable },
+// null when the bytes so far are a prefix of a valid frame (need more
+// data), or { invalid: true } when the bytes cannot start a frame.
+// Conservative by design: anything structurally off returns null/invalid
+// and lets zstdify's decoder produce the authoritative error. Probe-
+// verified against native frames (levels 1/3/6/19, 100 KB, 3 MB,
+// person.jpg.zst, checksum and dictionary frames, skippable variants).
+function parseZstdFrameEnd(buf, start) {
+  if (buf.length - start < 4) return null;
+  const magic = readU32LEBytes(buf, start);
+  if (magic >= ZSTD_SKIPPABLE_MAGIC_MIN && magic <= ZSTD_SKIPPABLE_MAGIC_MAX) {
+    if (buf.length - start < 8) return null;
+    const size = readU32LEBytes(buf, start + 4);
+    if (buf.length - start < 8 + size) return null;
+    return { end: start + 8 + size, isSkippable: true };
+  }
+  if (magic !== ZSTD_MAGIC) return { invalid: true };
+  if (buf.length - start < 5) return null;
+  const desc = buf[start + 4];
+  const fcsFlag = desc >> 6;
+  const singleSegment = (desc >> 5) & 1;
+  const checksumFlag = (desc >> 2) & 1;
+  const dictIdFlag = desc & 0x03;
+  let pos = start + 5;
+  if (!singleSegment) {
+    if (pos >= buf.length) return null;
+    pos += 1; // window descriptor (size only matters here)
+  }
+  const dictIdSize = [0, 1, 2, 4][dictIdFlag];
+  if (buf.length - pos < dictIdSize) return null;
+  pos += dictIdSize;
+  const fcsSize =
+    fcsFlag === 0
+      ? singleSegment
+        ? 1
+        : 0
+      : fcsFlag === 1
+        ? 2
+        : fcsFlag === 2
+          ? 4
+          : 8;
+  if (buf.length - pos < fcsSize) return null;
+  pos += fcsSize;
+  for (;;) {
+    if (buf.length - pos < 3) return null;
+    const bh = buf[pos] | (buf[pos + 1] << 8) | (buf[pos + 2] << 16);
+    const lastBlock = bh & 1;
+    const blockType = (bh >> 1) & 0x03;
+    const blockSize = bh >> 3;
+    if (blockType === 3) return { invalid: true }; // reserved
+    pos += 3;
+    if (blockType === 1) {
+      // RLE: one byte regardless of the (decompressed) size field.
+      if (buf.length - pos < 1) return null;
+      pos += 1;
+    } else {
+      // Raw (0) or compressed (2): blockSize bytes on the wire.
+      if (buf.length - pos < blockSize) return null;
+      pos += blockSize;
+    }
+    if (lastBlock) break;
+  }
+  if (checksumFlag) {
+    if (buf.length - pos < 4) return null;
+    pos += 4;
+  }
+  return { end: pos, isSkippable: false };
+}
+
+// Find the first content (non-skippable) frame in buf. Returns
+// { status: 'frame', end, contentStart } | { status: 'skippables-only' }
+// (buffer is exactly complete skippable frames, no content yet) |
+// { status: 'incomplete' } (need more data, or empty input) |
+// { status: 'invalid' } (bytes at the frame start are not a zstd frame).
+function firstZstdContentFrame(buf) {
+  let pos = 0;
+  for (;;) {
+    const f = parseZstdFrameEnd(buf, pos);
+    if (f === null) {
+      return pos > 0 && pos === buf.length
+        ? { status: "skippables-only" }
+        : { status: "incomplete" };
+    }
+    if (f.invalid) return { status: "invalid" };
+    if (f.isSkippable) {
+      pos = f.end;
+      continue;
+    }
+    return { status: "frame", end: f.end, contentStart: pos };
+  }
+}
+
+// True when buf[start..] is exactly a run of complete skippable frames
+// (trailing skippables after a content frame are not garbage).
+function isZstdSkippableTail(buf, start) {
+  let pos = start;
+  while (pos < buf.length) {
+    const f = parseZstdFrameEnd(buf, pos);
+    if (f === null || f.invalid || !f.isSkippable) return false;
+    pos = f.end;
+  }
+  return true;
+}
+
+// zstdify throws ZstdError for every decode failure; map the KIND to
+// Node's code/message (probed against real Node v24.22.1).
+function isZstdTruncationMessage(message) {
+  return (
+    /truncat/i.test(message) ||
+    message === "Empty input" ||
+    message === "Sequences section too short" ||
+    message === "Sequences bitstream empty" ||
+    message === "4-stream mode requires at least 10 bytes"
+  );
+}
+
+function zstdifyErrorToNode(err) {
+  const message = String((err && err.message) || "");
+  if (/^Invalid zstd magic:/.test(message)) {
+    return zlibError(
+      "ZSTD_error_prefix_unknown",
+      constants.ZSTD_error_prefix_unknown,
+      "Unknown frame descriptor",
+    );
+  }
+  if (message === "Content checksum mismatch") {
+    return zlibError(
+      "ZSTD_error_checksum_wrong",
+      constants.ZSTD_error_checksum_wrong,
+      "Restored data doesn't match checksum",
+    );
+  }
+  if (isZstdTruncationMessage(message)) {
+    return bufError("unexpected end of file");
+  }
+  return zlibError(
+    "ZSTD_error_corruption_detected",
+    constants.ZSTD_error_corruption_detected,
+    "Data corruption detected",
+  );
+}
+
+// zstdify accepts a dictionary only as a Uint8Array or { bytes, id? };
+// an ArrayBuffer or DataView is silently IGNORED (compresses as if no
+// dictionary was passed — 210 bytes instead of 112 for the dictionary
+// test vectors). Normalize every form Node accepts to a Uint8Array first,
+// so all four forms compress identically (the dictionary test asserts
+// equal lengths). Invalid types throw like normalizeZlibOptions does.
+function normalizeZstdDictionary(dictionary) {
+  if (dictionary === undefined || dictionary === null) return null;
+  if (dictionary instanceof Uint8Array) return dictionary;
+  if (isAnyArrayBuffer(dictionary)) return new Uint8Array(dictionary);
+  if (isArrayBufferView(dictionary)) {
+    return new Uint8Array(
+      dictionary.buffer,
+      dictionary.byteOffset,
+      dictionary.byteLength,
+    );
+  }
+  throw new ERR_INVALID_ARG_TYPE(
+    "options.dictionary",
+    "Buffer, TypedArray, DataView, or ArrayBuffer",
+    dictionary,
+  );
+}
+
+// Node's zstd default level is 3 (ZSTD_CLEVEL_DEFAULT); zstdify's default
+// behaves like level 0/1 (raw blocks — the 505-byte lorem compresses to
+// 515 bytes, LARGER than input), so the level is always passed
+// explicitly. params[100] (ZSTD_c_compressionLevel) overrides opts.level,
+// matching the native binding (probe-verified: level 19 via `level`
+// differs from via params[100], and params[100] wins when both are set).
+// Non-finite levels fall back to the default (zstdify would otherwise
+// propagate NaN through its level clamp).
+function zstdLevelFromOptions(opts) {
+  const fromParams = opts?.params?.[100];
+  const raw = fromParams !== undefined ? fromParams : opts?.level;
+  if (raw === undefined) return 3;
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return 3;
+  return Math.trunc(num);
+}
+
+function zstdCompressOptions(opts) {
+  return {
+    level: zstdLevelFromOptions(opts),
+    dictionary: normalizeZstdDictionary(opts?.dictionary),
+  };
+}
+
+function zstdDecompressOptions(opts) {
+  return { dictionary: normalizeZstdDictionary(opts?.dictionary) };
+}
+
+class ZstdCompressEngine {
+  constructor({ level, dictionary }) {
+    this.level = level;
+    this.dictionary = dictionary;
+    this.reset();
+  }
+
+  reset() {
+    this._chunks = [];
+    this._len = 0;
+    this.finished = false;
+    this.trailingGarbage = false;
+    return this;
+  }
+
+  write(chunk, flushFlag) {
+    const bytes = chunk && chunk.length > 0 ? chunk : PAKO_EMPTY;
+    if (this.finished) {
+      return {
+        output: PAKO_EMPTY,
+        finished: true,
+        consumed: bytes.length,
+        trailing: false,
+      };
+    }
+    if (bytes.length > 0) {
+      this._chunks.push(bytes);
+      this._len += bytes.length;
+    }
+    // Only the finalizing flush compresses: zstdify has no streaming
+    // encoder, so e_continue / e_flush return no output and stay
+    // unfinished (a mid-stream flush cannot emit a flushed frame).
+    if (flushFlag !== constants.ZSTD_e_end) {
+      return {
+        output: PAKO_EMPTY,
+        finished: false,
+        consumed: bytes.length,
+        trailing: false,
+      };
+    }
+    const input =
+      this._len === 0
+        ? PAKO_EMPTY
+        : this._chunks.length === 1
+          ? this._chunks[0]
+          : Buffer.concat(this._chunks, this._len);
+    // zstdify emits the 9-byte empty frame for empty input itself, so no
+    // EMPTY_FRAME_BY_MODE append is needed (that path is scoped to the
+    // PassThroughEngine stub and retires for zstd here).
+    let out;
+    try {
+      out = zstdifyCompress(input, {
+        level: this.level,
+        ...(this.dictionary ? { dictionary: this.dictionary } : {}),
+      });
+    } catch (err) {
+      throw zstdifyErrorToNode(err);
+    }
+    this.finished = true;
+    return {
+      output: Buffer.from(out),
+      finished: true,
+      consumed: bytes.length,
+      trailing: false,
+    };
+  }
+}
+
+class ZstdDecompressEngine {
+  constructor({ dictionary }) {
+    this.dictionary = dictionary;
+    this.reset();
+  }
+
+  reset() {
+    this._chunks = [];
+    this._len = 0;
+    this.finished = false;
+    this.trailingGarbage = false;
+    return this;
+  }
+
+  _buffer() {
+    if (this._len === 0) return PAKO_EMPTY;
+    if (this._chunks.length === 1) return this._chunks[0];
+    return Buffer.concat(this._chunks, this._len);
+  }
+
+  _decode(buf, end) {
+    const out = zstdifyDecompress(
+      end === undefined ? buf : buf.subarray(0, end),
+      this.dictionary ? { dictionary: this.dictionary } : undefined,
+    );
+    return Buffer.from(out);
+  }
+
+  write(chunk, flushFlag) {
+    const bytes = chunk && chunk.length > 0 ? chunk : PAKO_EMPTY;
+    const finalizing = flushFlag === constants.ZSTD_e_end;
+    if (this.finished) {
+      // Stream already ended; extra input is trailing garbage, never a
+      // second frame. (The stream layer normally prevents this.)
+      if (bytes.length > 0) this.trailingGarbage = true;
+      return {
+        output: PAKO_EMPTY,
+        finished: true,
+        consumed: bytes.length,
+        trailing: this.trailingGarbage,
+      };
+    }
+    const prevLen = this._len;
+    if (bytes.length > 0) {
+      this._chunks.push(bytes);
+      this._len += bytes.length;
+    }
+    const buf = this._buffer();
+    const first = firstZstdContentFrame(buf);
+    if (first.status === "frame") {
+      let out;
+      try {
+        out = this._decode(buf, first.end);
+      } catch (err) {
+        if (isZstdTruncationMessage(String((err && err.message) || ""))) {
+          // Walker and decoder disagree (walker found a frame end the
+          // decoder cannot complete): fall through to the whole-buffer
+          // path, which holds or throws Z_BUF_ERROR as appropriate.
+          return this._decodeWholeBuffer(buf, bytes.length, finalizing);
+        }
+        throw zstdifyErrorToNode(err);
+      }
+      // Classify the bytes after the first frame: trailing skippables
+      // are fine, anything else (a second frame, partial bytes) is
+      // trailing garbage.
+      this.trailingGarbage =
+        first.end !== buf.length && !isZstdSkippableTail(buf, first.end);
+      this.finished = true;
+      const consumed =
+        first.end === buf.length
+          ? bytes.length
+          : Math.max(0, first.end - prevLen);
+      return {
+        output: out,
+        finished: true,
+        consumed,
+        trailing: this.trailingGarbage,
+      };
+    }
+    // No complete content frame yet (incomplete frame, only skippable
+    // frames so far, or not a zstd frame at all): whole-buffer decode
+    // distinguishes corrupt (throw now) from truncated (hold).
+    return this._decodeWholeBuffer(buf, bytes.length, finalizing);
+  }
+
+  _decodeWholeBuffer(buf, consumed, finalizing) {
+    let out;
+    try {
+      out = this._decode(buf);
+    } catch (err) {
+      if (isZstdTruncationMessage(String((err && err.message) || ""))) {
+        if (finalizing) throw bufError("unexpected end of file");
+        return {
+          output: PAKO_EMPTY,
+          finished: false,
+          consumed,
+          trailing: false,
+        };
+      }
+      throw zstdifyErrorToNode(err);
+    }
+    // Whole-buffer decode succeeded but the walker found no complete
+    // content frame: the buffer is only skippable frames (empty output),
+    // or a frame shape the walker does not cover (real output). Emit what
+    // decoded; finish only on real output or a finalizing flush, so a
+    // skippable-only prefix does not end a stream more content may follow.
+    const output = Buffer.from(out);
+    if (output.length > 0 || finalizing) {
+      this.finished = true;
+      return { output, finished: true, consumed, trailing: false };
+    }
+    return {
+      output: PAKO_EMPTY,
+      finished: false,
+      consumed,
+      trailing: false,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Minimal stream implementation (browser-safe; no node:stream import)
 // ---------------------------------------------------------------------------
 
@@ -1780,7 +2226,7 @@ class ZlibBase extends MiniTransform {
       this._pledgedSrcSize = opts.pledgedSrcSize;
     }
 
-    this._engine = this._createEngine(mode, zopts);
+    this._engine = this._createEngine(mode, zopts, opts);
     const self = this;
     this._handle = {
       reset() {
@@ -1804,8 +2250,12 @@ class ZlibBase extends MiniTransform {
     this._inputPrefix = Buffer.alloc(0);
   }
 
-  _createEngine(mode, zopts) {
+  _createEngine(mode, zopts, opts) {
     switch (mode) {
+      case MODE_ZSTD_COMPRESS:
+        return new ZstdCompressEngine(zstdCompressOptions(opts));
+      case MODE_ZSTD_DECOMPRESS:
+        return new ZstdDecompressEngine(zstdDecompressOptions(opts));
       case MODE_DEFLATE:
         return new PakoDeflateEngine({ wrapper: "zlib", ...zopts });
       case MODE_DEFLATERAW:
@@ -1841,7 +2291,8 @@ class ZlibBase extends MiniTransform {
           rejectGarbageAfterEnd: this._rejectGarbageAfterEnd,
         });
       default:
-        // Brotli / Zstd: honest pass-through fallback (no codec available).
+        // Brotli: honest pass-through fallback (no codec available).
+        // Zstd has a real engine above; anything else is a stub too.
         return new PassThroughEngine();
     }
   }
