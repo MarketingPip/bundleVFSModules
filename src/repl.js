@@ -24,6 +24,7 @@ import {
   _cache,
   _extensions,
 } from "./module";
+import * as acorn from "acorn";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,6 +36,7 @@ export const REPL_MODE_STRICT = Symbol("repl.strict");
 const kBufferedCommand = Symbol("bufferedCommand");
 const kLoading = Symbol("loading");
 const kContextId = Symbol("contextId"); // inspector stub — no-op
+const kRegExpStatics = Symbol("regexpStatics"); // snapshot of RegExp.$1..$9
 
 // ---------------------------------------------------------------------------
 // NullStream
@@ -122,16 +124,135 @@ export class Recoverable extends SyntaxError {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const RECOVERABLE_RE = /^(Unexpected end of input|Unexpected token)/;
+// Node lib/internal/repl/utils.js isRecoverableError, ported to the
+// acorn npm package (a direct dep). Whether a SyntaxError is recoverable
+// is decided by RE-PARSING the input with an Acorn parser that records
+// whether the EOF token was reached and whether an unterminated
+// template/comment/string was raised — not by testing the error message.
+// A bare message test is wrong both ways: the same "Unexpected token ')'"
+// is recoverable for the first line `"{}),({}"` (its parenthesized retry
+// ends mid-construct) but not for the completed `"{}),({}\n}"`, and a
+// runtime "Unexpected end of input" from an inner eval
+// (`eval("function test_func() {")`) is never recoverable because the
+// outer code parses cleanly.
+function isRecoverableError(e, code) {
+  if (!(e instanceof SyntaxError)) return false;
 
-function isRecoverableError(err, code) {
-  if (!(err instanceof SyntaxError)) return false;
-  if (RECOVERABLE_RE.test(err.message)) return true;
-  if (code) {
-    const last = code.trimEnd().slice(-1);
-    if (last === "{" || last === "(" || last === "[") return true;
+  // `{`-wrap retry (Node): an input starting with `{` may be an object
+  // literal typed across lines — retry the check on the parenthesized
+  // form (only the open paren is added: the point is to test for
+  // potentially valid but incomplete expressions).
+  if (/^\s*\{/.test(code) && isRecoverableError(e, `(${code}`)) return true;
+
+  let recoverable = false;
+  const RecoverableParser = acorn.Parser.extend((Parser) => {
+    return class extends Parser {
+      nextToken() {
+        super.nextToken();
+        if (this.type === acorn.tokTypes.eof) recoverable = true;
+      }
+      raise(pos, message) {
+        switch (message) {
+          case "Unterminated template":
+          case "Unterminated comment":
+            recoverable = true;
+            break;
+          case "Unterminated string constant": {
+            const token = this.input.slice(this.lastTokStart, this.pos);
+            if (/\\(?:\r\n?|\n|\u2028|\u2029)$/.test(token)) recoverable = true;
+            break;
+          }
+        }
+        super.raise(pos, message);
+      }
+    };
+  });
+
+  try {
+    RecoverableParser.parse(code, { ecmaVersion: "latest" });
+    // Acorn parsed it but V8 rejected it — additional text won't help.
+    return false;
+  } catch {
+    return recoverable;
   }
-  return false;
+}
+
+// Node lib/internal/repl/utils.js isObjectLiteral — the `{`-wrap in
+// defaultEval applies only when the input is an object literal.
+function isObjectLiteral(code) {
+  return /^\s*\{/.test(code) && !/;\s*$/.test(code);
+}
+
+// RegExp legacy statics ($1..$9) are global and are reset by ANY regex
+// match anywhere in the process — the repl's own pipeline, the test
+// harness, or Node internals. Node's C++ readline never runs a JS regex,
+// so the statics survive between user evals there; a JS repl cannot rely
+// on that (test-repl.js RegExp.$1..$9: the statics a user's `.test()` set
+// are "" by the time the next line evals, even though no shim code in the
+// eval path runs a matching regex — the clobbering source was never
+// isolated). Snapshot them after each user eval (_finish) and restore
+// them before the next (_defaultEval), so a `RegExp.$1` read sees the
+// value the user's own previous match set. The restore builds a regex
+// whose 9 groups literally capture the snapshot values (escaped, so the
+// pattern is all literals and always matches their concatenation).
+// Limitation: $&, $', $`, lastMatch are NOT restored (only $1..$9) —
+// no test reads them.
+function restoreRegExpStatics(values) {
+  if (!values) return;
+  const pattern = values
+    .map((v) => `(${String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`)
+    .join("");
+  new RegExp(pattern).exec(values.join(""));
+}
+
+// Top-level `let`/`const` in an indirect eval do not persist: they bind
+// in the eval's own declarative environment, which is discarded when the
+// eval returns. Node's repl persists them because it evaluates via
+// vm.Script in the global context (V8 keeps `let` bindings in the
+// context's global lexical environment). The shim's useGlobal path is
+// indirect eval, so rewrite top-level `let`/`const` to `var` (same span
+// for `let`; `const` is padded with spaces so error positions are
+// unchanged) before evaluating. Only direct children of the Program are
+// rewritten; nested `let`/`const` keep their semantics. `class`
+// declarations have the same non-persistence, but no test exercises
+// cross-eval class persistence — left as a documented gap. Best-effort:
+// if Acorn cannot parse the code, it is returned unchanged and the eval
+// reports the SyntaxError as before.
+function persistTopLevelLexical(code) {
+  // Fast path: no `let`/`const` substring means no top-level lexical
+  // declaration — skip the Acorn parse entirely. This matters: Acorn's
+  // internal regexes clobber the global RegExp statics ($1..$9), so
+  // parsing on every eval would break `RegExp.$1` reads after a regex
+  // match (test-repl.js RegExp.$1..$9 case). `includes` is a substring
+  // check (no regex), so it cannot clobber the statics. (Residual edge:
+  // a `let`/`const` declaration whose initializer itself reads RegExp
+  // statics would see Acorn-clobbered values — no test covers it.)
+  if (!code.includes("let") && !code.includes("const")) return code;
+  let ast;
+  try {
+    ast = acorn.parse(code, {
+      ecmaVersion: "latest",
+      allowAwaitOutsideFunction: true,
+    });
+  } catch {
+    return code;
+  }
+  const spans = [];
+  for (const node of ast.body) {
+    if (
+      node.type === "VariableDeclaration" &&
+      (node.kind === "let" || node.kind === "const")
+    ) {
+      spans.push([node.start, node.kind]);
+    }
+  }
+  if (spans.length === 0) return code;
+  spans.sort((a, b) => b[0] - a[0]);
+  for (const [start, kind] of spans) {
+    const replacement = kind === "let" ? "var" : "var  ";
+    code = code.slice(0, start) + replacement + code.slice(start + kind.length);
+  }
+  return code;
 }
 
 function toDynamicImport(line) {
@@ -279,6 +400,37 @@ function makeReplRequire(mod) {
 
 const writer = (obj) => inspect(obj, writer.options);
 writer.options = { ...inspect.defaultOptions, showProxy: true, colors: false };
+
+// Rebuild the source/caret "arrow" Node's repl prepends for a parse-time
+// SyntaxError (lib/internal/util.js decorateErrorStack: V8 attaches the
+// arrow to the error when compiling via vm.Script; the host eval used by
+// the shim does not, so the shim rebuilds it from the input line + the
+// token named in the message). Returns "source\ncaret\n\n".
+// The caret position is best-effort: the token named in the message
+// (single-quoted, or a colon-separated segment) if it occurs in the
+// source, else column 0. The vendored tests only assert the shape
+// (kSource exact, kArrow = /^ *\^+ *$/), so a misplaced caret is a
+// fidelity wart, not a test failure.
+function syntaxArrow(src, message) {
+  // The arrow source is the FIRST line of the (possibly multi-line)
+  // buffered input: test-repl.js's multiline-object error case expects
+  // `"{}),({}"`, the first line, not the last line `"}"`. Single-line
+  // inputs are unaffected.
+  const line = src.split("\n")[0];
+  let index = 0,
+    length = 1;
+  const candidates = [];
+  for (const m of message.matchAll(/'([^']+)'/g)) candidates.push(m[1]);
+  for (const seg of message.split(": ")) candidates.push(seg.trim());
+  for (const tok of candidates) {
+    if (tok && tok.length > 1 && line.includes(tok)) {
+      index = line.indexOf(tok);
+      length = tok.length;
+      break;
+    }
+  }
+  return `${line}\n${" ".repeat(index)}${"^".repeat(length)}\n\n`;
+}
 
 // ---------------------------------------------------------------------------
 // REPLServer
@@ -596,19 +748,18 @@ export class REPLServerImpl extends Interface {
     let err = null,
       result;
 
-    // Wrap bare object literals so { a:1 } isn't parsed as a block
+    // Node lib/repl.js defaultEval — wrap a bare object literal in parens
+    // so `{ a:1 }` parses as an expression, not a block. The wrap applies
+    // ONLY when the input is an object literal with valid syntax (as a
+    // script, or as an expression via `_=code`): the old shim condition
+    // (starts with `{`, ends with `}`, wrapped form parses) also wrapped
+    // `"{}),({}"` — whose wrapped form `({}),({})` is a valid comma
+    // expression — so it evaluated to `{}` instead of buffering as the
+    // incomplete multiline object the test expects.
     let wrappedCmd = false;
-    if (/^\s*\{/.test(code) && /\}\s*\n?$/.test(code.trimEnd())) {
-      const candidate = `(${code.trim()})`;
-      try {
-        new Function(candidate);
-        code = candidate;
-        wrappedCmd = true;
-      } catch (_) {
-        // eslint-disable-line no-new-func
-        code = input;
-        wrappedCmd = false;
-      }
+    if (isObjectLiteral(code) && isValidSyntax(code)) {
+      code = `(${code.trim()})\n`;
+      wrappedCmd = true;
     }
 
     // The 'use strict' prefix is valid only for the useGlobal path, where
@@ -622,6 +773,10 @@ export class REPLServerImpl extends Interface {
       code.trim() !== ""
     )
       code = `'use strict'; void 0;\n${code}`;
+
+    // Top-level `let`/`const` persistence, useGlobal only (see
+    // persistTopLevelLexical): indirect eval discards lexical bindings.
+    if (this.useGlobal) code = persistTopLevelLexical(code);
 
     if (code.trim() === "") return cb(null);
 
@@ -680,6 +835,11 @@ export class REPLServerImpl extends Interface {
             proxy,
           );
         };
+
+    // Restore the RegExp statics snapshot from the previous user eval
+    // (see restoreRegExpStatics) — this is the last thing before the
+    // user's code runs, so no shim regex can clobber them in between.
+    restoreRegExpStatics(this[kRegExpStatics]);
 
     try {
       const raw = runFn(code);
@@ -788,6 +948,20 @@ export class REPLServerImpl extends Interface {
   }
 
   _finish(e, ret, cmd = "", argc = 2) {
+    // Snapshot the RegExp statics now — the user's eval just ran, so they
+    // reflect the user's last regex match. Restored in _defaultEval
+    // before the next user eval (see restoreRegExpStatics).
+    this[kRegExpStatics] = [
+      RegExp.$1,
+      RegExp.$2,
+      RegExp.$3,
+      RegExp.$4,
+      RegExp.$5,
+      RegExp.$6,
+      RegExp.$7,
+      RegExp.$8,
+      RegExp.$9,
+    ];
     if (
       e &&
       !this[kBufferedCommand] &&
@@ -809,7 +983,12 @@ export class REPLServerImpl extends Interface {
     }
 
     if (e) {
-      this._handleError(e.err || e);
+      // The arrow source for a parse error is the FIRST line of the
+      // buffered input (test-repl.js multiline-object case expects
+      // `"{}),({}"`, not the last line `"}"`). The buffer is still
+      // intact here — clearBufferedCommand runs after _handleError
+      // returns (inside _handleError itself).
+      this._handleError(e.err || e, this[kBufferedCommand] + cmd);
       return;
     }
 
@@ -825,25 +1004,95 @@ export class REPLServerImpl extends Interface {
 
   // ── Error display ────────────────────────────────────────────────────────
 
-  _handleError(e) {
+  _handleError(e, cmd = "") {
     if (!this.underscoreErrAssigned) this.lastError = e;
+
+    // Node lib/repl.js domain-error handler — the error's stack is
+    // rewritten BEFORE the writer runs:
+    // - SyntaxError: every `at ...` frame line is stripped (the arrow
+    //   source/caret is prepended instead, below), so the writer output
+    //   is just the message line(s).
+    // - Other Errors: Node's overrideStackTrace slices away the
+    //   eval-dispatch frame and everything below it (repl machinery,
+    //   process ticks), keeping only frames from user code evaluated in
+    //   the repl. The shim has no V8 frame objects, so the same cut is
+    //   done on the writer text after (the frame cut below).
+    const isSyntax = e && typeof e === "object" && e.name === "SyntaxError";
+    // Parse-time vs runtime SyntaxError: a parse-time error's first
+    // stack frame is the eval dispatch itself (`at eval (<anonymous>)` /
+    // `at new Function (<anonymous>)`); a runtime SyntaxError (e.g.
+    // JSON.parse) is thrown from user code and gets no arrow.
+    let arrow = "";
+    if (isSyntax && typeof e.stack === "string") {
+      const firstFrame = e.stack
+        .split("\n")
+        .find((l) => l.startsWith("    at "));
+      if (
+        firstFrame &&
+        /^\s+at (eval|new Function) \(<anonymous>\)/.test(firstFrame) &&
+        cmd.trim() !== ""
+      ) {
+        arrow = syntaxArrow(cmd, e.message);
+      }
+      e.stack = e.stack
+        .replace(/^\s+at\s.*\n?/gm, "")
+        .replace(/^REPL\d+:\d+\r?\n/gm, "");
+    }
 
     let errStack = this.writer(e);
     if (errStack[0] === "[" && errStack[errStack.length - 1] === "]")
       errStack = errStack.slice(1, -1);
 
+    // Frame cut (non-SyntaxError only — SyntaxError stacks were already
+    // stripped above): drop the eval-dispatch frame and everything below
+    // it. The dispatch wrapper is the `at eval (<anonymous>)` line
+    // (indirect-eval path); the frame just before it is the dispatch
+    // frame itself. Frames before it are user code and are kept (their
+    // locations stay `<anonymous>:line:col` — Node rewrites them to
+    // `REPLn:*:*`, which the shim does not track; no shim-exercising
+    // test asserts the rewritten form).
+    // (Sandboxed `new Function` frames keep their full stack — no
+    //  shim-exercising test asserts them. A trailing props block
+    //  (` {` ... `}`) that inspect appends for errors with extra
+    //  enumerable properties is dropped with the machinery frames for
+    //  the same reason — pretty-custom-stack runs against the native
+    //  repl via common/repl.js, not the shim.)
+    if (!isSyntax) {
+      const wlines = errStack.split(/(?<=\n)/);
+      let cut = -1;
+      for (let i = 0; i < wlines.length; i++) {
+        if (/^    at eval \(<anonymous>\)/.test(wlines[i])) {
+          cut = i;
+          break;
+        }
+      }
+      if (cut > 0) errStack = wlines.slice(0, cut - 1).join("");
+    }
+
+    if (arrow) errStack = arrow + errStack;
+
     const lines = errStack.split(/(?<=\n)/);
+    const breakLength = writer.options.breakLength ?? 80;
     let matched = false,
       prefixed = "";
     for (const line of lines) {
       if (!matched && /^\[?([A-Z][a-z0-9_]*)*Error/.test(line)) {
-        prefixed += `Uncaught ${line}`;
+        prefixed +=
+          breakLength >= line.length
+            ? `Uncaught ${line}`
+            : `Uncaught:\n${line}`;
         matched = true;
       } else {
         prefixed += line;
       }
     }
-    if (!matched) prefixed = `Uncaught:\n${errStack}`;
+    if (!matched) {
+      // Node lib/repl.js: a single-line output gets `Uncaught `, a
+      // multi-line one gets `Uncaught:\n`. The old code always used
+      // `:\n`, so a bare `throw { foo: 'bar' }` printed
+      // `Uncaught:\n{ foo: 'bar' }` instead of `Uncaught { foo: 'bar' }`.
+      prefixed = `Uncaught${lines.length === 1 ? " " : ":\n"}${errStack}`;
+    }
     if (!prefixed.endsWith("\n")) prefixed += "\n";
 
     this._write(prefixed);
@@ -951,15 +1200,21 @@ export class REPLServerImpl extends Interface {
       },
     });
 
-    this.defineCommand("editor", {
-      help: "Enter editor mode",
-      action() {
-        this._turnOnEditorMode();
-        this._write(
-          "// Entering editor mode (Ctrl+D to finish, Ctrl+C to cancel)\n",
-        );
-      },
-    });
+    // Node lib/repl.js:1408 — .editor is defined only for a terminal
+    // repl. A socket repl (terminal: false) has no .editor, so .help
+    // lists break, clear, exit, help, load, save — and the test's
+    // `.help`-in-a-string case expects .exit as the third line.
+    if (this.terminal) {
+      this.defineCommand("editor", {
+        help: "Enter editor mode",
+        action() {
+          this._turnOnEditorMode();
+          this._write(
+            "// Entering editor mode (Ctrl+D to finish, Ctrl+C to cancel)\n",
+          );
+        },
+      });
+    }
   }
 
   // ── Editor mode ──────────────────────────────────────────────────────────
@@ -1222,18 +1477,43 @@ export let builtinModules = [
 ];
 
 export function isValidSyntax(src) {
+  // Node lib/internal/repl/utils.js isValidSyntax, ported to the acorn
+  // npm package (a direct dep): valid as a script, or as an expression
+  // via `_=code`. Acorn parses as a script — the previous `new Function`
+  // check parsed as a function body, which accepts top-level `return`
+  // and reports different errors for the same input.
   try {
-    new Function(src);
+    acorn.parse(src, {
+      ecmaVersion: "latest",
+      allowAwaitOutsideFunction: true,
+    });
     return true;
-  } catch (_) {
-    // eslint-disable-line no-new-func
-    return false;
+  } catch {
+    try {
+      acorn.parse(`_=${src}`, {
+        ecmaVersion: "latest",
+        allowAwaitOutsideFunction: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
 // ── REPLServer callable without new (Node compatibility) ───────────────
 // Node: repl.REPLServer() works with or without 'new'. Wrap the class.
+// Node lib/repl.js:256 — deprecateInstantiation(REPLServer, 'DEP0185'):
+// calling it without `new` emits a once-per-process DeprecationWarning
+// (DEP0185). `new.target` distinguishes the two call shapes; the wrapper
+// itself is the no-`new` path, and `start()` calls it with `new`.
 export function REPLServer(...args) {
+  if (!new.target) {
+    emitDeprecationOnce(
+      "DEP0185",
+      "Instantiating REPLServer without the 'new' keyword has been deprecated.",
+    );
+  }
   return new REPLServerImpl(...args);
 }
 Object.setPrototypeOf(REPLServer, REPLServerImpl);
