@@ -96,6 +96,6 @@ running in parallel).
 
 ## Ship
 
-- PR #___ / Merge SHA: ___
+- PR #463 / Merge SHA: dda6f976
 - Branch: `fix/zlib-empty-frames`
 - Worktree: `~/workspace/worktrees/zlib-z2-empty-frames`
