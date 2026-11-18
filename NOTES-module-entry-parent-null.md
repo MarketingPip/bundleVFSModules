@@ -100,4 +100,4 @@ are visible), so there is no userland handle on it.
 
 ## Ship
 
-- PR #___ / merge SHA ___
+- PR #487 / merge SHA e0f5fb3d (squash-merged 2026-11-18)

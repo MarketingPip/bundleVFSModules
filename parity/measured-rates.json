@@ -104,9 +104,9 @@
       "total": 74
     },
     "module": {
-      "date": "2026-10-11",
-      "passed": 29,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-18",
+      "passed": 30,
+      "source": "Wave M 2026-11-18: 29 -> 30 via PR #487 (e0f5fb3d); wave-end sweep confirms 30/32 on main e0f5fb3d",
       "total": 32
     },
     "net": {
