@@ -173,8 +173,19 @@ expected `.exit` third. Now guarded by `if (this.terminal)`. (The
   `let npm` cases all now pass; the remaining failure is the
   `Error.stackTraceLimit = 5; require("internal/repl")` case, which
   needs the require-stack fix (below).
-- Full repl differential: (see differential section below).
-- Footprint test: (see below).
+- Full repl differential (base `c76a10f0` sweep
+  `repl-r2-base-2026-11-18.csv`: 92/101 pass; branch sweep
+  `repl-r2-sweep-2026-11-18.csv`: 94/101 pass): **flips
+  test-repl-recoverable only (+1); ZERO regressions.** The branch
+  sweep also shows test-repl-reverse-search passing, but it passes 2×
+  isolated on BOTH base and branch — it is the known sweep flake
+  (fails in-sweep on the base, passes isolated), NOT an R2 flip, and
+  is not banked. Base non-pass: envvars (124), mode, preview,
+  recoverable, require, reverse-search (flake), tab-complete-import,
+  tab-complete-require, top-level-await. Branch non-pass: envvars
+  (124), mode, preview, require, tab-complete-import,
+  tab-complete-require, top-level-await.
+- Footprint test: 29/29 PASS.
 
 ## Blocked (needs the parent's require scope decision — NOT silently expanded)
 
