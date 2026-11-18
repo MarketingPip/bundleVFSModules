@@ -939,6 +939,21 @@ function addNumericSeparator(str) {
   return out;
 }
 
+// Port of Node's addNumericSeparatorEnd (oracle
+// lib/internal/util/inspect.js:1912-1920): groups a fractional part from
+// the LEFT in chunks of 3 (`12345678` -> `123_456_78`). Used by
+// formatNumberPlain (and, via it, formatPrimitive) for the fractional
+// half of a separated number (test-util-inspect.js:4181). It was called
+// but never defined — a latent ReferenceError on the format() path.
+function addNumericSeparatorEnd(str) {
+  let result = "";
+  let i = 0;
+  for (; i < str.length - 3; i += 3) {
+    result += `${str.slice(i, i + 3)}_`;
+  }
+  return i === 0 ? str : `${result}${str.slice(i)}`;
+}
+
 /**
  * @typedef {object} InspectOptions
  * @property {boolean} [showHidden]
@@ -1217,10 +1232,67 @@ const builtinCtorNames = new Set(
   ),
 );
 
+// Mirror Node's wellKnownPrototypes map (oracle
+// lib/internal/util/inspect.js:633-655): the constructor-name walk checks
+// whether the current prototype object is a well-known builtin prototype
+// BEFORE reading its `constructor` descriptor. Without this, a patched
+// `Function.prototype.constructor` (test-util-inspect.js:4322) makes the
+// walk skip Function.prototype — its descriptor is a getter with no
+// `.value` — and fall through to Object.prototype, so plain functions
+// print `[Function: f] Object`. The map's instanceof check is what makes
+// the hit stick.
+const wellKnownPrototypes = new Map(
+  [
+    [Array.prototype, "Array", Array],
+    [ArrayBuffer.prototype, "ArrayBuffer", ArrayBuffer],
+    [Function.prototype, "Function", Function],
+    [Map.prototype, "Map", Map],
+    [Set.prototype, "Set", Set],
+    [Object.prototype, "Object", Object],
+    [
+      Object.getPrototypeOf(Uint8Array.prototype),
+      "TypedArray",
+      Object.getPrototypeOf(Uint8Array),
+    ],
+    [RegExp.prototype, "RegExp", RegExp],
+    [Date.prototype, "Date", Date],
+    [DataView.prototype, "DataView", DataView],
+    [Error.prototype, "Error", Error],
+    [AggregateError.prototype, "AggregateError", AggregateError],
+    [RangeError.prototype, "RangeError", RangeError],
+    [TypeError.prototype, "TypeError", TypeError],
+    [Boolean.prototype, "Boolean", Boolean],
+    [Number.prototype, "Number", Number],
+    [String.prototype, "String", String],
+    [Promise.prototype, "Promise", Promise],
+    [WeakMap.prototype, "WeakMap", WeakMap],
+    [WeakSet.prototype, "WeakSet", WeakSet],
+  ]
+    .filter(([, , ctor]) => typeof ctor === "function")
+    .map(([proto, name, ctor]) => [proto, [name, ctor]]),
+);
+
 /** instanceof check that never throws (proxies, revoked membranes, ...). */
 function safeInstanceof(tmp, fn) {
   try {
     return tmp instanceof fn;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Default `Symbol.hasInstance` check that never invokes a patched
+ * `Ctor[Symbol.hasInstance]` (unlike the `instanceof` operator). Mirror of
+ * Node's FunctionPrototypeSymbolHasInstance, used wherever the shim checks
+ * error-ness outside Node's own isError/getConstructorName paths — the
+ * error branch and isDirectTailChild. (test-util-inspect.js:4436 patches
+ * Error[Symbol.hasInstance] with mustNotCall; any `instanceof Error`
+ * during that window trips it, even for non-errors.)
+ */
+function defaultHasInstance(value, ctor) {
+  try {
+    return Function.prototype[Symbol.hasInstance].call(ctor, value);
   } catch {
     return false;
   }
@@ -1254,6 +1326,29 @@ function nodeConstructorName(value) {
   let obj = value;
   let firstProto;
   while (obj !== null) {
+    // Well-known builtin prototypes answer before the `constructor`
+    // descriptor is read (Node's getConstructorName checks the map first).
+    // This is what keeps a patched `Function.prototype.constructor`
+    // (a getter with no `.value`) from diverting the walk to Object — and
+    // the check itself must use the DEFAULT Symbol.hasInstance
+    // (Function.prototype[Symbol.hasInstance].call), NOT the `instanceof`
+    // operator: Node's getConstructorName does the same
+    // (FunctionPrototypeSymbolHasInstance), and the operator would invoke
+    // a patched Error[Symbol.hasInstance]
+    // (test-util-inspect.js:4436 patches it with mustNotCall).
+    const wellKnown = wellKnownPrototypes.get(obj);
+    if (wellKnown !== undefined) {
+      const [name, ctor] = wellKnown;
+      let hit = false;
+      try {
+        hit = Function.prototype[Symbol.hasInstance].call(ctor, tmp);
+      } catch {
+        hit = false;
+      }
+      if (hit) {
+        return { name, descended: firstProto !== obj };
+      }
+    }
     const desc = safeGetOwnPropertyDescriptor(obj, "constructor");
     if (
       desc !== undefined &&
@@ -1320,7 +1415,25 @@ function collectPrototypeProps(ctx, main, recurseTimes) {
         if (prevKeys !== null && prevKeys.has(key)) continue;
         const desc = safeGetOwnPropertyDescriptor(obj, key);
         if (desc === undefined || typeof desc.value === "function") continue;
-        output.push(formatProperty(ctx, obj, recurseTimes, key, false, main));
+        const formatted = formatProperty(
+          ctx,
+          obj,
+          recurseTimes,
+          key,
+          false,
+          main,
+        );
+        // Mirror Node's addPrototypeProperties: prototype properties print
+        // faint (dim) when colors are on (oracle
+        // lib/internal/util/inspect.js:757-761). Without the wrap,
+        // test-util-inspect.js:3882 fails (unevaluated getters print
+        // undimmed). Uncovered when the 2290 deep-recursion fix let the
+        // test run past that assertion.
+        if (ctx.options.colors) {
+          output.push(`\u001b[2m${formatted}\u001b[22m`);
+        } else {
+          output.push(formatted);
+        }
       }
     } finally {
       ctx.seen.pop();
@@ -1435,7 +1548,17 @@ function formatPrimitive(ctx, value) {
   if (typeof value === "string") {
     let trailer = "";
     let str = value;
-    const maxLen = ctx.options.maxStringLength ?? 10000;
+    // Node: maxStringLength null means unlimited (oracle
+    // lib/internal/util/inspect.js:408 — `if (ctx.maxStringLength === null)
+    // ctx.maxStringLength = Infinity`). The `??` below used to turn null
+    // into the 10000 default, truncating
+    // `inspect(x, { maxStringLength: null })`
+    // (test-util-inspect.js:3995). Uncovered when the 2290 deep-recursion
+    // fix let the test run past that assertion.
+    const maxLen =
+      ctx.options.maxStringLength === null
+        ? Infinity
+        : (ctx.options.maxStringLength ?? 10000);
     if (str.length > maxLen) {
       const remaining = str.length - maxLen;
       str = str.slice(0, maxLen);
@@ -1466,8 +1589,12 @@ function formatPrimitive(ctx, value) {
     else if (value === -Infinity) out = "-Infinity";
     else if (Object.is(value, -0)) out = "-0";
     else
+      // formatNumberPlain mirrors Node's formatNumber: the integer part
+      // groups from the right, the fractional part from the left
+      // (addNumericSeparatorEnd). The old one-arg addNumericSeparator call
+      // left the fraction ungrouped (test-util-inspect.js:4181).
       out = ctx.options.numericSeparator
-        ? addNumericSeparator(String(value))
+        ? formatNumberPlain(value, ctx.options)
         : String(value);
     return ctx.stylize(out, "number");
   }
@@ -1709,6 +1836,20 @@ function formatCollection(ctx, value, recurseTimes, isMap) {
  * @param {any} [original] receiver used when invoking a getter (differs from
  * `value` for prototype properties collected with showHidden)
  */
+// Mirror Node's formatProperty key naming (oracle
+// lib/internal/util/inspect.js:2337): identifier-like keys print bare,
+// except `__proto__` which prints as `['__proto__']` so an own property
+// is not mistaken for prototype syntax (test-util-inspect.js:4159). Other
+// keys print quoted. Used by formatProperty and by the tail's fast path,
+// which formats keys inline instead of calling formatProperty.
+function formatKeyName(ctx, key) {
+  if (!/^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key)) {
+    return ctx.stylize(quoteString(key), "string");
+  }
+  if (key === "__proto__") return "['__proto__']";
+  return ctx.stylize(key, "name");
+}
+
 function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
   let desc;
   try {
@@ -1763,6 +1904,20 @@ function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
             str = `${ctx.stylize(`[${label}]`, "special")} ${formatValue(ctx, tmp, nextRecurse)}`;
           } else {
             const primitive = formatPrimitive(ctx, tmp);
+            // Mirror Node's formatPrimitive fallthrough (oracle
+            // lib/internal/util/inspect.js:2013): anything that is not a
+            // string / number / bigint / boolean / undefined ends up at
+            // SymbolPrototypeToString(value), which throws for non-symbols
+            // — e.g. a getter returning a function, like Map's
+            // [Symbol.species] getter (test-util-inspect.js:3900). The
+            // shim's formatPrimitive returns undefined for those instead
+            // (formatValue's dispatch needs that), so reproduce the throw
+            // here; the catch below renders it as `<Inspection threw
+            // (TypeError: ...)>`. Reached only when tmp is a function
+            // (every other non-object, non-null result formats above).
+            if (primitive === undefined) {
+              Symbol.prototype.toString.call(tmp);
+            }
             str = `${ctx.stylize(`[${label}:`, "special")} ${primitive}${ctx.stylize("]", "special")}`;
           }
         } catch (err) {
@@ -1820,9 +1975,7 @@ function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
     return `${symName}:${extra}${str}`;
   }
   if (isArray && isCanonicalArrayIndex(key)) return str;
-  let name = /^[a-zA-Z_$][a-zA-Z_$0-9]*$/.test(key)
-    ? ctx.stylize(key, "name")
-    : ctx.stylize(quoteString(key), "string");
+  let name = formatKeyName(ctx, key);
   // Show non-enumerable properties with brackets when showHidden is true.
   if (ctx.options.showHidden && desc && desc.enumerable === false) {
     name = `[${name}]`;
@@ -2506,6 +2659,46 @@ function formatTypedArray(ctx, value) {
  * @param {number} level
  * @returns {string}
  */
+// Mirror Node's getUserOptions (oracle lib/internal/util/inspect.js:299-344):
+// the object handed to a custom inspect function is a filtered
+// user-options object, not the internal ctx. For cross-context values — a
+// value from another vm.Context, or any value that is not an instance of
+// the host Object (null-prototype objects included) — it must not receive
+// host-realm objects: the options object gets a null prototype, every
+// non-primitive entry is deleted, and stylize is replaced by a
+// null-prototype wrapper around the real one. Without this,
+// test-util-inspect.js:4026 fails: the custom function stores the ctx, and
+// its reachable graph then contains the host Object/Function.
+function getUserOptions(ctx, isCrossContext) {
+  const ret = {
+    stylize: ctx.stylize,
+    ...ctx.options,
+  };
+  if (isCrossContext) {
+    Object.setPrototypeOf(ret, null);
+    for (const key of Object.keys(ret)) {
+      if (
+        (typeof ret[key] === "object" || typeof ret[key] === "function") &&
+        ret[key] !== null
+      ) {
+        delete ret[key];
+      }
+    }
+    ret.stylize = Object.setPrototypeOf((value, flavour) => {
+      let stylized;
+      try {
+        stylized = `${ctx.stylize(value, flavour)}`;
+      } catch {
+        // Continue regardless of error.
+      }
+      if (typeof stylized !== "string") return value;
+      // `stylized` is a string as it should be, which is safe to pass along.
+      return stylized;
+    }, null);
+  }
+  return ret;
+}
+
 function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
   // Safeguard against runaway recursion on huge structures.
   // Increment a counter; if we exceed a threshold, bail out.
@@ -2531,6 +2724,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           depth: ctx.options.depth,
           showProxy: ctx.options.showProxy,
           compact: ctx.options.compact,
+          numericSeparator: ctx.options.numericSeparator,
         });
         return nativeOut;
       } catch {
@@ -2559,12 +2753,12 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     // recursion when util.inspect is stored as a property value).
     if (typeof custom === "function" && custom !== inspect) {
       const depth = recurseTimes;
-      // Node passes a filtered user options object (no internal ctx properties
-      // like seen array/budget/indentationLvl; user-passed options are included).
-      const userOptions = {
-        stylize: ctx.stylize,
-        ...ctx.options,
-      };
+      // Node passes a filtered user options object (no internal ctx
+      // properties like seen array/budget/indentationLvl; user-passed
+      // options are included), sanitized for cross-context values
+      // (getUserOptions above).
+      const isCrossContext = !(value instanceof Object);
+      const userOptions = getUserOptions(ctx, isCrossContext);
       let ret = custom.call(value, depth, userOptions, inspect);
       // If the custom inspection method returned `this`, don't go into
       // infinite recursion; fall through to normal formatting (Node does this).
@@ -2592,6 +2786,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           breakLength: ctx.options.breakLength,
           compact: ctx.options.compact,
           showHidden: ctx.options.showHidden,
+          numericSeparator: ctx.options.numericSeparator,
         });
         return reindentBridgeResult(ctx, normalizeBridgePromiseTag(nativeOut));
       } catch {
@@ -2612,6 +2807,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           breakLength: ctx.options.breakLength,
           compact: ctx.options.compact,
           showHidden: ctx.options.showHidden,
+          numericSeparator: ctx.options.numericSeparator,
         });
         return reindentBridgeResult(ctx, nativeOut);
       } catch {
@@ -2672,10 +2868,18 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
   const nextRecurse = recurseTimes === null ? null : recurseTimes - 1;
 
   // ---- Error
-  // Node uses isError() here: a native error OR `value instanceof Error`
-  // (covers custom errors whose prototype chain includes Error.prototype
-  // without the native error slot, e.g. function-style subclasses).
-  if (types.isNativeError(value) || safeInstanceof(value, Error)) {
+  // Mirror Node's isError() (oracle lib/internal/util.js:99-103): a native
+  // error OR the DEFAULT Symbol.hasInstance check (defaultHasInstance
+  // above) — which walks the prototype chain for Error.prototype WITHOUT
+  // invoking a patched Error[Symbol.hasInstance]. The `instanceof`
+  // operator would call the patch (test-util-inspect.js:4436 patches it
+  // with mustNotCall), and safeInstanceof uses that operator, so neither
+  // may be used here. (Covers custom errors whose prototype chain
+  // includes Error.prototype without the native error slot, e.g.
+  // function-style subclasses.)
+  const isErrorValue =
+    types.isNativeError(value) || defaultHasInstance(value, Error);
+  if (isErrorValue) {
     // Depth-exhausted: Node returns a simple `[Error]` placeholder without
     // formatting properties (prevents infinite recursion for recursively
     // throwing getters).
@@ -2717,27 +2921,41 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       tag = "";
     }
     let name;
+    // Whether the `name` read threw: Error.prototype.toString reads `name`
+    // itself, so a throwing name getter makes it throw — and Node's
+    // getStackString then fails, making formatError fall back to the
+    // ObjectPrototypeToString base (test-util-inspect.js:4436). The `name`
+    // below is defaulted from the caught throw, so the failure is
+    // reproduced from this flag (see errStrFailed) instead of re-reading
+    // the getter.
+    let nameThrew = false;
     try {
       name = value.name;
     } catch {
       name = undefined;
+      nameThrew = true;
     }
     if (name === null || name === undefined) name = "Error";
     // Node's Error.prototype.toString fallback, improved like a stack's
-    // first line. A throwing toString degrades to '[object Error]' without
-    // improveStack, exactly like Node's formatError catch; when there is no
-    // usable stack either, Node returns the bare string with no properties.
+    // first line. A throwing toString degrades to ObjectPrototypeToString
+    // (see the errStrFailed branch below) without improveStack, exactly
+    // like Node's formatError catch; when there is no usable stack either,
+    // Node returns the bare string with no properties.
+    // (A throwing `name` getter is a throwing toString too — see nameThrew
+    // above — so it fails here as well.)
     let errStr;
-    let errStrFailed = false;
-    try {
-      errStr = improveErrorStack(
-        errorProtoToString(value, name),
-        constructor,
-        name,
-        tag,
-      );
-    } catch {
-      errStrFailed = true;
+    let errStrFailed = nameThrew;
+    if (!errStrFailed) {
+      try {
+        errStr = improveErrorStack(
+          errorProtoToString(value, name),
+          constructor,
+          name,
+          tag,
+        );
+      } catch {
+        errStrFailed = true;
+      }
     }
     let base;
     if (typeof stack === "string" && stack !== "") {
@@ -2817,9 +3035,14 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       }
     } else if (errStrFailed) {
       // Node does not return early here; it sets the base to
-      // '[object Error]' and continues to format properties (e.g. throwing
-      // getters show as `[Getter: <Inspection threw ...>]`).
-      base = "[object Error]";
+      // ObjectPrototypeToString(value) — the value's OWN tag, not
+      // '[object Error]' — and continues to format properties (e.g.
+      // throwing getters show as `[Getter: <Inspection threw ...>]`).
+      // For a plain error that tag is '[object Error]' (test-util-inspect.js:
+      // 4436); for DOMException.prototype it is '[object DOMException]'
+      // (its `name` getter throws "Value of \"this\" must be of
+      // DOMException", so Node's getStackString fails the same way).
+      base = objectToString(value);
     } else if (stack) {
       let inspectedStack;
       {
@@ -2859,13 +3082,31 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
             // If the getter throws, keep the key (it will show as [Getter]).
             return true;
           }
-          return !(typeof v === "string" && base.includes(v));
+          // Mirror Node's formatError (oracle:1693-1700): hide the key
+          // when the value is not a string, or when the string already
+          // appears in the base (stack). The old test kept non-string
+          // values — e.g. a RegExp `name` printed a spurious
+          // `name: /a/g` body (test-util-inspect.js:4383).
+          if (typeof v !== "string") return false;
+          return !base.includes(v);
         }
         return true;
       });
     }
     /** @type {string[]} */
     const extraProps = [];
+    // Mirror Node's formatError tail (oracle:1771-1776): "The message and
+    // the stack have to be indented as well!" — every newline in the
+    // formatted error is re-indented by the current indentationLvl. This
+    // is what nests circular stacks: `error.stack = error2` /
+    // `error2.stack = error` renders the inner `[Circular *1]` at 8
+    // spaces, and a 3-error chain at 4/8/16 (test-util-inspect.js:4429).
+    // It runs after the key filter above (Node filters against the
+    // pre-indent stack) and before the properties are appended.
+    if (ctx.indentationLvl !== 0 && ctx.indentationLvl !== undefined) {
+      const indentation = " ".repeat(ctx.indentationLvl);
+      base = base.replaceAll("\n", `\n${indentation}`);
+    }
     // Node surfaces a non-enumerable own 'cause' as [cause] (even if undefined).
     if (
       Object.prototype.hasOwnProperty.call(value, "cause") &&
@@ -2895,7 +3136,19 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     const output = keys
       .map((key) => formatProperty(ctx, value, recurseTimes, key, false))
       .concat(extraProps);
-    if (output.length === 0) return finish(base);
+    if (output.length === 0) {
+      // Mirror Node's formatRaw (oracle:1090-1091): an error with no extra
+      // keys and no proto props returns the formatted error directly,
+      // BEFORE the `<ref *N>` logic — so a circular stack
+      // (`error.stack = error`, test-util-inspect.js:4420) prints
+      // `[Error: foo\n    [Circular *1]]` with no `<ref *1>` prefix, even
+      // though formatting the stack recorded the error in the circular
+      // map. finish() would prepend it. Bookkeeping only here.
+      ctx.seen.pop();
+      if (ctx.seenMap) ctx.seenMap.delete(value);
+      if (depthCounted) ctx.depthLevel--;
+      return base;
+    }
     // With compact:true, Node puts the error base inside the braces.
     // Single-line if it fits in breakLength, else props on new lines.
     if (ctx.options.compact === true) {
@@ -3012,6 +3265,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           breakLength: ctx.options.breakLength,
           compact: ctx.options.compact,
           showHidden: ctx.options.showHidden,
+          numericSeparator: ctx.options.numericSeparator,
         });
         return reindentBridgeResult(ctx, nativeOut);
       } catch {
@@ -3183,6 +3437,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           breakLength: ctx.options.breakLength,
           compact: ctx.options.compact,
           showHidden: true,
+          numericSeparator: ctx.options.numericSeparator,
         });
         return finish(reindentBridgeResult(ctx, nativeOut));
       } catch {
@@ -3231,6 +3486,81 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     );
   }
 
+  return formatObjectValue(ctx, value, recurseTimes, level, finish, depthCounted);
+}
+
+/**
+ * True when formatValue(child) is proven to reach the object tail
+ * (formatObjectValue) without returning early — i.e. the child is a plain
+ * object/array that the tail formats itself. Used by the fast path to recurse
+ * tail-to-tail, skipping one formatValue frame per nesting level (ponytail:
+ * the frame saved is the whole formatValue head; the checks below mirror
+ * that head's early returns exactly, so anything else still goes through
+ * formatValue). Anything uncertain returns false — the safe fallback.
+ * Check order mirrors the head where it matters: proxies before
+ * getPrototypeOf (a revoked proxy throws there), custom-inspect read with
+ * the head's exact throw behavior.
+ */
+function isDirectTailChild(ctx, child) {
+  if (child === null || typeof child !== "object") return false;
+  // Circular: formatValue returns `[Circular *N]` — let it handle it.
+  if (ctx.seenMap && ctx.seenMap.has(child)) return false;
+  // Proxies: the head delegates them to the bridge.
+  if (
+    typeof nativeTypesBridge?.isProxy === "function" &&
+    nativeTypesBridge.isProxy(child)
+  ) {
+    return false;
+  }
+  // Only plain objects (Object.prototype / null) and arrays reach the tail
+  // via this path; class instances, Dates, RegExps, boxed primitives, etc.
+  // keep the full formatValue route (conservative — same output, one more
+  // frame, only on those shapes).
+  const proto = Object.getPrototypeOf(child);
+  if (proto !== Object.prototype && proto !== null && !Array.isArray(child)) {
+    return false;
+  }
+  // Custom inspect: the head invokes it.
+  if (ctx.options.customInspect) {
+    const custom = child[inspect.custom];
+    if (typeof custom === "function" && custom !== inspect) return false;
+  }
+  // Every remaining head branch that returns before the tail.
+  if (
+    types.isPromise(child) ||
+    types.isMapIterator(child) ||
+    types.isSetIterator(child) ||
+    (typeof types.isExternal === "function" && types.isExternal(child)) ||
+    types.isNativeError(child) ||
+    defaultHasInstance(child, Error) ||
+    types.isArrayBuffer(child) ||
+    types.isSharedArrayBuffer(child) ||
+    types.isDataView(child) ||
+    types.isTypedArray(child) ||
+    types.isMap(child) ||
+    types.isSet(child) ||
+    types.isWeakMap(child) ||
+    types.isWeakSet(child)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Object/array/function/date/regexp tail of formatValue, split out so the
+ * per-level stack frame on deep structures carries only the object-tail
+ * locals. ponytail: Node spreads this across formatValue + formatObject +
+ * formatProperty; the shim had inlined all three into one giant formatValue
+ * frame (~1.87 KB/level vs native ~1.06 KB/level, triage-proven), so deep
+ * structures interrupted at 500 levels instead of 931. Assumes formatValue
+ * 's head already ran: proxy/custom/primitive/promise/iterator/external
+ * checks, the circular check, seen push + depth tracking.
+ * @param {(s: string) => string} finish - formatValue head cleanup
+ * (seen pop + depthLevel decrement + <ref *N> prefix).
+ * @param {boolean} depthCounted - whether this value counted toward depthLevel.
+ */
+function formatObjectValue(ctx, value, recurseTimes, level, finish, depthCounted) {
   // ---- generic object / array / function / date / regexp
   let tag = "";
   let braces = ["{", "}"];
@@ -3520,6 +3850,24 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
         tag = ctorName + tagSuffix;
         // If no ctor and no tag, fall back to objectToString.
         if (!tag) tag = objStr;
+        // Mirror Node's getConstructorName: prototype properties are
+        // collected for non-plain objects with showHidden regardless of
+        // which tag branch the value takes (oracle
+        // lib/internal/util/inspect.js:719-766). The [object Object]
+        // branch assigns protoProps at its own site; this custom-tag
+        // branch must do the same — otherwise e.g. Bar.prototype
+        // (objToString "[object Map]" via the inherited tag) loses its
+        // Foo.prototype getters [abc]/[def] (test-util-inspect.js:3900).
+        // Plain objects never get proto props. (The head's Map/Set
+        // branches already append them at their own sites.)
+        if (!isPlain) {
+          protoProps = maybePrototypeProps(
+            ctx,
+            value,
+            recurseTimes,
+            nodeConstructorName(value),
+          );
+        }
       }
     }
   }
@@ -3693,13 +4041,59 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
             desc = undefined;
           }
           if (desc && "value" in desc) {
+            const childRecurse =
+              recurseTimes === null ? null : recurseTimes - 1;
+            if (isDirectTailChild(ctx, desc.value)) {
+              // ponytail: tail-to-tail recursion. formatValue's head would
+              // only re-run its checks (all mirrored in isDirectTailChild)
+              // and its seen/depth bookkeeping (replicated inline below),
+              // then call formatObjectValue — one whole formatValue frame
+              // per nesting level saved. The head frame is paid once at the
+              // top; deep chains now cost one tail frame per level. Level
+              // is 0, matching formatValue's default on property paths.
+              const child = desc.value;
+              ctx.formatCount = (ctx.formatCount || 0) + 1;
+              if (ctx.formatCount > 100000) {
+                output[i] =
+                  `${formatKeyName(ctx, key)}: ` +
+                  ctx.stylize("...", "special");
+                continue;
+              }
+              if (!ctx.seenMap) ctx.seenMap = new Map();
+              const childIdx = ctx.seen.length;
+              ctx.seen.push(child);
+              ctx.seenMap.set(child, childIdx);
+              let childDepthCounted = false;
+              if (!(childRecurse !== null && childRecurse < 0)) {
+                ctx.depthLevel++;
+                if (ctx.depthLevel > ctx.currentDepth) {
+                  ctx.currentDepth = ctx.depthLevel;
+                }
+                childDepthCounted = true;
+              }
+              const childFinish = (s) => {
+                ctx.seen.pop();
+                if (ctx.seenMap) ctx.seenMap.delete(child);
+                if (childDepthCounted) ctx.depthLevel--;
+                const num = ctx.circularNums.get(child);
+                if (num !== undefined) return `<ref *${num}> ${s}`;
+                return s;
+              };
+              output[i] =
+                `${formatKeyName(ctx, key)}: ` +
+                formatObjectValue(
+                  ctx,
+                  child,
+                  childRecurse,
+                  0,
+                  childFinish,
+                  childDepthCounted,
+                );
+              continue;
+            }
             output[i] =
-              `${ctx.stylize(key, "name")}: ` +
-              formatValue(
-                ctx,
-                desc.value,
-                recurseTimes === null ? null : recurseTimes - 1,
-              );
+              `${formatKeyName(ctx, key)}: ` +
+              formatValue(ctx, desc.value, childRecurse);
             continue;
           }
         }
