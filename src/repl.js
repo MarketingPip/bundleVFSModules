@@ -15,6 +15,15 @@
 import { Interface } from "./readline";
 import vm from "./vm";
 import { inspect } from "./util";
+import {
+  Module as CJSModule,
+  builtinModules as nodeBuiltinModules,
+  isBuiltin,
+  _resolveFilename,
+  _resolveLookupPaths,
+  _cache,
+  _extensions,
+} from "./module";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -148,6 +157,123 @@ function processTopLevelAwait(code) {
 }
 
 // ---------------------------------------------------------------------------
+// Deprecation warnings — Node's deprecate() emits once per process.
+// ---------------------------------------------------------------------------
+
+const _depWarned = new Set();
+function emitDeprecationOnce(code, message) {
+  if (_depWarned.has(code)) return;
+  _depWarned.add(code);
+  if (
+    typeof process !== "undefined" &&
+    process !== null &&
+    typeof process.emitWarning === "function"
+  ) {
+    process.emitWarning(message, "DeprecationWarning", code);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// shouldColorize — port of Node lib/internal/util/colors.js shouldColorize()
+// ---------------------------------------------------------------------------
+// A stream colorizes only when it IS a TTY (with color depth > 2 when it
+// reports one), unless FORCE_COLOR is set. NOTE: this is NOT the util.js
+// stand-in (which defaults ON for non-TTY streams, for console use) — the
+// repl default follows Node's rule, so a non-TTY output gets no colors.
+function shouldColorizeRepl(stream) {
+  const env = (typeof process !== "undefined" && process.env) || {};
+  if (env.FORCE_COLOR !== undefined) {
+    return typeof stream?.getColorDepth === "function"
+      ? stream.getColorDepth() > 2
+      : true;
+  }
+  return (
+    !!stream?.isTTY &&
+    (typeof stream.getColorDepth === "function"
+      ? stream.getColorDepth() > 2
+      : true)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Context builtins — port of Node lib/internal/modules/helpers.js
+// addBuiltinLibsToObject() + lib/repl.js createContext() require/module.
+// ---------------------------------------------------------------------------
+// Lazy, non-enumerable getters for every builtin module, skipping
+// underscored names, slashed names, and names already defined on the
+// object. The getter loads via the shim's CJS loader so `util` etc.
+// resolve to the SHIM modules, never native. ponytail: a builtin the
+// shim cannot load throws honestly on first access (same as the module
+// shim's own behaviour) — no silent undefined, no fake success.
+function addBuiltinLibsToObject(object, replModule) {
+  for (const name of nodeBuiltinModules) {
+    if (
+      name[0] === "_" ||
+      name.includes("/") ||
+      Object.prototype.hasOwnProperty.call(object, name)
+    ) {
+      continue;
+    }
+    const setReal = (val) => {
+      delete object[name];
+      object[name] = val;
+    };
+    Object.defineProperty(object, name, {
+      __proto__: null,
+      get: () => {
+        const lib = replModule.require(name);
+        try {
+          // Override the getter with the loaded lib (still
+          // non-enumerable, still re-assignable), exactly as Node does.
+          Object.defineProperty(object, name, {
+            __proto__: null,
+            get: () => lib,
+            set: setReal,
+            configurable: true,
+            enumerable: false,
+          });
+        } catch {
+          // If the property is no longer configurable, ignore the error.
+        }
+        return lib;
+      },
+      set: setReal,
+      configurable: true,
+      enumerable: false,
+    });
+  }
+}
+
+// Port of Node lib/internal/modules/cjs/loader.js makeRequireFunction(),
+// bound to the REPL's `<repl>` module so `require('fs')` typed in the
+// REPL resolves through the shim's CJS loader.
+function makeReplRequire(mod) {
+  function require(id) {
+    return mod.require(id);
+  }
+  require.resolve = (request, options) => {
+    if (typeof request !== "string") {
+      const e = new TypeError(
+        `The "request" argument must be of type string. Received ${typeof request}`,
+      );
+      e.code = "ERR_INVALID_ARG_TYPE";
+      throw e;
+    }
+    if (isBuiltin(request)) return request;
+    const resolveOptions =
+      options !== undefined && options !== null && options.paths !== undefined
+        ? { paths: options.paths }
+        : undefined;
+    return _resolveFilename(request, mod, false, resolveOptions);
+  };
+  require.resolve.paths = (request) => _resolveLookupPaths(request, mod);
+  require.main = undefined;
+  require.extensions = _extensions;
+  require.cache = _cache;
+  return require;
+}
+
+// ---------------------------------------------------------------------------
 // Default writer
 // ---------------------------------------------------------------------------
 
@@ -197,7 +323,15 @@ export class REPLServerImpl extends Interface {
       options.terminal !== undefined ? !!options.terminal : !!output.isTTY;
 
     // ── Super: only pass what our readline Interface actually accepts ─────
-    super({ input, output, terminal, prompt: promptStr });
+    // historySize flows through: the Interface reads input.historySize
+    // into its history manager (default 30 when absent).
+    super({
+      input,
+      output,
+      terminal,
+      prompt: promptStr,
+      historySize: options.historySize,
+    });
 
     // ── Store refs directly — don't rely on super's private #output ──────
     this._input = input;
@@ -206,7 +340,12 @@ export class REPLServerImpl extends Interface {
 
     // ── Public properties ────────────────────────────────────────────────
     this._initialPrompt = promptStr;
-    this.useColors = !!(options.useColors ?? terminal);
+    // Node lib/repl.js:289-291 — when terminal && useColors === undefined,
+    // default via shouldColorize(output); a non-TTY output gets no colors.
+    let useColors = options.useColors;
+    if (terminal && useColors === undefined)
+      useColors = shouldColorizeRepl(output);
+    this.useColors = !!useColors;
     this.useGlobal = !!useGlobal;
     this.ignoreUndefined = !!ignoreUndefined;
     this.replMode = replMode || REPL_MODE_SLOPPY;
@@ -244,6 +383,18 @@ export class REPLServerImpl extends Interface {
 
     this[kBufferedCommand] = "";
     this[kLoading] = false;
+
+    // Node lib/repl.js:348-352 — breakEvalOnSigint with a custom eval is
+    // a configuration error (breakEvalOnSigint only affects the default
+    // eval). The check is on the raw eval option (truthy), not on whether
+    // it is a function.
+    if (this.breakEvalOnSigint && eval_) {
+      const e = new TypeError(
+        'Cannot specify both "breakEvalOnSigint" and "eval" for REPL',
+      );
+      e.code = "ERR_INVALID_REPL_EVAL_CONFIG";
+      throw e;
+    }
 
     this.eval =
       typeof eval_ === "function" ? eval_ : this._defaultEval.bind(this);
@@ -371,6 +522,27 @@ export class REPLServerImpl extends Interface {
       context.global = context;
     }
 
+    // Node lib/repl.js:1114-1137 — the REPL context gets a `<repl>` CJS
+    // module, a require function bound to it, and lazy getters for every
+    // builtin module (addBuiltinLibsToObject). Runs for both branches:
+    // with useGlobal the context IS globalThis (Node does the same).
+    const replModule = new CJSModule("<repl>");
+    replModule.paths = []; // No lookup paths in a browser; builtin
+    // requires never consult paths, and relative requires fail honestly.
+    Object.defineProperty(context, "module", {
+      __proto__: null,
+      configurable: true,
+      writable: true,
+      value: replModule,
+    });
+    Object.defineProperty(context, "require", {
+      __proto__: null,
+      configurable: true,
+      writable: true,
+      value: makeReplRequire(replModule),
+    });
+    addBuiltinLibsToObject(context, replModule);
+
     Object.defineProperty(context, "_", {
       configurable: true,
       get: () => this.last,
@@ -428,7 +600,16 @@ export class REPLServerImpl extends Interface {
       }
     }
 
-    if (this.replMode === REPL_MODE_STRICT && code.trim() !== "")
+    // The 'use strict' prefix is valid only for the useGlobal path, where
+    // the code is eval'd as a script (indirect eval). For the sandboxed
+    // path the code runs inside return(...) as an expression, where the
+    // prefix is a SyntaxError that masquerades as Recoverable and buffers
+    // forever — strictness there is applied by the wrapper in runFn below.
+    if (
+      this.useGlobal &&
+      this.replMode === REPL_MODE_STRICT &&
+      code.trim() !== ""
+    )
       code = `'use strict'; void 0;\n${code}`;
 
     if (code.trim() === "") return cb(null);
@@ -451,14 +632,38 @@ export class REPLServerImpl extends Interface {
       : (c) => {
           // Wrap in with-block; new vars declared with var land on context
           // via the Proxy below which traps set.
+          // ponytail: the expression wrapper only accepts a single
+          // expression — declarations (const/let) are statements and
+          // buffer as Recoverable instead of evaluating. Pre-existing
+          // architecture ceiling (a real script eval would be needed to
+          // fix it); not this lane.
+          const strict = this.replMode === REPL_MODE_STRICT;
           const proxy = new Proxy(this.context, {
-            has: () => true, // make `with` use the proxy for all names
+            // In sloppy mode `has` claims every name so undeclared
+            // assignments land on the context (vm-global semantics). In
+            // strict mode it must answer honestly, or `x = 3` would set
+            // a proxy property instead of throwing ReferenceError.
+            has: strict ? (t, k) => k in t || k in globalThis : () => true,
             get: (t, k) => (k in t ? t[k] : globalThis[k]),
             set: (t, k, v) => {
               t[k] = v;
               return true;
             },
           });
+          if (strict) {
+            // The 'use strict' directive cannot be prefixed onto the
+            // code string here: inside return(...) it is a SyntaxError.
+            // Instead the code runs inside a strict inner function
+            // (the outer with is sloppy, which is legal); with the
+            // honest `has` above, undeclared assignment throws
+            // ReferenceError. Known gap: strict + top-level-await runs
+            // the await body sloppy (the async IIFE has no directive).
+            // eslint-disable-next-line no-new-func
+            return new Function(
+              "__ctx__",
+              `with(__ctx__){return (function(){'use strict'; return (${c.trim()});})()}`,
+            )(proxy);
+          }
           // eslint-disable-next-line no-new-func
           return new Function("__ctx__", `with(__ctx__){return(${c.trim()})}`)(
             proxy,
@@ -810,12 +1015,39 @@ export class REPLServerImpl extends Interface {
 
   // ── Deprecated stream aliases (Node compatibility) ───────────────────
   // Node: repl.inputStream and repl.outputStream are deprecated (DEP0141).
-  // Use repl.input and repl.output instead.
+  // Use repl.input and repl.output instead. The warning fires once per
+  // process, like Node's deprecate().
   get inputStream() {
+    emitDeprecationOnce(
+      "DEP0141",
+      "repl.inputStream and repl.outputStream are deprecated. " +
+        "Use repl.input and repl.output instead",
+    );
     return this.input;
   }
+  set inputStream(v) {
+    emitDeprecationOnce(
+      "DEP0141",
+      "repl.inputStream and repl.outputStream are deprecated. " +
+        "Use repl.input and repl.output instead",
+    );
+    this.input = v;
+  }
   get outputStream() {
+    emitDeprecationOnce(
+      "DEP0141",
+      "repl.inputStream and repl.outputStream are deprecated. " +
+        "Use repl.input and repl.output instead",
+    );
     return this.output;
+  }
+  set outputStream(v) {
+    emitDeprecationOnce(
+      "DEP0141",
+      "repl.inputStream and repl.outputStream are deprecated. " +
+        "Use repl.input and repl.output instead",
+    );
+    this.output = v;
   }
 
   // ── Tab completion (Node compatibility) ──────────────────────────────
@@ -888,7 +1120,7 @@ export function start(options = "> ") {
 // ---------------------------------------------------------------------------
 
 /** @deprecated Use module.builtinModules */
-export const builtinModules = [
+export let builtinModules = [
   "assert",
   "buffer",
   "child_process",
@@ -945,16 +1177,61 @@ export function REPLServer(...args) {
 Object.setPrototypeOf(REPLServer, REPLServerImpl);
 REPLServer.prototype = REPLServerImpl.prototype;
 
-export default {
+const replExports = {
   start,
   writer,
   REPLServer,
   Recoverable,
   REPL_MODE_SLOPPY,
   REPL_MODE_STRICT,
-  builtinModules,
   isValidSyntax,
 };
+
+// Node lib/repl.js:1437-1465 — builtinModules and _builtinLibs are
+// deprecated getters on module.exports (DEP0191 / DEP0142, emitted once).
+// The CJS require() of this ESM shim returns this default-export object,
+// so the getters live here; the ESM named export above stays the plain
+// array for ESM importers.
+Object.defineProperty(replExports, "builtinModules", {
+  __proto__: null,
+  get() {
+    emitDeprecationOnce(
+      "DEP0191",
+      "repl.builtinModules is deprecated. Check module.builtinModules instead",
+    );
+    return builtinModules;
+  },
+  set(v) {
+    emitDeprecationOnce(
+      "DEP0191",
+      "repl.builtinModules is deprecated. Check module.builtinModules instead",
+    );
+    builtinModules = v;
+  },
+  enumerable: false,
+  configurable: true,
+});
+Object.defineProperty(replExports, "_builtinLibs", {
+  __proto__: null,
+  get() {
+    emitDeprecationOnce(
+      "DEP0142",
+      "repl._builtinLibs is deprecated. Check module.builtinModules instead",
+    );
+    return builtinModules;
+  },
+  set(v) {
+    emitDeprecationOnce(
+      "DEP0142",
+      "repl._builtinLibs is deprecated. Check module.builtinModules instead",
+    );
+    builtinModules = v;
+  },
+  enumerable: false,
+  configurable: true,
+});
+
+export default replExports;
 
 // ---------------------------------------------------------------------------
 // --- Usage ---
