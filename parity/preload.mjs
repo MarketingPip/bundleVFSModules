@@ -651,4 +651,54 @@ Module._load = function (request, parent, isMain) {
   return origLoad.call(this, request, parent, isMain);
 };
 
-register("./hooks.mjs", import.meta.url);
+// Only register the ESM hooks worker when the process can use it.
+// - Under `--permission` without `--allow-worker`, worker creation is
+//   denied and register() throws ERR_ACCESS_DENIED at preload load, before
+//   any test code runs (process wave L2: execve-permission-*). The CJS
+//   redirect above still works without the hooks worker.
+// - In forked children (process.send is a function) whose entry point is
+//   CJS, the hooks worker is a live thread the child never needs, and its
+//   mere presence deterministically flips console's async EPIPE error
+//   ordering so the EPIPE protection loses the race (process wave L3:
+//   external-stdio-close). The child here never imports ESM.
+// Default is to register (current behavior): unknown entry types keep the
+// hooks, so a forked child that genuinely needs ESM redirects is unaffected.
+// ponytail: the entry-type check mirrors Node's own .js resolution
+// (nearest package.json "type", default commonjs); if the package.json
+// cannot be read for a reason other than "absent", assume ESM (register)
+// rather than risk dropping hooks. A CJS child that later dynamically
+// imports an ESM module needing a redirect will not get one — that is the
+// ceiling of skipping the worker per-process; restoring hooks lazily is
+// impossible because register() must precede the import.
+function entryPointNeedsEsmHooks() {
+  const entry = process.argv[1];
+  if (!entry) return true;
+  if (entry.endsWith(".mjs")) return true;
+  if (entry.endsWith(".cjs")) return false;
+  let dir = path.dirname(entry);
+  while (true) {
+    try {
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(dir, "package.json"), "utf8"),
+      );
+      if (pkg && typeof pkg.type === "string") return pkg.type === "module";
+      return false;
+    } catch (err) {
+      if (err && (err.code === "ENOENT" || err.code === "ENOTDIR")) {
+        const parent = path.dirname(dir);
+        if (parent === dir) return false;
+        dir = parent;
+        continue;
+      }
+      return true;
+    }
+  }
+}
+
+const workersAllowed =
+  typeof process.permission?.has !== "function" ||
+  process.permission.has("worker");
+const isForkedChild = typeof process.send === "function";
+if (workersAllowed && !(isForkedChild && !entryPointNeedsEsmHooks())) {
+  register("./hooks.mjs", import.meta.url);
+}
