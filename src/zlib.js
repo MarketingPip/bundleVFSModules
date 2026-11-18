@@ -370,8 +370,8 @@ class ERR_STREAM_DESTROYED extends Error {
   }
 }
 class ERR_ZLIB_INITIALIZATION_FAILED extends Error {
-  constructor() {
-    super("Initialization failed");
+  constructor(message) {
+    super(message || "Initialization failed");
     this.code = "ERR_ZLIB_INITIALIZATION_FAILED";
   }
 }
@@ -1685,6 +1685,13 @@ class ZlibBase extends MiniTransform {
     const zopts = isBrotli || isZstd ? {} : normalizeZlibOptions(opts, mode);
     if (zopts.level !== undefined) this._level = zopts.level;
     if (zopts.strategy !== undefined) this._strategy = zopts.strategy;
+    // ponytail: zstd pledgedSrcSize — validated in validateZstdOptions
+    // before super(); stored here so _processChunkSync can fail the
+    // stream at the finishing flush on a size mismatch. Decompress
+    // validates the option but never enforces the count.
+    if (isZstd && opts && opts.pledgedSrcSize !== undefined) {
+      this._pledgedSrcSize = opts.pledgedSrcSize;
+    }
 
     this._engine = this._createEngine(mode, zopts);
     const self = this;
@@ -1810,6 +1817,23 @@ class ZlibBase extends MiniTransform {
     const bytes = chunk ? this._normalizeChunk(chunk) : Buffer.alloc(0);
     const result = this._engine.write(bytes, flushFlag);
     this.bytesWritten += result.consumed;
+    // ponytail: zstd pledgedSrcSize — the binding fails the stream at the
+    // finishing flush when the bytes written differ from the pledged size.
+    // The sync path reaches this through zlibBufferSync, the async path
+    // through the stream's _flush; decompress never enforces the count.
+    // Checked before the empty-frame append below: a failed stream emits
+    // nothing (the output would be discarded on throw either way).
+    if (
+      flushFlag === this._finishFlushFlag &&
+      this._mode === MODE_ZSTD_COMPRESS &&
+      this._pledgedSrcSize !== undefined &&
+      this.bytesWritten !== this._pledgedSrcSize
+    ) {
+      const err = new Error("Src size is incorrect");
+      err.code = "ZSTD_error_srcSize_wrong";
+      err.errno = constants.ZSTD_error_srcSize_wrong;
+      throw err;
+    }
     // ponytail: empty-input frame for the passthrough stub only. A brotli /
     // zstd stream finalized with zero total input must emit its empty frame
     // (EMPTY_FRAME_BY_MODE); the passthrough emits nothing. Scoped to the
@@ -1966,6 +1990,96 @@ function validateBrotliOptions(options) {
   }
 }
 
+// Max zstd param keys, computed from the constants like Node v24.20.0
+// lib/zlib.js (kMaxZstdCParam / kMaxZstdDParam): the highest ZSTD_c_* key
+// is ZSTD_c_overlapLog (402), the only ZSTD_d_* key is ZSTD_d_windowLogMax
+// (100).
+const kMaxZstdCParam = Math.max(
+  ...Object.keys(constants).map((key) =>
+    key.startsWith("ZSTD_c_") ? constants[key] : 0,
+  ),
+);
+const kMaxZstdDParam = Math.max(
+  ...Object.keys(constants).map((key) =>
+    key.startsWith("ZSTD_d_") ? constants[key] : 0,
+  ),
+);
+
+// ponytail: zstd option validation — mirrors Node v24.20.0 lib/zlib.js
+// Zstd constructor (params key range + duplicate detection via a
+// -1-filled Uint32Array, value type check) plus the binding's
+// pledgedSrcSize checks, all probe-verified against real Node v24.22.1.
+// Native-range checks cover only strategy (0-9) and windowLogMax
+// (0 = default, else 10-31): the binding accepts any compression level
+// (clamped internally) and the remaining log params' ranges are
+// unprobed — extend the table only if a test demands it. Ceiling:
+// test-zlib-zstd-pledged-src-size.js flips; the validation blocks of
+// test-zlib-zstd.js flip too (its level-scaling block still needs L6b).
+function validateZstdOptions(options, isCompress) {
+  const maxParam = isCompress ? kMaxZstdCParam : kMaxZstdDParam;
+  const initParams = new Uint32Array(maxParam + 1);
+  initParams.fill(-1);
+  if (options?.params) {
+    for (const origKey of Object.keys(options.params)) {
+      const key = +origKey;
+      if (
+        Number.isNaN(key) ||
+        key < 0 ||
+        key > maxParam ||
+        (initParams[key] | 0) !== -1
+      ) {
+        const err = new RangeError(`${origKey} is not a valid zstd parameter`);
+        err.code = "ERR_ZSTD_INVALID_PARAM";
+        throw err;
+      }
+      const value = options.params[origKey];
+      if (typeof value !== "number" && typeof value !== "boolean") {
+        throw new ERR_INVALID_ARG_TYPE(
+          "options.params[key]",
+          "number",
+          options.params[origKey],
+        );
+      }
+      initParams[key] = value;
+    }
+    // The binding's setter rejects out-of-range strategy / windowLogMax;
+    // -1 is the array's unset sentinel, 0 means "default" for the log param.
+    if (isCompress) {
+      const strategy = initParams[constants.ZSTD_c_strategy] | 0;
+      if (strategy !== -1 && (strategy < 0 || strategy > 9)) {
+        throw new ERR_ZLIB_INITIALIZATION_FAILED("Setting parameter failed");
+      }
+    } else {
+      const windowLogMax = initParams[constants.ZSTD_d_windowLogMax] | 0;
+      if (
+        windowLogMax !== -1 &&
+        windowLogMax !== 0 &&
+        (windowLogMax < 10 || windowLogMax > 31)
+      ) {
+        throw new ERR_ZLIB_INITIALIZATION_FAILED("Setting parameter failed");
+      }
+    }
+  }
+  const pledgedSrcSize = options?.pledgedSrcSize;
+  if (pledgedSrcSize !== undefined) {
+    if (typeof pledgedSrcSize !== "number") {
+      const err = new TypeError("pledgedSrcSize must be a number");
+      err.code = "ERR_INVALID_ARG_TYPE";
+      throw err;
+    }
+    if (!Number.isSafeInteger(pledgedSrcSize)) {
+      const err = new RangeError("pledgedSrcSize must be a safe integer");
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    if (pledgedSrcSize < 0) {
+      const err = new RangeError("pledgedSrcSize must be non-negative");
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+  }
+}
+
 function makeZlibClass(mode, validate, className) {
   class Z extends ZlibBase {
     constructor(opts) {
@@ -2025,12 +2139,12 @@ const BrotliDecompress = makeZlibClass(
 );
 const ZstdCompress = makeZlibClass(
   MODE_ZSTD_COMPRESS,
-  undefined,
+  (opts) => validateZstdOptions(opts, true),
   "ZstdCompress",
 );
 const ZstdDecompress = makeZlibClass(
   MODE_ZSTD_DECOMPRESS,
-  undefined,
+  (opts) => validateZstdOptions(opts, false),
   "ZstdDecompress",
 );
 
