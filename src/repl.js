@@ -15,7 +15,12 @@
  *   - domain option throws (removed in Node 24)
  */
 
-import { Interface } from "./readline";
+import {
+  Interface,
+  commonPrefix,
+  _historyNativeModules,
+} from "./readline";
+import path from "./path";
 import vm from "./vm";
 import { inspect } from "./util";
 import { Console } from "./console";
@@ -930,6 +935,863 @@ function syntaxArrow(src, message) {
 // REPLServer
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Tab completion — port of Node lib/internal/repl/completion.js
+// (Node v24.20.0, SHA256-verified source pack) + lib/repl.js:1196-1215.
+// The old complete() matched identifiers only — no module-name, require(),
+// or file completion. This port keeps the identifier/member branch and
+// adds the commands / require / import / fs.* branches, with the
+// completionGroupsLoaded merge (group separators are load-bearing).
+//
+// Shim adaptations (each marked below; the behavior matches Node's):
+//  A1  Node evals `try { <expr> } catch {}` — a statement the shim's
+//      expression wrapper rejects (SyntaxError). The port evals the bare
+//      expression and treats ANY error as "no object", which is exactly
+//      what Node's try/catch yields (undefined).
+//  A2  getOwnNonIndexProperties (a V8 internal binding) does not exist
+//      here — Object.getOwnPropertyNames + the isIdentifier filter
+//      excludes integer indices the same way (the non-index semantics).
+//  A3  getGlobalLexicalScopeNames is the V8 inspector
+//      (Runtime.globalLexicalScopeNames) — not portable. The shim tracks
+//      top-level lexical names in this._lexicalNames, accumulated by
+//      _defaultEval on the useGlobal path (empty in the sandboxed path
+//      until declaration persistence lands — R4c owns that).
+//  A4  Node's completion module uses its own module.paths
+//      (fixReplRequire). The shim reads the server's replModule.paths
+//      (R7, this.context.module.paths), falling back to
+//      CJSModule._nodeModulePaths("repl").
+//  A5  Node reads the real fs. The shim uses the completion fs object:
+//      the native bridge (the R6 probe-proven gate) under the harness,
+//      the VFS fs shim (_tryRequireFs) in the browser, null otherwise
+//      (builtin-only completion — honest degradation, no crash).
+//  A6  extensionFormatMap (ESM formats) has no shim equivalent — the
+//      default key set from Node lib/internal/modules/esm/get_format.js
+//      (.node/.ts are behind flags and excluded).
+//  A7  isProxy (internal/util/types) — native util.types.isProxy via
+//      the bridge, else () => false (proxies then complete like their
+//      targets — honest degradation in the browser).
+//  A8  globalBuiltins (fresh-context globals) —
+//      Object.getOwnPropertyNames(globalThis) per call.
+//  A9  The shim's sandboxed context is Object.create(null): its
+//      prototype chain is empty, where Node's vm context has
+//      Object.prototype. Bare names still resolve through to the host
+//      globalThis, so Object.prototype's members are completed as Node
+//      does.
+//  A10 Dirent entries that arrive as plain strings (an fs shim that
+//      ignores withFileTypes) are treated as files.
+//  A11 path ops use the shim's posix path import (string ops only —
+//      identical results on Linux).
+// ---------------------------------------------------------------------------
+
+// Node lib/repl.js:1437-1465 + lib/internal/repl/utils.js:821-834 —
+// _builtinLibs is the filtered CJSModule.builtinModules, LIVE: a push
+// mutates it in place and the next completion sees it (the import/require
+// tests assert exactly that). The old shim array was a hardcoded 36-name
+// snapshot with REPL_MODE_STRICT (a Symbol) and isValidSyntax (a function)
+// appended — neither is a module name, it could never reflect a push, and
+// a Symbol/function entry would crash the completion merge.
+// REPL_MODE_STRICT / isValidSyntax keep their own named exports.
+export let builtinModules = nodeBuiltinModules.filter(
+  (lib) => lib[0] !== "_" && !lib.startsWith("node:"),
+);
+
+// Node lib/internal/repl/completion.js:79-84 — node: variants snapshotted
+// once at module load, so a pushed "foobar" appears bare only, never as
+// node:foobar (the import/require tests assert exactly that).
+const nodeSchemeBuiltinLibs = builtinModules.map((lib) => `node:${lib}`);
+// Scheme-only modules (Node lib/internal/bootstrap/realm.js
+// getSchemeOnlyModuleNames): present only as `node:` — no bare module
+// exists, so the map above never produces them.
+for (const lib of nodeBuiltinModules) {
+  if (lib.startsWith("node:") && !nodeBuiltinModules.includes(lib.slice(5))) {
+    nodeSchemeBuiltinLibs.push(lib);
+  }
+}
+
+function getReplBuiltinLibs() {
+  return builtinModules;
+}
+
+// Node lib/internal/repl/utils.js:814-816 — REPL${n} resource names.
+let replResourceNumber = 0;
+function getREPLResourceName() {
+  return `REPL${replResourceNumber++}`;
+}
+
+// Node lib/internal/repl/completion.js — isIdentifier via acorn's
+// identifier tables (the npm acorn package exports both).
+function replIsIdentifier(str) {
+  if (str === "") return false;
+  const first = str.codePointAt(0);
+  if (!acorn.isIdentifierStart(first)) return false;
+  const firstLen = first > 0xffff ? 2 : 1;
+  for (let i = firstLen; i < str.length; i += 1) {
+    const cp = str.codePointAt(i);
+    if (!acorn.isIdentifierChar(cp)) return false;
+    if (cp > 0xffff) i += 1;
+  }
+  return true;
+}
+
+function replIsNotLegacyObjectPrototypeMethod(str) {
+  return (
+    replIsIdentifier(str) &&
+    str !== "__defineGetter__" &&
+    str !== "__defineSetter__" &&
+    str !== "__lookupGetter__" &&
+    str !== "__lookupSetter__"
+  );
+}
+
+// Node lib/internal/repl/completion.js: filteredOwnPropertyNames.
+// A2: getOwnNonIndexProperties is a V8 binding; Object.getOwnPropertyNames
+// + the identifier filter is equivalent here (integer indices are not
+// identifiers, so they are excluded the same way).
+function replFilteredOwnPropertyNames(obj) {
+  if (!obj) return [];
+  // `Object.prototype` is the only non-contrived object that fulfills
+  // `Object.getPrototypeOf(X) === null &&
+  //  Object.getPrototypeOf(Object.getPrototypeOf(X.constructor)) === X`.
+  let isObjectPrototype = false;
+  if (Object.getPrototypeOf(obj) === null) {
+    const ctorDescriptor = Object.getOwnPropertyDescriptor(obj, "constructor");
+    if (ctorDescriptor?.value) {
+      const ctorProto = Object.getPrototypeOf(ctorDescriptor.value);
+      isObjectPrototype =
+        ctorProto && Object.getPrototypeOf(ctorProto) === obj;
+    }
+  }
+  return Object.getOwnPropertyNames(obj).filter(
+    isObjectPrototype
+      ? replIsNotLegacyObjectPrototypeMethod
+      : replIsIdentifier,
+  );
+}
+
+function replAddCommonWords(completionGroups) {
+  // Only words which do not yet exist as global property should be added to
+  // this list.
+  completionGroups.push([
+    "async", "await", "break", "case", "catch", "const", "continue",
+    "debugger", "default", "delete", "do", "else", "export", "false",
+    "finally", "for", "function", "if", "import", "in", "instanceof", "let",
+    "new", "null", "return", "switch", "this", "throw", "true", "try",
+    "typeof", "var", "void", "while", "with", "yield",
+  ]);
+}
+
+// A5: the completion fs object. Native bridge under the harness (the R6
+// gate, reused via _historyNativeModules), VFS fs shim in the browser,
+// null when neither is available (builtin-only completion).
+let _replCompletionFsCached = false;
+let _replCompletionFsValue = null;
+function _replCompletionFs() {
+  if (_replCompletionFsCached) return _replCompletionFsValue;
+  _replCompletionFsCached = true;
+  try {
+    const native = _historyNativeModules();
+    if (native?.fs) {
+      _replCompletionFsValue = native.fs;
+      return _replCompletionFsValue;
+    }
+  } catch {
+    // Fall through to the VFS shim.
+  }
+  try {
+    _replCompletionFsValue = _tryRequireFs();
+  } catch {
+    _replCompletionFsValue = null;
+  }
+  return _replCompletionFsValue;
+}
+
+// A7: native util.types.isProxy via the bridge (the gate already proved
+// process.getBuiltinModule works), else a false stub.
+let _replIsProxyCached = false;
+let _replIsProxyValue = null;
+function _replIsProxy(obj) {
+  if (!_replIsProxyCached) {
+    _replIsProxyCached = true;
+    try {
+      const native = _historyNativeModules();
+      if (native) {
+        const util = process.getBuiltinModule("util");
+        if (typeof util?.types?.isProxy === "function") {
+          _replIsProxyValue = util.types.isProxy;
+        }
+      }
+    } catch {
+      // No bridge — proxies complete like their targets (A7).
+    }
+  }
+  return _replIsProxyValue ? _replIsProxyValue(obj) : false;
+}
+
+function replGracefulReaddir(...args) {
+  const fs = _replCompletionFs();
+  if (!fs) return undefined;
+  try {
+    return fs.readdirSync(...args);
+  } catch {
+    // Continue regardless of error.
+  }
+  return undefined;
+}
+
+function replCompleteFSFunctions(match) {
+  let baseName = "";
+  let filePath = match[1];
+  let fileList = replGracefulReaddir(filePath, { withFileTypes: true });
+
+  if (!fileList) {
+    baseName = path.basename(filePath);
+    filePath = path.dirname(filePath);
+    fileList = replGracefulReaddir(filePath, { withFileTypes: true }) || [];
+  }
+
+  const completions = fileList
+    .filter((dirent) => {
+      const name = typeof dirent === "string" ? dirent : dirent.name;
+      return name.startsWith(baseName);
+    })
+    .map((d) => (typeof d === "string" ? d : d.name));
+
+  return [[completions], baseName];
+}
+
+// Node lib/internal/repl/completion.js: findExpressionCompleteTarget.
+function replFindExpressionCompleteTarget(code) {
+  if (!code) return null;
+
+  if (code.at(-1) === ".") {
+    if (code.at(-2) === "?") {
+      // The code ends with the optional chaining operator (`?.`),
+      // such code can't generate a valid AST so we need to strip
+      // the suffix, run this function's logic and add back the
+      // optional chaining operator to the result if present
+      const result = replFindExpressionCompleteTarget(code.slice(0, -2));
+      return !result ? result : `${result}?.`;
+    }
+
+    // The code ends with a dot, such code can't generate a valid AST
+    // so we need to strip the suffix, run this function's logic and
+    // add back the dot to the result if present
+    const result = replFindExpressionCompleteTarget(code.slice(0, -1));
+    return !result ? result : `${result}.`;
+  }
+
+  let ast;
+  try {
+    ast = acorn.parse(code, {
+      __proto__: null,
+      sourceType: "module",
+      ecmaVersion: "latest",
+    });
+  } catch {
+    const keywords = code.split(" ");
+
+    if (keywords.length > 1) {
+      // Something went wrong with the parsing, however this can be due to incomplete code
+      // (that is for example missing a closing bracket, as for example `{ a: obj.te`),
+      // in this case we take the last code keyword and try again
+      return replFindExpressionCompleteTarget(keywords.at(-1));
+    }
+
+    // The ast parsing has legitimately failed so we return null
+    return null;
+  }
+
+  const lastBodyStatement = ast.body[ast.body.length - 1];
+
+  if (!lastBodyStatement) return null;
+
+  // If the last statement is a block we know there is not going to be a potential
+  // completion target (e.g. in `{ a: true }` there is no completion to be done)
+  if (lastBodyStatement.type === "BlockStatement") return null;
+
+  // If the last statement is an expression and it has a right side, that's what we
+  // want to potentially complete on, so let's re-run the function's logic on that
+  if (
+    lastBodyStatement.type === "ExpressionStatement" &&
+    lastBodyStatement.expression.right
+  ) {
+    const exprRight = lastBodyStatement.expression.right;
+    const exprRightCode = code.slice(exprRight.start, exprRight.end);
+    return replFindExpressionCompleteTarget(exprRightCode);
+  }
+
+  // If the last statement is a variable declaration statement the last declaration is
+  // what we can potentially complete on, so let's re-run the function's logic on that
+  if (lastBodyStatement.type === "VariableDeclaration") {
+    const lastDeclarationInit = lastBodyStatement.declarations.at(-1).init;
+    if (!lastDeclarationInit) {
+      // If there is no initialization we can simply return
+      return null;
+    }
+    const lastDeclarationInitCode = code.slice(
+      lastDeclarationInit.start,
+      lastDeclarationInit.end,
+    );
+    return replFindExpressionCompleteTarget(lastDeclarationInitCode);
+  }
+
+  // If the last statement is an expression statement with a unary operator (delete, typeof, etc.)
+  // we want to extract the argument for completion (e.g. for `delete obj.prop` we want `obj.prop`)
+  if (
+    lastBodyStatement.type === "ExpressionStatement" &&
+    lastBodyStatement.expression.type === "UnaryExpression" &&
+    lastBodyStatement.expression.argument
+  ) {
+    const argument = lastBodyStatement.expression.argument;
+    const argumentCode = code.slice(argument.start, argument.end);
+    return replFindExpressionCompleteTarget(argumentCode);
+  }
+
+  // If the last statement is an expression statement with "new" syntax
+  // we want to extract the callee for completion (e.g. for `new Sample` we want `Sample`)
+  if (
+    lastBodyStatement.type === "ExpressionStatement" &&
+    lastBodyStatement.expression.type === "NewExpression" &&
+    lastBodyStatement.expression.callee
+  ) {
+    const callee = lastBodyStatement.expression.callee;
+    const calleeCode = code.slice(callee.start, callee.end);
+    return replFindExpressionCompleteTarget(calleeCode);
+  }
+
+  // Walk the AST for the current block of code, and check whether it contains any
+  // statement or expression type that would potentially have side effects if evaluated.
+  let isAllowed = true;
+  const disallow = () => {
+    isAllowed = false;
+  };
+  walk.simple(lastBodyStatement, {
+    ForInStatement: disallow,
+    ForOfStatement: disallow,
+    CallExpression: disallow,
+    AssignmentExpression: disallow,
+    UpdateExpression: disallow,
+  });
+  if (!isAllowed) return null;
+
+  // If any of the above early returns haven't activated then it means that
+  // the potential complete target is the full code (e.g. the code represents
+  // a simple partial identifier, a member expression, etc...)
+  return code.slice(lastBodyStatement.start, lastBodyStatement.end);
+}
+
+// Node lib/internal/repl/completion.js: includesProxiesOrGetters.
+// A1: Node evals `try { <expr> } catch {}`; the port evals the bare
+// expression (the shim's expression wrapper rejects statements) and
+// treats any error as "no object" — the same outcome as Node's catch.
+function replIncludesProxiesOrGetters(expr, exprStr, evalFn, ctx, callback) {
+  if (expr?.type !== "MemberExpression") {
+    // If the expression is not a member one for obvious reasons no getters are involved
+    return callback(false);
+  }
+
+  if (expr.object.type === "MemberExpression") {
+    // The object itself is a member expression, so we need to recurse (e.g. the expression is `obj.foo.bar`)
+    return replIncludesProxiesOrGetters(
+      expr.object,
+      exprStr.slice(0, expr.object.end),
+      evalFn,
+      ctx,
+      (includes, lastEvaledObj) => {
+        if (includes) {
+          // If the recurred call found a getter we can also terminate
+          return callback(includes);
+        }
+
+        if (_replIsProxy(lastEvaledObj)) {
+          return callback(true);
+        }
+
+        // If a getter/proxy hasn't been found by the recursion call we need to check if maybe a getter/proxy
+        // is present here (e.g. in `obj.foo.bar` we found that `obj.foo` doesn't involve any getters so we now
+        // need to check if `bar` on `obj.foo` (i.e. `lastEvaledObj`) has a getter or if `obj.foo.bar` is a proxy)
+        return replHasGetterOrIsProxy(
+          lastEvaledObj,
+          expr.property,
+          exprStr,
+          evalFn,
+          ctx,
+          (doesHaveGetterOrIsProxy) => {
+            return callback(doesHaveGetterOrIsProxy);
+          },
+        );
+      },
+    );
+  }
+
+  // This is the base of the recursion we have an identifier for the object and an identifier or literal
+  // for the property (e.g. we have `obj.foo` or `obj['foo']`, `obj` is the object identifier and `foo`
+  // is the property identifier/literal)
+  if (expr.object.type === "Identifier") {
+    return evalFn(expr.object.name, ctx, getREPLResourceName(), (err, obj) => {
+      if (err) {
+        return callback(false);
+      }
+
+      if (_replIsProxy(obj)) {
+        return callback(true);
+      }
+
+      return replHasGetterOrIsProxy(
+        obj,
+        expr.property,
+        exprStr,
+        evalFn,
+        ctx,
+        (doesHaveGetterOrIsProxy) => {
+          if (doesHaveGetterOrIsProxy) {
+            return callback(true);
+          }
+
+          return evalFn(exprStr, ctx, getREPLResourceName(), (err, obj) => {
+            if (err) {
+              return callback(false);
+            }
+            return callback(false, obj);
+          });
+        },
+      );
+    });
+  }
+
+  return callback(false);
+}
+
+function replHasGetterOrIsProxy(obj, astProp, exprStr, evalFn, ctx, cb) {
+  if (!obj || !astProp) {
+    return cb(false);
+  }
+
+  if (astProp.type === "Literal") {
+    // We have something like `obj['foo'].x` where `x` is the literal
+    return replPropHasGetterOrIsProxy(obj, astProp.value, cb);
+  }
+
+  if (
+    astProp.type === "Identifier" &&
+    exprStr.at(astProp.start - 1) === "."
+  ) {
+    // We have something like `obj.foo.x` where `foo` is the identifier
+    return replPropHasGetterOrIsProxy(obj, astProp.name, cb);
+  }
+
+  return evalFn(
+    // Note: this eval runs the property expression, which might be side-effectful, for example
+    //       the user could be running `obj[getKey()].` where `getKey()` has some side effects.
+    //       Arguably this behavior should not be too surprising, but if it turns out that it is,
+    //       then we can revisit this behavior and add logic to analyze the property expression
+    //       and eval it only if we can confidently say that it can't have any side effects
+    exprStr.slice(astProp.start, astProp.end),
+    ctx,
+    getREPLResourceName(),
+    (err, evaledProp) => {
+      if (err) {
+        return cb(false);
+      }
+
+      if (typeof evaledProp === "string") {
+        return replPropHasGetterOrIsProxy(obj, evaledProp, cb);
+      }
+
+      return cb(false);
+    },
+  );
+}
+
+function replPropHasGetterOrIsProxy(obj, prop, cb) {
+  const propDescriptor = Object.getOwnPropertyDescriptor(obj, prop);
+  const propHasGetter = typeof propDescriptor?.get === "function";
+  if (propHasGetter) {
+    return cb(true);
+  }
+
+  if (_replIsProxy(obj[prop])) {
+    return cb(true);
+  }
+
+  return cb(false);
+}
+
+const replImportRE =
+  /\bimport\s*\(\s*['"`](([\w@./:-]+\/)?(?:[\w@./:-]*))(?![^'"`])$/;
+const replRequireRE =
+  /\brequire\s*\(\s*['"`](([\w@./:-]+\/)?(?:[\w@./:-]*))(?![^'"`])$/;
+const replFsAutoCompleteRE = /fs(?:\.promises)?\.\s*[a-z][a-zA-Z]+\(\s*["'](.*)/;
+const replVersionedFileNamesRe = /-\d+\.\d+/;
+// A6: default ESM extensions (Node lib/internal/modules/esm/get_format.js).
+const replEsmExtensions = [".cjs", ".js", ".json", ".mjs", ".wasm"];
+
+// Node lib/internal/repl/completion.js: complete. Called with `this` = the
+// REPLServer (via REPLServer.prototype.complete -> this.completer).
+function completeRepl(line, callback) {
+  // List of completion lists, one for each inheritance "level"
+  let completionGroups = [];
+  let completeOn, group;
+
+  // Ignore right whitespace. It could change the outcome.
+  line = line.trimStart();
+
+  let filter = "";
+
+  let match;
+  // REPL commands (e.g. ".break").
+  if ((match = /^\s*\.(\w*)$/.exec(line)) !== null) {
+    completionGroups.push(Object.keys(this.commands));
+    completeOn = match[1];
+    if (completeOn.length) {
+      filter = completeOn;
+    }
+  } else if ((match = replRequireRE.exec(line)) !== null) {
+    // require('...<Tab>')
+    completeOn = match[1];
+    filter = completeOn;
+    if (this.allowBlockingCompletions) {
+      const subdir = match[2] || "";
+      const extensions = Object.keys(CJSModule._extensions);
+      const indexes = extensions.map((extension) => `index${extension}`);
+      indexes.push("package.json", "index");
+
+      group = [];
+      let paths = [];
+
+      if (completeOn === ".") {
+        group = ["./", "../"];
+      } else if (completeOn === "..") {
+        group = ["../"];
+      } else if (/^\.\.?\//.exec(completeOn) !== null) {
+        paths = [replCwd()];
+      } else {
+        // A4: the server's replModule paths (R7), not this file's.
+        paths = [];
+        paths.push(...replModulePaths(this));
+        paths.push(...CJSModule.globalPaths);
+      }
+
+      for (const dir of paths) {
+        const resolved = path.resolve(dir, subdir);
+        const dirents = replGracefulReaddir(resolved, { withFileTypes: true }) || [];
+        for (const dirent of dirents) {
+          // A10: a plain-string entry (an fs shim ignoring withFileTypes).
+          const name = typeof dirent === "string" ? dirent : dirent.name;
+          const isDir =
+            typeof dirent === "string" ? false : dirent.isDirectory();
+          if (
+            replVersionedFileNamesRe.exec(name) !== null ||
+            name === ".npm"
+          ) {
+            // Exclude versioned names that 'npm' installs.
+            continue;
+          }
+          const extension = path.extname(name);
+          const base = name.slice(0, -extension.length);
+          if (!isDir) {
+            if (
+              extensions.includes(extension) &&
+              (!subdir || base !== "index")
+            ) {
+              group.push(`${subdir}${base}`);
+            }
+            continue;
+          }
+          group.push(`${subdir}${name}/`);
+          const absolute = path.resolve(resolved, name);
+          if (
+            (replGracefulReaddir(absolute) || []).some((subfile) =>
+              indexes.includes(
+                typeof subfile === "string" ? subfile : subfile.name,
+              ),
+            )
+          ) {
+            group.push(`${subdir}${name}`);
+          }
+        }
+      }
+      if (group.length) {
+        completionGroups.push(group);
+      }
+    }
+
+    completionGroups.push(getReplBuiltinLibs(), nodeSchemeBuiltinLibs);
+  } else if ((match = replImportRE.exec(line)) !== null) {
+    // import('...<Tab>')
+    completeOn = match[1];
+    filter = completeOn;
+    if (this.allowBlockingCompletions) {
+      const subdir = match[2] || "";
+      // File extensions that can be imported (A6).
+      const extensions = replEsmExtensions;
+
+      // Only used when loading bare module specifiers from `node_modules`:
+      const indexes = extensions.map((ext) => `index${ext}`);
+      indexes.push("package.json");
+
+      group = [];
+      let paths = [];
+      if (completeOn === ".") {
+        group = ["./", "../"];
+      } else if (completeOn === "..") {
+        group = ["../"];
+      } else if (/^\.\.?\//.exec(completeOn) !== null) {
+        paths = [replCwd()];
+      } else {
+        // A4: the server's replModule paths (R7), not this file's.
+        paths = [...replModulePaths(this)];
+      }
+
+      for (const dir of paths) {
+        const resolved = path.resolve(dir, subdir);
+        const isInNodeModules = path.basename(resolved) === "node_modules";
+        const dirents = replGracefulReaddir(resolved, { withFileTypes: true }) || [];
+        for (const dirent of dirents) {
+          // A10: a plain-string entry (an fs shim ignoring withFileTypes).
+          const name = typeof dirent === "string" ? dirent : dirent.name;
+          const isDir =
+            typeof dirent === "string" ? false : dirent.isDirectory();
+          if (
+            replVersionedFileNamesRe.exec(name) !== null ||
+            name === ".npm"
+          ) {
+            // Exclude versioned names that 'npm' installs.
+            continue;
+          }
+
+          if (!isDir) {
+            const extension = path.extname(name);
+            if (extensions.includes(extension)) {
+              group.push(`${subdir}${name}`);
+            }
+            continue;
+          }
+
+          group.push(`${subdir}${name}/`);
+          if (!subdir && isInNodeModules) {
+            const absolute = path.resolve(resolved, name);
+            const subfiles = replGracefulReaddir(absolute) || [];
+            if (
+              subfiles.some((subfile) => {
+                return indexes.includes(
+                  typeof subfile === "string" ? subfile : subfile.name,
+                );
+              })
+            ) {
+              group.push(`${subdir}${name}`);
+            }
+          }
+        }
+      }
+
+      if (group.length) {
+        completionGroups.push(group);
+      }
+    }
+
+    completionGroups.push(getReplBuiltinLibs(), nodeSchemeBuiltinLibs);
+  } else if (
+    (match = replFsAutoCompleteRE.exec(line)) !== null &&
+    this.allowBlockingCompletions
+  ) {
+    [completionGroups, completeOn] = replCompleteFSFunctions(match);
+  } else if (
+    line.length === 0 ||
+    /\w|\.|$/.exec(line[line.length - 1]) !== null
+  ) {
+    const completeTarget =
+      line.length === 0 ? line : replFindExpressionCompleteTarget(line);
+
+    if (line.length !== 0 && !completeTarget) {
+      completionGroupsLoaded();
+      return;
+    }
+    let expr = "";
+    completeOn = completeTarget;
+    if (line.endsWith(".")) {
+      expr = completeTarget.slice(0, -1);
+    } else if (line.length !== 0) {
+      const bits = completeTarget.split(".");
+      filter = bits.pop();
+      expr = bits.join(".");
+    }
+
+    // Resolve expr and get its completions.
+    if (!expr) {
+      // Get global vars synchronously
+      // A3: the inspector's globalLexicalScopeNames, approximated by the
+      // server-side set _defaultEval accumulates (useGlobal path only).
+      completionGroups.push([...(this._lexicalNames ?? [])]);
+      let contextProto = this.context;
+      while ((contextProto = Object.getPrototypeOf(contextProto)) !== null) {
+        completionGroups.push(replFilteredOwnPropertyNames(contextProto));
+      }
+      // A9: the shim's sandboxed context is Object.create(null) — its
+      // prototype chain is empty, where Node's vm context has
+      // Object.prototype. Complete Object.prototype's members as Node does.
+      if (Object.getPrototypeOf(this.context) === null) {
+        completionGroups.push(replFilteredOwnPropertyNames(Object.prototype));
+      }
+      const contextOwnNames = replFilteredOwnPropertyNames(this.context);
+      if (!this.useGlobal) {
+        // When the context is not `global`, builtins are not own
+        // properties of it.
+        // A8: the host globalThis names, per call.
+        contextOwnNames.push(...Object.getOwnPropertyNames(globalThis));
+      }
+      completionGroups.push(contextOwnNames);
+      if (filter !== "") replAddCommonWords(completionGroups);
+      completionGroupsLoaded();
+      return;
+    }
+
+    // If the target ends with a dot (e.g. `obj.foo.`) such code won't be valid for AST parsing
+    // so in order to make it correct we add an identifier to its end (e.g. `obj.foo.x`)
+    const parsableCompleteTarget = completeTarget.endsWith(".")
+      ? `${completeTarget}x`
+      : completeTarget;
+
+    let completeTargetAst;
+    try {
+      completeTargetAst = acorn.parse(parsableCompleteTarget, {
+        __proto__: null,
+        sourceType: "module",
+        ecmaVersion: "latest",
+      });
+    } catch {
+      /* No need to specifically handle parse errors */
+    }
+
+    if (!completeTargetAst) {
+      return completionGroupsLoaded();
+    }
+
+    return replIncludesProxiesOrGetters(
+      completeTargetAst.body[0].expression,
+      parsableCompleteTarget,
+      this.eval,
+      this.context,
+      (includes) => {
+        if (includes) {
+          // The expression involves proxies or getters, meaning that it
+          // can trigger side-effectful behaviors, so bail out
+          return completionGroupsLoaded();
+        }
+
+        let chaining = ".";
+        if (expr.endsWith("?")) {
+          expr = expr.slice(0, -1);
+          chaining = "?.";
+        }
+
+        const memberGroups = [];
+        // A1: Node evals `try { ${expr} } catch {}`; the port evals the
+        // bare expression — any error means "no object", same outcome.
+        this.eval(expr, this.context, getREPLResourceName(), (e, obj) => {
+          try {
+            let p;
+            if (
+              (typeof obj === "object" && obj !== null) ||
+              typeof obj === "function"
+            ) {
+              memberGroups.push(replFilteredOwnPropertyNames(obj));
+              p = Object.getPrototypeOf(obj);
+            } else {
+              p = obj.constructor ? obj.constructor.prototype : null;
+            }
+            // Circular refs possible? Let's guard against that.
+            let sentinel = 5;
+            while (p !== null && sentinel-- !== 0) {
+              memberGroups.push(replFilteredOwnPropertyNames(p));
+              p = Object.getPrototypeOf(p);
+            }
+          } catch {
+            // Maybe a Proxy object without `getOwnPropertyNames` trap.
+            // We simply ignore it here, as we don't want to break the
+            // autocompletion. Fixes the bug
+            // https://github.com/nodejs/node/issues/2119
+          }
+
+          if (memberGroups.length) {
+            expr += chaining;
+            for (const group of memberGroups) {
+              completionGroups.push(group.map((member) => `${expr}${member}`));
+            }
+            filter &&= `${expr}${filter}`;
+          }
+
+          completionGroupsLoaded();
+        });
+      },
+    );
+  }
+
+  return completionGroupsLoaded();
+
+  // Will be called when all completionGroups are in place
+  // Useful for async autocompletion
+  function completionGroupsLoaded() {
+    // Filter, sort (within each group), uniq and merge the completion groups.
+    if (completionGroups.length && filter) {
+      const newCompletionGroups = [];
+      const lowerCaseFilter = filter.toLocaleLowerCase();
+      for (const group of completionGroups) {
+        const filteredGroup = group.filter((str) => {
+          // Filter is always case-insensitive following chromium autocomplete
+          // behavior.
+          return str.toLocaleLowerCase().startsWith(lowerCaseFilter);
+        });
+        if (filteredGroup.length) {
+          newCompletionGroups.push(filteredGroup);
+        }
+      }
+      completionGroups = newCompletionGroups;
+    }
+
+    const completions = [];
+    // Unique completions across all groups.
+    const uniqueSet = new Set();
+    uniqueSet.add("");
+    // Completion group 0 is the "closest" (least far up the inheritance
+    // chain) so we put its completions last: to be closest in the REPL.
+    for (const group of completionGroups) {
+      group.sort((a, b) => (b > a ? 1 : -1));
+      const setSize = uniqueSet.size;
+      for (const entry of group) {
+        if (!uniqueSet.has(entry)) {
+          completions.unshift(entry);
+          uniqueSet.add(entry);
+        }
+      }
+      // Add a separator between groups.
+      if (uniqueSet.size !== setSize) {
+        completions.unshift("");
+      }
+    }
+
+    // Remove obsolete group entry, if present.
+    if (completions[0] === "") {
+      completions.shift();
+    }
+
+    callback(null, [completions, completeOn]);
+  }
+}
+
+// A4: the server's replModule paths (R7); falls back to a fresh lookup.
+function replModulePaths(server) {
+  return (
+    server.context?.module?.paths ?? CJSModule._nodeModulePaths("repl")
+  );
+}
+
+function replCwd() {
+  return typeof process !== "undefined" && typeof process.cwd === "function"
+    ? process.cwd()
+    : "/";
+}
+
 export class REPLServerImpl extends Interface {
   constructor(prompt, stream, eval_, useGlobal, ignoreUndefined, replMode) {
     // ── Normalise options ────────────────────────────────────────────────
@@ -980,12 +1842,17 @@ export class REPLServerImpl extends Interface {
     // ── Super: only pass what our readline Interface actually accepts ─────
     // historySize flows through: the Interface reads input.historySize
     // into its history manager (default 30 when absent).
+    // R3: the user completer goes through super so the Interface wraps a
+    // sync completer (length !== 2) into callback form, exactly like
+    // Node's Interface does. The internal completer is set after super
+    // (it needs `this`) when no user completer was given.
     super({
       input,
       output,
       terminal,
       prompt: promptStr,
       historySize: options.historySize,
+      completer: options.completer,
     });
 
     // ── Store refs directly — don't rely on super's private #output ──────
@@ -1008,6 +1875,20 @@ export class REPLServerImpl extends Interface {
     this.editorMode = false;
     this.commands = Object.create(null);
     this.breakEvalOnSigint = !!options.breakEvalOnSigint;
+    // Node lib/repl.js:332 — file/module completion runs only when the
+    // server allows blocking completions (R3: the tab-complete tests pass
+    // allowBlockingCompletions: true; without it only builtins complete).
+    this.allowBlockingCompletions = !!options.allowBlockingCompletions;
+    // R3: top-level lexical names for tab completion (the inspector's
+    // globalLexicalScopeNames, approximated — see the port header, A3).
+    // Accumulated by _defaultEval on the useGlobal path.
+    this._lexicalNames = new Set();
+    // R3: the internal completer (Node lib/repl.js:757-771). Set after
+    // super because it closes over `this`; a user completer passed via
+    // options was already stored (and sync-wrapped) by the Interface.
+    if (!options.completer) {
+      this.completer = this._replCompleter.bind(this);
+    }
     this[kContextId] = undefined;
 
     this.underscoreAssigned = false;
@@ -1650,6 +2531,12 @@ export class REPLServerImpl extends Interface {
       }
     }
 
+    // R3: accumulate top-level lexical names for tab completion (the
+    // inspector's globalLexicalScopeNames, approximated — see the port
+    // header, A3). Runs on the useGlobal path only; lexicalNames is []
+    // in the sandboxed path until declaration persistence lands (R4c).
+    for (const name of lexicalNames) this._lexicalNames.add(name);
+
     cb(null, result);
   }
 
@@ -2240,40 +3127,48 @@ export class REPLServerImpl extends Interface {
   }
 
   // ── Tab completion (Node compatibility) ──────────────────────────────
-  // Node: replServer.complete(line, callback) provides tab-completion.
-  // Basic implementation: completes identifiers from the context object.
+  // Node lib/repl.js:1196 — complete() dispatches through this.completer
+  // (the user completer when one was given, else the internal port of
+  // lib/internal/repl/completion.js — see the port block above the class).
   complete(line, callback) {
-    try {
-      // Extract the last identifier fragment to complete
-      const match = line.match(/[a-zA-Z_$][a-zA-Z0-9_$]*$/);
-      const filter = match ? match[0] : "";
-      const prefix = line.slice(0, line.length - filter.length);
+    Reflect.apply(this.completer, this, arguments);
+  }
 
-      // Gather completion candidates from the context
-      const candidates = new Set();
-      if (this.context && typeof this.context === "object") {
-        for (const key of Object.getOwnPropertyNames(this.context)) {
-          if (key.startsWith(filter)) candidates.add(prefix + key);
-        }
-        // Also check prototype chain
-        let proto = Object.getPrototypeOf(this.context);
-        while (proto && proto !== Object.prototype) {
-          for (const key of Object.getOwnPropertyNames(proto)) {
-            if (key.startsWith(filter)) candidates.add(prefix + key);
-          }
-          proto = Object.getPrototypeOf(proto);
-        }
-      }
-      // Add global names
-      for (const key of Object.getOwnPropertyNames(globalThis)) {
-        if (key.startsWith(filter)) candidates.add(prefix + key);
+  // Node lib/repl.js:1206-1215 — in editor mode, tab completes to the
+  // common prefix of the matches instead of listing them.
+  completeOnEditorMode(callback) {
+    return (err, results) => {
+      if (err) return callback(err);
+
+      const { 0: completions, 1: completeOn = "" } = results;
+      let result = completions.filter(Boolean);
+
+      if (completeOn && result.length !== 0) {
+        result = [commonPrefix(result)];
       }
 
-      const completions = [...candidates].sort();
-      callback(null, [completions, filter]);
-    } catch (err) {
-      callback(err);
+      callback(null, [result, completeOn]);
+    };
+  }
+
+  // Node lib/repl.js:757-759 — the internal completer wraps complete()
+  // with completeOnEditorMode when editorMode is on. Dual-mode: the
+  // shim's readline Interface awaits the completer with one argument
+  // ([kTabComplete]), while server.complete() and direct callers pass a
+  // callback — support both (a Promise when no callback is given).
+  _replCompleter(text, cb) {
+    if (typeof cb === "function") {
+      const done = this.editorMode ? this.completeOnEditorMode(cb) : cb;
+      return completeRepl.call(this, text, done);
     }
+    return new Promise((resolve, reject) => {
+      const done = this.editorMode
+        ? this.completeOnEditorMode((err, data) =>
+            err ? reject(err) : resolve(data),
+          )
+        : (err, data) => (err ? reject(err) : resolve(data));
+      completeRepl.call(this, text, done);
+    });
   }
 }
 
@@ -2333,45 +3228,9 @@ export function start(
 // Misc exports
 // ---------------------------------------------------------------------------
 
-/** @deprecated Use module.builtinModules */
-export let builtinModules = [
-  "assert",
-  "buffer",
-  "child_process",
-  "cluster",
-  "console",
-  "constants",
-  "crypto",
-  "dgram",
-  "dns",
-  "domain",
-  "events",
-  "fs",
-  "http",
-  "https",
-  "module",
-  "net",
-  "os",
-  "path",
-  "perf_hooks",
-  "process",
-  "punycode",
-  "querystring",
-  "readline",
-  "repl",
-  "stream",
-  "string_decoder",
-  "sys",
-  "timers",
-  "tls",
-  "tty",
-  "url",
-  "util",
-  "v8",
-  "vm",
-  "worker_threads",
-  "zlib",
-];
+// (builtinModules lives with the tab-completion port above: the live
+// filtered nodeBuiltinModules list. The old hardcoded 36-name snapshot
+// is deleted — it could never reflect a push and missed newer modules.)
 
 export function isValidSyntax(src) {
   // Node lib/internal/repl/utils.js isValidSyntax, ported to the acorn
