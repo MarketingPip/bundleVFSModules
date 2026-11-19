@@ -151,7 +151,7 @@ function _formatIPBytes(bytes) {
   return "";
 }
 
-// Parses the subjectAltName extension (OID 2.5.5.17) out of a certificate's
+// Parses the subjectAltName extension (OID 2.5.29.17) out of a certificate's
 // [3] extensions wrapper. Returns ["DNS:...", "IP Address:..."] entries in
 // Node's getPeerCertificate() subjectaltname string format.
 function _derSubjectAltNames(buf, tlv) {
@@ -161,7 +161,7 @@ function _derSubjectAltNames(buf, tlv) {
   for (const ext of _derChildren(buf, wrapper[0].valueStart, wrapper[0].end)) {
     const parts = _derChildren(buf, ext.valueStart, ext.end);
     if (parts.length === 0) continue;
-    if (_derOID(buf, parts[0].valueStart, parts[0].end) !== "2.5.5.17")
+    if (_derOID(buf, parts[0].valueStart, parts[0].end) !== "2.5.29.17")
       continue;
     const valueTlv = parts[parts.length - 1]; // OCTET STRING
     const inner = _derRead(buf, valueTlv.valueStart);

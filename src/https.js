@@ -327,6 +327,79 @@ function _pfxAgentKey(pfx, passphrase) {
   return key;
 }
 
+// Port of Node 26 lib/https.js:520-576 (getTlsOptionKey +
+// getKeyMaterialAgentKey): length-prefixed encoding so distinct TLS
+// policies cannot collapse to the same Agent key — `s<n>:<str>`,
+// `v<n>:<base64>` for views, `a<n>:<len>:<item>` for arrays, `o<id>`
+// for objects via a WeakMap, `n` for null. The v24 port (plain
+// String(value) join) went stale when Node 26 rewrote getName.
+// ponytail: ceiling — ids are per-process monotonic, as in Node (a
+// fresh process renumbers); only equality/inequality within a run
+// is observable, which is all getName promises.
+const _tlsPolicyObjectIds = new WeakMap();
+let _tlsPolicyObjectId = 0;
+
+function _getTlsOptionKey(value) {
+  if (value === undefined) return "";
+  if (value === null) return "n";
+  if (Array.isArray(value)) {
+    let key = `a${value.length}`;
+    for (let i = 0; i < value.length; i++) {
+      const itemKey = _getTlsOptionKey(value[i]);
+      key += `:${itemKey.length}:${itemKey}`;
+    }
+    return key;
+  }
+  if (ArrayBuffer.isView(value)) {
+    const bytes = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+    return `v${bytes.byteLength}:${bytes.toString("base64")}`;
+  }
+  const type = typeof value;
+  if (type === "object" || type === "function") {
+    let id = _tlsPolicyObjectIds.get(value);
+    if (id === undefined) {
+      id = ++_tlsPolicyObjectId;
+      _tlsPolicyObjectIds.set(value, id);
+    }
+    return `o${id}`;
+  }
+  const string = String(value);
+  return `${type[0]}${string.length}:${string}`;
+}
+
+function _getKeyMaterialAgentKey(
+  value,
+  passphrase,
+  property,
+  useTruthyProperties,
+) {
+  if (!Array.isArray(value)) {
+    return `${_getTlsOptionKey(value)}:${_getTlsOptionKey(passphrase)}`;
+  }
+  let key = `a${value.length}`;
+  for (let i = 0; i < value.length; i++) {
+    const item = value[i];
+    let raw = item;
+    let pass = passphrase;
+    if (
+      item !== null &&
+      typeof item === "object" &&
+      !ArrayBuffer.isView(item)
+    ) {
+      if (useTruthyProperties) {
+        raw = item[property] || item;
+        pass = item.passphrase || passphrase;
+      } else {
+        raw = item[property] !== undefined ? item[property] : item;
+        pass = item.passphrase !== undefined ? item.passphrase : passphrase;
+      }
+    }
+    const itemKey = `${_getTlsOptionKey(raw)}:${_getTlsOptionKey(pass)}`;
+    key += `:${itemKey.length}:${itemKey}`;
+  }
+  return key;
+}
+
 // Session-cache key. Node keys sessions by options._agentKey, which is
 // the https Agent's getName (lib/https.js:515-594: the http name plus
 // every TLS option). L4 owns the public getName port; this internal key
@@ -889,9 +962,13 @@ class HttpsAgentBase extends HttpAgent {
     return socket;
   }
 
-  // Port of Node lib/https.js:515-594 (Agent.prototype.getName): the http
-  // base name plus the TLS option fields, in Node's exact field order.
-  // The http base (super.getName) already yields e.g. 'localhost::' for {}.
+  // Port of Node 26 lib/https.js:584-708 (Agent.prototype.getName): the
+  // http base name plus the TLS option fields, in Node's exact field
+  // order, with the Node 26 length-prefixed encoding
+  // (getTlsOptionKey/getKeyMaterialAgentKey) and the eight trailing
+  // fields added in 26 (secureContext, allowPartialTrustChain,
+  // ALPNProtocols, certificateCompression, minDHSize, pskCallback,
+  // requestOCSP, session).
   // ponytail: ceiling — a real TLS layer would also need the per-request
   // checkServerIdentity symbol threaded from createConnection (L8); the
   // symbol key below is faithful to Node's tail but nothing sets it yet.
@@ -907,10 +984,10 @@ class HttpsAgentBase extends HttpAgent {
     const tls = options._tlsOptions || options;
 
     name += ":";
-    if (tls.ca) name += tls.ca;
+    if (tls.ca) name += _getTlsOptionKey(tls.ca);
 
     name += ":";
-    if (tls.cert) name += tls.cert;
+    if (tls.cert) name += _getTlsOptionKey(tls.cert);
 
     name += ":";
     if (tls.clientCertEngine) name += tls.clientCertEngine;
@@ -919,10 +996,14 @@ class HttpsAgentBase extends HttpAgent {
     if (tls.ciphers) name += tls.ciphers;
 
     name += ":";
-    if (tls.key) name += tls.key;
+    if (tls.key) {
+      name += _getKeyMaterialAgentKey(tls.key, tls.passphrase, "pem", false);
+    }
 
     name += ":";
-    if (tls.pfx) name += getPfxAgentKey(tls.pfx, tls.passphrase);
+    if (tls.pfx) {
+      name += _getKeyMaterialAgentKey(tls.pfx, tls.passphrase, "buf", true);
+    }
 
     name += ":";
     if (tls.rejectUnauthorized !== undefined) name += tls.rejectUnauthorized;
@@ -941,7 +1022,7 @@ class HttpsAgentBase extends HttpAgent {
     if (tls.secureProtocol) name += tls.secureProtocol;
 
     name += ":";
-    if (tls.crl) name += tls.crl;
+    if (tls.crl) name += _getTlsOptionKey(tls.crl);
 
     name += ":";
     if (tls.honorCipherOrder !== undefined) name += tls.honorCipherOrder;
@@ -967,6 +1048,33 @@ class HttpsAgentBase extends HttpAgent {
     name += ":";
     if (tls.privateKeyEngine) name += tls.privateKeyEngine;
 
+    name += ":";
+    if (tls.secureContext) name += _getTlsOptionKey(tls.secureContext);
+
+    name += ":";
+    if (tls.allowPartialTrustChain !== undefined)
+      name += _getTlsOptionKey(tls.allowPartialTrustChain);
+
+    name += ":";
+    if (tls.ALPNProtocols) name += _getTlsOptionKey(tls.ALPNProtocols);
+
+    name += ":";
+    if (tls.certificateCompression)
+      name += _getTlsOptionKey(tls.certificateCompression);
+
+    name += ":";
+    if (tls.minDHSize !== undefined) name += _getTlsOptionKey(tls.minDHSize);
+
+    name += ":";
+    if (tls.pskCallback) name += _getTlsOptionKey(tls.pskCallback);
+
+    name += ":";
+    if (tls.requestOCSP !== undefined)
+      name += _getTlsOptionKey(tls.requestOCSP);
+
+    name += ":";
+    if (tls.session) name += _getTlsOptionKey(tls.session);
+
     if (options[kPerRequestCheckServerIdentity])
       name += `:${options[kPerRequestCheckServerIdentity]}`;
 
@@ -978,19 +1086,6 @@ class HttpsAgentBase extends HttpAgent {
 const kPerRequestCheckServerIdentity = Symbol(
   "per-request checkServerIdentity",
 );
-
-function getPfxAgentKey(pfx, passphrase) {
-  if (!Array.isArray(pfx)) return pfx;
-
-  let key = "";
-  for (let i = 0; i < pfx.length; i++) {
-    const value = pfx[i];
-    const raw = value?.buf || value;
-    const pass = value?.passphrase || passphrase;
-    key += `:${raw}:${pass}`;
-  }
-  return key;
-}
 
 /** Node's https.Agent is callable without `new` as well. */
 export function Agent(...args) {
