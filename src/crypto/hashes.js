@@ -77,7 +77,7 @@ export function getHashes() {
 // Input / output encoding helpers
 // ---------------------------------------------------------------------------
 
-function toBytes(data, encoding) {
+export function toBytes(data, encoding) {
   if (typeof data === "string") {
     const enc =
       encoding === undefined ? "utf8" : String(encoding).toLowerCase();
@@ -154,7 +154,7 @@ function bytesToBase64(bytes) {
   return Buffer.from(bytes).toString("base64");
 }
 
-function encodeDigest(bytes, encoding) {
+export function encodeDigest(bytes, encoding) {
   if (encoding === undefined || encoding === null) {
     return Buffer.from(bytes);
   }

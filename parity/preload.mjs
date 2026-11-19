@@ -210,6 +210,15 @@ function polyfillPath(request) {
   if (target === "stream" && name === "stream") {
     return path.join(repoRoot, "parity", "stream-harness.mjs");
   }
+  // Harness-only timer-globals restore for crypto parity
+  // (parity/crypto-harness.mjs): the crypto shim imports ./stream.js (for
+  // the createMac Transform, via events → async_hooks → als-browser),
+  // which replaces timer globals on import, tripping Node's global-leak
+  // detector. The harness restores the originals snapshotted in preload.mjs.
+  // src/crypto.js itself is untouched.
+  if (target === "crypto" && name === "crypto") {
+    return path.join(repoRoot, "parity", "crypto-harness.mjs");
+  }
   // Harness-only timer-globals restore for async_hooks parity
   // (parity/async-hooks-harness.mjs): the async_hooks shim (als-browser)
   // replaces timer globals on import, tripping Node's global-leak detector.

@@ -21,6 +21,9 @@
  *    randomUUID / randomUUIDv7 / timingSafeEqual / getRandomValues
  *  - createHash / createHmac / hash / Hash / Hmac
  *    (md5, sha1, sha224, sha256, sha384, sha512, sha512-224, sha512-256)
+ *  - createMac / getMacs (hmac, kmac128/kmac256, blake2bmac/blake2smac;
+ *    cmac/gmac/poly1305/siphash and parsePKCS12 are honest-unsupported —
+ *    no in-tree primitive; see src/crypto/mac.js)
  *  - pbkdf2 / pbkdf2Sync / hkdf / hkdfSync (HMAC-based, RFC 2898/5869)
  *  - getHashes / getCiphers ([]) / getCurves ([]) / getCipherInfo
  *    (undefined) / getFips (0) / secureHeapUsed (zeros)
@@ -30,7 +33,7 @@
  * Everything OpenSSL-only (ciphers, DiffieHellman/ECDH, Sign/Verify,
  * KeyObject, X509Certificate, Certificate, scrypt, argon2, generateKey*,
  * publicEncrypt/privateDecrypt, encapsulate/decapsulate, setEngine,
- * setFips, checkPrime, generatePrime) throws a clear error naming the
+ * setFips, checkPrime, generatePrime, parsePKCS12) throws a clear error naming the
  * missing OpenSSL backing instead of silently misbehaving.
  */
 
@@ -41,6 +44,10 @@ import {
   Hash as _Hash,
   Hmac as _Hmac,
 } from "./crypto/hashes.js";
+import {
+  createMac as _createMac,
+  getMacs as _getMacs,
+} from "./crypto/mac.js";
 import {
   getRandomValues as _getRandomValues,
   randomBytes as _randomBytes,
@@ -281,6 +288,7 @@ export const createDiffieHellmanGroup = pick(
 export const createECDH = pick("createECDH", makeUnsupported("createECDH"));
 export const createHash = pick("createHash", _createHash);
 export const createHmac = pick("createHmac", _createHmac);
+export const createMac = pick("createMac", _createMac);
 export const createPrivateKey = pick(
   "createPrivateKey",
   makeUnsupported("createPrivateKey"),
@@ -334,12 +342,17 @@ export const getDiffieHellman = pick(
 );
 export const getFips = pick("getFips", () => 0);
 export const getHashes = pick("getHashes", () => [...FALLBACK_HASHES]);
+export const getMacs = pick("getMacs", _getMacs);
 export const getRandomValues = pick("getRandomValues", _getRandomValues);
 export const hash = pick("hash", _hash);
 export const hkdf = pick("hkdf", _hkdfFallback);
 export const hkdfSync = pick("hkdfSync", hkdfSyncFallback);
 export const pbkdf2 = pick("pbkdf2", _pbkdf2Fallback);
 export const pbkdf2Sync = pick("pbkdf2Sync", pbkdf2SyncFallback);
+export const parsePKCS12 = pick(
+  "parsePKCS12",
+  makeUnsupported("parsePKCS12"),
+);
 export const privateDecrypt = pick(
   "privateDecrypt",
   makeUnsupported("privateDecrypt"),
@@ -414,6 +427,7 @@ const defaultExport = {
   createECDH,
   createHash,
   createHmac,
+  createMac,
   createPrivateKey,
   createPublicKey,
   createSecretKey,
@@ -434,12 +448,14 @@ const defaultExport = {
   getDiffieHellman,
   getFips,
   getHashes,
+  getMacs,
   getRandomValues,
   hash,
   hkdf,
   hkdfSync,
   pbkdf2,
   pbkdf2Sync,
+  parsePKCS12,
   privateDecrypt,
   privateEncrypt,
   publicDecrypt,

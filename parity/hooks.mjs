@@ -93,6 +93,13 @@ function polyfillURL(specifier) {
     return pathToFileURL(path.join(repoRoot, "parity", "stream-harness.mjs"))
       .href;
   }
+  // Harness-only timer-globals restore for crypto parity
+  // (parity/crypto-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs.
+  if (target === "crypto" && name === "crypto") {
+    return pathToFileURL(path.join(repoRoot, "parity", "crypto-harness.mjs"))
+      .href;
+  }
   // Harness-only timer-globals restore for async_hooks parity
   // (parity/async-hooks-harness.mjs). ESM import path; CJS require path is in
   // preload.mjs.

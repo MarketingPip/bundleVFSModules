@@ -47,10 +47,58 @@ export class ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH extends RangeError {
   }
 }
 
+export class ERR_INVALID_ARG_VALUE extends TypeError {
+  constructor(name, value, reason = "is invalid") {
+    const inspected =
+      typeof value === "string" ? `'${value}'` : inspectReceived(value);
+    const type = name.includes(".") ? "property" : "argument";
+    super(`The ${type} '${name}' ${reason}. Received ${inspected}`);
+    this.code = "ERR_INVALID_ARG_VALUE";
+  }
+}
+
 export class ERR_CRYPTO_INVALID_DIGEST extends TypeError {
   constructor(digest) {
     super(`Invalid digest: ${digest}`);
     this.code = "ERR_CRYPTO_INVALID_DIGEST";
+  }
+}
+
+export class ERR_CRYPTO_INVALID_MAC extends TypeError {
+  constructor(algorithm) {
+    super(`Invalid MAC: ${algorithm}`);
+    this.code = "ERR_CRYPTO_INVALID_MAC";
+  }
+}
+
+export class ERR_CRYPTO_MAC_FINALIZED extends Error {
+  constructor() {
+    super("MAC already finalized");
+    this.code = "ERR_CRYPTO_MAC_FINALIZED";
+  }
+}
+
+// OpenSSL-flavoured validation codes raised by the Mac fallback where Node
+// reports the provider error directly (short message; the full OpenSSL
+// error stack only exists under the native bridge).
+export class ERR_OSSL_INVALID_KEY_LENGTH extends Error {
+  constructor() {
+    super("Invalid key length");
+    this.code = "ERR_OSSL_INVALID_KEY_LENGTH";
+  }
+}
+
+export class ERR_OSSL_INVALID_SALT_LENGTH extends Error {
+  constructor() {
+    super("Invalid salt length");
+    this.code = "ERR_OSSL_INVALID_SALT_LENGTH";
+  }
+}
+
+export class ERR_OSSL_NOT_XOF_OR_INVALID_LENGTH extends Error {
+  constructor() {
+    super("not xof or invalid length");
+    this.code = "ERR_OSSL_NOT_XOF_OR_INVALID_LENGTH";
   }
 }
 
@@ -68,7 +116,8 @@ export function unsupportedCrypto(what) {
       `backing of Node.js. The browser fallback of this module only supports ` +
       `getRandomValues, randomBytes, randomFill(Sync), randomInt, ` +
       `randomUUID(v7), timingSafeEqual, createHash/createHmac (MD5/SHA-1/SHA-2 ` +
-      `family), hash, getHashes, webcrypto/subtle and constants.`,
+      `family), createMac (hmac/kmac/blake2mac), hash, getHashes, getMacs, ` +
+      `webcrypto/subtle and constants.`,
   );
 }
 

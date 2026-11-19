@@ -1,6 +1,7 @@
 // Export-surface parity: src/crypto.js  <->  node:crypto
 // captured from real Node v24.20.0 (node:crypto)
 // Regenerate: node ~/workspace/bvm-export-helpers/gen_export_surface_tests.mjs
+// createMac / getMacs / parsePKCS12 are Node 26 additions (26w1-crypto L1).
 import * as shim from "../src/crypto.js";
 
 const EXPECTED = [
@@ -28,6 +29,7 @@ const EXPECTED = [
   "createECDH",
   "createHash",
   "createHmac",
+  "createMac",
   "createPrivateKey",
   "createPublicKey",
   "createSecretKey",
@@ -49,12 +51,14 @@ const EXPECTED = [
   "getDiffieHellman",
   "getFips",
   "getHashes",
+  "getMacs",
   "getRandomValues",
   "hash",
   "hkdf",
   "hkdfSync",
   "pbkdf2",
   "pbkdf2Sync",
+  "parsePKCS12",
   "privateDecrypt",
   "privateEncrypt",
   "publicDecrypt",
