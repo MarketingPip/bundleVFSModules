@@ -626,8 +626,153 @@ export function validateHeaderValue(name, value, lenient = false) {
   if (value === undefined) {
     throw ERR_HTTP_INVALID_HEADER_VALUE(value, name);
   }
-  if (_checkInvalidHeaderChar(String(value), lenient)) {
+  // ponytail: NO String() coercion here — Node passes value straight to
+  // checkInvalidHeaderChar, whose regex.test() throws a bare TypeError
+  // for symbols ("Cannot convert a Symbol value to a string"); String()
+  // would mask that into "Symbol(a)" and succeed. isValidHeaderValue
+  // must agree with this function for every input (Node 26
+  // test-http-is-valid-header.js), so the throw has to happen here.
+  if (_checkInvalidHeaderChar(value, lenient)) {
     throw ERR_INVALID_CHAR("header content", name);
+  }
+}
+
+/**
+ * Non-throwing counterpart of validateHeaderName (Node 26,
+ * lib/_http_outgoing.js): false for non-strings, empty names, and
+ * non-token names — agrees with validateHeaderName() for every input.
+ */
+export function isValidHeaderName(name) {
+  return typeof name === "string" && _checkIsHttpToken(name);
+}
+
+/**
+ * Non-throwing counterpart of validateHeaderValue (Node 26,
+ * lib/_http_outgoing.js). options.httpValidation 'strict' (default) or
+ * 'relaxed' (Fetch-spec leniency: only NUL/CR/LF and code points above
+ * U+00FF rejected); invalid options throw ERR_INVALID_ARG_TYPE /
+ * ERR_INVALID_ARG_VALUE (Node's validateObject / validateOneOf shapes);
+ * undefined or symbol values return false instead of throwing.
+ */
+export function isValidHeaderValue(value, options) {
+  let lenient = false;
+  if (options !== undefined) {
+    if (
+      options === null ||
+      Array.isArray(options) ||
+      typeof options !== "object"
+    ) {
+      throw ERR_INVALID_ARG_TYPE("options", "object", options);
+    }
+    const { httpValidation } = options;
+    if (httpValidation === "relaxed") {
+      lenient = true;
+    } else if (httpValidation !== undefined && httpValidation !== "strict") {
+      // Node lib/internal/validators.js validateOneOf message shape
+      // (cf. the Agent scheduling site): "must be one of: 'strict',
+      // 'relaxed'." — not the generic ERR_INVALID_ARG_VALUE rendering.
+      throw makeError(
+        "ERR_INVALID_ARG_VALUE",
+        `The property 'options.httpValidation' must be one of: 'strict', 'relaxed'. Received ${typeof httpValidation === "string" ? `'${httpValidation}'` : String(httpValidation)}`,
+      );
+    }
+  }
+  if (value === undefined || typeof value === "symbol") {
+    return false;
+  }
+  return !_checkInvalidHeaderChar(value, lenient);
+}
+
+// ponytail: Node 26.12.0 added websocketMask/websocketUnmask (lib/http.js),
+// thin wrappers over the C++ buffer.mask binding. No binding exists in a
+// browser, so the RFC 6455 §5.3 XOR is pure JS here; validation order,
+// error codes, and messages mirror lib/http.js exactly. The 4 key bytes
+// are snapshotted up front (the key may alias the output), and an
+// overlapping source/output is snapshotted too, so the result reads as
+// if the source had been copied before masking. A zero length returns
+// before any view is built, so detached inputs (byteLength 0) never
+// touch a detached buffer.
+const _websocketViewTypes = ["Buffer", "TypedArray", "DataView"];
+
+function _websocketMaskKey(key) {
+  if (!ArrayBuffer.isView(key)) {
+    throw ERR_INVALID_ARG_TYPE("mask", _websocketViewTypes, key);
+  }
+  if (key.byteLength !== 4) {
+    throw ERR_INVALID_ARG_VALUE("mask", key, "must be 4 bytes long");
+  }
+  return new Uint8Array(key.buffer, key.byteOffset, 4).slice();
+}
+
+// Node lib/internal/validators.js validateInteger (min 0, max given).
+function _validateWebsocketInteger(value, name, max) {
+  if (typeof value !== "number") {
+    throw ERR_INVALID_ARG_TYPE(name, "number", value);
+  }
+  if (!Number.isInteger(value)) {
+    throw ERR_OUT_OF_RANGE(name, "an integer", value);
+  }
+  if (value < 0 || value > max) {
+    throw ERR_OUT_OF_RANGE(name, `>= 0 && <= ${max}`, value);
+  }
+}
+
+/**
+ * XOR `length` bytes of `source` with the repeating 4-byte `key` and
+ * write the result to `output` at `offset` (RFC 6455 §5.3; Node 26.12.0).
+ */
+export function websocketMask(source, key, output, offset, length) {
+  if (!ArrayBuffer.isView(source)) {
+    throw ERR_INVALID_ARG_TYPE("source", _websocketViewTypes, source);
+  }
+  const keyBytes = _websocketMaskKey(key);
+  if (!ArrayBuffer.isView(output)) {
+    throw ERR_INVALID_ARG_TYPE("output", _websocketViewTypes, output);
+  }
+  const outputLength = output.byteLength;
+  _validateWebsocketInteger(offset, "offset", outputLength);
+  _validateWebsocketInteger(length, "length", source.byteLength);
+  if (length > outputLength - offset) {
+    throw ERR_OUT_OF_RANGE("length", `<= ${outputLength - offset}`, length);
+  }
+  if (length === 0) return;
+  const srcBytes = new Uint8Array(
+    source.buffer,
+    source.byteOffset,
+    source.byteLength,
+  );
+  const outBytes = new Uint8Array(
+    output.buffer,
+    output.byteOffset,
+    output.byteLength,
+  );
+  let src = srcBytes;
+  if (
+    source.buffer === output.buffer &&
+    source.byteOffset < output.byteOffset + offset + length &&
+    output.byteOffset + offset < source.byteOffset + length
+  ) {
+    src = srcBytes.slice(0, length);
+  }
+  for (let i = 0; i < length; i++) {
+    outBytes[offset + i] = src[i] ^ keyBytes[i & 3];
+  }
+}
+
+/**
+ * XOR every byte of `buffer` with the repeating 4-byte `key`, in place
+ * (RFC 6455 §5.3; Node 26.12.0). Masking twice is the identity.
+ */
+export function websocketUnmask(buffer, key) {
+  if (!ArrayBuffer.isView(buffer)) {
+    throw ERR_INVALID_ARG_TYPE("buffer", _websocketViewTypes, buffer);
+  }
+  const keyBytes = _websocketMaskKey(key);
+  const length = buffer.byteLength;
+  if (length === 0) return;
+  const bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, length);
+  for (let i = 0; i < length; i++) {
+    bytes[i] ^= keyBytes[i & 3];
   }
 }
 
@@ -12291,8 +12436,12 @@ export default {
   Server,
   ServerResponse,
   createServer,
+  isValidHeaderName,
+  isValidHeaderValue,
   validateHeaderName,
   validateHeaderValue,
+  websocketMask,
+  websocketUnmask,
   get,
   request,
   setMaxIdleHTTPParsers,
