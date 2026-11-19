@@ -1429,16 +1429,15 @@ async function* createAsyncIterator(stream, options) {
     error = aggregateTwoErrors(error, err);
     throw error;
   } finally {
-    const preserveHalfOpenDuplex =
-      error === null &&
-      stream.allowHalfOpen === true &&
-      stream.writable === true &&
-      stream.writableEnded !== true;
-
+    // Node 26 lib/internal/streams/readable.js:1611-1623 (finalize()):
+    // the v24 preserveHalfOpenDuplex carve-out is gone — the iterator
+    // destroys unless `destroyOnReturn === false`. Callers that need a
+    // half-open duplex after iteration must pass that option (see the
+    // Node 26 shapes of test-net-allow-half-open-async-iter.js and
+    // test-stream-readable-async-iter-half-open-duplex.js).
     if (
       (error || options?.destroyOnReturn !== false) &&
-      (error === undefined || stream._readableState.autoDestroy) &&
-      !preserveHalfOpenDuplex
+      (error === undefined || stream._readableState.autoDestroy)
     ) {
       destroyImpl.destroyer(stream, null);
     } else {

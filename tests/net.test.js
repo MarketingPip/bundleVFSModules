@@ -287,7 +287,7 @@ describe("BlockList", () => {
 describe("autoSelectFamily defaults", () => {
   test("defaults match Node", () => {
     expect(net.getDefaultAutoSelectFamily()).toBe(true);
-    expect(net.getDefaultAutoSelectFamilyAttemptTimeout()).toBe(250);
+    expect(net.getDefaultAutoSelectFamilyAttemptTimeout()).toBe(500);
   });
 
   test("setters validate", () => {
@@ -302,7 +302,7 @@ describe("autoSelectFamily defaults", () => {
     );
     net.setDefaultAutoSelectFamilyAttemptTimeout(5);
     expect(net.getDefaultAutoSelectFamilyAttemptTimeout()).toBe(10); // clamped
-    net.setDefaultAutoSelectFamilyAttemptTimeout(250);
+    net.setDefaultAutoSelectFamilyAttemptTimeout(500);
     net.setDefaultAutoSelectFamily(true);
   });
 });
