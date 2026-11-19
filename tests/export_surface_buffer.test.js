@@ -1,6 +1,9 @@
 // Export-surface parity: src/buffer.js  <->  node:buffer
 // captured from real Node v24.20.0 (node:buffer)
 // Regenerate: node ~/workspace/bvm-export-helpers/gen_export_surface_tests.mjs
+// Node 26 addition: isLatin1 (added in 26; module namespace only).
+// SlowBuffer is still listed: Node 26 removed it, but that is separate
+// drift, not part of this lane.
 import * as shim from "../src/buffer.js";
 
 const EXPECTED = [
@@ -14,6 +17,7 @@ const EXPECTED = [
   "constants",
   "default",
   "isAscii",
+  "isLatin1",
   "isUtf8",
   "kMaxLength",
   "kStringMaxLength",

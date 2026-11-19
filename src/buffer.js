@@ -1301,13 +1301,21 @@ function bindingIndexOfBuffer(buffer, val, byteOffset, encVal, dir, end) {
 
   if (isUcs2) {
     if (searchEnd < 2 || valLen < 2) return -1;
+    // ponytail: the byte offset converts to 2-byte units differently per
+    // direction — forward CEILs (an odd byte offset starts at the NEXT unit
+    // boundary: indexOf('\u6881', 1, 'utf16le') is 4, not 0), while backward
+    // FLOORs (a match must start at or before the byte offset:
+    // lastIndexOf('\u6881', 3, 'utf16le') is 0, not 4). Ceiling the backward
+    // path too would return matches starting past the offset. Ceiling for
+    // Node 26: the floor conversion was correct under the v24 tests, which
+    // never probed an odd forward offset.
     const result = dir
       ? searchUnitsForward(
           buffer,
           val,
           searchEnd / 2,
           Math.floor(valLen / 2),
-          Math.floor(offset / 2),
+          Math.ceil(offset / 2),
         )
       : searchUnitsBackward(
           buffer,
@@ -2379,39 +2387,64 @@ function writeFloatBackwards(val, offset = 0) {
 
 class FastBuffer extends Uint8Array {}
 
-function asciiWrite(buf, string, offset = 0, length = buf.byteLength - offset) {
+// ponytail: coerce `offset` exactly once — the old two-comparison bounds
+// check (`offset < 0 || offset > buf.byteLength`) plus the default-length
+// expression each coerced an object offset, so valueOf ran 2-3x. Node 26
+// test-buffer-write counts exactly one call. The checks run on the raw
+// double and the write itself uses ToIntegerOrInfinity(offset): a fractional
+// offset writes at the truncated position while the bounds checks still see
+// the fraction (0.9 with length 1 on a 1-byte buffer is OOB; 0.5 writes at
+// 0; NaN behaves as 0). Negative offsets stay ERR_BUFFER_OUT_OF_BOUNDS,
+// as in Node — parseArrayIndex would wrongly give ERR_OUT_OF_RANGE here.
+function asciiWrite(buf, string, offset, length) {
+  offset = offset === undefined ? 0 : Number(offset);
   if (offset < 0 || offset > buf.byteLength) {
     throw ERR_BUFFER_OUT_OF_BOUNDS("offset");
   }
+  if (length === undefined) length = buf.byteLength - offset;
   if (length < 0 || length > buf.byteLength - offset) {
     throw ERR_BUFFER_OUT_OF_BOUNDS("length");
   }
-  return asciiWriteStatic(buf, string, offset, length);
+  return asciiWriteStatic(
+    buf,
+    string,
+    Number.isNaN(offset) ? 0 : Math.trunc(offset),
+    length,
+  );
 }
 
-function latin1Write(
-  buf,
-  string,
-  offset = 0,
-  length = buf.byteLength - offset,
-) {
+function latin1Write(buf, string, offset, length) {
+  offset = offset === undefined ? 0 : Number(offset);
   if (offset < 0 || offset > buf.byteLength) {
     throw ERR_BUFFER_OUT_OF_BOUNDS("offset");
   }
+  if (length === undefined) length = buf.byteLength - offset;
   if (length < 0 || length > buf.byteLength - offset) {
     throw ERR_BUFFER_OUT_OF_BOUNDS("length");
   }
-  return latin1WriteStatic(buf, string, offset, length);
+  return latin1WriteStatic(
+    buf,
+    string,
+    Number.isNaN(offset) ? 0 : Math.trunc(offset),
+    length,
+  );
 }
 
-function utf8Write(buf, string, offset = 0, length = buf.byteLength - offset) {
+function utf8Write(buf, string, offset, length) {
+  offset = offset === undefined ? 0 : Number(offset);
   if (offset < 0 || offset > buf.byteLength) {
     throw ERR_BUFFER_OUT_OF_BOUNDS("offset");
   }
+  if (length === undefined) length = buf.byteLength - offset;
   if (length < 0 || length > buf.byteLength - offset) {
     throw ERR_BUFFER_OUT_OF_BOUNDS("length");
   }
-  return utf8WriteStatic(buf, string, offset, length);
+  return utf8WriteStatic(
+    buf,
+    string,
+    Number.isNaN(offset) ? 0 : Math.trunc(offset),
+    length,
+  );
 }
 
 // Validating adapter mirroring the C++ StringWrite binding used for the
@@ -3245,6 +3278,7 @@ function byteLength(string, encoding) {
 }
 
 Buffer.byteLength = byteLength;
+Buffer.stringLength = stringLength;
 
 // For backwards compatibility.
 Object.defineProperty(Buffer.prototype, "parent", {
@@ -3871,11 +3905,12 @@ function isUtf8(input) {
   if (isTypedArray(input) || isAnyArrayBuffer(input)) {
     return bindingIsUtf8(input);
   }
-  // A detached genuine ArrayBuffer fails the DataView probe inside
-  // isAnyArrayBuffer; Node reports ERR_INVALID_STATE for it rather than
-  // ERR_INVALID_ARG_TYPE.
+  // Node 26 treats detached buffers/views as empty: the DataView probe
+  // inside isAnyArrayBuffer fails on a detached genuine ArrayBuffer, so
+  // it is detected here and validates as true (was ERR_INVALID_STATE
+  // under the v24 behavior).
   if (isDetachedArrayBuffer(input)) {
-    throw new ERR_INVALID_STATE("Cannot validate on a detached buffer");
+    return true;
   }
 
   throw new ERR_INVALID_ARG_TYPE(
@@ -3889,8 +3924,9 @@ function isAscii(input) {
   if (isTypedArray(input) || isAnyArrayBuffer(input)) {
     return bindingIsAscii(input);
   }
+  // Node 26: detached buffers/views are treated as empty (see isUtf8).
   if (isDetachedArrayBuffer(input)) {
-    throw new ERR_INVALID_STATE("Cannot validate on a detached buffer");
+    return true;
   }
 
   throw new ERR_INVALID_ARG_TYPE(
@@ -3898,6 +3934,67 @@ function isAscii(input) {
     ["ArrayBuffer", "Buffer", "TypedArray"],
     input,
   );
+}
+
+// Node 26: every UTF-16 code unit of `input` must be <= 0xFF, i.e. `input`
+// can be losslessly encoded as 'latin1'. Exported on the module namespace
+// ONLY — `Buffer.isLatin1` stays undefined.
+function isLatin1(input) {
+  validateString(input, "input");
+  for (let i = 0; i < input.length; i++) {
+    if (input.charCodeAt(i) > 0xff) return false;
+  }
+  return true;
+}
+
+// Node 26: Buffer.stringLength(input, encoding) — the length of the string
+// `input` would decode to under `encoding`, without building it. Exists
+// ONLY as a Buffer static (assigned next to Buffer.byteLength below);
+// `require('buffer').stringLength` stays undefined.
+function stringLength(input, encoding = "utf8") {
+  if (!isTypedArray(input) && !isAnyArrayBuffer(input)) {
+    // Detached ArrayBuffers are treated as empty (byteLength 0): the
+    // DataView probe in isAnyArrayBuffer fails on them, so they are
+    // detected here instead of throwing ERR_INVALID_ARG_TYPE.
+    if (isDetachedArrayBuffer(input)) return 0;
+    throw new ERR_INVALID_ARG_TYPE(
+      "input",
+      ["ArrayBuffer", "Buffer", "TypedArray"],
+      input,
+    );
+  }
+  validateString(encoding, "encoding");
+  const ops = getEncodingOps(encoding);
+  if (ops === undefined) {
+    throw new ERR_UNKNOWN_ENCODING(encoding);
+  }
+  const length = input.byteLength;
+  switch (ops.encodingVal) {
+    case encodingsMap.utf8: {
+      if (length === 0) return 0;
+      const bytes =
+        input instanceof Uint8Array
+          ? input
+          : new Uint8Array(
+              input.buffer || input,
+              input.byteOffset || 0,
+              input.byteLength,
+            );
+      // Reuse the WHATWG decoder behind toString('utf8') so invalid
+      // sequences count exactly one U+FFFD per maximal subpart.
+      return utf8Slice(bytes, 0, bytes.length).length;
+    }
+    case encodingsMap.utf16le:
+      return Math.floor(length / 2);
+    case encodingsMap.hex:
+      return length * 2;
+    case encodingsMap.base64:
+      return Math.ceil(length / 3) * 4;
+    case encodingsMap.base64url:
+      return Math.ceil((length * 4) / 3);
+    default: // latin1, ascii
+      return length;
+  }
 }
 
 // Detects a genuine but detached ArrayBuffer/SharedArrayBuffer: the class
@@ -3979,6 +4076,7 @@ const bufferExports = {
   transcode,
   isUtf8,
   isAscii,
+  isLatin1,
 
   // Legacy
   kMaxLength,
@@ -4039,6 +4137,7 @@ export {
   transcode,
   isUtf8,
   isAscii,
+  isLatin1,
   kMaxLength,
   kStringMaxLength,
   btoa,

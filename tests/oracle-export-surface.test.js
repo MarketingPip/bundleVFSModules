@@ -72,6 +72,15 @@ const DEPRECATED_ALLOWLIST = {
   timers: ["_unrefActive", "active", "enroll", "unenroll"],
 };
 
+// Newer-Node APIs: exports that exist in a Node release NEWER than the
+// pinned CI oracle (Node v24.20.0) and are intentionally implemented ahead
+// of it. The oracle test does not flag these as problems; remove an entry
+// when the oracle's Node pin catches up to the version that added it.
+const NEWER_NODE_ALLOWLIST = {
+  // Node 26: isLatin1 is a new module-namespace export (oracle pins 24.20.0).
+  buffer: ["isLatin1"],
+};
+
 function describeValue(v) {
   if (v === null) return "null";
   if (v === undefined) return "undefined";
@@ -138,9 +147,11 @@ async function compareModule(name) {
   }
   for (const k of shimExp.keys) {
     if (!realExp.keys.includes(k) && k !== "default" && k !== "__esModule") {
-      // Skip deprecated-but-intentional extras (backward compat)
+      // Skip deprecated-but-intentional extras (backward compat) and
+      // newer-Node APIs the pinned oracle does not have yet.
       const allowlist = DEPRECATED_ALLOWLIST[name] || [];
-      if (!allowlist.includes(k)) {
+      const newer = NEWER_NODE_ALLOWLIST[name] || [];
+      if (!allowlist.includes(k) && !newer.includes(k)) {
         results.extra.push(k);
       }
     }
