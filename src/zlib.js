@@ -1421,9 +1421,11 @@ function zstdifyErrorToNode(err) {
 // dictionary was passed — 210 bytes instead of 112 for the dictionary
 // test vectors). Normalize every form Node accepts to a Uint8Array first,
 // so all four forms compress identically (the dictionary test asserts
-// equal lengths). Invalid types throw like normalizeZlibOptions does.
+// equal lengths). Invalid types throw like normalizeZlibOptions does —
+// including null: only undefined means "no dictionary" (native throws
+// ERR_INVALID_ARG_TYPE for null; test-zlib-zstd-dictionary :51).
 function normalizeZstdDictionary(dictionary) {
-  if (dictionary === undefined || dictionary === null) return null;
+  if (dictionary === undefined) return null;
   if (dictionary instanceof Uint8Array) return dictionary;
   if (isAnyArrayBuffer(dictionary)) return new Uint8Array(dictionary);
   if (isArrayBufferView(dictionary)) {
@@ -2129,7 +2131,20 @@ class MiniTransform extends MiniEmitter {
     this._destroyed = true;
     this._readableState.destroyed = true;
     this._writableState.destroyed = true;
+    // ponytail: pending write callbacks are failed, not dropped — native
+    // calls each with state.errored ?? ERR_STREAM_DESTROYED('write')
+    // (lib/internal/streams/writable.js:772). destroy() used to clear
+    // _wqueue silently, stranding e.g. the flush callback params() waits
+    // on (test-zlib-params :46). Fired on a microtask like the existing
+    // write-after-destroy path, never inline. Ceiling: a chunk already
+    // shifted off the queue into _transform keeps its old strand (its cb
+    // is skipped, not failed, when the pump microtask sees _destroyed).
+    const pending = this._wqueue;
     this._wqueue = [];
+    const cbErr = err ?? new ERR_STREAM_DESTROYED();
+    for (const item of pending) {
+      if (item.cb) queueMicrotask(() => item.cb(cbErr));
+    }
     this._wQueuedBytes = 0;
     this._needDrain = false;
     this._rbuf = [];
@@ -2686,9 +2701,14 @@ class ZlibBase extends MiniTransform {
       this._engine.setParams &&
       (this._level !== level || this._strategy !== strategy)
     ) {
-      this.flush(Z_SYNC_FLUSH, () => {
-        if (this._destroyed || !this._handle) {
-          if (callback) callback();
+      // ponytail: mirrors native paramsAfterFlushCallback
+      // (lib/zlib.js:738) — a failed/destroyed flush forwards its error
+      // instead of calling back clean. The shim used to swallow it
+      // (callback() with no error), so a destroy() between params() and
+      // the flush could never surface ERR_STREAM_DESTROYED.
+      this.flush(Z_SYNC_FLUSH, (err) => {
+        if (err || this._destroyed || !this._handle) {
+          if (callback) callback(err);
           return;
         }
         this._engine.setParams(level, strategy);
@@ -2946,7 +2966,29 @@ function normalizeBufferArgs(buffer, options, callback) {
     callback = options;
     options = undefined;
   }
-  const bytes = toBytes(buffer);
+  // ponytail: native zlibBuffer hands the raw string to stream.end(), so
+  // the Writable encodes it with options.defaultEncoding (lib/zlib.js +
+  // lib/internal/streams/writable.js:332). The shim pre-encodes here
+  // instead, so apply the same encoding — otherwise async latin1 input
+  // compresses as UTF-8 (test-zlib-zstd-pledged-src-size :156). Sync
+  // convenience methods intentionally stay UTF-8: native zlibBufferSync
+  // does Buffer.from(buffer) with no encoding. Ceiling: an unknown
+  // encoding falls back to UTF-8 here; native throws ERR_UNKNOWN_ENCODING
+  // from the Writable constructor, and stream-level write(string) still
+  // encodes UTF-8 — both need a defaultEncoding-aware MiniTransform.
+  let bytes;
+  const encoding = options?.defaultEncoding;
+  if (
+    typeof buffer === "string" &&
+    typeof encoding === "string" &&
+    typeof Buffer !== "undefined" &&
+    Buffer.isEncoding &&
+    Buffer.isEncoding(encoding)
+  ) {
+    bytes = Buffer.from(buffer, encoding);
+  } else {
+    bytes = toBytes(buffer);
+  }
   return { bytes, options, callback };
 }
 
