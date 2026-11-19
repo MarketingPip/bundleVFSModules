@@ -50,18 +50,20 @@ tree (86 files) — the triage proved it flips nothing for
 
 ## Triage correction (found in-lane)
 
-The triage's family C lists `test-inspector-connect-to-main-thread.js`
-as a failing test whose "first failure is a missing
-`ERR_INSPECTOR_NOT_WORKER` throw (test:110-116)". That is wrong: the
-vendored file is 20 lines long and calls `connectToMainThread()` only
-from a worker thread (line 17, in the `else` branch after
-`isMainThread` spawns a worker). There is no main-thread call and no
-test:110-116. The test PASSES under the shim (it is in the 30-test pass
-set, 0 on branch and base). The I-V1 `connectToMainThread()`
-`ERR_INSPECTOR_NOT_WORKER` throw is still worth implementing for oracle
-fidelity, but no vendored test asserts it — it flips 0 on its own.
+**Correction (parent-verified 2026-11-18, docs sync):** the "correction"
+above is itself WRONG and is retracted. The vendored
+`test-inspector-connect-to-main-thread.js` is ~200 lines, and the test
+FAILS [1,1] isolated on the triage base, the post-F1 base, and the
+post-V1 main — it was never in the 30-test pass set. Under V1 its
+failure moved from the validation assertion to the live-delivery
+assertions (:190 mustCall 0/1; :196 counter 0 !== 2) — progress, not
+regression. The triage's NO-FIX classification stands: the test needs
+real worker sessions + `Runtime.evaluate` results and cannot flip.
+The I-V1 `connectToMainThread()` `ERR_INSPECTOR_NOT_WORKER` throw is
+still worth implementing for oracle fidelity, but no vendored test
+asserts it — it flips 0 on its own.
 
 ## Ship
 
-- PR #___
-- Merge SHA: ___
+- PR #502
+- Merge SHA: 6b331aac

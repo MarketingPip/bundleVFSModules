@@ -1,12 +1,12 @@
 # NOTES — inspector validation lane I-V1
 
-Ship: `fix/inspector-validation-v1` → PR #___ (merge SHA ___; filled by docs sync).
+Ship: `fix/inspector-validation-v1` → PR #503 (merge SHA a39fe9d8).
 Base: main `327b0226`. Scope: `src/inspector.js` + `tests/inspector.test.js`
 (oracle-cited jest updates — see §5) + this file.
 
 ## Result
 
-**35/75** (banked 30/75 + 5 flips, 0 regressions). All 5 flips verified
+**38/75** wave total (this lane: +5 flips on its 30/75 base, 0 regressions; F1's +3 merged first, so the banked count at merge was 33/75). All 5 flips verified
 2× isolated on the branch (exit 0) and 2× on pristine main (exit 1):
 
 | Test | Flip | Oracle |
@@ -23,7 +23,7 @@ exactly the 5 flips, 0 regressions, 0 mode changes.
 CSVs: `hidden_files/fast-sweep/inspector-sweep-i-v1-branch.csv`,
 `inspector-sweep-i-v1-base.csv` (vs triage base
 `inspector-sweep-2026-11-18.csv`: toward-pass=5, regressions=0).
-Plus `test-inspector-wait.mjs` exit 0 on both sides → **35/75 total**.
+Plus `test-inspector-wait.mjs` exit 0 on both sides → **35/75 on this lane's base** (test-inspector.js still failing here; F1 flipped it separately — wave total 38/75).
 
 ## Throws implemented (each probe-proven natively first)
 
