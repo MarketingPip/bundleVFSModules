@@ -95,6 +95,9 @@ const NEWER_NODE_ALLOWLIST = {
     "websocketMask",
     "websocketUnmask",
   ],
+  // Node 26 Wave 1 lane UTIL U1-U8: debounce/throttle, isPartialDeepStrictEqual
+  // and markPromiseAsHandled are Node 26 node:util exports (oracle pins 24.20.0).
+  util: ["debounce", "isPartialDeepStrictEqual", "markPromiseAsHandled", "throttle"],
 };
 
 function describeValue(v) {
