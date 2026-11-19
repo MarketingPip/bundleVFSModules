@@ -191,6 +191,29 @@ function validateString(value, name) {
     throw invalidArgType(name, "of type string", value);
 }
 
+// ponytail: Node's validateStringWithoutNullBytes (lib/internal/validators.js,
+// Oct 2026 security fix): type check, then the NUL check — sync throw
+// ERR_INVALID_ARG_VALUE, 'must be a string without null bytes'. Message
+// rendering (control bytes \x-escaped) is the lookup path's existing pattern
+// (normalizeLookupArgs), now shared. Ceiling: this closes the NUL-validation
+// family (Node 26 L1, +2); the remaining dns gaps are STUB/UDP/PERF, none
+// reachable from validation — no further flips live here.
+function validateStringWithoutNullBytes(value, name) {
+  validateString(value, name);
+  if (value.includes("\0")) {
+    const shown = value.replace(
+      /[\0-\x1f\x7f]/g,
+      (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`,
+    );
+    throw coded(
+      new TypeError(
+        `The argument '${name}' must be a string without null bytes. Received '${shown}'`,
+      ),
+      "ERR_INVALID_ARG_VALUE",
+    );
+  }
+}
+
 function validateFunction(value, name) {
   if (typeof value !== "function")
     throw invalidArgType(name, "of type function", value);
@@ -983,18 +1006,8 @@ function normalizeLookupArgs(hostname, options, callback) {
         "and is supported in the dns module solely for compatibility.",
     );
     hostname = null;
-  } else if (hostname.includes("\0")) {
-    // Node appends the offending value with control characters \x-escaped.
-    const shown = hostname.replace(
-      /[\0-\x1f\x7f]/g,
-      (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`,
-    );
-    throw coded(
-      new TypeError(
-        `The argument 'hostname' must be a string without null bytes. Received '${shown}'`,
-      ),
-      "ERR_INVALID_ARG_VALUE",
-    );
+  } else {
+    validateStringWithoutNullBytes(hostname, "hostname");
   }
   validateFunction(callback, "callback");
   if (options == null) options = {};
@@ -1241,7 +1254,7 @@ function normalizeResolveArgs(hostname, rrtype, callback, fnName) {
     callback = rrtype;
     rrtype = "A";
   }
-  validateString(hostname, "name");
+  validateStringWithoutNullBytes(hostname, "name");
   if (rrtype === undefined) rrtype = "A";
   // Non-string rrtype (e.g. an Array) is a type error; a string that is not a
   // known type is a value error — matches Node exactly.
@@ -1264,7 +1277,7 @@ function makeResolveFn(type) {
       callback = options;
       options = {};
     }
-    validateString(hostname, "name");
+    validateStringWithoutNullBytes(hostname, "name");
     validateFunction(callback, "callback");
     const wantTtl = !!(options && typeof options === "object" && options.ttl);
     asyncTracked(defaultState, callback, async (done) => {
@@ -1340,7 +1353,8 @@ export function resolve(hostname, rrtype, callback) {
 }
 
 export function resolveAny(hostname, callback) {
-  validateString(hostname, "name");
+  // NUL check runs before the ENOTIMP answer: real Node validates first.
+  validateStringWithoutNullBytes(hostname, "name");
   validateFunction(callback, "callback");
   asyncTracked(defaultState, callback, async (done) =>
     done(dnsError("queryAny", NOTIMP, hostname)),
@@ -1349,6 +1363,10 @@ export function resolveAny(hostname, callback) {
 
 export function reverse(ip, callback) {
   validateString(ip, "ip");
+  // NUL check first, with argument name 'name' (Node's resolver('getHostByAddr')
+  // validates the name before the IP check) — a NUL IP must throw
+  // ERR_INVALID_ARG_VALUE, not the EINVAL below.
+  validateStringWithoutNullBytes(ip, "name");
   if (!isIPv4(ip) && !isIPv6(ip)) {
     // Node throws synchronously (before any callback) for non-IP input.
     throw dnsError("getHostByAddr", "EINVAL", ip);
@@ -1494,6 +1512,11 @@ export class Resolver {
     // the address is recorded only — a browser has no UDP socket to bind.
     validateString(ipv4, "ipv4");
     if (ipv6 !== undefined) validateString(ipv6, "ipv6");
+    // NUL check before the isIP check: Node validates the string first
+    // (lib/internal/dns/utils.js:182,185), so a NUL address reports the
+    // 'without null bytes' message, not 'Invalid IP address.'.
+    validateStringWithoutNullBytes(ipv4, "ipv4");
+    if (ipv6 !== undefined) validateStringWithoutNullBytes(ipv6, "ipv6");
     if (!isIPv4(ipv4) && !isIPv6(ipv4)) {
       throw Object.assign(new TypeError("Invalid IP address."), {
         code: "ERR_INVALID_ARG_VALUE",
@@ -1543,7 +1566,7 @@ export class Resolver {
       callback = options;
       options = {};
     }
-    validateString(hostname, "name");
+    validateStringWithoutNullBytes(hostname, "name");
     validateFunction(callback, "callback");
     const wantTtl =
       (type === "A" || type === "AAAA") &&
@@ -1612,7 +1635,7 @@ export class Resolver {
       callback = rrtype;
       rrtype = "A";
     }
-    validateString(hostname, "name");
+    validateStringWithoutNullBytes(hostname, "name");
     if (rrtype === undefined) rrtype = "A";
     if (typeof rrtype !== "string")
       throw invalidArgType("rrtype", "of type string", rrtype);
@@ -1647,7 +1670,8 @@ export class Resolver {
   }
 
   resolveAny(hostname, callback) {
-    validateString(hostname, "name");
+    // NUL check before the ENOTIMP answer (same trap as module-level).
+    validateStringWithoutNullBytes(hostname, "name");
     validateFunction(callback, "callback");
     asyncCallback(callback, () =>
       callback(dnsError("queryAny", NOTIMP, hostname)),
@@ -1656,6 +1680,8 @@ export class Resolver {
 
   reverse(ip, callback) {
     validateString(ip, "ip");
+    // NUL check first, argument name 'name' — see module-level reverse().
+    validateStringWithoutNullBytes(ip, "name");
     if (!isIPv4(ip) && !isIPv6(ip))
       throw dnsError("getHostByAddr", "EINVAL", ip);
     validateFunction(callback, "callback");
@@ -1691,11 +1717,21 @@ export const promises = _promisesNs;
 // extends clause never touches a cross-module binding at evaluation time.
 class PromisesResolver extends Resolver {
   _asPromise(method, ...args) {
-    return new Promise((resolvePromise, reject) => {
-      method(...args, (err, result) =>
-        err ? reject(err) : resolvePromise(result),
-      );
+    // ponytail: invoke the callback method OUTSIDE the Promise executor
+    // (same shape as src/dns/promises.js asPromise): real Node validates
+    // before creating the promise, so validation throws synchronously and
+    // only operational failures become rejections. Calling inside the
+    // executor would turn the sync NUL throw into a rejection, which
+    // test-dns-resolve-null-bytes.js rejects via assert.throws.
+    let resolvePromise, rejectPromise;
+    const promise = new Promise((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
     });
+    method(...args, (err, result) =>
+      err ? rejectPromise(err) : resolvePromise(result),
+    );
+    return promise;
   }
 
   resolve(hostname, rrtype) {
