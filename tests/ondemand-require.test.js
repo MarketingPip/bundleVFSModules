@@ -578,6 +578,12 @@ describe("structural: no new shims; template gained only __bvmRequireSync", () =
       /^parity\//, // harness, adapters, docs (incl. preload.mjs/hooks.mjs)
       /^NOTES-[^/]+\.md$/, // lane working notes at repo root
       /^docs\/capability-matrix\.json$/, // generated matrix (rule 10)
+      // One infra exception: the drift detector's CI job. The footprint rule
+      // otherwise forbids any file under .github/, so a scheduled drift job
+      // cannot exist without this line. It names the single file, not the
+      // directory — a lane touching run.yaml or any other workflow is still
+      // a stray. (Drift detector; see NOTES-drift-detector.md.)
+      /^\.github\/workflows\/drift\.yaml$/,
     ];
     const strays = nonDist.filter((f) => !ALLOWED.some((re) => re.test(f)));
     expect(strays).toEqual([]);
