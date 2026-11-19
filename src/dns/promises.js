@@ -233,6 +233,12 @@ export function reverse(ip) {
       err ? rejectPromise(err) : resolvePromise(hostnames),
     );
   } catch (e) {
+    // Only the EINVAL (non-IP literal) throw converts to a rejection —
+    // real Node rejects that case via the binding. Validation throws
+    // (ERR_INVALID_ARG_TYPE / ERR_INVALID_ARG_VALUE, e.g. the NUL check)
+    // must propagate synchronously: internal/dns/promises.js
+    // resolver('getHostByAddr') validates before createResolverPromise.
+    if (e && e.code === "ERR_INVALID_ARG_VALUE") throw e;
     if (typeof ip === "string") rejectPromise(e);
     else throw e;
   }
