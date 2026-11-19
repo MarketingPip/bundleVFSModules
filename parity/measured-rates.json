@@ -98,10 +98,10 @@
       "total": 67
     },
     "inspector": {
-      "date": "2026-10-11",
-      "passed": 29,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
-      "total": 74
+      "date": "2026-11-18",
+      "passed": 38,
+      "source": "Wave I 2026-11-18: 30 -> 38 via PR #502 (6b331aac), PR #503 (a39fe9d8); wave-end sweep confirms 38/75 on main a39fe9d8",
+      "total": 75
     },
     "module": {
       "date": "2026-11-18",
