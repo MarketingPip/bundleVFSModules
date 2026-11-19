@@ -739,6 +739,7 @@ function scanScript(code) {
   const functions = []; // { name, start, end }
   const vars = [];
   const assigned = [];
+  const lexical = []; // top-level let/const binding names (see skipLexical)
   const n = code.length;
   let i = 0;
   let braceDepth = 0;
@@ -806,7 +807,7 @@ function scanScript(code) {
         continue;
       }
       if (c === "/" && (code[j + 1] === "/" || code[j + 1] === "*")) {
-        j = skipWs(code, j);
+        j = skipWs(j);
         continue;
       }
       if (c === "/" && !op) {
@@ -881,59 +882,151 @@ function scanScript(code) {
     return j;
   }
 
-  /** Skip a let/const declarator list (we only need its extent, not its names). */
-  function skipLexical(j) {
-    let d0 = 0,
-      d1 = 0,
-      d2 = 0;
-    while (j < n) {
+  // Skip a `= <default>` (or `= <initializer>` tail) after a binding name.
+  function skipDefault(j) {
+    j = skipWs(j);
+    if (code[j] === "=") j = skipInitializer(j + 1);
+    return j;
+  }
+
+  // Parse one binding element after an object-pattern `:` (or a bare
+  // element position): a nested pattern, a rest binding, or an identifier
+  // with an optional default. Default values and computed keys are SKIPPED
+  // structurally — identifiers inside them are reads, not bindings
+  // (spike: collectPatternIds over-collects them, e.g. `let {a = foo}`).
+  function parseBindingElement(j) {
+    j = skipWs(j);
+    if (j >= n) return j;
+    const c = code[j];
+    if (c === "{" || c === "[") {
+      j = parsePattern(j);
+      return skipDefault(j);
+    }
+    if (c === "." && code.startsWith("...", j)) {
+      j = skipWs(j + 3);
+      if (isIdStartChar(code[j] || "")) {
+        const r = readId(code, j);
+        lexical.push(r.word);
+        j = r.end;
+      }
+      return j;
+    }
+    if (isIdStartChar(c)) {
+      const r = readId(code, j);
+      lexical.push(r.word);
+      j = skipWs(r.end);
+      return skipDefault(j);
+    }
+    return j;
+  }
+
+  // Parse a `{...}` / `[...]` binding pattern starting at j, collecting
+  // bound names into `lexical`. Returns the index just past the pattern.
+  function parsePattern(j) {
+    const open = code[j];
+    const close = open === "{" ? "}" : "]";
+    j++;
+    while (true) {
+      j = skipWs(j);
+      if (j >= n) break;
       const c = code[j];
-      if (c === '"' || c === "'" || c === "`") {
-        j = skipStringLex(code, j);
-        continue;
-      }
-      if (c === "/" && (code[j + 1] === "/" || code[j + 1] === "*")) {
-        j = skipCommentLex(code, j);
-        continue;
-      }
-      if (c === "(") {
-        d0++;
+      if (c === close) return j + 1;
+      if (c === ",") {
         j++;
         continue;
       }
-      if (c === ")") {
-        if (d0 === 0) break;
-        d0--;
-        j++;
+      if (c === "." && code.startsWith("...", j)) {
+        j = skipWs(j + 3);
+        if (isIdStartChar(code[j] || "")) {
+          const r = readId(code, j);
+          lexical.push(r.word);
+          j = r.end;
+        }
         continue;
       }
-      if (c === "[") {
-        d1++;
-        j++;
-        continue;
-      }
-      if (c === "]") {
-        if (d1 === 0) break;
-        d1--;
-        j++;
-        continue;
-      }
-      if (c === "{") {
-        d2++;
-        j++;
-        continue;
-      }
-      if (c === "}") {
-        if (d2 === 0) break;
-        d2--;
-        j++;
-        continue;
-      }
-      if (c === ";" && d0 === 0 && d1 === 0 && d2 === 0) {
-        j++;
+      if (open === "{") {
+        if (c === "[") {
+          // Computed key: skip the key expression, then the binding.
+          j = matchBalanced(code, j);
+          j = skipWs(j);
+          if (code[j] === ":") j = parseBindingElement(skipWs(j + 1));
+          continue;
+        }
+        if (c === '"' || c === "'") {
+          // String-literal key.
+          j = skipStringLex(code, j);
+          j = skipWs(j);
+          if (code[j] === ":") j = parseBindingElement(skipWs(j + 1));
+          continue;
+        }
+        if (c >= "0" && c <= "9") {
+          // Numeric-literal key.
+          j = skipNumberLex(code, j);
+          j = skipWs(j);
+          if (code[j] === ":") j = parseBindingElement(skipWs(j + 1));
+          continue;
+        }
+        if (isIdStartChar(c)) {
+          const r = readId(code, j);
+          const name = r.word;
+          j = skipWs(r.end);
+          if (code[j] === ":") {
+            // Property key; the binding follows the colon.
+            j = parseBindingElement(skipWs(j + 1));
+          } else {
+            // Shorthand binding, with an optional default.
+            lexical.push(name);
+            j = skipDefault(j);
+          }
+          continue;
+        }
+        if (c === "{" || c === "[") {
+          j = matchBalanced(code, j);
+          continue;
+        }
         break;
       }
-      j++;
+      // Array-pattern element.
+      if (c === "{" || c === "[") {
+        j = parsePattern(j);
+        j = skipDefault(j);
+        continue;
+      }
+      if (isIdStartChar(c)) {
+        const r = readId(code, j);
+        lexical.push(r.word);
+        j = skipWs(r.end);
+        j = skipDefault(j);
+        continue;
+      }
+      break;
+    }
+    return j;
+  }
+
+  /** Skip a let/const declarator list, collecting its bound names. */
+  function skipLexical(j) {
+    while (true) {
+      j = skipWs(j);
+      if (j >= n) break;
+      const c = code[j];
+      if (c === "{" || c === "[") {
+        j = parsePattern(j);
+      } else if (isIdStartChar(c)) {
+        const r = readId(code, j);
+        lexical.push(r.word);
+        j = r.end;
+      } else {
+        break;
+      }
+      j = skipWs(j);
+      if (code[j] === "=") j = skipInitializer(j + 1);
+      j = skipWs(j);
+      if (code[j] === ",") {
+        j++;
+        continue;
+      }
+      break;
     }
     return j;
   }
@@ -1215,7 +1308,7 @@ function scanScript(code) {
     i++;
   }
 
-  return { functions, vars, assigned };
+  return { functions, vars, assigned, lexical };
 }
 
 // ---------------------------------------------------------------------------
@@ -1605,6 +1698,33 @@ function rewriteDynamicImports(code) {
 function runWithContext(code, target, opts, dynImport) {
   const strict = isStrictPrologue(code);
   const scanned = scanScript(code);
+
+  // Restricted globals (spec GlobalDeclarationInstantiation 3.d): a
+  // top-level let/const binding over a non-configurable own property of
+  // the global must throw SyntaxError before anything runs. The shim runs
+  // code as a `new Function` body, so V8 never performs this check for us.
+  // ponytail: only let/const are covered — class declarations have no
+  // scanner support and top-level `function` capture is incomplete
+  // (`async function` at the top level is not captured), so covering them
+  // would be partial; no test covers them. Ceiling: semicolon-less
+  // consecutive declarations (`let a = 1\nlet b = 2`) are missed — the
+  // initializer skipper cannot see the ASI boundary, a pre-existing
+  // scanner limitation shared with var/assigned scanning. A throwing
+  // descriptor trap is treated as "not restricted" (fail-open, as with
+  // the scope proxy's traps elsewhere in this file).
+  for (const name of scanned.lexical) {
+    let desc = null;
+    try {
+      desc = Object.getOwnPropertyDescriptor(target, name);
+    } catch (_) {
+      desc = null;
+    }
+    if (desc !== undefined && desc !== null && desc.configurable === false) {
+      throw new SyntaxError(
+        `Identifier '${name}' has already been declared`,
+      );
+    }
+  }
 
   // Pre-declare everything the code may define at the top level so it lands
   // on the context object instead of the wrapper's function scope.
