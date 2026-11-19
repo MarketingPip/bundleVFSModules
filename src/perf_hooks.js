@@ -105,6 +105,7 @@ const kInitiatorType = Symbol("kInitiatorType");
 const kCacheMode = Symbol("kCacheMode");
 const kDeliveryType = Symbol("kDeliveryType");
 const kResponseStatus = Symbol("kResponseStatus");
+const kBodyInfo = Symbol("kBodyInfo");
 const kPending = Symbol("kPending");
 const kEntryTypes = Symbol("kEntryTypes");
 const kType = Symbol("kType");
@@ -1080,9 +1081,28 @@ class PerformanceResourceTiming extends PerformanceEntry {
     return this[kTimingInfo].finalNetworkRequestStartTime;
   }
 
+  // ponytail: Node 26 ResourceTiming attributes (L-PH4). Node's getters
+  // live in lib/internal/perf/resource_timing.js; finalResponseHeadersStart
+  // defaults to 0 when the timing info omits the field, firstInterim to 0
+  // via `?? 0`, and responseStart prefers a non-zero interim start.
+  // Ceiling: field-for-field mirror of the 26 getters; if Node adds more
+  // IDL attributes, add the getter + toJSON + inspect lines the same way.
+  get finalResponseHeadersStart() {
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
+    return this[kTimingInfo].finalNetworkResponseStartTime ?? 0;
+  }
+
+  get firstInterimResponseStart() {
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
+    return this[kTimingInfo].firstInterimNetworkResponseStartTime ?? 0;
+  }
+
   get responseStart() {
     validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
-    return this[kTimingInfo].finalNetworkResponseStartTime;
+    return (
+      this[kTimingInfo].firstInterimNetworkResponseStartTime ||
+      this[kTimingInfo].finalNetworkResponseStartTime
+    );
   }
 
   get responseEnd() {
@@ -1121,6 +1141,23 @@ class PerformanceResourceTiming extends PerformanceEntry {
     return this[kResponseStatus];
   }
 
+  get renderBlockingStatus() {
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
+    return this[kTimingInfo].renderBlocking === true
+      ? "blocking"
+      : "non-blocking";
+  }
+
+  get contentType() {
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
+    return this[kBodyInfo]?.contentType ?? "";
+  }
+
+  get contentEncoding() {
+    validateThisInternalField(this, kTimingInfo, "PerformanceResourceTiming");
+    return this[kBodyInfo]?.contentEncoding ?? "";
+  }
+
   toJSON() {
     return {
       name: this.name,
@@ -1139,6 +1176,8 @@ class PerformanceResourceTiming extends PerformanceEntry {
       connectEnd: this.connectEnd,
       secureConnectionStart: this.secureConnectionStart,
       requestStart: this.requestStart,
+      finalResponseHeadersStart: this.finalResponseHeadersStart,
+      firstInterimResponseStart: this.firstInterimResponseStart,
       responseStart: this.responseStart,
       responseEnd: this.responseEnd,
       transferSize: this.transferSize,
@@ -1146,6 +1185,9 @@ class PerformanceResourceTiming extends PerformanceEntry {
       decodedBodySize: this.decodedBodySize,
       deliveryType: this.deliveryType,
       responseStatus: this.responseStatus,
+      renderBlockingStatus: this.renderBlockingStatus,
+      contentType: this.contentType,
+      contentEncoding: this.contentEncoding,
     };
   }
 
@@ -1170,13 +1212,18 @@ class PerformanceResourceTiming extends PerformanceEntry {
       `  connectEnd: ${fmt(this.connectEnd)},\n` +
       `  secureConnectionStart: ${fmt(this.secureConnectionStart)},\n` +
       `  requestStart: ${fmt(this.requestStart)},\n` +
+      `  finalResponseHeadersStart: ${fmt(this.finalResponseHeadersStart)},\n` +
+      `  firstInterimResponseStart: ${fmt(this.firstInterimResponseStart)},\n` +
       `  responseStart: ${fmt(this.responseStart)},\n` +
       `  responseEnd: ${fmt(this.responseEnd)},\n` +
       `  transferSize: ${fmt(this.transferSize)},\n` +
       `  encodedBodySize: ${fmt(this.encodedBodySize)},\n` +
       `  decodedBodySize: ${fmt(this.decodedBodySize)},\n` +
       `  deliveryType: ${fmt(this.deliveryType)},\n` +
-      `  responseStatus: ${fmt(this.responseStatus)}\n` +
+      `  responseStatus: ${fmt(this.responseStatus)},\n` +
+      `  renderBlockingStatus: ${fmt(this.renderBlockingStatus)},\n` +
+      `  contentType: ${fmt(this.contentType)},\n` +
+      `  contentEncoding: ${fmt(this.contentEncoding)}\n` +
       `}`
     );
   }
@@ -1189,6 +1236,7 @@ function createPerformanceResourceTiming(
   timingInfo,
   deliveryType,
   responseStatus,
+  body,
 ) {
   const entry = new PerformanceResourceTiming(kSkipThrow, name, "resource");
   entry[kRequestedUrl] = `${name}`;
@@ -1197,6 +1245,7 @@ function createPerformanceResourceTiming(
   entry[kTimingInfo] = { ...timingInfo };
   entry[kDeliveryType] = deliveryType;
   entry[kResponseStatus] = responseStatus;
+  entry[kBodyInfo] = body;
   return entry;
 }
 
@@ -1617,7 +1666,14 @@ makeMethodsEnumerable(PerformanceMark, ["toJSON"]);
 setToStringTag(PerformanceMark, "PerformanceMark");
 makeMethodsEnumerable(PerformanceMeasure, ["toJSON"]);
 setToStringTag(PerformanceMeasure, "PerformanceMeasure");
-makeMethodsEnumerable(PerformanceResourceTiming, ["toJSON"]);
+makeMethodsEnumerable(PerformanceResourceTiming, [
+  "toJSON",
+  "finalResponseHeadersStart",
+  "firstInterimResponseStart",
+  "renderBlockingStatus",
+  "contentType",
+  "contentEncoding",
+]);
 setToStringTag(PerformanceResourceTiming, "PerformanceResourceTiming");
 makeMethodsEnumerable(PerformanceObserverEntryList, [
   "getEntries",
@@ -1745,6 +1801,7 @@ function markResourceTiming(
     timingInfo,
     deliveryType,
     responseStatus,
+    body,
   );
   enqueue(entry);
   bufferResourceTiming(entry);
