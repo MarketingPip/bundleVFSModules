@@ -84,15 +84,58 @@ describe("inspector shim", () => {
       expect(() => session.connect()).not.toThrow();
     });
 
-    test("connectToMainThread() does not throw", () => {
-      expect(() => session.connectToMainThread()).not.toThrow();
+    test("connectToMainThread() throws ERR_INSPECTOR_NOT_WORKER on the main thread", () => {
+      // Oracle lib/inspector.js:68-72; vendored
+      // test-inspector-connect-main-thread.js asserts this throw.
+      // Jest runs on the main thread, so this session is on the main thread.
+      expect(() => session.connectToMainThread()).toThrow(
+        expect.objectContaining({
+          code: "ERR_INSPECTOR_NOT_WORKER",
+          message: "Current thread is not a worker",
+        }),
+      );
     });
 
     test("disconnect() does not throw", () => {
       expect(() => session.disconnect()).not.toThrow();
     });
 
+    test("post() throws ERR_INSPECTOR_NOT_CONNECTED when not connected", () => {
+      // Oracle lib/inspector.js:131-133; vendored test-inspector-module.js
+      // asserts this throw.
+      expect(() =>
+        session.post("Runtime.evaluate", { expression: "2 + 2" }),
+      ).toThrow(
+        expect.objectContaining({
+          code: "ERR_INSPECTOR_NOT_CONNECTED",
+          message: "Session is not connected",
+        }),
+      );
+    });
+
+    test("connect() twice throws ERR_INSPECTOR_ALREADY_CONNECTED", () => {
+      // Oracle lib/inspector.js:60-66.
+      session.connect();
+      expect(() => session.connect()).toThrow(
+        expect.objectContaining({
+          code: "ERR_INSPECTOR_ALREADY_CONNECTED",
+          message: "The inspector session is already connected",
+        }),
+      );
+    });
+
+    test("post() validates its arguments", () => {
+      // Oracle lib/inspector.js:118-130.
+      expect(() => session.post(42)).toThrow(
+        expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }),
+      );
+      expect(() => session.post("Runtime.enable", 42)).toThrow(
+        expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }),
+      );
+    });
+
     test("post() invokes callback asynchronously with (null, {})", (done) => {
+      session.connect();
       session.post("Runtime.enable", {}, (err, result) => {
         expect(err).toBeNull();
         expect(result).toEqual({});
@@ -101,6 +144,7 @@ describe("inspector shim", () => {
     });
 
     test("post() shifts a function params slot into the callback slot", (done) => {
+      session.connect();
       session.post("Runtime.enable", (err, result) => {
         expect(err).toBeNull();
         expect(result).toEqual({});
@@ -108,12 +152,14 @@ describe("inspector shim", () => {
       });
     });
 
-    test("post() without callback does not throw", () => {
+    test("post() without callback does not throw when connected", () => {
+      session.connect();
       expect(() => session.post("Runtime.enable")).not.toThrow();
       expect(() => session.post("Runtime.enable", {})).not.toThrow();
     });
 
     test("post() callback does not fire synchronously", (done) => {
+      session.connect();
       let fired = false;
       session.post("Debugger.enable", {}, () => {
         fired = true;
@@ -123,6 +169,7 @@ describe("inspector shim", () => {
     });
 
     test("multiple post() calls each invoke their own callbacks", (done) => {
+      session.connect();
       const results = [];
       const finish = () => {
         if (results.length === 2) {
@@ -157,6 +204,14 @@ describe("inspector shim", () => {
     test("does not throw with port, host, and wait arguments", () => {
       expect(() => open(9229, "127.0.0.1", false)).not.toThrow();
     });
+
+    test("throws ERR_OUT_OF_RANGE for a port above 65535", () => {
+      // Oracle lib/inspector.js:175-178 (isUint32 -> validateInt32 0..65535);
+      // vendored test-inspector-open-port-integer-overflow.js.
+      expect(() => open(99999)).toThrow(
+        expect.objectContaining({ code: "ERR_OUT_OF_RANGE" }),
+      );
+    });
   });
 
   describe("close()", () => {
@@ -172,8 +227,16 @@ describe("inspector shim", () => {
   });
 
   describe("waitForDebugger()", () => {
-    test("does not throw", () => {
-      expect(() => waitForDebugger()).not.toThrow();
+    test("throws ERR_INSPECTOR_NOT_ACTIVE when the inspector is not active", () => {
+      // Oracle lib/inspector.js:200-207; vendored
+      // test-inspector-wait-for-connection.js asserts this throw.
+      close();
+      expect(() => waitForDebugger()).toThrow(
+        expect.objectContaining({
+          code: "ERR_INSPECTOR_NOT_ACTIVE",
+          message: "Inspector is not active",
+        }),
+      );
     });
   });
 
@@ -279,12 +342,14 @@ describe("inspector shim", () => {
 
     test("post() returns a promise resolving to {}", async () => {
       const s = new PromisesSession();
+      s.connect();
       const result = await s.post("Runtime.enable", {});
       expect(result).toEqual({});
     });
 
     test("post() works with params omitted", async () => {
       const s = new PromisesSession();
+      s.connect();
       await expect(s.post("Debugger.enable")).resolves.toEqual({});
     });
 
@@ -361,6 +426,7 @@ describe("inspector shim", () => {
 
     test("promises Session resolves {} without natives", async () => {
       const s = new fbPromises.Session();
+      s.connect();
       await expect(s.post("Debugger.enable")).resolves.toEqual({});
     });
 
