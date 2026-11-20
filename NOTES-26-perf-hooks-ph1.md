@@ -191,6 +191,11 @@ behavior, not an API gap — out of scope for this lane, no fix attempted.
   new push that retriggers CI on the branch. If CI still no-shows on
   the new head, the next unstick is close + reopen a fresh PR from the
   same branch (PR #384 precedent).
+- **Merged:** CI went green on the new head `87b84192` (Parity success,
+  build success — the push unstuck the no-show; no close/reopen needed).
+  Squash-merged as `a1d2b4d8` (PR #525, merge verified `merged: true`
+  by direct read). Branch ref deleted. Final count: **perf_hooks
+  24/31** (19 banked + 5 flips, 0 regressions).
 
 ## Verification (all green)
 
