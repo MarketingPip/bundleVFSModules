@@ -1,6 +1,6 @@
 // Parity adapter for `require('internal/fs/recursive_watch')` used by the
-// fs test test-fs-watch-recursive-delete-race.js (the only fs test importing
-// it).
+// fs recursive-watch tests (test-fs-watch-recursive-* and the recursive
+// block of test-fs-watch-enoent.js).
 //
 // The problem: Node's JS recursive FSWatcher (lib/internal/fs/recursive_watch.js)
 // is what fs.watch({ recursive: true }) uses on Linux, where libuv has no
@@ -9,15 +9,28 @@
 // its statSync on the memfs-only parent throws ENOENT at
 // [kFSWatchStart] (node:internal/fs/recursive_watch:322).
 //
-// This adapter is a faithful port of Node v24.20.0's FSWatcher class
-// (constructor validation, close, #watchFolder/#watchFile, [kFSWatchStart],
-// ref/unref, async iterator), with exactly one substitution: the fs
-// operations (statSync, readdirSync, watch) run through the shim
-// (../src/fs.js default export) instead of native fs. The fs methods are
-// read off the shared shim object AT CALL TIME — the harness wraps the
-// shim's methods in place on that object, and the test monkey-patches
-// fs.watch on it, so the port must not capture the functions at import
-// time (Node's lazyLoadFsSync() has the same call-time shape).
+// This adapter is a faithful port of Node v26.13.1's FSWatcher
+// (lib/internal/fs/recursive_watch.js — the v26 rewrite: Linux-only dir
+// watchers via kDirectoryWatchReportsEntries, #entries/#watchers/
+// #symbolicLinks sets, #watch returning false for paths that vanish before
+// the watch lands, #scanFolder watching BEFORE reading, #forget with the
+// exact-or-`file + sep` prefix, [kFSWatchStart] throwing unless
+// !throwIfNoEntry && code === 'ENOENT'), with exactly two substitutions:
+//
+// 1. The fs operations (statSync, lstatSync, readdirSync, watch) run through
+//    the shim (../src/fs.js default export) instead of native fs. The fs
+//    methods are read off the shared shim object AT CALL TIME — the harness
+//    wraps the shim's methods in place on that object, and the tests
+//    monkey-patch fs.watch / fs.readdirSync on it, so the port must not
+//    capture the functions at import time (Node's lazyLoadFsSync() has the
+//    same call-time shape).
+// 2. One memfs guard in #watch: memfs delivers watch events SYNCHRONOUSLY
+//    inside the mutating call (rmSync emits 'change' while watch() is still
+//    on the stack); libuv delivers them on a later turn, after watch() has
+//    returned. If a synchronous callback forgot the entry (or closed the
+//    watcher) while watch() was on the stack, the just-created watcher is
+//    closed instead of being registered — otherwise it leaks (registered
+//    after its entry was forgotten, never closed again).
 //
 // The validators, error classes, getValidatedPath, createIgnoreMatcher and
 // the kFSWatchStart symbol come from real Node internals (via createRequire
@@ -25,10 +38,7 @@
 // redirect does not apply to it) and from the sibling watchers adapter,
 // exactly as the net adapter does for `internal/net` (PR #425 precedent).
 //
-// Harness-only; src/ behavior is untouched. The delete-during-start race
-// the test exercises is handled by Node's own design: #watchFolder ignores
-// ENOENT when a directory vanishes between readdir and watch, so no error
-// is emitted for the deleted child.
+// Harness-only; src/ behavior is untouched.
 import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
 import path from "node:path";
@@ -36,7 +46,6 @@ import shimFs from "../src/fs.js";
 import {
   kFSWatchStart,
   createIgnoreMatcher,
-  StatWatcher,
 } from "./internal-fs-watchers-adapter.mjs";
 
 const require = createRequire(import.meta.url);
@@ -56,14 +65,61 @@ function assert(value) {
   if (!value) throw new Error("Assertion failed");
 }
 
+// The fs operations run through the shim, read off it at call time (see
+// header): the harness wraps these in place and tests monkey-patch them.
+function lazyLoadFsSync() {
+  return shimFs;
+}
+
+let kResistStopPropagation;
+
+const kIsAIX = process.platform === "aix";
+
+function isPathMissingForWatch(error, file) {
+  if (error.code === "ENOENT") {
+    return true;
+  }
+  // AIX reports ENODEV when the path disappears before fs.watch() starts.
+  // Check that it is actually gone so other ENODEV errors still propagate.
+  if (!kIsAIX || error.code !== "ENODEV") {
+    return false;
+  }
+  try {
+    return (
+      lazyLoadFsSync().statSync(file, { throwIfNoEntry: false }) === undefined
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Inotify reports changes to a directory's entries, with their names, on the
+// directory's own watch, so one watcher per directory is enough on Linux.
+// kqueue and event ports only report that the directory itself changed, so
+// elsewhere every file keeps a watcher of its own as well.
+const kDirectoryWatchReportsEntries = process.platform === "linux";
+
 class FSWatcher extends EventEmitter {
   #options = null;
   #closed = false;
-  #files = new Map();
+  // Every path below the root that has been reported (or existed at start).
+  #entries = new Set();
+  // One fs.watch() per directory and symbolic link (and per file where the
+  // directory watch does not report its entries).
   #watchers = new Map();
-  #symbolicFiles = new Set();
+  #symbolicLinks = new Set();
+  // Folders whose #scanFolder is on the stack. memfs delivers watch events
+  // synchronously inside the mutating call, so an event fired during a
+  // scan can re-enter #scanFolder for the same folder (the harness's
+  // sync-on-read resurrects a just-deleted dir from real disk while its
+  // memfs deletion is still in flight, and the re-scan re-arms the mock
+  // rmSync that deleted it — an unbounded resurrect/delete cycle).
+  // libuv never delivers an event re-entrantly, so in real Node this set
+  // is always empty when an event arrives; the guard only fires for the
+  // synchronous case, and the outer scan's own readdir still sees the
+  // post-event state, so no update is lost.
+  #scanning = new Set();
   #rootPath = path.resolve();
-  #watchingFile = false;
   #ignoreMatcher = null;
 
   constructor(options = kEmptyObject) {
@@ -119,195 +175,280 @@ class FSWatcher extends EventEmitter {
 
     this.#closed = true;
 
-    for (const file of this.#files.keys()) {
-      this.#watchers.get(file)?.close();
-      this.#watchers.delete(file);
+    for (const watcher of this.#watchers.values()) {
+      watcher.close();
     }
-
-    this.#files.clear();
-    this.#symbolicFiles.clear();
+    this.#watchers.clear();
+    this.#entries.clear();
+    this.#symbolicLinks.clear();
     this.emit("close");
   }
 
-  #unwatchFiles(file) {
-    this.#symbolicFiles.delete(file);
+  #emit(eventType, file) {
+    this.emit("change", eventType, path.relative(this.#rootPath, file));
+  }
+
+  #forget(file) {
+    const watcher = this.#watchers.get(file);
+    if (watcher !== undefined) {
+      watcher.close();
+      this.#watchers.delete(file);
+    }
+    this.#entries.delete(file);
+    this.#symbolicLinks.delete(file);
 
     const childPrefix = file + path.sep;
-    for (const filename of this.#files.keys()) {
-      if (filename === file || filename.startsWith(childPrefix)) {
-        this.#files.delete(filename);
-        this.#watchers.get(filename)?.close();
-        this.#watchers.delete(filename);
+    for (const entry of this.#entries) {
+      if (entry.startsWith(childPrefix)) {
+        this.#entries.delete(entry);
+        this.#symbolicLinks.delete(entry);
+        const childWatcher = this.#watchers.get(entry);
+        if (childWatcher !== undefined) {
+          childWatcher.close();
+          this.#watchers.delete(entry);
+        }
       }
     }
   }
 
-  #watchFolder(folder) {
-    // Read off the shim at call time: the harness wraps these in place and
-    // tests may monkey-patch them (same shape as Node's lazyLoadFsSync()).
-    const { readdirSync } = shimFs;
-
+  // Report an entry that vanished between being listed and being watched so
+  // the caller can discard its stale bookkeeping.
+  #watch(file, onChange) {
+    if (this.#closed) {
+      return false;
+    }
+    if (this.#watchers.has(file)) {
+      return true;
+    }
+    const { watch } = lazyLoadFsSync();
+    let watcher;
     try {
-      const files = readdirSync(folder, {
-        withFileTypes: true,
-      });
-
-      for (const file of files) {
-        if (this.#closed) {
-          break;
-        }
-
-        const f = path.join(folder, file.name);
-        const relativePath = path.relative(this.#rootPath, f);
-
-        // Skip watching ignored paths entirely to avoid kernel resource pressure
-        if (this.#ignoreMatcher?.(relativePath)) {
-          continue;
-        }
-
-        if (!this.#files.has(f)) {
-          this.emit("change", "rename", relativePath);
-
-          if (file.isSymbolicLink()) {
-            this.#symbolicFiles.add(f);
-          }
-
-          try {
-            this.#watchFile(f);
-            if (file.isDirectory() && !file.isSymbolicLink()) {
-              this.#watchFolder(f);
-            }
-          } catch (err) {
-            // Ignore ENOENT
-            if (err.code !== "ENOENT") {
-              throw err;
-            }
-          }
-        }
+      watcher = watch(
+        file,
+        { persistent: this.#options.persistent },
+        onChange,
+      );
+    } catch (err) {
+      if (
+        isPathMissingForWatch(err, file) &&
+        (file !== this.#rootPath || !this.#options.throwIfNoEntry)
+      ) {
+        return false;
       }
+      throw err;
+    }
+    // memfs delivers watch events synchronously inside the mutating call,
+    // so the listener may already have forgotten this entry (or closed
+    // the watcher) while watch() was still on the stack. Do not register
+    // a watcher for a forgotten entry — close it and report failure
+    // (the root is never an entry, so it is exempt: a vanished root is
+    // reported by the readdir ENOENT below, as in Node).
+    if (
+      this.#closed ||
+      (file !== this.#rootPath && !this.#entries.has(file))
+    ) {
+      watcher.close();
+      return false;
+    }
+    this.#watchers.set(file, watcher);
+    return true;
+  }
+
+  // Arms one watcher for `folder`, then registers entries that are not known
+  // yet (emitting 'rename' for them unless this is the initial scan);
+  // #addEntry() descends into subdirectories.
+  #scanFolder(folder, initial) {
+    if (this.#scanning.has(folder)) {
+      return;
+    }
+    this.#scanning.add(folder);
+    try {
+      this.#scanFolderInner(folder, initial);
+    } finally {
+      this.#scanning.delete(folder);
+    }
+  }
+
+  #scanFolderInner(folder, initial) {
+    if (
+      !this.#watch(folder, (eventType, filename) =>
+        this.#onFolderEvent(folder, filename),
+      )
+    ) {
+      this.#forget(folder);
+      return;
+    }
+
+    const { readdirSync } = lazyLoadFsSync();
+    let entries;
+    try {
+      entries = readdirSync(folder, { withFileTypes: true });
     } catch (error) {
-      if (error.code !== "ENOENT") {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") {
+        if (
+          folder === this.#rootPath &&
+          initial &&
+          (error.code !== "ENOENT" || this.#options.throwIfNoEntry)
+        ) {
+          throw error;
+        }
+        if (!initial && !this.#closed) {
+          this.#emit("rename", folder);
+        }
+        this.#forget(folder);
+      } else {
         this.emit("error", error);
       }
+      return;
+    }
+
+    for (const entry of entries) {
+      if (this.#closed) {
+        break;
+      }
+      const file = path.join(folder, entry.name);
+      if (
+        !this.#entries.has(file) &&
+        !this.#ignoreMatcher?.(path.relative(this.#rootPath, file))
+      ) {
+        this.#addEntry(file, entry, initial);
+      }
     }
   }
 
-  #watchFile(file) {
+  // `entry` is the Dirent or the lstat() Stats of `file`.
+  #addEntry(file, entry, initial) {
+    this.#entries.add(file);
+    if (!initial) {
+      this.#emit("rename", file);
+    }
+    if (entry.isSymbolicLink()) {
+      // The link target is watched so that changes behind the link surface
+      // as a 'rename' of the link, as they always have on this code path.
+      this.#symbolicLinks.add(file);
+      if (!this.#watch(file, () => this.#emit("rename", file))) {
+        this.#forget(file);
+      }
+    } else if (entry.isDirectory()) {
+      this.#scanFolder(file, initial);
+    } else if (!kDirectoryWatchReportsEntries) {
+      if (!this.#watch(file, () => this.#onEntryEvent(file))) {
+        this.#forget(file);
+      }
+    }
+  }
+
+  #onFolderEvent(folder, filename) {
     if (this.#closed) {
       return;
     }
-
-    // Read off the shim at call time (see #watchFolder): the test
-    // monkey-patches fs.watch, so a captured reference would miss it.
-    const { watch, statSync } = shimFs;
-
-    if (this.#files.has(file)) {
-      return;
-    }
-
-    {
-      const existingStat = statSync(file);
-      this.#files.set(file, existingStat);
-    }
-
-    // memfs delivers watch events SYNCHRONOUSLY inside the mutating call
-    // (rmSync emits 'change' while watch() is still on the stack); libuv
-    // delivers them on a later turn, after watch() has returned. The
-    // callback must therefore tolerate running before the watcher variable
-    // is assigned — hence the `let` cell + guard instead of Node's
-    // `const watcher = watch(...)`.
-    let watcher;
-    const onChange = () => {
-      const existingStat = this.#files.get(file);
-      let currentStats;
-
-      try {
-        currentStats = statSync(file);
-        this.#files.set(file, currentStats);
-      } catch {
-        // This happens if the file was removed
-      }
-
-      if (
-        currentStats === undefined ||
-        (currentStats.birthtimeMs === 0 && existingStat.birthtimeMs !== 0)
-      ) {
-        // The file is now deleted
-        this.#files.delete(file);
-        this.#watchers.delete(file);
-        watcher?.close();
-        this.emit("change", "rename", path.relative(this.#rootPath, file));
-        this.#unwatchFiles(file);
-      } else if (file === this.#rootPath && this.#watchingFile) {
-        // This case will only be triggered when watching a file with fs.watch
-        this.emit("change", "change", path.basename(file));
-      } else if (this.#symbolicFiles.has(file)) {
-        // Stats from watchFile does not return correct value for currentStats.isSymbolicLink()
-        // Since it is only valid when using fs.lstat(). Therefore, check the existing symbolic files.
-        this.emit("change", "rename", path.relative(this.#rootPath, file));
-      } else if (currentStats.isDirectory()) {
-        this.#watchFolder(file);
+    const { lstatSync, statSync } = lazyLoadFsSync();
+    if (!kDirectoryWatchReportsEntries || filename == null) {
+      // All that is known is that something about `folder` changed.
+      if (statSync(folder, { throwIfNoEntry: false }) === undefined) {
+        this.#emit("rename", folder);
+        this.#forget(folder);
       } else {
-        // Watching a directory will trigger a change event for child files)
-        this.emit("change", "change", path.relative(this.#rootPath, file));
+        this.#scanFolder(folder, false);
       }
-    };
-    watcher = watch(
-      file,
-      {
-        persistent: this.#options.persistent,
-      },
-      onChange,
-    );
-    if (!this.#files.has(file)) {
-      // The callback already fired synchronously (memfs delivers events
-      // inside the mutating call) and found the file gone: Node's callback
-      // closes the watcher itself, but it ran before `watcher` was
-      // assigned, so the guard above skipped the close. Close now instead
-      // of registering a watcher for a deleted file (otherwise its timer
-      // holds the event loop forever).
-      watcher.close();
       return;
     }
-    this.#watchers.set(file, watcher);
+    // Events about the watched directory itself are reported under its own
+    // name; those take the "unknown entry" path and are resolved by the parent.
+    const file = path.join(folder, filename);
+
+    if (!this.#entries.has(file)) {
+      if (this.#ignoreMatcher?.(path.relative(this.#rootPath, file))) {
+        return;
+      }
+      const entry = lstatSync(file, { throwIfNoEntry: false });
+      if (entry !== undefined) {
+        this.#addEntry(file, entry, false);
+      } else if (
+        folder === this.#rootPath &&
+        statSync(folder, { throwIfNoEntry: false }) === undefined
+      ) {
+        this.#emit("rename", folder);
+        this.#forget(folder);
+      }
+      return;
+    }
+
+    this.#onEntryEvent(file);
+  }
+
+  // Something happened to a known entry: work out what from its current state.
+  #onEntryEvent(file) {
+    if (this.#closed) {
+      return;
+    }
+    const { statSync } = lazyLoadFsSync();
+    const stats = statSync(file, { throwIfNoEntry: false });
+    if (stats === undefined) {
+      this.#emit("rename", file);
+      this.#forget(file);
+    } else if (this.#symbolicLinks.has(file)) {
+      this.#emit("rename", file);
+    } else if (stats.isDirectory()) {
+      this.#scanFolder(file, false);
+    } else {
+      this.#emit("change", file);
+    }
+  }
+
+  #watchRootFile(file) {
+    const { statSync } = lazyLoadFsSync();
+    this.#entries.add(file);
+    if (
+      !this.#watch(file, () => {
+        if (this.#closed) {
+          return;
+        }
+        if (statSync(file, { throwIfNoEntry: false }) === undefined) {
+          this.#emit("rename", file);
+          this.#forget(file);
+        } else {
+          this.emit("change", "change", path.basename(file));
+        }
+      })
+    ) {
+      this.#forget(file);
+    }
   }
 
   [kFSWatchStart](filename) {
     filename = path.resolve(getValidatedPath(filename));
 
     try {
-      const file = shimFs.statSync(filename);
+      const file = lazyLoadFsSync().statSync(filename);
 
       this.#rootPath = filename;
       this.#closed = false;
-      this.#watchingFile = file.isFile();
 
-      this.#watchFile(filename);
       if (file.isDirectory()) {
-        this.#watchFolder(filename);
+        this.#scanFolder(filename, true);
+      } else {
+        this.#watchRootFile(filename);
       }
     } catch (error) {
-      if (!this.#options.throwIfNoEntry && error.code === "ENOENT") {
+      if (this.#options.throwIfNoEntry || error.code !== "ENOENT") {
         error.filename = filename;
+        this.close();
         throw error;
       }
     }
   }
 
   ref() {
-    this.#files.forEach((file) => {
-      if (file instanceof StatWatcher) {
-        file.ref();
-      }
-    });
+    for (const watcher of this.#watchers.values()) {
+      watcher.ref();
+    }
   }
 
   unref() {
-    this.#files.forEach((file) => {
-      if (file instanceof StatWatcher) {
-        file.unref();
-      }
-    });
+    for (const watcher of this.#watchers.values()) {
+      watcher.unref();
+    }
   }
 
   [Symbol.asyncIterator]() {
@@ -328,8 +469,9 @@ class FSWatcher extends EventEmitter {
               reject(new AbortError(undefined, { cause: signal.reason }));
             };
             if (signal.aborted) return onAbort();
-            const kResistStopPropagation =
-              require("internal/event_target").kResistStopPropagation;
+            kResistStopPropagation ??= require(
+              "internal/event_target",
+            ).kResistStopPropagation;
             signal.addEventListener("abort", onAbort, {
               __proto__: null,
               once: true,

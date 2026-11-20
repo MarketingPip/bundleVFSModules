@@ -39,12 +39,15 @@ import {
   S_IFREG,
   Stats,
   stringToFlags,
+  UV_DIRENT_DIR,
+  UV_DIRENT_LINK,
   UV_DIRENT_UNKNOWN,
   validateInteger,
   validateOffsetLengthRead,
   validateOffsetLengthWrite,
 } from "./internals/fs-utils.js";
 import { fsBindingState } from "./internals/fs-binding-state.js";
+import { AsyncResource } from "./async_hooks.js";
 
 // Browser-safe nextTick (process.nextTick under Node, queueMicrotask otherwise).
 function nextTick(fn, ...args) {
@@ -1165,6 +1168,11 @@ function posixNormalize(p) {
   if (r === "") return abs ? "/" : ".";
   return r;
 }
+// Join posix path segments (path.join semantics: trailing separators
+// collapse, so join('tree/', 'a') === 'tree/a').
+function posixJoin(a, b) {
+  return posixNormalize(a + "/" + b);
+}
 
 // ── 4. Volume creation + seeding ────────────────────────────────────────────
 function getUmask() {
@@ -1225,6 +1233,90 @@ function seedVolume(vol, files) {
 
 function createVolume() {
   const vol = new Volume();
+  // ponytail: memfs Link.getChild stamps the PARENT dir's mtime on EVERY
+  // path traversal (memfs node.js: `Link.prototype.getChild` sets
+  // `this.getNode().mtime = new Date()` before the lookup), so stat/read/
+  // readdir of a child re-stamps every ancestor dir to "now". Real fs only
+  // bumps a dir's mtime when an entry is added/removed/renamed (memfs
+  // setChild/deleteChild already do that). The traversal bump makes
+  // directory mtimes unobservable: a cp --preserve-timestamps dir test
+  // fails by 1 ms because the test's own statSync calls re-stamp both
+  // dirs at different milliseconds (probed: statSync(child) bumps the
+  // parent; utimesSync itself sticks). Neutralize the one line on the
+  // shared Link prototype (all volumes share the class); the lookup itself
+  // is unchanged. Ceiling: if a future memfs stops stamping in getChild,
+  // this override is a no-op duplicate of the lookup and can be deleted —
+  // re-probe with `statSync(child)` vs parent mtime after any memfs bump.
+  if (!createVolume._getChildPatched) {
+    createVolume._getChildPatched = true;
+    // Symlink-resolution accounting for the ELOOP cap (below): one
+    // getResolvedLink call may traverse at most 40 symlinks (the kernel's
+    // MAXSYMLINKS/SYMLOOP_MAX); getChild counts the symlink nodes it
+    // returns while a resolution is in progress.
+    let resolveDepth = 0;
+    let symlinkExpansions = 0;
+    let resolvePath = "";
+    try {
+      const rootLink = vol.getLink([]);
+      const linkProto = Object.getPrototypeOf(rootLink);
+      linkProto.getChild = function (name) {
+        if (Object.hasOwnProperty.call(this.children, name)) {
+          const child = this.children[name];
+          if (resolveDepth > 0) {
+            let node = null;
+            try {
+              node = child.getNode();
+            } catch {
+              /* not a node — cannot be a symlink */
+            }
+            if (node && node.isSymlink && node.isSymlink()) {
+              if (++symlinkExpansions > 40) {
+                const loop = new Error(
+                  `ELOOP: too many symbolic links encountered, stat '${resolvePath}'`,
+                );
+                loop.code = "ELOOP";
+                loop.path = resolvePath;
+                throw loop;
+              }
+            }
+          }
+          return child;
+        }
+        return undefined;
+      };
+      // memfs getResolvedLink follows symlinks with NO traversal cap, so a
+      // cycle hangs (infinite loop) or, where the caller builds growing
+      // paths, recurses until the stack overflows — instead of ELOOP
+      // (probed: statSync on a self-referential dir loop never throws;
+      // cpSync with dereference:true RangeErrors). Real kernels cap one
+      // resolution at 40 symlink traversals and return ELOOP. The wrapper
+      // only scopes the counter — the counting happens in getChild above,
+      // which the resolver calls for every step. Ceiling: if memfs ever
+      // caps its own resolver, delete the wrapper and the counter;
+      // re-probe after any memfs bump.
+      const volProto = Object.getPrototypeOf(vol);
+      const origGetResolvedLink = volProto.getResolvedLink;
+      volProto.getResolvedLink = function (filenameOrSteps) {
+        const prevExpansions = symlinkExpansions;
+        const prevPath = resolvePath;
+        resolveDepth++;
+        symlinkExpansions = 0;
+        resolvePath =
+          typeof filenameOrSteps === "string"
+            ? filenameOrSteps
+            : "/" + filenameOrSteps.join("/");
+        try {
+          return origGetResolvedLink.call(this, filenameOrSteps);
+        } finally {
+          resolveDepth--;
+          symlinkExpansions = prevExpansions;
+          resolvePath = prevPath;
+        }
+      };
+    } catch {
+      /* best-effort: without the patch only dir-mtime asserts suffer */
+    }
+  }
   // Real Node returns 0 for reads positioned at/beyond EOF; memfs throws
   // ERR_OUT_OF_RANGE. Short-circuit here (no cursor is touched, so this is
   // safe at the volume level for every read path).
@@ -1688,12 +1780,27 @@ function buildApi(vol) {
       validatePath(p);
       const throwIfNoEntry = !options || options.throwIfNoEntry !== false;
       let m;
+      let recovered = false;
       try {
         m = orig.call(this, toPathString(p), options);
       } catch (e) {
-        // throwIfNoEntry:false returns undefined on ENOENT (test-fs-stat).
-        if (!throwIfNoEntry && e && e.code === "ENOENT") return undefined;
-        throw enrichErr(e, name);
+        // F14: memfs lstatSync cannot traverse a symlinked dir component
+        // (ENOENT for a path that exists); retry through the physical
+        // parent before giving up. Only the ENOENT case is retried, and a
+        // failed retry keeps the original error.
+        if (name === "lstatSync" && e && e.code === "ENOENT") {
+          try {
+            m = lstatSyncPhys(toPathString(p));
+            recovered = true;
+          } catch {
+            /* keep the original error below */
+          }
+        }
+        if (!recovered) {
+          // throwIfNoEntry:false returns undefined on ENOENT (test-fs-stat).
+          if (!throwIfNoEntry && e && e.code === "ENOENT") return undefined;
+          throw enrichErr(e, name);
+        }
       }
       const st = m === undefined ? undefined : toStats(m, options);
       emitFs("fs", name, p, st);
@@ -1741,7 +1848,10 @@ function buildApi(vol) {
   }
   {
     const orig = fs.fstat;
-    fs.fstat = function (fd, options, callback) {
+    // F10: fstat was the one stat-family member NOT wrapped in
+    // withAbortSignal, so an in-flight abort never fired (Node validates
+    // the signal and binds it to the req in lib/fs.js fstat).
+    fs.fstat = withAbortSignal(function (fd, options, callback) {
       if (typeof options === "function") {
         callback = options;
         options = undefined;
@@ -1761,7 +1871,7 @@ function buildApi(vol) {
         emitFs("fs", "fstat", fd, st);
         callback(null, st);
       });
-    };
+    }, 1);
   }
 
   // ── readFile/writeFile/appendFile: AbortSignal + fd-position fidelity ──
@@ -2117,7 +2227,9 @@ function buildApi(vol) {
           const types = names.map((n) => {
             let mode = 0;
             try {
-              mode = vol.lstatSync(path + "/" + n).mode;
+              // lstatSyncPhys: a plain lstat cannot see through a
+              // symlinked parent dir (F14).
+              mode = lstatSyncPhys(path + "/" + n).mode;
             } catch {
               /* unresolvable → UV_DIRENT_UNKNOWN; the caller re-stats */
             }
@@ -2342,42 +2454,136 @@ function buildApi(vol) {
     };
   }
 
+  // ponytail: memfs lstatSync walks the raw link tree (getLink), so it
+  // cannot traverse a symlinked directory component — lstatSync('d/link/a')
+  // throws ENOENT while statSync and readdirSync (getResolvedLink) work.
+  // Real Node's lstat resolves every component except the last. Resolve
+  // the parent to its physical path first, then lstat the final name
+  // there; fall back to the plain call so genuinely-missing paths keep
+  // their original error. (F14: the recursive test's reference walk reads
+  // dirents under symlinked dirs, so every lstat under a link must see
+  // the real type.)
+  function lstatSyncPhys(p) {
+    const idx = p.lastIndexOf("/");
+    if (idx <= 0) return vol.lstatSync(p);
+    const parent = p.slice(0, idx);
+    const base = p.slice(idx + 1);
+    if (!base || base === "." || base === "..") return vol.lstatSync(p);
+    let phys;
+    try {
+      phys = vol.realpathSync(parent);
+    } catch {
+      return vol.lstatSync(p);
+    }
+    if (phys === parent) return vol.lstatSync(p);
+    return vol.lstatSync(phys + "/" + base);
+  }
+  // Join a display path (string, or Buffer for Buffer roots / buffer
+  // encoding) with one entry name — Node's joinParentPath
+  // (lib/internal/fs/utils.js): string+string joins lexically, anything
+  // else concatenates Buffers with a separator.
+  function joinDisplayPath(base, name) {
+    if (typeof base === "string" && typeof name === "string") {
+      return posixJoin(base, name);
+    }
+    const baseBuf =
+      typeof base === "string" ? Buffer.from(base) : base;
+    const nameBuf =
+      typeof name === "string" ? Buffer.from(name) : name;
+    return Buffer.concat([baseBuf, Buffer.from("/"), nameBuf]);
+  }
+  // Join a relative prefix with one entry name (string, or Buffer when
+  // the encoding is 'buffer'); "" prefix yields the name itself.
+  function joinRelative(prefix, name) {
+    if (prefix === "" || prefix === undefined) return name;
+    if (typeof prefix === "string" && typeof name === "string") {
+      return prefix + "/" + name;
+    }
+    const prefixBuf =
+      typeof prefix === "string" ? Buffer.from(prefix) : prefix;
+    const nameBuf = typeof name === "string" ? Buffer.from(name) : name;
+    return Buffer.concat([prefixBuf, Buffer.from("/"), nameBuf]);
+  }
   // ── readdir/readdirSync: Dirent shape + recursive ──
   function readdirImpl(p, options, wantDirent) {
+    // Snapshot: the test mutates the options object after the callback-form
+    // call; the walk must see the options as passed.
+    const opts =
+      options && typeof options === "object" ? { ...options } : options;
     const enc =
-      typeof options === "string"
-        ? options
-        : options !== null && typeof options === "object"
-          ? options.encoding
+      typeof opts === "string"
+        ? opts
+        : opts !== null && typeof opts === "object"
+          ? opts.encoding
           : undefined;
-    const names = vol.readdirSync(p);
-    if (options && options.recursive) {
-      const out = [];
-      const walk = (dir, rel) => {
-        for (const name of vol.readdirSync(dir)) {
-          const full = dir + "/" + name;
-          const disp = decodeFsName(name, enc);
-          const rp = rel ? rel + "/" + disp : disp;
-          let st;
-          try {
-            st = vol.lstatSync(full);
-          } catch {
-            continue;
+    const ps = toPathString(p);
+    if (opts && opts.recursive) {
+      // Node 26 (lib/fs.js readdirSyncRecursive, permission-model JS
+      // fallback; lib/internal/fs/utils.js collectRecursiveReaddirResult):
+      // breadth-first over [dirs, prefixes]; each dir is read with the
+      // binding (types included); dir symlinks are followed via a
+      // following stat, dangling links are listed but not queued.
+      // The root keeps the path as given (a Buffer root keeps its exact
+      // Buffer object as parentPath); dirs below it are joined onto it.
+      const displayRoot =
+        typeof p === "string" || isUint8ArrayLike(p) ? p : ps;
+      const results = [];
+      const dirs = [displayRoot];
+      const prefixes = [""];
+      for (let i = 0; i < dirs.length; i++) {
+        const dir = dirs[i];
+        const prefix = prefixes[i];
+        const dirStr = typeof dir === "string" ? dir : toPathString(dir);
+        const [names, types] = fsBindingState.readdir(dirStr, enc, true);
+        for (let j = 0; j < names.length; j++) {
+          const name = names[j];
+          const relative = joinRelative(prefix, name);
+          let type = types[j];
+          if (type === UV_DIRENT_UNKNOWN) {
+            // The binding could not lstat this entry (it sits under a
+            // symlinked dir); re-stat through the physical parent.
+            try {
+              type = modeToDirentType(
+                lstatSyncPhys(dirStr + "/" + toPathString(name)).mode,
+              );
+            } catch {
+              /* unresolvable stays UNKNOWN */
+            }
           }
-          if (wantDirent)
-            out.push(new Dirent(disp, modeToDirentType(st.mode), dir));
-          else out.push(rp);
-          if (st.isDirectory()) walk(full, rp);
+          if (wantDirent) {
+            results.push(new Dirent(name, type, dir));
+          } else {
+            results.push(relative);
+          }
+          // Queue subdirectories: a real dir, or a symlink to one
+          // (following stat); dangling links and files are not queued.
+          let isDir = type === UV_DIRENT_DIR;
+          if (
+            !isDir &&
+            (type === UV_DIRENT_LINK || type === UV_DIRENT_UNKNOWN)
+          ) {
+            try {
+              isDir = vol
+                .statSync(dirStr + "/" + toPathString(name))
+                .isDirectory();
+            } catch {
+              isDir = false;
+            }
+          }
+          if (isDir) {
+            dirs.push(joinDisplayPath(dir, name));
+            prefixes.push(relative);
+          }
         }
-      };
-      walk(p, "");
-      return out;
+      }
+      return results;
     }
+    const names = vol.readdirSync(ps);
     if (wantDirent) {
       return names.map((name) => {
         let mode = 0;
         try {
-          mode = vol.lstatSync(p + "/" + name).mode;
+          mode = lstatSyncPhys(ps + "/" + name).mode;
         } catch {
           /* ignore */
         }
@@ -2400,7 +2606,9 @@ function buildApi(vol) {
       }
       let mode = 0;
       try {
-        mode = vol.lstatSync(path + "/" + name).mode;
+        // lstatSyncPhys: the binding's lstat cannot see through a
+        // symlinked parent dir (F14).
+        mode = lstatSyncPhys(path + "/" + name).mode;
       } catch {
         /* unresolvable stays UNKNOWN */
       }
@@ -2417,8 +2625,9 @@ function buildApi(vol) {
         if (options && options.recursive) {
           // Recursive stays vol-based (readdirImpl walk); Node recurses
           // through binding.readdir per directory, which no vendored
-          // test patches.
-          result = readdirImpl(ps, options, !!options.withFileTypes);
+          // test patches. Pass the path as given: a Buffer root keeps
+          // its exact Buffer object as parentPath (F14).
+          result = readdirImpl(p, options, !!options.withFileTypes);
         } else {
           // options may be a bare encoding string ("hex", "buffer", …);
           // options?.encoding would miss it (test-fs-buffer.js).
@@ -2456,7 +2665,8 @@ function buildApi(vol) {
       };
       if (options && options.recursive) {
         try {
-          done(null, readdirImpl(ps, options, !!options.withFileTypes));
+          // Pass the path as given (see readdirSync above).
+          done(null, readdirImpl(p, options, !!options.withFileTypes));
         } catch (e) {
           done(e);
         }
@@ -4375,36 +4585,62 @@ function buildApi(vol) {
     }
     cpSymlinkStore(resolvedSrc, d);
   }
-  function cpOnDir(s, d, srcStat, destStat, opts, isAsync) {
+  // mkdir for a new dest dir: an EEXIST here (async race — the dest
+  // appeared after the check) must surface with syscall 'mkdir'
+  // (enrichErr would otherwise rewrite it to the cp boundary's 'lstat').
+  function cpMkdirDir(d) {
+    try {
+      vol.mkdirSync(d);
+    } catch (e) {
+      if (e && e.code === "EEXIST") e._syscallOverride = "mkdir";
+      throw e;
+    }
+  }
+  function cpOnDir(s, d, srcStat, destStat, opts, isAsync, derefDepth = 0) {
     const useJsPath = isAsync || !!opts.filter;
-    const doChmod = () => {
-      try {
-        vol.chmodSync(d, srcStat.mode);
-      } catch {}
+    // Node's mkDirAndCopy/copyDir finally: a NEW dir takes the src mode;
+    // dir timestamps are set (when preserveTimestamps) AFTER the copy and
+    // AFTER the chmod — memfs chmod touches mtime, so times go last
+    // (cpHandleTimestamps already orders it that way for files).
+    const finishNewDir = () => {
+      if (opts.preserveTimestamps) cpHandleTimestamps(srcStat.mode, s, d);
+      else {
+        try {
+          vol.chmodSync(d, srcStat.mode);
+        } catch {}
+      }
+    };
+    const finishExistingDir = () => {
+      // An existing dest dir keeps its own mode (F2); only its times are
+      // refreshed when preserveTimestamps (Node copyDir finally).
+      if (opts.preserveTimestamps) cpSetTimesExact(d, s);
     };
     if (!destStat) {
       if (useJsPath) {
         // async mkDirAndCopy / sync-with-filter copyDir(mkDir): mkdir,
         // copy, then chmod the new dir to the src mode.
-        vol.mkdirSync(d);
-        if (isAsync) return cpCopyDir(s, d, opts, isAsync).then(doChmod);
+        cpMkdirDir(d);
+        if (isAsync) return cpCopyDir(s, d, opts, isAsync).then(finishNewDir);
         cpCopyDir(s, d, opts, isAsync);
-        doChmod();
+        finishNewDir();
         return;
       }
-      // sync fast path (C++ CpSyncCopyDir): no chmod of the new dir.
-      cpCopyDirFast(s, d, opts);
+      // sync fast path (C++ CpSyncCopyDir): creates dest with the src
+      // mode and preserves dir times (post-order, in cpCopyDirFast).
+      cpCopyDirFast(s, d, opts, false, derefDepth);
       return;
     }
-    if (isAsync && opts.errorOnExist && !opts.force) {
+    if (opts.errorOnExist && !opts.force) {
       throw cpErr("ERR_FS_CP_EEXIST", d, `${d} already exists`, 17);
     }
     if (useJsPath) {
-      if (isAsync) return cpCopyDir(s, d, opts, isAsync);
+      if (isAsync)
+        return cpCopyDir(s, d, opts, isAsync).then(finishExistingDir);
       cpCopyDir(s, d, opts, isAsync);
+      finishExistingDir();
       return;
     }
-    cpCopyDirFast(s, d, opts);
+    cpCopyDirFast(s, d, opts, false, derefDepth);
   }
   function cpCopyDir(s, d, opts, isAsync) {
     if (isAsync) return cpCopyDirAsync(s, d, opts);
@@ -4470,9 +4706,17 @@ function buildApi(vol) {
     }
     return cur;
   }
-  function cpGetStatsForCopy(s, d, srcStat, destStat, opts, isAsync) {
+  function cpGetStatsForCopy(
+    s,
+    d,
+    srcStat,
+    destStat,
+    opts,
+    isAsync,
+    derefDepth = 0,
+  ) {
     if (srcStat.isDirectory() && opts.recursive) {
-      return cpOnDir(s, d, srcStat, destStat, opts, isAsync);
+      return cpOnDir(s, d, srcStat, destStat, opts, isAsync, derefDepth);
     }
     if (srcStat.isDirectory()) {
       throw cpErr(
@@ -4511,12 +4755,57 @@ function buildApi(vol) {
     );
   }
   // Sync fast path (C++ CpSyncCopyDir) for filter-less dir copies.
-  function cpCopyDirFast(s, d, opts) {
+  // derefDepth counts dereferenced symlinks on the current chain (0 at the
+  // top): the fast path resolves symlinked dirs to their physical path
+  // (cpDirPhys — memfs lstat cannot traverse a link component), so a cycle
+  // would otherwise recurse forever on the same physical dir while the
+  // dest path grows. Real kernels stop the equivalent walk at 40 symlink
+  // traversals (MAXSYMLINKS); cap the chain the same way (F3 loop case).
+  function cpCopyDirFast(
+    s,
+    d,
+    opts,
+    createdByParent = false,
+    derefDepth = 0,
+  ) {
     const sp = cpDirPhys(s, opts);
-    try {
-      vol.mkdirSync(d, { recursive: true });
-    } catch (e) {
-      if (!e || e.code !== "EEXIST") throw e;
+    let created = createdByParent;
+    if (!created) {
+      let destStat = null;
+      try {
+        destStat = vol.lstatSync(d);
+      } catch (e) {
+        if (e && e.code === "ENOENT") created = true;
+        else throw e;
+      }
+      if (destStat && !destStat.isDirectory() && !destStat.isSymbolicLink()) {
+        // A non-directory occupying a dir dest fails the copy (Node
+        // ERR_FS_CP_DIR_TO_NON_DIR); a symlink (to a dir or dangling)
+        // falls through to the mkdir/merge below, as before.
+        throw cpErr(
+          "ERR_FS_CP_DIR_TO_NON_DIR",
+          d,
+          `cannot overwrite non-directory ${d} with directory ${s}`,
+          21,
+        );
+      }
+      // mkdir only when the dest does not already exist as a directory
+      // (directly, or through a symlink): memfs mkdirSync(recursive) on
+      // an existing symlink-to-dir throws ENOTDIR instead of EEXIST, so
+      // copying through a dest link (F3) must not call it at all.
+      let destIsDir = !!destStat && destStat.isDirectory();
+      if (destStat && !destIsDir) {
+        try {
+          destIsDir = vol.statSync(d).isDirectory();
+        } catch {}
+      }
+      if (!destIsDir) {
+        try {
+          vol.mkdirSync(d, { recursive: true });
+        } catch (e) {
+          if (!e || e.code !== "EEXIST") throw e;
+        }
+      }
     }
     const names = vol.readdirSync(sp);
     for (const name of names) {
@@ -4524,22 +4813,73 @@ function buildApi(vol) {
       const di = d + "/" + name;
       const lst = vol.lstatSync(spi);
       if (lst.isSymbolicLink()) {
+        if (opts.dereference) {
+          // Dereferenced child: copy the target's content, not the link
+          // (F3). Stat the target FIRST so a dangling target (ENOENT) or
+          // a cycle (ELOOP) propagates before the dest is touched, like
+          // the JS walk's getStatsForCopy.
+          const targetStat = vol.statSync(spi);
+          let childDestStat = null;
+          try {
+            childDestStat = vol.lstatSync(di);
+          } catch (e) {
+            if (!e || e.code !== "ENOENT") throw e;
+          }
+          if (
+            childDestStat &&
+            childDestStat.isDirectory() &&
+            !targetStat.isDirectory() &&
+            opts.force
+          ) {
+            // A directory occupying the dest of a dereferenced FILE is
+            // replaced under force (Node CpSyncCopyDir); unlink cannot
+            // remove a dir, so remove it first — cpOnFile's unlink then
+            // no-ops on the missing path.
+            try {
+              vol.rmSync(di, { recursive: true, force: true });
+            } catch {}
+            childDestStat = null;
+          }
+          // Cycle guard (see cpCopyDirFast header): the 41st dereferenced
+          // link on one chain is ELOOP, like the kernel's MAXSYMLINKS.
+          if (derefDepth + 1 > 40) {
+            const loop = new Error(
+              `ELOOP: too many symbolic links encountered, stat '${spi}'`,
+            );
+            loop.code = "ELOOP";
+            loop.path = spi;
+            throw loop;
+          }
+          cpDispatch(spi, di, childDestStat, opts, false, derefDepth + 1);
+          continue;
+        }
         let childIsDir = false;
         try {
           childIsDir = vol.statSync(spi).isDirectory();
         } catch {}
         cpFastLink(spi, di, opts, childIsDir);
       } else if (lst.isDirectory()) {
+        let childCreated = false;
         try {
           vol.mkdirSync(di);
+          childCreated = true;
         } catch (e) {
           if (!e || e.code !== "EEXIST") throw e;
         }
-        cpCopyDirFast(spi, di, opts);
+        cpCopyDirFast(spi, di, opts, childCreated, derefDepth);
       } else {
         cpFastFile(spi, di, opts);
       }
     }
+    // Post-order (Node copyDir finally): a newly created dir takes the src
+    // mode — an existing dest keeps its own (F2); dir times are refreshed
+    // whenever preserveTimestamps, new or existing (F1).
+    if (created) {
+      try {
+        vol.chmodSync(d, vol.statSync(sp).mode);
+      } catch {}
+    }
+    if (opts.preserveTimestamps) cpSetTimesExact(d, sp);
   }
   function cpFastFile(s, d, opts) {
     cpThrowIfFicloneForce(s, d, opts);
@@ -4656,11 +4996,19 @@ function buildApi(vol) {
       22,
     );
   }
-  function cpDispatch(s, d, destStat, opts, isAsync) {
+  function cpDispatch(s, d, destStat, opts, isAsync, derefDepth = 0) {
     const statFn = opts.dereference
       ? (p) => vol.statSync(p)
       : (p) => vol.lstatSync(p);
-    return cpGetStatsForCopy(s, d, statFn(s), destStat, opts, isAsync);
+    return cpGetStatsForCopy(
+      s,
+      d,
+      statFn(s),
+      destStat,
+      opts,
+      isAsync,
+      derefDepth,
+    );
   }
   function cpSyncTop(s, d, opts) {
     if (opts.filter && !cpFilterCheckSync(opts.filter, s, d)) return;
@@ -4690,7 +5038,24 @@ function buildApi(vol) {
     const { srcStat, destStat } = cpCheckPaths(s, d, opts, true);
     cpCheckParentPaths(s, d, srcStat, true);
     cpMkdirParent(d);
-    await cpDispatch(s, d, destStat, opts, true);
+    // F5: the dest is re-checked only at copy time in real Node, where
+    // each async step is an FSReqCallback — a dest that appears after the
+    // check fails the copy with EEXIST (mkdir). The shim's async cp is
+    // sync memfs work inside a nextTick, so no libuv request ever exists
+    // for an async_hooks FSREQCALLBACK init hook to observe. Run the
+    // dispatch inside a real FSREQCALLBACK AsyncResource (native under
+    // Node via the async_hooks shim, stub in the browser) so the race is
+    // observable at the same point: after the check, before the mkdir.
+    // Ceiling: other async fs ops still run under TickObject; a fuller
+    // port would wrap each async op in its own FSREQCALLBACK resource.
+    const resource = new AsyncResource("FSREQCALLBACK");
+    try {
+      await resource.runInAsyncScope(() =>
+        cpDispatch(s, d, destStat, opts, true),
+      );
+    } finally {
+      resource.emitDestroy();
+    }
   }
   fs.cpSync = function (src, dest, options) {
     const opts = validateCpOptions(options);
@@ -8315,7 +8680,14 @@ function buildApi(vol) {
       this[kFd] = v;
     }
     async stat(options) {
+      // F10: FileHandle.stat ignored options.signal entirely; Node routes
+      // it through fsCall(fstat) which validates the signal and binds it
+      // to the request. The sync work below runs after the nextTick in
+      // withAbortSignal-equivalent flow, so throwIfAborted (one macrotask
+      // yield, then re-check) is enough to observe an in-flight abort.
+      validateAbortSignal(options?.signal);
       try {
+        await throwIfAborted(options?.signal);
         const m = vol.fstatSync(this.fd);
         const st = toStats(m, options);
         emitFs("fs", "promises.stat", this.fd, st);
@@ -8707,14 +9079,28 @@ function buildApi(vol) {
 
       const handle = this;
       const fd = this.fd;
-      this._iterLocked = true;
+      // F11: Node 26 acquires the handle lock only when iteration STARTS
+      // (lockForIteration in the async generator), not at pull() creation —
+      // a second pull() created before the first is iterated must not
+      // throw (testPullLocking). The creation-time check (_checkIterUsable
+      // above) stays: a pull() created while another iterator is RUNNING
+      // still throws. The first next() re-checks closed/locked (the handle
+      // may have closed after creation — testPullAfterCloseRejectsOnIter-
+      // ation) and only THIS iterator's finally releases the lock it
+      // acquired, so a failed second iterator never unlocks the first.
+      let locked = false;
 
       const source = {
         async *[Symbol.asyncIterator]() {
+          if (handle[kFd] === -1)
+            throw errInvalidState("The FileHandle is closed");
+          if (handle._iterLocked)
+            throw errInvalidState("The FileHandle is locked");
+          handle._iterLocked = true;
+          locked = true;
           try {
             while (remaining !== 0) {
-              if (signal?.aborted)
-                throw signal.reason ?? makeAbortError(signal);
+              if (signal?.aborted) throw signal.reason;
               const toRead =
                 remaining > 0 ? Math.min(readSize, remaining) : readSize;
               const chunk = handle._iterRead(fd, toRead, pos);
@@ -8724,8 +9110,10 @@ function buildApi(vol) {
               yield [chunk];
             }
           } finally {
-            handle._iterLocked = false;
-            if (autoClose) await handle.close();
+            if (locked) {
+              handle._iterLocked = false;
+              if (autoClose) await handle.close();
+            }
           }
         },
       };
@@ -8748,9 +9136,14 @@ function buildApi(vol) {
 
       const handle = this;
       const fd = this.fd;
-      this._iterLocked = true;
+      // F11: like pull(), the lock is acquired on the FIRST next(), not at
+      // creation (Node 26 pullSync defers the lock the same way); cleanup
+      // only releases a lock this iterator acquired.
+      let locked = false;
 
       function cleanup() {
+        if (!locked) return;
+        locked = false;
         handle._iterLocked = false;
         if (autoClose) handle._closeSync();
       }
@@ -8766,6 +9159,12 @@ function buildApi(vol) {
                 }
                 return { value: undefined, done: true };
               }
+              if (handle[kFd] === -1)
+                throw errInvalidState("The FileHandle is closed");
+              if (handle._iterLocked)
+                throw errInvalidState("The FileHandle is locked");
+              handle._iterLocked = true;
+              locked = true;
               const toRead =
                 remaining > 0 ? Math.min(readSize, remaining) : readSize;
               let chunk;
