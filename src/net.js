@@ -934,7 +934,7 @@ BlockList.prototype._parseIPInfo = function _parseIPInfo(data) {
 // ---------------------------------------------------------------------------
 
 let defaultAutoSelectFamily = true;
-let defaultAutoSelectFamilyAttemptTimeout = 250;
+let defaultAutoSelectFamilyAttemptTimeout = 500; // Node 26: option default raised 250 → 500 (lib/net.js:160; node_options.cc:730).
 
 // Node CLI flags --network-family-autoselection /
 // --no-network-family-autoselection and
@@ -1446,6 +1446,15 @@ function Socket(options = {}) {
 }
 Object.setPrototypeOf(Socket.prototype, Duplex.prototype);
 Socket.prototype.constructor = Socket;
+
+// Refresh existing timeouts — port of Node 26 lib/net.js:800-807
+// (regression test for nodejs/node#64490). `_parent` may be null; the loose
+// `!= null` check covers external code setting it to `undefined`.
+Socket.prototype._unrefTimer = function _unrefTimer() {
+  for (let s = this; s != null; s = s._parent) {
+    if (s[kTimeout]) s[kTimeout].refresh();
+  }
+};
 // Virtual transport: _handle is a VirtualHandle while connected, null after
 // destroy (mirrors Node where _handle is a TCPWrap while connected, null
 // after close). Tests assert `socket._handle === null` for closed sockets
