@@ -94,6 +94,7 @@ const kHandle = Symbol("kHandle");
 const kMap = Symbol("kMap");
 const kEnabled = Symbol("kEnabled");
 const kRecordable = Symbol("kRecordable");
+const kSlidingWindowHandle = Symbol("kSlidingWindowHandle");
 const kName = Symbol("kName");
 const kEntryType = Symbol("kEntryType");
 const kStartTime = Symbol("kStartTime");
@@ -196,6 +197,12 @@ function errOutOfRange(name, range, value) {
 function errOutOfRangePlain() {
   const err = new RangeError("value is out of range");
   err.code = "ERR_OUT_OF_RANGE";
+  return err;
+}
+
+function errInvalidState() {
+  const err = new Error("Invalid state");
+  err.code = "ERR_INVALID_STATE";
   return err;
 }
 
@@ -325,7 +332,24 @@ class BucketStore {
       (this.subBucketCount - 1) * Math.pow(2, this.unitMagnitude);
     this.bucketCount = this._getBucketCount();
     this.counts = new Array(this.bucketCount * this.subBucketCount).fill(0);
-    this.reset();
+    // Node 26 state carried alongside the buckets. `resetCount` counts
+    // reset()/subtract() calls (see Histogram::ResetCount); `normOffset`
+    // is the CBOR normalizing index offset (physical counts are rotated by
+    // it; 0 for histograms built here); `convRatio` is the CBOR conversion
+    // ratio (1.0 unless imported). EWMA state mirrors
+    // Histogram::UpdateEwma (src/histogram-inl.h): alpha is derived from
+    // halfLife, the running mean/variance/error-rate track raw recorded
+    // values (not bucket midpoints), and reset() clears the running state.
+    this.resetCount = 0;
+    this.normOffset = 0;
+    this.convRatio = 1;
+    this.ewmaAlpha = 0;
+    this.ewmaThreshold = 0;
+    this._ewmaMean = 0;
+    this._ewmaVariance = 0;
+    this._ewmaErrorRate = 0;
+    this.ewmaInitialized = false;
+    this._clearCounts();
   }
 
   _getBucketCount() {
@@ -343,7 +367,7 @@ class BucketStore {
     return bucketsNeeded;
   }
 
-  reset() {
+  _clearCounts() {
     this.counts.fill(0);
     this.totalCount = 0;
     this.exceeds = 0;
@@ -353,6 +377,94 @@ class BucketStore {
     this.max = 0;
     this.minIndex = -1;
     this.maxIndex = -1;
+  }
+
+  reset() {
+    // Mirrors Histogram::Reset: clears the counts and the EWMA running
+    // state, and counts the reset for diff() staleness detection.
+    this._clearCounts();
+    this.resetCount++;
+    this._ewmaMean = 0;
+    this._ewmaVariance = 0;
+    this._ewmaErrorRate = 0;
+    this.ewmaInitialized = false;
+  }
+
+  // EWMA update for one successfully recorded raw value (Histogram::
+  // UpdateEwma). No-op when EWMA is disabled (alpha 0); exceeds values
+  // never reach here.
+  updateEwma(value) {
+    const alpha = this.ewmaAlpha;
+    if (alpha <= 0) return;
+    if (!this.ewmaInitialized) {
+      this._ewmaMean = value;
+      this._ewmaVariance = 0;
+      this.ewmaInitialized = true;
+      if (this.ewmaThreshold > 0) {
+        this._ewmaErrorRate = value > this.ewmaThreshold ? 1 : 0;
+      }
+      return;
+    }
+    const diff = value - this._ewmaMean;
+    this._ewmaMean += alpha * diff;
+    this._ewmaVariance =
+      (1 - alpha) * (this._ewmaVariance + alpha * diff * diff);
+    if (this.ewmaThreshold > 0) {
+      const exceeded = value > this.ewmaThreshold ? 1 : 0;
+      this._ewmaErrorRate += alpha * (exceeded - this._ewmaErrorRate);
+    }
+  }
+
+  clone() {
+    const copy = new BucketStore(this.lowest, this.highest, this.figures);
+    copy.counts = this.counts.slice();
+    copy.totalCount = this.totalCount;
+    copy.exceeds = this.exceeds;
+    copy.sum = this.sum;
+    copy.sumSq = this.sumSq;
+    copy.min = this.min;
+    copy.max = this.max;
+    copy.minIndex = this.minIndex;
+    copy.maxIndex = this.maxIndex;
+    copy.resetCount = this.resetCount;
+    copy.normOffset = this.normOffset;
+    copy.convRatio = this.convRatio;
+    copy.ewmaAlpha = this.ewmaAlpha;
+    copy.ewmaThreshold = this.ewmaThreshold;
+    copy._ewmaMean = this._ewmaMean;
+    copy._ewmaVariance = this._ewmaVariance;
+    copy._ewmaErrorRate = this._ewmaErrorRate;
+    copy.ewmaInitialized = this.ewmaInitialized;
+    return copy;
+  }
+
+  // Install counts given by hdr logical index (used by importHistogram()
+  // and diff()). Aggregates are recomputed in ascending index order,
+  // matching hdr's iteration order, so mean/stddev stay bit-identical to
+  // native. This re-buckets through value ranges, never through raw
+  // midpoints above `highest`: direct index assignment is the only exact
+  // path for top-bucket counts (Histogram::Diff copies counts directly).
+  setLogicalCounts(logicalCounts) {
+    this._clearCounts();
+    for (let j = 0; j < logicalCounts.length; j++) {
+      const c = logicalCounts[j];
+      if (c === 0) continue;
+      const i = hdrIndexToShimIndex(this, j);
+      const { lowest, size } = this._bucketInfo(i);
+      const contribution = lowest + Math.floor(size / 2);
+      this.counts[i] = c;
+      this.totalCount += c;
+      this.sum += contribution * c;
+      this.sumSq += contribution * contribution * c;
+      if (this.minIndex === -1 || i < this.minIndex) {
+        this.minIndex = i;
+        this.min = lowest;
+      }
+      if (this.maxIndex === -1 || i > this.maxIndex) {
+        this.maxIndex = i;
+        this.max = lowest + size - 1;
+      }
+    }
   }
 
   _bucketIndex(value) {
@@ -384,10 +496,13 @@ class BucketStore {
     return { lowest: sub * size, size };
   }
 
+  // Returns true when the value was recorded into a bucket, false when it
+  // exceeded the trackable range (exceeds++ instead). Callers use the
+  // result to decide whether the EWMA update applies.
   _addAt(value, times) {
     if (value > this.highest) {
       this.exceeds += times;
-      return;
+      return false;
     }
     const { index, lowest, size } = this._indexFor(value);
     const contribution = lowest + Math.floor(size / 2);
@@ -403,18 +518,19 @@ class BucketStore {
       this.maxIndex = index;
       this.max = lowest + size - 1;
     }
+    return true;
   }
 
   recordValue(value) {
-    this._addAt(value, 1);
+    return this._addAt(value, 1);
   }
 
   recordBigint(value) {
     if (value > BigInt(this.highest)) {
       this.exceeds++;
-      return;
+      return false;
     }
-    this.recordValue(Number(value));
+    return this.recordValue(Number(value));
   }
 
   add(other) {
@@ -544,6 +660,122 @@ class BucketStore {
   get maxBigInt() {
     return this.totalCount === 0 ? 0n : BigInt(this.max);
   }
+
+  get ewmaMean() {
+    return this.ewmaInitialized ? this._ewmaMean : 0;
+  }
+
+  get ewmaStddev() {
+    return this.ewmaInitialized ? Math.sqrt(this._ewmaVariance) : 0;
+  }
+
+  get ewmaErrorRate() {
+    return this.ewmaInitialized ? this._ewmaErrorRate : 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4b. Student's t-distribution (for Histogram.meanCI), ported from
+// src/histogram.cc (StudentTCdf / StudentTUpperQuantile /
+// RegularizedIncompleteBeta, non-asymptotic branch only — the shapes used
+// by meanCI never take the asymptotic path). lgamma is a Lanczos
+// approximation (g=7); JS has no Math.lgamma.
+// ---------------------------------------------------------------------------
+const _lgammaCoefficients = [
+  0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+  771.32342877765313, -176.61502916214059, 12.507343278686905,
+  -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+];
+
+function _lgamma(z) {
+  if (z < 0.5) {
+    // Reflection: Gamma(z) * Gamma(1 - z) = pi / sin(pi * z).
+    return Math.log(Math.PI / Math.sin(Math.PI * z)) - _lgamma(1 - z);
+  }
+  z -= 1;
+  let x = _lgammaCoefficients[0];
+  for (let i = 1; i < 9; i++) x += _lgammaCoefficients[i] / (z + i);
+  const t = z + 7.5;
+  return (
+    0.5 * Math.log(2 * Math.PI) +
+    (z + 0.5) * Math.log(t) -
+    t +
+    Math.log(x)
+  );
+}
+
+function _betaContinuedFraction(a, b, x) {
+  // Lentz's modified method (Numerical Recipes in C, 2nd ed., section 6.4).
+  const FPMIN = 1e-30;
+  const MAXIT = 200;
+  const EPS = 3e-12;
+  const qab = a + b;
+  const qap = a + 1;
+  const qam = a - 1;
+  let c = 1;
+  let d = 1 - (qab * x) / qap;
+  if (Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1 / d;
+  let h = d;
+  for (let m = 1; m <= MAXIT; m++) {
+    const m2 = 2 * m;
+    let aa = ((m * (b - m) * x) / ((qam + m2) * (a + m2)));
+    d = 1 + aa * d;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c;
+    if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    h *= d * c;
+    aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2));
+    d = 1 + aa * d;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c;
+    if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    const del = d * c;
+    h *= del;
+    if (Math.abs(del - 1) <= EPS) break;
+  }
+  return h;
+}
+
+function _regularizedIncompleteBeta(a, b, x) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const logNormalization = _lgamma(a + b) - _lgamma(a) - _lgamma(b);
+  const front = Math.exp(
+    logNormalization + a * Math.log(x) + b * Math.log(1 - x),
+  );
+  const symmetryPoint = (a + 1) / (a + b + 2);
+  if (x < symmetryPoint) {
+    return (front * _betaContinuedFraction(a, b, x)) / a;
+  }
+  return 1 - (front * _betaContinuedFraction(b, a, 1 - x)) / b;
+}
+
+function _studentTCdf(t, df) {
+  const squared = t * t;
+  const denominator = df + squared;
+  if (squared < df) {
+    const x = squared / denominator;
+    const ibeta = _regularizedIncompleteBeta(0.5, df / 2, x);
+    return t >= 0 ? 0.5 + 0.5 * ibeta : 0.5 - 0.5 * ibeta;
+  }
+  const x = df / denominator;
+  const ibeta = _regularizedIncompleteBeta(df / 2, 0.5, x);
+  return t >= 0 ? 1 - 0.5 * ibeta : 0.5 * ibeta;
+}
+
+function _studentTUpperQuantile(p, df) {
+  let lo = 0;
+  let hi = 1;
+  while (_studentTCdf(-hi, df) > p) hi *= 2;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (_studentTCdf(-mid, df) > p) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -591,12 +823,111 @@ class Histogram {
     return BigInt(this._store().exceeds);
   }
 
+  get resetCount() {
+    // Guarded by instanceof, not this._store(): a bare `this` (e.g.
+    // get.call({})) has no prototype methods, so _store() would throw a
+    // codeless TypeError instead of ERR_INVALID_THIS.
+    if (!(this instanceof Histogram)) throw errInvalidThis("Histogram");
+    return this._store().resetCount;
+  }
+
+  get ewmaMean() {
+    return this._store().ewmaMean;
+  }
+
+  get ewmaStddev() {
+    return this._store().ewmaStddev;
+  }
+
+  get ewmaErrorRate() {
+    return this._store().ewmaErrorRate;
+  }
+
   get mean() {
     return this._store().mean;
   }
 
   get stddev() {
     return this._store().stddev;
+  }
+
+  // Confidence interval for the mean using Student's t-distribution
+  // (Histogram::MeanCI). HdrHistogram reports the population stddev, so
+  // the sample variance applies Bessel's correction, exactly as in C++.
+  meanCI(options = undefined) {
+    if (!(this instanceof Histogram)) throw errInvalidThis("Histogram");
+    if (options === undefined) options = {};
+    validateObject(options, "options");
+    const { confidence = 0.95 } = options;
+    validateNumber(confidence, "options.confidence");
+    if (
+      Number.isNaN(confidence) ||
+      confidence <= 0 ||
+      confidence >= 1
+    ) {
+      throw errOutOfRange("options.confidence", "> 0 && < 1", confidence);
+    }
+    const store = this._store();
+    const count = store.totalCount;
+    const mean = store.mean;
+    if (count < 2) {
+      return { __proto__: null, mean, lower: NaN, upper: NaN };
+    }
+    const stddev = store.stddev;
+    if (stddev === 0) {
+      return { __proto__: null, mean, lower: mean, upper: mean };
+    }
+    const variance = ((stddev * stddev) / (count - 1)) * count;
+    const standardError = Math.sqrt(variance / count);
+    const alpha = 1 - confidence;
+    const tCrit = _studentTUpperQuantile(alpha / 2, count - 1);
+    const margin = tCrit * standardError;
+    return {
+      __proto__: null,
+      mean,
+      lower: mean - margin,
+      upper: mean + margin,
+    };
+  }
+
+  // Serializes the histogram to the CBOR export format (Histogram::Export,
+  // version 2). See the codec in section 5b.
+  export() {
+    if (!(this instanceof Histogram)) throw errInvalidThis("Histogram");
+    return histogramExportCbor(this._store());
+  }
+
+  // Returns a new, independent read-only histogram holding a copy of this
+  // histogram's current state (Histogram::Clone). The snapshot keeps the
+  // counts, exceeds, resetCount and EWMA state; it has no recordable
+  // methods because it is a plain Histogram, not a RecordableHistogram.
+  snapshot() {
+    if (!(this instanceof Histogram)) throw errInvalidThis("Histogram");
+    return makeClonedHistogram(this._store().clone());
+  }
+
+  // Returns a new read-only histogram with the values recorded in this
+  // histogram after `other`, an earlier snapshot of it, was taken
+  // (Histogram::Diff). Layout (lowest/highest/figures/counts length/
+  // normalizing offset) must match; a resetCount mismatch means values
+  // were removed since the snapshot (ERR_INVALID_STATE); any bucket
+  // count below the snapshot's means `other` is not earlier
+  // (ERR_INVALID_ARG_VALUE). The difference carries no EWMA state and
+  // resetCount 0, exactly as in C++.
+  diff(other) {
+    if (!(this instanceof Histogram)) throw errInvalidThis("Histogram");
+    const store = this._store();
+    if (!isHistogram(other)) {
+      throw errInvalidArgType("other", "Histogram", other);
+    }
+    const a = histogramLogicalView(store);
+    // A shim histogram diffs from its own store; a native histogram (no
+    // shim kHandle symbol) diffs from its decoded export.
+    const b =
+      other[kHandle] !== undefined && other[kHandle] !== null
+        ? histogramLogicalView(other._store())
+        : histogramLogicalViewFromExport(other.export());
+    return makeClonedHistogram(histogramDiffLogical(a, b));
   }
 
   percentile(percentile) {
@@ -677,18 +1008,21 @@ class RecordableHistogram extends Histogram {
     const store = this._recordableStore();
     if (typeof val === "bigint") {
       if (val < 1n) throw errOutOfRangePlain();
-      store.recordBigint(val);
+      // EWMA tracks the raw recorded value, and only when the value was
+      // actually recorded (not when it exceeded the trackable range).
+      if (store.recordBigint(val)) store.updateEwma(Number(val));
       return;
     }
     validateInteger(val, "val", 1);
-    store.recordValue(val);
+    if (store.recordValue(val)) store.updateEwma(val);
   }
 
   recordDelta() {
     const store = this._recordableStore();
     const t = Math.round(now() * 1e6);
     if (this._lastDelta !== undefined) {
-      store.recordValue(Math.max(0, t - this._lastDelta));
+      const delta = Math.max(0, t - this._lastDelta);
+      if (store.recordValue(delta)) store.updateEwma(delta);
     }
     this._lastDelta = t;
   }
@@ -776,23 +1110,22 @@ if (typeof Symbol.dispose !== "undefined") {
 function createHistogram(options = undefined) {
   if (options === undefined) options = {};
   validateObject(options, "options");
-  const { lowest = 1, highest = MAX_SAFE_INTEGER, figures = 3 } = options;
-  if (typeof lowest !== "bigint") {
-    validateInteger(lowest, "options.lowest", 1, MAX_SAFE_INTEGER);
+  const {
+    lowest = 1,
+    highest = MAX_SAFE_INTEGER,
+    figures = 3,
+    halfLife = 0,
+    threshold = 0,
+  } = options;
+  validateHistogramOptions26(lowest, highest, figures);
+  validateNumber(halfLife, "options.halfLife");
+  if (halfLife < 0) {
+    throw errOutOfRange("options.halfLife", ">= 0", halfLife);
   }
-  if (typeof highest !== "bigint") {
-    validateInteger(
-      highest,
-      "options.highest",
-      2 * Number(lowest),
-      MAX_SAFE_INTEGER,
-    );
-  } else if (highest < 2n * BigInt(Number(lowest))) {
-    const err = new RangeError('The value of "options.highest" is invalid.');
-    err.code = "ERR_INVALID_ARG_VALUE";
-    throw err;
+  validateNumber(threshold, "options.threshold");
+  if (threshold < 0) {
+    throw errOutOfRange("options.threshold", ">= 0", threshold);
   }
-  validateInteger(figures, "options.figures", 1, 5);
   if (nativePerfHooks !== null) {
     // Native histograms are V8 host objects: postMessage()/structuredClone()
     // produce live shared-state histograms, which pure JS cannot replicate.
@@ -800,15 +1133,923 @@ function createHistogram(options = undefined) {
     nativeHistogramSet.add(histogram);
     return histogram;
   }
-  const histogram = new RecordableHistogram(kSkipThrow);
-  histogram[kHandle] = new BucketStore(
+  const store = new BucketStore(
     Number(lowest),
     Number(highest),
     figures,
   );
+  if (halfLife > 0) {
+    store.ewmaAlpha = 1 - Math.exp(-Math.LN2 / halfLife);
+    store.ewmaThreshold = threshold;
+  }
+  const histogram = new RecordableHistogram(kSkipThrow);
+  histogram[kHandle] = store;
   histogram[kMap] = new Map();
   histogram[kRecordable] = true;
   histogram.constructor = RecordableHistogram;
+  return histogram;
+}
+
+// ---------------------------------------------------------------------------
+// 5b. Histogram export/import (CBOR), sliding-window histograms.
+// ---------------------------------------------------------------------------
+// The export format is Node's CBOR layout (src/histogram.cc,
+// Histogram::Export/Import; version 2, same layout as version 1):
+// a CBOR map with integer keys 0 version, 1 lowest, 2 highest, 3 figures,
+// 4 total count, 5 min, 6 max, 7 normalizing index offset, 8 conversion
+// ratio (float64), 9 counts array length, 10 delta-encoded sparse counts
+// as a flat [delta, count, ...] array (first delta is the absolute index,
+// indices are PHYSICAL — rotated by the normalizing offset), 11 EWMA
+// sub-map (omitted when alpha is 0): 0 alpha, 1 mean, 2 variance,
+// 3 error rate (all float64), 4 threshold (uint).
+//
+// Two index numberings exist and must not be confused: the shim's
+// BucketStore numbers sub-buckets 0..subBucketCount-1 per bucket, while hdr
+// numbers them 0..halfCount-1 for bucket 0 and halfCount..subBucketCount-1
+// above it, so hdr's counts array is half as long. Both partition values
+// into the same ranges; the translators below convert by (bucket, sub).
+// `ponytail:` ceiling — counts above 2^53 lose integer precision in the
+// JS-number bucket array (hdr keeps int64); no test exercises that range.
+const _kExportVersion = 2;
+const _kInt64Max = 9223372036854775807n;
+const _kInt32Max = 2147483647;
+
+// hdr_calculate_bucket_config (deps/histogram/src/hdr_histogram.c).
+// Returns the layout or null when hdr_init would reject the options.
+function hdrLayout(lowest, highest, figures) {
+  if (
+    !Number.isInteger(lowest) ||
+    !Number.isInteger(highest) ||
+    !Number.isInteger(figures) ||
+    lowest < 1 ||
+    figures < 1 ||
+    figures > 5 ||
+    // hdr's integer-division form (lowest > highest/2); the BigInt form
+    // stays exact where the double form would round highest > 2^53.
+    BigInt(lowest) > BigInt(highest) / 2n
+  ) {
+    return null;
+  }
+  const unitMagnitude = Math.floor(Math.log(lowest) / Math.LN2);
+  const subBucketHalfCountMagnitude = Math.ceil(figures * Math.log2(10));
+  if (unitMagnitude + subBucketHalfCountMagnitude > 61) return null;
+  const subBucketCount = Math.pow(2, subBucketHalfCountMagnitude + 1);
+  const subBucketHalfCount = subBucketCount / 2;
+  // buckets_needed_to_cover_value, with exact int64 arithmetic: the
+  // INT64_MAX/2 early return must compare against 2^62-1, which is not
+  // representable as a double (Number() rounds it up to 2^62 and the loop
+  // runs one iteration too far — e.g. the ELD layout lowest 1000 /
+  // highest INT64_MAX gives countsLen 47104 instead of 46080).
+  let smallestUntrackableValue =
+    BigInt(subBucketCount) << BigInt(unitMagnitude);
+  let bucketCount = 1;
+  const highestBig = BigInt(highest);
+  while (smallestUntrackableValue <= highestBig) {
+    if (smallestUntrackableValue > _kInt64Max / 2n) {
+      bucketCount++;
+      break;
+    }
+    smallestUntrackableValue *= 2n;
+    bucketCount++;
+  }
+  return {
+    lowest,
+    highest,
+    figures,
+    unitMagnitude,
+    subBucketHalfCountMagnitude,
+    subBucketCount,
+    subBucketHalfCount,
+    bucketCount,
+    countsLen: (bucketCount + 1) * subBucketHalfCount,
+  };
+}
+
+// The [lowest, lowest+size) value range of one hdr logical bucket
+// (hdr_value_at_index / lowest_equivalent_value_given_bucket_indices).
+function hdrBucketRange(lowest, figures, logicalIndex) {
+  const unitMagnitude = Math.floor(Math.log(lowest) / Math.LN2);
+  const sbhcm = Math.ceil(figures * Math.log2(10));
+  const halfCount = Math.pow(2, sbhcm);
+  let bucket = Math.floor(logicalIndex / halfCount) - 1;
+  let sub = (logicalIndex % halfCount) + halfCount;
+  if (bucket < 0) {
+    sub -= halfCount;
+    bucket = 0;
+  }
+  const size = Math.pow(2, bucket + unitMagnitude);
+  return { lowest: sub * size, size };
+}
+
+// Shim bucket index -> hdr logical index.
+function shimIndexToHdrIndex(store, i) {
+  const halfCount = store.subBucketCount / 2;
+  const bucket = Math.floor(i / store.subBucketCount);
+  const sub = i % store.subBucketCount;
+  return bucket === 0 ? sub : (bucket + 1) * halfCount + (sub - halfCount);
+}
+
+// Hdr logical index -> shim bucket index.
+function hdrIndexToShimIndex(store, j) {
+  const halfCount = store.subBucketCount / 2;
+  let bucket = Math.floor(j / halfCount) - 1;
+  let sub = (j % halfCount) + halfCount;
+  if (bucket < 0) {
+    sub -= halfCount;
+    bucket = 0;
+  }
+  return bucket * store.subBucketCount + sub;
+}
+
+// Node 26 option validation (lib/internal/histogram.js
+// validateHistogramOptions): bigint-aware ranges, highest >= 2 * lowest,
+// figures 1..5, plus the hdr magnitude rule.
+function validateHistogramOptions26(lowest, highest, figures) {
+  const kMaxInt64 = _kInt64Max;
+  if (typeof lowest !== "bigint") {
+    validateInteger(lowest, "options.lowest", 1, MAX_SAFE_INTEGER);
+  } else if (lowest < 1n || lowest > kMaxInt64) {
+    throw errOutOfRange("options.lowest", `>= 1n && <= ${kMaxInt64}n`, lowest);
+  }
+  if (typeof highest !== "bigint") {
+    validateInteger(highest, "options.highest", 1, MAX_SAFE_INTEGER);
+  } else if (highest < 1n || highest > kMaxInt64) {
+    throw errOutOfRange(
+      "options.highest",
+      `>= 1n && <= ${kMaxInt64}n`,
+      highest,
+    );
+  }
+  const minimumHighest =
+    2n * (typeof lowest === "bigint" ? lowest : BigInt(lowest));
+  const highestBigInt =
+    typeof highest === "bigint" ? highest : BigInt(highest);
+  if (highestBigInt < minimumHighest) {
+    throw errOutOfRange(
+      "options.highest",
+      `>= 2 * options.lowest (${minimumHighest}n)`,
+      highest,
+    );
+  }
+  validateInteger(figures, "options.figures", 1, 5);
+  if (
+    hdrLayout(Number(lowest), Number(highest), figures) === null
+  ) {
+    throw errInvalidArgValue(
+      "options",
+      { lowest, highest, figures },
+      "is invalid",
+    );
+  }
+}
+
+// --- Minimal CBOR (RFC 8949) codec: just the types the format uses,
+// plus a strict skipper for unknown-key values (mirrors CborSkipItem,
+// including the 16-level nesting limit and the indefinite/reserved
+// rejections). All failures surface as ERR_INVALID_ARG_VALUE.
+function errInvalidHistogramData() {
+  return errInvalidArgValue("data", undefined, "is not valid histogram data");
+}
+
+function _cborWriteUint(out, major, value) {
+  const v = typeof value === "bigint" ? value : BigInt(value);
+  if (v <= 23n) {
+    out.push(major | Number(v));
+  } else if (v <= 0xffn) {
+    out.push(major | 24, Number(v));
+  } else if (v <= 0xffffn) {
+    out.push(major | 25, Number(v >> 8n), Number(v & 0xffn));
+  } else if (v <= 0xffffffffn) {
+    out.push(
+      major | 26,
+      Number((v >> 24n) & 0xffn),
+      Number((v >> 16n) & 0xffn),
+      Number((v >> 8n) & 0xffn),
+      Number(v & 0xffn),
+    );
+  } else {
+    out.push(
+      major | 27,
+      Number((v >> 56n) & 0xffn),
+      Number((v >> 48n) & 0xffn),
+      Number((v >> 40n) & 0xffn),
+      Number((v >> 32n) & 0xffn),
+      Number((v >> 24n) & 0xffn),
+      Number((v >> 16n) & 0xffn),
+      Number((v >> 8n) & 0xffn),
+      Number(v & 0xffn),
+    );
+  }
+}
+
+// Writes an int64 field. Values arrive as Numbers, and INT64_MAX rounds
+// up to 2^63 as a double — which the int64 reader (here and in C++) must
+// reject. An int64 field can never legitimately be 2^63, so a Number
+// equal to it can only be rounded INT64_MAX (e.g. an ELD histogram's
+// highest); clamp it back to the exact value.
+function _cborWriteInt64(out, value) {
+  const v = typeof value === "bigint" ? value : BigInt(value);
+  _cborWriteUint(out, 0, v > _kInt64Max ? _kInt64Max : v);
+}
+
+function _cborWriteFloat64(out, value) {
+  out.push(0xfb);
+  const buf = new ArrayBuffer(8);
+  new DataView(buf).setFloat64(0, value, false);
+  for (const byte of new Uint8Array(buf)) out.push(byte);
+}
+
+// The reader throws errInvalidHistogramData() on any malformed input.
+class _CborReader {
+  constructor(data) {
+    this.data = data;
+    this.p = 0;
+  }
+
+  get remaining() {
+    return this.data.length - this.p;
+  }
+
+  _fail() {
+    throw errInvalidHistogramData();
+  }
+
+  _readHead() {
+    if (this.p >= this.data.length) this._fail();
+    const b = this.data[this.p++];
+    const major = b >> 5;
+    const ai = b & 31;
+    let arg;
+    if (ai < 24) {
+      arg = BigInt(ai);
+    } else if (ai === 24) {
+      if (this.remaining < 1) this._fail();
+      arg = BigInt(this.data[this.p++]);
+    } else if (ai === 25) {
+      if (this.remaining < 2) this._fail();
+      arg = BigInt((this.data[this.p] << 8) | this.data[this.p + 1]);
+      this.p += 2;
+    } else if (ai === 26) {
+      if (this.remaining < 4) this._fail();
+      arg = 0n;
+      for (let i = 0; i < 4; i++) arg = (arg << 8n) | BigInt(this.data[this.p++]);
+    } else if (ai === 27) {
+      if (this.remaining < 8) this._fail();
+      arg = 0n;
+      for (let i = 0; i < 8; i++) arg = (arg << 8n) | BigInt(this.data[this.p++]);
+    } else {
+      this._fail(); // Indefinite length or reserved — not supported.
+    }
+    return { major, arg };
+  }
+
+  readArgument(major) {
+    const { major: actual, arg } = this._readHead();
+    if (actual !== major) this._fail();
+    return arg;
+  }
+
+  readUint() {
+    return this.readArgument(0);
+  }
+
+  readInt64() {
+    const v = this.readArgument(0);
+    if (v > _kInt64Max) this._fail();
+    return v;
+  }
+
+  readInt32() {
+    const v = this.readArgument(0);
+    if (v > _kInt32Max) this._fail();
+    return Number(v);
+  }
+
+  readNumber() {
+    if (this.p < this.data.length && this.data[this.p] === 0xfb) {
+      this.p++;
+      if (this.remaining < 8) this._fail();
+      const value = new DataView(
+        this.data.buffer,
+        this.data.byteOffset + this.p,
+        8,
+      ).getFloat64(0, false);
+      this.p += 8;
+      return value;
+    }
+    return Number(this.readArgument(0));
+  }
+
+  skipItem(depth = 0) {
+    if (this.p >= this.data.length || depth > 16) this._fail();
+    const major = this.data[this.p] >> 5;
+    const info = this.data[this.p] & 31;
+    if (major === 7) {
+      let extra;
+      if (info <= 23) extra = 0;
+      else if (info <= 27) extra = 1 << (info - 24);
+      else this._fail(); // Reserved (28-30) or break (31).
+      this.p++;
+      if (this.remaining < extra) this._fail();
+      this.p += extra;
+      return;
+    }
+    const arg = this._readHead().arg;
+    switch (major) {
+      case 0:
+      case 1:
+        return;
+      case 2:
+      case 3:
+        if (arg > BigInt(this.remaining)) this._fail();
+        this.p += Number(arg);
+        return;
+      case 4:
+      case 5: {
+        if (arg > BigInt(this.remaining)) this._fail();
+        const items = major === 4 ? arg : arg * 2n;
+        for (let i = 0n; i < items; i++) this.skipItem(depth + 1);
+        return;
+      }
+      case 6:
+        this.skipItem(depth + 1);
+        return;
+      default:
+        this._fail();
+    }
+  }
+}
+
+function cborDecodeHistogram(data) {
+  const reader = new _CborReader(data);
+  const mapSize = reader.readArgument(5);
+  let version = 1n;
+  let lowest = 1;
+  let highest = Number(_kInt64Max);
+  let figures = 3;
+  let totalCount = null;
+  let min = null;
+  let max = null;
+  let normOffset = 0;
+  let convRatio = 1;
+  let countsLen = 0;
+  let hasCountsLen = false;
+  let ewma = null;
+  let hasUnknownKeys = false;
+  const seen = new Set();
+  const sparse = [];
+  for (let i = 0n; i < mapSize; i++) {
+    const key = reader.readArgument(0);
+    if (key > 11n) {
+      reader.skipItem();
+      hasUnknownKeys = true;
+      continue;
+    }
+    if (seen.has(key)) reader._fail();
+    seen.add(key);
+    switch (Number(key)) {
+      case 0: {
+        version = reader.readUint();
+        if (version < 1n || version > 2n) reader._fail();
+        break;
+      }
+      case 1:
+        lowest = Number(reader.readInt64());
+        break;
+      case 2:
+        highest = Number(reader.readInt64());
+        break;
+      case 3:
+        figures = reader.readInt32();
+        break;
+      case 4:
+        totalCount = reader.readInt64();
+        break;
+      case 5:
+        min = Number(reader.readInt64());
+        break;
+      case 6:
+        max = Number(reader.readInt64());
+        break;
+      case 7:
+        normOffset = reader.readInt32();
+        break;
+      case 8:
+        convRatio = reader.readNumber();
+        break;
+      case 9:
+        countsLen = reader.readInt32();
+        hasCountsLen = true;
+        break;
+      case 10: {
+        const arrLen = reader.readArgument(4);
+        if (arrLen % 2n !== 0n) reader._fail();
+        if (arrLen > BigInt(reader.remaining)) reader._fail();
+        let accIdx = 0;
+        for (let j = 0n; j < arrLen; j += 2n) {
+          const delta = reader.readInt32();
+          const cnt = reader.readInt64();
+          if (j > 0n && delta === 0) reader._fail();
+          accIdx += delta;
+          if (accIdx > Number(_kInt32Max)) reader._fail();
+          sparse.push([accIdx, cnt]);
+        }
+        break;
+      }
+      case 11: {
+        const subSize = reader.readArgument(5);
+        const sub = { alpha: 0, mean: 0, variance: 0, errorRate: 0, threshold: 0 };
+        const seenEwma = new Set();
+        for (let j = 0n; j < subSize; j++) {
+          const subKey = reader.readArgument(0);
+          if (subKey > 4n) {
+            reader.skipItem();
+            hasUnknownKeys = true;
+            continue;
+          }
+          if (seenEwma.has(subKey)) reader._fail();
+          seenEwma.add(subKey);
+          switch (Number(subKey)) {
+            case 0:
+              sub.alpha = reader.readNumber();
+              break;
+            case 1:
+              sub.mean = reader.readNumber();
+              break;
+            case 2:
+              sub.variance = reader.readNumber();
+              break;
+            case 3:
+              sub.errorRate = reader.readNumber();
+              break;
+            case 4:
+              sub.threshold = Number(reader.readInt64());
+              break;
+            default:
+              reader._fail();
+          }
+        }
+        ewma = sub;
+        break;
+      }
+      default:
+        reader._fail();
+    }
+  }
+  // Version 1 data keeps its original semantics: unknown keys rejected.
+  if (version === 1n && hasUnknownKeys) reader._fail();
+
+  const layout = hdrLayout(lowest, highest, figures);
+  if (layout === null) reader._fail();
+  if (!hasCountsLen || countsLen !== layout.countsLen) reader._fail();
+  if (normOffset < 0 || normOffset >= countsLen) reader._fail();
+
+  // Restore counts directly (physical -> logical via the offset), keeping
+  // the int64 sum check from C++.
+  const logical = new Array(countsLen).fill(0);
+  let observed = 0n;
+  for (const [idx, cnt] of sparse) {
+    if (idx < 0 || idx >= countsLen) reader._fail();
+    if (cnt > _kInt64Max - observed) reader._fail();
+    observed += cnt;
+    logical[(idx + normOffset) % countsLen] = Number(cnt);
+  }
+  if (totalCount !== null && totalCount !== observed) reader._fail();
+
+  return {
+    version: Number(version),
+    lowest,
+    highest,
+    figures,
+    totalCount: observed,
+    min,
+    max,
+    normOffset,
+    convRatio,
+    countsLen,
+    logical,
+    ewma,
+  };
+}
+
+function cborEncodeHistogram(fields) {
+  const out = [];
+  const hasEwma = fields.ewma !== null && fields.ewma.alpha > 0;
+  _cborWriteUint(out, 5 << 5, hasEwma ? 12 : 11);
+  _cborWriteUint(out, 0, 0);
+  _cborWriteUint(out, 0, fields.version);
+  _cborWriteUint(out, 0, 1);
+  _cborWriteInt64(out, fields.lowest);
+  _cborWriteUint(out, 0, 2);
+  _cborWriteInt64(out, fields.highest);
+  _cborWriteUint(out, 0, 3);
+  _cborWriteUint(out, 0, fields.figures);
+  _cborWriteUint(out, 0, 4);
+  _cborWriteInt64(out, fields.totalCount);
+  _cborWriteUint(out, 0, 5);
+  _cborWriteInt64(out, fields.min);
+  _cborWriteUint(out, 0, 6);
+  _cborWriteInt64(out, fields.max);
+  _cborWriteUint(out, 0, 7);
+  _cborWriteUint(out, 0, fields.normOffset);
+  _cborWriteUint(out, 0, 8);
+  _cborWriteFloat64(out, fields.convRatio);
+  _cborWriteUint(out, 0, 9);
+  _cborWriteUint(out, 0, fields.countsLen);
+  _cborWriteUint(out, 0, 10);
+  _cborWriteUint(out, 4 << 5, fields.sparse.length * 2);
+  let prev = 0;
+  for (const [idx, count] of fields.sparse) {
+    _cborWriteUint(out, 0, idx - prev);
+    _cborWriteInt64(out, count);
+    prev = idx;
+  }
+  if (hasEwma) {
+    _cborWriteUint(out, 0, 11);
+    _cborWriteUint(out, 5 << 5, 5);
+    _cborWriteUint(out, 0, 0);
+    _cborWriteFloat64(out, fields.ewma.alpha);
+    _cborWriteUint(out, 0, 1);
+    _cborWriteFloat64(out, fields.ewma.mean);
+    _cborWriteUint(out, 0, 2);
+    _cborWriteFloat64(out, fields.ewma.variance);
+    _cborWriteUint(out, 0, 3);
+    _cborWriteFloat64(out, fields.ewma.errorRate);
+    _cborWriteUint(out, 0, 4);
+    _cborWriteInt64(out, fields.ewma.threshold);
+  }
+  return new Uint8Array(out);
+}
+
+// Re-encodes already-decoded fields at the export version (2). The
+// sparse counts are stored logically here and rotated back to physical
+// indices on write.
+function cborEncodeDecoded(decoded, version = _kExportVersion) {
+  const physical = [];
+  for (let j = 0; j < decoded.logical.length; j++) {
+    const c = decoded.logical[j];
+    if (c === 0) continue;
+    const p =
+      (((j - decoded.normOffset) % decoded.countsLen) + decoded.countsLen) %
+      decoded.countsLen;
+    physical.push([p, c]);
+  }
+  physical.sort((a, b) => a[0] - b[0]);
+  return cborEncodeHistogram({
+    version,
+    lowest: decoded.lowest,
+    highest: decoded.highest,
+    figures: decoded.figures,
+    totalCount: decoded.totalCount,
+    min:
+      decoded.totalCount === 0n
+        ? _kInt64Max
+        : decoded.min !== null
+          ? decoded.min
+          : derivedMinMax(decoded).min,
+    max:
+      decoded.totalCount === 0n
+        ? 0
+        : decoded.max !== null
+          ? decoded.max
+          : derivedMinMax(decoded).max,
+    normOffset: decoded.normOffset,
+    convRatio: decoded.convRatio,
+    countsLen: decoded.countsLen,
+    sparse: physical,
+    ewma: decoded.ewma,
+  });
+}
+
+// Min/max derived from the counts when keys 5/6 are absent (as
+// Histogram::Import does via hdr_reset_internal_counters).
+function derivedMinMax(decoded) {
+  let first = -1;
+  let last = -1;
+  for (let j = 0; j < decoded.logical.length; j++) {
+    if (decoded.logical[j] === 0) continue;
+    if (first === -1) first = j;
+    last = j;
+  }
+  if (first === -1) return { min: Number(_kInt64Max), max: 0 };
+  const minRange = hdrBucketRange(decoded.lowest, decoded.figures, first);
+  const maxRange = hdrBucketRange(decoded.lowest, decoded.figures, last);
+  return { min: minRange.lowest, max: maxRange.lowest + maxRange.size - 1 };
+}
+
+// Pure-JS export(): encodes a BucketStore as version 2.
+function histogramExportCbor(store) {
+  const layout = hdrLayout(store.lowest, store.highest, store.figures);
+  const countsLen = layout === null ? store.counts.length : layout.countsLen;
+  const physical = [];
+  for (let i = 0; i < store.counts.length; i++) {
+    const c = store.counts[i];
+    if (c === 0) continue;
+    const logical = shimIndexToHdrIndex(store, i);
+    if (logical >= countsLen) continue;
+    const p =
+      (((logical - store.normOffset) % countsLen) + countsLen) % countsLen;
+    physical.push([p, c]);
+  }
+  physical.sort((a, b) => a[0] - b[0]);
+  return cborEncodeHistogram({
+    version: _kExportVersion,
+    lowest: store.lowest,
+    highest: store.highest,
+    figures: store.figures,
+    totalCount: store.totalCount,
+    min:
+      store.totalCount === 0
+        ? _kInt64Max
+        : store.min,
+    max: store.totalCount === 0 ? 0 : store.max,
+    normOffset: store.normOffset,
+    convRatio: store.convRatio,
+    countsLen,
+    sparse: physical,
+    ewma:
+      store.ewmaAlpha > 0
+        ? {
+            alpha: store.ewmaAlpha,
+            mean: store._ewmaMean,
+            variance: store._ewmaVariance,
+            errorRate: store._ewmaErrorRate,
+            threshold: store.ewmaThreshold,
+          }
+        : null,
+  });
+}
+
+// A histogram's state as hdr-logical counts, for diff().
+function histogramLogicalView(store) {
+  const layout = hdrLayout(store.lowest, store.highest, store.figures);
+  const countsLen = layout === null ? 0 : layout.countsLen;
+  const counts = new Array(countsLen).fill(0);
+  for (let i = 0; i < store.counts.length; i++) {
+    const c = store.counts[i];
+    if (c === 0) continue;
+    const logical = shimIndexToHdrIndex(store, i);
+    if (logical < countsLen) counts[logical] = c;
+  }
+  return {
+    lowest: store.lowest,
+    highest: store.highest,
+    figures: store.figures,
+    countsLen,
+    normOffset: store.normOffset,
+    convRatio: store.convRatio,
+    counts,
+    exceeds: store.exceeds,
+    resetCount: store.resetCount,
+  };
+}
+
+function histogramLogicalViewFromExport(bytes, resetCount, exceeds) {
+  const decoded = cborDecodeHistogram(bytes);
+  return {
+    lowest: decoded.lowest,
+    highest: decoded.highest,
+    figures: decoded.figures,
+    countsLen: decoded.countsLen,
+    normOffset: decoded.normOffset,
+    convRatio: decoded.convRatio,
+    counts: decoded.logical,
+    exceeds,
+    resetCount,
+  };
+}
+
+// Histogram::Diff over two logical views. Returns a fresh BucketStore
+// holding the difference (no EWMA, resetCount 0).
+function histogramDiffLogical(a, b) {
+  if (
+    a.lowest !== b.lowest ||
+    a.highest !== b.highest ||
+    a.figures !== b.figures ||
+    a.countsLen !== b.countsLen ||
+    a.normOffset !== b.normOffset
+  ) {
+    throw errInvalidArgValue("other", undefined, "is not compatible");
+  }
+  if (a.resetCount !== b.resetCount) throw errInvalidState();
+  if (a.exceeds < b.exceeds) {
+    throw errInvalidArgValue("other", undefined, "is not earlier");
+  }
+  const diffCounts = new Array(a.countsLen).fill(0);
+  for (let i = 0; i < a.countsLen; i++) {
+    if (a.counts[i] < b.counts[i]) {
+      throw errInvalidArgValue("other", undefined, "is not earlier");
+    }
+    diffCounts[i] = a.counts[i] - b.counts[i];
+  }
+  const store = new BucketStore(a.lowest, a.highest, a.figures);
+  store.setLogicalCounts(diffCounts);
+  store.exceeds = a.exceeds - b.exceeds;
+  store.normOffset = a.normOffset;
+  store.convRatio = a.convRatio;
+  return store;
+}
+
+function makeClonedHistogram(store) {
+  const histogram = new Histogram(kSkipThrow);
+  histogram[kHandle] = store;
+  histogram[kMap] = new Map();
+  return histogram;
+}
+
+// Reconstructs a recordable histogram from CBOR export data
+// (Histogram::Import). The pure-JS path handles both format versions, so
+// it also serves hosts whose native import rejects version 2.
+function importHistogram(data) {
+  if (
+    data === null ||
+    data === undefined ||
+    (typeof Uint8Array !== "undefined" && !(data instanceof Uint8Array))
+  ) {
+    throw errInvalidArgType("data", "Uint8Array", data);
+  }
+  const decoded = cborDecodeHistogram(data);
+  const store = new BucketStore(decoded.lowest, decoded.highest, decoded.figures);
+  store.setLogicalCounts(decoded.logical);
+  store.normOffset = decoded.normOffset;
+  store.convRatio = decoded.convRatio;
+  if (decoded.ewma !== null && decoded.ewma.alpha > 0) {
+    // Half-life is derived from alpha only for 0 < alpha < 1 (C++ Import);
+    // alpha >= 1 leaves the running state restored but EWMA disabled.
+    store.ewmaAlpha = decoded.ewma.alpha < 1 ? decoded.ewma.alpha : 0;
+    store._ewmaMean = decoded.ewma.mean;
+    store._ewmaVariance = decoded.ewma.variance;
+    store._ewmaErrorRate = decoded.ewma.errorRate;
+    store.ewmaThreshold = decoded.ewma.threshold;
+    store.ewmaInitialized = true;
+  }
+  const histogram = new RecordableHistogram(kSkipThrow);
+  histogram[kHandle] = store;
+  histogram[kMap] = new Map();
+  histogram[kRecordable] = true;
+  histogram.constructor = RecordableHistogram;
+  return histogram;
+}
+
+// Sliding-window histogram (pure-JS fallback). The window is `chunks`
+// BucketStores in a ring; each chunk belongs to one generation. Count
+// mode rotates every `recordsPerChunk` records; time mode rotates every
+// `chunkDuration` ms from creation (generations aligned to creation,
+// exactly as in C++). snapshot() aggregates the live chunks into a
+// read-only Histogram; reset() clears the generations (chunks are reset
+// lazily on reuse). `ponytail:` ceiling — structuredClone()/postMessage
+// of a pure-JS window succeed (plain object) where native throws
+// DataCloneError; the harness lane uses the native window, so this only
+// affects the browser lane.
+const kNoGeneration = -1;
+
+class SlidingWindowHistogram {
+  constructor(skipThrowSymbol = undefined) {
+    if (skipThrowSymbol !== kSkipThrow) throw errIllegalConstructor();
+  }
+
+  _checkSw() {
+    if (this[kSlidingWindowHandle] === undefined)
+      throw errInvalidThis("SlidingWindowHistogram");
+  }
+
+  record(val) {
+    const state = this[kSlidingWindowHandle];
+    if (state === undefined) throw errInvalidThis("SlidingWindowHistogram");
+    let value;
+    if (typeof val === "bigint") {
+      if (val < 0n || val >= 2n ** 63n) throw errOutOfRangePlain();
+      value = Number(val);
+    } else {
+      validateInteger(val, "val", 0);
+      value = val;
+    }
+    let generation;
+    if (state.timeBased) {
+      generation = Math.floor(
+        (now() - state.origin) / state.chunkDuration,
+      );
+    } else if (state.recordsInCurrentChunk === state.rotateAt) {
+      generation = state.currentGeneration + 1;
+    } else {
+      generation = state.currentGeneration;
+    }
+    const chunk = this._getChunk(generation);
+    if (state.timeBased) {
+      chunk.recordValue(value);
+    } else {
+      if (generation !== state.currentGeneration) {
+        state.currentGeneration = generation;
+        state.recordsInCurrentChunk = 0;
+      }
+      chunk.recordValue(value);
+      state.recordsInCurrentChunk++;
+      state.hasCountRecords = true;
+    }
+  }
+
+  _getChunk(generation) {
+    const state = this[kSlidingWindowHandle];
+    const index = ((generation % state.chunks.length) + state.chunks.length) % state.chunks.length;
+    if (state.generations[index] === generation) return state.chunks[index];
+    state.chunks[index]._clearCounts();
+    state.chunks[index].resetCount = 0;
+    state.generations[index] = generation;
+    return state.chunks[index];
+  }
+
+  snapshot() {
+    const state = this[kSlidingWindowHandle];
+    if (state === undefined) throw errInvalidThis("SlidingWindowHistogram");
+    const store = new BucketStore(state.lowest, state.highest, state.figures);
+    let currentGeneration;
+    if (state.timeBased) {
+      currentGeneration = Math.floor(
+        (now() - state.origin) / state.chunkDuration,
+      );
+    } else {
+      if (!state.hasCountRecords) return makeClonedHistogram(store);
+      currentGeneration = state.currentGeneration;
+    }
+    for (let i = 0; i < state.chunks.length; i++) {
+      const generation = state.generations[i];
+      if (
+        generation === kNoGeneration ||
+        generation > currentGeneration ||
+        currentGeneration - generation >= state.chunks.length
+      ) {
+        continue;
+      }
+      store.add(state.chunks[i]);
+    }
+    return makeClonedHistogram(store);
+  }
+
+  reset() {
+    const state = this[kSlidingWindowHandle];
+    if (state === undefined) throw errInvalidThis("SlidingWindowHistogram");
+    state.generations.fill(kNoGeneration);
+    state.origin = now();
+    state.currentGeneration = 0;
+    state.recordsInCurrentChunk = 0;
+    state.hasCountRecords = false;
+  }
+}
+
+function createSlidingWindowHistogram(options) {
+  validateObject(options, "options");
+  const {
+    chunks,
+    chunkDuration,
+    recordsPerChunk,
+    lowest = 1,
+    highest = MAX_SAFE_INTEGER,
+    figures = 3,
+  } = options;
+  validateInteger(chunks, "options.chunks", 1, 1024);
+  validateHistogramOptions26(lowest, highest, figures);
+  const timeBased = chunkDuration !== undefined;
+  if (timeBased === (recordsPerChunk !== undefined)) {
+    throw errInvalidArgValue(
+      "options",
+      options,
+      'must specify exactly one of "chunkDuration" or "recordsPerChunk"',
+    );
+  }
+  let rotateAt;
+  let chunkDurationMs;
+  if (timeBased) {
+    validateInteger(chunkDuration, "options.chunkDuration", 1, 18446744073709);
+    rotateAt = 0;
+    chunkDurationMs = chunkDuration;
+  } else {
+    validateInteger(recordsPerChunk, "options.recordsPerChunk", 1, MAX_SAFE_INTEGER);
+    rotateAt = recordsPerChunk;
+  }
+  if (nativePerfHooks !== null && typeof nativePerfHooks.createSlidingWindowHistogram === "function") {
+    const histogram = nativePerfHooks.createSlidingWindowHistogram(options);
+    return histogram;
+  }
+  const histogram = new SlidingWindowHistogram(kSkipThrow);
+  const chunksArray = [];
+  for (let i = 0; i < chunks; i++) {
+    chunksArray.push(new BucketStore(Number(lowest), Number(highest), figures));
+  }
+  histogram[kSlidingWindowHandle] = {
+    chunks: chunksArray,
+    generations: new Array(chunks).fill(kNoGeneration),
+    timeBased,
+    rotateAt,
+    chunkDuration: chunkDurationMs,
+    origin: now(),
+    currentGeneration: 0,
+    recordsInCurrentChunk: 0,
+    hasCountRecords: false,
+    lowest: Number(lowest),
+    highest: Number(highest),
+    figures,
+  };
+  histogram.constructor = SlidingWindowHistogram;
   return histogram;
 }
 
@@ -2189,6 +3430,222 @@ function monitorEventLoopDelay(options = undefined) {
 }
 
 // ---------------------------------------------------------------------------
+// 9b. Native histogram backfill (hosts older than Node 26).
+// ---------------------------------------------------------------------------
+// The host's native histograms (Node 24) lack snapshot()/diff()/resetCount
+// and export CBOR version 1, which importHistogram rejects. The 26 API is
+// patched onto the native base Histogram prototype — the parent of both the
+// RecordableHistogram and the ELD prototypes, so one patch covers both —
+// gated on the host lacking it (a Node 26 host already has all of this).
+// snapshot()/diff() round-trip through the native v1 export and the native
+// import, with exceeds restored by recording highest+1 (exceeds values are
+// not stored in the CBOR payload and do not touch EWMA). reset()/subtract()
+// are wrapped to bump a per-instance resetCount WeakMap. Snapshots are
+// re-prototyped to the base Histogram prototype with the own `constructor`
+// property removed, so they read as plain read-only Histograms.
+// `ponytail:` ceiling — a structuredClone() of a native histogram does not
+// carry the JS-side resetCount (V8 clones the handle, not our WeakMap);
+// untested by the 26 suite, and the clone starts at 0.
+const nativeResetCounts = new WeakMap();
+let nativeBaseProto = null;
+let nativeRecordableProto = null;
+let nativeExportFn = null;
+let nativeResetFn = null;
+let nativeSubtractFn = null;
+
+function isNativeHistogram(value) {
+  if (
+    value === null ||
+    (typeof value !== "object" && typeof value !== "function") ||
+    nativeBaseProto === null
+  ) {
+    return false;
+  }
+  let proto = Object.getPrototypeOf(value);
+  while (proto !== null) {
+    if (proto === nativeBaseProto) return true;
+    proto = Object.getPrototypeOf(proto);
+  }
+  return false;
+}
+
+function nativeResetCountOf(hist) {
+  return nativeResetCounts.get(hist) ?? 0;
+}
+
+// Restores `count` exceeds on a freshly imported histogram. `highest` is
+// the histogram's configured upper bound (from its export); highest+1 is
+// the smallest int64 value above it, and exceeds > 0 implies
+// highest < INT64_MAX. `ponytail:` ceiling — for highest > 2^53 the Number
+// round-trip can lose the exact bound; no 26 test exercises that range.
+function nativeRestoreExceeds(hist, count, highest) {
+  if (count <= 0) return;
+  const value = BigInt(highest) + 1n;
+  for (let i = 0; i < count; i++) hist.record(value);
+}
+
+function nativeSnapshot() {
+  if (!isNativeHistogram(this)) throw errInvalidThis("Histogram");
+  const bytes = nativeExportFn.call(this);
+  const decoded = cborDecodeHistogram(bytes);
+  const imported = nativePerfHooks.importHistogram(bytes);
+  nativeRestoreExceeds(imported, this.exceeds, decoded.highest);
+  Object.setPrototypeOf(imported, nativeBaseProto);
+  delete imported.constructor;
+  nativeResetCounts.set(imported, nativeResetCountOf(this));
+  return imported;
+}
+
+function nativeDiff(other) {
+  if (!isNativeHistogram(this)) throw errInvalidThis("Histogram");
+  // The other side may be a native histogram (decoded from its export) or
+  // a pure-JS histogram such as an importHistogram() result (read from its
+  // store directly). Anything else is not a histogram.
+  let bView;
+  if (isNativeHistogram(other)) {
+    const b = cborDecodeHistogram(other.export());
+    bView = {
+      lowest: b.lowest,
+      highest: b.highest,
+      figures: b.figures,
+      countsLen: b.countsLen,
+      normOffset: b.normOffset,
+      convRatio: b.convRatio,
+      counts: b.logical,
+      exceeds: other.exceeds,
+      resetCount: nativeResetCountOf(other),
+    };
+  } else if (
+    other !== null &&
+    typeof other === "object" &&
+    other[kHandle] !== undefined &&
+    other[kHandle] !== null
+  ) {
+    bView = histogramLogicalView(other._store());
+  } else {
+    throw errInvalidArgType("other", "Histogram", other);
+  }
+  const a = cborDecodeHistogram(nativeExportFn.call(this));
+  const aView = {
+    lowest: a.lowest,
+    highest: a.highest,
+    figures: a.figures,
+    countsLen: a.countsLen,
+    normOffset: a.normOffset,
+    convRatio: a.convRatio,
+    counts: a.logical,
+    exceeds: this.exceeds,
+    resetCount: nativeResetCountOf(this),
+  };
+  const diffStore = histogramDiffLogical(aView, bView);
+  const diffView = histogramLogicalView(diffStore);
+  // The host import rejects version 2, so the diff is re-encoded as v1.
+  const v1 = cborEncodeDecoded(
+    {
+      lowest: diffView.lowest,
+      highest: diffView.highest,
+      figures: diffView.figures,
+      totalCount: BigInt(diffStore.totalCount),
+      min: null,
+      max: null,
+      normOffset: diffView.normOffset,
+      convRatio: diffView.convRatio,
+      countsLen: diffView.countsLen,
+      logical: diffView.counts,
+      ewma: null,
+    },
+    1,
+  );
+  const imported = nativePerfHooks.importHistogram(v1);
+  nativeRestoreExceeds(imported, this.exceeds - other.exceeds, a.highest);
+  Object.setPrototypeOf(imported, nativeBaseProto);
+  delete imported.constructor;
+  nativeResetCounts.set(imported, 0);
+  return imported;
+}
+
+function nativeExportV2() {
+  if (!isNativeHistogram(this)) throw errInvalidThis("Histogram");
+  try {
+    return cborEncodeDecoded(cborDecodeHistogram(nativeExportFn.call(this)));
+  } catch {
+    return nativeExportFn.call(this);
+  }
+}
+
+if (
+  nativePerfHooks !== null &&
+  typeof nativePerfHooks.createHistogram === "function"
+) {
+  try {
+    const probe = nativePerfHooks.createHistogram();
+    nativeRecordableProto = Object.getPrototypeOf(probe);
+    nativeBaseProto = Object.getPrototypeOf(nativeRecordableProto);
+  } catch {
+    nativeBaseProto = null;
+    nativeRecordableProto = null;
+  }
+  if (nativeBaseProto !== null && typeof nativeBaseProto.snapshot !== "function") {
+    nativeExportFn = nativeBaseProto.export;
+    nativeResetFn = nativeBaseProto.reset;
+    Object.defineProperty(nativeBaseProto, "export", {
+      configurable: true,
+      writable: true,
+      enumerable: false,
+      value: nativeExportV2,
+    });
+    Object.defineProperty(nativeBaseProto, "resetCount", {
+      configurable: true,
+      enumerable: false,
+      get() {
+        if (!isNativeHistogram(this)) throw errInvalidThis("Histogram");
+        return nativeResetCountOf(this);
+      },
+    });
+    Object.defineProperty(nativeBaseProto, "reset", {
+      configurable: true,
+      writable: true,
+      enumerable: false,
+      value: function () {
+        if (!isNativeHistogram(this)) throw errInvalidThis("Histogram");
+        nativeResetFn.call(this);
+        nativeResetCounts.set(this, nativeResetCountOf(this) + 1);
+      },
+    });
+    if (typeof nativePerfHooks.importHistogram === "function") {
+      Object.defineProperty(nativeBaseProto, "snapshot", {
+        configurable: true,
+        writable: true,
+        enumerable: false,
+        value: nativeSnapshot,
+      });
+      Object.defineProperty(nativeBaseProto, "diff", {
+        configurable: true,
+        writable: true,
+        enumerable: false,
+        value: nativeDiff,
+      });
+    }
+    if (
+      nativeRecordableProto !== null &&
+      typeof nativeRecordableProto.subtract === "function"
+    ) {
+      nativeSubtractFn = nativeRecordableProto.subtract;
+      Object.defineProperty(nativeRecordableProto, "subtract", {
+        configurable: true,
+        writable: true,
+        enumerable: false,
+        value: function (other) {
+          if (!isNativeHistogram(this)) throw errInvalidThis("Histogram");
+          nativeSubtractFn.call(this, other);
+          nativeResetCounts.set(this, nativeResetCountOf(this) + 1);
+        },
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 10. Constants.
 // ---------------------------------------------------------------------------
 const constants = Object.freeze({
@@ -2285,7 +3742,9 @@ export {
   PerformanceResourceTiming,
   constants,
   createHistogram,
+  createSlidingWindowHistogram,
   eventLoopUtilization,
+  importHistogram,
   monitorEventLoopDelay,
   performance,
   timerify,
@@ -2301,7 +3760,9 @@ export default {
   PerformanceResourceTiming,
   constants,
   createHistogram,
+  createSlidingWindowHistogram,
   eventLoopUtilization,
+  importHistogram,
   monitorEventLoopDelay,
   performance,
   timerify,

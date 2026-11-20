@@ -34,7 +34,7 @@ function nextTick() {
 }
 
 describe("perf_hooks module surface", () => {
-  test("exports match Node v24.20.0 (no Histogram)", () => {
+  test("exports match Node v24.20.0 (no Histogram) + Node 26 additions", () => {
     const expected = [
       "Performance",
       "PerformanceEntry",
@@ -45,7 +45,11 @@ describe("perf_hooks module surface", () => {
       "PerformanceResourceTiming",
       "constants",
       "createHistogram",
+      // Node 26 additions (Wave 2 L-PH1): the host v24.22 namespace
+      // already carries both, so the native check below holds too.
+      "createSlidingWindowHistogram",
       "eventLoopUtilization",
+      "importHistogram",
       "monitorEventLoopDelay",
       "performance",
       "timerify",
