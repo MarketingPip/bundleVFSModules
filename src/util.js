@@ -10,9 +10,9 @@
  *   - types.isExternal()/isKeyObject() always return false (no native objects)
  *   - inspect(showProxy) prints target/handler placeholders (cannot extract them)
  *   - getSystemErrorMap() ships the common libuv errnos, not the full table
- *   - util.getCallSites / markPromiseAsHandled / setTraceSigInt / util.diff are
- *     not available (require native bindings / V8 source maps)
- *   - parseEnv does not perform variable expansion or multiline values
+ *   - setTraceSigInt is a noop (browsers have no SIGINT)
+ *   - debounce/throttle read the wall clock (Date.now()) instead of the
+ *     monotonic libuv clock (see the debounce/throttle section)
  */
 
 /**
@@ -243,8 +243,24 @@ const validateFunction = (v, n) => {
   if (typeof v !== "function") throw ERR_INVALID_ARG_TYPE(n, "function", v);
 };
 const validateObject = (v, n) => {
-  if (v === null || typeof v !== "object")
+  // Node 26 validateObject, default kValidateObjectNone
+  // (lib/internal/validators.js:252): null and arrays are rejected; only
+  // genuine objects pass (functions are rejected too — typeof 'function'
+  // !== 'object' — matching the previous behavior here).
+  if (v === null || Array.isArray(v) || typeof v !== "object")
     throw ERR_INVALID_ARG_TYPE(n, "object", v);
+};
+const validateAbortSignal = (signal, name) => {
+  // Node 26 validateAbortSignal (lib/internal/validators.js:454): an
+  // AbortSignal is any non-null object with an 'aborted' property.
+  if (
+    signal !== undefined &&
+    (signal === null ||
+      typeof signal !== "object" ||
+      !("aborted" in signal))
+  ) {
+    throw ERR_INVALID_ARG_TYPE(name, "AbortSignal", signal);
+  }
 };
 const validateInteger = (
   v,
@@ -592,34 +608,6 @@ function reindentBridgeResult(ctx, s) {
   return s.replace(/\n/g, `\n${pad}`);
 }
 
-/**
- * ponytail: normalize the `[Promise]` tag the native bridge adds to Promise
- * subclasses. Node v24.20.0 `getPrefix` (lib/internal/util/inspect.js:775-795)
- * suppresses the tag when the constructor name already contains "Promise"
- * followed by an uppercase letter or end-of-name (`PromiseSubclass`,
- * `MyPromise`); the host bridge (v24.22.1+) always tags subclasses, so the
- * shim would print `PromiseSubclass [Promise] { <pending> }` where v24.20.0
- * prints `PromiseSubclass { <pending> }`. Reuses the shim's own `getPrefix`
- * (the v24.20.0 rule) to decide. Plain `Promise` never carries the tag on
- * either version, so it passes through untouched, and on a v24.20.0 host the
- * bridge output has no tag to strip (no-op). The bridge never ANSI-styles
- * the constructor/tag (probe: colored output styles only the state), so the
- * prefix is plain text; the match tolerates ANSI escapes defensively.
- * Ceiling: only the leading ` [Promise] ` token is stripped; nested values
- * are untouched.
- * @param {string} out
- */
-function normalizeBridgePromiseTag(out) {
-  const m =
-    /^((?:\u001b\[[0-9;]*m)*[^\s\u001b\[]+(?:\u001b\[[0-9;]*m)*) \[Promise\] /.exec(
-      out,
-    );
-  if (m === null) return out;
-  const ctor = m[1].replace(/\u001b\[[0-9;]*m/g, "");
-  if (getPrefix(ctor, "Promise", "Promise").includes("[Promise]")) return out;
-  return out.slice(0, m[1].length) + out.slice(m[1].length + " [Promise]".length);
-}
-
 // ---------------------------------------------------------------------------
 // toUSVString
 // ---------------------------------------------------------------------------
@@ -641,11 +629,21 @@ export function toUSVString(input) {
 // ---------------------------------------------------------------------------
 
 const vtRegex = new RegExp(
-  "[\\u001B\\u009B][[\\]()#;?]*" +
+  // ponytail: Node 26 (lib/internal/util/inspect.js:288-295) puts an OSC
+  // alternative first: ESC ] ... up to BEL / ESC \ / ST, non-greedy. Without
+  // it the CSI branch below consumes only a short prefix of OSC 8 hyperlinks
+  // (its parameter class excludes URL chars like ( ) ! + [ ] $ ' *) and the
+  // URL + label leak through (test-util-stripvtcontrolcharacters.js).
+  // The CSI parameter separator is [;:] like Node 26, so colon-delimited
+  // SGR sub-parameters (38:2:255:0:0) strip as one sequence. An unterminated
+  // OSC still falls through to the CSI branch (short-prefix consumption),
+  // exactly as Node 26's regex does.
+  "(?:\\u001B\\][\\s\\S]*?(?:\\u0007|\\u001B\\u005C|\\u009C))" +
+    "|[\\u001B\\u009B][[\\]()#;?]*" +
     "(?:(?:(?:(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]+)*" +
     "|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?" +
     "(?:\\u0007|\\u001B\\u005C|\\u009C))" +
-    "|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?" +
+    "|(?:(?:\\d{1,4}(?:[;:]\\d{0,4})*)?" +
     "[\\dA-PR-TZcf-nq-uy=><~]))",
   "g",
 );
@@ -815,6 +813,282 @@ defineColorAlias("inverse", "swapColors");
 defineColorAlias("inverse", "swapcolors");
 defineColorAlias("doubleunderline", "doubleUnderline");
 
+/**
+ * Colorize a JavaScript RegExp pattern per ECMAScript grammar. Verbatim
+ * port of Node 26 lib/internal/util/inspect.js:533 (highlightRegExp): a
+ * tolerant single-pass highlighter using heuristics in some cases. It
+ * supports: groups (named/unnamed, lookaround), assertions, alternation,
+ * quantifiers, escapes (incl. Unicode properties), character classes and
+ * backreferences. Delimiters take the first palette color (green), the
+ * pattern takes deeper colors by nesting depth (yellow at depth 1).
+ * @param {string} regexpString
+ * @returns {string}
+ */
+function highlightRegExp(regexpString) {
+  let out = "";
+  let i = 0;
+  let depth = 0;
+  let inClass = false;
+
+  // Verify palette and update cache if user changed colors
+  const paletteNames =
+    highlightRegExp.colors?.length > 0
+      ? highlightRegExp.colors
+      : highlightRegExpColors;
+
+  const palette = paletteNames.reduce((acc, name) => {
+    const color = inspectColors[name];
+    if (color) acc.push([`\u001b[${color[0]}m`, `\u001b[${color[1]}m`]);
+    return acc;
+  }, []);
+
+  function writeGroup(start, end, decreaseDepth = 1) {
+    let seq = "";
+    i++;
+    // Only checking for the closing delimiter is a fast heuristic for regular
+    // expressions without the u or v flag. A safer check would verify that the
+    // read characters are all alphanumeric.
+    while (i < regexpString.length && regexpString[i] !== end) {
+      seq += regexpString[i++];
+    }
+    if (i < regexpString.length) {
+      depth -= decreaseDepth;
+      write(start);
+      writeDepth(seq, 1, 1);
+      write(end);
+      depth += decreaseDepth;
+    } else {
+      // The group is not closed which would lead to mistakes in the output.
+      // This is a workaround to prevent output from being corrupted.
+      writeDepth(start, 1, -seq.length);
+    }
+  }
+
+  const write = (str) => {
+    const idx = depth % palette.length;
+    // Safeguard against bugs in the implementation.
+    const color = palette[idx] ?? palette[0];
+    out += color[0] + str + color[1];
+    return idx;
+  };
+
+  function writeDepth(str, incDepth, incI) {
+    depth += incDepth;
+    write(str);
+    depth -= incDepth;
+    i += incI;
+  }
+
+  // Opening '/'
+  write("/");
+  depth++;
+  i = 1;
+
+  // Parse pattern until next unescaped '/'
+  while (i < regexpString.length) {
+    const ch = regexpString[i];
+
+    if (inClass) {
+      if (ch === "\\") {
+        let seq = "\\";
+        i++;
+        if (i < regexpString.length) {
+          seq += regexpString[i++];
+          const next = seq[1];
+          if (next === "u" && regexpString[i] === "{") {
+            writeGroup(`${seq}{`, "}", 0);
+            continue;
+          } else if (
+            (next === "p" || next === "P") &&
+            regexpString[i] === "{"
+          ) {
+            writeGroup(`${seq}{`, "}", 0);
+            continue;
+          } else if (seq[1] === "x") {
+            seq += regexpString.slice(i, i + 2);
+            i += 2;
+          }
+        }
+        write(seq);
+      } else if (ch === "]") {
+        depth--;
+        write("]");
+        i++;
+        inClass = false;
+      } else if (
+        ch === "-" &&
+        regexpString[i - 1] !== "[" &&
+        i + 1 < regexpString.length &&
+        regexpString[i + 1] !== "]"
+      ) {
+        writeDepth("-", 1, 1);
+      } else {
+        write(ch);
+        i++;
+      }
+    } else if (ch === "[") {
+      // Enter class
+      write("[");
+      depth++;
+      i++;
+      inClass = true;
+    } else if (ch === "(") {
+      write("(");
+      depth++;
+      i++;
+      if (i < regexpString.length && regexpString[i] === "?") {
+        // Assertions and named groups
+        i++;
+        const a = i < regexpString.length ? regexpString[i] : "";
+        if (a === ":" || a === "=" || a === "!") {
+          writeDepth(`?${a}`, -1, 1);
+        } else {
+          const b = i + 1 < regexpString.length ? regexpString[i + 1] : "";
+          if (a === "<" && (b === "=" || b === "!")) {
+            writeDepth(`?<${b}`, -1, 2);
+          } else if (a === "<") {
+            // Named capture: write '?<name>' as a single colored token
+            i++; // consume '<'
+            const start = i;
+            while (i < regexpString.length && regexpString[i] !== ">") {
+              i++;
+            }
+            const name = regexpString.slice(start, i);
+            if (i < regexpString.length && regexpString[i] === ">") {
+              depth--;
+              write("?<");
+              writeDepth(name, 1, 0);
+              write(">");
+              depth++;
+              i++;
+            } else {
+              writeDepth("?<", -1, 0);
+              write(name);
+            }
+          } else {
+            write("?");
+          }
+        }
+      }
+    } else if (ch === ")") {
+      depth--;
+      write(")");
+      i++;
+    } else if (ch === "\\") {
+      let seq = "\\";
+      i++;
+      if (i < regexpString.length) {
+        seq += regexpString[i++];
+        const next = seq[1];
+        if (i < regexpString.length) {
+          if (next === "u" && regexpString[i] === "{") {
+            writeGroup(`${seq}{`, "}", 0);
+            continue;
+          } else if (next === "x") {
+            seq += regexpString.slice(i, i + 2);
+            i += 2;
+          } else if (next >= "0" && next <= "9") {
+            while (
+              i < regexpString.length &&
+              regexpString[i] >= "0" &&
+              regexpString[i] <= "9"
+            ) {
+              seq += regexpString[i++];
+            }
+          } else if (next === "k" && regexpString[i] === "<") {
+            writeGroup(`${seq}<`, ">");
+            continue;
+          } else if (
+            (next === "p" || next === "P") &&
+            regexpString[i] === "{"
+          ) {
+            // Unicode properties
+            writeGroup(`${seq}{`, "}", 0);
+            continue;
+          }
+        }
+      }
+      writeDepth(seq, 1, 0);
+    } else if (
+      ch === "|" ||
+      ch === "+" ||
+      ch === "*" ||
+      ch === "?" ||
+      ch === "," ||
+      ch === "^" ||
+      ch === "$"
+    ) {
+      writeDepth(ch, 3, 1);
+    } else if (ch === "{") {
+      i++;
+      let digits = "";
+      while (
+        i < regexpString.length &&
+        regexpString[i] >= "0" &&
+        regexpString[i] <= "9"
+      ) {
+        digits += regexpString[i++];
+      }
+      if (digits) {
+        write("{");
+        depth++;
+        writeDepth(digits, 1, 0);
+      }
+      if (i < regexpString.length) {
+        if (regexpString[i] === ",") {
+          if (!digits) {
+            write("{");
+            depth++;
+          }
+          write(",");
+          i++;
+        } else if (!digits) {
+          depth += 1;
+          write("{");
+          depth -= 1;
+          continue;
+        }
+      }
+      let digits2 = "";
+      while (
+        i < regexpString.length &&
+        regexpString[i] >= "0" &&
+        regexpString[i] <= "9"
+      ) {
+        digits2 += regexpString[i++];
+      }
+      if (digits2) {
+        writeDepth(digits2, 1, 0);
+      }
+      if (i < regexpString.length && regexpString[i] === "}") {
+        depth--;
+        write("}");
+        i++;
+      }
+      if (i < regexpString.length && regexpString[i] === "?") {
+        writeDepth("?", 3, 1);
+      }
+    } else if (ch === ".") {
+      writeDepth(ch, 2, 1);
+    } else if (ch === "/") {
+      // Stop at closing delimiter (unescaped, outside of character class)
+      break;
+    } else {
+      writeDepth(ch, 1, 1);
+    }
+  }
+
+  // Closing delimiter and flags
+  writeDepth("/", -1, 1);
+  if (i < regexpString.length) {
+    write(regexpString.slice(i));
+  }
+  return out;
+}
+
+// Define the palette for RegExp group depth highlighting. Can be changed by users.
+highlightRegExp.colors = ["green", "red", "yellow", "cyan", "magenta"];
+
 /** @type {Record<string, string>} */
 const inspectStyles = {
   bigint: "yellow",
@@ -823,12 +1097,16 @@ const inspectStyles = {
   module: "underline",
   null: "bold",
   number: "yellow",
-  regexp: "red",
+  regexp: highlightRegExp,
   special: "cyan",
   string: "green",
   symbol: "green",
   undefined: "grey",
 };
+
+// Snapshot of the default palette: an empty/undefined user palette falls
+// back to this (Node 26 lib/internal/util/inspect.js:521).
+const highlightRegExpColors = highlightRegExp.colors.slice();
 
 /** @type {Record<string, {openSeq: string, closeSeq: string, keepClose: boolean}>} */
 let styleCache;
@@ -855,6 +1133,12 @@ function stylizeWithColor(str, styleType) {
   if (style && inspectColors[style]) {
     const codes = inspectColors[style];
     return `${kEscape}${codes[0]}${kEscapeEnd}${str}${kEscape}${codes[1]}${kEscapeEnd}`;
+  }
+  // Node 26 (stylizeWithColor, lib/internal/util/inspect.js:850): a
+  // function style is called with the whole string — this is how the
+  // regexp highlighter runs (inspect.styles.regexp is highlightRegExp).
+  if (typeof style === "function") {
+    return style(str);
   }
   return str;
 }
@@ -983,6 +1267,12 @@ function makeCtx(options) {
     // reached; depthLevel is the current composite nesting level.
     currentDepth: 0,
     depthLevel: 0,
+    // Node 26 output budget (lib/internal/util/inspect.js:355,1479-1490):
+    // cumulative formatted output per indentation level; once any level
+    // exceeds 2**27, further inspection collapses (budgetTripped forces
+    // recurseTimes = -1 in formatValue/formatObjectValue).
+    budget: /** @type {Record<number, number>} */ ({}),
+    budgetTripped: false,
     stylize: options.stylize
       ? options.stylize
       : options.colors
@@ -1004,6 +1294,13 @@ const nodeStripCommentsRegExp = /(\/\/.*?\n)|(\/\*(.|\n)*?\*\/)/g;
  * suffix (e.g. `Settings(2) [Set] `).
  */
 function getPrefix(constructor, tag, fallback, size = "") {
+  // ponytail: Node 26 getPrefix (lib/internal/util/inspect.js:1024-1041).
+  // The v24 rule (suppress the tag when the name CONTAINS it followed by an
+  // uppercase letter or end-of-name) is gone: v26 shows the [tag] unless the
+  // constructor name EQUALS the tag (or the part after its last dot).
+  // This is why SetSubclass/MapSubclass/PromiseSubclass all carry their
+  // [Set]/[Map]/[Promise] tags in the Node 26 suite (test-util-inspect.js:
+  // 1524-1528). The dot handling covers dotted tags.
   if (constructor === null) {
     if (tag !== "" && fallback !== tag) {
       return `[${fallback}${size}: null prototype] [${tag}] `;
@@ -1011,22 +1308,15 @@ function getPrefix(constructor, tag, fallback, size = "") {
     return `[${fallback}${size}: null prototype] `;
   }
 
-  let result = `${constructor}${size} `;
   if (tag !== "") {
-    const position = constructor.indexOf(tag);
-    if (position === -1) {
-      result += `[${tag}] `;
-    } else {
-      const endPos = position + tag.length;
-      if (
-        endPos !== constructor.length &&
-        constructor[endPos] === constructor[endPos].toLowerCase()
-      ) {
-        result += `[${tag}] `;
-      }
+    const dot = tag.lastIndexOf(".");
+    if (constructor === (dot >= 1 ? tag.slice(dot + 1) : tag)) {
+      return `${tag}${size} `;
     }
+    return `${constructor}${size} [${tag}] `;
   }
-  return result;
+
+  return `${constructor}${size} `;
 }
 
 /**
@@ -1616,34 +1906,14 @@ function formatPrimitive(ctx, value) {
 /**
  * Mirror of Node's getPrefix() in lib/internal/util/inspect.js: builds the
  * leading "Constructor [tag] " (or "[fallback: null prototype] [tag] ")
- * used when improving an error's first stack line.
+ * used when improving an error's first stack line. Node 26 has a single
+ * getPrefix shared by formatRaw and improveStack, so this delegates.
  * @param {string | null} constructor
  * @param {string} tag
  * @param {string} fallback
  */
 function getErrorPrefix(constructor, tag, fallback, size = "") {
-  if (constructor === null) {
-    if (tag !== "" && fallback !== tag) {
-      return `[${fallback}${size}: null prototype] [${tag}] `;
-    }
-    return `[${fallback}${size}: null prototype] `;
-  }
-  let result = `${constructor}${size} `;
-  if (tag !== "") {
-    const position = constructor.indexOf(tag);
-    if (position === -1) {
-      result += `[${tag}] `;
-    } else {
-      const endPos = position + tag.length;
-      if (
-        endPos !== constructor.length &&
-        constructor[endPos] === constructor[endPos].toLowerCase()
-      ) {
-        result += `[${tag}] `;
-      }
-    }
-  }
-  return result;
+  return getPrefix(constructor, tag, fallback, size);
 }
 
 /**
@@ -1900,24 +2170,16 @@ function formatProperty(ctx, value, recurseTimes, key, isArray, original) {
           const tmp = desc.get.call(original === undefined ? value : original);
           if (tmp === null) {
             str = `${ctx.stylize(`[${label}:`, "special")} ${ctx.stylize("null", "null")}${ctx.stylize("]", "special")}`;
-          } else if (typeof tmp === "object") {
+          } else if (typeof tmp === "object" || typeof tmp === "function") {
+            // Node 26 (formatProperty, lib/internal/util/inspect.js:2578):
+            // getter results that are functions format via formatValue like
+            // objects — `[Getter] [Function: bar]` — instead of falling
+            // through to formatPrimitive, whose SymbolPrototypeToString
+            // threw for non-symbols in v24
+            // (test-util-inspect.js:2627, nodejs/node#64838).
             str = `${ctx.stylize(`[${label}]`, "special")} ${formatValue(ctx, tmp, nextRecurse)}`;
           } else {
             const primitive = formatPrimitive(ctx, tmp);
-            // Mirror Node's formatPrimitive fallthrough (oracle
-            // lib/internal/util/inspect.js:2013): anything that is not a
-            // string / number / bigint / boolean / undefined ends up at
-            // SymbolPrototypeToString(value), which throws for non-symbols
-            // — e.g. a getter returning a function, like Map's
-            // [Symbol.species] getter (test-util-inspect.js:3900). The
-            // shim's formatPrimitive returns undefined for those instead
-            // (formatValue's dispatch needs that), so reproduce the throw
-            // here; the catch below renders it as `<Inspection threw
-            // (TypeError: ...)>`. Reached only when tmp is a function
-            // (every other non-object, non-null result formats above).
-            if (primitive === undefined) {
-              Symbol.prototype.toString.call(tmp);
-            }
             str = `${ctx.stylize(`[${label}:`, "special")} ${primitive}${ctx.stylize("]", "special")}`;
           }
         } catch (err) {
@@ -2420,6 +2682,36 @@ function groupArrayElements(ctx, output, value, indentLen) {
  * @param {number} level
  */
 function reduceToSingleString(ctx, output, tag, braces, level, arrayValue) {
+  // Node 26 output budget (lib/internal/util/inspect.js:1479-1490): every
+  // composite rendering accumulates its length into the budget of the
+  // current indentation level; once any level exceeds 2**27, ctx.depth is
+  // set to -1 and further inspection collapses. The shim tracks the same
+  // accumulation here — reduceToSingleString is the single choke point for
+  // composite rendering, mirroring Node's formatObject accounting — and
+  // records the trip in ctx.budgetTripped (the shim's equivalent of
+  // ctx.depth = -1; depth is counted down via recurseTimes here).
+  // ponytail: the fast path (formatObjectValue's tail-to-tail recursion)
+  // never touches ctx.indentationLvl, so deep renders accumulate into
+  // budget[0] — the trip then fires on TOTAL output, earlier than Node's
+  // per-level trip. That is fine: the budget test asserts only that
+  // inspect returns, and no other test renders anywhere near 2**27.
+  const res = reduceToSingleStringInner(
+    ctx,
+    output,
+    tag,
+    braces,
+    level,
+    arrayValue,
+  );
+  if (ctx.budget === undefined) ctx.budget = {};
+  const lvl = ctx.indentationLvl || 0;
+  const newLength = (ctx.budget[lvl] || 0) + res.length;
+  ctx.budget[lvl] = newLength;
+  if (newLength > 2 ** 27) ctx.budgetTripped = true;
+  return res;
+}
+
+function reduceToSingleStringInner(ctx, output, tag, braces, level, arrayValue) {
   const options = ctx.options;
   const breakLength = options.breakLength ?? 80;
   const compact = options.compact ?? 3;
@@ -2699,6 +2991,173 @@ function getUserOptions(ctx, isCrossContext) {
   return ret;
 }
 
+/**
+ * Fetch the showProxy:true rendering of a proxy at unlimited depth (the
+ * "spine"): `Proxy [ Proxy [ <target>, <handler> ], <handler> ]`. The
+ * bridge's showProxy:true path never reads properties through the proxies
+ * (getProxyDetails only), so it cannot throw on handler traps — unlike
+ * its showProxy:false path (see below). Returns null when the bridge is
+ * unavailable or the call throws.
+ * @param {any} value
+ * @returns {string|null}
+ */
+function getProxySpine(value) {
+  try {
+    return nativeInspectBridge(value, {
+      showProxy: true,
+      depth: null,
+      colors: false,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Count the `Proxy(...)` wraps Node 26 applies when formatting a proxy
+ * with showProxy:false (formatValue, lib/internal/util/inspect.js:1117-
+ * 1200): one wrap per proxy in the TARGET chain. Derived from the
+ * showProxy:true spine — each level contributes one leading `Proxy [`
+ * spine token; the first remainder that is not a `Proxy [` is the ultimate
+ * target. A revoked proxy renders `<Revoked Proxy>` (0 wraps); a proxy
+ * over a revoked proxy renders one `Proxy [` (1 wrap). The handler never
+ * contributes: it appears after the target, past the comma. depth:null is
+ * safe: proxy target chains are finite (a target must exist before its
+ * proxy). Pure-JS proxy detection is impossible (no isProxy without the
+ * native bridge), so this is a bridge-only helper — see NOTES-26-util-u1u8.md.
+ * @param {string} spine the showProxy:true, depth:null rendering
+ * @returns {number}
+ */
+function countProxyWraps(spine) {
+  let wraps = 0;
+  let rest = spine;
+  for (;;) {
+    const trimmed = rest.replace(/^\s+/, "");
+    if (!trimmed.startsWith("Proxy [")) break;
+    wraps++;
+    rest = trimmed.slice("Proxy [".length);
+  }
+  return wraps;
+}
+
+/**
+ * Find the index of the comma separating the two elements of a
+ * `Proxy [ target, handler ]` rendering, scanning from inside the outer
+ * `[` (depth 1). Bracket-aware and quote-aware: commas inside nested
+ * `[{(` pairs or inside quoted strings do not count. Returns -1 when no
+ * top-level comma exists (malformed input).
+ * @param {string} s the text after the leading `Proxy [`
+ * @returns {number}
+ */
+function findProxySpineComma(s) {
+  let depth = 1;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "'" || ch === '"' || ch === "`") {
+      // Skip a quoted string (backslash escapes the next character).
+      i++;
+      while (i < s.length && s[i] !== ch) {
+        if (s[i] === "\\") i++;
+        i++;
+      }
+      continue;
+    }
+    if (ch === "[" || ch === "{" || ch === "(") depth++;
+    else if (ch === "]" || ch === "}" || ch === ")") {
+      depth--;
+      if (depth === 0) return -1;
+    } else if (ch === "," && depth === 1) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Extract the ultimate target's rendering from a showProxy:true spine:
+ * peel `Proxy [` layers until the target is not itself a proxy rendering.
+ * The extracted text is de-indented by 2 spaces per peeled layer — the
+ * spine formats each level with indentationLvl bumped by 2, so the
+ * target's continuation lines carry that extra indent.
+ * Returns null when the spine does not have the expected shape.
+ * @param {string} spine
+ * @returns {string|null}
+ */
+function extractProxyTargetRendering(spine) {
+  let rest = spine;
+  let peeled = 0;
+  for (;;) {
+    const trimmed = rest.replace(/^\s+/, "");
+    if (!trimmed.startsWith("Proxy [")) return null;
+    rest = trimmed.slice("Proxy [".length);
+    peeled++;
+    const comma = findProxySpineComma(rest);
+    if (comma === -1) return null;
+    const target = rest.slice(0, comma);
+    const targetTrimmed = target.replace(/^\s+/, "");
+    if (!targetTrimmed.startsWith("Proxy [")) {
+      // De-indent continuation lines by 2 per peeled layer.
+      const dedent = " ".repeat(2 * peeled);
+      const lines = targetTrimmed.split("\n");
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i].startsWith(dedent)) lines[i] = lines[i].slice(dedent.length);
+      }
+      return lines.join("\n").trimEnd();
+    }
+    rest = target;
+  }
+}
+
+/**
+ * Detect whether any custom inspect method is involved in a proxy's
+ * spine rendering: compare the spine against the same rendering with
+ * customInspect disabled. Used only on the fallback path (when the
+ * showProxy:false bridge call throws), where the target cannot be
+ * rendered directly.
+ * @param {any} value
+ * @param {string} spine
+ * @returns {boolean}
+ */
+function proxySpineUsesCustomInspect(value, spine) {
+  try {
+    const plain = nativeInspectBridge(value, {
+      showProxy: true,
+      depth: null,
+      colors: false,
+      customInspect: false,
+    });
+    return plain !== spine;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect whether formatting the unwrapped target of a proxy involves a
+ * custom inspect method: compare the showProxy:false rendering against
+ * the same rendering with customInspect disabled. Node 26 returns a
+ * custom inspect result directly, with NO Proxy(...) wrap — so a
+ * difference means "do not wrap". (With customInspect:false the target
+ * renders as a plain object, including its enumerable inspect.custom
+ * symbol property, so it differs from the custom result.)
+ * @param {any} value
+ * @param {string} unwrappedOut the showProxy:false bridge rendering
+ * @param {object} bridgeOpts the options used for that rendering
+ * @returns {boolean}
+ */
+function proxyTargetUsesCustomInspect(value, unwrappedOut, bridgeOpts) {
+  try {
+    const plain = nativeInspectBridge(value, {
+      ...bridgeOpts,
+      showProxy: false,
+      customInspect: false,
+    });
+    return plain !== unwrappedOut;
+  } catch {
+    return false;
+  }
+}
+
 function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
   // Safeguard against runaway recursion on huge structures.
   // Increment a counter; if we exceed a threshold, bail out.
@@ -2719,14 +3178,74 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     // This handles revoked proxies, throwing traps, and showProxy correctly.
     if (typeof nativeInspectBridge === "function") {
       try {
-        const nativeOut = nativeInspectBridge(value, {
+        // ponytail: pass the full option set, not just the original five.
+        // Node 26's proxy rendering honors breakLength (proxy12 needs
+        // breakLength:1 for its multiline array) and the other display
+        // options; the shim's defaults match the bridge's, so passing them
+        // explicitly is a no-op for default options.
+        const bridgeOpts = {
           colors: ctx.options.colors,
           depth: ctx.options.depth,
           showProxy: ctx.options.showProxy,
           compact: ctx.options.compact,
           numericSeparator: ctx.options.numericSeparator,
-        });
-        return nativeOut;
+          breakLength: ctx.options.breakLength,
+          maxArrayLength: ctx.options.maxArrayLength,
+          maxStringLength: ctx.options.maxStringLength,
+          showHidden: ctx.options.showHidden,
+          sorted: ctx.options.sorted,
+          getters: ctx.options.getters,
+        };
+        if (ctx.options.showProxy) {
+          return nativeInspectBridge(value, bridgeOpts);
+        }
+        // Node 26 with showProxy:false unwraps the proxy for formatting,
+        // then re-wraps the result in `Proxy(...)` once per proxy in the
+        // TARGET chain (formatValue, lib/internal/util/inspect.js:1117-
+        // 1200) — v24 just returned the unwrapped rendering. A custom
+        // inspect result on the unwrapped target is returned directly with
+        // NO wrap.
+        const wrap = (out, n) => {
+          for (let k = 0; k < n; k++) {
+            out = `${ctx.stylize("Proxy(", "special")}${out}${ctx.stylize(")", "special")}`;
+          }
+          return out;
+        };
+        let nativeOut;
+        try {
+          nativeOut = nativeInspectBridge(value, bridgeOpts);
+        } catch {
+          nativeOut = undefined;
+        }
+        if (nativeOut === undefined) {
+          // The host bridge (v24) unwraps only ONE proxy level before
+          // reading the custom-inspect symbol, so a handler trap throws
+          // on chains of length >= 2; Node 26 unwraps fully first (no
+          // read). Recover the unwrapped rendering from the showProxy:true
+          // spine, which never reads through the proxies.
+          const spine = getProxySpine(value);
+          const targetOut =
+            spine === null ? null : extractProxyTargetRendering(spine);
+          if (targetOut === null) throw new Error("unrecoverable proxy");
+          const wraps = countProxyWraps(spine);
+          if (wraps === 0 || proxySpineUsesCustomInspect(value, spine)) {
+            return targetOut;
+          }
+          return wrap(targetOut, wraps);
+        }
+        // Lazily-fetched spine: only needed for the wrap count.
+        let spine;
+        const getSpine = () => {
+          if (spine === undefined) spine = getProxySpine(value);
+          return spine;
+        };
+        const s = getSpine();
+        const wraps = s === null ? 0 : countProxyWraps(s);
+        if (wraps === 0) return nativeOut;
+        if (proxyTargetUsesCustomInspect(value, nativeOut, bridgeOpts)) {
+          return nativeOut;
+        }
+        return wrap(nativeOut, wraps);
       } catch {
         /* ignore, fall through to safe fallback */
       }
@@ -2741,6 +3260,15 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     }
     return ctx.stylize("Proxy", "special");
   }
+
+  // Node 26 output budget collapse (lib/internal/util/inspect.js:1489):
+  // once the budget trips, further inspection collapses to the
+  // depth-exhausted placeholders ([Object], [Array], [Error]). Placed after
+  // the proxy head (proxies still go to the bridge — ceiling, see NOTES)
+  // and before custom inspect, so a custom inspect method sees the tripped
+  // depth (-1) like Node's `ctx.depth - recurseTimes`. Primitives below
+  // still render: they return before any depth logic in Node too.
+  if (ctx.budgetTripped) recurseTimes = -1;
 
   // custom inspect hook
   if (
@@ -2788,7 +3316,10 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
           showHidden: ctx.options.showHidden,
           numericSeparator: ctx.options.numericSeparator,
         });
-        return reindentBridgeResult(ctx, normalizeBridgePromiseTag(nativeOut));
+        // ponytail: no tag normalization — Node 26's getPrefix shows the
+        // [Promise] tag for subclasses (PromiseSubclass [Promise]), and the
+        // host bridge (v24.22.1+) already prints it that way.
+        return reindentBridgeResult(ctx, nativeOut);
       } catch {
         /* fall through */
       }
@@ -3108,13 +3639,19 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       base = base.replaceAll("\n", `\n${indentation}`);
     }
     // Node surfaces a non-enumerable own 'cause' as [cause] (even if undefined).
+    // ponytail: extras are formatted at the error's own `level`, NOT level+1:
+    // the parent reduceToSingleString re-indents every newline of the nested
+    // value by 2*(level+1), so level+1 double-counts the nesting for any
+    // multiline nested value (nested SuppressedError/cause chain,
+    // test-util-inspect.js:739). Verified against the Node 26 oracle:
+    // a [cause] holding a SuppressedError indents its entries at 4, not 6.
     if (
       Object.prototype.hasOwnProperty.call(value, "cause") &&
       !Object.prototype.propertyIsEnumerable.call(value, "cause") &&
       !keys.includes("cause")
     ) {
       extraProps.push(
-        `${ctx.stylize("[cause]", "special")}: ${formatValue(ctx, value.cause, nextRecurse, level + 1)}`,
+        `${ctx.stylize("[cause]", "special")}: ${formatValue(ctx, value.cause, nextRecurse, level)}`,
       );
     }
     // Node surfaces AggregateError's non-enumerable own 'errors' as [errors].
@@ -3127,11 +3664,31 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
         !keys.includes("errors")
       ) {
         extraProps.push(
-          `${ctx.stylize("[errors]", "special")}: ${formatValue(ctx, errors, nextRecurse, level + 1)}`,
+          `${ctx.stylize("[errors]", "special")}: ${formatValue(ctx, errors, nextRecurse, level)}`,
         );
       }
     } catch {
       /* ignore getter that throws */
+    }
+    // Node 26 surfaces SuppressedError's non-enumerable own 'error' and
+    // 'suppressed' as [error] / [suppressed] (formatError,
+    // lib/internal/util/inspect.js:1993-2001), in that order after [errors].
+    // An error that merely inherits from a SuppressedError has no own
+    // properties, so no extras are shown.
+    for (const prop of ["error", "suppressed"]) {
+      try {
+        if (
+          Object.prototype.hasOwnProperty.call(value, prop) &&
+          !Object.prototype.propertyIsEnumerable.call(value, prop) &&
+          !keys.includes(prop)
+        ) {
+          extraProps.push(
+            `${ctx.stylize(`[${prop}]`, "special")}: ${formatValue(ctx, value[prop], nextRecurse, level)}`,
+          );
+        }
+      } catch {
+        /* ignore getter that throws */
+      }
     }
     const output = keys
       .map((key) => formatProperty(ctx, value, recurseTimes, key, false))
@@ -3210,17 +3767,16 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
   // Use types.isDataView for cross-realm safety. Node always shows
   // byteLength/byteOffset/buffer as bracketed extras, before any own keys.
   // If a getter throws (detached buffer), Node falls back to reading the key
-  // from value.buffer. Node also leaks +2 indentationLvl per thrown getter
-  // (formatExtraProperties' -= 2 is skipped); we replicate the leaked indent
-  // for parity.
+  // from value.buffer. Node 26 reads the value BEFORE indenting
+  // (formatExtraProperties, lib/internal/util/inspect.js:2547), so no
+  // indentation leaks into the output — the level boost this code used to
+  // apply (replicating the v24 leak) is dropped.
   if (types.isDataView(value)) {
     const output = [];
-    let levelBoost = 0;
     const getExtra = (key) => {
       try {
         return value[key];
       } catch {
-        levelBoost++;
         try {
           return value.buffer[key];
         } catch {
@@ -3244,7 +3800,7 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     const dvCtor = nodeConstructorName(value);
     const dvBase = dvCtor === null ? "[DataView: null prototype]" : "DataView";
     return finish(
-      reduceToSingleString(ctx, output, dvBase, ["{", "}"], level + levelBoost),
+      reduceToSingleString(ctx, output, dvBase, ["{", "}"], level),
     );
   }
 
@@ -3361,18 +3917,13 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
       mapBase = `[Map(${mapSize}): null prototype]`;
     } else {
       const ctorName = mapCtor.name;
-      // Node appends the intrinsic [Map] tag for subclasses (e.g. "Bar(0) [Map]"),
-      // unless the name already contains 'Map' followed by an uppercase letter
-      // (e.g. MapSubclass -> no tag). This matches Node's redundancy heuristic.
+      // Node's getPrefix (lib/internal/util/inspect.js:1024): the intrinsic
+      // [Map] tag is shown unless the constructor name EQUALS the tag
+      // (plain Map). Any other name — MapSubclass, MyMap, Foo — gets the
+      // tag, even when the name starts with 'Map'.
       let tagSuffix = "";
       if (ctorName && ctorName !== "Map") {
-        const tag = "Map";
-        const idx = ctorName.indexOf(tag);
-        const isRedundant =
-          idx !== -1 &&
-          (idx + tag.length >= ctorName.length ||
-            /[A-Z]/.test(ctorName[idx + tag.length]));
-        if (!isRedundant) tagSuffix = " [Map]";
+        tagSuffix = " [Map]";
       }
       mapBase =
         ctorName && ctorName !== "Map"
@@ -3400,18 +3951,12 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
     } else {
       const ctorName = ctor.name;
       const setName = ctorName && ctorName !== "Set" ? ctorName : "Set";
-      // Append [Set] tag for subclasses, unless the name already contains 'Set'
-      // followed by an uppercase letter (e.g. SetSubclass -> no tag, Settings -> [Set]).
-      // This matches Node's heuristic to avoid redundant tags.
+      // Node's getPrefix (lib/internal/util/inspect.js:1024): the intrinsic
+      // [Set] tag is shown unless the constructor name EQUALS the tag
+      // (plain Set). Any other name — SetSubclass, MySet, Foo — gets it.
       let tagSuffix = "";
       if (setName !== "Set") {
-        const tag = "Set";
-        const idx = setName.indexOf(tag);
-        const isRedundant =
-          idx !== -1 &&
-          (idx + tag.length >= setName.length ||
-            /[A-Z]/.test(setName[idx + tag.length]));
-        if (!isRedundant) tagSuffix = " [Set]";
+        tagSuffix = " [Set]";
       }
       setBase = `${setName}(${collSize})${tagSuffix}`;
     }
@@ -3561,6 +4106,12 @@ function isDirectTailChild(ctx, child) {
  * @param {boolean} depthCounted - whether this value counted toward depthLevel.
  */
 function formatObjectValue(ctx, value, recurseTimes, level, finish, depthCounted) {
+  // Node 26 output budget collapse (see formatValue): the tail-to-tail fast
+  // path calls this directly, bypassing formatValue's head, so the trip
+  // must be consulted here too — otherwise deep chains keep rendering
+  // after the budget trips. The depth-exhausted branch below then returns
+  // the [Object]/[Array] placeholders without recursing.
+  if (ctx.budgetTripped) recurseTimes = -1;
   // ---- generic object / array / function / date / regexp
   let tag = "";
   let braces = ["{", "}"];
@@ -3833,15 +4384,22 @@ function formatObjectValue(ctx, value, recurseTimes, level, finish, depthCounted
             }
           }
         }
-        // Set the tag suffix (only if different from constructor name to avoid
-        // duplication, e.g. `Foo [Foo]` -> `Foo`).
+        // Set the tag suffix. Node 26's getPrefix
+        // (lib/internal/util/inspect.js:1024-1041): when the constructor
+        // name equals the tag — or the part of the tag after its last dot —
+        // the TAG replaces the constructor ('Class' + 'Namespaced.Class'
+        // prints just the tag, test-util-inspect.js:4107); otherwise the
+        // tag is appended ('Foo [bar]').
         let tagSuffix = "";
-        if (
-          typeof actualTag === "string" &&
-          actualTag !== "" &&
-          actualTag !== ctorName
-        ) {
-          tagSuffix = ` [${actualTag}]`;
+        if (typeof actualTag === "string" && actualTag !== "") {
+          const dot = actualTag.lastIndexOf(".");
+          const tagBase =
+            dot >= 1 ? actualTag.slice(dot + 1) : actualTag;
+          if (tagBase === ctorName) {
+            ctorName = actualTag;
+          } else {
+            tagSuffix = ` [${actualTag}]`;
+          }
         }
         // For plain non-null-proto with tag, Node uses 'Object [tag]'.
         if (!ctorName && tagSuffix) {
@@ -3931,8 +4489,19 @@ function formatObjectValue(ctx, value, recurseTimes, level, finish, depthCounted
     const tagVal = value[Symbol.toStringTag];
     let prefix = "";
     if (ctorName && ctorName !== "Object") prefix = ctorName;
-    if (typeof tagVal === "string" && tagVal !== "" && tagVal !== ctorName) {
-      prefix = prefix ? `${prefix} [${tagVal}]` : `[${tagVal}]`;
+    // Node 26's getPrefix dot rule (see the custom-tag branch above):
+    // suppress the [tag] when the constructor name equals the tag's part
+    // after its last dot ('Namespaced.Class' / 'Class').
+    const tagDot = typeof tagVal === "string" ? tagVal.lastIndexOf(".") : -1;
+    const tagBase =
+      tagDot >= 1 ? tagVal.slice(tagDot + 1) : tagVal;
+    if (typeof tagVal === "string" && tagVal !== "") {
+      if (prefix && tagBase === ctorName) {
+        // The tag replaces the constructor (see the custom-tag branch).
+        prefix = tagVal;
+      } else if (tagBase !== ctorName) {
+        prefix = prefix ? `${prefix} [${tagVal}]` : `[${tagVal}]`;
+      }
     }
     // For null-prototype, Node shows '[Foo: null prototype]' (with brackets if has
     // props, otherwise '[Foo: null prototype] {}'). The toStringTag comes after.
@@ -3946,6 +4515,10 @@ function formatObjectValue(ctx, value, recurseTimes, level, finish, depthCounted
       // Base is '[Object: null prototype]' or '[Foo: null prototype]'.
       // The tag [Foo] comes after, not inside.
       const baseName = ctorName && ctorName !== "Object" ? ctorName : "Object";
+      // ponytail: plain `!==` here, NOT the dot rule — Node's getPrefix
+      // null-prototype branch compares the FALLBACK name against the whole
+      // tag (`[Class: null prototype] [Namespaced.Class]`), with no dot
+      // handling (lib/internal/util/inspect.js:1025-1030).
       const tagPart =
         typeof tagVal === "string" && tagVal !== "" && tagVal !== baseName
           ? ` [${tagVal}]`
@@ -5052,7 +5625,73 @@ export function callbackify(original) {
  * @param {any} a @param {any} b
  * @param {Set<any>} seen
  */
-function deepEqualInner(a, b, seen, skipPrototype) {
+// ponytail: partial-mode helpers, verbatim ports of Node 26
+// lib/internal/util/comparisons.js:154 (isPartialUint8Array), 941
+// (partialSparseArrayEquiv), 963 (partialArrayEquiv). A subsequence scan:
+// every element of b must partial-match an element of a in order. Holes in
+// either side at the scan position delegate to the sparse variant, which
+// scans Object.keys instead of indices. Ceiling: Node's partial error
+// leniency (isEnumerableOrIdentical: a missing prop on a is OK when b's is
+// undefined) is not ported — no test in test-util-isPartialDeepStrictEqual.js
+// exercises it.
+function isPartialUint8Array(a, b) {
+  const lenA = a.length;
+  const lenB = b.length;
+  if (lenA < lenB) return false;
+  let offsetA = 0;
+  for (let offsetB = 0; offsetB < lenB; offsetB++) {
+    while (a[offsetA] !== b[offsetB]) {
+      offsetA++;
+      if (offsetA > lenA - lenB + offsetB) return false;
+    }
+    offsetA++;
+  }
+  return true;
+}
+
+function partialSparseArrayEquiv(a, b, seen, skipPrototype, startA, startB) {
+  let aPos = startA;
+  const keysA = PrimordialObjectKeys(a);
+  const keysB = PrimordialObjectKeys(b);
+  const lenA = keysA.length - startA;
+  const lenB = keysB.length - startB;
+  if (lenA < lenB) return false;
+  for (let i = 0; i < lenB; i++) {
+    const keyB = keysB[startB + i];
+    while (
+      !deepEqualInner(a[keysA[aPos]], b[keyB], seen, skipPrototype, true)
+    ) {
+      aPos++;
+      if (aPos > keysA.length - lenB + i) return false;
+    }
+    aPos++;
+  }
+  return true;
+}
+
+function partialArrayEquiv(a, b, seen, skipPrototype) {
+  let aPos = 0;
+  for (let i = 0; i < b.length; i++) {
+    let isSparse = b[i] === undefined && !hasOwn(b, i);
+    if (isSparse) {
+      return partialSparseArrayEquiv(a, b, seen, skipPrototype, aPos, i);
+    }
+    while (
+      !(isSparse = a[aPos] === undefined && !hasOwn(a, aPos)) &&
+      !deepEqualInner(a[aPos], b[i], seen, skipPrototype, true)
+    ) {
+      aPos++;
+      if (aPos > a.length - b.length + i) return false;
+    }
+    if (isSparse) {
+      return partialSparseArrayEquiv(a, b, seen, skipPrototype, aPos, i);
+    }
+    aPos++;
+  }
+  return true;
+}
+
+function deepEqualInner(a, b, seen, skipPrototype, partial = false) {
   if (a === b) return a !== 0 || 1 / a === 1 / b; // 0 !== -0
   if (Number.isNaN(a) && Number.isNaN(b)) return true; // NaN equals NaN
   if (typeof a !== typeof b) return false;
@@ -5119,15 +5758,27 @@ function deepEqualInner(a, b, seen, skipPrototype) {
     if (a[Symbol.toStringTag] !== b[Symbol.toStringTag]) return false;
     const ua = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
     const ub = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
-    if (ua.length !== ub.length) return false;
-    for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return false;
+    if (partial && ua.length !== ub.length) {
+      // Node 26: differing byteLength in partial mode is a subsequence
+      // byte match (isPartialArrayBufferView), not a failure.
+      if (!isPartialUint8Array(ua, ub)) return false;
+    } else {
+      if (ua.length !== ub.length) return false;
+      for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return false;
+    }
     // Fall through to key comparison for extra own properties.
   } else if (types.isAnyArrayBuffer(a) || types.isAnyArrayBuffer(b)) {
     if (!(types.isAnyArrayBuffer(a) && types.isAnyArrayBuffer(b))) return false;
-    if (a.byteLength !== b.byteLength) return false;
-    const ua = new Uint8Array(a),
-      ub = new Uint8Array(b);
-    for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return false;
+    if (partial && a.byteLength !== b.byteLength) {
+      const ua = new Uint8Array(a),
+        ub = new Uint8Array(b);
+      if (!isPartialUint8Array(ua, ub)) return false;
+    } else {
+      if (a.byteLength !== b.byteLength) return false;
+      const ua = new Uint8Array(a),
+        ub = new Uint8Array(b);
+      for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return false;
+    }
     // Fall through to key comparison for extra own properties.
   }
   if (types.isNativeError(a) || types.isNativeError(b)) {
@@ -5144,17 +5795,22 @@ function deepEqualInner(a, b, seen, skipPrototype) {
   }
   if (types.isMap(a) || types.isMap(b)) {
     if (!(types.isMap(a) && types.isMap(b))) return false;
-    if (a.size !== b.size) return false;
+    if (partial ? a.size < b.size : a.size !== b.size) return false;
     const aEntries = [...a.entries()];
     const bEntries = [...b.entries()];
-    const used = new Array(bEntries.length).fill(false);
-    outer: for (const [ka, va] of aEntries) {
-      for (let i = 0; i < bEntries.length; i++) {
+    // Partial mode: every entry of b must match a distinct entry of a
+    // (iterate b against a); strict mode iterates a against b (equal sizes,
+    // so the direction is interchangeable).
+    const outerEntries = partial ? bEntries : aEntries;
+    const innerEntries = partial ? aEntries : bEntries;
+    const used = new Array(innerEntries.length).fill(false);
+    outer: for (const [ka, va] of outerEntries) {
+      for (let i = 0; i < innerEntries.length; i++) {
         if (used[i]) continue;
-        const [kb, vb] = bEntries[i];
+        const [kb, vb] = innerEntries[i];
         if (
-          deepEqualInner(ka, kb, seen, skipPrototype) &&
-          deepEqualInner(va, vb, seen, skipPrototype)
+          deepEqualInner(ka, kb, seen, skipPrototype, partial) &&
+          deepEqualInner(va, vb, seen, skipPrototype, partial)
         ) {
           used[i] = true;
           continue outer;
@@ -5166,14 +5822,17 @@ function deepEqualInner(a, b, seen, skipPrototype) {
   }
   if (types.isSet(a) || types.isSet(b)) {
     if (!(types.isSet(a) && types.isSet(b))) return false;
-    if (a.size !== b.size) return false;
+    if (partial ? a.size < b.size : a.size !== b.size) return false;
     const aVals = [...a.values()];
     const bVals = [...b.values()];
-    const used = new Array(bVals.length).fill(false);
-    outer: for (const va of aVals) {
-      for (let i = 0; i < bVals.length; i++) {
+    // Partial mode: every value of b must match a distinct value of a.
+    const outerVals = partial ? bVals : aVals;
+    const innerVals = partial ? aVals : bVals;
+    const used = new Array(innerVals.length).fill(false);
+    outer: for (const va of outerVals) {
+      for (let i = 0; i < innerVals.length; i++) {
         if (used[i]) continue;
-        if (deepEqualInner(va, bVals[i], seen, skipPrototype)) {
+        if (deepEqualInner(va, innerVals[i], seen, skipPrototype, partial)) {
           used[i] = true;
           continue outer;
         }
@@ -5187,15 +5846,25 @@ function deepEqualInner(a, b, seen, skipPrototype) {
     bIsArr = Array.isArray(b);
   if (aIsArr !== bIsArr) return false;
   if (aIsArr && bIsArr) {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      const aHas = hasOwn(a, i),
-        bHas = hasOwn(b, i);
-      if (aHas !== bHas) return false;
-      if (aHas && !deepEqualInner(a[i], b[i], seen, skipPrototype))
-        return false;
+    if (partial) {
+      // Node 26: a may be longer; b's elements must appear in a as a
+      // subsequence (partialArrayEquiv). Non-index properties are checked
+      // by the subset key loop below.
+      if (a.length < b.length) return false;
+      if (!partialArrayEquiv(a, b, seen, skipPrototype)) return false;
+    } else {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        const aHas = hasOwn(a, i),
+          bHas = hasOwn(b, i);
+        if (aHas !== bHas) return false;
+        if (aHas && !deepEqualInner(a[i], b[i], seen, skipPrototype))
+          return false;
+      }
     }
-  } else if (!skipPrototype) {
+  } else if (!skipPrototype && !partial) {
+    // Node 26 checks prototypes only in strict mode (not partial, not
+    // strict-without-prototypes).
     if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
   }
 
@@ -5212,6 +5881,25 @@ function deepEqualInner(a, b, seen, skipPrototype) {
       PrimordialObjectPrototypeHasOwnProperty(b, s) &&
       PrimordialObjectGetOwnPropertyDescriptor(b, s).enumerable,
   );
+  if (partial) {
+    // Node 26 partial: b's keys must be a subset of a's, with partial-equal
+    // values (objEquiv over keys2 only). Array indices and typed-array
+    // indices are covered by the subsequence scans above, so they are
+    // skipped here — only non-index properties are checked.
+    const skipIndexKeys = aIsArr || ArrayBuffer.isView(a);
+    for (const k of bKeys) {
+      if (skipIndexKeys && isCanonicalArrayIndex(String(k))) continue;
+      if (!hasOwn(a, k)) return false;
+      if (!deepEqualInner(a[k], b[k], seen, skipPrototype, partial))
+        return false;
+    }
+    for (const s of bSymbols) {
+      if (!aSymbols.includes(s)) return false;
+      if (!deepEqualInner(a[s], b[s], seen, skipPrototype, partial))
+        return false;
+    }
+    return true;
+  }
   if (aKeys.length !== bKeys.length || aSymbols.length !== bSymbols.length)
     return false;
   for (const k of aKeys) {
@@ -5235,6 +5923,19 @@ function deepEqualInner(a, b, seen, skipPrototype) {
  */
 export function isDeepStrictEqual(a, b, skipPrototype = false) {
   return deepEqualInner(a, b, new Map(), skipPrototype);
+}
+
+/**
+ * Returns true if `b` is a deep-strict subset of `a`: every property of b
+ * exists in a with a partial-equal value; arrays match as subsequences;
+ * Maps/Sets match as subsets; prototypes are not compared (Node 26
+ * lib/internal/util/comparisons.js kPartial).
+ * @param {any} a
+ * @param {any} b
+ * @returns {boolean}
+ */
+export function isPartialDeepStrictEqual(a, b) {
+  return deepEqualInner(a, b, new Map(), false, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -5419,7 +6120,11 @@ const envKeyRegex = /^[a-zA-Z_][a-zA-Z_0-9]*$/;
 export function parseEnv(content) {
   validateString(content, "content");
   /** @type {Record<string, string>} */
-  const result = {};
+  // ponytail: Node 26 returns a null-prototype object (C++ binding,
+  // Dotenv::ToObject). The parser below is a faithful port of
+  // Dotenv::ParseContent (multiline quoted values, \n expansion inside
+  // double quotes only, inline comments, `export ` prefix, last-wins).
+  const result = Object.create(null);
 
   // Handle windows newlines "\r\n": remove "\r" and keep only "\n"
   let lines = content.replace(/\r/g, "");
@@ -6741,6 +7446,595 @@ export function _errnoException(err, syscall, path) {
 }
 
 // ---------------------------------------------------------------------------
+// debounce / throttle (Node 26, lib/internal/util/debounce.js +
+// lib/internal/util/throttle.js)
+//
+// Port notes (ponytail: browser ceiling — no libuv clock, no native
+// Timeout internals):
+// - Node reads the clock via internalBinding('timers').getLibuvNow() and
+//   captures timers' setTimeout/clearTimeout at module load. This port
+//   reads Date.now() and globalThis.setTimeout/clearTimeout at EACH use,
+//   so node:test mock.timers (which swaps the Date/setTimeout globals
+//   AFTER this module loads) drives throttle-timing deterministically.
+//   Real-timer behavior uses the wall clock instead of the monotonic
+//   libuv clock — same values at ms resolution for interval math.
+// - markPromiseAsHandled is the binding's job in Node; here attaching a
+//   no-op rejection handler marks the promise handled the same way.
+// - AbortError is internal in Node (lib/internal/errors.js); here it is a
+//   module-local class with the same code/name/cause behavior.
+// ---------------------------------------------------------------------------
+
+/** Node's internal/timers TIMEOUT_MAX (2^31 - 1 ms). */
+const TIMEOUT_MAX = 2147483647;
+
+/**
+ * Internal AbortError (Node lib/internal/errors.js): code 'ABORT_ERR',
+ * name 'AbortError', default message 'The operation was aborted', cause
+ * carried through the Error constructor options.
+ */
+class AbortError extends Error {
+  constructor(message = "The operation was aborted", options) {
+    super(message, options);
+    this.code = "ABORT_ERR";
+    this.name = "AbortError";
+  }
+}
+
+/** Local Promise.withResolvers (avoids depending on the host having it). */
+function promiseWithResolvers() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/**
+ * Marks a promise as handled so a rejection never surfaces as an
+ * unhandled rejection (Node: internalBinding('util').markPromiseAsHandled).
+ * @param {Promise} promise
+ */
+export function markPromiseAsHandled(promise) {
+  promise.then(undefined, () => {});
+}
+
+/** Node's internal/events/abort_listener addAbortListener, minimal form. */
+function addAbortListener(signal, listener) {
+  signal.addEventListener("abort", listener, { once: true });
+}
+
+function createFnProp(value) {
+  return {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value,
+  };
+}
+
+/**
+ * Creates a function that delays calling `fn` until `wait` milliseconds
+ * have elapsed since its most recent invocation. Port of Node 26
+ * lib/internal/util/debounce.js.
+ * @param {Function} fn
+ * @param {number} wait
+ * @param {object} [options]
+ * @returns {Function}
+ */
+export function debounce(fn, wait, options = {}) {
+  validateFunction(fn, "fn");
+  validateInteger(wait, "wait", 0, TIMEOUT_MAX);
+  validateObject(options, "options");
+
+  const { leading = false, rejectOnCancel = false, signal } = options;
+
+  validateBoolean(leading, "options.leading");
+  validateBoolean(rejectOnCancel, "options.rejectOnCancel");
+  validateAbortSignal(signal, "options.signal");
+
+  if (signal?.aborted) {
+    throw new AbortError(undefined, { __proto__: null, cause: signal.reason });
+  }
+
+  let args;
+  let abortError;
+  let pendingCalls = [];
+  let refed = true;
+  let timeout;
+
+  function rejectPending(error) {
+    const calls = pendingCalls;
+    pendingCalls = [];
+    for (let i = 0; i < calls.length; i++) {
+      calls[i].reject(error);
+    }
+  }
+
+  function cancelWithError(error) {
+    if (timeout === undefined) return;
+    globalThis.clearTimeout(timeout);
+    timeout = undefined;
+    args = undefined;
+    rejectPending(error);
+  }
+
+  function cancel(reason) {
+    if (timeout === undefined) return;
+    const error =
+      reason === undefined
+        ? new AbortError()
+        : new AbortError(undefined, { __proto__: null, cause: reason });
+    cancelWithError(error);
+  }
+
+  function abort() {
+    if (abortError === undefined) {
+      abortError =
+        signal.reason === undefined
+          ? new AbortError()
+          : new AbortError(undefined, {
+              __proto__: null,
+              cause: signal.reason,
+            });
+    }
+    cancelWithError(abortError);
+  }
+
+  function ref() {
+    refed = true;
+    timeout?.ref();
+    return debounced;
+  }
+
+  function unref() {
+    refed = false;
+    timeout?.unref();
+    return debounced;
+  }
+
+  function invoke(callArgs, calls) {
+    if (signal?.aborted) {
+      abort();
+      for (let i = 0; i < calls.length; i++) {
+        calls[i].reject(abortError);
+      }
+      return;
+    }
+
+    let result;
+    try {
+      result = Reflect.apply(fn, debounced, callArgs);
+    } catch (error) {
+      for (let i = 0; i < calls.length; i++) {
+        calls[i].reject(error);
+      }
+      return;
+    }
+
+    for (let i = 0; i < calls.length; i++) {
+      calls[i].resolve(result);
+    }
+  }
+
+  function invokePending() {
+    const callArgs = args;
+    args = undefined;
+    const calls = pendingCalls;
+    pendingCalls = [];
+    if (calls.length !== 0) invoke(callArgs, calls);
+  }
+
+  function onTimeout() {
+    timeout = undefined;
+    invokePending();
+  }
+
+  function flush() {
+    if (pendingCalls.length === 0) return;
+
+    globalThis.clearTimeout(timeout);
+    timeout = undefined;
+    invokePending();
+  }
+
+  function debounced(...callArgs) {
+    if (signal?.aborted) abort();
+    if (abortError !== undefined) return Promise.reject(abortError);
+
+    const invokeNow = leading && timeout === undefined;
+    if (timeout !== undefined) {
+      if (pendingCalls.length !== 0) {
+        markPromiseAsHandled(pendingCalls[pendingCalls.length - 1].promise);
+        if (rejectOnCancel) {
+          rejectPending(new AbortError("The debounced call was superseded"));
+        }
+      }
+      timeout.refresh();
+    } else {
+      timeout = globalThis.setTimeout(onTimeout, wait);
+      if (!refed) timeout.unref();
+    }
+
+    if (signal?.aborted) {
+      abort();
+      return Promise.reject(abortError);
+    }
+
+    const call = promiseWithResolvers();
+    if (invokeNow) {
+      invoke(callArgs, [call]);
+    } else {
+      pendingCalls.push(call);
+      args = callArgs;
+    }
+    return call.promise;
+  }
+
+  Object.defineProperties(debounced, {
+    cancel: createFnProp(cancel),
+    flush: createFnProp(flush),
+    ref: createFnProp(ref),
+    unref: createFnProp(unref),
+    pending: {
+      enumerable: false,
+      get() {
+        return pendingCalls.length === 0
+          ? null
+          : pendingCalls[pendingCalls.length - 1].promise;
+      },
+    },
+    pendingCount: {
+      enumerable: false,
+      get() {
+        return pendingCalls.length;
+      },
+    },
+    length: {
+      configurable: true,
+      value: fn.length,
+    },
+    name: {
+      configurable: true,
+      value: fn.name,
+    },
+  });
+
+  if (signal !== undefined) {
+    addAbortListener(signal, abort);
+  }
+
+  return debounced;
+}
+
+/**
+ * Creates a function that invokes `fn` at most `limit` times per
+ * `interval`. Port of Node 26 lib/internal/util/throttle.js.
+ * @param {Function} fn
+ * @param {number} limit
+ * @param {number} interval
+ * @param {object} [options]
+ * @returns {Function}
+ */
+export function throttle(fn, limit, interval, options = {}) {
+  validateFunction(fn, "fn");
+  validateInteger(limit, "limit", 1);
+  validateInteger(interval, "interval", 0, TIMEOUT_MAX);
+  validateObject(options, "options");
+
+  const {
+    concurrency = Infinity,
+    maxPending = Infinity,
+    overflow = "queue",
+    signal,
+    strict = false,
+  } = options;
+
+  if (concurrency !== Infinity) {
+    validateInteger(concurrency, "options.concurrency", 1);
+  }
+  if (maxPending !== Infinity) {
+    validateInteger(maxPending, "options.maxPending", 0);
+  }
+  validateOneOf(overflow, "options.overflow", ["queue", "drop"]);
+  validateAbortSignal(signal, "options.signal");
+  validateBoolean(strict, "options.strict");
+
+  if (signal?.aborted) {
+    throw new AbortError(undefined, { __proto__: null, cause: signal.reason });
+  }
+
+  let abortError;
+  let activeCount = 0;
+  let pendingCalls = [];
+  let pendingIndex = 0;
+  let refed = true;
+  let strictIndex = 0;
+  let strictTicks = [];
+  let timeout;
+  let windowCount = 0;
+  let windowStart;
+
+  function pendingCount() {
+    return pendingCalls.length - pendingIndex;
+  }
+
+  function dequeue() {
+    const call = pendingCalls[pendingIndex];
+    pendingCalls[pendingIndex++] = undefined;
+
+    if (pendingIndex === pendingCalls.length) {
+      pendingCalls = [];
+      pendingIndex = 0;
+    } else if (pendingIndex > 1024 && pendingIndex * 2 >= pendingCalls.length) {
+      pendingCalls = pendingCalls.slice(pendingIndex);
+      pendingIndex = 0;
+    }
+
+    return call;
+  }
+
+  function rejectPending(error) {
+    const calls = pendingCalls;
+    const start = pendingIndex;
+    pendingCalls = [];
+    pendingIndex = 0;
+    for (let i = start; i < calls.length; i++) {
+      calls[i].reject(error);
+    }
+  }
+
+  function resetLimiter() {
+    strictIndex = 0;
+    strictTicks = [];
+    windowCount = 0;
+    windowStart = undefined;
+  }
+
+  function cancelWithError(error) {
+    if (timeout !== undefined) {
+      globalThis.clearTimeout(timeout);
+      timeout = undefined;
+    }
+    resetLimiter();
+    rejectPending(error);
+  }
+
+  function cancel(reason) {
+    const error =
+      reason === undefined
+        ? new AbortError()
+        : new AbortError(undefined, { __proto__: null, cause: reason });
+    cancelWithError(error);
+  }
+
+  function abort() {
+    if (abortError === undefined) {
+      abortError =
+        signal.reason === undefined
+          ? new AbortError()
+          : new AbortError(undefined, {
+              __proto__: null,
+              cause: signal.reason,
+            });
+    }
+    cancelWithError(abortError);
+  }
+
+  function ref() {
+    refed = true;
+    timeout?.ref();
+    return throttled;
+  }
+
+  function unref() {
+    refed = false;
+    timeout?.unref();
+    return throttled;
+  }
+
+  function hasImmediateCapacity() {
+    if (
+      signal?.aborted ||
+      pendingCount() !== 0 ||
+      activeCount >= concurrency
+    ) {
+      return false;
+    }
+
+    const now = Date.now();
+    if (strict) {
+      let index = strictIndex;
+      while (
+        index < strictTicks.length &&
+        now - strictTicks[index] >= interval
+      ) {
+        index++;
+      }
+      return strictTicks.length - index < limit;
+    }
+
+    return (
+      windowStart === undefined ||
+      now - windowStart >= interval ||
+      windowCount < limit
+    );
+  }
+
+  function pruneStrictTicks(now) {
+    while (
+      strictIndex < strictTicks.length &&
+      now - strictTicks[strictIndex] >= interval
+    ) {
+      strictIndex++;
+    }
+
+    if (strictIndex === strictTicks.length) {
+      strictIndex = 0;
+      strictTicks = [];
+    } else if (strictIndex > 1024 && strictIndex * 2 >= strictTicks.length) {
+      strictTicks = strictTicks.slice(strictIndex);
+      strictIndex = 0;
+    }
+  }
+
+  function hasCapacity(now) {
+    if (strict) {
+      pruneStrictTicks(now);
+      return strictTicks.length - strictIndex < limit;
+    }
+
+    if (windowStart === undefined || now - windowStart >= interval) {
+      windowCount = 0;
+      windowStart = now;
+    }
+    return windowCount < limit;
+  }
+
+  function reserve(now) {
+    if (strict) {
+      strictTicks.push(now);
+    } else {
+      windowCount++;
+    }
+  }
+
+  function onSettled() {
+    activeCount--;
+    drain();
+  }
+
+  function invoke(call) {
+    activeCount++;
+    let resultPromise;
+    try {
+      resultPromise = Promise.resolve(Reflect.apply(fn, throttled, call.args));
+    } catch (error) {
+      resultPromise = Promise.reject(error);
+    }
+    call.resolve(resultPromise);
+    resultPromise.then(onSettled, onSettled);
+  }
+
+  function drop() {
+    const promise = Promise.reject(
+      E("ERR_THROTTLED", "The call was dropped by the throttled function"),
+    );
+    markPromiseAsHandled(promise);
+    return promise;
+  }
+
+  function schedule() {
+    if (
+      timeout !== undefined ||
+      pendingCount() === 0 ||
+      activeCount >= concurrency
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    if (hasCapacity(now)) {
+      drain();
+      return;
+    }
+
+    const delay = strict
+      ? strictTicks[strictIndex] + interval - now
+      : windowStart + interval - now;
+    timeout = globalThis.setTimeout(onTimeout, delay);
+    if (!refed) timeout.unref();
+  }
+
+  function drain() {
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+
+    while (pendingCount() !== 0 && activeCount < concurrency) {
+      const now = Date.now();
+      if (!hasCapacity(now)) break;
+      const call = dequeue();
+      reserve(now);
+      invoke(call);
+    }
+
+    schedule();
+  }
+
+  function onTimeout() {
+    timeout = undefined;
+    drain();
+  }
+
+  function throttled(...callArgs) {
+    if (signal?.aborted) abort();
+    if (abortError !== undefined) return Promise.reject(abortError);
+
+    const now = Date.now();
+    const canInvoke =
+      pendingCount() === 0 && activeCount < concurrency && hasCapacity(now);
+    if (!canInvoke && (overflow === "drop" || pendingCount() >= maxPending)) {
+      return drop();
+    }
+
+    const call = promiseWithResolvers();
+    call.args = callArgs;
+
+    if (canInvoke) {
+      reserve(now);
+      invoke(call);
+    } else {
+      pendingCalls.push(call);
+      schedule();
+    }
+
+    return call.promise;
+  }
+
+  Object.defineProperties(throttled, {
+    cancel: createFnProp(cancel),
+    hasImmediateCapacity: createFnProp(hasImmediateCapacity),
+    ref: createFnProp(ref),
+    unref: createFnProp(unref),
+    pending: {
+      enumerable: false,
+      get() {
+        return pendingCount() === 0
+          ? null
+          : pendingCalls[pendingCalls.length - 1].promise;
+      },
+    },
+    pendingCount: {
+      enumerable: false,
+      get: pendingCount,
+    },
+    activeCount: {
+      enumerable: false,
+      get() {
+        return activeCount;
+      },
+    },
+    length: {
+      configurable: true,
+      value: fn.length,
+    },
+    name: {
+      configurable: true,
+      value: fn.name,
+    },
+  });
+
+  if (signal !== undefined) {
+    addAbortListener(signal, abort);
+  }
+
+  return throttled;
+}
+
+// ---------------------------------------------------------------------------
 // default export
 // ---------------------------------------------------------------------------
 
@@ -6761,6 +8055,7 @@ export default {
   promisify,
   callbackify,
   isDeepStrictEqual,
+  isPartialDeepStrictEqual,
   toUSVString,
   getSystemErrorName,
   getSystemErrorMessage,
@@ -6768,6 +8063,9 @@ export default {
   types,
   parseEnv,
   parseArgs,
+  debounce,
+  throttle,
+  markPromiseAsHandled,
   MIMEType,
   MIMEParams,
   TextEncoder,
