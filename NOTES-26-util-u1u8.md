@@ -280,3 +280,9 @@ Node 26 changes that all landed in the same file.
   that CI's fresh install resolves differently. After CI's regen push, an
   empty commit re-triggers CI on the regen-inclusive tree (a
   `GITHUB_TOKEN` push cannot trigger a run itself).
+- **Rebase #2 (onto `de79b5b2`):** main moved again (events lane + http
+  #519); PR dirty again on a real conflict — both sides added entries to
+  `NEWER_NODE_ALLOWLIST` in `tests/oracle-export-surface.test.js` (http
+  lane's `http:` entry vs this lane's `util:` entry, adjacent lines).
+  Resolved keeping both; local test-merge is clean and `src/util.js` is
+  still byte-identical to the guard-verified commit.
