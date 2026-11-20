@@ -37,6 +37,14 @@ no stray files; worktree clean apart from the `node_modules` symlink.
   baseline, so flags change no verdict.
 - Repo suite on rebased head: 39/40 (same single pre-existing failure
   as before, "exports match Node v24.20.0").
+- CI: code SHA `caa68880` run 44647759998 completed **success**. CI's
+  dist-regen bot then pushed `6b3a023f` ("chore: regenerate vfs.js",
+  `dist/perf_hooks.js` + `dist/vfs.js` only); no workflow run ever
+  started for it (0 check-runs after 30+ min). Not the usual
+  GITHUB_TOKEN-push suppression: a sibling bot regen (`ccaca43a`,
+  fix/26w1-https-tab) got its pull_request run 9 s after its push, so
+  this head's event was lost. Retrigger: this notes-only commit,
+  re-pinning the waiter to the new head.
 
 ## Score
 
