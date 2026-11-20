@@ -823,6 +823,14 @@ class BrowserWorker extends EventEmitter {
       URL.revokeObjectURL(this.#blobUrl);
       this.#blobUrl = null;
     }
+    // ponytail: Node 26 [kOnExit] (lib/internal/worker.js:395-396) drops
+    // 'message' + 'messageerror' listeners before 'exit' is emitted; host
+    // v24 drops 'message' only. Mirror it here (and in the native-path
+    // subclass below) so exit handlers observe listenerCount 0 for both.
+    // Ceiling: browser Worker has no V8 heap/profiler surface; the native
+    // Worker, when available, carries the rest.
+    this.removeAllListeners("message");
+    this.removeAllListeners("messageerror");
     this.emit("exit", code);
     this.#resolveExit(code);
   }
@@ -896,7 +904,49 @@ class BrowserWorker extends EventEmitter {
 }
 
 // Prefer the native Worker under Node; the browser implementation otherwise.
-const Worker = nativeWt ? nativeWt.Worker : BrowserWorker;
+// ponytail: Node 26 removes 'message' + 'messageerror' listeners on Worker
+// exit (lib/internal/worker.js [kOnExit]:395-396, before 'exit' is emitted);
+// host v24 removes 'message' only. The native path therefore needs a thin
+// subclass: its constructor-registered once('exit') cleanup runs before any
+// user 'exit' handler added after construction, exactly like Node 26's
+// pre-emit removal. Browser behaviour is untouched — the subclass exists
+// only on the native path (BrowserWorker gets the same cleanup in #finish
+// above). No maskAsNative: the real Worker.toString() shows class source,
+// and so does this subclass. Ceiling: host-skew only; on Node 26 the native
+// Worker already does this and the subclass is a no-op wrapper.
+const Worker = nativeWt
+  ? class Worker extends nativeWt.Worker {
+      constructor(filename, options = {}) {
+        super(filename, options);
+        this.once("exit", () => {
+          this.removeAllListeners("message");
+          this.removeAllListeners("messageerror");
+        });
+      }
+    }
+  : BrowserWorker;
+
+// CJS require('node:worker_threads') returns the default export (see
+// parity/preload.mjs: `ns.default ?? ns`), so the subclass must be visible
+// there too — the named export alone would leave the flip test holding the
+// native host Worker. Copy the native module's own properties (descriptors
+// preserved; probe-proven on host v24.22.1: 21 own string keys, 0 symbols,
+// all plain data props, Object.prototype) and swap only Worker; every other
+// binding keeps its native value and identity.
+const _nativeDefault =
+  nativeWt &&
+  Object.defineProperties(
+    {},
+    {
+      ...Object.getOwnPropertyDescriptors(nativeWt),
+      Worker: {
+        value: Worker,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      },
+    },
+  );
 
 // ── Module shape ─────────────────────────────────────────────────────────────
 // The default export is the native module when available, otherwise a getters
@@ -996,4 +1046,4 @@ export {
   threadName,
   workerData,
 };
-export default nativeWt ?? _defaultExport;
+export default _nativeDefault ?? _defaultExport;
