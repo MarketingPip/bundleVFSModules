@@ -1181,6 +1181,10 @@ class Http2Session extends EventEmitter {
     // value; effective is the last set value).
     this._localWindowSize = 65535;
     this._effectiveLocalWindowSize = 65535;
+    // H2-26-W1: the peer's connection window as last advertised
+    // (connectionWindowSize at connect / server creation, exchanged at
+    // dispatch). state.remoteWindowSize reads this, not a constant.
+    this._remoteWindowSize = 65535;
     // H2-V4: server-initiated (push) stream ids are even, starting at
     // 2 (Node lib/internal/http2/core.js). Only server sessions use it.
     this._nextPushStreamID = 2;
@@ -1237,7 +1241,7 @@ class Http2Session extends EventEmitter {
       nextStreamID: this._nextStreamID,
       localWindowSize: this._localWindowSize,
       lastProcStreamID: 0,
-      remoteWindowSize: 65535,
+      remoteWindowSize: this._remoteWindowSize,
       outboundQueueSize: 0,
       deflateDynamicTableSize: 4096,
       inflateDynamicTableSize: 4096,
@@ -1570,6 +1574,29 @@ class ServerHttp2Session extends Http2Session {
   get type() {
     return constants.NGHTTP2_SESSION_SERVER;
   }
+
+  destroy(error, code = constants.NGHTTP2_NO_ERROR) {
+    // H2-26-W1: destroying the server end tears the (virtual)
+    // connection down, so the client sessions behind its streams
+    // close too (Node: the peer sees 'close' when the socket dies).
+    // Without this, stream.session.destroy() in a handler — which
+    // now correctly targets the server session — would leave the
+    // client session alive forever
+    // (test-http2-session-destroy-stream-handler). Only the server
+    // side propagates: a client disconnect must not kill the shared
+    // server session other clients use.
+    if (!this._destroyed) {
+      const peers = new Set();
+      for (const stream of [...(this._streams || [])]) {
+        if (stream._clientSession && !stream._clientSession._destroyed)
+          peers.add(stream._clientSession);
+      }
+      super.destroy(error, code);
+      for (const peer of peers) peer.destroy();
+    } else {
+      super.destroy(error, code);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1585,6 +1612,16 @@ class Http2Stream extends EventEmitter {
   constructor(session = null, headers = {}) {
     super();
     this.session = session;
+    // H2-26-W1: the client session that owns this stream, kept across
+    // dispatch (dispatch swaps .session to the server session — Node:
+    // each side's stream belongs to its own session — so pushStream
+    // and teardown still find the client side).
+    this._clientSession =
+      session instanceof Http2Session ? session : null;
+    // H2-26-WR: true while the server's 'stream'/'request' handler
+    // runs synchronously in _emitVirtualStream; write() routes by
+    // this, not by _requestEnded alone (see write()).
+    this._inServerDispatch = false;
     this._requestHeaders = { ...headers };
     this._id = 0; // 0 = not yet assigned; real ids come from the session
     this._closed = false;
@@ -1804,6 +1841,8 @@ class Http2Stream extends EventEmitter {
     // iterates them; deleting during iteration is safe for a Set).
     if (this.session && this.session._streams)
       this.session._streams.delete(this);
+    if (this._clientSession && this._clientSession._streams)
+      this._clientSession._streams.delete(this);
     if (this._serverSession && this._serverSession._streams)
       this._serverSession._streams.delete(this);
     if (err) this.emit("error", err);
@@ -1970,6 +2009,15 @@ class Http2Stream extends EventEmitter {
     this._sentHeaders = headersObject;
     this._responseRawPairs = rawPairs;
     if (options.waitForTrailers) this._responseWaitForTrailers = true;
+    // H2-26-W1: respond() honors endStream like request() does — the
+    // response ends with the headers (Node: END_STREAM on the HEADERS
+    // frame). Without this a handler that only responds never delivers
+    // (test-http2-connection-window-size-option).
+    if (options.endStream) {
+      if (this._responseWaitForTrailers) this._emitWantTrailers("response");
+      this._responseEnded = true;
+      this._deliverResponse();
+    }
   }
 
   respondWithFD(fd, headers = {}, options = {}) {
@@ -2236,11 +2284,17 @@ class Http2Stream extends EventEmitter {
     const serverSession = this._serverSession;
     const pushId = serverSession._nextPushStreamID;
     serverSession._nextPushStreamID += 2;
+    // H2-26-W1: the push stream belongs to the client side (the
+    // client receives it via its session's 'stream' event); .session
+    // is the server session after dispatch, so use the remembered
+    // client session — also for the :authority/:scheme defaults,
+    // which come from the client session.
+    const clientSession = this._clientSession || this.session;
     const { headersObject, rawPairs } = normalizeRequestHeaders(
       headers || {},
-      this.session,
+      clientSession,
     );
-    const pushStream = new Http2Stream(this.session, headersObject);
+    const pushStream = new Http2Stream(clientSession, headersObject);
     pushStream._id = pushId;
     pushStream._isPush = true;
     pushStream._serverSession = serverSession;
@@ -2251,7 +2305,7 @@ class Http2Stream extends EventEmitter {
     // _serverEndListeners, so the server-side branch is a no-op.
     pushStream._requestBodyDeliveryStarted = true;
     pushStream._requestBodyComplete = true;
-    this.session.emit("stream", pushStream, headersObject, 0, rawPairs);
+    clientSession.emit("stream", pushStream, headersObject, 0, rawPairs);
     if (callback) {
       queueMicrotask(() =>
         callback(null, pushStream, headersObject, {}),
@@ -2260,15 +2314,26 @@ class Http2Stream extends EventEmitter {
   }
 
   // -- shared write/end: route by side ------------------------------------
-  // The client writes the request body strictly before it ends the
-  // request, so until _requestEnded any write is a request chunk — even
-  // after the server has responded. (The old _responseStarted test routed
-  // a piped upload written after respond() into the response body, so
-  // requestBody stayed empty and the body arrived as 0 bytes — H2-V1
-  // probe-proven.) Once the request has ended, writes are response data.
-  // Known shared-stream limit: a server early-response write while the
-  // request is still in flight would land in the request body; the compat
-  // res.write() path bypasses this router via _writeResponse directly.
+  // H2-26-WR: the client writes the request body strictly before it
+  // ends the request, so until _requestEnded any write OUTSIDE the
+  // server dispatch is a request chunk — even after the server has
+  // responded (a piped upload written after respond() must stay a
+  // request chunk; routing by _responseStarted alone misroutes it —
+  // H2-V1 probe-proven, test-http2-zero-length-write). But a write
+  // that runs synchronously inside the server's dispatch handler is
+  // the server's write even while the request is still in flight, so
+  // it routes to the response (_inServerDispatch, set by
+  // _emitVirtualStream; _deliverResponse clears it while emitting to
+  // client listeners, so a client write from a 'response' handler is
+  // still a request chunk). After the request ends, writes are
+  // response data. A push stream is server-to-client only — no
+  // request body exists to write — so its writes are always response
+  // data (without this the push chunk lands in _requestChunks and
+  // end() misclassifies the server's end as the client's,
+  // test-http2-client-data-end). Known remaining limit: an async
+  // server write that lands before the client ends (timer/microtask
+  // after dispatch) still routes by _requestEnded and lands in the
+  // request body.
   get _responseStarted() {
     return this._sentHeaders !== null || this._responseDelivered;
   }
@@ -2278,7 +2343,7 @@ class Http2Stream extends EventEmitter {
       callback = encoding;
       encoding = undefined;
     }
-    if (this._requestEnded) {
+    if (this._requestEnded || this._inServerDispatch || this._isPush) {
       this._writeResponse(chunk, encoding);
     } else {
       const buf =
@@ -2532,35 +2597,45 @@ class Http2Stream extends EventEmitter {
       ? toWireRawHeaders(this._responseRawPairs)
       : toWireRawHeaders(pairsFromObject(headers));
     // Client-side observable events, in real order.
-    if (this._isPush) {
-      // H2-V4: a push stream signals its response with a 'push' event
-      // (Node Http2Stream 'push'), and the headers always carry a date.
-      const pushHeaders = { ...headers };
-      if (!pushHeaders.date) pushHeaders.date = new Date().toUTCString();
-      this.emit("push", pushHeaders, 0);
-    } else {
-      this.emit("response", { ...headers }, 0, rawHeaders);
+    // H2-26-WR: a response delivered synchronously from the server's
+    // dispatch handler runs client listeners while _inServerDispatch
+    // is set; clear it here so a client write from a 'response' /
+    // 'data' / 'end' handler still routes to the request body.
+    const wasDispatching = this._inServerDispatch;
+    this._inServerDispatch = false;
+    try {
+      if (this._isPush) {
+        // H2-V4: a push stream signals its response with a 'push' event
+        // (Node Http2Stream 'push'), and the headers always carry a date.
+        const pushHeaders = { ...headers };
+        if (!pushHeaders.date) pushHeaders.date = new Date().toUTCString();
+        this.emit("push", pushHeaders, 0);
+      } else {
+        this.emit("response", { ...headers }, 0, rawHeaders);
+      }
+      if (body.length > 0 && !this.headRequest) {
+        // H2-V4: side-scoped — the response body goes to the client's
+        // listeners only, not the server's request-body consumers.
+        this._emitData(
+          this._encoding ? body.toString(this._encoding) : body,
+          "response",
+        );
+      }
+      // H2-V4: side-scoped — only the client's listeners see response
+      // trailers (the server's 'trailers' listener is for request
+      // trailers and must not fire again here).
+      if (this._sentTrailers)
+        this._emitTrailers({ ...this._sentTrailers }, "response");
+      // H2-V4b: the client's 'end' fires here, after the response lands.
+      // _emitEndOnce is per-side now: the server's 'end' already fired
+      // when the request body landed, unless the body was never delivered
+      // (no consumer), in which case it fires here too.
+      this._emitEndOnce();
+      this._closed = true;
+      this._emitCloseOnce(constants.NGHTTP2_NO_ERROR);
+    } finally {
+      this._inServerDispatch = wasDispatching;
     }
-    if (body.length > 0 && !this.headRequest) {
-      // H2-V4: side-scoped — the response body goes to the client's
-      // listeners only, not the server's request-body consumers.
-      this._emitData(
-        this._encoding ? body.toString(this._encoding) : body,
-        "response",
-      );
-    }
-    // H2-V4: side-scoped — only the client's listeners see response
-    // trailers (the server's 'trailers' listener is for request
-    // trailers and must not fire again here).
-    if (this._sentTrailers)
-      this._emitTrailers({ ...this._sentTrailers }, "response");
-    // H2-V4b: the client's 'end' fires here, after the response lands.
-    // _emitEndOnce is per-side now: the server's 'end' already fired
-    // when the request body landed, unless the body was never delivered
-    // (no consumer), in which case it fires here too.
-    this._emitEndOnce();
-    this._closed = true;
-    this._emitCloseOnce(constants.NGHTTP2_NO_ERROR);
   }
 
   get requestBody() {
@@ -2750,7 +2825,7 @@ export class Http2ServerResponse extends EventEmitter {
     // (lib/internal/http2/compat.js:698-706) defines statusMessage as a
     // prototype getter/setter pair; assigning in the constructor would burn
     // the warn-once guard before any test read.
-    this._headers = {};
+    this._headers = { __proto__: null };
     this._headersSent = false;
     this.sendDate = true;
   }
@@ -2838,7 +2913,12 @@ export class Http2ServerResponse extends EventEmitter {
     return this._headers[name.toLowerCase()];
   }
   getHeaders() {
-    return { ...this._headers };
+    // H2-26-C1: Node lib/internal/http2/compat.js getHeaders() returns
+    // a fresh null-prototype copy of the null-prototype store (so
+    // '__proto__' stays an own key and integer-like keys order first).
+    // The copy shares value references (a set-cookie array pushed to
+    // after the copy still shows in getHeader).
+    return Object.assign({ __proto__: null }, this._headers);
   }
   getHeaderNames() {
     return Object.keys(this._headers);
@@ -2895,8 +2975,19 @@ export class Http2ServerResponse extends EventEmitter {
     // (Node lib/internal/http2/compat.js:900) — a handler that sets
     // response.sendDate = false must get no auto date.
     this.stream.respond(out, { sendDate: this.sendDate });
+    // H2-26-C1: Node compat.js [kBeginSend] records ':status' in the
+    // header store itself when sending begins, so getHeaders() after
+    // flushHeaders()/writeHead() shows it (last, after earlier keys).
+    this._headers[":status"] = statusCode;
     this._headersSent = true;
     return this;
+  }
+
+  flushHeaders() {
+    // H2-26-C1: Node lib/internal/http2/compat.js flushHeaders() —
+    // sends the headers with the current status code unless already
+    // sent; writeHead() itself is the closed-stream noop.
+    if (!this._headersSent) this.writeHead(this.statusCode);
   }
 
   get headersSent() {
@@ -3195,6 +3286,21 @@ class Http2Server extends EventEmitter {
       );
     }
     this._options = { ...options };
+    // H2-26-W1: Node lib/internal/http2/core.js validateSessionOptions
+    // — connectionWindowSize is validated exactly like validateInt32
+    // (..., 1, 2**31 - 1): non-number -> ERR_INVALID_ARG_TYPE,
+    // non-integer or out of range -> ERR_OUT_OF_RANGE. Seeded into the
+    // server session at _getServerSession; the peer learns it as its
+    // remoteWindowSize at dispatch.
+    if (options.connectionWindowSize !== undefined) {
+      validateInteger(
+        options.connectionWindowSize,
+        "options.connectionWindowSize",
+        1,
+        2147483647,
+      );
+    }
+    this._connectionWindowSize = options.connectionWindowSize ?? 65535;
     // Custom request/response classes (Node supports overriding via
     // options.Http2ServerRequest / options.Http2ServerResponse).
     this._RequestClass = this._options.Http2ServerRequest || Http2ServerRequest;
@@ -3293,7 +3399,12 @@ class Http2Server extends EventEmitter {
 
   // -- virtual loop -------------------------------------------------------
   _getServerSession() {
-    if (!this._serverSession) {
+    // H2-26-W1: a destroyed server session never serves a new
+    // connection (Node: each connection gets a fresh server session);
+    // without this, a handler that destroyed its session would leave
+    // later rounds dispatching on a dead session
+    // (test-http2-session-destroy-stream-handler).
+    if (!this._serverSession || this._serverSession._destroyed) {
       this._serverSession = new ServerHttp2Session({
         encrypted: this instanceof Http2SecureServer,
       });
@@ -3302,6 +3413,14 @@ class Http2Server extends EventEmitter {
       // response headers against it.
       this._serverSession._strictSingleValueFields =
         this._options.strictSingleValueFields !== false;
+      // H2-26-W1: seed the server session's window from the server's
+      // connectionWindowSize option (effective is the option value;
+      // local is the high-water mark over the initial 65535, as in
+      // setLocalWindowSize).
+      const windowSize = this._connectionWindowSize ?? 65535;
+      this._serverSession._effectiveLocalWindowSize = windowSize;
+      if (windowSize > this._serverSession._localWindowSize)
+        this._serverSession._localWindowSize = windowSize;
       this._serverSession._connecting = false;
       this._sessions.add(this._serverSession);
       queueMicrotask(() => this.emit("session", this._serverSession));
@@ -3317,6 +3436,20 @@ class Http2Server extends EventEmitter {
     // the session's _remoteSettings current).
     stream._serverSession = this._serverSession;
     this._serverSession._streams.add(stream);
+    // H2-26-W1: the server handler sees the server session (Node:
+    // each side's stream belongs to its own session) and each side
+    // learns the peer's connection window as its remoteWindowSize
+    // (the WINDOW_UPDATE the peer's connectionWindowSize advertises).
+    // Only for real client sessions — the host bridge passes a bare
+    // {_virtualPort} object with neither session to swap nor window.
+    if (clientSession instanceof Http2Session) {
+      stream._clientSession = clientSession;
+      stream.session = this._serverSession;
+      this._serverSession._remoteWindowSize =
+        clientSession._effectiveLocalWindowSize;
+      clientSession._remoteWindowSize =
+        this._serverSession._effectiveLocalWindowSize;
+    }
     const headers = { ...stream._requestHeaders };
     const flags = 0;
     // H2-V6: rawHeaders is the wire-order flat list (pseudo-headers
@@ -3375,21 +3508,29 @@ class Http2Server extends EventEmitter {
       const trailersBefore = stream.listeners("trailers");
       const dataBefore = stream.listeners("data");
       const endBefore = stream.listeners("end");
-      this.emit("stream", stream, headers, flags, rawHeaders);
-      if (
-        this.listenerCount("request") > 0 ||
-        this.listenerCount("checkContinue") > 0
-      ) {
-        const req = new this._RequestClass(stream, headers);
-        const res = new this._ResponseClass(stream);
+      // H2-26-WR: the server handler runs synchronously here; a
+      // stream.write() inside it is the server's write even while the
+      // request is still in flight (write() routes on this flag).
+      stream._inServerDispatch = true;
+      try {
+        this.emit("stream", stream, headers, flags, rawHeaders);
         if (
-          this.listenerCount("checkContinue") > 0 &&
-          headers.expect === "100-continue"
+          this.listenerCount("request") > 0 ||
+          this.listenerCount("checkContinue") > 0
         ) {
-          this.emit("checkContinue", req, res);
-        } else {
-          this.emit("request", req, res);
+          const req = new this._RequestClass(stream, headers);
+          const res = new this._ResponseClass(stream);
+          if (
+            this.listenerCount("checkContinue") > 0 &&
+            headers.expect === "100-continue"
+          ) {
+            this.emit("checkContinue", req, res);
+          } else {
+            this.emit("request", req, res);
+          }
         }
+      } finally {
+        stream._inServerDispatch = false;
       }
       stream._serverTrailersListeners = stream
         .listeners("trailers")
@@ -3524,6 +3665,16 @@ export function connect(authority, options, listener) {
     options = {};
   }
   options = options || {};
+  // H2-26-W1: validate like validateSessionOptions (see the server
+  // constructor) — before the session exists, like Node.
+  if (options.connectionWindowSize !== undefined) {
+    validateInteger(
+      options.connectionWindowSize,
+      "options.connectionWindowSize",
+      1,
+      2147483647,
+    );
+  }
   const url = normalizeConnectAuthority(authority, options);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw http2Error(
@@ -3534,6 +3685,14 @@ export function connect(authority, options, listener) {
   const session = new ClientHttp2Session({
     encrypted: url.protocol === "https:",
   });
+  // H2-26-W1: seed the client's window from its connectionWindowSize
+  // option (effective is the option value; local is the high-water
+  // mark over the initial 65535, as in setLocalWindowSize).
+  if (options.connectionWindowSize !== undefined) {
+    session._effectiveLocalWindowSize = options.connectionWindowSize;
+    if (options.connectionWindowSize > session._localWindowSize)
+      session._localWindowSize = options.connectionWindowSize;
+  }
   // H2-V4: connect() options.strictSingleValueFields (default true,
   // Node lib/internal/http2/core.js:3657-3663) flows to the session,
   // so request() validates request headers against it.
