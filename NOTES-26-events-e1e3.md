@@ -155,3 +155,44 @@
   `parity/node-test/` is TRACKED — never `rm -rf` it; the runner's own
   restore (`git checkout --` + exact staged-only deletion) is the only
   safe cleanup.
+
+## CI (PR #517)
+
+- Code SHA `e3615a9f` run 44648912421 completed **success**.
+- CI's dist-regen bot then pushed `79e9d28f` ("chore: regenerate vfs.js",
+  `dist/*` 1-line each); no workflow run ever started for it (0 runs
+  after 15+ min — GITHUB_TOKEN-push suppression, the known no-show).
+  Retrigger: this notes-only commit, re-pinning the waiter to the new
+  head.
+- Retrigger SHA `4ef2b726` ALSO started no run (0 runs / 0 check-runs
+  after 30+ min, verified with full-SHA `head_sha` queries). Same for the
+  perf_hooks (`4c281bb7`) and zlib (`f7260b85`, `96e087d1`) retriggers —
+  **ref updates via the git-database API do not trigger `pull_request`
+  runs at all**; the only run any API-pushed head ever got came from the
+  `opened` event when the PR was created. Close + reopen (01:40 UTC,
+  timeline-confirmed) also started no run for `4ef2b726` after 10+ min.
+- CI waiter (pinned to `e3615a9f`, re-pinned `79e9d28f` → `4ef2b726`)
+  was killed by a service/VM restart at ~01:49 UTC (SIGTERM, no verdict)
+  before its 90-min timeout.
+- Rebase 2: origin/main moved `bb6905b5` → `0f30d17c` (#514 crypto,
+  #515 https, #516 assert); PR `mergeable_state` went dirty. Rebased:
+  code commit re-applied cleanly as `813b277a` (lane files byte-identical
+  to green-run `e3615a9f` — the only diff vs it is main's crypto-harness
+  additions in `preload.mjs`/`hooks.mjs`); bot regen commit `79e9d28f`
+  conflicted on `dist/*` and was SKIPPED (dist-only, CI regenerates);
+  notes commit re-applied as `6b55c9a5`. Post-rebase differential:
+  events **9/9** (phase 1, all 9).
+- Force-push DOES trigger CI: force-pushing the rebased branch
+  (`c5764b62`) started Build VFS run 44657119518, completed **success**
+  (build + Parity both green). The fast-forward API pushes never did —
+  the trigger difference is force-push vs fast-forward, not the commit
+  content. Run 44657119518's build job pushed regen `1d5b95ae`
+  (dist-only, 28 files, 0 non-dist) — no run will ever start for it
+  (GITHUB_TOKEN suppression), so the waiter pinned to it can never go
+  green; the green conclusion that gates the merge is 44657119518 on
+  `c5764b62`, whose tested code is byte-identical to the regen head.
+- Merge attempt 1: 405 "Pull Request has merge conflicts" —
+  main moved again (#519 http merged 01:57). Rebase 3 onto `9c0edeea`:
+  clean, no conflicts; code `c9a3e897` (src/events.js +
+  parity/events-harness.mjs byte-identical to green-run `e3615a9f`);
+  post-rebase differential events **9/9** (phase 1, all 9).
