@@ -27,12 +27,27 @@ import * as acorn from "acorn";
 import { inspect } from "../util.js";
 
 // Local stylize over the shim's public inspect tables (same values and
-// wrap shape as src/util.js's module-local stylizeWithColor).
+// wrap shape as src/util.js's module-local stylizeWithColor). Mirrors
+// Node 26 lib/internal/util/inspect.js:850-862, including the
+// function-style branch: Wave 1 util #513 set
+// `inspect.styles.regexp = highlightRegExp` (a FUNCTION,
+// src/util.js:1100), so `inspect.colors[style]` is undefined for it and
+// the function itself must be called — otherwise highlight('/regexp/u')
+// returns unstylized.
+// ponytail: ceiling — a style that is neither a known color name nor a
+// function still falls through unstylized, matching Node; if a future
+// util style becomes an object (e.g. a {open,close} pair), this branch
+// needs a matching case here, not a change in src/util.js.
 function stylizeWithColor(str, styleType) {
   const style = inspect.styles[styleType];
-  if (style && inspect.colors[style]) {
-    const codes = inspect.colors[style];
-    return `\u001B[${codes[0]}m${str}\u001B[${codes[1]}m`;
+  if (style !== undefined) {
+    const color = inspect.colors[style];
+    if (color !== undefined) {
+      return `\u001B[${color[0]}m${str}\u001B[${color[1]}m`;
+    }
+    if (typeof style === "function") {
+      return style(str);
+    }
   }
   return str;
 }
