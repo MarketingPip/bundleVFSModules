@@ -108,6 +108,14 @@ function polyfillURL(specifier) {
       path.join(repoRoot, "parity", "async-hooks-harness.mjs"),
     ).href;
   }
+  // Harness-only timer-globals restore for events parity
+  // (parity/events-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs. Needed by the ESM-only test-events-add-abort-listener.mjs,
+  // which would otherwise load src/events.js directly (no timer restore).
+  if (target === "events" && name === "events") {
+    return pathToFileURL(path.join(repoRoot, "parity", "events-harness.mjs"))
+      .href;
+  }
   // Harness-only timer-globals restore for tty parity
   // (parity/tty-harness.mjs). ESM import path; CJS require path is in
   // preload.mjs.

@@ -22,13 +22,19 @@
 //       plain `AbortSignal.addEventListener('abort', listener, { once: true })`
 //       plus a `queueMicrotask` for already-aborted signals; the
 //       stop-propagation resistance is a Node-only guarantee there.
+//       Already-aborted signals never delegate (the host v24 builtin calls
+//       the listener with no arguments and ignores dispose): the pure path
+//       synthesizes a real abort Event and makes the call cancellable by
+//       dispose (Node 26 behavior).
 //     * `once()`/`on()` register their abort cleanup through the same
 //       bridge for the same reason.
 // - EventTarget helpers (`getEventListeners`, `getMaxListeners`,
 //   `listenerCount`, static `setMaxListeners`) discover Node's real symbols
 //   (`kEvents`, `events.maxEventTargetListeners`, ...) by symbol description
 //   on the target instance; foreign EventTargets without those symbols fall
-//   back to a WeakMap/defaults.
+//   back to a WeakMap/defaults. `getEventListeners` additionally consults a
+//   shim-side registry of original listeners (see EventTarget interop) —
+//   als-browser's bound copies sit in kEvents, not the originals.
 // - The returned disposable of `addAbortListener()` implements
 //   `Symbol.dispose` (with a `Symbol.for('Symbol.dispose')` fallback).
 
@@ -1436,6 +1442,108 @@ function listenersController() {
 // ---------------------------------------------------------------------------
 // EventTarget interop.
 // ---------------------------------------------------------------------------
+// ponytail: als-browser (imported via async_hooks above) replaces
+// EventTarget.prototype.addEventListener with a wrapper that registers
+// AsyncLocalStorage-bound copies, and keeps the original→bound mapping in a
+// module-private WeakMap with no public unwrap API — so getEventListeners,
+// which walks Node's kEvents list, returns the bound copies instead of the
+// originals (test-events-static-geteventlisteners, probe-proven). Track the
+// originals in our own layer: wrap add/removeEventListener on top of
+// als-browser's patch (so ALS propagation through listeners is preserved)
+// and record (target, type) -> original listeners in insertion order,
+// mirroring Node's dedup (same listener + capture registers once).
+// getEventListeners consults this registry first and falls back to the
+// kEvents walk for listeners added before this module loaded or through
+// paths that bypass the wrapper (e.g. NodeEventTarget's own method).
+// Ceiling: { once: true } listeners (and AbortSignal-option removals) stay
+// in the registry after they fire / their signal aborts — Node removes them
+// from kEvents on dispatch, but pruning would need dispatch-time hooks; if a
+// future test asserts getEventListeners after a once-listener fires, that
+// test needs dispatch-time pruning, not a registry tweak here. Weak
+// ({ [kWeakHandler]: {} }) listeners are also held strongly by the registry
+// while their target lives, so they cannot be GC'd out of it.
+const eventTargetOriginals = new WeakMap();
+const kEventTargetTracked = Symbol.for(
+  "bundleVFSModules.events.trackedListener",
+);
+function eventTargetCaptureOf(options) {
+  if (typeof options === "boolean") return options;
+  if (options !== null && typeof options === "object")
+    return options.capture === true;
+  return false;
+}
+function recordEventTargetListener(target, type, listener, options) {
+  if (
+    (typeof target !== "object" && typeof target !== "function") ||
+    target === null
+  ) {
+    return;
+  }
+  const capture = eventTargetCaptureOf(options);
+  const key = String(type);
+  let byType = eventTargetOriginals.get(target);
+  if (byType === undefined) {
+    byType = new Map();
+    eventTargetOriginals.set(target, byType);
+  }
+  let list = byType.get(key);
+  if (list === undefined) {
+    list = [];
+    byType.set(key, list);
+  }
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].listener === listener && list[i].capture === capture) return;
+  }
+  list.push({ listener, capture });
+}
+function forgetEventTargetListener(target, type, listener, options) {
+  if (
+    (typeof target !== "object" && typeof target !== "function") ||
+    target === null
+  ) {
+    return;
+  }
+  const byType = eventTargetOriginals.get(target);
+  const list = byType?.get(String(type));
+  if (list === undefined) return;
+  const capture = eventTargetCaptureOf(options);
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].listener === listener && list[i].capture === capture) {
+      list.splice(i, 1);
+      break;
+    }
+  }
+  if (list.length === 0) byType.delete(String(type));
+}
+(function installEventTargetTracking() {
+  if (typeof EventTarget !== "function") return;
+  const proto = EventTarget.prototype;
+  const patchedAdd = proto.addEventListener;
+  const patchedRemove = proto.removeEventListener;
+  if (
+    typeof patchedAdd !== "function" ||
+    typeof patchedRemove !== "function" ||
+    patchedAdd[kEventTargetTracked]
+  ) {
+    return;
+  }
+  function trackedAddEventListener(type, listener, options) {
+    if (listener !== null && listener !== undefined) {
+      recordEventTargetListener(this, type, listener, options);
+    }
+    return patchedAdd.call(this, type, listener, options);
+  }
+  function trackedRemoveEventListener(type, listener, options) {
+    if (listener !== null && listener !== undefined) {
+      forgetEventTargetListener(this, type, listener, options);
+    }
+    return patchedRemove.call(this, type, listener, options);
+  }
+  trackedAddEventListener[kEventTargetTracked] = true;
+  proto.addEventListener = trackedAddEventListener;
+  proto.removeEventListener = trackedRemoveEventListener;
+})();
+
 function isEventTarget(obj) {
   if (obj === null || obj === undefined) return false;
   try {
@@ -1474,9 +1582,40 @@ function pureAddAbortListener(signal, listener) {
   validateAbortSignal(signal, "signal");
   validateFunction(listener, "listener");
 
+  // ponytail: Node 26 changed the already-aborted branch (verified on the
+  // Node 26.13.1 binary): the listener receives a real abort Event (type
+  // 'abort', target/currentTarget = signal, isTrusted true) and the
+  // scheduled call is cancellable by dispose. The v24 behavior this port
+  // copied — queueMicrotask(() => listener()) with no arguments and a
+  // no-op dispose — fails both new Node 26 subtests. Synthesize the event:
+  // dispatchEvent would leave isTrusted false (probe-verified on both
+  // binaries), so build a real Event and shadow the three read-only
+  // prototype accessors with own properties. The disposed flag is checked
+  // at call time so dispose-before-microtask suppresses the call.
+  // Ceiling: the synthesized event carries own target/currentTarget/
+  // isTrusted properties (Node 26's has none — it dispatches internally),
+  // but all asserted properties and `instanceof Event` match; if a future
+  // test asserts the absence of own properties, the synthesis needs real
+  // internal dispatch, which public APIs cannot do.
+  let disposed = false;
   let removeEventListener;
   if (signal.aborted) {
-    queueMicrotask(() => listener());
+    const event = new Event("abort");
+    Object.defineProperty(event, "target", {
+      value: signal,
+      configurable: true,
+    });
+    Object.defineProperty(event, "currentTarget", {
+      value: signal,
+      configurable: true,
+    });
+    Object.defineProperty(event, "isTrusted", {
+      value: true,
+      configurable: true,
+    });
+    queueMicrotask(() => {
+      if (!disposed) listener(event);
+    });
   } else {
     signal.addEventListener("abort", listener, {
       __proto__: null,
@@ -1491,6 +1630,7 @@ function pureAddAbortListener(signal, listener) {
   return {
     __proto__: null,
     [SymbolDispose]() {
+      disposed = true;
       removeEventListener?.();
     },
   };
@@ -1509,6 +1649,13 @@ function realAddAbortListener() {
 
 /** Internal abort-listener registration: real builtin when available. */
 function addAbortListenerInternal(signal, listener) {
+  // Already-aborted signals never reach the real builtin: the host builtin
+  // (v24) calls the listener with no arguments and ignores dispose
+  // (probe-verified), so the pure path above — synthesized abort Event plus
+  // cancellable microtask — is the only route to Node 26 behavior. The
+  // non-aborted path still delegates so the stopImmediatePropagation
+  // resistance (private kResistStopPropagation) keeps working.
+  if (signal?.aborted) return pureAddAbortListener(signal, listener);
   const real = realAddAbortListener();
   if (real) return real(signal, listener);
   return pureAddAbortListener(signal, listener);
@@ -1525,6 +1672,14 @@ function getEventListeners(emitterOrTarget, type) {
   }
   // Then, we check if the emitterOrTarget is an EventTarget.
   if (isEventTarget(emitterOrTarget)) {
+    // Originals tracked by our addEventListener wrapper (see above): the
+    // kEvents walk below would return als-browser's bound copies.
+    const tracked = eventTargetOriginals
+      .get(emitterOrTarget)
+      ?.get(String(type));
+    if (tracked !== undefined && tracked.length > 0) {
+      return tracked.map((entry) => entry.listener);
+    }
     const kEvents = discoverOwnSymbol(emitterOrTarget, "kEvents");
     const root =
       kEvents === undefined ? undefined : emitterOrTarget[kEvents]?.get(type);
