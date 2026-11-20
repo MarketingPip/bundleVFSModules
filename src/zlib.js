@@ -231,6 +231,7 @@ const {
   Z_BLOCK,
   Z_OK,
   Z_STREAM_END,
+  Z_STREAM_ERROR,
   Z_NEED_DICT,
   Z_DATA_ERROR,
   Z_BUF_ERROR,
@@ -1098,8 +1099,29 @@ class PakoDeflateEngine {
   }
 
   reset() {
+    // ponytail: L-RESET — native ZlibContext::ResetStream (node_zlib.cc)
+    // refuses a gzip reset once an incomplete member has emitted output
+    // (deflateReset is deflateEnd + deflateInit; the header cannot be taken
+    // back). zlib-wrapped deflate still allows reset after flush (callers
+    // discard the first member — test-zlib-dictionary.js) and raw deflate
+    // has no wrapper header, so the refusal is gzip-only. The check runs
+    // before any state is torn down, like the native one; the error is
+    // raised as a stream error by _handle.reset(), never thrown here.
+    if (
+      this.wrapper === "gzip" &&
+      this._outputEmitted &&
+      !this.finished
+    ) {
+      throw zlibError(
+        "ERR_ZLIB_INCOMPLETE_FRAME",
+        Z_STREAM_ERROR,
+        "Cannot reset a gzip stream with an incomplete member; end the " +
+          "stream or start a new gzip compressor",
+      );
+    }
     this._header = this._wrapperHeader();
     this._headerEmitted = false;
+    this._outputEmitted = false;
     this._phase = this._makePhase({
       level: this.level,
       strategy: this.strategy,
@@ -1211,6 +1233,10 @@ class PakoDeflateEngine {
         output = output.length > 0 ? Buffer.concat([output, trailer]) : trailer;
       }
     }
+    // ponytail: L-RESET — the gzip refusal above keys on emitted output;
+    // the wrapper header counts (it goes out on the very first write even
+    // when pako emits nothing yet).
+    if (output.length > 0) this._outputEmitted = true;
     return {
       output,
       finished: this.finished,
@@ -1226,8 +1252,12 @@ class PakoDeflateEngine {
 // compress/decompress only, so both engines are buffering adapters:
 //
 // - ZstdCompressEngine accumulates input and compresses once, at the
-//   finalizing flush (ZSTD_e_end). Non-finalizing flushes (e_continue /
-//   e_flush) return no output and stay unfinished.
+//   finalizing flush (ZSTD_e_end) — except a mid-stream flush (e_flush)
+//   or a single write that fills a zstd block (128 KiB), which emit a
+//   complete frame for the input so far (L-RESET; native emits a frame
+//   fragment there, zstdify cannot, so the bytes differ —
+//   test-zlib-zstd-flush stays NO-FIX). Plain e_continue writes stay
+//   buffered and unfinished.
 // - ZstdDecompressEngine accumulates input and decodes eagerly on every
 //   write, so invalid input errors surface on write() with no end() call.
 //   A complete first frame emits its output and finishes the stream; a
@@ -1235,6 +1265,9 @@ class PakoDeflateEngine {
 //   throws Z_BUF_ERROR at the finalizing flush; bytes after the first
 //   frame set trailingGarbage, which ZlibBase turns into
 //   ERR_TRAILING_JUNK_AFTER_STREAM_END when rejectGarbageAfterEnd is set.
+//   Concatenated complete frames are all decoded (L-RESET dependency:
+//   a flush-emitted frame plus the final frame must round-trip); a frame
+//   split across writes still ends the stream after the first frame.
 //
 // ponytail: zstdify decodes ALL frames and has no first-frame-only mode,
 // so first-frame-only is enforced here with a small RFC 8878 frame walker
@@ -1254,10 +1287,13 @@ class PakoDeflateEngine {
 // ponytail: zstdify has no streaming encoder, so a mid-stream flush
 // cannot emit a flushed frame — test-zlib-zstd-flush stays NO-FIX
 // (it needs a streaming encoder with flush support, not a size gap).
-// ponytail: only `level` is applied (params[100] overrides opts.level,
-// default 3 = Node's ZSTD_CLEVEL_DEFAULT). Other zstd params are
-// validated (validateZstdOptions) but have no zstdify equivalent and are
-// not applied; params() stays a validated no-op (no setParams).
+// ponytail: only `level` is applied on the compress side (params[100]
+// overrides opts.level, default 3 = Node's ZSTD_CLEVEL_DEFAULT). Other
+// zstd params are validated (validateZstdOptions) but have no zstdify
+// equivalent and are not applied; params() stays a validated no-op (no
+// setParams). The one exception is decompress-side ZSTD_d_windowLogMax
+// (params[100]): it is enforced from the frame header (L-RESET), since
+// the check needs no codec support — only the header walker.
 // ---------------------------------------------------------------------------
 
 const ZSTD_MAGIC = 0xfd2fb528;
@@ -1341,6 +1377,52 @@ function parseZstdFrameEnd(buf, start) {
     pos += 4;
   }
   return { end: pos, isSkippable: false };
+}
+
+// Effective windowLog of the zstd content frame starting at `start`
+// (RFC 8878 §3.1.1.3), or null when the header is incomplete or the bytes
+// are not a content frame. A non-single-segment frame carries a window
+// descriptor (windowLog = 10 + (descriptor >> 3)); a single-segment frame
+// carries no descriptor — the window IS the frame content size, so
+// windowLog = ceil(log2(FCS)), floored at the zstd minimum of 10.
+// Probe-verified against real Node 26.13.1: a windowLog-11 frame reports
+// 11 (max 10 rejects, max 11 passes); the shim's own 4096-byte
+// single-segment frame reports 12. Only used for the ZSTD_d_windowLogMax
+// enforcement below; a null result means "cannot tell", never a rejection.
+function zstdFrameWindowLog(buf, start) {
+  if (buf.length - start < 5) return null;
+  if (readU32LEBytes(buf, start) !== ZSTD_MAGIC) return null;
+  const desc = buf[start + 4];
+  const fcsFlag = desc >> 6;
+  const singleSegment = (desc >> 5) & 1;
+  let pos = start + 5;
+  let windowLog;
+  if (!singleSegment) {
+    if (pos >= buf.length) return null;
+    windowLog = 10 + (buf[pos] >> 3);
+    pos += 1;
+  }
+  const dictIdSize = [0, 1, 2, 4][desc & 0x03];
+  if (buf.length - pos < dictIdSize) return null;
+  pos += dictIdSize;
+  const fcsSize =
+    fcsFlag === 0
+      ? singleSegment
+        ? 1
+        : 0
+      : fcsFlag === 1
+        ? 2
+        : fcsFlag === 2
+          ? 4
+          : 8;
+  if (buf.length - pos < fcsSize) return null;
+  if (singleSegment) {
+    let fcs = 0;
+    for (let i = 0; i < fcsSize; i++) fcs += buf[pos + i] * 2 ** (8 * i);
+    if (fcsFlag === 1) fcs += 256;
+    windowLog = fcs <= 1 ? 10 : Math.ceil(Math.log2(fcs));
+  }
+  return windowLog;
 }
 
 // Find the first content (non-skippable) frame in buf. Returns
@@ -1467,22 +1549,75 @@ function zstdCompressOptions(opts) {
 }
 
 function zstdDecompressOptions(opts) {
-  return { dictionary: normalizeZstdDictionary(opts?.dictionary) };
+  // ponytail: L-RESET — ZSTD_d_windowLogMax (params[100]) is the only
+  // decompress parameter with a zstdify-independent enforcement: the
+  // engine rejects frames whose windowLog exceeds it, like native
+  // ZSTD_DCtx_setParameter + decompressStream. Validated already in
+  // validateZstdOptions (0 = default, else 10-31); 0/undefined/-1 mean
+  // "no enforcement" (the native default 27 is not enforced — unprobed,
+  // and no passing test feeds a frame over it). The value survives
+  // reset(): reset() replays the initial parameters, it never clears them.
+  const raw = opts?.params?.[constants.ZSTD_d_windowLogMax];
+  const windowLogMax =
+    raw === undefined || raw === 0 || raw === -1 ? undefined : raw | 0;
+  return {
+    dictionary: normalizeZstdDictionary(opts?.dictionary),
+    windowLogMax,
+  };
 }
 
 class ZstdCompressEngine {
   constructor({ level, dictionary }) {
     this.level = level;
     this.dictionary = dictionary;
+    this._frameComplete = true;
+    this._frameOutputEmitted = false;
     this.reset();
   }
 
   reset() {
+    // ponytail: L-RESET — native ZstdCompressContext::ResetStream
+    // (node_zlib.cc) refuses when the current incomplete frame has already
+    // emitted output (ZSTD_reset_session_only cannot take back bytes);
+    // a write with no emitted output stays resettable. Checked before any
+    // state is torn down; the error surfaces as a stream error via
+    // _handle.reset(), never as a sync throw.
+    if (!this._frameComplete && this._frameOutputEmitted) {
+      throw zlibError(
+        "ERR_ZLIB_INCOMPLETE_FRAME",
+        constants.ZSTD_error_stage_wrong,
+        "Cannot reset a zstd stream with an incomplete frame; end the " +
+          "frame or discard the output produced so far",
+      );
+    }
     this._chunks = [];
     this._len = 0;
     this.finished = false;
     this.trailingGarbage = false;
+    this._frameComplete = true;
+    this._frameOutputEmitted = false;
     return this;
+  }
+
+  _compressBuffered() {
+    const input =
+      this._len === 0
+        ? PAKO_EMPTY
+        : this._chunks.length === 1
+          ? this._chunks[0]
+          : Buffer.concat(this._chunks, this._len);
+    let out;
+    try {
+      out = zstdifyCompress(input, {
+        level: this.level,
+        ...(this.dictionary ? { dictionary: this.dictionary } : {}),
+      });
+    } catch (err) {
+      throw zstdifyErrorToNode(err);
+    }
+    this._chunks = [];
+    this._len = 0;
+    return Buffer.from(out);
   }
 
   write(chunk, flushFlag) {
@@ -1499,10 +1634,39 @@ class ZstdCompressEngine {
       this._chunks.push(bytes);
       this._len += bytes.length;
     }
-    // Only the finalizing flush compresses: zstdify has no streaming
-    // encoder, so e_continue / e_flush return no output and stay
-    // unfinished (a mid-stream flush cannot emit a flushed frame).
+    // Non-finalizing flushes stay unfinished; emission is handled below
+    // (flush / block-sized write), plain e_continue writes stay buffered.
     if (flushFlag !== constants.ZSTD_e_end) {
+      // ponytail: L-RESET — mid-stream emission. A flush, or a single
+      // write large enough to fill a zstd block (ZSTD_BLOCKSIZE_MAX =
+      // 128 KiB), must emit output (native flushes the frame fragment;
+      // the 512 KiB write in test-zlib-zstd-reset-incomplete-frame.js
+      // asserts chunks > 0). The bound keys on the SINGLE write's size,
+      // not the accumulated length: the sync/async convenience paths
+      // drive the engine in small chunkSize pieces and must stay
+      // single-frame (an accumulated bound split the 18 KiB async
+      // compress in test-zlib-zstd-pledged-src-size.js into two frames,
+      // 46 bytes vs the sync path's 37). zstdify cannot emit a fragment,
+      // so the shim emits a complete frame for the input so far and
+      // starts a new frame afterwards. Native decoders accept
+      // concatenated frames, and the shim decoder learned to below; the
+      // flushed bytes still differ from native's fragment, so
+      // test-zlib-zstd-flush stays NO-FIX. Ceiling: single-frame
+      // continuation needs a real streaming encoder with flush support.
+      const isFlush = flushFlag === constants.ZSTD_e_flush;
+      const fillsBlock = bytes.length >= 128 * 1024;
+      if ((isFlush && this._len > 0) || fillsBlock) {
+        const out = this._compressBuffered();
+        this._frameComplete = false;
+        this._frameOutputEmitted = true;
+        return {
+          output: out,
+          finished: false,
+          consumed: bytes.length,
+          trailing: false,
+        };
+      }
+      this._frameComplete = false;
       return {
         output: PAKO_EMPTY,
         finished: false,
@@ -1510,27 +1674,31 @@ class ZstdCompressEngine {
         trailing: false,
       };
     }
-    const input =
-      this._len === 0
-        ? PAKO_EMPTY
-        : this._chunks.length === 1
-          ? this._chunks[0]
-          : Buffer.concat(this._chunks, this._len);
     // zstdify emits the 9-byte empty frame for empty input itself, so no
     // EMPTY_FRAME_BY_MODE append is needed (that path is scoped to the
-    // PassThroughEngine stub and retires for zstd here).
-    let out;
-    try {
-      out = zstdifyCompress(input, {
-        level: this.level,
-        ...(this.dictionary ? { dictionary: this.dictionary } : {}),
-      });
-    } catch (err) {
-      throw zstdifyErrorToNode(err);
+    // PassThroughEngine stub and retires for zstd here). But when a frame
+    // was already emitted mid-stream (flush / block-sized write), there
+    // is no open frame to close — emitting another empty frame would
+    // append a useless second frame, so end with nothing buffered emits
+    // nothing. Total-empty input still gets its empty frame (no frame
+    // was ever emitted).
+    if (this._len === 0 && this._frameOutputEmitted) {
+      this.finished = true;
+      this._frameComplete = true;
+      this._frameOutputEmitted = false;
+      return {
+        output: PAKO_EMPTY,
+        finished: true,
+        consumed: bytes.length,
+        trailing: false,
+      };
     }
+    const out = this._compressBuffered();
     this.finished = true;
+    this._frameComplete = true;
+    this._frameOutputEmitted = false;
     return {
-      output: Buffer.from(out),
+      output: out,
       finished: true,
       consumed: bytes.length,
       trailing: false,
@@ -1539,8 +1707,13 @@ class ZstdCompressEngine {
 }
 
 class ZstdDecompressEngine {
-  constructor({ dictionary }) {
+  constructor({ dictionary, windowLogMax }) {
     this.dictionary = dictionary;
+    // ponytail: L-RESET — ZSTD_d_windowLogMax survives reset() (native
+    // ResetStream replays the initial parameters); it is a constructor
+    // field precisely so engine reset() — which clears only buffered
+    // input and completion state — can never drop it.
+    this._windowLogMax = windowLogMax;
     this.reset();
   }
 
@@ -1558,9 +1731,33 @@ class ZstdDecompressEngine {
     return Buffer.concat(this._chunks, this._len);
   }
 
+  // ponytail: L-RESET — enforce ZSTD_d_windowLogMax from the frame header
+  // before any byte of the frame is decoded, like native decompressStream
+  // (which rejects the frame as soon as its header is read). The error
+  // message/errno are the native ones (probed on Node 26.13.1).
+  _checkWindowLog(buf, start) {
+    if (this._windowLogMax === undefined) return;
+    const windowLog = zstdFrameWindowLog(buf, start);
+    if (windowLog !== null && windowLog > this._windowLogMax) {
+      throw zlibError(
+        "ZSTD_error_frameParameter_windowTooLarge",
+        constants.ZSTD_error_frameParameter_windowTooLarge,
+        "Frame requires too much memory for decoding",
+      );
+    }
+  }
+
   _decode(buf, end) {
+    return this._decodeRange(
+      buf,
+      0,
+      end === undefined ? buf.length : end,
+    );
+  }
+
+  _decodeRange(buf, start, end) {
     const out = zstdifyDecompress(
-      end === undefined ? buf : buf.subarray(0, end),
+      buf.subarray(start, end),
       this.dictionary ? { dictionary: this.dictionary } : undefined,
     );
     return Buffer.from(out);
@@ -1588,6 +1785,7 @@ class ZstdDecompressEngine {
     const buf = this._buffer();
     const first = firstZstdContentFrame(buf);
     if (first.status === "frame") {
+      this._checkWindowLog(buf, 0);
       let out;
       try {
         out = this._decode(buf, first.end);
@@ -1599,6 +1797,55 @@ class ZstdDecompressEngine {
           return this._decodeWholeBuffer(buf, bytes.length, finalizing);
         }
         throw zstdifyErrorToNode(err);
+      }
+      // ponytail: L-RESET — concatenated complete frames. Native decodes
+      // every frame; the shim used to return only the first and flag the
+      // rest as trailing garbage. Walk the remainder while it parses as
+      // complete frames (content or skippable) and concatenate each
+      // content frame's output. This is a dependency of the compress-side
+      // flush emission above: a flush-emitted frame plus the final frame
+      // must round-trip through the shim's own decompressor
+      // (test-zlib-zstd-reset-incomplete-frame.js "flush followed by end").
+      // Anything unparseable — an incomplete frame, a corrupt frame, junk
+      // — falls back to the old first-frame-only + trailing-garbage
+      // result. Ceiling: a frame split across writes still ends the
+      // stream after the first frame (F4 chunking work, not this lane).
+      let end = first.end;
+      let multiOut = null;
+      let pos = first.end;
+      let multiOk = true;
+      while (pos < buf.length) {
+        const f = parseZstdFrameEnd(buf, pos);
+        if (f === null || f.invalid) {
+          multiOk = false;
+          break;
+        }
+        if (f.isSkippable) {
+          pos = f.end;
+          continue;
+        }
+        // The windowLog check is authoritative and must propagate (it is
+        // the test-zlib-zstd-reset.js rejection); only a failed decode of
+        // a subsequent frame falls back to first-frame-only below.
+        this._checkWindowLog(buf, pos);
+        try {
+          (multiOut ??= []).push(this._decodeRange(buf, pos, f.end));
+        } catch {
+          multiOk = false;
+          break;
+        }
+        pos = f.end;
+        end = f.end;
+      }
+      if (multiOk && multiOut !== null) {
+        this.trailingGarbage = false;
+        this.finished = true;
+        return {
+          output: Buffer.concat([out, ...multiOut]),
+          finished: true,
+          consumed: Math.max(0, end - prevLen),
+          trailing: false,
+        };
       }
       // Classify the bytes after the first frame: trailing skippables
       // are fine, anything else (a second frame, partial bytes) is
@@ -2465,7 +2712,26 @@ class ZlibBase extends MiniTransform {
             "Cannot reset zlib stream while a write is in progress",
           );
         }
-        self._engine.reset();
+        try {
+          self._engine.reset();
+        } catch (err) {
+          // ponytail: L-RESET — a refused reset is a stream error, not a
+          // sync throw: the native binding EmitErrors (node_zlib.cc
+          // CompressionStream::Reset) and the tests await finished(),
+          // which rejects on the error. Destroy on a microtask, not
+          // inline: reset(); end() queues the end's write first, so the
+          // destroy fails it silently instead of the write emitting a
+          // second ERR_STREAM_DESTROYED after the first error. Any other
+          // engine error still throws synchronously, as before.
+          if (err && err.code === "ERR_ZLIB_INCOMPLETE_FRAME") {
+            const refused = err;
+            queueMicrotask(() => {
+              if (!self._destroyed) self.destroy(refused);
+            });
+            return;
+          }
+          throw err;
+        }
         self._emptyFrameEmitted = false;
         self._inputPrefix = Buffer.alloc(0);
       },
