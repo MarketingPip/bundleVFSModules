@@ -121,38 +121,38 @@ Separate program from the v24 ranking above: different test suite (Node 26.13.1 
 
 Baseline (`parity/drift/node26-baseline.jsonc`, 2026-11-19): 2,748 run — 2,144 pass / 575 fail / 29 timeout. Oracle (`parity/drift/node26-oracle.json`): 563 true shim-gap / 27 fails-natively / 5 native-timeout (triage corrected 9 oracle entries; see `NOTES-26-triage-index.md`). Ceiling ~2,297/2,748 (83.6%).
 
-Wave 1 (PRs #507–#521, 15 lanes, 2026-11-19/20): 53 net flips — 2,144 → 2,197/2,748 (80.0%). Wave 2 (PRs #522–#529, 8 lanes, 2026-11-20): 75 flips — 2,197 → 2,272/2,748 (82.7%). All counts parent-verified on live main (suite re-runs + isolated adjudication); per-lane evidence in `NOTES-26-*.md`.
+Wave 1 (PRs #507–#521, 15 lanes, 2026-11-19/20): 53 net flips — 2,144 → 2,197/2,748 (80.0%). Wave 2 (PRs #522–#529, 8 lanes, 2026-11-20): 75 flips — 2,197 → 2,272/2,748 (82.7%). Wave 3 (PRs #531–#534, 4 lanes, 2026-11-20): 51 flips — 2,272 → 2,323/2,748 (84.5%), above the triage ceiling of ~2,297: repl highlight repair (PR #531, +1), http2 WR/W1/C1 (PR #532, +6), zlib Zip API (PR #533, +15), stream iter port (PR #534, +29 net — 33 flips minus 4 brotli NO-FIX regressions, documented in NOTES-26-stream-l6.md). All counts parent-verified on live main (suite re-runs + isolated adjudication); per-lane evidence in `NOTES-26-*.md`.
 
-Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `test-repl-highlight.js` (proven by one-step bisection against the pre-util merge); the repair is a Wave 3 follow-up. Wave 2 took repl 97 → 99/108.
+Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `test-repl-highlight.js` (proven by one-step bisection against the pre-util merge); the repair is a Wave 3 follow-up. Wave 2 took repl 97 → 99/108. Wave 3 repaired it to 100/108 (PR #531).
 
-| module | baseline | Wave 1 | Wave 2 | % |
-| --- | ---: | ---: | ---: | ---: |
-| assert | 12/14 | 13/14 | 13/14 | 92.9% |
-| async_hooks | 29/36 | 29/36 | 29/36 | 80.6% |
-| buffer | 64/74 | 71/74 | 71/74 | 95.9% |
-| console | 22/22 | 22/22 | 22/22 | 100% |
-| crypto | 145/167 | 149/167 | 162/167 | 97.0% |
-| dns | 10/32 | 12/32 | 12/32 | 37.5% |
-| events | 1/9 | 9/9 | 9/9 | 100% |
-| fs | 346/385 | 350/385 | 365/385 | 94.8% |
-| http | 390/422 | 393/422 | 412/422 | 97.6% |
-| http2 | 88/289 | 88/289 | 88/289 | 30.4% |
-| https | 58/70 | 60/70 | 60/70 | 85.7% |
-| inspector | 41/76 | 41/76 | 41/76 | 53.9% |
-| module | 32/37 | 33/37 | 33/37 | 89.2% |
-| net | 145/161 | 148/161 | 148/161 | 91.9% |
-| os | 7/8 | 7/8 | 7/8 | 87.5% |
-| perf_hooks | 17/31 | 19/31 | 24/31 | 77.4% |
-| process | 88/102 | 88/102 | 88/102 | 86.3% |
-| readline | 21/22 | 21/22 | 21/22 | 95.5% |
-| repl | 95/108 | 97/108 | 99/108 | 91.7% |
-| stream | 180/232 | 180/232 | 197/232 | 84.9% |
-| string_decoder | 4/4 | 4/4 | 4/4 | 100% |
-| timers | 58/59 | 58/59 | 58/59 | 98.3% |
-| trace_events | 12/13 | 12/13 | 12/13 | 92.3% |
-| tty | 3/3 | 3/3 | 3/3 | 100% |
-| util | 26/36 | 36/36 | 36/36 | 100% |
-| vm | 65/101 | 66/101 | 66/101 | 65.3% |
-| worker_threads | 137/146 | 137/146 | 138/146 | 94.5% |
-| zlib | 48/89 | 51/89 | 54/89 | 60.7% |
-| **total** | **2,144/2,748** | **2,197/2,748** | **2,272/2,748** | **82.7%** |
+| module | baseline | Wave 1 | Wave 2 | Wave 3 | % |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| assert | 12/14 | 13/14 | 13/14 | 13/14 | 92.9% |
+| async_hooks | 29/36 | 29/36 | 29/36 | 29/36 | 80.6% |
+| buffer | 64/74 | 71/74 | 71/74 | 71/74 | 95.9% |
+| console | 22/22 | 22/22 | 22/22 | 22/22 | 100% |
+| crypto | 145/167 | 149/167 | 162/167 | 162/167 | 97.0% |
+| dns | 10/32 | 12/32 | 12/32 | 12/32 | 37.5% |
+| events | 1/9 | 9/9 | 9/9 | 9/9 | 100% |
+| fs | 346/385 | 350/385 | 365/385 | 365/385 | 94.8% |
+| http | 390/422 | 393/422 | 412/422 | 412/422 | 97.6% |
+| http2 | 88/289 | 88/289 | 88/289 | 94/289 | 32.5% |
+| https | 58/70 | 60/70 | 60/70 | 60/70 | 85.7% |
+| inspector | 41/76 | 41/76 | 41/76 | 41/76 | 53.9% |
+| module | 32/37 | 33/37 | 33/37 | 33/37 | 89.2% |
+| net | 145/161 | 148/161 | 148/161 | 148/161 | 91.9% |
+| os | 7/8 | 7/8 | 7/8 | 7/8 | 87.5% |
+| perf_hooks | 17/31 | 19/31 | 24/31 | 24/31 | 77.4% |
+| process | 88/102 | 88/102 | 88/102 | 88/102 | 86.3% |
+| readline | 21/22 | 21/22 | 21/22 | 21/22 | 95.5% |
+| repl | 95/108 | 97/108 | 99/108 | 100/108 | 92.6% |
+| stream | 180/232 | 180/232 | 197/232 | 226/232 | 97.4% |
+| string_decoder | 4/4 | 4/4 | 4/4 | 4/4 | 100% |
+| timers | 58/59 | 58/59 | 58/59 | 58/59 | 98.3% |
+| trace_events | 12/13 | 12/13 | 12/13 | 12/13 | 92.3% |
+| tty | 3/3 | 3/3 | 3/3 | 3/3 | 100% |
+| util | 26/36 | 36/36 | 36/36 | 36/36 | 100% |
+| vm | 65/101 | 66/101 | 66/101 | 66/101 | 65.3% |
+| worker_threads | 137/146 | 137/146 | 138/146 | 138/146 | 94.5% |
+| zlib | 48/89 | 51/89 | 54/89 | 69/89 | 77.5% |
+| **total** | **2,144/2,748** | **2,197/2,748** | **2,272/2,748** | **2,323/2,748** | **84.5%** |

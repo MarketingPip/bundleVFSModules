@@ -189,6 +189,6 @@ Per Node 26 `lib/internal/http2/compat.js`:
 ## Ship
 
 - Branch: `fix/http2-26-w3`
-- PR: (fill on open)
-- Merge SHA: (fill on merge)
+- PR: #532
+- Merge SHA: `4fffd61e8e269bbd296bbfce3f998803b964b8d5` (squash-merge of PR #532)
 - CI waiter: (polls + conclusions — fill at merge time)

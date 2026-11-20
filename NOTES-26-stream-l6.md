@@ -149,5 +149,6 @@ for a zlib brotli fix.** Everything else in the lane is complete and green.
 ## Ship section
 
 - Branch: `fix/stream-26-l6-iter` (worktree `~/workspace/worktrees/w3-stream-l6`)
-- PR: (to be filled on push)
-- Merge SHA: (blocked — see merge-blocker note above)
+- PR: #534
+- Merge SHA: `aae02d018c61036b0a09fc7c3a21c505c8ae0bb2` (squash-merge of PR #534)
+- Merge-blocker resolved by coordinator decision: merged at 226/232 with the 4 brotli regressions documented as NO-FIX above.

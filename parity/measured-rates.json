@@ -305,9 +305,9 @@
     },
     "http2": {
       "date": "2026-11-20",
-      "passed": 88,
+      "passed": 94,
       "total": 289,
-      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+      "source": "Wave 3 H2-26-WR/W1/C1 (PR #532, merge 4fffd61e): 88 -> 94/289."
     },
     "https": {
       "date": "2026-11-20",
@@ -359,15 +359,15 @@
     },
     "repl": {
       "date": "2026-11-20",
-      "passed": 99,
+      "passed": 100,
       "total": 108,
-      "source": "Wave 1 R-26 (PR #518, merge 6929cffe): 95 -> 97/108 at wave-end \u2014 highlight flip regressed by the util merge #513 (652333e7), proven by bisection; Wave 2 L1 (PR #526, merge ba030119): 97 -> 99/108."
+      "source": "Wave 1 R-26 (PR #518, merge 6929cffe): 95 -> 97/108 at wave-end \u2014 highlight flip regressed by the util merge #513 (652333e7), proven by bisection; Wave 2 L1 (PR #526, merge ba030119): 97 -> 99/108; Wave 3 highlight repair (PR #531, merge 2c9ee723): 99 -> 100/108."
     },
     "stream": {
       "date": "2026-11-20",
-      "passed": 197,
+      "passed": 226,
       "total": 232,
-      "source": "Wave 2 L1-L5 (PR #522, merge b5f2e94f): 180 -> 197/232; no Wave 1 lane."
+      "source": "Wave 2 L1-L5 (PR #522, merge b5f2e94f): 180 -> 197/232; no Wave 1 lane. Wave 3 L6 stream/iter (PR #534, merge aae02d01): 197 -> 226/232 net (33 flips - 4 brotli NO-FIX regressions)."
     },
     "string_decoder": {
       "date": "2026-11-20",
@@ -413,9 +413,9 @@
     },
     "zlib": {
       "date": "2026-11-20",
-      "passed": 54,
+      "passed": 69,
       "total": 89,
-      "source": "Wave 1 L-SMALL (PR #511, merge 11d8db2d): 48 -> 51/89; Wave 2 L-RESET (PR #524, merge 4a05cd91): 51 -> 54/89."
+      "source": "Wave 1 L-SMALL (PR #511, merge 11d8db2d): 48 -> 51/89; Wave 2 L-RESET (PR #524, merge 4a05cd91): 51 -> 54/89; Wave 3 L-ZIP (PR #533, merge 1ca07c82): 54 -> 69/89."
     }
   }
 }
