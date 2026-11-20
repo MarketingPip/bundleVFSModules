@@ -63,6 +63,23 @@ no stray files; worktree clean apart from the `node_modules` symlink.
   byte-identical to `ac5b60a9`. Rebased head is 3 commits (code + 2
   notes, this paragraph amended into the top one); force-push
   re-triggers CI, which regenerates dist against the new base.
+- Green on the rebased head: replay-push (`/tmp/ph4/replay-push.py`,
+  small base_tree posts + `force:true` ref update — `git-push-api.py`
+  kept dying on its big recursive tree POST) landed remote head
+  `4e4549a9`; run 44655121224 **completed success** (build + parity
+  jobs both success). CI then pushed bot regen `44382c02`
+  (`dist/perf_hooks.js` + `dist/vfs.js` only); its run 44655448996 is
+  `action_required` with **0 jobs** — the GITHUB_TOKEN loop-prevention
+  non-run, not a test result. Precedent checked: the https-tab bot
+  regen run 44646359472 ("failure") also had 0 jobs. Bot-regen runs
+  never execute here, so the merge gate is the code SHA's green.
+  Convergence: this notes-only retrigger (head now green-verified code
+  + current dist, so the next run regenerates identical dist and pushes
+  nothing) → merge on the new head's green. NOTE: this paragraph was
+  written before the push method was settled — the commit goes on top
+  of the remote bot-regen head `44382c02` via the minimal API push
+  (small base_tree post + `force:true` ref update, the combination that
+  triggered runs), NOT as a rebase that would drop the regen.
 
 ## Score
 
