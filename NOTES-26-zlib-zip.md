@@ -120,5 +120,33 @@ on live main): **54/89** (34 fail, 1 timeout).
 
 ## Ship
 - Branch: `fix/zlib-26-zip`
-- PR: (to fill)
+- PR: https://github.com/MarketingPip/bundleVFSModules/pull/533
+- First push: local `7a63c1db` → remote `0f8d9bc6` (code SHA
+  `0f8d9bc69acbe56bd6727fd53d6e040178c45492`)
 - Merge SHA: (to fill)
+
+## CI (first run, code SHA 0f8d9bc6)
+- CI waiter polls 1–3: Parity (Node official tests) **success**;
+  build **failure** at the "Run Tests" step.
+- Local full jest reproduction (`NODE_OPTIONS=--experimental-vm-modules
+  npx --no-install jest --runInBand --forceExit`): 6 failed / 3065
+  passed. Root causes:
+  - MINE (2): `tests/export_surface_zlib.test.js` and
+    `tests/oracle-export-surface.test.js` (node:zlib) — both pin the
+    v24.20.0 export surface, which has no zip API; the 8 new exports
+    were flagged as extras. Fixed in the second commit by the repo's
+    own forward-extra mechanisms (same as the Wave 1 util lane):
+    the 8 names added to the zlib surface EXPECTED list, and a `zlib`
+    entry added to `NEWER_NODE_ALLOWLIST` in the oracle test.
+  - PRE-EXISTING, environment-driven (4): `tests/constants.test.js`
+    (3) and `tests/export_surface_sys.test.js` (1) fail identically
+    on base @ `10bdfcaa` with the same local node (v24.22.1) —
+    `src/sys.js` re-exports live `node:util`, and 24.22.1's builtins
+    have keys the 24.20.0 captures lack (`debounce`,
+    `markPromiseAsHandled`, `throttle`, `UV_FS_O_RANDOM`,
+    `UV_FS_O_SEQUENTIAL`, `UV_FS_O_SHORT_LIVED`, `UV_FS_O_TEMPORARY`).
+    On CI's pinned 24.20.0 they pass. Not touched in this PR.
+- After the fix, local re-run of the affected suites:
+  `export_surface_zlib` + `oracle-export-surface` + `ondemand-require`
+  → 46/46 pass.
+
