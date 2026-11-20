@@ -201,3 +201,40 @@
 - `src/util.js` (+5: `export { stylizeWithColor }`)
 - `NOTES-26-repl-r26.md` (this file)
 - No docs-number changes. No `dist/` changes. No baseline changes.
+
+## Resume #2 (2026-11-20 ~02:00 EST) — rebase #3 + CI green on 13eda709
+
+- Resume worker found local HEAD `12a7241d` never pushed: remote branch
+  still at `a82bb3f0` (dist-regen bot commit). `git push` fails here (no
+  credential helper); push via `git-push-api.py . fix/26w1-repl-r26
+  --force` — attempt 1 aborted on blob `e802a9de` (connection reset x3);
+  retry after 40 s succeeded, remote head `13eda709` (tree `cd10bcd5`,
+  identical to local `12a7241d`). PR body corrected (stale `src/util.js`
+  export claim removed).
+- CI on code SHA `13eda709`: Parity SUCCESS + build SUCCESS (waiter
+  `/tmp/r26r4-ci-wait-518.sh`, poll 1, FINISHED 02:08:38Z). Branch head
+  then moved to `633f0cee` (`chore: regenerate vfs.js`, parent
+  `13eda709`) — dist-regen bot commit, no check runs, merge on code SHA
+  green per lane rules.
+- Fresh guard on this tree (`/tmp/r26r4-baseline-repl.jsonc`,
+  `/tmp/r26r4-csv-2026-11-20`): 95/108 on paper; diff vs banked
+  baseline is exactly 4 lines — both flips fail→pass, plus
+  `test-repl-history-navigation.js` and
+  `test-repl-save-load-load-dir.js` pass→fail. Both misses pass
+  isolated 3x each on the head (`/tmp/r26r4-*.log`, exit 0) — load
+  flakes, not regressions (save-load-load-dir is timing/filesystem
+  sensitive like the history flakes; no lane mechanism touches it:
+  preload redirect fires only for `internal/repl/highlight`, the L4
+  removal only drops a no-op async_hooks hook). True count 97/108, 0
+  regressions. Flips re-verified isolated 2x WITH `--expose-internals`
+  on the head: exit 0 each.
+- Merge blocked: main moved under the PR (events #517 `de79b5b2`, http
+  #519 `9c0edeea` merged; PR mergeable_state dirty). Rebase #3 onto
+  `de79b5b2`, CLEAN, no conflicts; new HEAD `e0706cd0`, diff vs new
+  main exactly the same 5 lane files. Main's merges touch
+  `parity/preload.mjs` (+8, events timer-restore in polyfillPath) — the
+  one shared file this lane edits — but the additions compose: events
+  block is target-scoped `events` in polyfillPath, repl redirect is
+  target-scoped `repl` in Module._load; repl redirect intact at
+  preload.mjs:696. New guard re-run owed on the rebased tree (code
+  files byte-identical to the guarded tree; only base + NOTES differ).
