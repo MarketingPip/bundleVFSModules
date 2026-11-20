@@ -192,5 +192,14 @@ Not counted: test-zlib-brotli-16GB.js (timeout, NO-FIX per baseline).
 ## Ship
 
 - Branch: `feat/w2-zlib-lreset`
-- PR: #___ (fill at ship time)
+- PR: #524
 - Merge SHA: ___ (fill at ship time)
+
+CI on first head `af84fcc2` (run 44689647790): Parity **success**; Build **failure**
+on exactly one test — `tests/timers.test.js`, `timers-web › setInterval /
+clearInterval › interval fires repeatedly until cleared`, jest 30 s timeout
+(226 suites / 3070 tests passed). Zero zlib references in that file; the test
+is a 10 ms interval / 50 ms timeout timing assertion — a load flake, not this
+lane (diff is `src/zlib.js` only). Re-run-failed-jobs refused 403 (token lacks
+actions scope), so CI was retriggered by this NOTES commit (PR number
+recorded); no code changed since the 54/89 differential.
