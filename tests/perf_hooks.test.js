@@ -331,6 +331,9 @@ describe("resource timing (pure JS)", () => {
     expect(r.responseStatus).toBe(200);
   });
 
+  // Node 26 adds finalResponseHeadersStart / firstInterimResponseStart
+  // after requestStart and renderBlockingStatus / contentType /
+  // contentEncoding at the end (lib/internal/perf/resource_timing.js).
   test("toJSON key order matches Node", () => {
     const r = performance.markResourceTiming(
       timingInfo,
@@ -359,6 +362,8 @@ describe("resource timing (pure JS)", () => {
       "connectEnd",
       "secureConnectionStart",
       "requestStart",
+      "finalResponseHeadersStart",
+      "firstInterimResponseStart",
       "responseStart",
       "responseEnd",
       "transferSize",
@@ -366,6 +371,9 @@ describe("resource timing (pure JS)", () => {
       "decodedBodySize",
       "deliveryType",
       "responseStatus",
+      "renderBlockingStatus",
+      "contentType",
+      "contentEncoding",
     ]);
   });
 
