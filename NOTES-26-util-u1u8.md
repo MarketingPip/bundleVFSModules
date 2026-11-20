@@ -297,3 +297,18 @@ Node 26 changes that all landed in the same file.
   sequence (run 44661034679 in progress → head moved to the CI regen
   commit `3fd5f292`, which touched only dist/repl.js + dist/vfs.js). Run
   44661034679 later confirmed completed/success.
+- **Rebase #4 (onto `067a8700`):** main moved again (fs lane #521) DURING
+  the ~4 min between the empty-commit re-trigger going green on
+  `215197ef` (run 44671442896, both jobs success) and the merge check —
+  the PR went dirty on `dist/vfs.js` only (local test-merge: the oracle
+  test auto-merged clean; fs lane added `fs: ["openAsBlobSync"]` to
+  `NEWER_NODE_ALLOWLIST` at a non-adjacent line). Rebased clean (dropped
+  the CI regen commit `cce19fe2` + the empty commit `b3a95d05` via
+  sequence-editor — the empty commit had a DIFFERENT SHA remotely
+  (`215197ef`) than locally (`b3a95d05`) despite identical tree/message/
+  author/date: the API-created commit object differs somewhere from
+  git's; harmless, pushes go through the API). `src/util.js` still
+  byte-identical to the guard-verified commit; jest subset 25/25 green.
+  Waiter hardened: exits early (`repin-no-runs`, exit 3) if a (re-)pinned
+  SHA shows no runs for 5 consecutive polls, so a regen push wakes the
+  lane within ~5 min instead of burning the timeout.
