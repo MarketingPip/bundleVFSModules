@@ -286,3 +286,14 @@ Node 26 changes that all landed in the same file.
   lane's `http:` entry vs this lane's `util:` entry, adjacent lines).
   Resolved keeping both; local test-merge is clean and `src/util.js` is
   still byte-identical to the guard-verified commit.
+- **Rebase #3 (onto `cb73e799`):** main moved again (net #520, zlib #511,
+  perf_hooks); PR dirty on `dist/repl.js` + `dist/vfs.js` (net/zlib lanes'
+  regen vs this lane's dist files). Dropped the lane's dist commit during
+  the rebase — committing dist is futile while lanes merge faster than the
+  push→CI→merge cycle, and CI's regen step supplies it. Branch is now
+  src/test/NOTES only; `src/util.js` still byte-identical to the
+  guard-verified commit. The waiter for the previous head (`8cf3258a`)
+  was SIGTERMed by the runtime after ~80 min; its log showed the expected
+  sequence (run 44661034679 in progress → head moved to the CI regen
+  commit `3fd5f292`, which touched only dist/repl.js + dist/vfs.js). Run
+  44661034679 later confirmed completed/success.
