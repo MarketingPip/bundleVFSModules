@@ -513,11 +513,6 @@ function isBoxedPrimitiveValue(v) {
 }
 
 export { types };
-// Exported for src/internals/repl-highlight.js: Node's
-// internal/repl/highlight.js gets this same function from
-// internal/util/inspect; the shim's port imports the shim's own so
-// highlight() output matches the shim's inspect.colors exactly.
-export { stylizeWithColor };
 
 // Native bridge (Node only): where the environment really is Node, delegate
 // the predicates that pure JS cannot implement exactly (isProxy, isExternal,

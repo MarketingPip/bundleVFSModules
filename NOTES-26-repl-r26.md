@@ -28,13 +28,14 @@
     `new this(...)`, so it stays bound to Parser exactly as Node binds
     it); `stylizeWithColor` from `internal/util/inspect` → the shim's
     own (see below); ESM export instead of `module.exports`.
-  - `src/util.js` — export `stylizeWithColor` (was module-local) so the
-    port's output matches the shim's `inspect.colors` exactly. The
-    shim's style table already matches Node's (special→cyan,
-    string→green, …) and the wrap shape is identical
-    (`\u001b[<open>m...\u001b[<close>m`), so the test's exact-ANSI
-    assertion (`const` cyan, `"text"` green, via the shim's own
-    `inspect.colors`) holds.
+  - The port's `stylizeWithColor` is a LOCAL wrapper over the shim's
+    PUBLIC `inspect.styles` / `inspect.colors` (src/util.js:4196-4197)
+    — same table and wrap shape, so the test's exact-ANSI assertion
+    (`const` cyan, `"text"` green, via the shim's own `inspect.colors`)
+    holds. It is deliberately NOT imported from src/util.js: exporting
+    it there polluted the node:util surface and failed
+    `tests/export_surface_util.test.js` (CI build job, PR #518 first
+    run) — fixed in the follow-up commit below.
   - `parity/internal-repl-highlight-adapter.mjs` (NEW) — re-exports the
     port's `highlight` (named + default), following the
     `internal-http-adapter.mjs` precedent.
@@ -140,6 +141,38 @@
   commits the Node 24 test tree there); restored with
   `git checkout -- parity/node-test` — never `rm -rf` that path, let
   the runner's restore step handle it.
+
+- CI incident (PR #518, first run on code SHA `e74f2c07`): Parity job
+  SUCCESS, Build VFS job FAILURE at the `Run Tests` (jest) step.
+  Local repro (`NODE_OPTIONS=--experimental-vm-modules npx jest
+  --runInBand --forceExit`, `/tmp/r26r-jest.log`): 6 suites / 9 tests
+  failed. Root cause of ONE was this lane: the original
+  `export { stylizeWithColor }` in src/util.js polluted the node:util
+  surface (`tests/export_surface_util.test.js`: extra export).
+  The other five are NOT this lane, proven by running the same six
+  suites on a clean main worktree (`/tmp/r26r-main`, `bb6905b5`,
+  `/tmp/r26r-main-6suites.log`): perf_hooks, oracle-export-surface,
+  constants, export_surface_sys fail identically on main (host
+  v24.22.1 vs the v24.20.0-captured expectations — e.g. sys
+  re-exports the REAL node:util, which gained debounce/throttle in
+  24.22.1; oracle lists new 24.22.1 crypto/util APIs the shim lacks);
+  timers passed on main, so its branch failure (setInterval fired 2x
+  not 3x in 50 ms) is a load flake; export_surface_util PASSED on
+  main, confirming it as this lane's regression. (Main's CI is green
+  on bb6905b5 because CI pins Node 24.20.0, where the host-version
+  artifacts do not occur.)
+- Fix (follow-up commit): `stylizeWithColor` is now a LOCAL wrapper in
+  src/internals/repl-highlight.js over the shim's PUBLIC
+  `inspect.styles` / `inspect.colors` — same tables, same output, no
+  util.js export. Re-verified: highlight isolated 2x exit 0
+  (`/tmp/r26r2-highlight-fix{1,2}.log`), tla exit 0
+  (`/tmp/r26r2-tla.log`); targeted jest
+  (export_surface_util, export_surface_repl, repl, util_named_exports,
+  export_surface_util_types) 5 suites / 21 tests PASS.
+- CI log fetch blocked: `gh-logs.py` 401s on `custom.github-tibia`
+  ("Bad credentials") and the `gh.py` job-logs fetch hit an approval
+  card that timed out unanswered — NOT retried (needs user action).
+  Diagnosis above came from the local jest repro instead.
 
 ## Files changed
 

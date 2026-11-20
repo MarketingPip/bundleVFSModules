@@ -9,10 +9,13 @@
 //   direct dep; src/repl.js imports it the same way). `Parser.tokenizer`
 //   uses `new this(...)`, so it stays bound to Parser exactly as Node
 //   binds it.
-// - `stylizeWithColor` from `internal/util/inspect` replaced with the
-//   shim's own (src/util.js) — same style table (special→cyan,
-//   string→green, ...) and same `\u001b[<open>m...\u001b[<close>m` shape,
-//   so highlight() output matches the shim's inspect.colors exactly.
+// - `stylizeWithColor` from `internal/util/inspect` replaced with a
+//   local wrapper over the shim's PUBLIC `inspect.styles` /
+//   `inspect.colors` (src/util.js:4196-4197) — same table, same
+//   `\u001b[<open>m...\u001b[<close>m` shape, so highlight() output
+//   matches the shim's inspect.colors exactly. NOT imported from
+//   src/util.js: exporting it there would pollute the node:util surface
+//   (tests/export_surface_util.test.js failed on the extra export).
 // - ESM export instead of `module.exports`.
 //
 // ponytail: ceiling — the shim's REPLServer does not wire this in as its
@@ -21,7 +24,18 @@
 // the interactive redraw path must be proven not to leak ANSI into the
 // ArrayStream transcripts the repl tests assert on.
 import * as acorn from "acorn";
-import { stylizeWithColor } from "../util.js";
+import { inspect } from "../util.js";
+
+// Local stylize over the shim's public inspect tables (same values and
+// wrap shape as src/util.js's module-local stylizeWithColor).
+function stylizeWithColor(str, styleType) {
+  const style = inspect.styles[styleType];
+  if (style && inspect.colors[style]) {
+    const codes = inspect.colors[style];
+    return `\u001B[${codes[0]}m${str}\u001B[${codes[1]}m`;
+  }
+  return str;
+}
 
 const tokenizer = acorn.Parser.tokenizer.bind(acorn.Parser);
 
