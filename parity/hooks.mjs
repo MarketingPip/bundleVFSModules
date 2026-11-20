@@ -65,6 +65,19 @@ function isExtraRedirect(name) {
 
 function polyfillURL(specifier) {
   const name = specifier.startsWith("node:") ? specifier.slice(5) : specifier;
+  // ESM twin of the preload.mjs early return: stream/iter tests import
+  // 'zlib/iter' (consumers-dump.mjs is ESM). Routed through the harness
+  // (timer-globals restore), not src/zlib-iter.js directly.
+  if (target === "stream" && name === "zlib/iter") {
+    return pathToFileURL(path.join(repoRoot, "parity", "zlib-iter-harness.mjs"))
+      .href;
+  }
+  // ESM twin: 'stream/iter' goes through the iter harness.
+  if (target === "stream" && name === "stream/iter") {
+    return pathToFileURL(
+      path.join(repoRoot, "parity", "stream-iter-harness.mjs"),
+    ).href;
+  }
   if (name.startsWith(".") || path.isAbsolute(name)) return null;
   const parts = name.split("/");
   if (target && parts[0] !== target && !isExtraRedirect(parts[0])) return null;

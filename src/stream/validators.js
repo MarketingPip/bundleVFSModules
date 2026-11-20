@@ -95,11 +95,50 @@ const validateOneOf = hideStackFrames((value, name, oneOf) => {
   }
 });
 
+const validateNumber = hideStackFrames((value, name) => {
+  if (typeof value !== "number")
+    throw new ERR_INVALID_ARG_TYPE(name, "number", value);
+});
+
+// Port of Node v26 lib/internal/validators.js validateFiniteNumber /
+// checkRangesOrGetDefault (needed by stream/iter transform option
+// validation). Semantics verbatim: false for undefined/NaN, true for
+// finite, throws ERR_INVALID_ARG_TYPE for non-numbers and
+// ERR_OUT_OF_RANGE for infinities.
+const validateFiniteNumber = hideStackFrames((number, name) => {
+  if (number === undefined) {
+    return false;
+  }
+  if (Number.isFinite(number)) {
+    return true;
+  }
+  if (Number.isNaN(number)) {
+    return false;
+  }
+  validateNumber(number, name);
+  throw new ERR_OUT_OF_RANGE(name, "a finite number", number);
+});
+
+const checkRangesOrGetDefault = hideStackFrames(
+  (number, name, lower, upper, def) => {
+    if (!validateFiniteNumber(number, name)) {
+      return def;
+    }
+    if (number < lower || number > upper) {
+      throw new ERR_OUT_OF_RANGE(name, `>= ${lower} and <= ${upper}`, number);
+    }
+    return number;
+  },
+);
+
 export {
   validateAbortSignal,
   validateBoolean,
   validateFunction,
   validateInteger,
+  validateNumber,
+  validateFiniteNumber,
+  checkRangesOrGetDefault,
   validateObject,
   validateOneOf,
   kValidateObjectAllowNullable,
