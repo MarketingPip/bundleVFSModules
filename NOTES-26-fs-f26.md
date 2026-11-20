@@ -80,10 +80,12 @@ All in `src/fs.js` except the one noted F9 adapter change.
   error from a `setImmediate`, surfacing as `uncaughtException`. The
   host binding owns the fd close; this registry only supplies the throw.
   Only `test-fs-filehandle.js` calls `openFileHandle` among fs tests.
-- **Flags note:** `run-baseline.mjs` does NOT honor `// Flags:`
-  headers, so the guard sweep will still show this test as failing
-  (no flags → `globalThis.gc` undefined → TypeError). The flip is
-  proven by direct flagged runs (2x isolated, above).
+- **Flags note (corrected after the sweep):** `run-baseline.mjs` does
+  NOT honor `// Flags:` headers itself, but test/common respawns
+  flagged tests as a child with their flags (`common/index.js:163`
+  preserves `process.execArgv`, so the preload survives) — so the
+  sweep passes this test too. The flip is proven by direct flagged
+  runs (2x isolated, above) AND the full sweep.
 
 ### F12 — `-0` is fd 0 (Node 26.1.0)
 - `src/fs.js` (~2134, ~2191): `writeFileSync`'s utf8 fast path is
@@ -141,8 +143,27 @@ All in `src/fs.js` except the one noted F9 adapter change.
 - Repo jest (`NODE_OPTIONS=--experimental-vm-modules npx --no-install
   jest tests/fs.test.js tests/export_surface_fs.test.js`): **62/62 pass**.
 - Full fs differential via `parity/drift/run-baseline.mjs --modules fs
-  --jobs 2 --short 60 --full 120`: **[PENDING — sweep running at write
-  time; fill in before merge]**.
+  --jobs 2 --short 60 --full 120` on rebased head `24cf9552`
+  (out `/tmp/fs-f26-sweep.jsonc`, csv `parity/drift/csv-fs-f26-r3`,
+  removed after): **349/385 pass, 36 fail, 0 timeout** (baseline
+  346/385). Phase 1 385/385, phase 2: 26 hit the 60s cap, re-ran at 120s.
+  Flips in-sweep (4): `test-fs-openAsBlobSync.js`,
+  `test-fs-rmdir-recursive-error.js`, `test-fs-filehandle.js`,
+  `test-fs-stream-windows-handle.js` — filehandle passes in-sweep too:
+  test/common respawns flagged tests as a child with their `// Flags:`
+  (`--expose-gc --no-warnings --expose-internals`, `common/index.js:163`
+  preserves `process.execArgv`, so the preload survives).
+- **Sweep-only fail `test-fs-write-reuse-callback.js` — flake, not a
+  regression:** exit 1 in the sweep, then **5× exit 0 on re-run**
+  (3× isolated + 2× concurrent, all under the harness with the
+  `--expose-gc` respawn). No lane code path touches async `fs.write`
+  (diff grep: only `vol.writeSync` change is inside writeFileSync's
+  fd branch, guarded by `buf.byteLength > 0`). Unreproduced; sweep
+  stderr was discarded (`stdio: ignore`), so no failure text survives.
+- `test-fs-negative-zero.js` still fails in-sweep (exit 1) as expected:
+  host-bound child SIGABRT (see F12 above).
+- **New count: 350/385 effective** (346 + 4 flips; 349 in-sweep + the
+  write-reuse flake). F8 explicitly out of scope (later wave).
 - Baseline guard set: the 346 fs passes in
   `parity/drift/node26-baseline.jsonc` (list: `/tmp/fs26-pass.txt`).
 
