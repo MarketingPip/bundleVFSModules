@@ -45,6 +45,24 @@ no stray files; worktree clean apart from the `node_modules` symlink.
   fix/26w1-https-tab) got its pull_request run 9 s after its push, so
   this head's event was lost. Retrigger: this notes-only commit,
   re-pinning the waiter to the new head.
+- Retrigger 2: the minimal-API push (`96f561fa`, PATCH ref on top of the
+  bot regen) ALSO started no run after 8+ min — while both pushes made
+  via `git-push-api.py` on this branch (original `6bd6172a`, rebase
+  `caa68880`) got their runs within ~1 min. Re-retriggering through
+  `git-push-api.py` (this commit).
+- Rebase 2 + dirty PR (2026-11-20 ~01:30 UTC): PR showed
+  `mergeable: False / dirty` and the last three heads (`6b3a023f`,
+  `96f561fa`, `463adb40`) started no runs. Root cause of dirty: main had
+  moved on (https #515, crypto #514, assert #516, head `0f30d17c`), each
+  squash-merge regenerating `dist/*`; the bot regen computed against
+  `bb6905b5` now conflicts with main's newer `dist/vfs.js`. Fix: clean
+  rebase onto `0f30d17c` (no conflicts; local tree never carried the
+  stale regen), differential re-run on the rebased head:
+  `/tmp/ph4/node26-perfhooks-ph4-rebased2.jsonc` → **19/31, 12 fail,
+  0 timeout**, flip set vs baseline exactly the 2 targets, code
+  byte-identical to `ac5b60a9`. Rebased head is 3 commits (code + 2
+  notes, this paragraph amended into the top one); force-push
+  re-triggers CI, which regenerates dist against the new base.
 
 ## Score
 
