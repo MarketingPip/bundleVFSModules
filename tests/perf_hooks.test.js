@@ -34,7 +34,7 @@ function nextTick() {
 }
 
 describe("perf_hooks module surface", () => {
-  test("exports match Node v24.20.0 (no Histogram)", () => {
+  test("exports match Node v24.20.0 (no Histogram) + Node 26 additions", () => {
     const expected = [
       "Performance",
       "PerformanceEntry",
@@ -45,7 +45,11 @@ describe("perf_hooks module surface", () => {
       "PerformanceResourceTiming",
       "constants",
       "createHistogram",
+      // Node 26 additions (Wave 2 L-PH1): the host v24.22 namespace
+      // already carries both, so the native check below holds too.
+      "createSlidingWindowHistogram",
       "eventLoopUtilization",
+      "importHistogram",
       "monitorEventLoopDelay",
       "performance",
       "timerify",
@@ -53,11 +57,14 @@ describe("perf_hooks module surface", () => {
     expect(Object.keys(perfHooks).sort()).toEqual(expected.slice().sort());
     // The native namespace additionally carries a `default` key; the named
     // exports must otherwise match.
-    expect(
-      Object.keys(nativePerfHooks)
-        .filter((k) => k !== "default")
-        .sort(),
-    ).toEqual(expected.slice().sort());
+    // The native namespace is version-dependent: Node 24.20.0 lacks the
+    // two Node 26 additions, later versions carry them. The shim must cover
+    // everything the host native offers (the exact shim list is pinned
+    // above), so the native check is a subset check, not an equality.
+    const nativeKeys = Object.keys(nativePerfHooks)
+      .filter((k) => k !== "default")
+      .sort();
+    expect(nativeKeys.every((k) => expected.includes(k))).toBe(true);
     for (const name of expected) {
       expect(perfHooks[name]).toBeDefined();
     }
