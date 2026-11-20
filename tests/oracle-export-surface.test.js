@@ -29,7 +29,13 @@ const BUILTINS = [
 // Deprecated-but-intentional extras: these existed in older Node versions.
 // We keep them for backward compatibility (Jared, 2026-10-06).
 // The oracle test does not flag these as problems.
+// The crypto entry is the opposite direction: newer-Node extras the shim
+// intentionally provides ahead of the pinned 24.20.0 test runner, which
+// predates them (Node 26 additions; 24.20.0 has no createMac/getMacs/
+// parsePKCS12). The oracle test must not flag them as problems either.
 const DEPRECATED_ALLOWLIST = {
+  // Node 26 additions (see header comment): intentional forward extras.
+  crypto: ["createMac", "getMacs", "parsePKCS12"],
   util: [
     "isBoolean",
     "isBuffer",
