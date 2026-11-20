@@ -249,10 +249,15 @@ function sprintf(fmt, ...args) {
   });
 }
 
-// E(code, formatter, Base) — mirrors Node's internal E() just enough for
-// the stream port: message built by formatter, .code set, TypeError-style
-// name, and a HideStackFramesError static for the validators.
-function E(code, formatter, Base = Error) {
+// E(code, formatter, Base, ...otherClasses) — mirrors Node's internal E()
+// (lib/internal/errors.js:556): the returned class extends Base, and for
+// each extra class Node attaches a same-code sibling class under
+// ErrClass[clazz.name] — e.g. `new ERR_INVALID_STATE.RangeError(...)`
+// (base Error, siblings TypeError + RangeError) and
+// `new ERR_STREAM_WRITE_AFTER_END.TypeError(...)`. The stream/iter port
+// uses those sibling forms, so a single-class E() throws
+// "X.TypeError is not a constructor" at the call site.
+function makeNodeErrorClass(code, formatter, Base) {
   class NodeError extends Base {
     constructor(...args) {
       super(
@@ -272,6 +277,19 @@ function E(code, formatter, Base = Error) {
   Object.defineProperty(NodeError, "name", { value: code, configurable: true });
   // Used via `codes.ERR_X: { HideStackFramesError: ERR_X }` destructuring.
   NodeError.HideStackFramesError = NodeError;
+  return NodeError;
+}
+
+function E(code, formatter, Base = Error, ...otherClasses) {
+  const NodeError = makeNodeErrorClass(code, formatter, Base);
+  for (const clazz of otherClasses) {
+    // The shim has no separate hide-stack-frames class (HideStackFramesError
+    // is the class itself); skip it — Node only attaches it as a marker.
+    if (typeof clazz !== "function" || clazz.name === "HideStackFramesError") {
+      continue;
+    }
+    NodeError[clazz.name] = makeNodeErrorClass(code, formatter, clazz);
+  }
   return NodeError;
 }
 
@@ -321,6 +339,7 @@ const codes = {
     "ERR_INVALID_ARG_VALUE",
     invalidArgValueFormatter,
     TypeError,
+    RangeError,
   ),
   ERR_OUT_OF_RANGE: E("ERR_OUT_OF_RANGE", outOfRangeFormatter, RangeError),
   ERR_STREAM_PUSH_AFTER_EOF: E(
@@ -337,6 +356,7 @@ const codes = {
     "ERR_STREAM_WRITE_AFTER_END",
     "write after end",
     Error,
+    TypeError,
   ),
   ERR_STREAM_UNSHIFT_AFTER_END_EVENT: E(
     "ERR_STREAM_UNSHIFT_AFTER_END_EVENT",
@@ -360,6 +380,30 @@ const codes = {
   ERR_STREAM_ALREADY_FINISHED: E(
     "ERR_STREAM_ALREADY_FINISHED",
     "Cannot call %s after a stream was finished",
+    Error,
+  ),
+  // Added for the stream/iter port (Node v26 lib/internal/errors.js).
+  ERR_BROTLI_INVALID_PARAM: E(
+    "ERR_BROTLI_INVALID_PARAM",
+    "%s is not a valid Brotli parameter",
+    RangeError,
+  ),
+  ERR_ZSTD_INVALID_PARAM: E(
+    "ERR_ZSTD_INVALID_PARAM",
+    "%s is not a valid zstd parameter",
+    RangeError,
+  ),
+  ERR_INVALID_STATE: E(
+    "ERR_INVALID_STATE",
+    "Invalid state: %s",
+    Error,
+    TypeError,
+    RangeError,
+  ),
+  ERR_MISSING_OPTION: E("ERR_MISSING_OPTION", "%s is required", TypeError),
+  ERR_OPERATION_FAILED: E(
+    "ERR_OPERATION_FAILED",
+    "Operation failed: %s",
     Error,
   ),
 };
@@ -393,4 +437,36 @@ const aggregateTwoErrors = (innerError, outerError) => {
   return innerError || outerError;
 };
 
-export { AbortError, aggregateTwoErrors, codes, determineSpecificType };
+// ERR_FALSY_VALUE_REJECTION carries `.reason` on the instance (Node's
+// formatter sets it via `this`); the generic E() cannot do that (its
+// formatter runs before super()), so this code gets a bespoke class with
+// the byte-identical message.
+class FalsyValueRejectionError extends Error {
+  constructor(reason) {
+    super("Promise was rejected with falsy value");
+    this.code = "ERR_FALSY_VALUE_REJECTION";
+    this.name = "ERR_FALSY_VALUE_REJECTION";
+    this.reason = reason;
+  }
+  toString() {
+    return `${this.name} [${this.code}]: ${this.message}`;
+  }
+}
+FalsyValueRejectionError.HideStackFramesError = FalsyValueRejectionError;
+codes.ERR_FALSY_VALUE_REJECTION = FalsyValueRejectionError;
+
+// Port of Node lib/internal/errors.js genericNodeError (used by the
+// stream/iter zlib transform engine for native-style engine errors).
+function genericNodeError(message, errorProperties) {
+  const err = new Error(message);
+  Object.assign(err, errorProperties);
+  return err;
+}
+
+export {
+  AbortError,
+  aggregateTwoErrors,
+  codes,
+  determineSpecificType,
+  genericNodeError,
+};

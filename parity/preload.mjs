@@ -182,6 +182,23 @@ function isExtraRedirect(name) {
 
 function polyfillPath(request) {
   const name = request.startsWith("node:") ? request.slice(5) : request;
+  // stream/iter tests also require('zlib/iter') (the compression
+  // transforms in src/stream/iter/transform.js, ported to src/zlib-iter.js
+  // — src/zlib.js is a file, so no src/zlib/ directory can exist). The
+  // target gate below only admits parts[0] === "stream", so this
+  // subpath needs its own early return, like the fs/promises special
+  // cases further down. require('zlib') itself is NOT redirected.
+  // Routed through parity/zlib-iter-harness.mjs (not src/zlib-iter.js
+  // directly) so the timer-globals restore runs — same reason as the
+  // stream harness below.
+  if (target === "stream" && name === "zlib/iter") {
+    return path.join(repoRoot, "parity", "zlib-iter-harness.mjs");
+  }
+  // stream/iter goes through parity/stream-iter-harness.mjs (timer-globals
+  // restore — the plain `stream` harness does not cover the subpath).
+  if (target === "stream" && name === "stream/iter") {
+    return path.join(repoRoot, "parity", "stream-iter-harness.mjs");
+  }
   if (name.startsWith(".") || path.isAbsolute(name)) return null;
   const parts = name.split("/");
   if (target && parts[0] !== target && !isExtraRedirect(parts[0])) return null;

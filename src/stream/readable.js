@@ -80,8 +80,6 @@ import {
 export default Readable;
 Readable.ReadableState = ReadableState;
 
-const getOptionValue = () => false;
-
 let debug = () => {};
 
 const {
@@ -2054,25 +2052,24 @@ Readable.wrap = function (src, options) {
 // fromReadable() since fromReadable() checks for toAsyncStreamable,
 // which would create infinite recursion.
 //
-// The flag cannot be checked at module load time (readable.js loads during
-// bootstrap before options are available). Instead, toAsyncStreamable is
-// always defined but lazily initializes on first call -- throwing if the
-// flag is not set.
+// ponytail: readable.js cannot import classic.js statically (classic
+// imports Readable), so classic.js registers its implementation via
+// setIterClassicImpl() when src/stream/iter.js loads. Until then the
+// method throws exactly as Node does without --experimental-stream-iter.
+let iterClassicImpl;
+export function setIterClassicImpl(impl) {
+  iterClassicImpl = impl;
+}
+
 {
   const toAsyncStreamable = SymbolFor("Stream.toAsyncStreamable");
-  let createBatchedAsyncIterator;
-  let normalizeBatch;
-  let kValidatedSource;
 
   Readable.prototype[toAsyncStreamable] = function () {
-    if (createBatchedAsyncIterator === undefined) {
-      if (!getOptionValue("--experimental-stream-iter")) {
-        throw new ERR_STREAM_ITER_MISSING_FLAG();
-      }
-      // The experimental stream/iter helpers are not ported and the
-      // flag is never set here; Node throws ERR_STREAM_ITER_MISSING_FLAG.
+    if (iterClassicImpl === undefined) {
       throw new ERR_STREAM_ITER_MISSING_FLAG();
     }
+    const { createBatchedAsyncIterator, normalizeBatch, kValidatedSource } =
+      iterClassicImpl;
     const state = this._readableState;
     const normalize =
       state.objectMode || state.encoding ? normalizeBatch : null;
