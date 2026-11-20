@@ -123,7 +123,7 @@ on live main): **54/89** (34 fail, 1 timeout).
 - PR: https://github.com/MarketingPip/bundleVFSModules/pull/533
 - First push: local `7a63c1db` → remote `0f8d9bc6` (code SHA
   `0f8d9bc69acbe56bd6727fd53d6e040178c45492`)
-- Merge SHA: (to fill)
+- Merge SHA: `1ca07c825e1ce2ef8ad3e1c0d6bae41df0aac9ee` (squash-merge of PR #533)
 
 ## CI (first run, code SHA 0f8d9bc6)
 - CI waiter polls 1–3: Parity (Node official tests) **success**;

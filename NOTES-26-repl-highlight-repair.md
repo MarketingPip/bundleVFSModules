@@ -122,5 +122,5 @@
 
 ## Ship
 
-- PR: (fill on open)
-- Merge SHA: (fill on merge)
+- PR: #531
+- Merge SHA: `2c9ee723bfefe8e035bd125a0d55d14a0153d8c1` (squash-merge of PR #531)
