@@ -70,6 +70,7 @@ import { validateAbortSignal, validateObject } from "./validators.js";
 import { StringDecoder } from "../string_decoder.js";
 import from from "./from.js";
 import { nextTick } from "./task-queues.js";
+import { writeKnownBuffer } from "./writable.js";
 import { procStdout, procStderr } from "./task-queues.js";
 import {
   newStreamReadableFromReadableStream,
@@ -125,6 +126,11 @@ const kFlowing = 1 << 24;
 const kHasPaused = 1 << 25;
 const kPaused = 1 << 26;
 const kDataListening = 1 << 27;
+const kEndScheduled = 1 << 28;
+const kEofReadablePending = 1 << 29;
+// Set only while flowSync() is inside _read(). push() then keeps the
+// chunk on state.fastChunk instead of the buffer array.
+const kFastPush = 1 << 30;
 
 // TODO(benjamingr) it is likely slower to do it this way than with free functions
 function makeBitMapDescriptor(bit) {
@@ -287,6 +293,12 @@ function ReadableState(options, stream, isDuplex) {
   this.buffer = [];
   this.bufferIndex = 0;
   this.length = 0;
+  // Chunk prefetched by flowSync(), kept off the buffer array.
+  this.fastChunk = null;
+  // The sole pipe() 'data' listener, when there is exactly one destination.
+  // flowSync() writes buffers straight to that destination.
+  this.pipeOnData = null;
+  this.pipePause = null;
   this.pipes = [];
 
   // Should close be emitted on destroy. Defaults to true.
@@ -393,9 +405,34 @@ Readable.prototype[SymbolAsyncDispose] = async function () {
 // similar to how Writable.write() returns true if you should
 // write() some more.
 Readable.prototype.push = function (chunk, encoding) {
+  const state = this._readableState;
+
+  // flowSync() is inside _read() and wants a single buffer parked on
+  // fastChunk. A second push, a string, or EOF drops back to the buffer.
+  if (
+    (state[kState] & kFastPush) !== 0 &&
+    encoding == null &&
+    state.fastChunk == null &&
+    chunk instanceof Buffer &&
+    chunk.length > 0
+  ) {
+    state.fastChunk = chunk;
+    state.length = chunk.length;
+    state[kState] &= ~kReading;
+    return chunk.length < state.highWaterMark;
+  }
+  if ((state[kState] & kFastPush) !== 0) {
+    state[kState] &= ~kFastPush;
+    if (state.fastChunk != null) {
+      const first = state.fastChunk;
+      state.fastChunk = null;
+      state.length = 0;
+      readableAddChunkPushByteMode(this, state, first);
+    }
+  }
+
   debug("push", chunk);
 
-  const state = this._readableState;
   return (state[kState] & kObjectMode) === 0
     ? readableAddChunkPushByteMode(this, state, chunk, encoding)
     : readableAddChunkPushObjectMode(this, state, chunk, encoding);
@@ -610,6 +647,7 @@ Readable.prototype.isPaused = function () {
 // Backwards compatibility.
 Readable.prototype.setEncoding = function (enc) {
   const state = this._readableState;
+  if (state.fastChunk != null) materializeFastChunk(state);
 
   const decoder = new StringDecoder(enc);
   state.decoder = decoder;
@@ -656,9 +694,14 @@ function howMuchToRead(n, state) {
     return 0;
   if ((state[kState] & kObjectMode) !== 0) return 1;
   if (NumberIsNaN(n)) {
+    // Fast path for buffers.
+    if ((state[kState] & kDecoder) === 0 && state.length)
+      return state.buffer[state.bufferIndex].length;
+
     // Only flow one buffer at a time.
     if ((state[kState] & kFlowing) !== 0 && state.length)
       return state.buffer[state.bufferIndex].length;
+
     return state.length;
   }
   if (n <= state.length) return n;
@@ -667,6 +710,11 @@ function howMuchToRead(n, state) {
 
 // You can override either this method, or the async _read(n) below.
 Readable.prototype.read = function (n) {
+  // A nested read() during flowSync()'s 'data' event must see the
+  // prefetched chunk. Null for every read that is not inside that loop.
+  if (this._readableState.fastChunk != null)
+    materializeFastChunk(this._readableState);
+
   debug("read", n);
   // Same as parseInt(undefined, 10), however V8 7.3 performance regressed
   // in this scenario, so we are doing it manually.
@@ -681,7 +729,7 @@ Readable.prototype.read = function (n) {
   // If we're asking for more than the current hwm, then raise the hwm.
   if (n > state.highWaterMark) state.highWaterMark = computeNewHighWaterMark(n);
 
-  if (n !== 0) state[kState] &= ~kEmittedReadable;
+  if (n !== 0) state[kState] &= ~(kEmittedReadable | kEofReadablePending);
 
   // If we're doing read(0) to trigger a readable event, but we
   // already have a bunch of data in the buffer, then just trigger
@@ -822,7 +870,18 @@ function onEofChunk(stream, state) {
     // If we are sync, wait until next tick to emit the data.
     // Otherwise we risk emitting data in the flow()
     // the readable code triggers during a read() call.
-    emitReadable(stream);
+    if (
+      (state[kState] & (kFlowing | kNeedReadable)) !== 0 ||
+      stream.listenerCount("readable") > 0
+    ) {
+      emitReadable(stream);
+    } else {
+      // Nobody is observing the stream: do not schedule the 'readable'
+      // emission at all. A 'readable' listener attached later redeems it
+      // (see Readable.prototype.on), and read() and resume() reach the
+      // end of the stream on their own.
+      state[kState] |= kEofReadablePending;
+    }
   } else {
     // Emit 'readable' now to make sure it gets picked up.
     state[kState] &= ~kNeedReadable;
@@ -949,6 +1008,16 @@ Readable.prototype.pipe = function (dest, pipeOpts) {
   }
 
   state.pipes.push(dest);
+  // Only a single pipe destination can skip emit('data') and call write()
+  // directly. A second destination, or an extra 'data' listener, must go
+  // through emit so every listener still runs.
+  if (state.pipes.length === 1) {
+    state.pipeOnData = ondata;
+    state.pipePause = pause;
+  } else {
+    state.pipeOnData = null;
+    state.pipePause = null;
+  }
   debug("pipe count=%d opts=%j", state.pipes.length, pipeOpts);
 
   const doEnd =
@@ -999,13 +1068,13 @@ Readable.prototype.pipe = function (dest, pipeOpts) {
     // specific writer, then it would cause it to never start
     // flowing again.
     // So, if this is awaiting a drain, then we just call it now.
-    // If we don't know, then assume that we are waiting for one.
-    if (
-      ondrain &&
-      state.awaitDrainWriters &&
-      (!dest._writableState || dest._writableState.needDrain)
-    )
-      ondrain();
+    // `pipeOnDrain` only removes this destination from the awaiting-drain set
+    // and resumes the source once nothing else is awaiting a drain, so it is
+    // safe to call unconditionally and no-ops when this writer wasn't awaiting
+    // a drain. Guarding on `needDrain` used to skip this for a destination that
+    // errored synchronously, leaving it stuck in the set and starving other
+    // destinations piped from the same source (see #53185).
+    if (ondrain && state.awaitDrainWriters) ondrain();
   }
 
   function pause() {
@@ -1137,6 +1206,8 @@ Readable.prototype.unpipe = function (dest) {
     // remove all.
     const dests = state.pipes;
     state.pipes = [];
+    state.pipeOnData = null;
+    state.pipePause = null;
     this.pause();
 
     for (let i = 0; i < dests.length; i++)
@@ -1149,6 +1220,8 @@ Readable.prototype.unpipe = function (dest) {
   if (index === -1) return this;
 
   state.pipes.splice(index, 1);
+  state.pipeOnData = null;
+  state.pipePause = null;
   if (state.pipes.length === 0) this.pause();
 
   dest.emit("unpipe", this, unpipeInfo);
@@ -1181,8 +1254,17 @@ Readable.prototype.on = function (ev, fn) {
       debug("on readable");
       if (state.length) {
         emitReadable(this);
-      } else if ((state[kState] & kReading) === 0) {
-        nextTick(nReadingNextTick, this);
+      } else {
+        if ((state[kState] & kEofReadablePending) !== 0) {
+          // The end-of-stream 'readable' emission was skipped because
+          // nobody was listening when the stream ended (see onEofChunk):
+          // emit it now.
+          state[kState] &= ~kEofReadablePending;
+          emitReadable(this);
+        }
+        if ((state[kState] & kReading) === 0) {
+          nextTick(nReadingNextTick, this);
+        }
       }
     }
   }
@@ -1262,6 +1344,9 @@ function nReadingNextTick(self) {
 // If the user uses them, then switch into old mode.
 Readable.prototype.resume = function () {
   const state = this._readableState;
+  if ((state[kState] & kDestroyed) !== 0) {
+    return this;
+  }
   if ((state[kState] & kFlowing) === 0) {
     debug("resume");
     // We flow only if there is no one listening
@@ -1301,6 +1386,9 @@ function resume_(stream, state) {
 
 Readable.prototype.pause = function () {
   const state = this._readableState;
+  if ((state[kState] & kDestroyed) !== 0) {
+    return this;
+  }
   debug("call pause");
   if ((state[kState] & (kHasFlowing | kFlowing)) !== kHasFlowing) {
     debug("pause");
@@ -1315,7 +1403,110 @@ Readable.prototype.pause = function () {
 function flow(stream) {
   const state = stream._readableState;
   debug("flow");
+  // Byte-mode pipe sits in read() to pull one already-buffered chunk and
+  // refill. That read is most of the per-chunk cost. flowSync() keeps the
+  // same prefetch order without the buffer array or the general read path.
+  if (flowSync(stream, state)) return;
   while ((state[kState] & kFlowing) !== 0 && stream.read() !== null);
+}
+
+const kFastFlowNeed = kConstructed | kFlowing | kDataListening;
+const kFastFlowBlock =
+  kObjectMode | kDecoder | kEnded | kDestroyed | kErrored | kPaused | kReading | kSync;
+
+// Pipe's only listener is ondata(), which calls dest.write(). Skip emit
+// and the general write() checks for a single Buffer in that steady state.
+function deliverFlowChunk(stream, state, chunk) {
+  const pipeOnData = state.pipeOnData;
+  const events = stream._events;
+  if (
+    pipeOnData !== null &&
+    events !== undefined &&
+    events.data === pipeOnData
+  ) {
+    const dest = state.pipes[0];
+    let ret;
+    try {
+      ret = writeKnownBuffer(dest, chunk);
+    } catch (error) {
+      dest.destroy(error);
+      return;
+    }
+    if (ret === undefined) stream.emit("data", chunk);
+    else if (ret === false && state.pipePause !== null) state.pipePause();
+    return;
+  }
+  stream.emit("data", chunk);
+}
+
+// Returns true when this call owned the flowing loop, including any
+// fallback to read() after the fast path stops.
+function flowSync(stream, state) {
+  const bits = state[kState];
+  if (
+    (bits & kFastFlowNeed) !== kFastFlowNeed ||
+    (bits & kFastFlowBlock) !== 0 ||
+    !(state.highWaterMark > 0) ||
+    state.fastChunk != null
+  ) {
+    return false;
+  }
+
+  if (state.length !== 0) {
+    const buf = state.buffer;
+    const idx = state.bufferIndex;
+    const chunk = buf[idx];
+    // Only the one-chunk prefetch left by read(0) / the previous read.
+    if (buf.length !== idx + 1 || chunk == null || chunk.length !== state.length)
+      return false;
+    buf.length = 0;
+    state.bufferIndex = 0;
+    state.fastChunk = chunk;
+  }
+
+  while ((state[kState] & kFlowing) !== 0) {
+    const current = state.fastChunk;
+    if (current == null) break;
+    if ((state[kState] & kFastFlowBlock) !== 0) break;
+
+    // _read() of the next chunk runs before 'data', matching read().
+    state.fastChunk = null;
+    state.length = 0;
+    state[kState] |= kReading | kSync | kFastPush;
+    try {
+      stream._read(state.highWaterMark);
+    } catch (err) {
+      state[kState] &= ~(kSync | kFastPush);
+      errorOrDestroy(stream, err);
+      break;
+    }
+    state[kState] &= ~(kSync | kFastPush);
+
+    if ((state[kState] & (kErrorEmitted | kCloseEmitted)) === 0) {
+      state[kState] |= kDataEmitted;
+      deliverFlowChunk(stream, state, current);
+    }
+
+    // Nested read() moved fastChunk into the buffer and may have refilled.
+    if (state.fastChunk == null && state.length !== 0) break;
+  }
+
+  if (state.fastChunk != null) materializeFastChunk(state);
+
+  while ((state[kState] & kFlowing) !== 0 && stream.read() !== null);
+  return true;
+}
+
+// Put fastChunk at the head of the buffer. state.length already counts it.
+function materializeFastChunk(state) {
+  const chunk = state.fastChunk;
+  if (chunk == null) return;
+  state.fastChunk = null;
+  if (state.bufferIndex > 0) {
+    state.buffer[--state.bufferIndex] = chunk;
+  } else {
+    state.buffer.unshift(chunk);
+  }
 }
 
 // Wrap an old-style stream as the async data source.
@@ -1533,7 +1724,14 @@ ObjectDefineProperties(Readable.prototype, {
     __proto__: null,
     enumerable: false,
     get: function () {
-      return this._readableState?.buffer;
+      const state = this._readableState;
+      if (state == null) return undefined;
+      if (state.fastChunk == null) return state.buffer;
+      if (state.bufferIndex === state.buffer.length)
+        return [state.fastChunk];
+      const out = state.buffer.slice(state.bufferIndex);
+      out.push(state.fastChunk);
+      return out;
     },
   },
 
@@ -1774,14 +1972,20 @@ function endReadable(stream) {
   const state = stream._readableState;
 
   debug("endReadable");
-  if ((state[kState] & kEndEmitted) === 0) {
-    state[kState] |= kEnded;
+  if ((state[kState] & (kEndEmitted | kEndScheduled)) === 0) {
+    state[kState] |= kEnded | kEndScheduled;
     nextTick(endReadableNT, state, stream);
   }
 }
 
 function endReadableNT(state, stream) {
   debug("endReadableNT");
+
+  // The scheduled tick is running; allow endReadable() to schedule again.
+  // This matters both when the 'end' emission is skipped below (e.g. after
+  // an unshift()) and when the stream is later reset for reuse
+  // (see undestroy()), which clears kEndEmitted but not this flag.
+  state[kState] &= ~kEndScheduled;
 
   // Check that we didn't get one last unshift.
   if (
