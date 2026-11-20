@@ -34,10 +34,29 @@ export class ERR_OUT_OF_RANGE extends RangeError {
     super(
       customMessage ??
         `The value of "${name}" is out of range. It must be ${range}. ` +
-          `Received ${inspectReceived(actual)}`,
+          `Received ${inspectOutOfRange(actual)}`,
     );
     this.code = "ERR_OUT_OF_RANGE";
   }
+}
+
+// Node's ERR_OUT_OF_RANGE renders the value with util.inspect — numbers
+// bare (NaN, 5), strings single-quoted — NOT the `type X (...)` form
+// ERR_INVALID_ARG_TYPE uses (inspectReceived above). The two errors
+// have different formats; sharing the renderer broke
+// test-crypto-random.js, which expects `Received NaN`, not
+// `Received type number (NaN)`.
+function inspectOutOfRange(value) {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  const t = typeof value;
+  if (t === "string") return `'${value}'`;
+  if (t === "bigint") return `${value}n`;
+  if (t === "number" || t === "boolean") return String(value);
+  if (t === "symbol") return String(value);
+  if (t === "function") return `[Function: ${value.name || "anonymous"}]`;
+  const name = value?.constructor?.name;
+  return name && name !== "Object" ? `[${name}]` : "[Object]";
 }
 
 export class ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH extends RangeError {
@@ -100,6 +119,79 @@ export class ERR_OSSL_NOT_XOF_OR_INVALID_LENGTH extends Error {
     super("not xof or invalid length");
     this.code = "ERR_OSSL_NOT_XOF_OR_INVALID_LENGTH";
   }
+}
+
+export class ERR_CRYPTO_INVALID_JWK extends TypeError {
+  constructor() {
+    super("Invalid JWK EC key");
+    this.code = "ERR_CRYPTO_INVALID_JWK";
+  }
+}
+
+export class ERR_CRYPTO_INVALID_AUTH_TAG extends TypeError {
+  constructor(length) {
+    super(`Invalid authentication tag length: ${length}`);
+    this.code = "ERR_CRYPTO_INVALID_AUTH_TAG";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// OpenSSL error decoration (Node 26 parity).
+//
+// Host Node v24's crypto jobs surface raw OpenSSL lines
+// ("error:0308010C:digital envelope routines::unsupported") with no
+// code/library/reason/opensslErrorStack, while Node 26 decorates them
+// (CryptoErrorStore): a friendly message, an ERR_OSSL_* code, the
+// library/reason pair, and the raw line in opensslErrorStack. The code is
+// ERR_OSSL_<LIB>_<REASON> with LIB from the probe-grounded map below
+// ('digital envelope routines' -> EVP, 'rsa routines' -> RSA) and no LIB
+// prefix for other libraries ('Provider routines', 'DECODER routines'
+// both yield the bare reason — verified against Node 26.13.1 and host
+// v24.22.1 probes, see NOTES-26-crypto-l2l8.md).
+// ---------------------------------------------------------------------------
+
+const OSSL_LIB_PREFIX = {
+  "digital envelope routines": "EVP",
+  "rsa routines": "RSA",
+};
+
+export function parseOpensslErrorLine(message) {
+  if (typeof message !== "string") return null;
+  const m = /^error:[0-9A-Fa-f]+:(.+)::(.+)$/.exec(message);
+  if (!m) return null;
+  const library = m[1];
+  const reason = m[2];
+  const reasonSnake = reason
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const prefix = OSSL_LIB_PREFIX[library];
+  const code =
+    "ERR_OSSL_" +
+    (prefix === undefined || prefix === "" ? "" : prefix + "_") +
+    reasonSnake;
+  return { library, reason, code, raw: message };
+}
+
+/**
+ * Rewrite a raw-OpenSSL-line error in place to its Node 26 decorated
+ * shape: friendly message, ERR_OSSL_* code, library/reason, and an
+ * opensslErrorStack carrying the raw line. Returns the error unchanged
+ * when its message is not a raw OpenSSL line (validation errors with a
+ * code already set pass through untouched).
+ */
+export function decorateOpensslError(err, friendlyMessage) {
+  if (!err || typeof err !== "object" || typeof err.message !== "string") {
+    return err;
+  }
+  const parsed = parseOpensslErrorLine(err.message);
+  if (!parsed) return err;
+  err.message = friendlyMessage;
+  err.code = parsed.code;
+  err.library = parsed.library;
+  err.reason = parsed.reason;
+  err.opensslErrorStack = [parsed.raw];
+  return err;
 }
 
 export class ERR_OPERATION_FAILED extends Error {

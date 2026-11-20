@@ -56,11 +56,55 @@ function isAnyArrayBuffer(v) {
 }
 
 function isTypedArray(v) {
+  // ponytail (L8): element width from the CONSTRUCTOR's static, never
+  // the instance's BYTES_PER_ELEMENT — the randomfill test shadows the
+  // instance property with a mustNotCall getter.
   return (
     isArrayBufferView(v) &&
     !(v instanceof DataView) &&
-    typeof v.BYTES_PER_ELEMENT === "number"
+    typeof v.constructor?.BYTES_PER_ELEMENT === "number"
   );
+}
+
+// ---------------------------------------------------------------------------
+// Getter-proof view access (Node 26 test-crypto-randomfill-properties).
+//
+// The test shadows byteLength/length/BYTES_PER_ELEMENT/buffer/byteOffset
+// (and Symbol.toStringTag) with mustNotCall getters — or with lying values
+// (0 / 4096) — on every TypedArray/DataView/Buffer/ArrayBuffer input AND
+// its backing, then calls randomFill(Sync) with offset/size in ELEMENT
+// units. Node 26 reads internal slots only. The JS equivalent is to read
+// the value through the genuine getter found on the PROTOTYPE chain:
+// the instance's own (poisoned) property is never consulted, and the
+// prototype getter reads the internal slot directly.
+// ---------------------------------------------------------------------------
+
+function realProp(obj, prop) {
+  let proto = Object.getPrototypeOf(obj);
+  while (proto !== null) {
+    const desc = Object.getOwnPropertyDescriptor(proto, prop);
+    if (desc && typeof desc.get === "function") return desc.get.call(obj);
+    proto = Object.getPrototypeOf(proto);
+  }
+  return undefined;
+}
+
+function realByteLength(buf) {
+  return realProp(buf, "byteLength");
+}
+
+function realElementSize(buf) {
+  // ponytail: the constructor's static, not the instance property.
+  return buf.constructor?.BYTES_PER_ELEMENT || 1;
+}
+
+/** A real Uint8Array view over `buf`'s bytes, without reading any instance getter. */
+function realUint8View(buf) {
+  if (isAnyArrayBuffer(buf)) return new Uint8Array(buf);
+  const buffer = realProp(buf, "buffer");
+  const byteOffset = realProp(buf, "byteOffset");
+  const byteLength = realProp(buf, "byteLength");
+  return new Uint8Array(buffer, byteOffset, byteLength);
 }
 
 // ---------------------------------------------------------------------------
@@ -167,18 +211,22 @@ export function randomFillSync(buf, offset = 0, size) {
     );
   }
 
-  const elementSize = buf.BYTES_PER_ELEMENT || 1;
-  offset = assertOffset(offset, elementSize, buf.byteLength);
+  // ponytail (L8): every size here comes from the prototype getters /
+  // constructor statics above — never the instance's byteLength/length/
+  // BYTES_PER_ELEMENT, which the test shadows.
+  const elementSize = realElementSize(buf);
+  const byteLength = realByteLength(buf);
+  offset = assertOffset(offset, elementSize, byteLength);
 
   if (size === undefined) {
-    size = buf.byteLength - offset;
+    size = byteLength - offset;
   } else {
-    size = assertSize(size, elementSize, offset, buf.byteLength);
+    size = assertSize(size, elementSize, offset, byteLength);
   }
 
   if (size === 0) return buf;
 
-  fillRandom(toUint8(buf), offset, size);
+  fillRandom(realUint8View(buf), offset, size);
   return buf;
 }
 
@@ -191,25 +239,27 @@ export function randomFill(buf, offset, size, callback) {
     );
   }
 
-  const elementSize = buf.BYTES_PER_ELEMENT || 1;
+  const elementSize = realElementSize(buf);
+  const byteLength = realByteLength(buf);
+  const elementLength = Math.floor(byteLength / elementSize);
 
   if (typeof offset === "function") {
     callback = offset;
     offset = 0;
-    size = buf.length;
+    size = elementLength;
   } else if (typeof size === "function") {
     callback = size;
-    size = buf.length - offset;
+    size = elementLength - offset;
   } else {
     validateFunction(callback, "callback");
   }
 
-  offset = assertOffset(offset, elementSize, buf.byteLength);
+  offset = assertOffset(offset, elementSize, byteLength);
 
   if (size === undefined) {
-    size = buf.byteLength - offset;
+    size = byteLength - offset;
   } else {
-    size = assertSize(size, elementSize, offset, buf.byteLength);
+    size = assertSize(size, elementSize, offset, byteLength);
   }
 
   if (size === 0) {
@@ -219,7 +269,7 @@ export function randomFill(buf, offset, size, callback) {
 
   queueMicrotask(() => {
     try {
-      fillRandom(toUint8(buf), offset, size);
+      fillRandom(realUint8View(buf), offset, size);
       callback(null, buf);
     } catch (error) {
       callback(error);
@@ -342,7 +392,7 @@ export function getRandomValues(data) {
       "TypeMismatchError",
     );
   }
-  if (data.byteLength > 65536) {
+  if (realByteLength(data) > 65536) {
     throw domException(
       "The requested length exceeds 65,536 bytes",
       "QuotaExceededError",

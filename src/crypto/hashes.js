@@ -21,7 +21,55 @@ import {
   sha512_224,
   sha512_256,
 } from "@noble/hashes/sha2.js";
-import { ERR_INVALID_ARG_TYPE, ERR_CRYPTO_INVALID_DIGEST } from "./errors.js";
+import { shake128, shake256 } from "@noble/hashes/sha3.js";
+import {
+  ERR_INVALID_ARG_TYPE,
+  ERR_OUT_OF_RANGE,
+  ERR_CRYPTO_INVALID_DIGEST,
+} from "./errors.js";
+
+// Node 26 DEP0198: creating a SHAKE128/256 digest without an explicit
+// options.outputLength is deprecated. Node emits it once per process (its
+// getDeprecationWarningEmitter keeps a warned flag); mirror that here so
+// repeated shake uses still produce exactly one warning. The fallback and
+// the native wrapper in ../crypto.js share this emitter.
+const DEP0198_MESSAGE =
+  "Creating SHAKE128/256 digests without an explicit options.outputLength is deprecated.";
+let dep0198Warned = false;
+
+function normalizeShakeName(algorithm) {
+  if (typeof algorithm !== "string") return undefined;
+  const key = algorithm.toLowerCase().replace(/-/g, "");
+  return key === "shake128" || key === "shake256" ? key : undefined;
+}
+
+export function maybeWarnShakeDefault(algorithm, options) {
+  if (dep0198Warned) return;
+  if (normalizeShakeName(algorithm) === undefined) return;
+  const outputLength =
+    options !== null && typeof options === "object"
+      ? options.outputLength
+      : undefined;
+  if (outputLength !== undefined) return;
+  dep0198Warned = true;
+  try {
+    if (
+      typeof process !== "undefined" &&
+      process !== null &&
+      typeof process.emitWarning === "function"
+    ) {
+      process.emitWarning(DEP0198_MESSAGE, {
+        type: "DeprecationWarning",
+        code: "DEP0198",
+      });
+    }
+  } catch {
+    /* no process.emitWarning (browser) — the warning is Node-only */
+  }
+}
+
+// Default XOF output lengths (bytes), matching Node/OpenSSL.
+const SHAKE_DEFAULT_OUTPUT_LENGTH = { shake128: 16, shake256: 32 };
 
 // ---------------------------------------------------------------------------
 // Algorithm table: Node name -> @noble/hashes hasher.
@@ -39,6 +87,8 @@ const ALGORITHMS = {
   sha512,
   "sha512-224": sha512_224,
   "sha512-256": sha512_256,
+  shake128,
+  shake256,
 };
 
 function normalizeAlgorithm(algorithm) {
@@ -56,6 +106,8 @@ function normalizeAlgorithm(algorithm) {
     "sha-512": "sha512",
     "sha2-256": "sha256",
     "sha2-512": "sha512",
+    "shake-128": "shake128",
+    "shake-256": "shake256",
   };
   return ALGORITHMS[key] ? key : aliases[key];
 }
@@ -70,6 +122,8 @@ export function getHashes() {
     "sha512",
     "sha512-224",
     "sha512-256",
+    "shake128",
+    "shake256",
   ];
 }
 
@@ -214,15 +268,45 @@ export class Hash {
     if (key === undefined) {
       throw new Error("Digest method not supported");
     }
-    this._hasher = ALGORITHMS[key];
-    this._state = this._hasher.create();
-    this._algorithm = key;
     if (
       options !== undefined &&
-      (options === null || typeof options !== "object")
+      options !== null &&
+      typeof options !== "object"
     ) {
       throw new ERR_INVALID_ARG_TYPE("options", "object", options);
     }
+    const outputLength = options?.outputLength;
+    if (
+      outputLength !== undefined &&
+      (!Number.isInteger(outputLength) ||
+        outputLength < 0 ||
+        outputLength > 0xffffffff)
+    ) {
+      throw new ERR_OUT_OF_RANGE(
+        "options.outputLength",
+        ">= 0 && <= 4294967295",
+        outputLength,
+      );
+    }
+    this._hasher = ALGORITHMS[key];
+    this._algorithm = key;
+    // XOF output length: noble's shake create() takes { dkLen }; the
+    // default (16/32) matches Node/OpenSSL when outputLength is absent.
+    // ponytail: only shake reads outputLength — for fixed-output hashes
+    // Node ignores it, so the state is created with no options there.
+    if (
+      outputLength !== undefined &&
+      (key === "shake128" || key === "shake256")
+    ) {
+      this._state = this._hasher.create({ dkLen: outputLength });
+      this._outputLength = outputLength;
+    } else {
+      this._state = this._hasher.create();
+      this._outputLength = SHAKE_DEFAULT_OUTPUT_LENGTH[key];
+    }
+    // Node 26 DEP0198, emitted once per process after a successful
+    // construction (an invalid algorithm/option throws before it).
+    maybeWarnShakeDefault(algorithm, options);
   }
   update(data, inputEncoding) {
     this._state.update(toBytes(data, inputEncoding));
@@ -231,11 +315,24 @@ export class Hash {
   digest(encoding) {
     return encodeDigest(this._state.digest(), encoding);
   }
-  copy() {
+  copy(options) {
     const c = Object.create(Hash.prototype);
     c._hasher = this._hasher;
-    c._state = this._state.clone();
     c._algorithm = this._algorithm;
+    c._state = this._state.clone();
+    // Node: copy(options) resets the XOF output length to the algorithm
+    // default unless options.outputLength is given (even 0 counts —
+    // test-crypto-hash.js). Noble's clone copies outputLen, so override
+    // it on the clone; digest() reads this.outputLen.
+    if (this._algorithm === "shake128" || this._algorithm === "shake256") {
+      const outputLength =
+        options?.outputLength ??
+        SHAKE_DEFAULT_OUTPUT_LENGTH[this._algorithm];
+      c._state.outputLen = outputLength;
+      c._outputLength = outputLength;
+    } else {
+      c._outputLength = this._outputLength;
+    }
     return c;
   }
 }
@@ -311,7 +408,15 @@ export function createHmac(algorithm, key, options) {
 
 /** One-shot digest, mirroring Node's crypto.hash(). */
 export function hash(algorithm, data, outputEncoding) {
-  return createHash(algorithm)
+  // Node 26 hash(algorithm, data, options): the third argument may be an
+  // options object ({ outputEncoding, outputLength, ... }) as well as an
+  // encoding string. The DEP0198 warning fires from createHash below.
+  let options;
+  if (outputEncoding !== null && typeof outputEncoding === "object") {
+    options = outputEncoding;
+    outputEncoding = options.outputEncoding;
+  }
+  return createHash(algorithm, options)
     .update(data)
     .digest(outputEncoding ?? "hex");
 }
