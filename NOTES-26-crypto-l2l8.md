@@ -166,7 +166,7 @@ code: ec-jwk exit 0, key-reuse exit 0. Jest 16/16 on the final code.
 ## Merge
 
 - PR: https://github.com/MarketingPip/bundleVFSModules/pull/527
-- Merge SHA: (fill after squash-merge)
+- Merge SHA: `dc70e38d3672d6500cae1230d30a1799d9b76a3c` (squash-merge of PR #527)
 
 ## Guards held
 
