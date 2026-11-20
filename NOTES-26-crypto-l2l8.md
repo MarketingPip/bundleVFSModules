@@ -131,6 +131,43 @@ code: ec-jwk exit 0, key-reuse exit 0. Jest 16/16 on the final code.
   test-crypto-random-cache-snapshot.js:** fail natively on Node 26
   (snapshot-builder crash); not shim gaps. Untouched.
 
+## Recovery (2026-11-20, second worker — first worker killed by runtime restart)
+
+- Restored `parity/node-test/` first: scoped `git checkout -- parity/node-test`
+  + null-separated removal of 6,777 untracked staged files; worktree status
+  then showed only the 6 modified + 4 new lane files + this NOTES file.
+- Reviewed every hunk (src/crypto.js, errors.js, hashes.js, random.js,
+  wrap26.js, sec1.js, subtle-pkcs8.js, adapter, preload.mjs, tests):
+  in-scope (L2–L8 only; L1 untouched; secure-heap untouched). Kept as-is —
+  no repairs needed, nothing dropped.
+- Re-verified isolated, recovery rounds (`~/workspace/w2-crypto-l2l8-probes/verify-rec.mjs`,
+  stage-once runner; logs `logs-rec-r1/`, `logs-rec-r2/`): **13/13 flips exit 0
+  twice** ([0,0] x2); argon2 with its declared `--expose-internals
+  --no-warnings` flags; `test-crypto-no-algorithm.js` exit 1 at :73 both
+  rounds (NO-FIX remainder, host SIGABRT). 5/5 guard-1 regression repairs
+  re-checked exit 0 in r1.
+- Post-rebase round (`logs-rec-r3/`, head f62fd0b0 on 4a05cd91): 13/13 flips
+  + 5/5 spot checks exit 0.
+- Full guard (`parity/drift/run-baseline.mjs --modules crypto --jobs 2
+  --full 120`, `~/workspace/26w2-crypto-guard-rec.jsonc`):
+  **162/167 pass, 5 fail, 0 timeout; 0 regressions vs drift baseline.**
+  Remaining fails: no-algorithm (NO-FIX remainder), secure-heap (NO-FIX),
+  provider-cache-snapshot + random-cache-snapshot (fail natively on Node
+  26.13.1), provider-cache.js (L1, fails identically on main).
+- Repo tests: jest `tests/export_surface_crypto.test.js tests/crypto.test.js`
+  16/16 pass.
+- Committed `070b2da1` (local) → rebased clean onto origin/main `4a05cd91`
+  → `f62fd0b0`; pushed via git-push-api.py (remote `1363392d`); PR #527
+  opened. Main then moved to `e895aceb` (perf_hooks #525); rebased again
+  clean → `6d7ff913`, force-pushed (remote `ef81490d8d1d1fb25068a86c86e3501fe007c3ef`);
+  CI waiter `26w2-crypto-ci-waiter-527.py` pinned to that SHA.
+- **New count: crypto 162/167** (149 banked + 13 flips − 0 regressions).
+
+## Merge
+
+- PR: https://github.com/MarketingPip/bundleVFSModules/pull/527
+- Merge SHA: (fill after squash-merge)
+
 ## Guards held
 
 - Full 149-test pass set guarded by `parity/drift/run-baseline.mjs
@@ -141,7 +178,9 @@ code: ec-jwk exit 0, key-reuse exit 0. Jest 16/16 on the final code.
   pass at 120 s (slow-test artifacts of the 30 s phase-2 cap); 5 real
   regressions, all repaired (see §Regression repairs) and re-verified
   in round 4 (logs-r4/, all 13 exit 0). Second guard
-  (`26w2-crypto-guard2.jsonc`, `--full 120`): **PENDING.**
+  (`26w2-crypto-guard2.jsonc`, `--full 120`): **DONE in recovery —
+  `~/workspace/26w2-crypto-guard-rec.jsonc`: 162/167 pass, 5 fail,
+  0 timeout, 0 regressions** (see §Recovery).
 - Repo tests: `NODE_OPTIONS=--experimental-vm-modules npx --no-install
   jest tests/export_surface_crypto.test.js tests/crypto.test.js` —
   16/16 pass on the final code (after the WRAPPED_EXPORTS test update
