@@ -63,6 +63,20 @@ import {
   ERR_OUT_OF_RANGE,
   unsupportedCrypto,
 } from "./crypto/errors.js";
+import {
+  patchKmacToCryptoKey,
+  patchSubtle,
+  wrapAsyncWithSyncFallback,
+  wrapCreateDecipheriv,
+  wrapCreateHash,
+  wrapCreatePublicKey,
+  wrapDecapsulate,
+  wrapEncapsulate,
+  wrapHash,
+  wrapHkdfSync,
+  wrapPbkdf2Sync,
+} from "./crypto/wrap26.js";
+import { patchSec1Export } from "./crypto/sec1.js";
 import { Buffer as PolyBuffer } from "./buffer.js";
 
 // ---------------------------------------------------------------------------
@@ -86,6 +100,24 @@ function getBuiltinModuleSafe(name) {
 
 const native = getBuiltinModuleSafe("crypto");
 
+// ponytail (L7): Node 26 SEC1 exports are usage-history independent;
+// host v24's are not (key-reuse-concurrent run 1 iter 5). Normalize
+// sec1+der EC exports via a fresh PKCS8 round-trip — see ./crypto/sec1.js.
+// Prototype patch: structuredClone/KeyObject.from drop per-instance
+// wrappers, so only the prototype survives the test's fresh clones.
+// ponytail (L4/L7): patch the shared SubtleCrypto instance in place
+// (importKey JWK check + exportKey pkcs8 normalization) — see
+// ./crypto/wrap26.js patchSubtle. Same object as globalThis.crypto
+// .subtle, so the globalThis path is covered with no harness wrap.
+// ponytail (L7): patch KeyObject.prototype.toCryptoKey for the KMAC
+// length check — a per-instance own property breaks the KeyObject
+// no-own-keys tests; the prototype method covers every secret key.
+if (native) {
+  patchSec1Export(native);
+  patchSubtle(native);
+  patchKmacToCryptoKey(native);
+}
+
 // ---------------------------------------------------------------------------
 // Browser fallback pieces beyond hashes.js / random.js.
 // ---------------------------------------------------------------------------
@@ -99,6 +131,8 @@ const FALLBACK_HASHES = Object.freeze([
   "sha512",
   "sha512-224",
   "sha512-256",
+  "shake128",
+  "shake256",
 ]);
 
 function toBytesCompat(data, name) {
@@ -239,6 +273,11 @@ const _platformWebCrypto =
 
 const pick = (name, fallback) => (native ? native[name] : fallback);
 
+// Node 26 wrapper (./crypto/wrap26.js): applies only to the native side —
+// the browser fallback keeps its own behaviour.
+const wrapPick = (name, fallback, wrapper) =>
+  native ? wrapper(native[name]) : fallback;
+
 export const Certificate = pick("Certificate", makeUnsupported("Certificate"));
 export const Cipheriv = pick("Cipheriv", makeUnsupported("Cipheriv"));
 export const Decipheriv = pick("Decipheriv", makeUnsupported("Decipheriv"));
@@ -273,9 +312,10 @@ export const createCipheriv = pick(
   "createCipheriv",
   makeUnsupported("createCipheriv"),
 );
-export const createDecipheriv = pick(
+export const createDecipheriv = wrapPick(
   "createDecipheriv",
   makeUnsupported("createDecipheriv"),
+  wrapCreateDecipheriv,
 );
 export const createDiffieHellman = pick(
   "createDiffieHellman",
@@ -286,16 +326,17 @@ export const createDiffieHellmanGroup = pick(
   makeUnsupported("createDiffieHellmanGroup"),
 );
 export const createECDH = pick("createECDH", makeUnsupported("createECDH"));
-export const createHash = pick("createHash", _createHash);
+export const createHash = wrapPick("createHash", _createHash, wrapCreateHash);
 export const createHmac = pick("createHmac", _createHmac);
 export const createMac = pick("createMac", _createMac);
 export const createPrivateKey = pick(
   "createPrivateKey",
   makeUnsupported("createPrivateKey"),
 );
-export const createPublicKey = pick(
+export const createPublicKey = wrapPick(
   "createPublicKey",
   makeUnsupported("createPublicKey"),
+  wrapCreatePublicKey,
 );
 export const createSecretKey = pick(
   "createSecretKey",
@@ -306,12 +347,21 @@ export const createVerify = pick(
   "createVerify",
   makeUnsupported("createVerify"),
 );
-export const decapsulate = pick("decapsulate", makeUnsupported("decapsulate"));
-export const diffieHellman = pick(
+export const decapsulate = wrapPick(
+  "decapsulate",
+  makeUnsupported("decapsulate"),
+  wrapDecapsulate,
+);
+export const diffieHellman = wrapPick(
   "diffieHellman",
   makeUnsupported("diffieHellman"),
+  (fn) => wrapAsyncWithSyncFallback(fn, fn),
 );
-export const encapsulate = pick("encapsulate", makeUnsupported("encapsulate"));
+export const encapsulate = wrapPick(
+  "encapsulate",
+  makeUnsupported("encapsulate"),
+  wrapEncapsulate,
+);
 export const generateKey = pick("generateKey", makeUnsupported("generateKey"));
 export const generateKeyPair = pick(
   "generateKeyPair",
@@ -344,11 +394,15 @@ export const getFips = pick("getFips", () => 0);
 export const getHashes = pick("getHashes", () => [...FALLBACK_HASHES]);
 export const getMacs = pick("getMacs", _getMacs);
 export const getRandomValues = pick("getRandomValues", _getRandomValues);
-export const hash = pick("hash", _hash);
+export const hash = wrapPick("hash", _hash, wrapHash);
 export const hkdf = pick("hkdf", _hkdfFallback);
-export const hkdfSync = pick("hkdfSync", hkdfSyncFallback);
+export const hkdfSync = wrapPick("hkdfSync", hkdfSyncFallback, wrapHkdfSync);
 export const pbkdf2 = pick("pbkdf2", _pbkdf2Fallback);
-export const pbkdf2Sync = pick("pbkdf2Sync", pbkdf2SyncFallback);
+export const pbkdf2Sync = wrapPick(
+  "pbkdf2Sync",
+  pbkdf2SyncFallback,
+  wrapPbkdf2Sync,
+);
 export const parsePKCS12 = pick(
   "parsePKCS12",
   makeUnsupported("parsePKCS12"),
@@ -370,8 +424,13 @@ export const publicEncrypt = pick(
   makeUnsupported("publicEncrypt"),
 );
 export const randomBytes = pick("randomBytes", _randomBytes);
-export const randomFill = pick("randomFill", _randomFill);
-export const randomFillSync = pick("randomFillSync", _randomFillSync);
+// ponytail (L8): randomFill(Sync) NEVER delegate to host native — host
+// v24 reads the input's byteLength/length/BYTES_PER_ELEMENT getters,
+// which test-crypto-randomfill-properties shadows with mustNotCall.
+// The fallback in ./crypto/random.js is getter-proof (prototype getters
+// + constructor statics) and byte-identical for normal inputs.
+export const randomFill = _randomFill;
+export const randomFillSync = _randomFillSync;
 export const randomInt = pick("randomInt", _randomInt);
 export const randomUUID = pick("randomUUID", _randomUUID);
 export const randomUUIDv7 = pick("randomUUIDv7", _randomUUIDv7);
@@ -385,13 +444,17 @@ export const secureHeapUsed = pick("secureHeapUsed", () => ({
 }));
 export const setEngine = pick("setEngine", makeUnsupported("setEngine"));
 export const setFips = pick("setFips", makeUnsupported("setFips"));
-export const sign = pick("sign", makeUnsupported("sign"));
+export const sign = wrapPick("sign", makeUnsupported("sign"), (fn) =>
+  wrapAsyncWithSyncFallback(fn, fn),
+);
 export const subtle = pick(
   "subtle",
   _platformWebCrypto ? _platformWebCrypto.subtle : undefined,
 );
 export const timingSafeEqual = pick("timingSafeEqual", _timingSafeEqual);
-export const verify = pick("verify", makeUnsupported("verify"));
+export const verify = wrapPick("verify", makeUnsupported("verify"), (fn) =>
+  wrapAsyncWithSyncFallback(fn, fn),
+);
 export const webcrypto = pick("webcrypto", _platformWebCrypto);
 
 // Deprecated aliases (Node: same function object as randomBytes). Kept as

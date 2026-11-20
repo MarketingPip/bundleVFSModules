@@ -80,6 +80,30 @@ const EXPECTED_EXPORTS = [
   "default",
 ];
 
+// Node 26 wrappers (NOTES-26-crypto-l2l8.md): host v24.22.1 lacks several
+// Node 26 behaviours, so these exports are thin wrappers around the
+// native functions — or the getter-proof fallback for randomFill(Sync),
+// which never delegates to host native — rather than the native
+// functions by identity. Behaviour is verified by the Node 26
+// differential (13 flips, [0,0] x2), not by identity here. `subtle` is
+// NOT in this set: it is the native instance with two methods patched
+// in place, so its identity still holds.
+const WRAPPED_EXPORTS = new Set([
+  "createDecipheriv",
+  "createHash",
+  "createPublicKey",
+  "decapsulate",
+  "diffieHellman",
+  "encapsulate",
+  "hash",
+  "hkdfSync",
+  "pbkdf2Sync",
+  "randomFill",
+  "randomFillSync",
+  "sign",
+  "verify",
+]);
+
 describe("crypto native bridge (node)", () => {
   test("exports the full node:crypto surface", () => {
     for (const name of EXPECTED_EXPORTS) {
@@ -89,8 +113,13 @@ describe("crypto native bridge (node)", () => {
 
   test("native exports delegate to the real builtin by identity", () => {
     for (const name of EXPECTED_EXPORTS) {
-      if (name === "default") continue;
+      if (name === "default" || WRAPPED_EXPORTS.has(name)) continue;
       expect(crypto[name]).toBe(nodeCrypto[name]);
+    }
+    // Wrapped exports are functions delegating to the native builtin;
+    // their Node 26 behaviour is covered by the differential, not here.
+    for (const name of WRAPPED_EXPORTS) {
+      expect(typeof crypto[name]).toBe("function");
     }
   });
 
@@ -234,6 +263,8 @@ describe("crypto browser fallback", () => {
       "sha512",
       "sha512-224",
       "sha512-256",
+      "shake128",
+      "shake256",
     ]);
     expect(fb.getCiphers()).toEqual([]);
     expect(fb.getCurves()).toEqual([]);

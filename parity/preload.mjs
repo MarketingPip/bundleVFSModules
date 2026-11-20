@@ -704,6 +704,28 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // test-crypto-argon2-job.js exercises the native Argon2Job directly
+    // via internalBinding, bypassing the JS layer — no src/ wrapper can
+    // reach it. Host v24.22.1's job errors lack Node 26's decoration
+    // ('Argon2 derivation failed' + code/library/reason/stack). Same
+    // treatment: the adapter re-exports real Node's internal/test/binding
+    // with internalBinding('crypto') returning the real binding whose
+    // Argon2Job decorates its errors; every other binding falls through,
+    // so test-crypto-provider-cache.js still fails the same way (L1 §4:
+    // isKeyAlgorithmAvailable missing on the host binding). Crypto target
+    // only. See parity/internal-test-binding-crypto-adapter.mjs.
+    if (target === "crypto" && bare === "internal/test/binding") {
+      return origLoad.call(
+        this,
+        path.join(
+          repoRoot,
+          "parity",
+          "internal-test-binding-crypto-adapter.mjs",
+        ),
+        parent,
+        isMain,
+      );
+    }
     // test-repl-highlight.js requires `internal/repl/highlight`, new in
     // Node 26 (lib/internal/repl/highlight.js). The host v24.22.1 has no
     // such module, so the require fails before any assertion runs. Same
