@@ -162,3 +162,33 @@ separately first (8/8 incl. kmac customization -> personalization).
 - Fallback error messages for the OpenSSL codes are short
   descriptions (`Invalid key length`, etc.), not the full OpenSSL
   error stack — only the native bridge can produce that.
+
+## 7. CI red on first push — oracle surface vs pinned 24.20.0 runner (fixed)
+
+- PR #514, first head `455b07df`: Build VFS run 44641409004 — Parity job
+  success, build job failure in the "Run Tests" step only (57 s; Build VFS
+  and later steps skipped).
+- Root cause, proven under the exact CI runtime
+  (`~/workspace/local/node-24.20.0/bin/node`): Node 24.20.0's live
+  `node:crypto` has no `createMac`/`getMacs`/`parsePKCS12` (all
+  `typeof === 'undefined'`; also absent from the 24.20.0 source pack's
+  `lib/crypto.js`). `tests/oracle-export-surface.test.js` compares shim vs
+  live and flags shim-only keys as `Extra exports` — crypto had no
+  allowlist entry. Under 24.20.0 the oracle crypto test fails with exactly
+  `Extra exports: createMac, getMacs, parsePKCS12` (15/16 pass); under host
+  24.22.1 it passes (live has all three). This is the CI failure, not a
+  regression in the shim: the lane intentionally ships Node 26 exports the
+  pinned runner predates.
+- Fix (second commit on the branch): `crypto: ["createMac", "getMacs",
+  "parsePKCS12"]` in the oracle test's allowlist, with a comment stating
+  the direction (forward extras, not deprecated extras). Smallest correct
+  fix; reuses the test's existing intentional-extras mechanism.
+- Verified: full jest suite under Node 24.20.0
+  (`NODE_OPTIONS=--experimental-vm-modules ... jest --runInBand
+  --forceExit`) exits 0, zero FAIL lines — the exact CI "Run Tests" step.
+- Note: `node src/build-vfs.mjs` fails on this VM (esm.sh fetch for acorn
+  fails inside the esm-sh plugin, 2/2 runs, while curl to the same URL
+  returns 200) — a VM-local network issue, NOT the CI failure (CI skipped
+  Build VFS after "Run Tests" failed; crypto itself builds fine:
+  `Built crypto -> dist/crypto.js`). Local dist/ churn from those runs was
+  restored with `git checkout -- dist/`.
