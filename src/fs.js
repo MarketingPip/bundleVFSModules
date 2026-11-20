@@ -2132,8 +2132,12 @@ function buildApi(vol) {
     }
     function bindingWriteFileUtf8(path, data, flags, mode) {
       // lib/fs.js writeFileUtf8 fast path: open/write/close, no fsync.
+      // Node's C++ loop is `while (offset < length)` — empty data issues
+      // NO write at all, so a user fd that was never opened (e.g. -0,
+      // which is fd 0/stdin) must not EBADF here (test-fs-negative-zero).
       if (typeof path === "number") {
         const buf = toUtf8Bytes(data);
+        if (buf.byteLength === 0) return 0;
         return vol.writeSync(path, buf, 0, buf.byteLength, null);
       }
       const fd = vol.openSync(path, flags, mode);
@@ -2187,6 +2191,52 @@ function buildApi(vol) {
 
     fs.writeFileSync = function (file, data, options) {
       const flush = validateFlushOpt(options);
+      const writeFlag =
+        options !== null &&
+        typeof options === "object" &&
+        options.flag !== undefined
+          ? options.flag
+          : "w";
+      const writeMode =
+        options !== null &&
+        typeof options === "object" &&
+        options.mode !== undefined
+          ? options.mode
+          : 0o666;
+      // Node fast path (lib/fs.js writeFileSync) runs FIRST, before the
+      // fd branch and before flush handling — and its encoding test uses
+      // the RAW options.encoding, not a defaulted one: getOptions does
+      // not merge defaults into a provided object, so { flush: true }
+      // (no encoding) takes the non-fast path and DOES fsync, while
+      // { encoding: 'utf8', flush: true } takes the fast path and does
+      // NOT (test-fs-write-file-flush, probed against Node 26.13.1).
+      // Only undefined options (defaults) and string options count as
+      // utf8 here. A number file is an fd only when int32 — V8 does not
+      // report -0 as int32, so `file | 0` normalizes -0 to fd 0 (Node
+      // 26.1.0, test-fs-negative-zero); a non-int32 number falls through
+      // to path validation, which throws ERR_INVALID_ARG_TYPE.
+      const rawEncoding =
+        options === undefined
+          ? "utf8"
+          : typeof options === "string"
+            ? options
+            : options?.encoding;
+      if (
+        typeof data === "string" &&
+        (rawEncoding === "utf8" || rawEncoding === "utf-8")
+      ) {
+        let target = file;
+        if (typeof target === "number") {
+          if (target !== (target | 0)) validatePath(target);
+          target |= 0;
+        }
+        return fsBindingState.writeFileUtf8(
+          target,
+          data,
+          stringToFlags(writeFlag),
+          parseFileMode(writeMode, "mode", 0o666),
+        );
+      }
       // fd variant: current-position write, no truncation (memfs truncates).
       if (typeof file === "number") {
         const flush =
@@ -2194,9 +2244,14 @@ function buildApi(vol) {
             ? (options.flush ?? false)
             : false;
         validateBoolean(flush, "options.flush");
-        checkFdWritable(file, "write");
         const buf = dataToBuffer(data, options);
-        vol.writeSync(file, buf, 0, buf.byteLength, null);
+        // Node's non-fast write loop is `while (length > 0)` — empty data
+        // issues no write, so an unopened fd (e.g. -0/stdin) must not
+        // EBADF here either.
+        if (buf.byteLength > 0) {
+          checkFdWritable(file, "write");
+          vol.writeSync(file, buf, 0, buf.byteLength, null);
+        }
         if (flush) fs.fsyncSync(file);
         emitFs("fs", "writeFileSync", file, buf.byteLength);
         return;
@@ -2217,39 +2272,6 @@ function buildApi(vol) {
           fs.closeSync(fd);
         }
         return;
-      }
-      const writeFlag =
-        options !== null &&
-        typeof options === "object" &&
-        options.flag !== undefined
-          ? options.flag
-          : "w";
-      const writeMode =
-        options !== null &&
-        typeof options === "object" &&
-        options.mode !== undefined
-          ? options.mode
-          : 0o666;
-      const writeEncoding =
-        options === undefined
-          ? "utf8"
-          : typeof options === "string"
-            ? options
-            : (options?.encoding ?? "utf8");
-      // Node fast path (lib/fs.js writeFileSync): a string with a utf8
-      // encoding goes straight to binding.writeFileUtf8 — no open/write/
-      // close through the fs object, so test mocks of fs.openSync /
-      // fs.writeSync / fs.closeSync never fire on this path.
-      if (
-        typeof data === "string" &&
-        (writeEncoding === "utf8" || writeEncoding === "utf-8")
-      ) {
-        return fsBindingState.writeFileUtf8(
-          file,
-          data,
-          stringToFlags(writeFlag),
-          parseFileMode(writeMode, "mode", 0o666),
-        );
       }
       // Non-fast path (lib/fs.js writeFileSync): open via the fs object
       // (so mocks are observed), write loop, close in finally. `data`
@@ -3289,44 +3311,21 @@ function buildApi(vol) {
       });
     };
   }
-  // DEP0147 fires once per process in real Node (verified against v24:
-  // repeated rmdir(path, { recursive: true }) calls warn only once).
-  let rmdirRecursiveWarned = false;
-  function warnRmdirRecursive() {
-    if (rmdirRecursiveWarned) return;
-    rmdirRecursiveWarned = true;
-    if (
-      typeof process !== "undefined" &&
-      typeof process.emitWarning === "function"
-    ) {
-      process.emitWarning(
-        "In future versions of Node.js, fs.rmdir(path, { recursive: true }) " +
-          "will be removed. Use fs.rm(path, { recursive: true }) instead",
-        "DeprecationWarning",
-        "DEP0147",
+  // Node 26 (25.0.0): fs.rmdir(path, { recursive: true }) was removed.
+  // Any defined `recursive` option throws ERR_INVALID_ARG_VALUE on all
+  // three forms (lib/fs.js rmdir/rmdirSync, lib/internal/fs/promises.js
+  // rmdir) — `recursive: false` throws too, `recursive: undefined` does
+  // not. The old DEP0147 recursive implementation is deleted, not kept
+  // behind the warning: there is no upgrade path back (use fs.rm with
+  // { recursive: true }).
+  function throwRmdirRecursive(options) {
+    if (options?.recursive !== undefined) {
+      throw errInvalidArgValue(
+        "options.recursive",
+        options.recursive,
+        "is no longer supported",
       );
     }
-  }
-  // Real Node's recursive rmdir removes the tree (lstat-walk: symlinks are
-  // unlinked, never followed). memfs's recursive rmdirBase merely detaches
-  // the dir link, leaking children; do it properly here.
-  function rmdirRecursiveSync(ps) {
-    let st;
-    try {
-      st = vol.lstatSync(ps);
-    } catch (e) {
-      throw e; // ENOENT surfaces (test-fs-rmdir-recursive-sync-warns-not-found)
-    }
-    if (!st.isDirectory()) {
-      throw makeFsError("ENOTDIR", "rmdir", ps, "not a directory");
-    }
-    for (const name of vol.readdirSync(ps)) {
-      const child = ps + "/" + name;
-      const cst = vol.lstatSync(child);
-      if (cst.isDirectory()) rmdirRecursiveSync(child);
-      else vol.unlinkSync(child);
-    }
-    vol.rmdirSync(ps);
   }
   for (const [syncName, cbName] of [["rmSync", "rm"]]) {
     const origSync = fs[syncName],
@@ -3381,29 +3380,29 @@ function buildApi(vol) {
     };
   }
   // rmdir/rmdirSync: plain rmdir removes an empty dir (memfs raises
-  // ENOTEMPTY/ENOTDIR/ENOENT itself); recursive rmdir warns DEP0147 once and
-  // removes the tree. Never the rm EISDIR path (test-fs-mkdir-rmdir).
+  // ENOTEMPTY/ENOTDIR/ENOENT itself). Any defined `recursive` option
+  // throws ERR_INVALID_ARG_VALUE (Node 26, 25.0.0 removal) — sync after
+  // path validation, async before callback/path validation (Node's
+  // lib/fs.js order). Never the rm EISDIR path (test-fs-mkdir-rmdir).
   {
     const origSync = fs.rmdirSync,
       origCb = fs.rmdir;
     fs.rmdirSync = function (p, options) {
       validatePath(p);
       const ps = toPathString(p);
-      const recursive = !!(
-        options &&
-        typeof options === "object" &&
-        options.recursive
-      );
-      if (recursive) warnRmdirRecursive();
+      throwRmdirRecursive(options);
       try {
-        if (recursive) rmdirRecursiveSync(ps);
-        else origSync.call(this, ps, options);
+        origSync.call(this, ps, options);
       } catch (e) {
         throw enrichErr(e, "rmdirSync");
       }
       emitFs("fs", "rmdirSync", p, undefined);
     };
     fs.rmdir = function (p, options, callback) {
+      // Node throws the recursive error before makeCallback/path
+      // validation, so a missing callback still surfaces
+      // ERR_INVALID_ARG_VALUE, not ERR_INVALID_ARG_TYPE.
+      throwRmdirRecursive(options);
       if (typeof options === "function") {
         callback = options;
         options = undefined;
@@ -3412,25 +3411,13 @@ function buildApi(vol) {
         throw errInvalidArgType("cb", "function", callback);
       validatePath(p);
       const ps = toPathString(p);
-      const recursive = !!(
-        options &&
-        typeof options === "object" &&
-        options.recursive
-      );
-      if (recursive) warnRmdirRecursive();
       nextTick(() => {
         try {
-          if (recursive) rmdirRecursiveSync(ps);
-          else
-            origCb.call(this, ps, options, (err) => {
-              if (err) return callback(enrichErr(err, "rmdir"));
-              emitFs("fs", "rmdir", p, undefined);
-              callback(null);
-            });
-          if (recursive) {
+          origCb.call(this, ps, options, (err) => {
+            if (err) return callback(enrichErr(err, "rmdir"));
             emitFs("fs", "rmdir", p, undefined);
             callback(null);
-          }
+          });
         } catch (e) {
           callback(enrichErr(e, "rmdir"));
         }
@@ -6169,27 +6156,146 @@ function buildApi(vol) {
     return disp;
   };
 
-  // ── openAsBlob ──
-  fs.openAsBlob = async function (p, options) {
+  // ── openAsBlob / openAsBlobSync ──
+  // Node 26 (lib/fs.js openAsBlob/openAsBlobSync, lib/internal/blob.js
+  // createBlobFromFilePath): openAsBlobSync is new; both validate options
+  // strictly BEFORE path validation — null options throws
+  // ERR_INVALID_ARG_TYPE, a non-string `type` throws
+  // ERR_INVALID_ARG_TYPE — and the blob is LAZY and file-backed: open
+  // only stats the file (missing → ENOENT with syscall 'stat'); every
+  // read re-stats and rejects with NotReadableError if the file changed
+  // size/mtime or vanished after open (test-fs-openAsBlobSync).
+  // ponytail: the re-stat compares size AND mtimeMs; a same-size rewrite
+  // within the same millisecond would slip past memfs's ms-resolution
+  // mtime — real Node compares the same fields, so this matches its
+  // observable contract except under sub-ms mutation.
+  function validateOpenAsBlobOptions(options) {
+    if (options === undefined) return "";
+    if (options === null || typeof options !== "object")
+      throw errInvalidArgType("options", "Object", options);
+    const type = options.type === undefined ? "" : options.type;
+    // NB: `??` is wrong here — Node destructures `const { type = '' }`,
+    // whose default applies only to `undefined`, so a null type must
+    // still fail validateString below (test-fs-openAsBlobSync).
+    if (typeof type !== "string")
+      throw errInvalidArgType("options.type", "string", type);
+    return type;
+  }
+  function openAsBlobStat(ps, method) {
+    let st;
+    try {
+      st = vol.statSync(ps);
+    } catch (e) {
+      // Node surfaces the stat ENOENT (C++ CreateFdEntry stats at open).
+      e._syscallOverride = "stat";
+      throw enrichErr(e, method);
+    }
+    return st;
+  }
+  function makeNotReadableError() {
+    if (typeof DOMException !== "undefined")
+      return new DOMException(
+        "The blob could not be read",
+        "NotReadableError",
+      );
+    const e = new Error("The blob could not be read");
+    e.name = "NotReadableError";
+    return e;
+  }
+  // Lazily-read Blob: size/type are fixed at open; content is read (and
+  // freshness re-checked) on every read call.
+  let FileBackedBlob = null;
+  if (typeof Blob !== "undefined") {
+    FileBackedBlob = class FileBackedBlob extends Blob {
+      constructor(path, type, stat) {
+        super([], { type });
+        this._fbPath = path;
+        this._fbSize = stat.size;
+        this._fbMtimeMs = stat.mtimeMs;
+      }
+      get size() {
+        return this._fbSize;
+      }
+      _fbRead() {
+        let st;
+        try {
+          st = vol.statSync(this._fbPath);
+        } catch {
+          throw makeNotReadableError();
+        }
+        if (st.size !== this._fbSize || st.mtimeMs !== this._fbMtimeMs)
+          throw makeNotReadableError();
+        return vol.readFileSync(this._fbPath);
+      }
+      async text() {
+        return new TextDecoder().decode(this._fbRead());
+      }
+      async arrayBuffer() {
+        const d = this._fbRead();
+        return d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength);
+      }
+      async bytes() {
+        return new Uint8Array(this._fbRead());
+      }
+      slice(start, end, contentType) {
+        const d = this._fbRead();
+        return new Blob([d.slice(start, end)], {
+          type: contentType ?? "",
+        });
+      }
+      stream() {
+        return new Blob([this._fbRead()]).stream();
+      }
+    };
+  }
+  function makeFileBackedBlob(ps, type, st) {
+    if (FileBackedBlob) return new FileBackedBlob(ps, type, st);
+    // Minimal fallback where Blob is unavailable: same lazy semantics.
+    const blob = {
+      size: st.size,
+      type,
+      _fbPath: ps,
+      _fbSize: st.size,
+      _fbMtimeMs: st.mtimeMs,
+      _fbRead() {
+        let s;
+        try {
+          s = vol.statSync(this._fbPath);
+        } catch {
+          throw makeNotReadableError();
+        }
+        if (s.size !== this._fbSize || s.mtimeMs !== this._fbMtimeMs)
+          throw makeNotReadableError();
+        return vol.readFileSync(this._fbPath);
+      },
+      async text() {
+        return new TextDecoder().decode(this._fbRead());
+      },
+      async arrayBuffer() {
+        const d = this._fbRead();
+        return d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength);
+      },
+    };
+    return blob;
+  }
+  fs.openAsBlobSync = function (p, options) {
+    const type = validateOpenAsBlobOptions(options);
     validatePath(p);
     const ps = toPathString(p);
-    let data;
-    try {
-      data = vol.readFileSync(ps);
-    } catch (e) {
-      throw enrichErr(e, "openAsBlob");
-    }
+    const st = openAsBlobStat(ps, "openAsBlobSync");
+    emitFs("fs", "openAsBlobSync", p, undefined);
+    return makeFileBackedBlob(ps, type, st);
+  };
+  // Plain (non-async) function so option validation AND the stat throw
+  // synchronously, like Node's — an `async function` would reject
+  // instead and assert.throws would never see it.
+  fs.openAsBlob = function (p, options) {
+    const type = validateOpenAsBlobOptions(options);
+    validatePath(p);
+    const ps = toPathString(p);
+    const st = openAsBlobStat(ps, "openAsBlob");
     emitFs("fs", "openAsBlob", p, undefined);
-    const type = (options && options.type) || "";
-    if (typeof Blob !== "undefined") return new Blob([data], { type });
-    // Minimal Blob fallback.
-    return {
-      size: data.length,
-      type,
-      arrayBuffer: async () =>
-        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-      text: async () => new TextDecoder().decode(data),
-    };
+    return Promise.resolve(makeFileBackedBlob(ps, type, st));
   };
 
   // ── realpath/realpathSync + .native ──
@@ -7293,6 +7399,58 @@ function buildApi(vol) {
   }
   // The options argument itself: object, string (encoding), null, or
   // undefined. Anything else is ERR_INVALID_ARG_TYPE.
+  // Node 26 lib/internal/fs/streams.js ReadStream/WriteStream: the
+  // windowsHandle checks run FIRST — before fd validation and before
+  // path validation (a null path + windowsHandle must report the handle
+  // error, not ERR_INVALID_ARG_TYPE for the path). Order: fd-pair check
+  // (raw options.fd) → platform → custom fs → bigint type → 64-bit
+  // range (C++ HandleToFd: Int64Value lossless). On win32 with a valid
+  // handle there is no handleToFd binding in a browser shim — that is
+  // the ceiling: throw ERR_METHOD_NOT_IMPLEMENTED (ponytail: a future
+  // host-provided handleToFd hook would slot in here).
+  function validateWindowsHandleOption(opts) {
+    const wh = opts.windowsHandle;
+    if (wh == null) return;
+    if (opts.fd != null) {
+      const err = new TypeError(
+        'Option "windowsHandle" cannot be used in combination with option "fd"',
+      );
+      err.code = "ERR_INCOMPATIBLE_OPTION_PAIR";
+      throw err;
+    }
+    if (
+      typeof process === "undefined" ||
+      process.platform !== "win32"
+    ) {
+      const err = new TypeError(
+        "The feature windowsHandle is unavailable on the current platform, which is being used to run Node.js",
+      );
+      err.code = "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM";
+      throw err;
+    }
+    if (opts.fs) {
+      const err = new Error(
+        "The windowsHandle with fs method is not implemented",
+      );
+      err.code = "ERR_METHOD_NOT_IMPLEMENTED";
+      throw err;
+    }
+    if (typeof wh !== "bigint")
+      throw errInvalidArgType("options.windowsHandle", "bigint", wh);
+    if (wh < -(2n ** 63n) || wh > 2n ** 63n - 1n) {
+      const err = new RangeError(
+        "windowsHandle does not fit into 64 bits",
+      );
+      err.code = "ERR_OUT_OF_RANGE";
+      throw err;
+    }
+    // ponytail: no handleToFd binding exists in a browser shim, so a
+    // valid handle on win32 is the ceiling — a future host-provided
+    // handleToFd hook would slot in here and return the fd instead.
+    const err = new Error("The windowsHandle method is not implemented");
+    err.code = "ERR_METHOD_NOT_IMPLEMENTED";
+    throw err;
+  }
   function validateStreamOptions(options) {
     if (
       options !== undefined &&
@@ -7489,6 +7647,8 @@ function buildApi(vol) {
     _initReadStream(path, options) {
       // options.signal validated for every stream (invalid type throws).
       const opts = options || {};
+      // windowsHandle validation runs before signal/fd/path validation.
+      validateWindowsHandleOption(opts);
       const signal = validateAbortSignal(opts.signal);
       const fdValidated = validateStreamFd(opts.fd);
       const handle =
@@ -7708,6 +7868,8 @@ function buildApi(vol) {
     constructor(path, options) {
       validateStreamOptions(options);
       const opts = options || {};
+      // windowsHandle validation runs before signal/fd/path validation.
+      validateWindowsHandleOption(opts);
       // Every synchronous validation runs BEFORE super(): real Node never
       // schedules _construct on a half-constructed stream — createWriteStream(46),
       // {start:'4'}, and invalid options.fs fns all throw with no zombie
@@ -8085,44 +8247,46 @@ function buildApi(vol) {
   fs.FileWriteStream = WriteStreamFactory;
 
   // ── FileHandle (internal; never exposed publicly) ──
-  // Node closes an unclosed FileHandle when it is GC'd (src/node_file.cc
-  // FileHandle::Close): the fd is closed synchronously and a process warning
-  // is emitted from an unref'd setImmediate — a per-fd Warning plus a
-  // once-per-process DEP0137 DeprecationWarning. The registry holds only the
-  // fd number, never the handle, so registration cannot keep it alive; the
-  // handle itself is the unregister token, so an explicit close() (which
-  // always funnels through _closeSync) silences the GC path.
-  // ponytail: the close here is best-effort — if the fd was already closed
-  // out from under the handle (e.g. fs.closeSync(fh.fd)), the EBADF is
-  // swallowed and the warning still fires; real Node fatals that edge in
-  // C++, which a browser shim cannot (and should not) reproduce.
-  let fileHandleCloseWarningEmitted = false;
+  // Node 26 (25.0.0 "FileHandle close-on-GC removed", src/node_file.cc
+  // FileHandle::Close): an unclosed FileHandle GC'd now THROWS instead
+  // of warning — the fd is closed synchronously and an ERR_INVALID_STATE
+  // ("A FileHandle object was closed during garbage collection...") is
+  // thrown from an unref'd setImmediate, surfacing as uncaughtException.
+  // The registry holds only {fd, path}, never the handle, so registration
+  // cannot keep it alive; the handle itself is the unregister token, so
+  // an explicit close() (which always funnels through _closeSync)
+  // silences the GC path.
+  // ponytail: if the fd was already closed out from under the handle
+  // (e.g. fs.closeSync(fh.fd)), the close fails and the UVException
+  // ("Closing file descriptor %d on garbage collection failed") is
+  // thrown instead — matching Node's C++ close-failure path.
   const fileHandleGcRegistry =
     typeof FinalizationRegistry !== "undefined"
-      ? new FinalizationRegistry((fd) => {
+      ? new FinalizationRegistry(({ fd, path }) => {
+          let closeErr = null;
           try {
             vol.closeSync(fd);
-          } catch {}
-          if (
-            typeof process !== "undefined" &&
-            typeof process.emitWarning === "function"
-          ) {
-            process.emitWarning(
-              `Closing file descriptor ${fd} on garbage collection`,
-            );
-            if (!fileHandleCloseWarningEmitted) {
-              fileHandleCloseWarningEmitted = true;
-              process.emitWarning(
-                "Closing a FileHandle object on garbage collection is " +
-                  "deprecated. Please close FileHandle objects explicitly " +
-                  "using FileHandle.prototype.close(). In the future, an " +
-                  "error will be thrown if a file descriptor is closed " +
-                  "during garbage collection.",
-                "DeprecationWarning",
-                "DEP0137",
-              );
-            }
+          } catch (e) {
+            closeErr = e;
           }
+          setImmediateSafe(() => {
+            if (closeErr) {
+              const err = new Error(
+                `Closing file descriptor ${fd} on garbage collection failed (${closeErr.message})`,
+              );
+              err.code = closeErr.code || "EBADF";
+              throw err;
+            }
+            const err = new Error(
+              "A FileHandle object was closed during garbage collection. " +
+                "This used to be allowed with a deprecation warning but is " +
+                "now considered an error. Please close FileHandle objects " +
+                "explicitly. " +
+                `File descriptor: ${fd} (${path})`,
+            );
+            err.code = "ERR_INVALID_STATE";
+            throw err;
+          });
         })
       : null;
   const MemFileHandle = fs.promises.FileHandle;
@@ -8136,13 +8300,13 @@ function buildApi(vol) {
   // constructor to stop assigning this.fd (upstream change, not ours).
   const kFd = Symbol("fs.FileHandle.fd");
   class FileHandle extends MemFileHandle {
-    constructor(fd) {
+    constructor(fd, path = "<unknown path>") {
       super(fd);
       // EventEmitter state init (the class itself can't be .call()ed).
       _FsEventEmitter.init.call(this);
       this.fd = fd;
       if (fileHandleGcRegistry !== null)
-        fileHandleGcRegistry.register(this, fd, this);
+        fileHandleGcRegistry.register(this, { fd, path }, this);
     }
     get fd() {
       return this[kFd];
@@ -9084,7 +9248,7 @@ function buildApi(vol) {
     return new Promise((resolve, reject) => {
       fs.open(p, flags, mode, (err, fd) => {
         if (err) return reject(err);
-        resolve(new FileHandle(fd));
+        resolve(new FileHandle(fd, toPathString(p)));
       });
     });
   }

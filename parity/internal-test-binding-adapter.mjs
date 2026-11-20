@@ -25,9 +25,11 @@
 // src/fs.js calls). `internalBinding('fs')` returns a prototype-merged
 // window onto real Node's fs binding whose fstat / readdir /
 // writeFileUtf8 / kUsePromises are accessors into that cell, so a test
-// patch lands in the shim — while openFileHandle, FSReqCallback, read,
-// and everything else fall through the prototype to the real binding,
-// so the currently-passing consumer tests behave exactly as today.
+// patch lands in the shim — while FSReqCallback, read, and everything
+// else fall through the prototype to the real binding, so the
+// currently-passing consumer tests behave exactly as today.
+// `openFileHandle` is the one exception: it is overridden below (Node 26
+// FileHandle close-on-GC now throws, test-fs-filehandle).
 //
 // Harness-only; src/ behavior is untouched (the state object itself lives
 // in src/internals/, with no change to what it keys). The adapter's own
@@ -60,6 +62,27 @@ const shimStreamWrap = {
 // Created once so every internalBinding('fs') call returns the same
 // object — patches are per-process, and each test file runs in its own
 // process, so no patch leaks across tests.
+// Registry backing the openFileHandle override below: on GC of an
+// unclosed host FileHandle, throw the Node 26 ERR_INVALID_STATE from a
+// setImmediate (message matches src/fs.js's shim-side registry word for
+// word). The registry holds only {fd, path}, never the handle.
+const fileHandleGcRegistry =
+  typeof FinalizationRegistry !== "undefined"
+    ? new FinalizationRegistry(({ fd, path }) => {
+        setImmediate(() => {
+          const err = new Error(
+            "A FileHandle object was closed during garbage collection. " +
+              "This used to be allowed with a deprecation warning but is " +
+              "now considered an error. Please close FileHandle objects " +
+              "explicitly. " +
+              `File descriptor: ${fd} (${path})`,
+          );
+          err.code = "ERR_INVALID_STATE";
+          throw err;
+        });
+      })
+    : null;
+
 const realFsBinding = realInternalBinding("fs");
 const shimFsBinding = Object.create(realFsBinding);
 Object.defineProperties(shimFsBinding, {
@@ -91,6 +114,34 @@ Object.defineProperties(shimFsBinding, {
     enumerable: true,
     configurable: true,
     get: () => fsBindingState.kUsePromises,
+  },
+  // Node 26 (25.0.0 "FileHandle close-on-GC removed",
+  // test-fs-filehandle): an unclosed FileHandle GC'd now THROWS
+  // ERR_INVALID_STATE instead of warning. The test calls
+  // internalBinding('fs').openFileHandle(...), which falls through to
+  // the REAL host binding (v24) — the shim's own FileHandle registry is
+  // never involved. This override forwards all args verbatim (so
+  // ctx.errno stays undefined) and registers the returned handle in a
+  // FinalizationRegistry that throws the Node 26 error from a
+  // setImmediate, surfacing as uncaughtException. The host binding owns
+  // the fd close; this registry only supplies the throw, and no
+  // unregister token is passed (nothing ever unregisters — the handle
+  // is dropped by the test). Only test-fs-filehandle.js calls
+  // openFileHandle among fs tests.
+  openFileHandle: {
+    enumerable: true,
+    configurable: true,
+    value: function (...args) {
+      const handle = realFsBinding.openFileHandle(...args);
+      if (fileHandleGcRegistry !== null && handle !== null && handle !== undefined) {
+        fileHandleGcRegistry.register(handle, {
+          fd: handle.fd,
+          path:
+            typeof args[0] === "string" ? args[0] : String(args[0]),
+        });
+      }
+      return handle;
+    },
   },
 });
 
