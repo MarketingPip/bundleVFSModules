@@ -105,6 +105,39 @@ recovery re-verified everything on the rebased head before pushing:
 - Sweep evidence preserved at
   `~/workspace/goals/node-parity-sweep-bundlevfsmodules-runtime/hidden_files/node26-baseline-a261-rebase.jsonc`
   (+ `csv-a261-rebase/`).
+
+## CI (PR #516) — v24 parity conflicts, fixed via expected-failures
+
+- First CI run on remote head `336a0e33` (run 44647783408): build
+  **success**, Parity **failure**. The Parity job runs the vendored v24
+  suite (`parity/run.mjs` for path/punycode/querystring/string_decoder/
+  events/assert); assert was 17/19 with exactly two NEW failures, both
+  genuine v24-vs-Node-26 conflicts — the v24 tests pin behavior Node 26
+  deliberately removed, and the shim intentionally implements Node 26,
+  so no code change can satisfy both suites:
+  - `test-assert.js` (v24 "Additional asserts"): expects
+    `assert(false, Symbol('foo'))` → AssertionError `'Symbol(foo)'`;
+    Node 26 throws `ERR_INVALID_ARG_TYPE`. Mutually exclusive.
+  - `test-assert-fail-deprecation.js`: expects multi-arg `fail()` +
+    DEP0094 warning, removed in Node 25.0.0.
+  - `test-assert-deep.js` PASSED in CI (Node 24.20.0); its Crypto
+    sub-test fails only under local host Node v24.22.1 (native
+    KeyObject inspect-tag difference) — a local-version artifact,
+    not a CI issue.
+- Fix (recovery commit): both files added to
+  `parity/expected-failures.shim.json` as `wontfix` with reasons
+  (per `docs/PARITY_TESTING.md`: "Not worth fixing — document why,
+  move on"; precedent: 301 entries). No code change — the Node 26 flip
+  stands, and the v24 files are documented as superseded, not faked.
+- Verified with the CI-mirror binary
+  (`~/workspace/local/node-24.20.0/bin/node parity/run.mjs assert`):
+  exit 0, 17/19, "No new failures. Parity steady. ✔", 303 expected
+  (wontfix: 2).
+- Dist-regen note: the build job auto-pushed `chore: regenerate vfs.js`
+  (`fdd27696`) to the branch. Pushes made with `GITHUB_TOKEN` do NOT
+  trigger new workflow runs, so no CI ever ran on that SHA (verified:
+  0 runs for `fdd27696`); the fix push (PAT via git-push-api) triggers
+  CI on the new head, and the waiter follows it via whole-SHA replace.
 - `test-assert-deep.js` isolated: 50/54, exit 1, failing sub-tests exactly
   the triaged F2 set — no regression from this change.
 - Repo tests: `NODE_OPTIONS=--experimental-vm-modules npx --no-install jest

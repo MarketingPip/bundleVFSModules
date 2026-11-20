@@ -179,6 +179,14 @@
     "category": "inherent",
     "reason": "Inherent: Requires V8 inspector internals (bindings, module registry, VM accessors); no V8 inspector in browser"
   },
+  "test-assert-fail-deprecation.js": {
+    "category": "wontfix",
+    "reason": "Node 25.0.0 removed multi-arg fail() and retired DEP0094; the v24 test pins the removed behavior (fail(actual, expected, message, operator) with deprecation warning). The shim implements Node 26's single-message fail() (lane A-26-1, PR #516), so this file cannot pass. Node 26 suite has no equivalent file."
+  },
+  "test-assert.js": {
+    "category": "wontfix",
+    "reason": "One sub-test ('Additional asserts') pins pre-26 message handling: assert(false, Symbol('foo')) must throw AssertionError with message 'Symbol(foo)'. Node 26 throws ERR_INVALID_ARG_TYPE for non-string/non-function messages instead. The shim implements Node 26 (lane A-26-1, PR #516, flips the Node 26 test-assert.js); the v24 and Node 26 expectations for this identical call are mutually exclusive, so the v24 file cannot pass."
+  },
   "test-async-hooks-correctly-switch-promise-hook.js": {
     "category": "inherent",
     "reason": "Asserts exact promise-hook event sequence; als-browser (imported by src/async_hooks.js for the browser lane) creates async resources during module evaluation, shifting the event sequence. Harness limitation: cannot avoid the import under Node without breaking CJS require() (TLA incompatible with preload's synchronous Module._load)."
