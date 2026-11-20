@@ -649,6 +649,15 @@ Module.prototype._compile = function _compile(content, filename) {
 // _cache uses a null-prototype object, like Node's.
 const _cache = Object.create(null);
 const _pathCache = Object.create(null);
+// ponytail: per-directory relative resolve cache, mirroring Node 26's
+// `relativeResolveCache` (lib/internal/modules/cjs/loader.js:232, 1349-1351,
+// 1469-1475). Keyed by parent dir, then request -> resolved filename. A Map
+// (not Node's plain object) so a `__proto__` request can't pollute the
+// bucket. Ceiling: this mirrors the read-count + fast-path observable only;
+// resolution itself still goes through _resolveFilename/_findPath. Upgrade
+// path: none needed unless _resolveFilename is ever bypassed for more
+// requests.
+const _relativeResolveCache = new Map();
 
 const _extensions = {
   __proto__: null,
@@ -1520,6 +1529,28 @@ function loadBuiltinModule(normalizedId, originalRequest) {
 }
 
 function _load(request, parent, isMain) {
+  // Node 26 reads parent.path exactly once per _load call (loader.js:1349)
+  // to key the per-directory relative resolve cache — in every path:
+  // builtins, throwing resolutions, first loads, and cache hits alike.
+  // The read happens here, before the builtin early-return, so the count
+  // matches even when _resolveFilename never sees the parent.
+  let parentPath;
+  let relResolveCacheByDir;
+  if (parent) {
+    parentPath = parent.path;
+    relResolveCacheByDir = _relativeResolveCache.get(parentPath);
+    const relFilename = relResolveCacheByDir?.get(request);
+    if (relFilename !== undefined) {
+      const relCached = _cache[relFilename];
+      if (relCached !== undefined) {
+        updateChildren(parent, relCached, true);
+        return relCached.exports;
+      }
+      // Stale entry (module dropped from _cache): fall through and re-resolve.
+      relResolveCacheByDir.delete(request);
+    }
+  }
+
   const normalized = normalizeRequirableId(request);
   if (normalized !== undefined) {
     return loadBuiltinModule(normalized, request);
@@ -1531,6 +1562,17 @@ function _load(request, parent, isMain) {
   if (cachedModule !== undefined) {
     updateChildren(parent, cachedModule, true);
     return cachedModule.exports;
+  }
+
+  // Only create the per-directory bucket once there is a resolved filename
+  // to store, so builtins and failed resolutions leave no bucket behind
+  // (Node 26 loader.js:1469-1475).
+  if (parent) {
+    if (relResolveCacheByDir === undefined) {
+      relResolveCacheByDir = new Map();
+      _relativeResolveCache.set(parentPath, relResolveCacheByDir);
+    }
+    relResolveCacheByDir.set(request, filename);
   }
 
   const module = new Module(filename, parent);
@@ -1545,6 +1587,9 @@ function _load(request, parent, isMain) {
   } finally {
     if (!success) {
       delete _cache[filename];
+      if (relResolveCacheByDir !== undefined) {
+        relResolveCacheByDir.delete(request);
+      }
     }
   }
 
