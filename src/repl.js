@@ -61,6 +61,232 @@ const kSigintQueue = Symbol("sigintQueue"); // prioritized SIGINT tasks (Node li
 // belongs behind a version gate here, not unconditionally — the stamped
 // form is observable in every Promise the REPL prints.
 
+// ---------------------------------------------------------------------------
+// Node 26 async error routing (lib/repl.js:179-219, :692, :985) — port.
+// Domains are gone; instead one AsyncLocalStorage `replContext` marks the
+// async work each eval creates, one process-wide uncaught-exception
+// capture callback routes an error to the owning instance's `_handleError`,
+// and the `handleError` option lets the user take over (return 'ignore' /
+// 'print' / 'unhandled').
+// The AsyncLocalStorage class is resolved lazily through
+// process.getBuiltinModule (see getReplContext below), NOT by importing
+// ./async_hooks: that module statically imports the `als-browser` npm
+// package, which patches the global timers (setTimeout / setInterval /
+// setImmediate / queueMicrotask) at import time — and a patched timer
+// callback adds a null-named frame that changes the native domain error
+// handler's stack slicing (lib/repl.js:638-660 keeps frames up to the
+// LAST null-named frame), so a native REPL server prints an extra
+// `at Immediate.<anonymous>` line and test-repl-underscore.js fails.
+// src/readline.js avoids ../events.js for the same reason (its header
+// comment). The bridge loads nothing extra; in the browser there is no
+// native module, so replContext is a no-op stub: eval runs un-wrapped
+// and async errors surface as the host's ordinary uncaught errors
+// (never swallowed, never faked).
+// Host shape: Node 26's addUncaughtExceptionCaptureCallback does NOT
+// exist on the v24.22.1 harness host (proven: typeof === 'undefined'),
+// so the port installs it when present and falls back to the v24
+// singleton setUncaughtExceptionCaptureCallback — only when no callback
+// is already set, with "not mine" reproduced in-callback (emit +
+// crash-if-unhandled) because the singleton's return is ignored.
+// ponytail: ceiling — Node's _handleError standalone branch (re-emit via
+// process 'uncaughtException' listeners) is NOT ported: the shim has no
+// _isStandalone, so a standalone REPL prints like a non-standalone one.
+// ---------------------------------------------------------------------------
+let _replALSClass = null; // null = unresolved
+let _replContext = null;
+function replALSClass() {
+  if (_replALSClass !== null) return _replALSClass;
+  try {
+    const proc = typeof process !== "undefined" ? process : undefined;
+    const getBuiltin =
+      proc && typeof proc.getBuiltinModule === "function"
+        ? proc.getBuiltinModule
+        : undefined;
+    if (getBuiltin !== undefined) {
+      // Same four-export validation src/async_hooks.js uses for its
+      // loadNativeAsyncHooks probe.
+      const mod = getBuiltin.call(proc, "async_hooks");
+      if (
+        mod &&
+        typeof mod.AsyncLocalStorage === "function" &&
+        typeof mod.AsyncResource === "function" &&
+        typeof mod.createHook === "function" &&
+        typeof mod.executionAsyncId === "function"
+      ) {
+        _replALSClass = mod.AsyncLocalStorage;
+        return _replALSClass;
+      }
+    }
+  } catch {
+    // No native module — fall through to the stub.
+  }
+  _replALSClass = class NoopAsyncLocalStorage {
+    run(_store, fn, ...args) {
+      return fn(...args);
+    }
+    getStore() {
+      return undefined;
+    }
+  };
+  return _replALSClass;
+}
+function getReplContext() {
+  if (_replContext === null) _replContext = new (replALSClass())();
+  return _replContext;
+}
+let exceptionCaptureSetup = false;
+// Set when the capture was installed via the v24 singleton setter (its
+// return value is ignored by the dispatcher, so a "not mine" error must
+// be emulated in-callback instead of returned — see replCaptureCallback).
+let captureIsSingleton = false;
+let captureHostProcess = null;
+
+// Node-style coded errors (lib/internal/errors.js makeNodeErrorWithCode) —
+// same shape as src/inspector.js: `name` stays the plain base-class name
+// while toString() carries the code, exactly like real Node
+// (assert.throws with a RegExp tests String(err)).
+function codedError(code, message, Kind = Error) {
+  const err = new Kind(message);
+  err.code = code;
+  Object.defineProperty(err, "toString", {
+    value() {
+      return `${this.name} [${code}]: ${this.message}`;
+    },
+    configurable: true,
+  });
+  return err;
+}
+
+// Returns the real host process when one is reachable through the
+// _historyNativeModules() bridge (parity harness only: bare `process`
+// is the real Node process there), else null. In the browser/sandbox
+// the bridge is null — there is no host process to capture on, and an
+// async error from REPL-evaluated code surfaces as the host's ordinary
+// uncaught error instead: honest, never swallowed, never faked handled.
+function replHostProcess() {
+  try {
+    return _historyNativeModules() !== null ? process : null;
+  } catch {
+    return null;
+  }
+}
+
+// The capture callback shared by both host shapes (Node lib/repl.js:194-200).
+// Returns true when the error was routed to an owning REPL (the add*
+// contract: true = handled, anything else = try the next handler).
+// On the v24 singleton path the return value is IGNORED by the
+// dispatcher, so a "not mine" error must reproduce the default handling
+// inline instead of returning.
+function replCaptureCallback(err) {
+  const store = getReplContext().getStore();
+  if (store?.replServer) {
+    const result = store.replServer._handleError(err);
+    if (result !== "unhandled") return true;
+  }
+  if (captureIsSingleton) {
+    // v24 lib/internal/process/execution.js createOnGlobalUncaughtException:
+    // with a capture set, the dispatcher skips the 'uncaughtException'
+    // emit and the crash — so this callback must do both itself for an
+    // error no REPL owns (no store, or the user handler said 'unhandled').
+    // ('uncaughtExceptionMonitor' already fired natively before the
+    // capture, so it is NOT re-emitted here.)
+    if (!captureHostProcess.emit("uncaughtException", err)) {
+      // No listener took it: crash exactly like the default path. The
+      // capture must be unset first (else the rethrow comes straight
+      // back here), and the throw must happen off this callback's stack
+      // (throwing here would recurse into the capture) — so unset and
+      // rethrow on the next tick; the process still exits 1 with the
+      // error.
+      try {
+        captureHostProcess.setUncaughtExceptionCaptureCallback(null);
+      } catch {
+        // Already unset — the rethrow below still crashes.
+      }
+      setImmediate(() => {
+        throw err;
+      });
+    }
+    return true; // ignored by the v24 dispatcher
+  }
+  return undefined; // add* path: let the next handler / default run
+}
+
+// Install the process-wide uncaught-exception capture (Node
+// lib/repl.js:191-204) exactly once; returns true when installed.
+// Two host shapes, gated on what the host provides:
+// - Node 26+: addUncaughtExceptionCaptureCallback — auxiliary callbacks
+//   coexist with the primary (domain's), so install unconditionally.
+// - v24 host (this harness): no add* API (proven: typeof
+//   process.addUncaughtExceptionCaptureCallback === 'undefined' on
+//   v24.22.1), only the singleton setUncaughtExceptionCaptureCallback —
+//   install ONLY when no callback is already set (it throws
+//   ERR_UNCAUGHT_EXCEPTION_CAPTURE_ALREADY_SET otherwise, and the
+//   domain module claims it exclusively), with "not mine" emulated in
+//   replCaptureCallback.
+// In the browser there is no host process (replHostProcess() is null)
+// and nothing is installed.
+// ponytail: ceiling — on the singleton path the callback cannot tell an
+// unhandled REJECTION from an uncaught exception (v24 passes only the
+// error), so a non-REPL rejection is emulated via 'uncaughtException'
+// rather than 'unhandledRejection'. No repl test exercises that shape.
+function setupExceptionCapture() {
+  if (exceptionCaptureSetup) return true;
+  const hostProcess = replHostProcess();
+  if (!hostProcess) return false;
+  captureHostProcess = hostProcess;
+  if (typeof hostProcess.addUncaughtExceptionCaptureCallback === "function") {
+    hostProcess.addUncaughtExceptionCaptureCallback(replCaptureCallback);
+  } else if (
+    typeof hostProcess.setUncaughtExceptionCaptureCallback === "function" &&
+    typeof hostProcess.hasUncaughtExceptionCaptureCallback === "function" &&
+    !hostProcess.hasUncaughtExceptionCaptureCallback()
+  ) {
+    captureIsSingleton = true;
+    hostProcess.setUncaughtExceptionCaptureCallback(replCaptureCallback);
+  } else {
+    return false;
+  }
+  exceptionCaptureSetup = true;
+  return true;
+}
+
+// Node lib/repl.js:207-219 — a listener for `uncaughtException` added
+// from inside a REPL eval is refused: the listener would swallow the
+// routed error for the whole process, so the add itself throws and the
+// REPL prints it like any other eval error.
+function processNewListener(event, listener) {
+  if (event === "uncaughtException") {
+    const store = getReplContext().getStore();
+    if (store?.replServer) {
+      // Throw an error so that the event will not be added and the
+      // current REPL handles it. That way the user is notified about
+      // the error and the current code evaluation is stopped, just as
+      // any other code that contains an error.
+      throw codedError(
+        "ERR_INVALID_REPL_INPUT",
+        "Listeners for `uncaughtException` cannot be used in the REPL",
+        TypeError,
+      );
+    }
+  }
+}
+
+let processNewListenerUseCount = 0;
+function addProcessNewListener(hostProcess) {
+  if (processNewListenerUseCount++ === 0) {
+    // Add this listener only once and use a WeakSet that contains the REPLs
+    // domains. Otherwise we'd have to add a single listener to each REPL
+    // instance and that could trigger the `MaxListenersExceededWarning`.
+    hostProcess.prependListener("newListener", processNewListener);
+  }
+}
+
+function removeProcessNewListener(hostProcess) {
+  if (--processNewListenerUseCount === 0) {
+    hostProcess.removeListener("newListener", processNewListener);
+  }
+}
+
 
 // Node lib/repl.js:599-602 creates the interruption error with
 // stackTraceLimit 0, so its stack is just the message line — and the
@@ -1897,6 +2123,10 @@ export class REPLServerImpl extends Interface {
     this.editorMode = false;
     this.commands = Object.create(null);
     this.breakEvalOnSigint = !!options.breakEvalOnSigint;
+    // Node lib/repl.js:386 — the user error handler for _handleError
+    // (return 'ignore' / 'print' / 'unhandled'; anything else throws
+    // ERR_INVALID_STATE when an error is handled).
+    this._userErrorHandler = options.handleError;
     // Node lib/repl.js:332 — file/module completion runs only when the
     // server allows blocking completions (R3: the tab-complete tests pass
     // allowBlockingCompletions: true; without it only builtins complete).
@@ -1968,6 +2198,22 @@ export class REPLServerImpl extends Interface {
     this.eval =
       typeof eval_ === "function" ? eval_ : this._defaultEval.bind(this);
 
+    // Node lib/repl.js:692 — wrap eval to run within the REPL's async
+    // context for error tracking, so async work the eval creates (a
+    // setTimeout / setImmediate callback that throws) is owned by this
+    // server and the capture callback routes the uncaught error back to
+    // this server's _handleError instead of crashing the process. The
+    // function names are needed for stack trace filtering - they must not
+    // be anonymous, but we can't use 'eval' as a name since it's reserved.
+    // eslint-disable-next-line node-core/func-name-matching
+    const self = this;
+    const originalEval = this.eval;
+    this.eval = function REPLEval(code, context, file, cb) {
+      getReplContext().run({ replServer: self }, function REPLEvalInContext() {
+        originalEval(code, context, file, cb);
+      });
+    };
+
     // ── Context ──────────────────────────────────────────────────────────
     this.resetContext();
 
@@ -1992,6 +2238,21 @@ export class REPLServerImpl extends Interface {
     // output ([kWriteToOutput] → output.write, no echo back to input), so
     // no re-entrancy occurs — verified by the mode/recoverable/require
     // flips + the full repl differential.
+    // Node lib/repl.js:402-407 — set up exception capture for async
+    // error handling (host-only; replHostProcess() is null in the
+    // browser, where there is no host process to capture on) and the
+    // guard refusing `uncaughtException` listeners added from inside a
+    // REPL eval, removed again when this server exits. The two installs
+    // are independent, like Node's: the guard goes in whenever a host
+    // process is reachable, even if the capture itself could not install
+    // (e.g. the domain module already owns the v24 singleton).
+    const hostProcess = replHostProcess();
+    if (hostProcess) {
+      setupExceptionCapture();
+      addProcessNewListener(hostProcess);
+      this.once("exit", () => removeProcessNewListener(hostProcess));
+    }
+
     this.displayPrompt();
   }
 
@@ -2725,6 +2986,33 @@ export class REPLServerImpl extends Interface {
   // ── Error display ────────────────────────────────────────────────────────
 
   _handleError(e, cmd = "") {
+    // Node lib/repl.js:985-1000 — the `handleError` user option runs
+    // first: 'ignore' prints nothing, 'print' falls through to the
+    // normal print path below, 'unhandled' returns 'unhandled' (the
+    // capture callback then lets the host handle it); anything else
+    // throws ERR_INVALID_STATE, which propagates synchronously out of
+    // the eval callback (sync errors) or out of the capture callback
+    // (async errors, where it becomes the process's uncaught exception).
+    // The message carries Node's 'Invalid state: ' prefix (the
+    // ERR_INVALID_STATE constructor adds it) and codedError's toString
+    // carries the code, exactly like the real error.
+    if (this._userErrorHandler) {
+      const state = this._userErrorHandler(e);
+      if (state !== "ignore" && state !== "print" && state !== "unhandled") {
+        throw codedError(
+          "ERR_INVALID_STATE",
+          `Invalid state: External REPL error handler must return either "ignore", "print", or "unhandled", but received: ${state}`,
+          Error,
+        );
+      }
+      if (state === "ignore") {
+        return;
+      }
+      if (state === "unhandled") {
+        return "unhandled";
+      }
+    }
+
     if (!this.underscoreErrAssigned) this.lastError = e;
 
     // Node lib/repl.js domain-error handler — the error's stack is
