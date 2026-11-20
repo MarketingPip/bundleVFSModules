@@ -174,6 +174,24 @@
   card that timed out unanswered — NOT retried (needs user action).
   Diagnosis above came from the local jest repro instead.
 
+- Rebase #2 (2026-11-20): main moved under the PR (crypto #514, https
+  #515, assert #516 merged; PR went mergeable_state dirty). Rebased
+  onto `0f30d17c`, CLEAN, no conflicts (new HEAD `fa34d67e`; the
+  dist-regen bot commit on the remote branch is NOT replayed — CI
+  regenerates dist). Diff vs new main is exactly the 5 lane files
+  (src/util.js now identical to main). Re-verified on the rebased
+  head: highlight 2x + tla 2x isolated exit 0
+  (`/tmp/r26r3-highlight-fix{1,2}.log`, `/tmp/r26r3-tla-fix{1,2}.log`);
+  targeted jest (export_surface_util, export_surface_repl, repl) PASS.
+  Full guard (`/tmp/r26r3-baseline-repl.jsonc`,
+  `/tmp/r26r3-csv-2026-11-20`): 95/108 on paper, but BOTH flips pass
+  in it — the two misses are the known history-navigation flake plus
+  history-load-preserves-pending-entries (also timing-sensitive), each
+  passing isolated 3x on the rebased head
+  (`/tmp/r26r3-history-navigation-{1,2,3}.log`,
+  `/tmp/r26r3-history-load-preserves-pending-entries-{1,2,3}.log`).
+  True count 97/108, 0 regressions.
+
 ## Files changed
 
 - `src/internals/repl-highlight.js` (new, 100 lines)
