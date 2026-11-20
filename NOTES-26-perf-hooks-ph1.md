@@ -136,6 +136,24 @@ behavior, not an API gap — out of scope for this lane, no fix attempted.
 - `toJSON` EWMA/skewness fields unchanged (native under harness; out of
   scope).
 
+## CI follow-up (2026-11-20 ~07:00 EST)
+
+- First CI run on PR #525 (head `d696c9fc`) went red on the `build` job;
+  the Parity check was green. The CI log (`/tmp/ph26/ci-build-525.log`)
+  shows exactly one failing test: `tests/perf_hooks.test.js`,
+  "exports match Node v24.20.0 (no Histogram) + Node 26 additions", at the
+  NATIVE-surface assertion (line 64). Cause: CI pins Node 24.20.0, whose
+  native namespace lacks both new exports (verified: 0 occurrences in the
+  24.20.0 source pack, `hidden_files/node-src/lib/{perf_hooks,
+  internal/histogram}.js`) — the shim assertion passed, the native
+  equality failed. The host here is v24.22.1, which already carries both,
+  so the failure was CI-only.
+- Fix: the native check is now a subset check — the shim must cover
+  everything the host native offers (the exact shim list stays pinned by
+  the first assertion). Verified locally (41/41) and against the 24.20.0
+  export list extracted from the source pack (subset holds). Pushed as a
+  second commit on the branch; CI re-run awaited on the new head SHA.
+
 ## Verification (all green)
 
 - `node --check src/perf_hooks.js`
