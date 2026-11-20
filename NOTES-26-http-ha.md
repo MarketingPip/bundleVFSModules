@@ -154,6 +154,23 @@
   CI pins 24.20.0 (`.github/workflows/run.yaml:34,93`) — on CI both pass
   (run 44652234170 log). This branch does not touch `src/util.js` or
   `src/crypto.js` (diff vs origin/main: `src/http.js` + NOTES only).
+- Second run on the fix commit `5c62e656` (run 44653456788): **both jobs
+  SUCCESS** (build + Parity). Fix validated by CI.
+- CI then pushed dist-regen `279c993f` (`chore: regenerate vfs.js`,
+  dist-only). Pushes made with the workflow's `GITHUB_TOKEN` do not
+  trigger new workflow runs, so no run ever appears for a regen SHA —
+  the gate is the run on the code SHA, not the regen SHA.
+- Rebase #2 (2026-11-20): main moved while the PR was open (crypto #514,
+  https #515, assert #516 merged → `0f30d17c`). The dist-regen commit
+  made the PR unmergeable (dist conflicts: `dist/http*.js`,
+  `dist/https.js` — generated files, both sides regenerated from
+  different bases). Local rebase onto `0f30d17c` was clean, no src
+  conflicts (merge-tree exit 0); the remote's extra commit is only the
+  stale regen, so the re-push overwrote it deliberately (`--force` via
+  git-push-api.py) and CI regenerates dist on the new head. Local
+  re-check after rebase: `node --check src/http.js` OK, both http
+  export-surface suites pass; only remaining local failure is the
+  pre-existing util skew above (crypto now passes post-#514).
 
 ## Guard: full Node 26 http suite (pre-rebase, superseded)
 
