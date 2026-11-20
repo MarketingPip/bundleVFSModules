@@ -577,3 +577,9 @@ counting.
   `git-push-api.py` (full os.environ, `--force` only for the reviewed
   rebase); PR via `gh.py`; CI waiter as a runtime-tracked backgrounded
   exec pinned to the remote code SHA.
+
+## Ship
+
+- PR: #529
+- Merge SHA: `10bdfcaae51e989261f5a65e268d6452fa67a249` (squash-merge of PR #529)
+- Final count: **http 412/422** (393 banked + 19 flips, 0 regressions)

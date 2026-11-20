@@ -165,3 +165,9 @@
 - Callers are unaffected: `Buffer.prototype.write` already validates the
   offset as an integer via `validateOffset` before calling these, and the
   `encodingOps` write paths pass validated numbers.
+
+## Ship
+
+- PR: #512
+- Merge SHA: `bb6905b58ef37ec10ac96c0806a38ea7b1786a2e` (squash-merge of PR #512)
+- Final count: **buffer 71/74** (64 banked + 7 flips, 0 regressions)

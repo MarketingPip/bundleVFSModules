@@ -192,3 +192,9 @@ separately first (8/8 incl. kmac customization -> personalization).
   Build VFS after "Run Tests" failed; crypto itself builds fine:
   `Built crypto -> dist/crypto.js`). Local dist/ churn from those runs was
   restored with `git checkout -- dist/`.
+
+## Ship
+
+- PR: #514
+- Merge SHA: `e86d615eb500dfe1f0c19fd0f226263612ddfcca` (squash-merge of PR #514)
+- Final count: **crypto 149/167** (145 banked + 4 flips, 0 regressions)

@@ -312,3 +312,4 @@ Node 26 changes that all landed in the same file.
   Waiter hardened: exits early (`repin-no-runs`, exit 3) if a (re-)pinned
   SHA shows no runs for 5 consecutive polls, so a regen push wakes the
   lane within ~5 min instead of burning the timeout.
+- **Merged:** squash-merged as `652333e70263f01872cad93ab50199e122fdd90f` (PR #513, merge verified `merged: true` by direct read). Branch ref deleted. Final count: **util 36/36** (26 banked + 10 flips, 0 regressions).

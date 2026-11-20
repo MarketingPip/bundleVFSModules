@@ -105,3 +105,9 @@ it was disproved by probe and had to be corrected:
   expression scanning — out of scope for this lane.
 - `parseVarDeclarators` still over-collects pattern identifiers via
   `collectPatternIds` (unchanged, harmless for `var`).
+
+## Ship
+
+- PR: #509
+- Merge SHA: `03d7f9cce13143e1869475b165d406be3389e736` (squash-merge of PR #509)
+- Final count: **vm 66/101** (65 banked + 1 flips, 0 regressions)

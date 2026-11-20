@@ -179,3 +179,9 @@ v24.22.1 surface artefact, documented in triage §F1, not this lane.
   flip set vs baseline = exactly the 2 targets; regressions = none.
 - Repo suite: `NODE_OPTIONS=--experimental-vm-modules npx --no-install
   jest tests/perf_hooks.test.js` → 39/40 (1 pre-existing failure, above).
+
+## Ship
+
+- PR: #510
+- Merge SHA: `70a70a2e60991e4a4a22cd702c4999cccde15a9c` (squash-merge of PR #510)
+- Final count: **perf_hooks 19/31** (17 banked + 2 flips, 0 regressions)

@@ -198,3 +198,9 @@
     passes still pass. `test-http-websocket-mask-immutable.js` still 9.
 - Net: guard run 392/422; true post-fix count **393/422** (390 + 3 flips)
   — the 392 reflects the byteswritten load flake, which passes isolated.
+
+## Ship
+
+- PR: #519
+- Merge SHA: `9c0edeeab3bdad953a11d369096813f413efc658` (squash-merge of PR #519)
+- Final count: **http 393/422** (390 banked + 3 flips, 0 regressions)

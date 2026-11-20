@@ -262,3 +262,9 @@
   in src/ imports it (the browser repl never loads `internal/repl/highlight`;
   the L2 fix is exercised via the parity harness preload redirect only).
   Nothing to regenerate for it; the file ships as source.
+
+## Ship
+
+- PR: #526
+- Merge SHA: `ba030119e3c9c18b680a27c495eb7e7d280831e3` (squash-merge of PR #526)
+- Final count: **repl 99/108** (97 banked + 2 flips, L1 ALS routing only, 0 regressions). The L2-repair highlight flip did NOT land — the highlight regression (util #513's `inspectStyles.regexp` function vs the repl port's string-style assumption) is a separate follow-up lane; the Node 26 oracle reference (`lib/internal/util/inspect.js:850-862`) is recorded in this file.

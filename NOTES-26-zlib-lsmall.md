@@ -283,3 +283,9 @@ flaky, not the flag.
 `params()` error forwarding). Each hunk carries a `ponytail:` comment naming
 its ceiling and upgrade path. No shared files, no `dist/*`, no docs-number
 changes.
+
+## Ship
+
+- PR: #511
+- Merge SHA: `11d8db2d0500ebf004376e54c23f6cae44de7322` (squash-merge of PR #511)
+- Final count: **zlib 51/89** (48 banked + 3 flips, 0 regressions)

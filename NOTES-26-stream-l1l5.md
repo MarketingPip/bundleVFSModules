@@ -190,3 +190,9 @@ propagates destruction upstream.
 ## NO-FIX
 
 None. All 17 target tests flipped with the ports above.
+
+## Ship
+
+- PR: #522
+- Merge SHA: `b5f2e94f265ff99a591306efef31f5c535c13920` (squash-merge of PR #522)
+- Final count: **stream 197/232** (180 banked + 17 flips, 0 regressions)

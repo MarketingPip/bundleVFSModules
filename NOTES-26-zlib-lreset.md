@@ -193,7 +193,8 @@ Not counted: test-zlib-brotli-16GB.js (timeout, NO-FIX per baseline).
 
 - Branch: `feat/w2-zlib-lreset`
 - PR: #524
-- Merge SHA: ___ (fill at ship time)
+- Merge SHA: `4a05cd91f01f417fa06c37a2509b26fc7bd83cf7` (squash-merge of PR #524)
+- Final count: **zlib 54/89** (51 banked + 3 flips, 0 regressions)
 
 CI on first head `af84fcc2` (run 44689647790): Parity **success**; Build **failure**
 on exactly one test — `tests/timers.test.js`, `timers-web › setInterval /

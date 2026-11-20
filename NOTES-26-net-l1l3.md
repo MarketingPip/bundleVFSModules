@@ -130,3 +130,9 @@ No regressions in the net or stream 26-suite pass sets.
   - Repo suite: `NODE_OPTIONS=--experimental-vm-modules npx --no-install
     jest tests/net.test.js` — **78/78 pass** on the rebased head.
 - No `// Flags:` headers on any target test; no `zz-*.js` probes left.
+
+## Ship
+
+- PR: #520
+- Merge SHA: `cb73e799fac083c669bff3d838914f322dc1844c` (squash-merge of PR #520)
+- Final count: **net 148/161** (145 banked + 3 flips, 0 regressions)

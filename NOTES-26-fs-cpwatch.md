@@ -231,3 +231,9 @@ a VM restart at ~13 min, re-run to completion in ~53 min):
   `test-fs-watch-recursive-delete-race.js`,
   `test-fs-watch-recursive-watch-before-read.js` — green in the
   differential (exit 0).
+
+## Ship
+
+- PR: #528
+- Merge SHA: `84702e7314d9e5bd12c0220a151ba208474b711d` (squash-merge of PR #528)
+- Final count: **fs 365/385** (350 banked + 15 flips, 0 regressions)

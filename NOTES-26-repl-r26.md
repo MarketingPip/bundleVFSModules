@@ -238,3 +238,9 @@
   target-scoped `repl` in Module._load; repl redirect intact at
   preload.mjs:696. New guard re-run owed on the rebased tree (code
   files byte-identical to the guarded tree; only base + NOTES differ).
+
+## Ship
+
+- PR: #518
+- Merge SHA: `6929cffeb7a3ad8d05761e27224a4cdce811dec0` (squash-merge of PR #518)
+- Final count: **repl 97/108 at Wave 1 wave-end** (95 banked + 2 flips on this lane — highlight L2 + top-level-await L4 — plus the util lane's test-repl.js flip = 98 on the branch; the util merge #513 regressed the highlight flip after this lane merged, proven by one-step bisection. Highlight repair is a Wave 3 follow-up.)
