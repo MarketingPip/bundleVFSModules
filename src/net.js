@@ -1632,8 +1632,17 @@ Object.defineProperties(Socket.prototype, {
       }
       const peer = this._peer;
       if (peer && !peer.destroyed) {
-        const unread =
+        let unread =
           typeof peer.readableLength === "number" ? peer.readableLength : 0;
+        // Paused-read queue (#416): while the peer is paused, inbound
+        // chunks wait here uncounted and unpushed — they are still unread
+        // (test-http-agent-reuse-drained-socket-only: a 192MB body sits
+        // here while the server never reads, so the drained-only reuse
+        // veto must see it, or the socket is pooled and reused).
+        // ponytail: same queue sum as _destroy's unread rule below.
+        if (Array.isArray(peer._pausedReadQueue)) {
+          for (const b of peer._pausedReadQueue) unread += b ? b.length : 0;
+        }
         if (unread > 131072) len += unread - 131072;
       }
       return len;
@@ -3426,24 +3435,30 @@ Socket.prototype._destroy = function _destroy(exception, cb) {
   // 'end' + 'close' (hadError false), and an unread-data destroy with no
   // server end() still resets the peer. The unread count is captured
   // here: nothing can add to the buffer after destroy.
-  // ponytail: no new state — reuses readableLength + the #416
-  // _pausedReadQueue; the peer's writable state is deliberately NOT a
-  // carve-out (test-net-stream's server had already end()ed and still
-  // errors on real Node). The queue sum is the #416-interaction fix:
-  // paused chunks are unread too, even though they were never pushed.
+  // Unread means still in the (virtual) kernel: bytes the peer wrote that
+  // libuv has NOT yet read into userspace. In this transport that is only
+  // the #416 _pausedReadQueue — a paused socket's inbound chunks wait
+  // there because readStop holds them in the kernel. Bytes already in the
+  // readable buffer WERE read from the kernel (a flowing 'data' delivery
+  // or an app read() pulled them), so they must NOT count: destroying
+  // with a full readable buffer sends FIN on real Node, and counting
+  // them RSTs a peer that should see a clean 'end'
+  // (test-http-server-multiple-client-error: the server socket holds the
+  // 34-byte remainder of a one-chunk write in its buffer when the
+  // clientError handler destroys it; the client must see FIN, not an
+  // unhandled ECONNRESET 'error').
+  // ponytail: no new state — reuses the #416 _pausedReadQueue; the peer's
+  // writable state is deliberately NOT a carve-out (test-net-stream's
+  // server had already end()ed and still errors on real Node).
   if (peer && !peer.destroyed && !this._finSent) {
-    // Unread data is the pushed-but-unconsumed readable buffer PLUS the
-    // paused-read queue (#416): while explicitly paused, inbound chunks
-    // wait in _pausedReadQueue uncounted and unpushed — they are still
-    // unread kernel data, and destroying with them queued must RST.
-    // (test-net-stream regressed on the #416 rebase: readableLength alone
-    // read ~0 while ~18MB sat in the queue, so the peer got EOF.)
+    // Unread data is the paused-read queue (#416): while explicitly
+    // paused, inbound chunks wait in _pausedReadQueue uncounted and
+    // unpushed — they are still unread kernel data, and destroying with
+    // them queued must RST.
     const queued = Array.isArray(this._pausedReadQueue)
       ? this._pausedReadQueue.reduce((n, b) => n + (b ? b.length : 0), 0)
       : 0;
-    const unread =
-      (typeof this.readableLength === "number" ? this.readableLength : 0) +
-      queued;
+    const unread = queued;
     const notifyPeer = () => {
       if (peer.destroyed) return;
       if (peer._peer === this) peer._peer = null;

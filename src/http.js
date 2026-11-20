@@ -22,7 +22,7 @@
 //     fetch(). Trailers are unsupported.
 
 import { EventEmitter } from "events";
-import { Readable, Writable } from "stream";
+import { Duplex, Readable, Writable } from "stream";
 // NOTE: imported from the relative path, NOT bare "stream": the esbuild
 // browser build resolves bare "stream" to node-modules-polyfills:stream,
 // which does not export getDefaultHighWaterMark (that import broke the
@@ -1867,7 +1867,69 @@ export class OutgoingMessage extends Writable {
     }
   }
 
+  // Chunked corking (Node lib/_http_outgoing.js:1125-1157): write()
+  // corks the socket on the first non-end write and the cork releases
+  // on the next tick, so chunked writes in the same tick accumulate in
+  // kChunkedBuffer and flush as ONE chunk. Framing each write
+  // separately splits them on the wire (test-http-1.0: write('Hello, ')
+  // + write('world!') must be one `d` chunk, not `7` + `6`). Raw body
+  // bytes accumulate here; the next-tick flush frames the total as a
+  // single chunk via _pendFrame. The flush is a nextTick — not a
+  // microtask — so a write scheduled in a later nextTick (test-http-1.0's
+  // end('X')) starts a NEW chunk: the nextTick queue is FIFO, so the
+  // flush scheduled by the writes runs before end's nextTick. A
+  // same-tick end(chunk) joins the pending body (Node's end chunk is
+  // buffered while corked too); end()'s terminator block flushes it
+  // synchronously before appending the terminator.
+  // ponytail: buffered (non-streaming) responses still frame per write
+  // in _flushHeaders/_writeBufferedResponse — coalescing there needs
+  // tick stamps on outputData entries, a separate change.
+  _pendChunkBody(buf) {
+    this._pendingChunkBody = this._pendingChunkBody
+      ? Buffer.concat([this._pendingChunkBody, buf])
+      : buf;
+    // Raw bytes counted while pending (see _pendFrame's accounting
+    // note); _flushChunkBody swaps the raw count for the framed one.
+    this._framedPending = (this._framedPending || 0) + buf.length;
+    if (!this._pendingChunkFlushScheduled) {
+      this._pendingChunkFlushScheduled = true;
+      if (typeof globalThis.process?.nextTick === "function") {
+        globalThis.process.nextTick(() => {
+          this._pendingChunkFlushScheduled = false;
+          this._flushChunkBody();
+        });
+      } else {
+        queueMicrotask(() => {
+          this._pendingChunkFlushScheduled = false;
+          this._flushChunkBody();
+        });
+      }
+    }
+  }
+
+  _flushChunkBody() {
+    const body = this._pendingChunkBody;
+    if (!body || body.length === 0) return;
+    this._pendingChunkBody = null;
+    this._framedPending = Math.max(
+      0,
+      (this._framedPending || 0) - body.length,
+    );
+    this._pendFrame(
+      Buffer.concat([
+        Buffer.from(body.length.toString(16) + "\r\n", "latin1"),
+        body,
+        Buffer.from("\r\n", "latin1"),
+      ]),
+    );
+  }
+
   _flushPendingFrame() {
+    // Defensive: if the nextTick chunk flush has not run yet (a
+    // nextTick implementation slower than microtasks), frame any
+    // pending chunk body now so it joins this frame instead of
+    // slipping behind it.
+    this._flushChunkBody();
     const frame = this._pendingFrame;
     if (!frame) return;
     this._pendingFrame = null;
@@ -1903,11 +1965,19 @@ export class OutgoingMessage extends Writable {
           for (const cb of wCbs) cb();
         }
       } else {
+        // Virtual sockets keep the fire-and-forget write, but the
+        // queued _write callbacks (see _write) fire here with the flush
+        // outcome: null on success. A destroy(err) before the flush
+        // already fired them with the error in _destroy, which clears
+        // the queue — so this site never double-fires.
+        const wCbs = this._pendingFrameCallbacks || [];
+        this._pendingFrameCallbacks = [];
         try {
           sock.write(frame);
         } catch {
           /* socket write failed; ignore */
         }
+        for (const cb of wCbs) cb();
         // Drain AFTER the write, not before: a drain listener may
         // end() the response, and end()'s terminator must follow this
         // frame on the wire. Emitting first let the terminator overtake
@@ -1916,6 +1986,21 @@ export class OutgoingMessage extends Writable {
         this._maybeEmitStreamDrain();
       }
     } else {
+      // No socket / destroyed socket: the frame is dropped. The queued
+      // callbacks still fire — with the socket's error if it has one,
+      // else null (a bare socket destroy reports no failure, as a
+      // synchronous callback would have).
+      const wCbs = this._pendingFrameCallbacks || [];
+      this._pendingFrameCallbacks = [];
+      const sockErr = sock?.errored ?? null;
+      // A failed write's error is delivered through the callbacks only
+      // (see _flushPendingFrame's foreign branch): record it as
+      // suppressed so the Writable's onwriteError 'error' emission does
+      // not also fire on the response.
+      if (sockErr) {
+        (this._suppressedWriteErrors ??= new Set()).add(sockErr);
+      }
+      for (const cb of wCbs) cb(sockErr);
       this._maybeEmitStreamDrain();
     }
   }
@@ -2187,6 +2272,17 @@ export class IncomingMessage extends Readable {
     if (!this._consuming && this._readableState.length === 0) {
       this._consuming = true;
     }
+    // The socket may be paused by the onBody backpressure (see above);
+    // a read restarts it (Node lib/_http_incoming.js:259-267, _read →
+    // readStart). Resuming an already-flowing socket is a no-op, so
+    // this is safe when the socket never paused.
+    if (this.socket && this.socket.readable) {
+      try {
+        this.socket.resume();
+      } catch {
+        /* best effort */
+      }
+    }
   }
 
   // Call this instead of resume() if we want to just
@@ -2428,9 +2524,12 @@ export class IncomingMessage extends Readable {
   }
 
   // Internal: push one body chunk (Buffer/Uint8Array/string).
+  // Returns the Readable.push() verdict (Node lib/_http_common.js:139,
+  // parserOnBody: a false push — the message buffer is full — pauses
+  // the socket via readStop; the server onBody wiring uses it).
   _pushBody(chunk) {
     if (chunk === null || chunk === undefined) return;
-    this.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    return this.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
 
   // Internal: mark the message complete (end of body).
@@ -2692,8 +2791,7 @@ export class ServerResponse extends OutgoingMessage {
     // Standalone responses (test-http-server-response-standalone) have
     // no dispatch finish listener to serialize them: at finish, flush
     // the rendered header block + buffered body to the assigned socket
-    // followed by an empty write (real Node's final empty socket
-    // write). Dispatch-created responses carry _serverReqNo (set by
+    // as ONE write. Dispatch-created responses carry _serverReqNo (set by
     // dispatch before finish can fire) and are serialized by
     // _finishSocketResponse instead, so they skip this.
     this.once("finish", () => {
@@ -2708,8 +2806,12 @@ export class ServerResponse extends OutgoingMessage {
           this._headerFlushed || !this._header
             ? Buffer.alloc(0)
             : Buffer.from(this._header, "latin1");
+        // Exactly ONE write (headers + body): the test's Writable is
+        // mustCall(..., 1), and real Node delivers a standalone response
+        // as a single write — a trailing empty write would trip the
+        // mustCall count (and its endsWith('hello world') assert).
+        // (test-http-server-response-standalone)
         sock.write(Buffer.concat([header, body]));
-        sock.write(Buffer.alloc(0));
       } catch {
         /* socket write failed; ignore */
       }
@@ -2866,6 +2968,24 @@ export class ServerResponse extends OutgoingMessage {
     }
   }
 
+  // Mirrors ServerResponse._write's branch selection: true when this
+  // write will pend a frame for a real socket (streaming), false when
+  // it will go through the ported buffered _write. Used by write() to
+  // decide whether the user callback is wrapped for the flush outcome.
+  // A header not yet rendered will be rendered by
+  // OutgoingMessage.write before _write runs, so a headerless write
+  // still takes the first-write streaming branch when the socket is
+  // real. A bare message (no socket) and a FakeSocket are buffered.
+  _isStreamingWrite() {
+    const sock = this.socket;
+    const realSock =
+      !!(sock && !sock.destroyed && sock.constructor.name !== "FakeSocket");
+    if (!this._header) return realSock;
+    if (this._headerFlushed) return realSock;
+    if (!this.finished) return realSock;
+    return false;
+  }
+
   /**
    * Override _write to stream directly to the socket once headers are flushed.
    * Before the first flush, buffer normally (so end()-only responses can
@@ -2879,17 +2999,10 @@ export class ServerResponse extends OutgoingMessage {
       if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
         try {
           if (this._chunkedStreaming && buf.length > 0) {
-            // One frame per chunk, not three (see _flushHeaders): a
-            // chunk split across delivery events lets a naive client
-            // split-count mis-pair headers and bodies. Frames pend
-            // (see _pendFrame) so end() can join the terminator.
-            this._pendFrame(
-              Buffer.concat([
-                Buffer.from(buf.length.toString(16) + "\r\n", "latin1"),
-                buf,
-                Buffer.from("\r\n", "latin1"),
-              ]),
-            );
+            // Corked: accumulate raw body bytes, frame as ONE chunk at
+            // the next-tick flush (see _pendChunkBody) — one frame per
+            // write splits same-tick writes on the wire (test-http-1.0).
+            this._pendChunkBody(buf);
           } else if (buf.length > 0) {
             this._pendFrame(buf);
           }
@@ -2897,19 +3010,15 @@ export class ServerResponse extends OutgoingMessage {
           /* ignore */
         }
       }
-      // Foreign sockets: the write callback fires with the flush
-      // outcome (see _flushPendingFrame); calling it now with null
-      // would report success before the socket even saw the bytes.
-      // EXCEPT empty writes: they pend no frame, so no flush is ever
-      // scheduled for them — queueing their callback deadlocks the
-      // Writable (later writes never reach _write, finish never
-      // fires). An empty write has no bytes whose outcome to await,
-      // so its callback fires immediately, as before.
-      if (this._isForeignSocket() && buf.length > 0) {
-        (this._pendingFrameCallbacks ??= []).push(callback);
-      } else {
-        callback();
-      }
+      // The Writable callback fires synchronously here: the pipeline
+      // must flow so consecutive synchronous writes and end() stay in
+      // tick order (deferring it stalls the Writable — a buffered
+      // write delivered after end()'s nextTick collapses the chunk
+      // boundary and breaks test-http-1.0 / test-http-outgoing-finish).
+      // The USER callback's deferral lives in write(), which wraps it
+      // to fire at the flush outcome (test-http-outgoing-destroyed
+      // block 4) — this callback is the Writable's own, not the user's.
+      callback();
       return;
     }
     // First chunk with headers already rendered (writeHead called) via
@@ -2933,14 +3042,11 @@ export class ServerResponse extends OutgoingMessage {
         try {
           const header = this._streamingHeader();
           if (this._chunkedStreaming && buf.length > 0) {
-            this._pendFrame(
-              Buffer.concat([
-                Buffer.from(header, "latin1"),
-                Buffer.from(buf.length.toString(16) + "\r\n", "latin1"),
-                buf,
-                Buffer.from("\r\n", "latin1"),
-              ]),
-            );
+            // Header pends alone; the body is corked (see _pendChunkBody)
+            // — framing header+body as one buffer would freeze this
+            // write's chunk before later same-tick writes join it.
+            this._pendFrame(Buffer.from(header, "latin1"));
+            this._pendChunkBody(buf);
           } else if (buf.length > 0) {
             this._pendFrame(
               Buffer.concat([Buffer.from(header, "latin1"), buf]),
@@ -2952,14 +3058,9 @@ export class ServerResponse extends OutgoingMessage {
           /* ignore */
         }
         this._headerFlushed = true;
-        // Foreign sockets: see the streaming branch above — the
-        // callback waits for the flush outcome, it does not fire null
-        // before the bytes reach the socket.
-        if (this._isForeignSocket()) {
-          (this._pendingFrameCallbacks ??= []).push(callback);
-        } else {
-          callback();
-        }
+        // See the streaming branch above: the Writable callback fires
+        // synchronously; the user callback's deferral lives in write().
+        callback();
         return;
       }
     }
@@ -2987,7 +3088,18 @@ export class ServerResponse extends OutgoingMessage {
       this.socket &&
       this.socket.constructor.name !== "FakeSocket"
     ) {
-      return this._framedPending || 0;
+      let n = this._framedPending || 0;
+      const pending = this._pendingChunkBody;
+      if (pending && pending.length > 0) {
+        // The pending chunk body is framed as ONE chunk at the flush
+        // (hex size line + CRLF + body + CRLF), but _pendChunkBody
+        // counts only its raw bytes. Add the framing overhead now so
+        // the length reads as the wire length synchronously after
+        // write() (test-http-outgoing-properties: write('asd') reads
+        // len + 8, i.e. header 103 + framed chunk 8, not 103 + 3).
+        n += pending.length.toString(16).length + 4;
+      }
+      return n;
     }
     return super.writableLength;
   }
@@ -3017,6 +3129,10 @@ export class ServerResponse extends OutgoingMessage {
   }
 
   write(chunk, encoding, callback) {
+    if (typeof encoding === "function") {
+      callback = encoding;
+      encoding = null;
+    }
     // Write-after-end must emit 'error' (test-http-res-write-after-end):
     // the ported Writable routes the WRITE_AFTER_END error through
     // destroy(), and OutgoingMessage._destroy deliberately swallows it
@@ -3035,7 +3151,83 @@ export class ServerResponse extends OutgoingMessage {
       // listener this throws, exactly as the ported emitErrorNT does.
       queueMicrotask(() => this.emit("error", er));
     }
-    const ret = super.write(chunk, encoding, callback);
+    // Streaming write callbacks wait for the flush outcome (Node's
+    // write() corks, so the callback fires when the corked buffer
+    // flushes — never synchronously). The WRITABLE's callback must
+    // still fire synchronously inside _write (see _write): deferring
+    // it stalls the Writable pipeline — a buffered write delivered
+    // after end()'s nextTick collapses the chunk boundary
+    // (test-http-1.0) and strands later callbacks
+    // (test-http-outgoing-finish). So the deferral wraps only the
+    // USER callback, here — and the thunk is queued SYNCHRONOUSLY:
+    // the Writable invokes its callback on nextTick (afterWrite),
+    // AFTER a synchronous destroy() in the same tick, so queueing in
+    // the wrapper would run too late and _destroy would find an
+    // empty queue (test-http-outgoing-destroyed block 4: the callback
+    // must get the destroy error, not null). A `fired` flag keeps the
+    // user callback exactly-once: the flush or destroy fires the
+    // thunk, and the wrapper only fires it for a _write error
+    // (removing the queued thunk first). Buffered writes keep the
+    // direct callback (their Writable callback already fires on
+    // microtask via OutgoingMessage._write). EVERY streaming write
+    // queues its thunk in the one FIFO queue — including empty
+    // writes, which pend no frame: firing them through the wrapper
+    // instead would reorder them against the flush (the Writable's
+    // nextTick runs before the flush microtask, so 'c' would fire
+    // before '' — test-http-outgoing-message-write-callback). When
+    // no flush of either kind is scheduled, the thunk is fired by
+    // its own microtask (a later write's flush fires it first
+    // instead, in order — the `fired` flag makes the second call a
+    // no-op); when a chunk flush is pending, the thunk waits for it
+    // rather than jumping ahead of earlier chunked writes.
+    let cb = callback;
+    if (typeof callback === "function" && this._isStreamingWrite()) {
+      const userCb = callback;
+      let fired = false;
+      const thunk = (flushErr) => {
+        if (fired) return;
+        fired = true;
+        userCb(flushErr ?? null);
+      };
+      (this._pendingFrameCallbacks ??= []).push(thunk);
+      if (
+        !this._pendingFlushScheduled &&
+        !this._pendingChunkFlushScheduled
+      ) {
+        // The check above runs before super.write() pends the frame,
+        // so a first write always looks flush-less here — but _write
+        // schedules the real flush synchronously inside super.write
+        // (before any microtask runs), and that flush must deliver
+        // the true outcome (a foreign socket's write error, not
+        // null — test-http-outgoing-writableFinished). Re-check the
+        // flags when the microtask runs: the flush microtask was
+        // scheduled after this one, so if a flush is now pending it
+        // fires the thunk with the real outcome and this call is a
+        // no-op; only a still-flush-less thunk fires null here.
+        queueMicrotask(() => {
+          if (
+            !this._pendingFlushScheduled &&
+            !this._pendingChunkFlushScheduled
+          ) {
+            thunk(null);
+          }
+        });
+      }
+      cb = (writeErr) => {
+        if (writeErr && !fired) {
+          const q = this._pendingFrameCallbacks;
+          if (q) {
+            const i = q.indexOf(thunk);
+            if (i !== -1) q.splice(i, 1);
+          }
+          fired = true;
+          userCb(writeErr);
+        }
+        // Otherwise the queued thunk fires at the flush (null) or
+        // the destroy (error).
+      };
+    }
+    const ret = super.write(chunk, encoding, cb);
     // Streaming backpressure (test-http-outgoing-finish): with
     // synchronous _write callbacks the Writable length is always 0, so
     // super.write always returns true and a `while (res.write())` loop
@@ -3376,6 +3568,30 @@ export class ServerResponse extends OutgoingMessage {
   // client's agent pool. An explicit destroy with an error (abort) still
   // destroys the socket.
   _destroy(err, cb) {
+    // Pending streaming write callbacks (see _write): a destroy with
+    // an error delivers it to them — real Node's destroy→uncork fires
+    // the corked buffer's callbacks with the destroy error
+    // (test-http-outgoing-destroyed block 4). Fired synchronously here,
+    // before the flush microtask can report success: the flush was
+    // scheduled at _pendFrame time, so a microtask firing would run
+    // first and report null. The error is recorded as suppressed
+    // before firing (see emit): the Writable's onwriteError emits
+    // 'error' after the user callback, and a failed write's error is
+    // delivered through the callbacks only. A bare destroy leaves the
+    // callbacks for the flush, which fires null — no test pins
+    // ERR_STREAM_DESTROYED for a pending response write callback.
+    if (err && this._pendingFrameCallbacks?.length) {
+      (this._suppressedWriteErrors ??= new Set()).add(err);
+      const queued = this._pendingFrameCallbacks;
+      this._pendingFrameCallbacks = [];
+      for (const cb of queued) {
+        try {
+          cb(err);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
     const sock = this.socket;
     // Remove the response's socket-close observer (see dispatch)
     // first: a destroyed response must not linger on a socket that
@@ -3648,6 +3864,12 @@ export class ServerResponse extends OutgoingMessage {
       const sock = this.socket;
       if (sock && !sock.destroyed && sock.constructor.name !== "FakeSocket") {
         try {
+          // Flush any corked chunk body first: end()'s own chunk (same
+          // tick) joins the pending body as one chunk (Node's end chunk
+          // is buffered while corked too), and a later-tick end() finds
+          // the body already framed by the nextTick flush — either way
+          // the terminator must follow the chunk, never precede it.
+          this._flushChunkBody();
           // Join the terminator to any pended frame in one write, so
           // a synchronous write();end() reaches the client as a
           // single 'data' event (see _pendFrame).
@@ -3750,8 +3972,13 @@ export class ServerResponse extends OutgoingMessage {
 function parseRequestArgs(urlOrOptions, optionsOrCallback, callback) {
   let options;
   let cb = callback;
+  // Node lib/_http_client.js:335-359: the path came from the URL unless
+  // the options object carries its own 'path' (override) — a CONNECT
+  // target from a URL loses its leading slash (see the constructor).
+  let pathIsFromURL = false;
 
   if (typeof urlOrOptions === "string" || urlOrOptions instanceof URL) {
+    pathIsFromURL = true;
     const parsed = new URL(urlOrOptions.toString());
     options = {
       protocol: parsed.protocol,
@@ -3777,8 +4004,12 @@ function parseRequestArgs(urlOrOptions, optionsOrCallback, callback) {
     if (typeof optionsOrCallback === "function") {
       cb = optionsOrCallback;
     } else if (optionsOrCallback) {
+      if (Object.prototype.hasOwnProperty.call(optionsOrCallback, "path")) {
+        pathIsFromURL = false;
+      }
       options = { __proto__: null, ...options, ...optionsOrCallback };
     }
+    options._pathIsFromURL = pathIsFromURL;
   } else {
     options = urlOrOptions || {};
     if (typeof optionsOrCallback === "function") {
@@ -4112,7 +4343,20 @@ export class ClientRequest extends OutgoingMessage {
       throw ERR_OUT_OF_RANGE("maxHeaderSize", ">= 0", options.maxHeaderSize);
     }
 
-    this[kPath] = options.path || "/";
+    // Node lib/_http_client.js:481-484: strip the leading slash added
+    // when a CONNECT target comes from a URL
+    // (test-http-request-connect-path: URL 'http://localhost:PORT/example.com'
+    // must reach the server as 'example.com', while an options path
+    // '/example.com' keeps its slash).
+    let reqPath = options.path || "/";
+    if (
+      method === "CONNECT" &&
+      options._pathIsFromURL &&
+      reqPath[0] === "/"
+    ) {
+      reqPath = reqPath.slice(1) || "/";
+    }
+    this[kPath] = reqPath;
     this.method = method;
     this.host = host;
     this.port = port;
@@ -4338,22 +4582,30 @@ export class ClientRequest extends OutgoingMessage {
       this._removedTE =
         options.setDefaultHeaders === false;
     if (host && !this._headersArray && !this.getHeader("host") && setHost) {
-      let hostHeader = host;
-      // Node lib/_http_client.js:512-520: IPv6 literals in the Host header
-      // get square brackets (RFC 3986 §3.2.2). A host with a second colon
-      // that doesn't already start with "[" is an unbracketed literal;
-      // a single colon is a host:port pair, not IPv6. (Bracket check
-      // kept from the localaddress lane's fix.)
-      const posColon = hostHeader.indexOf(":");
-      if (
-        posColon !== -1 &&
-        hostHeader.includes(":", posColon + 1) &&
-        hostHeader.charCodeAt(0) !== 91 /* "[" */
-      ) {
-        hostHeader = `[${hostHeader}]`;
-      }
-      if (port && Number(port) !== Number(defaultPort)) {
-        hostHeader += `:${port}`;
+      // Node lib/_http_client.js:562-566: a CONNECT request's default Host
+      // is the request path (the authority), not host:port
+      // (test-http-connect-default-host-header).
+      let hostHeader;
+      if (this.method === "CONNECT" && options.path) {
+        hostHeader = String(this.path);
+      } else {
+        hostHeader = host;
+        // Node lib/_http_client.js:512-520: IPv6 literals in the Host header
+        // get square brackets (RFC 3986 §3.2.2). A host with a second colon
+        // that doesn't already start with "[" is an unbracketed literal;
+        // a single colon is a host:port pair, not IPv6. (Bracket check
+        // kept from the localaddress lane's fix.)
+        const posColon = hostHeader.indexOf(":");
+        if (
+          posColon !== -1 &&
+          hostHeader.includes(":", posColon + 1) &&
+          hostHeader.charCodeAt(0) !== 91 /* "[" */
+        ) {
+          hostHeader = `[${hostHeader}]`;
+        }
+        if (port && Number(port) !== Number(defaultPort)) {
+          hostHeader += `:${port}`;
+        }
       }
       this.setHeader("Host", hostHeader);
     }
@@ -4651,8 +4903,27 @@ export class ClientRequest extends OutgoingMessage {
           }
         }, 0);
       } else {
+        // Node lib/_http_client.js:722 (ClientRequest.destroy): the
+        // socket is destroyed WITH the destroy error, so the round trip
+        // rejects with it and the abort error's `cause` carries it
+        // (test-http-response-socket-error 'requestDestroy': a bare
+        // destroy() made the round trip synthesize ERR_SOCKET_CLOSED
+        // and the cause was lost). The socket error forwarder cannot
+        // double-fire the request's 'error': _errorEmitted is already
+        // set for an explicit destroy error (above). EXCEPT the
+        // FakeSocket placeholder (no socket assigned yet, e.g. a
+        // createSocket override that errored synchronously —
+        // test-http-agent-close): its destroy(err) emits 'error' on
+        // the placeholder with no listener and no forwarder to the
+        // request, throwing uncaught. A bare destroy() gives it
+        // close-only; the request's own error comes from
+        // super.destroy(err) below.
         try {
-          sock.destroy();
+          if (sock instanceof FakeSocket) {
+            sock.destroy();
+          } else {
+            sock.destroy(err);
+          }
         } catch {
           /* best effort */
         }
@@ -6830,6 +7101,11 @@ export class ClientRequest extends OutgoingMessage {
           socket: sock,
           noDefaultHost,
           servername,
+          // The request itself, so the round trip can materialize
+          // req._header as the full serialized head (test-http.js reads
+          // it in the response callback). The runtime-bridge caller has
+          // no request and omits it.
+          req: this,
           insecureHTTPParser: this.insecureHTTPParser,
           parser: this.parser,
           // Threaded for the response parser's pair budget (below):
@@ -7050,10 +7326,33 @@ export class ClientRequest extends OutgoingMessage {
           } catch {
             /* best effort */
           }
+          // Real Node's abort error carries the socket error as a
+          // non-enumerable `cause` (test-http-response-socket-error:
+          // err.cause === the request's error; the clean-destroy 'close'
+          // method has no cause at all — the round trip's synthesized
+          // close errors are not socket errors).
+          const e = new Error("aborted");
+          e.code = "ECONNRESET";
+          if (
+            err instanceof Error &&
+            err.code !== "ERR_SOCKET_CLOSED" &&
+            err.message !== "socket hang up"
+          ) {
+            Object.defineProperty(e, "cause", {
+              value: err,
+              writable: true,
+              enumerable: false,
+              configurable: true,
+            });
+          }
           if (streamedMsg.listenerCount("error") > 0) {
-            const e = new Error("aborted");
-            e.code = "ECONNRESET";
             streamedMsg.emit("error", e);
+          }
+          // Real Node's IncomingMessage._destroy records the abort error
+          // as res.errored (the test asserts res.errored === the pipeline
+          // error, same object); a bare destroy() leaves it null.
+          if (streamedMsg._readableState) {
+            streamedMsg._readableState.errored = e;
           }
           try {
             streamedMsg.destroy();
@@ -7105,10 +7404,35 @@ export class ClientRequest extends OutgoingMessage {
         // test, so its error delivery here is effectively guarded.
         // (Aborts return early above, so no isAbort guard is needed
         // here anymore.)
-        const e = err instanceof Error ? err : new Error(String(err));
+        // Non-abort socket failure mid-response: real Node still reports
+        // the response error as ECONNRESET 'aborted' (socketCloseListener's
+        // ConnResetException), not the round trip's synthesized close error
+        // (test-http-response-socket-error 'close' method: a clean peer
+        // destroy synthesizes ERR_SOCKET_CLOSED, whose message must not
+        // leak to the pipeline). The cause rule is the abort branch's:
+        // a genuine socket error carries over, a synthesized close error
+        // does not.
+        const e = new Error("aborted");
         e.code = "ECONNRESET";
+        if (
+          err instanceof Error &&
+          err.code !== "ERR_SOCKET_CLOSED" &&
+          err.message !== "socket hang up"
+        ) {
+          Object.defineProperty(e, "cause", {
+            value: err,
+            writable: true,
+            enumerable: false,
+            configurable: true,
+          });
+        }
         if (streamedMsg.listenerCount("error") > 0) {
           streamedMsg.emit("error", e);
+        }
+        // Same errored recording as the abort branch above: the response
+        // is errored with the error the pipeline receives.
+        if (streamedMsg._readableState) {
+          streamedMsg._readableState.errored = e;
         }
         // Don't call _finishBody() — 'end' must NOT fire on abort.
         // Destroy the message which emits 'close'.
@@ -8075,8 +8399,19 @@ function _serializeRequestHead(
         : String(value);
     } else if (lower === "connection") hasConnection = true;
     if (Array.isArray(value)) {
-      // Like Node on the wire: one header line per element.
-      for (const v of value) push(name, v);
+      // Node lib/_http_outgoing.js processHeader: an array value renders
+      // one line per element, EXCEPT a Cookie array, which joins with
+      // '; ' into one line (test-http.js: object-form Cookie arrays join;
+      // array-form pairs are separate entries, not arrays, so they stay
+      // separate lines). The unique-headers join is handled upstream by
+      // _virtualHeaders; only the unconditional cookie rule lives here.
+      if (value.length === 0) {
+        // No lines, like Node's empty-array loop.
+      } else if (name.length === 6 && name.toLowerCase() === "cookie") {
+        push(name, value.join("; "));
+      } else {
+        for (const v of value) push(name, v);
+      }
     } else {
       push(name, value);
     }
@@ -8100,7 +8435,15 @@ function _serializeRequestHead(
   const bodyBuf =
     body == null ? null : Buffer.isBuffer(body) ? body : Buffer.from(body);
   if (!hasContentLength && !hasTransferEncoding) {
-    if (bodyBuf && bodyBuf.length > 0) {
+    // Node lib/_http_outgoing.js:595-601: with no framing header, an
+    // implicit Content-Length is added only when chunked encoding is the
+    // default; for methods with useChunkedEncodingByDefault === false
+    // (GET/HEAD/DELETE/OPTIONS/TRACE/CONNECT) the body goes out unframed
+    // and the connection closes (_last = true — the Connection: close
+    // above already reflects it). Without the gate a DELETE body got a
+    // Content-Length and the server parsed the trailing bytes as its body
+    // (test-http-request-method-delete-payload).
+    if (bodyBuf && bodyBuf.length > 0 && useChunkedEncodingByDefault) {
       push("Content-Length", String(bodyBuf.length));
     } else if (
       !bodyFollows &&
@@ -8294,6 +8637,9 @@ function _socketHttpRoundTrip(
     // SNI name for this request, from ClientRequest by the virtual path
     // only (undefined for http requests and emulated inbound requests).
     servername = undefined,
+    // The ClientRequest itself (virtual path only): the round trip
+    // materializes req._header as the full serialized head here.
+    req = null,
   },
 ) {
   return new Promise((resolve, reject) => {
@@ -8607,6 +8953,12 @@ function _socketHttpRoundTrip(
           // caller (framing decided at first write); body chunks arrive
           // later via the writer. Head first, then frames, in order.
           sock.write(headBytes);
+          // Materialize req._header as the full serialized head (Node's
+          // _storeHeader rendering): the request line alone (what
+          // _implicitHeader stamps) has no headers, so a response
+          // callback reading req._header for its Cookie lines would
+          // find nothing (test-http.js).
+          if (req) req._header = headBytes.toString("latin1");
           if (typeof onStreamReady === "function") {
             onStreamReady({
               write(buf) {
@@ -8624,21 +8976,29 @@ function _socketHttpRoundTrip(
             });
           }
         } else {
-          sock.write(
-            _serializeRequestHead(
-              method,
-              path,
-              headers,
-              body,
-              noDefaultHost,
-              false,
-              setDefaultHeaders,
-              chunkedTerminator,
-              shouldKeepAlive,
-              useChunkedEncodingByDefault,
-              hasAgent,
-            ),
+          const wireBytes = _serializeRequestHead(
+            method,
+            path,
+            headers,
+            body,
+            noDefaultHost,
+            false,
+            setDefaultHeaders,
+            chunkedTerminator,
+            shouldKeepAlive,
+            useChunkedEncodingByDefault,
+            hasAgent,
           );
+          sock.write(wireBytes);
+          // Same _header materialization as the streaming branch: the
+          // head is the wire bytes up to the first blank line (the body,
+          // when present, follows it and must not be included).
+          if (req) {
+            const headEnd = wireBytes.indexOf("\r\n\r\n");
+            req._header = wireBytes
+              .subarray(0, headEnd >= 0 ? headEnd + 4 : wireBytes.length)
+              .toString("latin1");
+          }
         }
       } catch (err) {
         fail(err);
@@ -8931,6 +9291,84 @@ function _writeBufferedResponse(socket, req, res) {
     socket.write(Buffer.concat([Buffer.from(headOut, "latin1"), body]));
   } else {
     socket.write(headOut);
+  }
+}
+
+// UpgradeStream — port of Node lib/_http_server.js:1057-1131
+// (UpgradeStream). An upgrade whose request body has not finished
+// parsing when 'upgrade' fires cannot hand the app the raw socket:
+// the socket's bytes are still request body, and the app must not see
+// them (test-http-upgrade-server-with-large-body-unread: a 200KB body
+// the handler never reads must never leak to the socket 'data'). The
+// wrapper is what the 'upgrade' handler receives in that case; when
+// the body completes, requestBodyCompleted(head) pushes the true
+// post-body head and starts streaming socket data through the wrapper.
+// When the body is already complete at dispatch, the raw socket is
+// emitted instead (see _dispatchSocketRequest) — Node does the same
+// (onParserExecuteCommon: req.complete → socket, else UpgradeStream).
+// ponytail: the wrapper is deliberately a port, not a reuse of the
+// client-side upgrade handling (~7489) — the client side never has a
+// pending request body to shield.
+class UpgradeStream extends Duplex {
+  constructor(socket, req) {
+    super({
+      allowHalfOpen: socket.allowHalfOpen,
+    });
+    this._upgradeSocket = socket;
+    this._upgradeReq = req;
+    // Proxy error, end & closure events immediately (Node's constructor).
+    socket.on("error", (err) => this.destroy(err));
+    socket.on("close", () => this.destroy());
+    this.on("close", () => socket.destroy());
+    socket.on("end", () => {
+      this.push(null);
+      // Match the socket behaviour, where 'end' will fire despite no
+      // 'data' listeners if a socket with no pending data ends.
+      if (this.readableLength === 0) {
+        this.resume();
+      }
+    });
+    // Other events (most notably, reading) only activate after
+    // requestBodyCompleted is called.
+  }
+
+  requestBodyCompleted(upgradeHead) {
+    this._upgradeReq = null;
+    // When the request body is completed, begin streaming all the
+    // post-body data for the upgraded protocol.
+    if (upgradeHead?.length > 0) {
+      if (!this.push(upgradeHead)) {
+        this._upgradeSocket.pause();
+      }
+    }
+    this._upgradeSocket.on("data", (data) => {
+      if (!this.push(data)) {
+        this._upgradeSocket.pause();
+      }
+    });
+  }
+
+  _read(size) {
+    // Reading the upgrade stream starts the request stream flowing.
+    // It is important that this happens, even if there are no
+    // listeners, or it would be impossible to read this without
+    // explicitly reading all the request body first, which is backward
+    // incompatible & awkward.
+    this._upgradeReq?.resume();
+    this._upgradeSocket.resume();
+  }
+
+  _final(callback) {
+    this._upgradeSocket.end(callback);
+  }
+
+  _write(chunk, encoding, callback) {
+    this._upgradeSocket.write(chunk, encoding, callback);
+  }
+
+  _destroy(err, callback) {
+    this._upgradeSocket.destroy(err);
+    callback(err);
   }
 }
 
@@ -9862,19 +10300,10 @@ class ServerBase extends EventEmitter {
       state.awaitingBody = info.hasBody;
       const created = this._dispatchSocketRequest(socket, info, state);
       state.current = created;
-      // Body callbacks are wired inside dispatch (before emit) now, so
-      // a reentrant body pulled by an interim reply is not lost; the
-      // 100-continue auto-ack stays gated on no checkContinue listener
-      // (a listener owns the reply via writeContinue instead).
-      if (
-        typeof info.headers.expect === "string" &&
-        info.headers.expect.toLowerCase() === "100-continue" &&
-        info.httpVersionMajor === 1 &&
-        info.httpVersionMinor === 1 &&
-        this.listenerCount("checkContinue") === 0
-      ) {
-        socket.write("HTTP/1.1 100 Continue\r\n\r\n");
-      }
+      // The 100-continue auto-ack lives inside dispatch (before the
+      // 'request' emit) now — Node's order — so it precedes any
+      // synchronous handler reply on the wire; the old post-dispatch
+      // ack here let a sync 200 overtake it.
     };
     parser.onError = (err) => {
       // The message is dead: a later close()/closeIdleConnections()
@@ -10245,7 +10674,22 @@ class ServerBase extends EventEmitter {
     // outer onHeadersComplete) drops that body and never fires req
     // 'end' (test-http-expect-continue). Non-reentrant behavior is
     // unchanged: these are the same closures, just bound earlier.
-    state.parser.onBody = (chunk) => req._pushBody(chunk);
+    state.parser.onBody = (chunk) => {
+      // Node lib/_http_common.js:139 (parserOnBody): a false push —
+      // the unread message's buffer is full — pauses the socket
+      // (readStop). Without it an unread request never backpressures
+      // and the server never learns the client is blocked
+      // (test-http-no-read-no-dump: the 64 KiB post must pause the
+      // connection so the handler can end the response). _read resumes
+      // it when the app reads (Node lib/_http_incoming.js:259-267).
+      if (req._pushBody(chunk) === false) {
+        try {
+          socket.pause();
+        } catch {
+          /* best effort */
+        }
+      }
+    };
     state.parser.onMessageComplete = () => {
       state.awaitingBody = false;
       state.receiving = false;
@@ -10258,6 +10702,40 @@ class ServerBase extends EventEmitter {
         IncomingMessage._applyRawTrailers(req, state.parser.rawTrailers);
       }
       req._finishBody();
+      // Upgrade with a pending body (see the upgrade branch below):
+      // the body just completed, so the wrapper can start streaming
+      // the post-body bytes. takeRemainder() NOW returns truly
+      // post-body bytes (the head) — and clearing the buffer here also
+      // keeps validatePipelinedRemainder from misparsing the head as a
+      // new request. Detach the HTTP layer first (Node's order in
+      // onParserExecuteCommon: listeners off, then
+      // requestBodyCompleted), exactly as the bodyless upgrade does at
+      // dispatch: the socket belongs to the app now.
+      if (state.upgradeStream) {
+        const upgradeStream = state.upgradeStream;
+        state.upgradeStream = null;
+        let head = Buffer.alloc(0);
+        try {
+          if (typeof state.parser.takeRemainder === "function") {
+            head = state.parser.takeRemainder();
+          }
+        } catch {
+          /* empty head */
+        }
+        const hl = state.httpListeners;
+        if (hl) {
+          socket.removeListener("close", hl.close);
+          socket.removeListener("data", hl.data);
+          socket.removeListener("error", hl.error);
+          socket.removeListener("timeout", hl.timeout);
+          socket.removeListener("end", hl.end);
+          socket._onHttpSocketClose = hl.close;
+        }
+        socket.parser = null;
+        state.upgraded = true;
+        state.receiving = false;
+        upgradeStream.requestBodyCompleted(head);
+      }
       state.current = null;
     };
 
@@ -10349,6 +10827,29 @@ class ServerBase extends EventEmitter {
       ) {
         if (this.listenerCount("upgrade") === 0) {
           socket.destroy();
+          return { req, res: null };
+        }
+        // Body still streaming (info.hasBody): the parser has not
+        // consumed the body yet — takeRemainder() here would wipe the
+        // unparsed body bytes and the request would never complete
+        // (test-http-upgrade-server-with-body* all hang on the wiped
+        // buffer). Emit a wrapper with an EMPTY head instead (Node's
+        // UpgradeStream); the parser stays attached so the body keeps
+        // parsing into req, and onMessageComplete finishes the wrapper
+        // with the true post-body head and detaches the HTTP layer
+        // then. state.upgraded stays false until then, so onHttpData
+        // keeps feeding the parser. The raw-socket path below is only
+        // for bodyless upgrades. req.socket stays the real socket.
+        if (info.hasBody) {
+          const upgradeStream = new UpgradeStream(socket, req);
+          state.upgradeStream = upgradeStream;
+          const prevUpgradeDispatch = socket._upgradeDispatch;
+          socket._upgradeDispatch = true;
+          try {
+            this.emit("upgrade", req, upgradeStream, Buffer.alloc(0));
+          } finally {
+            socket._upgradeDispatch = prevUpgradeDispatch;
+          }
           return { req, res: null };
         }
         state.upgraded = true;
@@ -10549,7 +11050,7 @@ class ServerBase extends EventEmitter {
     // Connection: close through the normal finish machinery (mirroring
     // the drop branch above), and 'request' never fires. With no
     // Expect header, or 100-continue with no listener, dispatch is the
-    // normal 'request' (the auto-ack in onHeadersComplete covers the
+    // normal 'request' (the auto-ack in dispatch covers the
     // no-listener 100 case).
     let dispatchEvent = "request";
     let expect417 = false;
@@ -10784,6 +11285,25 @@ class ServerBase extends EventEmitter {
     // attaches, and the socket's EOF handling (nextTick-ordered) runs
     // before the microtask, closing the socket under the pending response.
     // (test-http-chunk-extensions-limit)
+    // Node lib/_http_server.js:1440-1452 (parserOnIncoming): with
+    // `Expect: 100-continue` and no checkContinue listener, the 100
+    // reply goes out BEFORE the 'request' emit — a handler that answers
+    // synchronously must see its 200 queued behind the 100 on the wire
+    // (test-http-server-raw-header-lookup). Placed here, after the body
+    // callbacks and the response are wired, so a reentrant body pulled
+    // by the interim reply still lands in req
+    // (test-http-expect-continue); checkContinue/checkExpectation
+    // dispatches own their reply and never auto-ack.
+    if (
+      dispatchEvent === "request" &&
+      typeof req.headers.expect === "string" &&
+      req.headers.expect.toLowerCase() === "100-continue" &&
+      info.httpVersionMajor === 1 &&
+      info.httpVersionMinor === 1 &&
+      this.listenerCount("checkContinue") === 0
+    ) {
+      socket.write("HTTP/1.1 100 Continue\r\n\r\n");
+    }
     try {
       // captureRejections covers 'request' only; checkContinue /
       // checkExpectation dispatch through a plain emit.
@@ -10959,6 +11479,10 @@ class ServerBase extends EventEmitter {
         req.method !== "HEAD"
       ) {
         try {
+          // Flush any corked chunk body first (see end()'s terminator
+          // block): finish can arrive with a body still pending when
+          // end()'s own block was skipped.
+          res._flushChunkBody();
           const term = Buffer.from(res._chunkTerminator(), "latin1");
           const pending = res._pendingFrame;
           res._pendingFrame = null;
@@ -10971,6 +11495,13 @@ class ServerBase extends EventEmitter {
           res._maybeEmitStreamDrain?.();
           socket.write(pending ? Buffer.concat([pending, term]) : term);
           res._chunkTerminatorSent = true;
+          // Any _write callback still queued (the flush microtask never
+          // ran, e.g. end()'s block was skipped) fires now with null:
+          // its bytes just went out. take-and-clear, so this never
+          // double-fires with _flushPendingFrame or end()'s block.
+          const wCbs = res._pendingFrameCallbacks || [];
+          res._pendingFrameCallbacks = [];
+          for (const cb of wCbs) cb();
         } catch {
           /* ignore */
         }
@@ -10986,6 +11517,11 @@ class ServerBase extends EventEmitter {
             res._maybeEmitStreamDrain?.();
             socket.write(pending);
           }
+          // See the chunked branch above: any still-queued _write
+          // callback fires now with null.
+          const wCbs = res._pendingFrameCallbacks || [];
+          res._pendingFrameCallbacks = [];
+          for (const cb of wCbs) cb();
         } catch {
           /* ignore */
         }
@@ -11386,6 +11922,33 @@ function isConnectionClose(headers) {
   return false;
 }
 
+// Keylog handler slot (Node lib/_http_agent.js maybeEnableKeylog): set on
+// the first 'keylog' listener; the handler re-emits the socket's keylog line
+// on the agent with the socket as `this`.
+const kOnKeylog = Symbol("onkeylog");
+
+// Node lib/_http_agent.js:287-311: on the first 'keylog' listener the agent
+// removes this hook, installs the re-emit handler, and attaches it to every
+// socket it already owns — both maps hold arrays keyed by name, so each
+// bucket has to be walked (test-http-agent-keylog-existing-sockets: treating
+// a bucket as a socket threw TypeError). Future sockets get the handler at
+// creation (createSocket below).
+function maybeEnableKeylog(eventName) {
+  if (eventName !== "keylog") return;
+  this.removeListener("newListener", maybeEnableKeylog);
+  const agent = this;
+  this[kOnKeylog] = function onkeylog(keylog) {
+    agent.emit("keylog", keylog, this);
+  };
+  for (const set of [this.freeSockets, this.sockets]) {
+    for (const bucket of Object.values(set)) {
+      for (const socket of bucket) {
+        socket.on("keylog", this[kOnKeylog]);
+      }
+    }
+  }
+}
+
 class AgentBase extends EventEmitter {
   constructor(options) {
     super();
@@ -11443,6 +12006,10 @@ class AgentBase extends EventEmitter {
     this.sockets = { __proto__: null };
     this.freeSockets = { __proto__: null };
     this.totalSocketCount = 0;
+    // Don't emit keylog events unless there is a listener for them
+    // (Node lib/_http_agent.js): the hook attaches the re-emit handler
+    // to existing and future sockets on the first 'keylog' listener.
+    this.on("newListener", maybeEnableKeylog);
   }
 
   /**
@@ -11633,6 +12200,10 @@ class AgentBase extends EventEmitter {
       this.totalSocketCount++;
       sock._agentName = name;
       sock._agent = this;
+      // Future-socket keylog wiring (see maybeEnableKeylog): a keylog
+      // listener installed after this socket was created still gets its
+      // lines, via the agent's re-emit handler.
+      if (this[kOnKeylog]) sock.on("keylog", this[kOnKeylog]);
       sock._connectedBeforeAssign = sock._connected === true;
       // Queued-creation 'free' (see _processQueue): before assignment.
       if (req._fromQueue) {
@@ -11665,6 +12236,8 @@ class AgentBase extends EventEmitter {
     // Track the agent name on the socket for removal on destroy.
     socket._agentName = name;
     socket._agent = this;
+    // Future-socket keylog wiring (see maybeEnableKeylog).
+    if (this[kOnKeylog]) socket.on("keylog", this[kOnKeylog]);
     // Assign at creation, like Node: the request's 'socket' event fires
     // while the socket is still connecting (probed: connecting=true,
     // pending=true at 'socket' time), and 'connect' follows naturally —
@@ -12183,6 +12756,23 @@ class AgentBase extends EventEmitter {
     if (socket._idleCloseHandler) {
       socket.removeListener("close", socket._idleCloseHandler);
       socket._idleCloseHandler = null;
+    }
+    // Node lib/_http_agent.js:427-435: on pooled-socket reuse, a request
+    // highWaterMark that differs from the socket's writable HWM is synced
+    // onto the socket before the 'socket' event fires, so backpressure
+    // matches what the caller requested
+    // (test-http-agent-highwatermark-reuse). One-way only (request →
+    // socket); the socket's readable HWM is untouched.
+    // ponytail: ceiling — the sync reads req._agentOptions, the request's
+    // stashed copy; a request that never set highWaterMark leaves the
+    // socket's HWM alone.
+    const reuseHwm = req._agentOptions?.highWaterMark;
+    if (
+      typeof reuseHwm === "number" &&
+      socket._writableState &&
+      reuseHwm !== socket.writableHighWaterMark
+    ) {
+      socket._writableState.highWaterMark = reuseHwm;
     }
     req.onSocket(socket);
   }
