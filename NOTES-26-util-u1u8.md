@@ -247,3 +247,36 @@ the test passing).
 None. All 9–10 estimated flips landed; the throttle-timing 0–1 uncertainty
 resolved to 1 (passes), and U4's first-failure estimate grew into 5 further
 Node 26 changes that all landed in the same file.
+
+## Post-guard history (ship log)
+
+- **CI red, run 44641461502 (SHA `0da718b6`):** exactly 1 failing test of
+  3072 — `tests/oracle-export-surface.test.js` flagged the 4 new Node 26
+  util exports as extra against CI's pinned Node v24.20.0. Fixed by
+  allowlisting them (first in `DEPRECATED_ALLOWLIST`, then — after the
+  rebase — moved to `NEWER_NODE_ALLOWLIST` per the crypto/buffer lanes'
+  convention on current main). Locally verified: `node:util` oracle
+  subtest passes. (A local-only `node:crypto` oracle failure —
+  `createMac`/`getMacs`/`parsePKCS12` present on host v24.22.1, absent in
+  v24.20.0 — is NOT this lane: 0 occurrences in the v24.20.0 source pack;
+  the crypto lane #514 added those exports to the shim on main.)
+- **CI green, run 44642133653 (SHA `1bbf4e04`):** build + parity both
+  success. CI's "Commit generated file" step then pushed
+  `chore: regenerate vfs.js` (`27efb434`, dist/console.js, dist/repl.js,
+  dist/util.js, dist/vfs.js). A push by the default `GITHUB_TOKEN` does
+  NOT trigger a new workflow run, so no run ever existed for `27efb434`.
+- **Rebase (dirty PR):** by then main had moved 7 merges (assert #516,
+  crypto #514, https #515, buffer #512, module #508, vm #509, dns), and
+  the PR went `mergeable: false / dirty` (dist conflicts). Rebased clean
+  onto `0f30d17c`; `src/util.js` replay is byte-identical to the
+  guard-verified commit, so the guard results above still hold.
+- **dist:** local `node src/build-vfs.mjs` only completes with all
+  `*_proxy` vars + `NODE_USE_ENV_PROXY` unset (otherwise Node's fetch
+  routes esm.sh through the unreachable `hatch-egress-proxy`). Committed
+  dist/util.js + dist/console.js (byte-identical to CI's regen) and
+  dist/repl.js (minified names match CI's regen); dist/vfs.js, dist/fs.js,
+  dist/fs_promises.js, dist/zlib.js are left for CI's regen — the local
+  build embeds drifted floating-dep bytes (pako/picomatch, no lockfile)
+  that CI's fresh install resolves differently. After CI's regen push, an
+  empty commit re-triggers CI on the regen-inclusive tree (a
+  `GITHUB_TOKEN` push cannot trigger a run itself).
