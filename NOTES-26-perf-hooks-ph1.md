@@ -154,6 +154,44 @@ behavior, not an API gap — out of scope for this lane, no fix attempted.
   export list extracted from the source pack (subset holds). Pushed as a
   second commit on the branch; CI re-run awaited on the new head SHA.
 
+## Recovery re-verification (L-PH1 recovery worker, 2026-11-20 ~02:45 EST)
+
+- The first worker was killed by a runtime restart before CI ran; the
+  branch survived at head `17113894`, PR #525 open, 0 check-runs
+  (CI no-show). The stale local worktree was at `836e056a` (its own
+  merge commit, tree-diff vs the pushed head: only `dist/vfs.js` 1 line);
+  it was hard-reset to `origin/feat/w2-perf-hooks-ph1` — clean, nothing
+  uncommitted lost. `/tmp/ph26` logs were wiped by the restart, so every
+  claim below was re-proven from scratch.
+- **Full differential re-run** (`parity/run.mjs perf_hooks`, 31 Node 26
+  test files staged + `qrde-r-oracle.json` fixture, then restored):
+  **24/31 PASS** on the branch — the 7 fails are exactly the out-of-scope
+  set (external-memory, fast-calls, record-zero, monitor-options,
+  monitor-resolution, resourcetiming-fetch.mjs,
+  sliding-window-fast-calls). Log: `/tmp/ph26-rec/run-branch.log`
+  (ephemeral; counts recorded here).
+- **Baseline re-run on `origin/main` (`4a05cd91`)**, same staging:
+  **19/31 PASS** — confirms the coordinator banked count. The 5 claimed
+  flips all FAIL on main, all 19 baseline passes still pass on the
+  branch: **0 regressions**. Log: `/tmp/ph26-rec/run-baseline.log`.
+  Note: `resourcetiming-attributes` + `resourcetiming` PASS on main too
+  (part of the 19 guard set) — the triage F6 first-failure does not
+  reproduce under this harness invocation; L-PH4's work is therefore not
+  double-counted here and no extra flip is claimed.
+- **Isolated 2x re-runs** (direct harness, `PARITY_TARGET=perf_hooks`;
+  stats with its declared `// Flags: --expose-internals --no-warnings`):
+  all 5 flips exit 0 twice — import, stats, sliding-window-histogram,
+  diff, snapshot. Logs: `/tmp/ph26-rec/iso-*-run{1,2}.log`.
+- **Repo tests:** `jest tests/perf_hooks.test.js
+  tests/export_surface_perf_hooks.test.js` — **41/41**. `node --check
+  src/perf_hooks.js` clean.
+- **Rebase:** `origin/main` has not moved since the branch's `1910c4b0`
+  merge (`4a05cd91` still tip, base is an ancestor) — a rebase is a
+  no-op, so no new head SHA comes from it. This recovery commit is the
+  new push that retriggers CI on the branch. If CI still no-shows on
+  the new head, the next unstick is close + reopen a fresh PR from the
+  same branch (PR #384 precedent).
+
 ## Verification (all green)
 
 - `node --check src/perf_hooks.js`
