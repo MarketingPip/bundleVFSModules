@@ -38,6 +38,20 @@ import bufferExports from "./buffer.js";
 // codec is vendored under src/ instead of installed.
 import { compress as zstdifyCompress } from "./vendor/zstdify/dist/compress.js";
 import { decompress as zstdifyDecompress } from "./vendor/zstdify/dist/decompress.js";
+// ZIP archive API (Node 26, experimental): the implementation lives in
+// ./zlib-zip.js (a port of lib/internal/zip/*). It imports this module's
+// convenience functions, so the two modules form a cycle — safe because
+// neither touches the other's bindings at evaluation time.
+import {
+  ZipEntry as RawZipEntry,
+  ZipBuffer as RawZipBuffer,
+  ZipFile as RawZipFile,
+  createZipArchive as rawCreateZipArchive,
+  createZipArchiveSync as rawCreateZipArchiveSync,
+  getMaxZipContentSize as rawGetMaxZipContentSize,
+  setMaxZipContentSize as rawSetMaxZipContentSize,
+  zipFiles as rawZipFiles,
+} from "./zlib-zip.js";
 
 // Node captures buffer.kMaxLength at load (const { kMaxLength } =
 // require('buffer')) and uses it as the default maxOutputLength. Read the
@@ -3396,6 +3410,89 @@ function zstdDecompressSync(buffer, options) {
 }
 
 // ---------------------------------------------------------------------------
+// ZIP archive API (experimental, Node 26 lib/zlib.js zip section, verbatim
+// shape). The warning fires when the API is *used*, not when node:zlib is
+// imported: the ESM facade reads every export to build its bindings, so
+// warning on property access would fire on a bare `import 'node:zlib'`. Each
+// public class is a thin subclass whose factory methods (and, for ZipBuffer,
+// its constructor) warn; each function is a warn-on-call wrapper. A
+// `[Symbol.hasInstance]` override keeps `instanceof` matching instances
+// produced by the internal (unwrapped) implementation. The rest of node:zlib
+// is stable and never warns.
+// ---------------------------------------------------------------------------
+
+let zipExperimentalWarningEmitted = false;
+function emitZipExperimentalWarning() {
+  if (zipExperimentalWarningEmitted) return;
+  zipExperimentalWarningEmitted = true;
+  const proc =
+    typeof globalThis.process !== "undefined" ? globalThis.process : null;
+  if (proc && typeof proc.emitWarning === "function") {
+    proc.emitWarning(
+      "The zlib ZIP archive API is an experimental feature and might change at any time",
+      "ExperimentalWarning",
+    );
+  }
+}
+
+function experimentalZipFunction(fn, thisArg) {
+  return function (...args) {
+    emitZipExperimentalWarning();
+    return Reflect.apply(fn, thisArg, args);
+  };
+}
+
+class ExperimentalZipEntry extends RawZipEntry {
+  static [Symbol.hasInstance](instance) {
+    return instance instanceof RawZipEntry;
+  }
+}
+
+class ExperimentalZipFile extends RawZipFile {
+  static [Symbol.hasInstance](instance) {
+    return instance instanceof RawZipFile;
+  }
+}
+
+class ExperimentalZipBuffer extends RawZipBuffer {
+  static [Symbol.hasInstance](instance) {
+    return instance instanceof RawZipBuffer;
+  }
+  constructor(buffer) {
+    emitZipExperimentalWarning();
+    super(buffer);
+  }
+}
+
+for (const [Wrapper, Raw, factories] of [
+  [
+    ExperimentalZipEntry,
+    RawZipEntry,
+    ["read", "create", "createSync", "createStream", "createSymlink"],
+  ],
+  [ExperimentalZipFile, RawZipFile, ["open", "openSync"]],
+  [ExperimentalZipBuffer, RawZipBuffer, []],
+]) {
+  for (const name of factories) {
+    Object.defineProperty(Wrapper, name, {
+      configurable: true,
+      writable: true,
+      value: experimentalZipFunction(Raw[name], Raw),
+    });
+  }
+  Object.defineProperty(Wrapper, "name", { value: Raw.name });
+}
+
+const ZipEntry = ExperimentalZipEntry;
+const ZipFile = ExperimentalZipFile;
+const ZipBuffer = ExperimentalZipBuffer;
+const createZipArchive = experimentalZipFunction(rawCreateZipArchive);
+const createZipArchiveSync = experimentalZipFunction(rawCreateZipArchiveSync);
+const zipFiles = experimentalZipFunction(rawZipFiles);
+const getMaxZipContentSize = experimentalZipFunction(rawGetMaxZipContentSize);
+const setMaxZipContentSize = experimentalZipFunction(rawSetMaxZipContentSize);
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
@@ -3444,6 +3541,14 @@ export {
   zstdCompressSync,
   zstdDecompress,
   zstdDecompressSync,
+  ZipEntry,
+  ZipBuffer,
+  ZipFile,
+  createZipArchive,
+  createZipArchiveSync,
+  getMaxZipContentSize,
+  setMaxZipContentSize,
+  zipFiles,
 };
 
 const zlibDefaultExport = {
@@ -3494,6 +3599,14 @@ const zlibDefaultExport = {
   zstdCompressSync,
   zstdDecompress,
   zstdDecompressSync,
+  ZipEntry,
+  ZipBuffer,
+  ZipFile,
+  createZipArchive,
+  createZipArchiveSync,
+  getMaxZipContentSize,
+  setMaxZipContentSize,
+  zipFiles,
 };
 Object.freeze(zlibDefaultExport);
 export default zlibDefaultExport;

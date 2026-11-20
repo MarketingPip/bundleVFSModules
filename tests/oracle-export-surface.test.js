@@ -98,6 +98,18 @@ const NEWER_NODE_ALLOWLIST = {
   // Node 26 Wave 1 lane UTIL U1-U8: debounce/throttle, isPartialDeepStrictEqual
   // and markPromiseAsHandled are Node 26 node:util exports (oracle pins 24.20.0).
   util: ["debounce", "isPartialDeepStrictEqual", "markPromiseAsHandled", "throttle"],
+  // Node 26: the ZIP archive API (26.8.0) is a new zlib export set
+  // (oracle pins 24.20.0).
+  zlib: [
+    "ZipBuffer",
+    "ZipEntry",
+    "ZipFile",
+    "createZipArchive",
+    "createZipArchiveSync",
+    "getMaxZipContentSize",
+    "setMaxZipContentSize",
+    "zipFiles",
+  ],
 };
 
 function describeValue(v) {
