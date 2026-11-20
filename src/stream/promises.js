@@ -1,4 +1,4 @@
-import { ArrayPrototypePop, Promise } from "./primordials.js";
+import { ArrayPrototypePop, ArrayIsArray, Promise } from "./primordials.js";
 import { isIterable, isNodeStream, isWebStream } from "./utils.js";
 import { pipelineImpl as pl } from "./pipeline.js";
 import { finished } from "./end-of-stream.js";
@@ -20,7 +20,12 @@ function pipeline(...streams) {
       end = options.end;
     }
 
-    pl(
+    let lastStream = streams[streams.length - 1];
+    if (streams.length === 1 && ArrayIsArray(streams[0])) {
+      lastStream = streams[0][streams[0].length - 1];
+    }
+
+    const stream = pl(
       streams,
       (err, value) => {
         if (err) {
@@ -31,6 +36,13 @@ function pipeline(...streams) {
       },
       { signal, end },
     );
+
+    // Node 26: when the last stream is a function, pipeline() returns a
+    // PassThrough proxy whose readable side nobody consumes — resume it so
+    // the pump's writes can drain and pipeline() can complete.
+    if (typeof lastStream === "function" && stream.readable) {
+      stream.resume();
+    }
   });
 }
 

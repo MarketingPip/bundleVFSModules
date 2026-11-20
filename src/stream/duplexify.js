@@ -93,6 +93,8 @@ export default function duplexify(body, name) {
     const then = value?.then;
     if (typeof then === "function") {
       let d;
+      // Tracks whether writable final() has started.
+      let finalized = false;
 
       const promise = FunctionPrototypeCall(
         then,
@@ -100,6 +102,12 @@ export default function duplexify(body, name) {
         (val) => {
           if (val != null) {
             throw new ERR_INVALID_RETURN_VALUE("nully", "body", val);
+          }
+          // Node 26 #55077: the async function returned without (fully)
+          // consuming the input. Destroy the duplex so that pipeline
+          // propagates destruction upstream.
+          if (!finalized) {
+            destroyer(d);
           }
         },
         (err) => {
@@ -113,6 +121,7 @@ export default function duplexify(body, name) {
         readable: false,
         write,
         final(cb) {
+          finalized = true;
           final(async () => {
             try {
               await promise;

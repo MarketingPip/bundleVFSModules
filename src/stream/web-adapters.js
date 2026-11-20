@@ -496,6 +496,10 @@ function newReadableStreamFromStreamReadable(
     streamReadable.pause();
 
     streamReadable.on("data", function onData(chunk) {
+      // Node 26 #54205: cancelling the web ReadableStream while the
+      // underlying Readable is producing data must not enqueue into a
+      // closed controller (ERR_INVALID_STATE).
+      if (wasCanceled) return;
       // Copy the Buffer to detach it from the pool.
       if (Buffer.isBuffer(chunk) && !objectMode) chunk = new Uint8Array(chunk);
       controller.enqueue(chunk);
@@ -596,6 +600,23 @@ function newStreamReadableFromReadableStream(
  * @param {{readableType?: 'bytes'}} [options]
  * @returns {{readable: ReadableStream, writable: WritableStream}}
  */
+// DEP0201 (Node 26): 'options.type' is a deprecated alias for
+// 'options.readableType' on Duplex.toWeb(). Warned once per process,
+// mirroring Node's getDeprecationWarningEmitter.
+let dep0201Warned = false;
+function emitDEP0201() {
+  if (dep0201Warned) return;
+  dep0201Warned = true;
+  if (typeof process !== "undefined" && typeof process.emitWarning === "function") {
+    process.emitWarning(
+      "Passing 'options.type' to Duplex.toWeb() is deprecated. " +
+        "To specify the ReadableStream type, use 'options.readableType'.",
+      "DeprecationWarning",
+      "DEP0201",
+    );
+  }
+}
+
 function newReadableWritablePairFromDuplex(duplex, options = kEmptyObject) {
   // Not using the internal/streams/utils isWritableNodeStream and
   // isReadableNodeStream utilities here because they will return false
@@ -614,9 +635,14 @@ function newReadableWritablePairFromDuplex(duplex, options = kEmptyObject) {
 
   const readableOptions = {
     __proto__: null,
-    // DEP0201: 'options.type' is a deprecated alias for 'options.readableType'
-    type: options.readableType ?? options.type,
+    type: options.readableType,
   };
+
+  if (options.readableType == null && options.type != null) {
+    // 'options.type' is a deprecated alias for 'options.readableType'
+    emitDEP0201();
+    readableOptions.type = options.type;
+  }
 
   if (isDestroyed(duplex)) {
     const writable = new WritableStream();

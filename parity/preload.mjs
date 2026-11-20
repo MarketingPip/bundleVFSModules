@@ -511,6 +511,23 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // test-stream-finished.js requires `internal/streams/end-of-stream`
+    // for kEosNodeSynchronousCallback. Same treatment as
+    // `internal/event_target` above: without a redirect the require falls
+    // through to native Node's internal module, whose symbol never matches
+    // the shim's, so the sync-callback option is invisible to the shim's
+    // eos() and the callback is deferred past the test's immediate
+    // cleanup2(). The adapter re-exports real Node's module with the
+    // shim's symbol (see parity/internal-eos-adapter.mjs). Stream target
+    // only.
+    if (target === "stream" && bare === "internal/streams/end-of-stream") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-eos-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
     // The http tests' `_http_common` needs the same treatment as
     // `internal/event_target` above, for the same reason: the module must
     // be shared state, not two copies. `http.setMaxIdleHTTPParsers()`
