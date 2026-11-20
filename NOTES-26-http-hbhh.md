@@ -556,9 +556,24 @@ counting.
 
 ## PR
 
-- TODO — branch `feat/w2-http-hbhh`, one PR, squash-merge only on green CI.
+- PR #529 — https://github.com/MarketingPip/bundleVFSModules/pull/529 —
+  branch `feat/w2-http-hbhh`, one PR, squash-merge only on green CI.
+- Local commit 2a16a0bd (base e895aceb) pushed as remote c8eb290b; the
+  build job's dist-regen pushed 0f14c620, which conflicted with main's
+  dist/ (fs lane #528 had regenerated it) — `mergeable_state: dirty`.
+  Resolved by rebasing onto current main 84702e73 (clean, verified by
+  merge-tree) and force-pushing the reviewed rebase: remote head is now
+  code SHA **f1b11daf60e5bf5b2df11c9daf59758ff524e289** (`mergeable:
+  True`). The code SHA c8eb290bdf… was green on both CI jobs (Parity
+  success, build success) before the rebase; the waiter re-pinned to
+  the rebased code SHA.
+- Dist-regen rule (fs lane #528 precedent): bot dist-regen heads never
+  get check-runs (bot pushes don't trigger workflows), so the merge
+  decision rides on the CODE SHA's green checks; the waiter logs regen
+  head moves but does not re-pin to them.
 - NO docs-number changes in the fix PR.
-- Commit `--no-verify`; verify diff hunks before pushing; push via
-  `git-push-api.py` (full os.environ, `git checkout -b` first in the
-  worktree); PR via `gh.py`; CI waiter as a runtime-tracked backgrounded
+- Commit `--no-verify`; diff hunks verified before pushing (only
+  `src/http.js`, `src/net.js`, `NOTES-26-http-hbhh.md`); push via
+  `git-push-api.py` (full os.environ, `--force` only for the reviewed
+  rebase); PR via `gh.py`; CI waiter as a runtime-tracked backgrounded
   exec pinned to the remote code SHA.
