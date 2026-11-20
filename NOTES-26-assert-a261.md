@@ -161,3 +161,9 @@ recovery re-verified everything on the rebased head before pushing:
 - `test-assert-typedarray-deepequal.js` needs >30 s under the shim even
   isolated (~31 s quiet, more under load); the baseline runner's 30 s
   phase-2 cap records it as a timeout on loaded runs. Not a code issue.
+
+## Ship
+
+- PR: #516
+- Merge SHA: `0f30d17cc5d6df35ae25e3f59c5be6dec2e64b96` (squash-merge of PR #516)
+- Final count: **assert 13/14** (12 banked + 1 flips, 0 regressions)

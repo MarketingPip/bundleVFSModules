@@ -80,3 +80,9 @@ was wrong (first failing assertion: builtin block, `:39`, `0 !== 1`).
 - No docs-number changes; no shared files touched (`parity/preload.mjs`,
   `parity/run.mjs`, `dist/*`, `.github/workflows/run.yaml`,
   `package.json` untouched).
+
+## Ship
+
+- PR: #508
+- Merge SHA: `e3286ac77ede939455f888940c66d6ef20ca6035` (squash-merge of PR #508)
+- Final count: **module 33/37** (32 banked + 1 flips, 0 regressions)

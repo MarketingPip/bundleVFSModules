@@ -152,3 +152,9 @@ New count = 137 + 1 verified flip − 0 regressions = **138**.
 - `src/worker_threads.js` (only `src/` file touched)
 - `NOTES-26-worker-threads-w261.md` (this file)
 - No docs-number changes.
+
+## Ship
+
+- PR: #523
+- Merge SHA: `bf42753be3435f884c8f025bed10c4f75c66342a` (squash-merge of PR #523)
+- Final count: **worker_threads 138/146** (137 banked + 1 flips, 0 regressions)

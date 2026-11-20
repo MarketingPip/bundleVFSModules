@@ -85,3 +85,9 @@ other test asserted `subjectaltname`, which is why it went unnoticed.
 - `src/https.js` (116+/21−): Node 26 `getName` port.
 - `src/internals/tls-verify.js` (2 lines): SAN OID `2.5.5.17` → `2.5.29.17`.
 - `NOTES-26-https-tab.md` (this file).
+
+## Ship
+
+- PR: #515
+- Merge SHA: `cac4c22ddda9a3b09151f26670eccfee9c0807ae` (squash-merge of PR #515)
+- Final count: **https 60/70** (58 banked + 2 flips, 0 regressions)

@@ -196,3 +196,9 @@
   clean, no conflicts; code `c9a3e897` (src/events.js +
   parity/events-harness.mjs byte-identical to green-run `e3615a9f`);
   post-rebase differential events **9/9** (phase 1, all 9).
+
+## Ship
+
+- PR: #517
+- Merge SHA: `de79b5b2fafce159b914f16f695654d4363e53fa` (squash-merge of PR #517)
+- Final count: **events 9/9** (1 banked + 8 flips, 0 regressions)

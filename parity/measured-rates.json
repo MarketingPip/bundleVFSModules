@@ -1,5 +1,5 @@
 {
-  "_about": "Measured official-test pass rates per module, consumed by scripts/generate-capability-matrix.mjs. Entries are added ONLY from actual sweep runs (never derived from the capability matrix itself, never estimated). Update an entry when its module is re-swept, and record the new date and source. Method for all entries unless noted: each test-<module>-* file in parity/node-test/parallel run via parity/preload.mjs with PARITY_TARGET=<module>, 30s timeout per file; counts are raw (entries in parity/expected-failures.shim.json are NOT subtracted).",
+  "_about": "Measured official-test pass rates per module, consumed by scripts/generate-capability-matrix.mjs. Entries are added ONLY from actual sweep runs (never derived from the capability matrix itself, never estimated). Update an entry when its module is re-swept, and record the new date and source. Method for all entries unless noted: each test-<module>-* file in parity/node-test/parallel run via parity/preload.mjs with PARITY_TARGET=<module>, 30s timeout per file; counts are raw (entries in parity/expected-failures.shim.json are NOT subtracted). The top-level `node26` object holds the same structure for the Node 26.13.1 re-target suite (26 test files run via `parity/drift/run-baseline.mjs`); its counts are parent-verified wave-end counts, never estimates.",
   "modules": {
     "assert": {
       "date": "2026-10-11",
@@ -246,6 +246,176 @@
       "passed": 52,
       "source": "PR #237 (zlib parity); wave Z 2026-11-18: 43 -> 52 via PR #462 (6ad8f058), PR #463 (dda6f976), PR #464 (931951bf), PR #465 (41a4e4cb), PR #466 (7b8cdaef), PR #467 (12532c04); supersedes the 33/65 in parity/HITLIST.md's full-ranking table",
       "total": 65
+    }
+  },
+  "node26": {
+    "assert": {
+      "date": "2026-11-20",
+      "passed": 13,
+      "total": 14,
+      "source": "Wave 1 A-26-1 (PR #516, merge 0f30d17c): 12 -> 13/14; no Wave 2 lane."
+    },
+    "async_hooks": {
+      "date": "2026-11-20",
+      "passed": 29,
+      "total": 36,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "buffer": {
+      "date": "2026-11-20",
+      "passed": 71,
+      "total": 74,
+      "source": "Wave 1 B1-B4 (PR #512, merge bb6905b5): 64 -> 71/74; no Wave 2 lane."
+    },
+    "console": {
+      "date": "2026-11-20",
+      "passed": 22,
+      "total": 22,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "crypto": {
+      "date": "2026-11-20",
+      "passed": 162,
+      "total": 167,
+      "source": "Wave 1 L1 (PR #514, merge e86d615e): 145 -> 149/167; Wave 2 L2-L8 (PR #527, merge dc70e38d): 149 -> 162/167."
+    },
+    "dns": {
+      "date": "2026-11-20",
+      "passed": 12,
+      "total": 32,
+      "source": "Wave 1 L1 (PR #507, merge 1a1b89a2): 10 -> 12/32; no Wave 2 lane."
+    },
+    "events": {
+      "date": "2026-11-20",
+      "passed": 9,
+      "total": 9,
+      "source": "Wave 1 E1-E3 (PR #517, merge de79b5b2): 1 -> 9/9; no Wave 2 lane."
+    },
+    "fs": {
+      "date": "2026-11-20",
+      "passed": 365,
+      "total": 385,
+      "source": "Wave 1 F6/F7/F9/F13 (PR #521, merge 067a8700): 346 -> 350/385; Wave 2 cp/watch (PR #528, merge 84702e73): 350 -> 365/385."
+    },
+    "http": {
+      "date": "2026-11-20",
+      "passed": 412,
+      "total": 422,
+      "source": "Wave 1 header validators + websocket mask (PR #519, merge 9c0edeea): 390 -> 393/422; Wave 2 H-B-H-H (PR #529, merge 10bdfcaa): 393 -> 412/422."
+    },
+    "http2": {
+      "date": "2026-11-20",
+      "passed": 88,
+      "total": 289,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "https": {
+      "date": "2026-11-20",
+      "passed": 60,
+      "total": 70,
+      "source": "Wave 1 T-A/T-B (PR #515, merge cac4c22d): 58 -> 60/70; no Wave 2 lane."
+    },
+    "inspector": {
+      "date": "2026-11-20",
+      "passed": 41,
+      "total": 76,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "module": {
+      "date": "2026-11-20",
+      "passed": 33,
+      "total": 37,
+      "source": "Wave 1 M-26-1 (PR #508, merge e3286ac7): 32 -> 33/37; no Wave 2 lane."
+    },
+    "net": {
+      "date": "2026-11-20",
+      "passed": 148,
+      "total": 161,
+      "source": "Wave 1 L1-L3 (PR #520, merge cb73e799): 145 -> 148/161; no Wave 2 lane."
+    },
+    "os": {
+      "date": "2026-11-20",
+      "passed": 7,
+      "total": 8,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "perf_hooks": {
+      "date": "2026-11-20",
+      "passed": 24,
+      "total": 31,
+      "source": "Wave 1 L-PH4 (PR #510, merge 70a70a2e): 17 -> 19/31; Wave 2 L-PH1 (PR #525, merge a1d2b4d8): 19 -> 24/31."
+    },
+    "process": {
+      "date": "2026-11-20",
+      "passed": 88,
+      "total": 102,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "readline": {
+      "date": "2026-11-20",
+      "passed": 21,
+      "total": 22,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "repl": {
+      "date": "2026-11-20",
+      "passed": 99,
+      "total": 108,
+      "source": "Wave 1 R-26 (PR #518, merge 6929cffe): 95 -> 97/108 at wave-end \u2014 highlight flip regressed by the util merge #513 (652333e7), proven by bisection; Wave 2 L1 (PR #526, merge ba030119): 97 -> 99/108."
+    },
+    "stream": {
+      "date": "2026-11-20",
+      "passed": 197,
+      "total": 232,
+      "source": "Wave 2 L1-L5 (PR #522, merge b5f2e94f): 180 -> 197/232; no Wave 1 lane."
+    },
+    "string_decoder": {
+      "date": "2026-11-20",
+      "passed": 4,
+      "total": 4,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "timers": {
+      "date": "2026-11-20",
+      "passed": 58,
+      "total": 59,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "trace_events": {
+      "date": "2026-11-20",
+      "passed": 12,
+      "total": 13,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "tty": {
+      "date": "2026-11-20",
+      "passed": 3,
+      "total": 3,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+    },
+    "util": {
+      "date": "2026-11-20",
+      "passed": 36,
+      "total": 36,
+      "source": "Wave 1 U1-U8 (PR #513, merge 652333e7): 26 -> 36/36; no Wave 2 lane."
+    },
+    "vm": {
+      "date": "2026-11-20",
+      "passed": 66,
+      "total": 101,
+      "source": "Wave 1 restricted globals (PR #509, merge 03d7f9cc): 65 -> 66/101; no Wave 2 lane."
+    },
+    "worker_threads": {
+      "date": "2026-11-20",
+      "passed": 138,
+      "total": 146,
+      "source": "Wave 2 W-26-1 (PR #523, merge bf42753b): 137 -> 138/146; no Wave 1 lane."
+    },
+    "zlib": {
+      "date": "2026-11-20",
+      "passed": 54,
+      "total": 89,
+      "source": "Wave 1 L-SMALL (PR #511, merge 11d8db2d): 48 -> 51/89; Wave 2 L-RESET (PR #524, merge 4a05cd91): 51 -> 54/89."
     }
   }
 }

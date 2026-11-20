@@ -84,3 +84,9 @@ Traps (probe-proven, handled):
 
 - Differential runs: `/tmp/dns-l1/node26-dns-l1-run1.jsonc`,
   `/tmp/dns-l1/node26-dns-l1-run2.jsonc` (+ `csv-run1/`, `csv-run2/`).
+
+## Ship
+
+- PR: #507
+- Merge SHA: `1a1b89a26ccdf8e28a17bd38c6e82a932b1dcd1b` (squash-merge of PR #507)
+- Final count: **dns 12/32** (10 banked + 2 flips, 0 regressions)

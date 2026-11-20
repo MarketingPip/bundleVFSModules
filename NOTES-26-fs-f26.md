@@ -178,3 +178,9 @@ All in `src/fs.js` except the one noted F9 adapter change.
   called a regression. Load during this lane: ~5–17.
 - No `zz-*.js` probes remain; `parity/node-test/` restored to
   committed state before the jest + guard runs.
+
+## Ship
+
+- PR: #521
+- Merge SHA: `067a8700b7260840346d106b371027d1217bd5d7` (squash-merge of PR #521)
+- Final count: **fs 350/385** (346 banked + 4 flips, 0 regressions)
