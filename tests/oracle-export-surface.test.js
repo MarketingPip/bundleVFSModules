@@ -85,6 +85,14 @@ const DEPRECATED_ALLOWLIST = {
 const NEWER_NODE_ALLOWLIST = {
   // Node 26: isLatin1 is a new module-namespace export (oracle pins 24.20.0).
   buffer: ["isLatin1"],
+  // Node 26: isValidHeaderName/isValidHeaderValue (26) and
+  // websocketMask/websocketUnmask (26.12.0) are new http exports.
+  http: [
+    "isValidHeaderName",
+    "isValidHeaderValue",
+    "websocketMask",
+    "websocketUnmask",
+  ],
 };
 
 function describeValue(v) {

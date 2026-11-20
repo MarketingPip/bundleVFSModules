@@ -130,6 +130,31 @@
 - Net: guard run 394/422; true post-fix count **393/422** (390 + 3 flips)
   — the 394 includes the one-off cluster-test pass, which fails isolated.
 
+## CI (PR #519)
+
+- First Build VFS run on `ad7dd0bc` (run 44652234170): Parity job
+  SUCCESS, build job FAILURE — 2 jest suites failed, both this lane's
+  new exports, not the implementation:
+  - `tests/oracle-export-surface.test.js`: `Extra exports:
+    isValidHeaderName, isValidHeaderValue, websocketMask, websocketUnmask`
+    (oracle pins Node v24.20.0, which lacks them).
+  - `tests/export_surface_http.test.js`: same four as `extra`.
+- Fix (second commit on the branch, mirroring buffer lane #512 for
+  `isLatin1`): added the four names to the http EXPECTED list in
+  `tests/export_surface_http.test.js` (with a Node 26 comment) and to
+  `NEWER_NODE_ALLOWLIST.http` in `tests/oracle-export-surface.test.js`.
+  No `src/` change; no differential impact.
+- Local verification: `NODE_OPTIONS=--experimental-vm-modules npx
+  --no-install jest tests/export_surface_http.test.js
+  tests/oracle-export-surface.test.js` — http suites pass. The 2
+  remaining local failures are pre-existing local-oracle skew, not this
+  lane: `node:util` (missing debounce, markPromiseAsHandled, throttle)
+  and `node:crypto` (missing createMac, getMacs, parsePKCS12) fail only
+  because the local host is Node v24.22.1, which HAS those exports, while
+  CI pins 24.20.0 (`.github/workflows/run.yaml:34,93`) — on CI both pass
+  (run 44652234170 log). This branch does not touch `src/util.js` or
+  `src/crypto.js` (diff vs origin/main: `src/http.js` + NOTES only).
+
 ## Guard: full Node 26 http suite (pre-rebase, superseded)
 
 - `node parity/drift/run-baseline.mjs --node26-src ~/workspace/local/node-26-src
