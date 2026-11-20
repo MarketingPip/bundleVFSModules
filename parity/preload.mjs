@@ -687,6 +687,20 @@ Module._load = function (request, parent, isMain) {
         isMain,
       );
     }
+    // test-repl-highlight.js requires `internal/repl/highlight`, new in
+    // Node 26 (lib/internal/repl/highlight.js). The host v24.22.1 has no
+    // such module, so the require fails before any assertion runs. Same
+    // treatment as `internal/http` above: the adapter re-exports the
+    // shim's port (see src/internals/repl-highlight.js). Repl target
+    // only (R-26 lane L2).
+    if (target === "repl" && bare === "internal/repl/highlight") {
+      return origLoad.call(
+        this,
+        path.join(repoRoot, "parity", "internal-repl-highlight-adapter.mjs"),
+        parent,
+        isMain,
+      );
+    }
   }
   return origLoad.call(this, request, parent, isMain);
 };

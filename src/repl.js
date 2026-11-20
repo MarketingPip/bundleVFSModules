@@ -49,47 +49,18 @@ const kContextId = Symbol("contextId"); // inspector stub — no-op
 const kRegExpStatics = Symbol("regexpStatics"); // snapshot of RegExp.$1..$9
 const kSigintQueue = Symbol("sigintQueue"); // prioritized SIGINT tasks (Node lib/repl.js:821)
 
-// Node lib/repl.js:334 — the repl creates a domain, whose async_hooks
-// tracking stamps every promise with async ids; that is what makes
-// util.inspect render a Promise multi-line (`Promise {\n  456,\n
-// Symbol(async_id_symbol): ...`). The shim stubs the domain, so the
-// tracking is enabled here instead, once per process, on first
-// REPLServer construction. The hook is a no-op with an `init` callback
-// — an empty callbacks object does NOT activate the promise hook
-// (probed: createHook({}).enable() stamps nothing, createHook({init(){} })
-// .enable() does). Under Node the ids are real host async ids, not
-// fabricated. In the browser/sandbox there is no native module and the
-// tracking stays off (the stub hook cannot stamp real promises); the
-// repl still works, promises just inspect single-line.
-// The native module is reached through the bare global process's
-// getBuiltinModule — the same probe src/async_hooks.js uses — NOT by
-// importing ./async_hooks: that module statically imports `als-browser`,
-// which replaces globalThis.setTimeout/setInterval/setImmediate/
-// queueMicrotask at import time and trips the official test harness's
-// global-leak check (see src/readline.js:18 — the same reason the
-// readline shim avoids the shared events.js).
-// ponytail: this is process-wide by design — Node pays the same cost via
-// domain.create(). Best-effort: if async_hooks is unavailable the repl
-// must still construct, so a failure here is swallowed.
-let _promiseTrackingEnabled = false;
-function enablePromiseTrackingOnce() {
-  if (_promiseTrackingEnabled) return;
-  _promiseTrackingEnabled = true;
-  try {
-    const proc = typeof process !== "undefined" ? process : undefined;
-    const getBuiltin =
-      proc && typeof proc.getBuiltinModule === "function"
-        ? proc.getBuiltinModule
-        : undefined;
-    if (getBuiltin === undefined) return;
-    const mod = getBuiltin.call(proc, "async_hooks");
-    if (mod && typeof mod.createHook === "function") {
-      mod.createHook({ init() {} }).enable();
-    }
-  } catch {
-    // async_hooks unavailable — promises stay single-line (see NOTES).
-  }
-}
+// Node 26 removed domains (lib/repl.js no longer creates one; the
+// `domain` option throws ERR_INVALID_ARG_VALUE), so nothing here enables
+// async_hooks promise tracking anymore. Promises therefore inspect
+// single-line (`Promise { 456 }`), matching Node 26 and the browser
+// (where there is no native module to stamp them). The v24-era
+// enablePromiseTrackingOnce hook was removed in R-26: it stamped every
+// promise with async ids, making the shim print the multi-line form
+// Node 26 no longer produces (test-repl-top-level-await.js:187).
+// ponytail: if a future Node reintroduces promise stamping, the hook
+// belongs behind a version gate here, not unconditionally — the stamped
+// form is observable in every Promise the REPL prints.
+
 
 // Node lib/repl.js:599-602 creates the interruption error with
 // stackTraceLimit 0, so its stack is just the message line — and the
@@ -1966,11 +1937,10 @@ export class REPLServerImpl extends Interface {
       },
     };
 
-    // Node's domain.create() (lib/repl.js:334) is what enables async_hooks
-    // promise tracking; the shim stubs the domain, so the tracking is
-    // enabled here instead (once per process — see
-    // enablePromiseTrackingOnce).
-    enablePromiseTrackingOnce();
+    // Node 26 removed domains, so no promise tracking is enabled here
+    // anymore (see the note at the top of this file): the stubbed
+    // _domain above is only the minimal EventEmitter-shaped object the
+    // REPLServer surface keeps, it stamps nothing.
 
     // Prioritized SIGINT queue (Node lib/repl.js:821): a pending
     // breakEvalOnSigint await registers its interrupt here; _onSigint
