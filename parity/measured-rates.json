@@ -256,10 +256,10 @@
       "source": "Wave 1 A-26-1 (PR #516, merge 0f30d17c): 12 -> 13/14; no Wave 2 lane."
     },
     "async_hooks": {
-      "date": "2026-11-20",
-      "passed": 29,
-      "total": 36,
-      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+      "date": "2026-11-21",
+      "passed": 41,
+      "total": 48,
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged. Wave 4 fold-in: 12 AsyncLocalStorage tests measured, all pass -> 41/48."
     },
     "buffer": {
       "date": "2026-11-20",
@@ -286,10 +286,10 @@
       "source": "Wave 1 L1 (PR #507, merge 1a1b89a2): 10 -> 12/32; no Wave 2 lane."
     },
     "events": {
-      "date": "2026-11-20",
-      "passed": 9,
-      "total": 9,
-      "source": "Wave 1 E1-E3 (PR #517, merge de79b5b2): 1 -> 9/9; no Wave 2 lane."
+      "date": "2026-11-21",
+      "passed": 39,
+      "total": 39,
+      "source": "Wave 1 E1-E3 (PR #517, merge de79b5b2): 1 -> 9/9; no Wave 2 lane. Wave 4 E-26-W4 (PR #537, merge e3774e64): 9/9 banked + 22 measured passes + 8 flips -> 39/39."
     },
     "fs": {
       "date": "2026-11-20",
@@ -304,10 +304,10 @@
       "source": "Wave 1 header validators + websocket mask (PR #519, merge 9c0edeea): 390 -> 393/422; Wave 2 H-B-H-H (PR #529, merge 10bdfcaa): 393 -> 412/422."
     },
     "http2": {
-      "date": "2026-11-20",
+      "date": "2026-11-21",
       "passed": 94,
-      "total": 289,
-      "source": "Wave 3 H2-26-WR/W1/C1 (PR #532, merge 4fffd61e): 88 -> 94/289."
+      "total": 307,
+      "source": "Wave 3 H2-26-WR/W1/C1 (PR #532, merge 4fffd61e): 88 -> 94/289. Wave 4 fold-in: 18 diagnostics-channel tests measured, 0 pass (NO-FIX, no real HTTP/2 engine) -> 94/307."
     },
     "https": {
       "date": "2026-11-20",
@@ -322,10 +322,10 @@
       "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
     },
     "module": {
-      "date": "2026-11-20",
-      "passed": 33,
-      "total": 37,
-      "source": "Wave 1 M-26-1 (PR #508, merge e3286ac7): 32 -> 33/37; no Wave 2 lane."
+      "date": "2026-11-21",
+      "passed": 37,
+      "total": 41,
+      "source": "Wave 1 M-26-1 (PR #508, merge e3286ac7): 32 -> 33/37; no Wave 2 lane. Wave 4 fold-in: 4 diagnostics-channel tests measured, all pass (not-a-gap: native loader publishes, shim never loaded) -> 37/41."
     },
     "net": {
       "date": "2026-11-20",
@@ -406,10 +406,10 @@
       "source": "Wave 1 restricted globals (PR #509, merge 03d7f9cc): 65 -> 66/101; no Wave 2 lane."
     },
     "worker_threads": {
-      "date": "2026-11-20",
-      "passed": 138,
-      "total": 146,
-      "source": "Wave 2 W-26-1 (PR #523, merge bf42753b): 137 -> 138/146; no Wave 1 lane."
+      "date": "2026-11-21",
+      "passed": 139,
+      "total": 147,
+      "source": "Wave 2 W-26-1 (PR #523, merge bf42753b): 137 -> 138/146; no Wave 1 lane. Wave 4 fold-in: 1 diagnostics-channel test measured, passes -> 139/147."
     },
     "zlib": {
       "date": "2026-11-20",
