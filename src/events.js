@@ -120,8 +120,51 @@ function emitWarning(warning) {
   }
 }
 
-/** Minimal util.inspect stand-in (only used for warning text). */
+/** Minimal util.inspect stand-in (only used for warning text).
+ * Honors `util.inspect.custom` (Node calls it and lets its throw propagate
+ * — `getUnhandledErrorException` relies on that throw to fall back to the
+ * raw object) and the `{ depth: -1 }` form Node uses for the max-listeners
+ * warning (`lib/events.js:604`): an object with own keys prints
+ * `[ConstructorName]`, one without prints `Name {}`. Both verified against
+ * native Node 26.13.1. ponytail: full inspect lives in src/util.js; this
+ * stays a stand-in to avoid the events<->util import cycle — upgrade only
+ * if a test needs deeper inspect fidelity here. */
 function inspect(value, depth = 0, seen = new Set()) {
+  const depthNum = typeof depth === "object" && depth !== null ? depth.depth : depth;
+  // util.inspect.custom first: Node calls it even at depth -1, and a
+  // throwing custom inspect propagates (it is NOT swallowed).
+  if (typeof value === "object" && value !== null && !seen.has(value)) {
+    const custom = value[Symbol.for("nodejs.util.inspect.custom")];
+    if (typeof custom === "function") {
+      seen.add(value);
+      try {
+        const ret = custom.call(value, depthNum, { depth: depthNum }, inspect);
+        return typeof ret === "string" ? ret : inspect(ret, depth, seen);
+      } finally {
+        seen.delete(value);
+      }
+    }
+  }
+  // { depth: -1 }: no recursion — `[Name]` when the object has own keys,
+  // `Name {}` (or `{}` for plain objects) when it has none.
+  if (typeof depth === "object" && depth !== null && depth.depth === -1) {
+    if (typeof value !== "object" || value === null)
+      return inspect(value, 0, seen);
+    const hasKeys =
+      Object.keys(value).length > 0 ||
+      Object.getOwnPropertySymbols(value).some((s) =>
+        Object.prototype.propertyIsEnumerable.call(value, s),
+      );
+    const ctor = value.constructor;
+    const name =
+      ctor && typeof ctor.name === "string" && ctor.name !== ""
+        ? ctor.name
+        : null;
+    if (hasKeys) return `[${name ?? "Object"}]`;
+    if (ctor === undefined || ctor === null)
+      return "[Object: null prototype] {}";
+    return name && name !== "Object" ? `${name} {}` : "{}";
+  }
   try {
     if (typeof value === "string") return `'${value}'`;
     if (value === null) return "null";
@@ -611,10 +654,13 @@ function _getMaxListenersForTarget(emitterOrTarget) {
 // own `events.maxEventTargetListeners` symbol (e.g. foreign/browser ones).
 const eventTargetMaxListenersFallback = new WeakMap();
 
-class EventEmitter {
-  constructor(opts) {
-    EventEmitter.init.call(this, opts);
-  }
+// Node defines EventEmitter as a plain function, not a class
+// (lib/events.js:209), so `EventEmitter.call(this)` inside a function
+// constructor works. ponytail: keep it a function — converting back to a
+// class would re-break test-event-emitter-subclass; no class-only feature
+// is used anywhere in this file.
+function EventEmitter(opts) {
+  EventEmitter.init.call(this, opts);
 }
 EventEmitter.prototype._events = undefined;
 EventEmitter.prototype._eventsCount = 0;
@@ -689,8 +735,40 @@ EventEmitter.prototype.emit = function emit(type, ...args) {
     doError = doError && events.error === undefined;
   } else if (!doError) return false;
 
+  // Domain routing (Node's lib/domain.js patches EventEmitter.prototype.emit
+  // when `domain` is required). The shim's domain module applies the same
+  // patch to this class in browsers, but under the parity harness
+  // `require('domain')` resolves to the native module, so the shim emit must
+  // route itself — otherwise an error on a domain-attached emitter with no
+  // 'error' listener throws instead of reaching the domain's handler.
+  // ponytail: only the 'error' path lives here (it is the observable
+  // behavior this file can implement alone); the domain-stack dance and
+  // the non-error enter/exit stay in src/domain.js, which owns the stack.
+  const domain = this.domain;
+  const hasDomain =
+    domain !== null &&
+    domain !== undefined &&
+    !(hasProcess && this === process);
+
   // If there is no 'error' event listener then throw.
   if (doError) {
+    if (hasDomain && typeof domain.emit === "function") {
+      const er =
+        args.length > 0 && args[0] ? args[0] : new ERR_UNHANDLED_ERROR();
+      if (typeof er === "object" && er !== null) {
+        er.domainEmitter = this;
+        Object.defineProperty(er, "domain", {
+          __proto__: null,
+          configurable: true,
+          enumerable: false,
+          value: domain,
+          writable: true,
+        });
+        er.domainThrown = false;
+      }
+      domain.emit("error", er);
+      return false;
+    }
     const er = getUnhandledErrorException(this, args);
     // Note: The comments on the `throw` lines are intentional, they show
     // up in Node's output if this results in an unhandled exception.
@@ -787,7 +865,7 @@ function warnMaxListenersExceeded(target, type, existing, m) {
   // No error code for this since it is a Warning
   const w = genericNodeError(
     `Possible EventEmitter memory leak detected. ${existing.length} ${String(type)} listeners ` +
-      `added to ${inspect(target)}. MaxListeners is ${m}. Use emitter.setMaxListeners() to increase limit`,
+      `added to ${inspect(target, { depth: -1 })}. MaxListeners is ${m}. Use emitter.setMaxListeners() to increase limit`,
     {
       name: "MaxListenersExceededWarning",
       emitter: target,
@@ -922,7 +1000,7 @@ EventEmitter.prototype.removeAllListeners = function removeAllListeners(type) {
 
   // Emit removeListener for all listeners on all events
   if (arguments.length === 0) {
-    for (const key of Object.keys(events)) {
+    for (const key of Reflect.ownKeys(events)) {
       if (key === "removeListener") continue;
       this.removeAllListeners(key);
     }
@@ -1119,24 +1197,20 @@ function addCatch(that, promise, type, args) {
     return;
   }
 
-  // Handle native promises and thenables that use the native promise
-  // as a basis for their implementation.
-  let then;
+  // Handle Promises/A+ spec, then could be a getter
+  // that throws on second use.
   try {
-    then = promise.then;
-  } catch {
-    // If the then function throws, we consider the promise rejected.
-    deferNextTick(emitUnhandledRejectionOrErr, that, promise, type, args);
-    return;
-  }
+    const then = promise.then;
 
-  // If the promise is rejected, handle the rejection.
-  try {
-    then.call(promise, undefined, function (err) {
-      deferNextTick(emitUnhandledRejectionOrErr, that, err, type, args);
-    });
+    if (typeof then === "function") {
+      then.call(promise, undefined, function (err) {
+        // The callback is called with nextTick to avoid a follow-up
+        // rejection from this promise.
+        deferNextTick(emitUnhandledRejectionOrErr, that, err, type, args);
+      });
+    }
   } catch (err) {
-    deferNextTick(emitUnhandledRejectionOrErr, that, err, type, args);
+    that.emit("error", err);
   }
 }
 
