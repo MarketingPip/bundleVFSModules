@@ -228,3 +228,6 @@ never passes in any observed run.
 - `test-eventemitter-asyncresource.js` (Node 26 tree, matches no module glob) was measured for a possible fold-in under the strict rule (oracle exit 0 AND shim exit 0 twice): oracle (native Node 26.13.1) exit 0; shim exit 1, 2x (isolated staged runs, `PARITY_TARGET=events`, Node 26 `common/`).
 - Failure: `src/events.js:1865` — `EventEmitterAsyncResource` constructor calls `validateString(options?.name, "options.name")` and throws `ERR_INVALID_ARG_TYPE` when the test subclasses it without a name (`new Foo()` at test:58). Node 26 defaults the name; the shim requires it.
 - **Not folded in.** Events stays 39/39, denominator stays 2,813, program total stays 2,372/2,813. This is a real shim gap and a candidate fix lane (default `options.name` in `EventEmitterAsyncResource`), not a measurement correction.
+
+## Ship
+- Banked by docs sync PR #540, merge `6018a7d5461984a06423e701085c0c781da0693b` (main tip 2026-11-22). Re-sweep base main `8d037677`; tool fix PR #539. Program 2,370/2,813 → **2,372/2,813 (84.3%)**: process 89/102, readline 22/22 (both measurement corrections, 0 regressions, no code change). Evidence: `hidden_files/resweep-flags/` in the parity-sweep goal workspace.
