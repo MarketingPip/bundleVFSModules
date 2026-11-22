@@ -5,11 +5,15 @@
 // restore parity/node-test/ to its committed state.
 //
 // The runner loop mirrors fast-sweep.py / sweep-mjs.py run_one/run_phase
-// exactly (PARITY_TARGET=<module>, `timeout N node --import <absolute
-// preload> parity/node-test/parallel/<test>`, phase 1 short timeout, phase 2
+// exactly (PARITY_TARGET=<module>, `timeout N node [flags from the test's
+// // Flags: header] --import <absolute preload>
+// parity/node-test/parallel/<test>`, phase 1 short timeout, phase 2
 // full timeout only for 124s, signal -> 128+N) so results are comparable
 // with the pinned sweeps — but it is self-contained (no dependency on the
-// goal hidden_files runners) so the CI drift job can run it.
+// goal hidden_files runners) so the CI drift job can run it. Flags the host
+// Node cannot parse (a 25/26-only flag on the v24 host) are dropped with a
+// log line — see isFlagSupported below — never passed through to die as a
+// bogus "bad option" failure.
 //
 // SAFETY: refuses unless `git status --porcelain -- parity/node-test` in the
 // worktree is empty, and restores the directory afterwards (tracked files via
@@ -163,12 +167,62 @@ function restore(state) {
   }
 }
 
+// --- // Flags: headers ------------------------------------------------------
+// Mirrors run-oracle.mjs flagsFor: Node test files declare CLI flags in a
+// `// Flags:` header comment (same format Node itself uses), and the oracle
+// already passes them through. The baseline did NOT — a test needing a flag
+// was run without it and mis-measured (e.g. a test requiring internals
+// failed before its first assertion). Read the header from the STAGED file:
+// parallelDir holds the Node 26 tree after stage().
+function flagsFor(test) {
+  try {
+    const src = readFileSync(join(parallelDir, test), "utf8")
+      .split("\n")
+      .slice(0, 30)
+      .join("\n");
+    const m = src.match(/\/\/ Flags:\s*(.+)/);
+    if (!m) return [];
+    // Split on whitespace; drop empty entries. Flags are trusted: they come
+    // from Node's own test files, not user input.
+    return m[1].trim().split(/\s+/).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// The harness runs Node 26 tests under the HOST Node (v24.22.1 here), and a
+// flag added in 25/26 does not exist there: the child dies at startup with
+// "bad option" (exit 9) and the test is mis-measured as a shim failure.
+// Probe each distinct flag once (cached); drop only on positive evidence of
+// rejection (exit 9 + "bad option" on stderr). Any other probe outcome —
+// including a probe timeout — passes the flag through, so a probe failure
+// can never silently change a test's invocation.
+const flagSupportCache = new Map();
+const droppedFlags = new Set();
+function isFlagSupported(flag) {
+  if (flagSupportCache.has(flag)) return flagSupportCache.get(flag);
+  let ok = true;
+  try {
+    const r = spawnSync("node", [flag, "-e", ""], { encoding: "utf8", timeout: 10000 });
+    ok = !(r.status === 9 && /bad option/.test(r.stderr ?? ""));
+  } catch {
+    ok = true; // probe failure (e.g. timeout) is not evidence of rejection
+  }
+  flagSupportCache.set(flag, ok);
+  if (!ok && !droppedFlags.has(flag)) {
+    droppedFlags.add(flag);
+    console.log(`flags: host rejects ${flag} — dropping it (test runs as before)`);
+  }
+  return ok;
+}
+
 // --- runner (mirrors fast-sweep.py run_one/run_phase) -----------------------
 function runOne(test, timeoutS, target) {
   return new Promise((res) => {
+    const flags = flagsFor(test).filter(isFlagSupported);
     const p = spawn(
       "timeout",
-      [String(timeoutS), "node", "--import", preload, `parity/node-test/parallel/${test}`],
+      [String(timeoutS), "node", ...flags, "--import", preload, `parity/node-test/parallel/${test}`],
       { cwd: worktree, env: { ...process.env, PARITY_TARGET: target }, stdio: "ignore" },
     );
     p.on("error", () => res(-1));
@@ -266,7 +320,9 @@ const baseline = {
 };
 const header = `// Node 26 baseline: Node v26.13.1 test/parallel files for the 28 program
 // modules, run under the parity harness (PARITY_TARGET per module, preload)
-// on host ${baseline.host}. Status per test: "pass" (exit 0), "fail" (any other
+// on host ${baseline.host}. Each test is run with its // Flags: header flags
+// (a flag the host Node cannot parse is dropped and logged, not passed
+// through). Status per test: "pass" (exit 0), "fail" (any other
 // non-zero exit), "timeout" (exit 124).
 // "fail" means "does not pass under the v24.20.0 shims" — NOT "the shim is
 // wrong": a Node 26 test can fail because it needs a Node 26 API, a newer

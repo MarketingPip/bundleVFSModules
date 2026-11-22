@@ -309,9 +309,54 @@ runtime ends development after ~1 year of fixes).
   official posts. The export diff + baseline are the backstop for those
   gaps: anything that shipped in a minor shows up as a surface addition or a
   baseline failure.
-- The baseline runner mirrors fast-sweep's run_one (no `// Flags:` parsing
-  for the harness run — the ORACLE parses Flags; a test needing a flag fails
-  in the baseline and is classified by the oracle, not silently skipped).
+- The baseline runner honors `// Flags:` headers (fixed 2026-11-22 — see
+  the `// Flags: honoring` section below). Before the fix it mirrored
+  fast-sweep's run_one with no flag parsing for the harness run — the ORACLE
+  parsed Flags, so a test needing a flag failed in the baseline and was
+  classified by the oracle, not silently skipped.
+
+## // Flags: honoring in run-baseline.mjs (2026-11-22)
+
+`parity/drift/run-baseline.mjs` now parses each test file's `// Flags:`
+header and passes those flags to the child Node invocation
+(`timeout N node [flags] --import <preload> <test>`), mirroring
+`run-oracle.mjs` `flagsFor` exactly (same regex, same first-30-lines
+window, same whitespace split). The 30-line window misses nothing in the
+baseline globs (no header sits beyond line 30; the only file with a second
+`// Flags:` match is `test-http2-premature-close.js`, whose later matches
+are HTTP/2 frame-flag comments, not headers). **363 flagged tests** in the
+baseline globs (13% of the suite), 42 distinct flag tokens.
+
+One deliberate difference from the oracle: the harness runs Node 26 tests
+under the HOST Node (v24.22.1), and a flag added in 25/26 does not exist
+there — passed verbatim, the child dies at startup with "bad option"
+(exit 9) and the test is mis-measured as a shim failure. `isFlagSupported`
+probes each distinct flag once (cached) and drops only on positive
+evidence of rejection (exit 9 + "bad option" on stderr); any other probe
+outcome, including a probe timeout, passes the flag through. On this host
+exactly 3 flags are rejected: `--experimental-vfs` (1 test),
+`--experimental-web-worker` (1 test), `--js-immutable-arraybuffer`
+(2 tests); each drop is logged. The `--require` relative path in
+`test-inspector-overwrite-config.js` passes through verbatim (it resolves
+against the worktree cwd, so the require fails — same fail status, the
+test is NO-FIX either way).
+
+Verification (tool before vs after, live main `e1ab699a`, 6 modules,
+347 tests): buffer 71/74 → 71/74, zlib 68/89 → 67/89, assert 13/14 →
+13/14, dns 12/32 → 12/32, process 88/102 → 87/102, async_hooks 29/36 →
+29/36 (281 → 280). The 2 diffs are proven parallel flakes, not
+regressions: both tests have NO `// Flags:` header (invocation
+byte-identical), both call `tmpdir.refresh()` (the shared-`.tmp.0`
+mechanism), both pass 3/3 isolated
+(`test-zlib-zip-property.js`, `test-process-redirect-warnings-env.js`).
+Three flagged candidates still fail WITH their flags
+(`test-buffer-alloc-alignment.js` + `test-zlib-zip-internals.js` with
+`--expose-internals`, `test-zlib.js` with `--no-warnings`, all exit 1) —
+genuine shim gaps, now measured under their declared flags. JSONC schema
+unchanged (same keys, same per-test `{status, exit}`); memfs preflight
+untouched; no program-number changes (the Nov 19 baseline JSONC is
+untouched — a future re-run under the fixed tool will re-measure the
+flagged tests).
 
 ## Footprint conflict (adjudication needed — parent)
 
