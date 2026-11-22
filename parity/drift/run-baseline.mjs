@@ -73,14 +73,24 @@ export const MODULES = [
   "zlib",
 ];
 
-// Test-file prefix per module. Most modules use their own name; five do not
-// (the fast-sweep glob/target coupling gap — same as the pinned suite).
-export const PREFIX = {
-  async_hooks: "async-hooks",
-  perf_hooks: "perf-hooks",
-  trace_events: "trace-events",
-  worker_threads: "worker",
-  string_decoder: "string-decoder",
+// Test-file prefixes per module. Most modules use their own name; some need
+// extra prefixes for files the program already counts (the fast-sweep
+// glob/target coupling gap — same as the pinned suite). The extras are the
+// Wave 4 fold-in groups, measured by hand with isolated recipes before this
+// fix: events' singular test-event-* files, the two test-eventsource* files
+// (never touch the shim) and test-eventemitter-asyncresource.js; async_hooks'
+// test-async-local-storage-* files; and the test-diagnostics-channel-*
+// files for http2, module and worker_threads. A prefix matches
+// `test-<prefix>-*` plus the bare `test-<prefix>.js`.
+export const PREFIXES = {
+  async_hooks: ["async-hooks", "async-local-storage"],
+  events: ["events", "event", "eventsource", "eventemitter"],
+  http2: ["http2", "diagnostics-channel-http2"],
+  module: ["module", "diagnostics-channel-module"],
+  perf_hooks: ["perf-hooks"],
+  string_decoder: ["string-decoder"],
+  trace_events: ["trace-events"],
+  worker_threads: ["worker", "diagnostics-channel-worker"],
 };
 
 function arg(name, def) {
@@ -273,12 +283,14 @@ async function runPhase(tests, timeoutS, target, label) {
 }
 
 async function runModule(mod) {
-  const prefix = PREFIX[mod] ?? mod;
+  const prefixes = PREFIXES[mod] ?? [mod];
   const files = readdirSync(parallelDir)
-    .filter((f) => f.startsWith(`test-${prefix}-`) || f === `test-${prefix}.js`)
+    .filter((f) =>
+      prefixes.some((p) => f.startsWith(`test-${p}-`) || f === `test-${p}.js`),
+    )
     .sort();
   if (!files.length) {
-    console.log(`${mod}: no test files (prefix test-${prefix}-)`);
+    console.log(`${mod}: no test files (prefixes ${prefixes.join(", ")})`);
     return {};
   }
   console.log(`${mod}: ${files.length} files`);
