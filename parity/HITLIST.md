@@ -127,6 +127,8 @@ Wave 4 (PR #537, 2026-11-21): folded the 65 unrun in-scope tests into the progra
 
 Re-sweep (2026-11-22): full-program re-measurement on main with the fixed drift tool (`parity/drift/run-baseline.mjs` now honors each test's `// Flags:` header). All 28 modules re-swept, every diff adjudicated isolated 2x (evidence in `NOTES-26-resweep-flags.md`): **2,370/2,813 → 2,372/2,813 (84.3%)**, 0 regressions. Two measurement corrections, no code change: `test-process-redirect-warnings.js` (process 88 → 89/102; the triage had classified it "not a gap, sweep race") and `test-readline-promises-csi.mjs` (readline 21 → 22/22; passes under its `// Flags: --expose-internals` header, now honored — the flag-caused flip the re-sweep was designed to find). The one uncounted file the re-sweep surfaced, `test-eventemitter-asyncresource.js`, stays uncounted: it passes natively (Node 26.13.1, exit 0) but fails under the shim (exit 1, 2x — `EventEmitterAsyncResource` requires `options.name` where Node defaults it), a real shim gap and a candidate fix lane, not a fold-in.
 
+Fold-in (2026-11-22): the asyncresource lane fixed `test-eventemitter-asyncresource.js` (name defaults to the subclass name, per Node 26), so the test is folded into the program record — events 39/39 → **40/40**, program **2,372/2,813 → 2,373/2,814 (84.3%)**. The headline percentage does not move.
+
 Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `test-repl-highlight.js` (proven by one-step bisection against the pre-util merge); the repair is a Wave 3 follow-up. Wave 2 took repl 97 → 99/108. Wave 3 repaired it to 100/108 (PR #531).
 
 | module | baseline | Wave 1 | Wave 2 | Wave 3 | Wave 4 | Re-sweep | % |
@@ -137,7 +139,7 @@ Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `t
 | console | 22/22 | 22/22 | 22/22 | 22/22 | 22/22 | 22/22 | 100% |
 | crypto | 145/167 | 149/167 | 162/167 | 162/167 | 162/167 | 162/167 | 97.0% |
 | dns | 10/32 | 12/32 | 12/32 | 12/32 | 12/32 | 12/32 | 37.5% |
-| events | 1/9 | 9/9 | 9/9 | 9/9 | 39/39 | 39/39 | 100% |
+| events | 1/9 | 9/9 | 9/9 | 9/9 | 39/39 | 40/40 | 100% |
 | fs | 346/385 | 350/385 | 365/385 | 365/385 | 365/385 | 365/385 | 94.8% |
 | http | 390/422 | 393/422 | 412/422 | 412/422 | 412/422 | 412/422 | 97.6% |
 | http2 | 88/289 | 88/289 | 88/289 | 94/289 | 94/307 | 94/307 | 30.6% |
@@ -159,4 +161,4 @@ Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `t
 | vm | 65/101 | 66/101 | 66/101 | 66/101 | 66/101 | 66/101 | 65.3% |
 | worker_threads | 137/146 | 137/146 | 138/146 | 138/146 | 139/147 | 139/147 | 94.6% |
 | zlib | 48/89 | 51/89 | 54/89 | 69/89 | 69/89 | 69/89 | 77.5% |
-| **total** | **2,144/2,748** | **2,197/2,748** | **2,272/2,748** | **2,323/2,748** | **2,370/2,813** | **84.3%** |
+| **total** | **2,144/2,748** | **2,197/2,748** | **2,272/2,748** | **2,323/2,748** | **2,370/2,813** | **2,373/2,814** | **84.3%** |
