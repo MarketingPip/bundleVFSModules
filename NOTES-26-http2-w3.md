@@ -192,3 +192,10 @@ Per Node 26 `lib/internal/http2/compat.js`:
 - PR: #532
 - Merge SHA: `4fffd61e8e269bbd296bbfce3f998803b964b8d5` (squash-merge of PR #532)
 - CI waiter: 5 polls x ~40s, pinned to code SHA f89f02d3 — Parity (Node official tests): success, build: success.
+
+## Ship (write-callbacks flip)
+
+- PR: #548
+- Merge SHA: `3d52ca2ba766d16f71bee4e5a23e912a6eeb5fb2` (squash-merge of PR #548)
+- CI: both jobs completed/success on code SHA e2b08671, single run (poll 4).
+- Flip: `test-http2-write-callbacks.js` passing on current main — it was failing at the Nov 18 wave end and was never banked. Surfaced by the http2 engine design study's every-5th sample of the failing set; re-verified isolated 2x on main `f89551e7` (oracle exit 0 2x, shim exit 0 2x). No code change: http2 94/307 → **95/307 (30.9%)**, program 2,373/2,814 → **2,374/2,814 (84.4%)**.
