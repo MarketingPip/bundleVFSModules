@@ -358,6 +358,34 @@ untouched; no program-number changes (the Nov 19 baseline JSONC is
 untouched — a future re-run under the fixed tool will re-measure the
 flagged tests).
 
+## Signal exits recorded as 128+N in run-baseline.mjs + run-oracle.mjs (2026-11-22)
+
+Both drift tools mis-recorded signal deaths. `run-baseline.mjs` mapped
+every signal to a hardcoded 129 (only correct for SIGHUP) — the
+baseline's nine 129s hid real 134s (SIGABRT), 137s (OOM-kill) and 139s
+(SIGSEGV) (see "Signal-death adjudication" above). `run-oracle.mjs`
+recorded -1 for any signal death, losing the signal entirely. Both now
+map the signal name to its POSIX number and record 128+N (SIGKILL 137,
+SIGTERM 143, SIGABRT 134, SIGSEGV 139, SIGHUP 129, SIGINT 130); an
+unknown signal records -1, matching the spawn-error path. The map is
+duplicated in each file (mirroring the `flagsFor` duplication — the
+tools are standalone scripts with no shared import). The status
+classification is unchanged (0 = pass, 124 = timeout, else fail) and the
+oracle's class rule is unchanged (a signal exit like 137 still classifies
+as fails-natively).
+
+Verification (before vs after, same probe tree): three self-signaling
+probe tests (`test-assert-signal-KILL/TERM/ABRT.js`, `process.kill` on
+startup) recorded 129/129/129 under the old baseline tool and
+137/143/134 under the fixed tool, with the 14 real assert tests
+byte-identical (13/14, the banked count). Under the old oracle the
+probes recorded nativeExit -1/-1/-1; under the fixed oracle 134/137/143,
+all still classed fails-natively, and a normal control
+(`test-assert-async.js`) still records 0 / shim-gap. No program-number
+changes (tooling only; the committed baseline JSONC is untouched — a
+future re-run under the fixed tool will re-measure signal deaths with
+their real exits).
+
 ## Footprint conflict (adjudication needed — parent)
 
 The footprint test (`tests/ondemand-require.test.js`) on main allows only

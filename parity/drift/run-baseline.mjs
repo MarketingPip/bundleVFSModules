@@ -217,6 +217,27 @@ function isFlagSupported(flag) {
 }
 
 // --- runner (mirrors fast-sweep.py run_one/run_phase) -----------------------
+// Signal numbers (POSIX): a child killed by a signal reports code === null
+// and the signal NAME on the close event. Record the shell convention
+// 128+N so the recorded exit says which signal killed it (SIGKILL 137,
+// SIGTERM 143, SIGABRT 134, SIGSEGV 139, ...). Previously every signal
+// recorded a hardcoded 129, which is only correct for SIGHUP — the
+// baseline's nine 129s hid real 134s, 137s and 139s (see NOTES,
+// "Signal-death adjudication"). Unknown signal → -1, matching the
+// spawn-error path.
+const SIGNAL_NUMBERS = {
+  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6,
+  SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
+  SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGSTKFLT: 16, SIGCHLD: 17,
+  SIGCONT: 18, SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22,
+  SIGURG: 23, SIGXCPU: 24, SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27,
+  SIGWINCH: 28, SIGIO: 29, SIGPWR: 30, SIGSYS: 31,
+};
+function signalExit(signal) {
+  const n = SIGNAL_NUMBERS[signal];
+  return n === undefined ? -1 : 128 + n;
+}
+
 function runOne(test, timeoutS, target) {
   return new Promise((res) => {
     const flags = flagsFor(test).filter(isFlagSupported);
@@ -227,7 +248,7 @@ function runOne(test, timeoutS, target) {
     );
     p.on("error", () => res(-1));
     p.on("close", (code, signal) => {
-      if (code === null) res(signal ? 128 + 1 : -1);
+      if (code === null) res(signal ? signalExit(signal) : -1);
       else res(code);
     });
   });
