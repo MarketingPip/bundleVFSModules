@@ -92,6 +92,6 @@ harness invocation and under the oracle, so it counts once the fix lands.
 
 ## Ship
 
-- PR: (fill)
-- Merge SHA: (fill)
-- CI: (fill — both jobs, code SHA, single run)
+- PR: #542
+- Merge SHA: c2981c8dd9be380a3070b351dcc605c9bc4fca84
+- CI: both jobs completed/success on code SHA 9e174c15, single run (poll 5; waiter killed by a runtime restart at poll 4 with Parity green and build in progress — state re-checked directly, build completed/success before the merge).
