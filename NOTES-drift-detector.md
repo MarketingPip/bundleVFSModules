@@ -386,6 +386,38 @@ changes (tooling only; the committed baseline JSONC is untouched — a
 future re-run under the fixed tool will re-measure signal deaths with
 their real exits).
 
+## Test-file prefix selection covers the full in-scope set (2026-11-22)
+
+`run-baseline.mjs` selected each module's files with a single prefix
+(`test-<prefix>-*` plus the bare `test-<prefix>.js`), which missed the
+Wave 4 fold-in groups the program already counts — the tool measured
+2,748 files against the banked 2,814, and 5 modules short: events 9/40
+(the 28 singular `test-event-*` files, the 2 `test-eventsource*` files,
+and `test-eventemitter-asyncresource.js`), async_hooks 36/48 (the 12
+`test-async-local-storage-*` files), http2 289/307 (the 18
+`test-diagnostics-channel-http2-*` files), module 37/41 (the 4
+`test-diagnostics-channel-module-*` files), worker_threads 146/147 (the
+1 `test-diagnostics-channel-worker-threads.js` file). The other 23
+modules already matched their banked denominators exactly.
+
+`PREFIX` (one string per module) is now `PREFIXES` (a list per module);
+`runModule` matches a file if ANY listed prefix matches. Each added
+group runs under its module's PARITY_TARGET, reproducing the isolated
+recipe the Wave 4 notes record (events, async_hooks, module,
+worker_threads, http2); the 2 `test-eventsource*` files pass under the
+tool although they never touch the shim. Selection counts now match the
+banked denominators for all 28 modules (2,814 total).
+
+Verification (fixed tool, live main `d0ad50d3`, the 5 affected modules,
+583 tests): events 40/40, async_hooks 41/48, module 37/41,
+worker_threads 139/147, http2 94/307 — every count matches the banked
+numbers exactly, and the pass sets are byte-identical to the re-sweep's
+adjudicated sets plus the two known post-re-sweep additions (the
+diagnostics-channel worker test, and the asyncresource test fixed by
+PR #542). 0 flips, 0 regressions. No program-number changes (tooling
+only; the committed baseline JSONC is untouched — the next scheduled
+drift run re-measures with the full selection).
+
 ## Footprint conflict (adjudication needed — parent)
 
 The footprint test (`tests/ondemand-require.test.js`) on main allows only
