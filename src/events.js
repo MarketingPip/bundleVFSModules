@@ -1862,8 +1862,18 @@ Object.defineProperty(EventEmitter, "EventEmitterAsyncResource", {
             name = options;
             options = undefined;
           } else {
-            validateString(options?.name, "options.name");
-            name = options?.name || "EventEmitterAsyncResource";
+            // ponytail: Node 26 (lib/events.js:150-153) validates
+            // options.name ONLY for direct construction (new.target ===
+            // EventEmitterAsyncResource); a subclass skips validation and
+            // the name defaults to the subclass name (new.target.name).
+            // Ceiling: the name is only the async_hooks init-hook type;
+            // a real AsyncResource name registry (or the genuine builtin,
+            // preferred under Node) is the upgrade path if deeper
+            // async-context fidelity is ever needed.
+            if (new.target === EventEmitterAsyncResource) {
+              validateString(options?.name, "options.name");
+            }
+            name = options?.name || new.target.name;
           }
           super(options);
 
