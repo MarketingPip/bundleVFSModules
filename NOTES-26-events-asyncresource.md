@@ -96,3 +96,9 @@ PR follows below.)
 - PR: #542
 - Merge SHA: c2981c8dd9be380a3070b351dcc605c9bc4fca84
 - CI: both jobs completed/success on code SHA 9e174c15, single run (poll 5; waiter killed by a runtime restart at poll 4 with Parity green and build in progress — state re-checked directly, build completed/success before the merge).
+
+## Ship (fold-in)
+
+- PR: #544
+- Merge SHA: 65b42573ddf84716ed2d0dbe972dc2c7867c9457
+- CI: both jobs completed/success on code SHA fb8c4ca7, single run (poll 4).
