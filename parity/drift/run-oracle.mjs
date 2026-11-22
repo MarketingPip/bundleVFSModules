@@ -63,6 +63,26 @@ function flagsFor(test) {
   }
 }
 
+// Signal numbers (POSIX): a child killed by a signal reports code === null
+// and the signal NAME on the close event. Record the shell convention
+// 128+N so the recorded exit says which signal killed it (SIGKILL 137,
+// SIGTERM 143, SIGABRT 134, SIGSEGV 139, ...). Previously a signal death
+// recorded -1, losing the signal entirely. Unknown signal → -1, matching
+// the spawn-error path. (Mirrors run-baseline.mjs signalExit; the two
+// tools are standalone scripts with no shared import.)
+const SIGNAL_NUMBERS = {
+  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6,
+  SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
+  SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGSTKFLT: 16, SIGCHLD: 17,
+  SIGCONT: 18, SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22,
+  SIGURG: 23, SIGXCPU: 24, SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27,
+  SIGWINCH: 28, SIGIO: 29, SIGPWR: 30, SIGSYS: 31,
+};
+function signalExit(signal) {
+  const n = SIGNAL_NUMBERS[signal];
+  return n === undefined ? -1 : 128 + n;
+}
+
 function runOne({ test }) {
   return new Promise((res) => {
     const flags = flagsFor(test);
@@ -78,9 +98,9 @@ function runOne({ test }) {
       clearTimeout(timer);
       res({ test, flags, nativeExit: -1 });
     });
-    p.on("close", (code) => {
+    p.on("close", (code, signal) => {
       clearTimeout(timer);
-      res({ test, flags, nativeExit: code === null ? -1 : code });
+      res({ test, flags, nativeExit: code === null ? (signal ? signalExit(signal) : -1) : code });
     });
   });
 }
