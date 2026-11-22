@@ -286,10 +286,10 @@
       "source": "Wave 1 L1 (PR #507, merge 1a1b89a2): 10 -> 12/32; no Wave 2 lane."
     },
     "events": {
-      "date": "2026-11-21",
-      "passed": 39,
-      "total": 39,
-      "source": "Wave 1 E1-E3 (PR #517, merge de79b5b2): 1 -> 9/9; no Wave 2 lane. Wave 4 E-26-W4 (PR #537, merge e3774e64): 9/9 banked + 22 measured passes + 8 flips -> 39/39."
+      "date": "2026-11-22",
+      "passed": 40,
+      "total": 40,
+      "source": "Wave 1 E1-E3 (PR #517, merge de79b5b2): 1 -> 9/9; no Wave 2 lane. Wave 4 E-26-W4 (PR #537, merge e3774e64): 9/9 banked + 22 measured passes + 8 flips -> 39/39. Fold-in: test-eventemitter-asyncresource.js, surfaced uncounted by the full-program re-sweep and fixed by the asyncresource lane (PR #542, merge c2981c8d), now passes -> 40/40."
     },
     "fs": {
       "date": "2026-11-20",

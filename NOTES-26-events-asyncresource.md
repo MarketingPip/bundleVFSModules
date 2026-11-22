@@ -85,10 +85,11 @@ already preferred under Node). No other file touched.
 
 ## Fold-in (follow-up docs sync, NOT this PR)
 
-This PR changes no program numbers. The follow-up docs sync folds the
-test in: events 39/39 → **40/40**, denominator 2,813 → **2,814**,
-program 2,372/2,813 → **2,373/2,814**. The test passes under a correct
-harness invocation and under the oracle, so it counts once the fix lands.
+Fold-in done by the follow-up docs sync: events 39/39 → **40/40**,
+denominator 2,813 → **2,814**, program 2,372/2,813 → **2,373/2,814**.
+The test passes under a correct harness invocation and under the oracle,
+so it counts now that the fix has landed. (Ship section for the fold-in
+PR follows below.)
 
 ## Ship
 
