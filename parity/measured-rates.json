@@ -346,16 +346,16 @@
       "source": "Wave 1 L-PH4 (PR #510, merge 70a70a2e): 17 -> 19/31; Wave 2 L-PH1 (PR #525, merge a1d2b4d8): 19 -> 24/31."
     },
     "process": {
-      "date": "2026-11-20",
-      "passed": 88,
+      "date": "2026-11-22",
+      "passed": 89,
       "total": 102,
-      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane. Full-program re-sweep with the fixed // Flags: tool (NOTES-26-resweep-flags.md): test-process-redirect-warnings.js passes (triage: not a gap, sweep race) -- 88 -> 89/102. No code change."
     },
     "readline": {
-      "date": "2026-11-20",
-      "passed": 21,
+      "date": "2026-11-22",
+      "passed": 22,
       "total": 22,
-      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane; count unchanged."
+      "source": "Node 26 baseline 2026-11-19 (parity/drift/node26-baseline.jsonc); no Wave 1/2 lane. Full-program re-sweep with the fixed // Flags: tool (NOTES-26-resweep-flags.md): test-readline-promises-csi.mjs passes under its // Flags: --expose-internals header, now honored -- 21 -> 22/22. No code change."
     },
     "repl": {
       "date": "2026-11-20",

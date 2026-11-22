@@ -125,36 +125,38 @@ Wave 1 (PRs #507–#521, 15 lanes, 2026-11-19/20): 53 net flips — 2,144 → 2,
 
 Wave 4 (PR #537, 2026-11-21): folded the 65 unrun in-scope tests into the program record (triage in `NOTES-26-unrun-triage.md`, per-group evidence in `NOTES-26-unrun-*.md`): 39 already pass under the harness (33 true shim passes + 6 that never touch the shim), 8 flippable — all events, flipped by the E-26-W4 lane — and 18 NO-FIX (all http2 diagnostics-channel). Program 2,323/2,748 → 2,370/2,813 (84.3%). The headline moves from 84.5% to 84.3% because the 18 http2 NO-FIX tests enter the denominator with 0 passes — a measurement artifact of folding in the unrun tests, not a regression. Events reaches 39/39 (100%).
 
+Re-sweep (2026-11-22): full-program re-measurement on main with the fixed drift tool (`parity/drift/run-baseline.mjs` now honors each test's `// Flags:` header). All 28 modules re-swept, every diff adjudicated isolated 2x (evidence in `NOTES-26-resweep-flags.md`): **2,370/2,813 → 2,372/2,813 (84.3%)**, 0 regressions. Two measurement corrections, no code change: `test-process-redirect-warnings.js` (process 88 → 89/102; the triage had classified it "not a gap, sweep race") and `test-readline-promises-csi.mjs` (readline 21 → 22/22; passes under its `// Flags: --expose-internals` header, now honored — the flag-caused flip the re-sweep was designed to find). The one uncounted file the re-sweep surfaced, `test-eventemitter-asyncresource.js`, stays uncounted: it passes natively (Node 26.13.1, exit 0) but fails under the shim (exit 1, 2x — `EventEmitterAsyncResource` requires `options.name` where Node defaults it), a real shim gap and a candidate fix lane, not a fold-in.
+
 Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `test-repl-highlight.js` (proven by one-step bisection against the pre-util merge); the repair is a Wave 3 follow-up. Wave 2 took repl 97 → 99/108. Wave 3 repaired it to 100/108 (PR #531).
 
-| module | baseline | Wave 1 | Wave 2 | Wave 3 | Wave 4 | % |
+| module | baseline | Wave 1 | Wave 2 | Wave 3 | Wave 4 | Re-sweep | % |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| assert | 12/14 | 13/14 | 13/14 | 13/14 | 13/14 | 92.9% |
-| async_hooks | 29/36 | 29/36 | 29/36 | 29/36 | 41/48 | 85.4% |
-| buffer | 64/74 | 71/74 | 71/74 | 71/74 | 71/74 | 95.9% |
-| console | 22/22 | 22/22 | 22/22 | 22/22 | 22/22 | 100% |
-| crypto | 145/167 | 149/167 | 162/167 | 162/167 | 162/167 | 97.0% |
-| dns | 10/32 | 12/32 | 12/32 | 12/32 | 12/32 | 37.5% |
-| events | 1/9 | 9/9 | 9/9 | 9/9 | 39/39 | 100% |
-| fs | 346/385 | 350/385 | 365/385 | 365/385 | 365/385 | 94.8% |
-| http | 390/422 | 393/422 | 412/422 | 412/422 | 412/422 | 97.6% |
-| http2 | 88/289 | 88/289 | 88/289 | 94/289 | 94/307 | 30.6% |
-| https | 58/70 | 60/70 | 60/70 | 60/70 | 60/70 | 85.7% |
-| inspector | 41/76 | 41/76 | 41/76 | 41/76 | 41/76 | 53.9% |
-| module | 32/37 | 33/37 | 33/37 | 33/37 | 37/41 | 90.2% |
-| net | 145/161 | 148/161 | 148/161 | 148/161 | 148/161 | 91.9% |
-| os | 7/8 | 7/8 | 7/8 | 7/8 | 7/8 | 87.5% |
-| perf_hooks | 17/31 | 19/31 | 24/31 | 24/31 | 24/31 | 77.4% |
-| process | 88/102 | 88/102 | 88/102 | 88/102 | 88/102 | 86.3% |
-| readline | 21/22 | 21/22 | 21/22 | 21/22 | 21/22 | 95.5% |
-| repl | 95/108 | 97/108 | 99/108 | 100/108 | 100/108 | 92.6% |
-| stream | 180/232 | 180/232 | 197/232 | 226/232 | 226/232 | 97.4% |
-| string_decoder | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 | 100% |
-| timers | 58/59 | 58/59 | 58/59 | 58/59 | 58/59 | 98.3% |
-| trace_events | 12/13 | 12/13 | 12/13 | 12/13 | 12/13 | 92.3% |
-| tty | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 100% |
-| util | 26/36 | 36/36 | 36/36 | 36/36 | 36/36 | 100% |
-| vm | 65/101 | 66/101 | 66/101 | 66/101 | 66/101 | 65.3% |
-| worker_threads | 137/146 | 137/146 | 138/146 | 138/146 | 139/147 | 94.6% |
-| zlib | 48/89 | 51/89 | 54/89 | 69/89 | 69/89 | 77.5% |
+| assert | 12/14 | 13/14 | 13/14 | 13/14 | 13/14 | 13/14 | 92.9% |
+| async_hooks | 29/36 | 29/36 | 29/36 | 29/36 | 41/48 | 41/48 | 85.4% |
+| buffer | 64/74 | 71/74 | 71/74 | 71/74 | 71/74 | 71/74 | 95.9% |
+| console | 22/22 | 22/22 | 22/22 | 22/22 | 22/22 | 22/22 | 100% |
+| crypto | 145/167 | 149/167 | 162/167 | 162/167 | 162/167 | 162/167 | 97.0% |
+| dns | 10/32 | 12/32 | 12/32 | 12/32 | 12/32 | 12/32 | 37.5% |
+| events | 1/9 | 9/9 | 9/9 | 9/9 | 39/39 | 39/39 | 100% |
+| fs | 346/385 | 350/385 | 365/385 | 365/385 | 365/385 | 365/385 | 94.8% |
+| http | 390/422 | 393/422 | 412/422 | 412/422 | 412/422 | 412/422 | 97.6% |
+| http2 | 88/289 | 88/289 | 88/289 | 94/289 | 94/307 | 94/307 | 30.6% |
+| https | 58/70 | 60/70 | 60/70 | 60/70 | 60/70 | 60/70 | 85.7% |
+| inspector | 41/76 | 41/76 | 41/76 | 41/76 | 41/76 | 41/76 | 53.9% |
+| module | 32/37 | 33/37 | 33/37 | 33/37 | 37/41 | 37/41 | 90.2% |
+| net | 145/161 | 148/161 | 148/161 | 148/161 | 148/161 | 148/161 | 91.9% |
+| os | 7/8 | 7/8 | 7/8 | 7/8 | 7/8 | 7/8 | 87.5% |
+| perf_hooks | 17/31 | 19/31 | 24/31 | 24/31 | 24/31 | 24/31 | 77.4% |
+| process | 88/102 | 88/102 | 88/102 | 88/102 | 88/102 | 89/102 | 87.3% |
+| readline | 21/22 | 21/22 | 21/22 | 21/22 | 21/22 | 22/22 | 100% |
+| repl | 95/108 | 97/108 | 99/108 | 100/108 | 100/108 | 100/108 | 92.6% |
+| stream | 180/232 | 180/232 | 197/232 | 226/232 | 226/232 | 226/232 | 97.4% |
+| string_decoder | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 | 100% |
+| timers | 58/59 | 58/59 | 58/59 | 58/59 | 58/59 | 58/59 | 98.3% |
+| trace_events | 12/13 | 12/13 | 12/13 | 12/13 | 12/13 | 12/13 | 92.3% |
+| tty | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 100% |
+| util | 26/36 | 36/36 | 36/36 | 36/36 | 36/36 | 36/36 | 100% |
+| vm | 65/101 | 66/101 | 66/101 | 66/101 | 66/101 | 66/101 | 65.3% |
+| worker_threads | 137/146 | 137/146 | 138/146 | 138/146 | 139/147 | 139/147 | 94.6% |
+| zlib | 48/89 | 51/89 | 54/89 | 69/89 | 69/89 | 69/89 | 77.5% |
 | **total** | **2,144/2,748** | **2,197/2,748** | **2,272/2,748** | **2,323/2,748** | **2,370/2,813** | **84.3%** |
