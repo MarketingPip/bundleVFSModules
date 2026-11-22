@@ -304,10 +304,10 @@
       "source": "Wave 1 header validators + websocket mask (PR #519, merge 9c0edeea): 390 -> 393/422; Wave 2 H-B-H-H (PR #529, merge 10bdfcaa): 393 -> 412/422."
     },
     "http2": {
-      "date": "2026-11-21",
-      "passed": 94,
+      "date": "2026-11-22",
+      "passed": 95,
       "total": 307,
-      "source": "Wave 3 H2-26-WR/W1/C1 (PR #532, merge 4fffd61e): 88 -> 94/289. Wave 4 fold-in: 18 diagnostics-channel tests measured, 0 pass (NO-FIX, no real HTTP/2 engine) -> 94/307."
+      "source": "Wave 3 H2-26-WR/W1/C1 (PR #532, merge 4fffd61e): 88 -> 94/289. Wave 4 fold-in: 18 diagnostics-channel tests measured, 0 pass (NO-FIX, no real HTTP/2 engine) -> 94/307. Flip 2026-11-22: test-http2-write-callbacks.js 94 -> 95/307, verified isolated 2x on main f89551e7 (oracle exit 0 2x, shim exit 0 2x); surfaced by the http2 engine design study."
     },
     "https": {
       "date": "2026-11-20",

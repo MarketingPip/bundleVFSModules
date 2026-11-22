@@ -129,6 +129,8 @@ Re-sweep (2026-11-22): full-program re-measurement on main with the fixed drift 
 
 Fold-in (2026-11-22): the asyncresource lane fixed `test-eventemitter-asyncresource.js` (name defaults to the subclass name, per Node 26), so the test is folded into the program record — events 39/39 → **40/40**, program **2,372/2,813 → 2,373/2,814 (84.3%)**. The headline percentage does not move.
 
+Flip (2026-11-22): the http2 engine design study's every-5th sample of the failing set found `test-http2-write-callbacks.js` passing on current main — it was failing at the Nov 18 wave end and was never banked. Re-verified isolated 2x on main `f89551e7` (oracle exit 0 2x, shim exit 0 2x, empty output). No code change: http2 94/307 → **95/307 (30.9%)**, program **2,373/2,814 → 2,374/2,814 (84.4%)**. The headline percentage moves 84.3% → 84.4%.
+
 Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `test-repl-highlight.js` (proven by one-step bisection against the pre-util merge); the repair is a Wave 3 follow-up. Wave 2 took repl 97 → 99/108. Wave 3 repaired it to 100/108 (PR #531).
 
 | module | baseline | Wave 1 | Wave 2 | Wave 3 | Wave 4 | Re-sweep | % |
@@ -142,7 +144,7 @@ Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `t
 | events | 1/9 | 9/9 | 9/9 | 9/9 | 39/39 | 40/40 | 100% |
 | fs | 346/385 | 350/385 | 365/385 | 365/385 | 365/385 | 365/385 | 94.8% |
 | http | 390/422 | 393/422 | 412/422 | 412/422 | 412/422 | 412/422 | 97.6% |
-| http2 | 88/289 | 88/289 | 88/289 | 94/289 | 94/307 | 94/307 | 30.6% |
+| http2 | 88/289 | 88/289 | 88/289 | 94/289 | 94/307 | 95/307 | 30.9% |
 | https | 58/70 | 60/70 | 60/70 | 60/70 | 60/70 | 60/70 | 85.7% |
 | inspector | 41/76 | 41/76 | 41/76 | 41/76 | 41/76 | 41/76 | 53.9% |
 | module | 32/37 | 33/37 | 33/37 | 33/37 | 37/41 | 37/41 | 90.2% |
@@ -161,4 +163,4 @@ Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `t
 | vm | 65/101 | 66/101 | 66/101 | 66/101 | 66/101 | 66/101 | 65.3% |
 | worker_threads | 137/146 | 137/146 | 138/146 | 138/146 | 139/147 | 139/147 | 94.6% |
 | zlib | 48/89 | 51/89 | 54/89 | 69/89 | 69/89 | 69/89 | 77.5% |
-| **total** | **2,144/2,748** | **2,197/2,748** | **2,272/2,748** | **2,323/2,748** | **2,370/2,813** | **2,373/2,814** | **84.3%** |
+| **total** | **2,144/2,748** | **2,197/2,748** | **2,272/2,748** | **2,323/2,748** | **2,370/2,813** | **2,374/2,814** | **84.4%** |
