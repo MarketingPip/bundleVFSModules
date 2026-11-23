@@ -1,4 +1,5 @@
 // src/http.js — port of node:http (Node v24.20.0) for the browser runtime.
+// MIT License — Joyent, Inc. and other Node contributors.
 //
 // Browser strategy:
 //   * Client (ClientRequest / request / get) is backed by fetch(). The browser
@@ -2791,9 +2792,18 @@ export class ServerResponse extends OutgoingMessage {
     // Standalone responses (test-http-server-response-standalone) have
     // no dispatch finish listener to serialize them: at finish, flush
     // the rendered header block + buffered body to the assigned socket
-    // as ONE write. Dispatch-created responses carry _serverReqNo (set by
-    // dispatch before finish can fire) and are serialized by
-    // _finishSocketResponse instead, so they skip this.
+    // followed by an empty write (Node v24.20.0's final empty socket
+    // write — OutgoingMessage.end's `this._send('', 'latin1', finish)`,
+    // lib/_http_outgoing.js:1173). Dispatch-created responses carry
+    // _serverReqNo (set by dispatch before finish can fire) and are
+    // serialized by _finishSocketResponse instead, so they skip this.
+    // ponytail: ceiling is the v24/node26 split — Node 26 end() folds
+    // the final chunk into ONE write (maybePrepareFinalChunk) and its
+    // test expects mustCall(..., 1), so this trailing empty write
+    // fails the node26 test; a fixed write count cannot satisfy both
+    // yardsticks. Upgrade path is a harness-declared target version
+    // (e.g. PARITY_NODE_VERSION) the shim could read — no such signal
+    // exists today; without it, one yardstick must lose.
     this.once("finish", () => {
       if (this._serverReqNo !== undefined) return;
       const sock = this.socket;
@@ -2806,12 +2816,12 @@ export class ServerResponse extends OutgoingMessage {
           this._headerFlushed || !this._header
             ? Buffer.alloc(0)
             : Buffer.from(this._header, "latin1");
-        // Exactly ONE write (headers + body): the test's Writable is
-        // mustCall(..., 1), and real Node delivers a standalone response
-        // as a single write — a trailing empty write would trip the
-        // mustCall count (and its endsWith('hello world') assert).
+        // Two writes: headers + body, then a zero-length chunk — the
+        // v24 test's Writable is mustCall(..., 2) and asserts the
+        // second chunk has length 0.
         // (test-http-server-response-standalone)
         sock.write(Buffer.concat([header, body]));
+        sock.write(Buffer.alloc(0));
       } catch {
         /* socket write failed; ignore */
       }
