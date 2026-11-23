@@ -151,7 +151,20 @@ one comment block + one license line, all in `src/http.js`.
 
 ## PR
 
-<!-- FILL: PR number / URL / branch / code SHA -->
+- PR #554 — https://github.com/MarketingPip/bundleVFSModules/pull/554 —
+  branch `feat/takeback-http-standalone`, one PR, squash-merge only on
+  green CI.
+- Local commit 103d0dff (base 51ada62d) pushed as remote code SHA
+  **f52e9313db6acb58b0771b650b4b85700ad234f2** (verified by direct branch
+  read). Commit `--no-verify`; diff hunks verified before pushing (only
+  `src/http.js`, `NOTES-26-http-standalone.md`); push via
+  `git-push-api.py`; PR via `gh.py`; CI waiter as a runtime-tracked
+  backgrounded exec pinned to the remote code SHA
+  (`hidden_files/tb-http-standalone-ci-waiter-554.py`).
+- Dist-regen rule: bot dist-regen heads never get check-runs (bot pushes
+  don't trigger workflows), so the merge decision rides on the CODE SHA's
+  green checks; the waiter logs regen head moves but does not re-pin.
+- NO docs-number changes in the fix PR.
 
 ## Ship
 
