@@ -9416,6 +9416,10 @@ class ServerBase extends EventEmitter {
     });
 
     this.listening = false;
+    // Service Worker fetch transport (take-back of Gen 0
+    // src/_http_server.js): the 'fetch' event handler registered by
+    // listen() in a Service Worker global scope; null elsewhere.
+    this._fetchHandler = null;
     this.maxHeadersCount = null;
     // createServer({ joinDuplicateHeaders }) — Node lib/_http_server.js:589:
     // stored raw (default undefined, like the client option); forwarded
@@ -9746,6 +9750,22 @@ class ServerBase extends EventEmitter {
     // Apply a sticky unref() issued before this listen() (see _unrefed).
     if (this._unrefed) netServer.unref();
     this.listening = true;
+    // Service Worker transport (take-back of Gen 0 src/_http_server.js
+    // listen():553-578): in a Service Worker global scope, register a
+    // 'fetch' listener that answers each event with _handleFetch. Gated
+    // on the scope check, so normal listen() is untouched — the virtual
+    // network listen above still runs exactly as before.
+    if (
+      typeof ServiceWorkerGlobalScope !== "undefined" &&
+      globalThis instanceof ServiceWorkerGlobalScope &&
+      typeof globalThis.addEventListener === "function" &&
+      !this._fetchHandler
+    ) {
+      this._fetchHandler = (event) => {
+        event.respondWith(this._handleFetch(event.request));
+      };
+      globalThis.addEventListener("fetch", this._fetchHandler);
+    }
     // emitMe(fn, method, ...args) serializes only ...args — the payload must
     // go in args (3rd position), not method, or the parent sees an empty message.
     emitEvent?.(
@@ -9833,6 +9853,19 @@ class ServerBase extends EventEmitter {
     }
     this._stopConnectionChecker();
     this.listening = false;
+    // Service Worker transport: drop the 'fetch' listener registered by
+    // listen() (if any), so a closed server stops answering fetch events.
+    if (
+      this._fetchHandler &&
+      typeof globalThis.removeEventListener === "function"
+    ) {
+      try {
+        globalThis.removeEventListener("fetch", this._fetchHandler);
+      } catch {
+        /* best effort: a host without removeEventListener still closes */
+      }
+    }
+    this._fetchHandler = null;
     queueMicrotask(() => this.emit("close"));
     return this;
   }
@@ -11843,6 +11876,96 @@ class ServerBase extends EventEmitter {
         }
       });
     });
+  }
+
+  /**
+   * Service Worker / Fetch-API server transport (take-back of Gen 0
+   * `Server._handleFetch`, src/_http_server.js:634-643 at a97251d9).
+   * Opt-in adapter over the existing `handleRequest` entry point — the
+   * dispatch path is untouched. Usage (Gen 0's documented shape):
+   * `export default { fetch: (req) => server._handleFetch(req) }`
+   * for Cloudflare Workers / Deno Deploy, or via the 'fetch' listener
+   * listen() registers in a Service Worker global scope.
+   *
+   * Contract (Gen 0's): a server that is not listening answers 503
+   * Service Unavailable; a listening server dispatches to the 'request'
+   * handler and the rendered response comes back as a WHATWG Response.
+   *
+   * Honest limits (flagged, not solved — see the salvage check):
+   * - Multi-value `set-cookie`: preserved only when the rendered
+   *   headers carry it as an array (the direct handleRequest path
+   *   does). A `set-cookie` value that arrives already joined with
+   *   ", " cannot be split back reliably and stays joined.
+   * - ponytail: ceiling is the direct handleRequest path — the
+   *   request is NOT routed through the virtual-socket round trip the
+   *   runtime bridge uses for listened servers, so req.socket is null
+   *   here (IncomingMessage default) rather than a real connected
+   *   socket. Upgrade path is to route through the bridge's
+   *   _socketHttpRoundTrip when the server has a backing net server
+   *   (server._netServer) — no such routing exists today; until then
+   *   handlers that need req.socket must use the RT bridge path.
+   */
+  async _handleFetch(request) {
+    if (!this.listening) {
+      return new Response("Service Unavailable", { status: 503 });
+    }
+    const buf = await request.arrayBuffer();
+    // request.url is absolute; Node handlers see the request-target.
+    let url = request.url;
+    try {
+      const parsed = new URL(request.url);
+      url = parsed.pathname + parsed.search;
+    } catch {
+      /* keep the raw url: fromRequest stores it verbatim */
+    }
+    const headers = {};
+    for (const [name, value] of request.headers) {
+      // Headers iteration yields one entry per set-cookie value
+      // (probed node-26.13.1); other duplicates arrive joined with
+      // ", ", matching what fromRequest expects.
+      headers[name] = value;
+    }
+    const result = await this.handleRequest(
+      request.method,
+      url,
+      headers,
+      buf.byteLength ? new Uint8Array(buf) : null,
+    );
+    const responseHeaders = new Headers();
+    for (const [name, value] of Object.entries(result.headers || {})) {
+      // Array values (multi-value headers, incl. set-cookie on the
+      // direct path) append one line each; a joined string stays joined.
+      if (Array.isArray(value)) {
+        for (const v of value) responseHeaders.append(name, String(v));
+      } else if (value !== undefined) {
+        responseHeaders.append(name, String(value));
+      }
+    }
+    const init = { headers: responseHeaders };
+    // Response only accepts 200-599; an unrepresentable handler status
+    // degrades to 500 rather than throwing out of the fetch event.
+    init.status =
+      result.statusCode >= 200 && result.statusCode <= 599
+        ? result.statusCode
+        : 500;
+    // statusText must be a valid reason phrase or the constructor
+    // throws (probed node-26.13.1); omit anything invalid and let
+    // Response supply the default.
+    if (
+      typeof result.statusMessage === "string" &&
+      result.statusMessage.length > 0 &&
+      /^[ \t\x21-\x7E\x80-\xFF]*$/.test(result.statusMessage)
+    ) {
+      init.statusText = result.statusMessage;
+    }
+    // Fetch null-body statuses (101, 204, 205, 304) reject a body
+    // (probed node-26.13.1: 204/304 throw TypeError).
+    const nullBody =
+      init.status === 101 ||
+      init.status === 204 ||
+      init.status === 205 ||
+      init.status === 304;
+    return new Response(nullBody ? null : result.body, init);
   }
 }
 
