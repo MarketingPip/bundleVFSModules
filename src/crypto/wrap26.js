@@ -41,6 +41,10 @@ import {
   parseOpensslErrorLine,
 } from "./errors.js";
 import { maybeWarnShakeDefault } from "./hashes.js";
+// ponytail: version-gate — the L5 decapsulate message rewrite below is
+// a Node 26 behaviour; under TARGET_NODE=24 the host's v24 message
+// passes through unchanged (table: crypto-encap-decap-message).
+import { isTarget24 } from "../version-gate.js";
 import {
   isEcPrivateCryptoKey,
   makeDeriveRawPublic,
@@ -325,10 +329,15 @@ export function wrapDecapsulateSync(nativeDecapsulate) {
     try {
       return nativeDecapsulate(key, ciphertext);
     } catch (err) {
-      // Host v24: 'Failed to perform decapsulation'; Node 26:
+      // ponytail: version-gate (table: crypto-encap-decap-message) —
+      // host v24: 'Failed to perform decapsulation'; Node 26:
       // 'Decapsulation failed' (code ERR_CRYPTO_OPERATION_FAILED is
-      // already right on both).
+      // already right on both). Under TARGET_NODE=24 the rewrite is
+      // skipped and the v24 message passes through. The async path
+      // derives from this sync function (wrapDecapsulate below), so
+      // this one gate covers both.
       if (
+        !isTarget24 &&
         err &&
         typeof err === "object" &&
         err.message === "Failed to perform decapsulation"

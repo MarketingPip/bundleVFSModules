@@ -27,6 +27,10 @@ import {
   ERR_OUT_OF_RANGE,
   ERR_CRYPTO_INVALID_DIGEST,
 } from "./errors.js";
+// ponytail: version-gate — DEP0198 is a pending deprecation in Node 24
+// (warns only with --pending-deprecation) and a real one in Node 26
+// (warns always). See maybeWarnShakeDefault below.
+import { isTarget24 } from "../version-gate.js";
 
 // Node 26 DEP0198: creating a SHAKE128/256 digest without an explicit
 // options.outputLength is deprecated. Node emits it once per process (its
@@ -51,6 +55,29 @@ export function maybeWarnShakeDefault(algorithm, options) {
       ? options.outputLength
       : undefined;
   if (outputLength !== undefined) return;
+  // ponytail: version-gate (table: crypto-shake-dep0198) — the shim
+  // delegates to the host's native crypto, and the host (v24.22.1) has
+  // the SAME pending-deprecation semantics as Node 24.20.0: with
+  // --pending-deprecation the host already emits DEP0198 once, so a
+  // shim warning there would be a DUPLICATE (common.expectWarning
+  // fails the test on the extra warning). The shim therefore warns
+  // only when the host would NOT have warned: target 26 (a real
+  // deprecation there) AND no --pending-deprecation flag. Under
+  // target 24 the host covers both cells exactly (flag -> host warns,
+  // no flag -> nobody warns), so the shim stays silent. Under the
+  // harness the flag arrives in process.execArgv: the vendored common
+  // re-spawns the test with its // Flags: plus the --import preload,
+  // so the shim sees the flag even though fast-sweep passes none.
+  if (isTarget24) return;
+  {
+    const argv =
+      typeof process !== "undefined" &&
+      process !== null &&
+      Array.isArray(process.execArgv)
+        ? process.execArgv
+        : [];
+    if (argv.includes("--pending-deprecation")) return;
+  }
   dep0198Warned = true;
   try {
     if (
