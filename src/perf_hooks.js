@@ -29,6 +29,11 @@
 // 1. Runtime bridge (rewritten per-sandbox by the runtime's _build_file).
 // ---------------------------------------------------------------------------
 import { perfObserveBridge } from "./internals/perf-observe.js";
+// ponytail: version-gate — TARGET_NODE selects whether the five Node 26
+// PerformanceResourceTiming attributes appear in toJSON()/inspect
+// (table: perf-hooks-resourcetiming-attrs). The getters stay in place:
+// the v24 test never reads them directly.
+import { isTarget24 } from "./version-gate.js";
 
 const RT =
   typeof globalThis._RUNTIME_ !== "undefined"
@@ -2400,7 +2405,14 @@ class PerformanceResourceTiming extends PerformanceEntry {
   }
 
   toJSON() {
-    return {
+    // ponytail: version-gate (table: perf-hooks-resourcetiming-attrs) —
+    // Node 24's PerformanceResourceTiming has no finalResponseHeadersStart,
+    // firstInterimResponseStart, renderBlockingStatus, contentType or
+    // contentEncoding; the v24 test asserts toJSON() deep-equal without
+    // them. The object is built in Node 26 order and the five keys are
+    // deleted under 24 (deepStrictEqual is order-insensitive, and the
+    // 26 path stays byte-identical).
+    const json = {
       name: this.name,
       entryType: this.entryType,
       startTime: this.startTime,
@@ -2430,11 +2442,35 @@ class PerformanceResourceTiming extends PerformanceEntry {
       contentType: this.contentType,
       contentEncoding: this.contentEncoding,
     };
+    if (isTarget24) {
+      delete json.finalResponseHeadersStart;
+      delete json.firstInterimResponseStart;
+      delete json.renderBlockingStatus;
+      delete json.contentType;
+      delete json.contentEncoding;
+    }
+    return json;
   }
 
   [kInspect](depth, _options, inspectFn) {
     if (depth < 0) return this;
     const fmt = (v) => formatInspectValue(v, inspectFn);
+    // ponytail: version-gate (table: perf-hooks-resourcetiming-attrs) —
+    // same five attributes as toJSON above: two chunks because the
+    // attributes are not contiguous in the output (two sit between
+    // requestStart and responseStart, three after responseStatus). The
+    // trailing comma lives in the tail chunk so the 24 output ends
+    // `responseStatus: 200` with no trailing comma, exactly as the v24
+    // test's inspect strings require.
+    const headAttrs = isTarget24
+      ? ""
+      : `  finalResponseHeadersStart: ${fmt(this.finalResponseHeadersStart)},\n` +
+        `  firstInterimResponseStart: ${fmt(this.firstInterimResponseStart)},\n`;
+    const tailAttrs = isTarget24
+      ? ""
+      : `,\n  renderBlockingStatus: ${fmt(this.renderBlockingStatus)},\n` +
+        `  contentType: ${fmt(this.contentType)},\n` +
+        `  contentEncoding: ${fmt(this.contentEncoding)}`;
     return (
       `PerformanceResourceTiming {\n` +
       `  name: ${fmt(this.name)},\n` +
@@ -2453,18 +2489,14 @@ class PerformanceResourceTiming extends PerformanceEntry {
       `  connectEnd: ${fmt(this.connectEnd)},\n` +
       `  secureConnectionStart: ${fmt(this.secureConnectionStart)},\n` +
       `  requestStart: ${fmt(this.requestStart)},\n` +
-      `  finalResponseHeadersStart: ${fmt(this.finalResponseHeadersStart)},\n` +
-      `  firstInterimResponseStart: ${fmt(this.firstInterimResponseStart)},\n` +
+      headAttrs +
       `  responseStart: ${fmt(this.responseStart)},\n` +
       `  responseEnd: ${fmt(this.responseEnd)},\n` +
       `  transferSize: ${fmt(this.transferSize)},\n` +
       `  encodedBodySize: ${fmt(this.encodedBodySize)},\n` +
       `  decodedBodySize: ${fmt(this.decodedBodySize)},\n` +
       `  deliveryType: ${fmt(this.deliveryType)},\n` +
-      `  responseStatus: ${fmt(this.responseStatus)},\n` +
-      `  renderBlockingStatus: ${fmt(this.renderBlockingStatus)},\n` +
-      `  contentType: ${fmt(this.contentType)},\n` +
-      `  contentEncoding: ${fmt(this.contentEncoding)}\n` +
+      `  responseStatus: ${fmt(this.responseStatus)}${tailAttrs}\n` +
       `}`
     );
   }

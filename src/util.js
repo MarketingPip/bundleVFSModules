@@ -28,6 +28,10 @@
 
 import { Buffer } from "buffer";
 import process from "process";
+// ponytail: version-gate — TARGET_NODE selects the Node 24 vs 26
+// behaviour for parseEnv's result prototype and the DataView inspect
+// indent (src/version-gate.js).
+import { isTarget24 } from "./version-gate.js";
 
 // ---------------------------------------------------------------------------
 // internal/errors-lite
@@ -3769,8 +3773,16 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
   // If a getter throws (detached buffer), Node falls back to reading the key
   // from value.buffer. Node 26 reads the value BEFORE indenting
   // (formatExtraProperties, lib/internal/util/inspect.js:2547), so no
-  // indentation leaks into the output — the level boost this code used to
-  // apply (replicating the v24 leak) is dropped.
+  // indentation leaks into the output — the default path below.
+  // ponytail: version-gate (table: util-inspect-dataview-indent) —
+  // Node 24's formatExtraProperties (inspect.js:2272) bumps
+  // ctx.indentationLvl +2 BEFORE reading value[key]; for a detached
+  // DataView the getter throws, the -= 2 never runs, and the +2 leaks —
+  // once per throwing extra (byteLength AND byteOffset), so the props
+  // render at 6 spaces with the closing brace at 4. The TARGET_NODE=24
+  // arm below replicates that bump/read/retry sequence per extra; the
+  // leaked level is restored after reduceToSingleString, exactly as
+  // Node's formatRaw restores ctx.indentationLvl on return.
   if (types.isDataView(value)) {
     const output = [];
     const getExtra = (key) => {
@@ -3784,24 +3796,49 @@ function formatValue(ctx, value, recurseTimes, level = 0, typedArray = false) {
         }
       }
     };
-    output.push(
-      `[${ctx.stylize("byteLength", "special")}]: ${getExtra("byteLength")}`,
-    );
-    output.push(
-      `[${ctx.stylize("byteOffset", "special")}]: ${getExtra("byteOffset")}`,
-    );
-    output.push(
-      `[${ctx.stylize("buffer", "special")}]: ${formatValue(ctx, getExtra("buffer"), recurseTimes, 0)}`,
-    );
+    let savedLvl = null;
+    if (isTarget24) {
+      savedLvl = ctx.indentationLvl || 0;
+      const formatExtra24 = (key) => {
+        ctx.indentationLvl = (ctx.indentationLvl || 0) + 2;
+        let str;
+        try {
+          const v = value[key];
+          str = formatValue(ctx, v, recurseTimes, 0);
+          ctx.indentationLvl = (ctx.indentationLvl || 0) - 2;
+        } catch {
+          // formatRaw retries with the fallback value value.buffer[key].
+          ctx.indentationLvl = (ctx.indentationLvl || 0) + 2;
+          str = formatValue(ctx, getExtra(key), recurseTimes, 0);
+          ctx.indentationLvl = (ctx.indentationLvl || 0) - 2;
+        }
+        return `[${ctx.stylize(key, "special")}]: ${str}`;
+      };
+      output.push(formatExtra24("byteLength"));
+      output.push(formatExtra24("byteOffset"));
+      output.push(formatExtra24("buffer"));
+    } else {
+      output.push(
+        `[${ctx.stylize("byteLength", "special")}]: ${getExtra("byteLength")}`,
+      );
+      output.push(
+        `[${ctx.stylize("byteOffset", "special")}]: ${getExtra("byteOffset")}`,
+      );
+      output.push(
+        `[${ctx.stylize("buffer", "special")}]: ${formatValue(ctx, getExtra("buffer"), recurseTimes, 0)}`,
+      );
+    }
     const keys = getKeys(ctx, value);
     for (const key of keys)
       output.push(formatProperty(ctx, value, recurseTimes, key, false));
     // A null prototype gets Node's `[DataView: null prototype]` prefix.
     const dvCtor = nodeConstructorName(value);
     const dvBase = dvCtor === null ? "[DataView: null prototype]" : "DataView";
-    return finish(
+    const res = finish(
       reduceToSingleString(ctx, output, dvBase, ["{", "}"], level),
     );
+    if (savedLvl !== null) ctx.indentationLvl = savedLvl;
+    return res;
   }
 
   // ---- TypedArray
@@ -6120,11 +6157,11 @@ const envKeyRegex = /^[a-zA-Z_][a-zA-Z_0-9]*$/;
 export function parseEnv(content) {
   validateString(content, "content");
   /** @type {Record<string, string>} */
-  // ponytail: Node 26 returns a null-prototype object (C++ binding,
-  // Dotenv::ToObject). The parser below is a faithful port of
-  // Dotenv::ParseContent (multiline quoted values, \n expansion inside
-  // double quotes only, inline comments, `export ` prefix, last-wins).
-  const result = Object.create(null);
+  // ponytail: version-gate (table: util-parseenv-null-prototype) —
+  // Node 24 returns a plain {}; Node 26 returns a null-prototype
+  // object (C++ binding, Dotenv::ToObject). deepStrictEqual
+  // distinguishes the prototypes, so the gate selects it here.
+  const result = isTarget24 ? {} : Object.create(null);
 
   // Handle windows newlines "\r\n": remove "\r" and keep only "\n"
   let lines = content.replace(/\r/g, "");

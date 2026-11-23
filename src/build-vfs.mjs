@@ -192,6 +192,17 @@ const DIST_DIR = "dist";
 // Get __dirname equivalent in ESM
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Build-time TARGET_NODE gate (src/version-gate.js): dist builds bake
+// the target as a constant via esbuild `define` below. TARGET_NODE=24
+// builds the v24 dist; default (and any CI run without the env var)
+// is 26. An unrecognised value fails the build — never silently defaults.
+const BUILD_TARGET_NODE = process.env.TARGET_NODE ?? "26";
+if (BUILD_TARGET_NODE !== "24" && BUILD_TARGET_NODE !== "26") {
+  throw new Error(
+    `TARGET_NODE must be '24' or '26', got ${JSON.stringify(BUILD_TARGET_NODE)}`,
+  );
+}
+
 async function bundleToString(entry) {
   entry = path.resolve(__dirname, entry);
   try {
@@ -205,6 +216,13 @@ async function bundleToString(entry) {
       write: false,
       external: [],
       treeShaking: true,
+      // Bake TARGET_NODE into every bundle: src/version-gate.js reads
+      // the free identifier __TARGET_NODE__ and the define replaces it
+      // with the string literal, so the env branch is dead code in dist
+      // and is eliminated by minify. The parity harness runs src/
+      // directly (no define), where the gate reads PARITY_TARGET_NODE
+      // per run instead. No runtime version switcher (AGENTS.md rule 11).
+      define: { __TARGET_NODE__: JSON.stringify(BUILD_TARGET_NODE) },
       plugins: [
         nodeGitHubPlugin(),
         nodeModulesPolyfillPlugin({

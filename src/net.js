@@ -35,6 +35,10 @@
 
 import { Duplex } from "./stream.js";
 import { EventEmitter, addAbortListener } from "./events.js";
+// ponytail: version-gate — TARGET_NODE selects the Node 24 vs 26
+// default for auto-select-family (250 vs 500, src/version-gate.js).
+// Ceiling: delete the '24' arm when the 24 build is dropped.
+import { isTarget24 } from "./version-gate.js";
 import { undestroy as undestroyStream } from "./stream/destroy.js";
 import { constants as osConstants } from "./os.js";
 // ponytail: node:fs is imported ONLY for pipe-bind filesystem effects
@@ -934,7 +938,11 @@ BlockList.prototype._parseIPInfo = function _parseIPInfo(data) {
 // ---------------------------------------------------------------------------
 
 let defaultAutoSelectFamily = true;
-let defaultAutoSelectFamilyAttemptTimeout = 500; // Node 26: option default raised 250 → 500 (lib/net.js:160; node_options.cc:730).
+// ponytail: version-gate (table: net-autoselectfamily-default) —
+// Node 24 default 250, Node 26 default 500 (lib/net.js:160;
+// node_options.cc:730). The v24 test asserts platformTimeout(2500)
+// because v24 common scales the default x10; n26 common scales x5.
+let defaultAutoSelectFamilyAttemptTimeout = isTarget24 ? 250 : 500;
 
 // Node CLI flags --network-family-autoselection /
 // --no-network-family-autoselection and

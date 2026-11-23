@@ -24,6 +24,11 @@
 
 import { EventEmitter } from "events";
 import { Duplex, Readable, Writable } from "stream";
+// ponytail: version-gate — TARGET_NODE selects the standalone-response
+// write count (2 under 24, 1 under 26; table:
+// http-standalone-trailing-write). No import cycle: version-gate.js
+// imports nothing.
+import { isTarget24 } from "./version-gate.js";
 // NOTE: imported from the relative path, NOT bare "stream": the esbuild
 // browser build resolves bare "stream" to node-modules-polyfills:stream,
 // which does not export getDefaultHighWaterMark (that import broke the
@@ -2807,17 +2812,16 @@ export class ServerResponse extends OutgoingMessage {
           this._headerFlushed || !this._header
             ? Buffer.alloc(0)
             : Buffer.from(this._header, "latin1");
-        // Exactly ONE write (headers + body): the test's Writable is
-        // mustCall(..., 1), and real Node delivers a standalone response
-        // as a single write — a trailing empty write would trip the
-        // mustCall count (and its endsWith('hello world') assert).
-        // (test-http-server-response-standalone)
-        // No trailing empty write: the live program is Node 26, which
-        // folds the final chunk into ONE write (maybePrepareFinalChunk,
-        // lib/_http_outgoing.js) and expects mustCall(..., 1); the v24
-        // file's mustCall(..., 2) is mutually exclusive — one fixed
-        // write count cannot satisfy both yardsticks.
+        // ponytail: version-gate (table: http-standalone-trailing-write)
+        // — Node 26 folds the final chunk into ONE write
+        // (maybePrepareFinalChunk, lib/_http_outgoing.js) and its test
+        // expects mustCall(..., 1); Node 24 emits a trailing empty write
+        // and its test expects mustCall(..., 2) with the 2nd chunk
+        // length 0. One fixed write count cannot satisfy both yardsticks
+        // (PR #554 restored the write unconditionally and regressed
+        // node26; reverted by #555) — the gate selects it per target.
         sock.write(Buffer.concat([header, body]));
+        if (isTarget24) sock.write(Buffer.alloc(0));
       } catch {
         /* socket write failed; ignore */
       }
