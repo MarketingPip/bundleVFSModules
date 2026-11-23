@@ -1,5 +1,6 @@
 /**
  * Browser-compatible child_process shim — port of Node v24.20.0 lib/child_process.js
+ * MIT License.
  *
  * Argument validation, error codes/messages, option normalization, return
  * shapes, and event names match Node v24.20.0. Real subprocesses are
@@ -2678,9 +2679,18 @@ function spawnSyncCore(shellCommand, shellArgs, norm) {
  */
 export function execSync(command, options) {
   const norm = normalizeExecArgs(command, options, null);
+  // ponytail: Node's execSync routes via spawnSync → normalizeSpawnArguments,
+  // so argument validation (cwd/argv0/shell/env null bytes) runs before any
+  // spawn attempt. This shim called spawnSyncCore directly, so getShell()
+  // threw plain "no shell configured" before any validation. Validate with
+  // the existing helper first and hand the shell the validated options;
+  // valid calls still reach getShell(). Ceiling: timeout/maxBuffer/
+  // killSignal/signal are validated only on the spawnSync path — if a test
+  // ever needs them here, route execSync through spawnSync instead.
+  const spawnNorm = normalizeSpawnArguments(command, [], norm.options);
   // Pass the original command string (not "/bin/sh") so the shell
   // contract matches async exec: shell(command, [], options).
-  return spawnSyncCore(command, [], norm.options).stdout;
+  return spawnSyncCore(command, [], spawnNorm).stdout;
 }
 
 /**
