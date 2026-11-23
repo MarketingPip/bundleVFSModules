@@ -1,4 +1,5 @@
 // src/zlib.js — Browser-first port of Node.js zlib (Node v24 API surface).
+// MIT License.
 //
 // Implements the Node v24 zlib API surface (deflate/inflate/gzip/gunzip,
 // deflateRaw/inflateRaw/unzip, Brotli facades, Zstd via the vendored
@@ -3608,5 +3609,24 @@ const zlibDefaultExport = {
   setMaxZipContentSize,
   zipFiles,
 };
+
+// ponytail: ceiling is CJS-shape parity only — real Node exposes every
+// non-BROTLI entry of `constants` (107 names on v24/v26, 36 strict Z_*) as
+// a non-enumerable, non-writable, non-configurable property on
+// module.exports (node-src/lib/zlib.js:1083-1092), while the ESM namespace
+// has none of them. This loop mirrors that rule instead of retyping the
+// values, so a future constants addition flows through automatically; it
+// must run before the freeze below. Do NOT add named ESM exports for
+// these — real Node ESM has none (`import { Z_OK }` is a SyntaxError
+// there). Upgrade path: if Node ever makes these enumerable or adds a
+// named ESM export, change the descriptor / export list here.
+for (const [key, value] of Object.entries(constants)) {
+  if (key.startsWith("BROTLI")) continue;
+  Object.defineProperty(zlibDefaultExport, key, {
+    enumerable: false,
+    value,
+    writable: false,
+  });
+}
 Object.freeze(zlibDefaultExport);
 export default zlibDefaultExport;
