@@ -285,8 +285,9 @@ drop-connections 124,124 (base 124,124). Both match base.
 
 ## Ship
 
-- Branch: (fill in)
-- Code SHA: (fill in)
-- PR: (fill in)
-- Merge SHA: (fill in)
-- CI: (fill in)
+- Branch: `fix/26-gate-step1` (local commit `42cf8aba`)
+- Code SHA: `318c63b4e1d5cd6528b9dc03e7e79e49ebdb2b1b`
+- PR: #558 — feat: build-time TARGET_NODE version gate + 9 datum cases (step 1)
+- Merge SHA: `5094eb177e3e28c376377ebdfd95001ef78585e5` (squash, PUT; `merged: true` confirmed by direct API read; main tip verified). Second PR commit was the dist-regen bot commit `9fc4baa6` — expected.
+- CI: GREEN on the code SHA (waiter poll 6: Parity completed/success + build completed/success, single complete run).
+- Banking: v24 2,305 → **2,311/3,206 (+6)** — net +1 (142→143), crypto +3 (118→121), util +1 (28→29), perf_hooks +1 (14→15), http +0 (388/397, composition changed). Node 26 unchanged **2,374/2,814** — zero regressions, zero flips. Numbers banked in `parity/measured-rates.json` + `parity/HITLIST.md` by the docs-sync follow-up PR (this PR's sibling).
