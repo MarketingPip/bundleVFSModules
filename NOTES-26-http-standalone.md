@@ -168,4 +168,8 @@ one comment block + one license line, all in `src/http.js`.
 
 ## Ship
 
-<!-- FILL: PR, full merge SHA, CI line, flip facts -->
+- PR: #554 — https://github.com/MarketingPip/bundleVFSModules/pull/554
+- Merge SHA: `80b406d269e6eadd870846346bd168a7fe0c6266` (squash-merge of PR #554; verified `merged: true` by direct read; merge SHA is an ancestor of `origin/main`).
+- CI line: code SHA `b5c4bad2ff18c0301ae9b73bde1b88242bc58edb` — Parity (Node official tests) completed/success, build completed/success (waiter verdict green + direct check-runs read: 2 runs, both completed/success). The regen head `06dd22d6` (bot `chore: regenerate vfs.js`, dist/ only) carried zero check-runs, per the dist-regen rule.
+- Flip facts: v24 http **388 → 389/397** (standalone flip, verified [0,0] 2x isolated; v24 differential 387/397 sweep, toward-pass=1, 0 genuine regressions — `test-http-unix-socket.js` adjudicated sweep-only flake, isolated [0,0]). Node26 http **412 → 411/422** (standalone is the only diff in the full `run-baseline.mjs --modules http` differential).
+- Repo jest http suite: 11 suites, 134 tests green (incl. footprint `tests/ondemand-require.test.js`).

@@ -20,15 +20,15 @@
       "total": 62
     },
     "child_process": {
-      "date": "2026-10-11",
-      "passed": 6,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-23",
+      "passed": 7,
+      "source": "Take-back L-C 2026-11-23: 6 -> 7 via PR #552 (merge 013048f9b5a9e5d6be74d388d2d4fb47286802b3); flip test-child-process-reject-null-bytes.js verified 2x, 0 regressions.",
       "total": 112
     },
     "cluster": {
-      "date": "2026-10-11",
-      "passed": 4,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-23",
+      "passed": 22,
+      "source": "Take-back L-HARNESS 2026-11-23: 4 -> 22 via PR #553 (merge db576b10af6f3ea0129d8f9451c1694e112b82c9); timer-restore harness, 18 flips verified 2x, 0 regressions.",
       "total": 83
     },
     "console": {
@@ -44,9 +44,9 @@
       "total": 129
     },
     "dgram": {
-      "date": "2026-10-11",
-      "passed": 1,
-      "source": "parity/HITLIST.md full-ranking sweep 2026-10-11",
+      "date": "2026-11-23",
+      "passed": 14,
+      "source": "Take-back L-HARNESS 2026-11-23: 1 -> 14 via PR #553 (merge db576b10af6f3ea0129d8f9451c1694e112b82c9); timer-restore harness, 13 flips verified 2x, 0 regressions.",
       "total": 80
     },
     "diagnostics_channel": {

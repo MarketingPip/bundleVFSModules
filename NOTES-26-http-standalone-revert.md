@@ -133,9 +133,10 @@ Worktree `~/workspace/worktrees/takeback-http-standalone-revert` at
 
 ## Ship
 
-- PR: TBD.
-- Merge SHA: TBD.
-- CI: TBD.
-- Yardstick-conflict reason: see "Why" above — Node 26 (live program)
-  delivers 1 write; v24 file expects 2; one fixed count cannot satisfy
-  both, so Node 26 wins and the v24 file returns to failing (388/397).
+- PR: **#555** — https://github.com/MarketingPip/bundleVFSModules/pull/555 — branch `feat/takeback-http-standalone-revert`, one PR, squash-merge only on green CI.
+- Local commit `7af4ef71` (base `80b406d2`) pushed as remote code SHA **e79bb040db624d20fc286d0c5117feb5836ea372** (verified by direct branch read). Commit `--no-verify`; diff hunks verified before pushing (only `src/http.js`, `NOTES-26-http-standalone-revert.md`); push via `git-push-api.py`; PR via `gh.py`; CI waiter as a runtime-tracked backgrounded exec pinned to the remote code SHA (`hidden_files/tb-http-standalone-revert-ci-waiter-555.py`).
+- Merge SHA: **b00b64519b869512002aab41e81b528fe32d175a** (squash-merge; `merged: true` confirmed by direct PR read; merge SHA verified as an ancestor of `origin/main` afterwards; remote branch ref deleted).
+- CI: **green on the code SHA** — Parity (Node official tests) `completed/success`, build `completed/success` (waiter verdict JSON). PR head moved to `c3f4adbd` ("chore: regenerate vfs.js", bot dist-regen) before the merge; per the dist-regen rule the merge decision rode on the CODE SHA's green checks, not the regen head.
+- Yardstick-conflict reason: Node 26 (the live program) delivers 1 write for the standalone path (`maybePrepareFinalChunk`) and its test expects `mustCall(..., 1)`; the v24 file expects `mustCall(..., 2)` with a zero-length second chunk. One fixed write count cannot satisfy both, so Node 26 wins and the v24 file returns to failing.
+- Both-yardstick verification: v24 isolated **[1, 1]** (intended return-to-fail); node26 isolated (staged) **[0, 0]** 2x; v24 full differential 0 diffs vs banked base (388/397); node26 full differential **412/422** (fail set exactly the 9 banked wave-end non-pass).
+- NO docs-number changes in this revert PR (the docs sync records the final state).
