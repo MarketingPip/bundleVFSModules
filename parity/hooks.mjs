@@ -189,6 +189,22 @@ function polyfillURL(specifier) {
   if (target === "net" && name === "net") {
     return pathToFileURL(path.join(repoRoot, "parity", "net-harness.mjs")).href;
   }
+  // Harness-only timer-globals restore for cluster parity
+  // (parity/cluster-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs. Needed by ESM test files that import 'cluster'.
+  if (target === "cluster" && name === "cluster") {
+    return pathToFileURL(
+      path.join(repoRoot, "parity", "cluster-harness.mjs"),
+    ).href;
+  }
+  // Harness-only timer-globals restore for dgram parity
+  // (parity/dgram-harness.mjs). ESM import path; CJS require path is in
+  // preload.mjs. Needed by the ESM-only test-dgram-async-dispose.mjs,
+  // which would otherwise load src/dgram.js directly (no timer restore).
+  if (target === "dgram" && name === "dgram") {
+    return pathToFileURL(path.join(repoRoot, "parity", "dgram-harness.mjs"))
+      .href;
+  }
   const candidate = path.join(repoRoot, "src", ...parts) + ".js";
   if (!fs.existsSync(candidate)) return null;
   return pathToFileURL(candidate).href;
