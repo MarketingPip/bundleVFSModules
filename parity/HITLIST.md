@@ -24,6 +24,7 @@ self-contained `src/readline/event-emitter.js` (zero imports, zero globals)
 is used by `src/readline.js` and `src/readline/promises.js` instead.
 Updated 2026-11-23: take-back wave (PRs #551–#556) — v24 total 2,273/3,206 → 2,305/3,206 (+32): child_process 6→7, cluster 4→22, dgram 1→14; http unchanged (L-H merged then reverted, net 0); node26 unchanged 2,374/2,814.
 Updated 2026-11-23: version-support step 1 (PR #558) — v24 total 2,305/3,206 → 2,311/3,206 (+6): net 142→143, crypto 118→121, util 28→29, perf_hooks 14→15; http unchanged in count (388/397, composition changed — standalone flip offsets drop-connections); node26 unchanged 2,374/2,814.
+Updated 2026-11-23: http2 double-count correction (post-gate full-program re-sweep) — node26 http2 95/307 → 94/307, program 2,374/2,814 → 2,373/2,814 (84.3%): test-http2-write-callbacks.js was already among PR #532's 6 flips (88 → 94/289) and was banked again by PR #548; the test passes, the banking counted it twice. No code change, no regression.
 Method: each `test-<module>-*` file run via `parity/preload.mjs` with
 `PARITY_TARGET=<module>` (30s timeout per file). Pass rates are **raw** —
 they do not subtract `parity/expected-failures.shim.json` entries.
@@ -156,6 +157,8 @@ Fold-in (2026-11-22): the asyncresource lane fixed `test-eventemitter-asyncresou
 
 Flip (2026-11-22): the http2 engine design study's every-5th sample of the failing set found `test-http2-write-callbacks.js` passing on current main — it was failing at the Nov 18 wave end and was never banked. Re-verified isolated 2x on main `f89551e7` (oracle exit 0 2x, shim exit 0 2x, empty output). No code change: http2 94/307 → **95/307 (30.9%)**, program **2,373/2,814 → 2,374/2,814 (84.4%)**. The headline percentage moves 84.3% → 84.4%.
 
+Correction (2026-11-23): the 2026-11-22 http2 flip above double-counted `test-http2-write-callbacks.js` — it was already among PR #532's 6 flips (the PR #532 merge message lists write-callbacks; "Differential 88/289 -> 94/289"), so the 94 already contained it. PR #548 banked it again as "94 -> 95/307". The test passes on live main (exit 0); the banking counted it twice. Corrected: http2 95/307 → **94/307 (30.6%)**, program **2,374/2,814 → 2,373/2,814 (84.3%)**. No code change, no regression. Evidence: post-gate full-program re-sweep NOTES (`hidden_files/resweep-postgate/NOTES-26-resweep-postgate.md`).
+
 Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `test-repl-highlight.js` (proven by one-step bisection against the pre-util merge); the repair is a Wave 3 follow-up. Wave 2 took repl 97 → 99/108. Wave 3 repaired it to 100/108 (PR #531).
 
 | module | baseline | Wave 1 | Wave 2 | Wave 3 | Wave 4 | Re-sweep | % |
@@ -169,7 +172,7 @@ Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `t
 | events | 1/9 | 9/9 | 9/9 | 9/9 | 39/39 | 40/40 | 100% |
 | fs | 346/385 | 350/385 | 365/385 | 365/385 | 365/385 | 365/385 | 94.8% |
 | http | 390/422 | 393/422 | 412/422 | 412/422 | 412/422 | 412/422 | 97.6% |
-| http2 | 88/289 | 88/289 | 88/289 | 94/289 | 94/307 | 95/307 | 30.9% |
+| http2 | 88/289 | 88/289 | 88/289 | 94/289 | 94/307 | 94/307 | 30.6% |
 | https | 58/70 | 60/70 | 60/70 | 60/70 | 60/70 | 60/70 | 85.7% |
 | inspector | 41/76 | 41/76 | 41/76 | 41/76 | 41/76 | 41/76 | 53.9% |
 | module | 32/37 | 33/37 | 33/37 | 33/37 | 37/41 | 37/41 | 90.2% |
@@ -188,4 +191,4 @@ Correction: repl Wave 1 is 97/108, not 98 — the util merge (#513) regressed `t
 | vm | 65/101 | 66/101 | 66/101 | 66/101 | 66/101 | 66/101 | 65.3% |
 | worker_threads | 137/146 | 137/146 | 138/146 | 138/146 | 139/147 | 139/147 | 94.6% |
 | zlib | 48/89 | 51/89 | 54/89 | 69/89 | 69/89 | 69/89 | 77.5% |
-| **total** | **2,144/2,748** | **2,197/2,748** | **2,272/2,748** | **2,323/2,748** | **2,370/2,813** | **2,374/2,814** | **84.4%** |
+| **total** | **2,144/2,748** | **2,197/2,748** | **2,272/2,748** | **2,323/2,748** | **2,370/2,813** | **2,373/2,814** | **84.3%** |
