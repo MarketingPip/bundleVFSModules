@@ -48,6 +48,9 @@ import {
 } from "./internals/fs-utils.js";
 import { fsBindingState } from "./internals/fs-binding-state.js";
 import { AsyncResource } from "./async_hooks.js";
+// ponytail: version-gate — TARGET_NODE selects the Node 24 vs 26
+// behaviour for recursive rmdir (DEP0147 + works vs removed, throws).
+import { isTarget24 } from "./version-gate.js";
 
 // Browser-safe nextTick (process.nextTick under Node, queueMicrotask otherwise).
 function nextTick(fn, ...args) {
@@ -3525,9 +3528,12 @@ function buildApi(vol) {
   // Any defined `recursive` option throws ERR_INVALID_ARG_VALUE on all
   // three forms (lib/fs.js rmdir/rmdirSync, lib/internal/fs/promises.js
   // rmdir) — `recursive: false` throws too, `recursive: undefined` does
-  // not. The old DEP0147 recursive implementation is deleted, not kept
-  // behind the warning: there is no upgrade path back (use fs.rm with
-  // { recursive: true }).
+  // not. Under TARGET_NODE=24 the option still exists: recursive rmdir
+  // works and emits DEP0147 once per process (Node 24 lib/fs.js
+  // emitRecursiveRmdirWarning, lib/internal/fs/utils.js
+  // validateRmdirOptions / validateRmOptionsSync). The 24 path below is
+  // real removal via the existing fs.rm machinery, not a warn-and-pretend
+  // (rule 7): the warning fires only when the tree is really removed.
   function throwRmdirRecursive(options) {
     if (options?.recursive !== undefined) {
       throw errInvalidArgValue(
@@ -3536,6 +3542,88 @@ function buildApi(vol) {
         "is no longer supported",
       );
     }
+  }
+  // ponytail: version-gate (table: fs-rmdir-recursive) — DEP0147 emitter,
+  // mirroring src/crypto/hashes.js maybeWarnShakeDefault: once per
+  // process, via process.emitWarning, Node-only (browser: no-op).
+  const DEP0147_MESSAGE =
+    "In future versions of Node.js, fs.rmdir(path, { recursive: true }) " +
+    "will be removed. Use fs.rm(path, { recursive: true }) instead";
+  let dep0147Warned = false;
+  function emitRecursiveRmdirWarning() {
+    if (dep0147Warned) return;
+    dep0147Warned = true;
+    try {
+      if (
+        typeof process !== "undefined" &&
+        process !== null &&
+        process.noDeprecation
+      )
+        return;
+      if (
+        typeof process !== "undefined" &&
+        process !== null &&
+        typeof process.emitWarning === "function"
+      ) {
+        process.emitWarning(DEP0147_MESSAGE, {
+          type: "DeprecationWarning",
+          code: "DEP0147",
+        });
+      }
+    } catch {
+      /* no process.emitWarning (browser) — the warning is Node-only */
+    }
+  }
+  // Node v24 lib/internal/fs/utils.js validateRmdirOptions (defaults:
+  // retryDelay 100, maxRetries 0, recursive false). Same shape as the
+  // faithful port in parity/internal-fs-utils-adapter.mjs (strict object
+  // check — null/arrays throw; explicit `recursive: undefined` throws
+  // because the spread overwrites the default). Only used on the
+  // TARGET_NODE=24 rmdir path; Node 26 removed the option entirely.
+  // Retry behaviour is not reimplemented: memfs rm ignores maxRetries /
+  // retryDelay, and no v24 test exercises retries (residual, noted in
+  // NOTES-26-fs-rmdir-gate.md).
+  const DEFAULT_RMDIR_OPTIONS = {
+    retryDelay: 100,
+    maxRetries: 0,
+    recursive: false,
+  };
+  function validateRmdirOptionsShim(options) {
+    if (options === undefined) return { ...DEFAULT_RMDIR_OPTIONS };
+    if (
+      options === null ||
+      typeof options !== "object" ||
+      Array.isArray(options)
+    )
+      throw errInvalidArgType("options", "object", options);
+    const merged = { ...DEFAULT_RMDIR_OPTIONS, ...options };
+    if (typeof merged.recursive !== "boolean")
+      throw errInvalidPropType(
+        "options.recursive",
+        "boolean",
+        merged.recursive,
+      );
+    validateInteger(merged.retryDelay, "options.retryDelay", 0, 2147483647);
+    validateInteger(merged.maxRetries, "options.maxRetries", 0, 4294967295);
+    return merged;
+  }
+  // Node 24 validateRmOptionsSync(path, {...opts, force: false},
+  // expectDir=true) lstat step (lib/internal/fs/utils.js:841-865):
+  // returns the stats when the target is a directory, null when it exists
+  // but is not a directory (file/symlink — the caller falls through to
+  // plain rmdir, which raises ENOTDIR; memfs agrees with real Node here,
+  // probed on 24.20.0). Throws the lstat error itself when the target is
+  // missing (ENOENT, syscall 'lstat' via the sticky override, mirroring
+  // checkRm).
+  function rmdirRecursiveStat(ps) {
+    let st;
+    try {
+      st = vol.lstatSync(ps);
+    } catch (e) {
+      if (e && e.code === "ENOENT") e._syscallOverride = "lstat";
+      throw e;
+    }
+    return st.isDirectory() ? st : null;
   }
   for (const [syncName, cbName] of [["rmSync", "rm"]]) {
     const origSync = fs[syncName],
@@ -3590,17 +3678,48 @@ function buildApi(vol) {
     };
   }
   // rmdir/rmdirSync: plain rmdir removes an empty dir (memfs raises
-  // ENOTEMPTY/ENOTDIR/ENOENT itself). Any defined `recursive` option
-  // throws ERR_INVALID_ARG_VALUE (Node 26, 25.0.0 removal) — sync after
-  // path validation, async before callback/path validation (Node's
-  // lib/fs.js order). Never the rm EISDIR path (test-fs-mkdir-rmdir).
+  // ENOTEMPTY/ENOTDIR/ENOENT itself). Under TARGET_NODE=26 any defined
+  // `recursive` option throws ERR_INVALID_ARG_VALUE (25.0.0 removal) —
+  // sync after path validation, async before callback/path validation
+  // (Node's lib/fs.js order). Under TARGET_NODE=24 `recursive: true`
+  // warns DEP0147 once and really removes the tree via the wrapped
+  // fs.rm/fs.rmSync above (symlinks inside are unlinked, never followed
+  // — memfs rm agrees with rimraf there); a missing target reports
+  // ENOENT and a file/symlink target falls through to plain rmdir
+  // (ENOTDIR). Never the rm EISDIR path (test-fs-mkdir-rmdir).
+  // fs.promises.rmdir delegates to the callback form, so it is gated
+  // by the same branch.
   {
     const origSync = fs.rmdirSync,
       origCb = fs.rmdir;
     fs.rmdirSync = function (p, options) {
       validatePath(p);
       const ps = toPathString(p);
-      throwRmdirRecursive(options);
+      if (isTarget24) {
+        const opts = validateRmdirOptionsShim(options);
+        if (opts.recursive) {
+          emitRecursiveRmdirWarning();
+          let st;
+          try {
+            st = rmdirRecursiveStat(ps);
+          } catch (e) {
+            throw enrichErr(e, "rmdirSync");
+          }
+          if (st) {
+            fs.rmSync(ps, {
+              recursive: true,
+              force: false,
+              maxRetries: opts.maxRetries,
+              retryDelay: opts.retryDelay,
+            });
+            emitFs("fs", "rmdirSync", p, undefined);
+            return;
+          }
+          // Not a directory: fall through to plain rmdir (ENOTDIR).
+        }
+      } else {
+        throwRmdirRecursive(options);
+      }
       try {
         origSync.call(this, ps, options);
       } catch (e) {
@@ -3609,10 +3728,11 @@ function buildApi(vol) {
       emitFs("fs", "rmdirSync", p, undefined);
     };
     fs.rmdir = function (p, options, callback) {
-      // Node throws the recursive error before makeCallback/path
+      // Node 26 throws the recursive error before makeCallback/path
       // validation, so a missing callback still surfaces
-      // ERR_INVALID_ARG_VALUE, not ERR_INVALID_ARG_TYPE.
-      throwRmdirRecursive(options);
+      // ERR_INVALID_ARG_VALUE, not ERR_INVALID_ARG_TYPE. Node 24
+      // validates callback/path first, then warns.
+      if (!isTarget24) throwRmdirRecursive(options);
       if (typeof options === "function") {
         callback = options;
         options = undefined;
@@ -3621,7 +3741,7 @@ function buildApi(vol) {
         throw errInvalidArgType("cb", "function", callback);
       validatePath(p);
       const ps = toPathString(p);
-      nextTick(() => {
+      const plainAsyncRmdir = () => {
         try {
           origCb.call(this, ps, options, (err) => {
             if (err) return callback(enrichErr(err, "rmdir"));
@@ -3631,7 +3751,48 @@ function buildApi(vol) {
         } catch (e) {
           callback(enrichErr(e, "rmdir"));
         }
-      });
+      };
+      if (isTarget24 && options?.recursive) {
+        emitRecursiveRmdirWarning();
+        nextTick(() => {
+          let opts;
+          try {
+            opts = validateRmdirOptionsShim(options);
+          } catch (e) {
+            callback(enrichErr(e, "rmdir"));
+            return;
+          }
+          let st;
+          try {
+            st = rmdirRecursiveStat(ps);
+          } catch (e) {
+            callback(enrichErr(e, "rmdir"));
+            return;
+          }
+          if (st) {
+            fs.rm(
+              ps,
+              {
+                recursive: true,
+                force: false,
+                maxRetries: opts.maxRetries,
+                retryDelay: opts.retryDelay,
+              },
+              (err) => {
+                if (err) return callback(enrichErr(err, "rmdir"));
+                emitFs("fs", "rmdir", p, undefined);
+                callback(null);
+              },
+            );
+            return;
+          }
+          // Not a directory: plain rmdir raises ENOTDIR.
+          plainAsyncRmdir();
+        });
+        return;
+      }
+      if (isTarget24) validateRmdirOptionsShim(options);
+      nextTick(plainAsyncRmdir);
     };
   }
 

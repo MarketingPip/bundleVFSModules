@@ -12,6 +12,18 @@ import { nodeModulesPolyfillPlugin } from "esbuild-plugins-node-modules-polyfill
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Build-time TARGET_NODE gate (src/version-gate.js): fs is a gated
+// module since the rmdir-recursive gate, so this one-off rebuild must
+// bake the target exactly like src/build-vfs.mjs bundleToString does.
+// TARGET_NODE=24 builds the v24 dist; default is 26. An unrecognised
+// value fails the build — never silently defaults.
+const BUILD_TARGET_NODE = process.env.TARGET_NODE ?? "26";
+if (BUILD_TARGET_NODE !== "24" && BUILD_TARGET_NODE !== "26") {
+  throw new Error(
+    `TARGET_NODE must be '24' or '26', got ${JSON.stringify(BUILD_TARGET_NODE)}`,
+  );
+}
+
 async function buildOne(entryRel, outRel) {
   const entry = path.resolve(__dirname, entryRel);
   const result = await build({
@@ -24,6 +36,7 @@ async function buildOne(entryRel, outRel) {
     write: false,
     external: [],
     treeShaking: true,
+    define: { __TARGET_NODE__: JSON.stringify(BUILD_TARGET_NODE) },
     plugins: [
       nodeGitHubPlugin(),
       nodeModulesPolyfillPlugin({ globals: { Buffer: true } }),
