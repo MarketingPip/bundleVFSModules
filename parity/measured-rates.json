@@ -1,5 +1,5 @@
 {
-  "_about": "Measured official-test pass rates per module, consumed by scripts/generate-capability-matrix.mjs. Entries are added ONLY from actual sweep runs (never derived from the capability matrix itself, never estimated). Update an entry when its module is re-swept, and record the new date and source. Method for all entries unless noted: each test-<module>-* file in parity/node-test/parallel run via parity/preload.mjs with PARITY_TARGET=<module>, 30s timeout per file; counts are raw (entries in parity/expected-failures.shim.json are NOT subtracted). The top-level `node26` object holds the same structure for the Node 26.13.1 re-target suite (26 test files run via `parity/drift/run-baseline.mjs`); its counts are parent-verified wave-end counts, never estimates.",
+  "_about": "Measured official-test pass rates per module, consumed by scripts/generate-capability-matrix.mjs. Entries are added ONLY from actual sweep runs (never derived from the capability matrix itself, never estimated). Update an entry when its module is re-swept, and record the new date and source. Method for all entries unless noted: each test-<module>-* file in parity/node-test/parallel run via parity/preload.mjs with PARITY_TARGET=<module>, 30s timeout per file; counts are raw (entries in parity/expected-failures.shim.json are NOT subtracted). The top-level `node26` object holds the same structure for the Node 26.13.1 re-target suite (26 test files run via `parity/drift/run-baseline.mjs`); its counts are parent-verified wave-end counts, never estimates. The top-level `node24` object holds the same structure for the Node 24.20.0 drift baseline (28 drift modules run via `parity/drift/run-baseline.mjs --target 24`); its counts are the baseline values from `parity/drift/node24-baseline.jsonc`, not banked program numbers.",
   "modules": {
     "assert": {
       "date": "2026-11-22",
@@ -74,9 +74,9 @@
       "total": 9
     },
     "fs": {
-      "date": "2026-11-22",
-      "passed": 333,
-      "source": "parity/HITLIST.md wave F1 (324->344, 2026-11-15; merges 47bbd2e3, be592901, 3c2b76a4, eca141cf, ee0a2490, 5a2b13c4, 42f7bd56, 08fe2b0d, f23082f3, 7f5f322d, 10ead287, dc25a75e, 82d117de, 5322dce5, 1376ec6b) Re-baseline 2026-11-22 (shim before/after audit 2026-11-22, main 7f4610fe): 344 -> 333/349 (sweep 331 + 2 flakes test-fs-mkdir-mode-mask.js + test-fs-realpath.js, pass 0 0 isolated); 11 genuine regressions incl. 7x rmdir-recursive + file-handle x4.",
+      "date": "2026-11-25",
+      "passed": 340,
+      "source": "parity/HITLIST.md wave F1 (324->344, 2026-11-15; merges 47bbd2e3, be592901, 3c2b76a4, eca141cf, ee0a2490, 5a2b13c4, 42f7bd56, 08fe2b0d, f23082f3, 7f5f322d, 10ead287, dc25a75e, 82d117de, 5322dce5, 1376ec6b) Re-baseline 2026-11-22 (shim before/after audit 2026-11-22, main 7f4610fe): 344 -> 333/349 (sweep 331 + 2 flakes test-fs-mkdir-mode-mask.js + test-fs-realpath.js, pass 0 0 isolated); 11 genuine regressions incl. 7x rmdir-recursive + file-handle x4. Version-support step 1 fs rmdir gate (PR #561, merge 3bc83ffb, 2026-11-25): 333 -> 340/349 (+7 rmdir-recursive files, verified exit 0 on merged main under PARITY_TARGET_NODE=24, mutually exclusive under 26; node26 unchanged 365/385).",
       "total": 349
     },
     "http": {
@@ -416,6 +416,176 @@
       "passed": 69,
       "total": 89,
       "source": "Wave 1 L-SMALL (PR #511, merge 11d8db2d): 48 -> 51/89; Wave 2 L-RESET (PR #524, merge 4a05cd91): 51 -> 54/89; Wave 3 L-ZIP (PR #533, merge 1ca07c82): 54 -> 69/89."
+    }
+  },
+  "node24": {
+    "assert": {
+      "date": "2026-11-25",
+      "passed": 16,
+      "total": 19,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 16/19 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "async_hooks": {
+      "date": "2026-11-25",
+      "passed": 29,
+      "total": 36,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 29/36 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "buffer": {
+      "date": "2026-11-25",
+      "passed": 60,
+      "total": 62,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 60/62 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "console": {
+      "date": "2026-11-25",
+      "passed": 22,
+      "total": 22,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 22/22 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "crypto": {
+      "date": "2026-11-25",
+      "passed": 121,
+      "total": 129,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 121/129 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "dns": {
+      "date": "2026-11-25",
+      "passed": 8,
+      "total": 31,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 8/31 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "events": {
+      "date": "2026-11-25",
+      "passed": 9,
+      "total": 9,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 9/9 of the drift selection (2,527 tests); the v24 tree holds only 9 events files, so this is complete coverage for this tree; baseline values, not banked program numbers."
+    },
+    "fs": {
+      "date": "2026-11-25",
+      "passed": 328,
+      "total": 349,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 328/349 of the drift selection (2,527 tests); PRE-GATE baseline (run before PR #561 merged) — banked v24 fs is 340/349; baseline values, not banked program numbers."
+    },
+    "http": {
+      "date": "2026-11-25",
+      "passed": 390,
+      "total": 399,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 390/399 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "http2": {
+      "date": "2026-11-25",
+      "passed": 90,
+      "total": 277,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 90/277 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "https": {
+      "date": "2026-11-25",
+      "passed": 58,
+      "total": 67,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 58/67 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "inspector": {
+      "date": "2026-11-25",
+      "passed": 38,
+      "total": 75,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 38/75 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "module": {
+      "date": "2026-11-25",
+      "passed": 30,
+      "total": 32,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 30/32 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "net": {
+      "date": "2026-11-25",
+      "passed": 143,
+      "total": 156,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 143/156 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "os": {
+      "date": "2026-11-25",
+      "passed": 7,
+      "total": 7,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 7/7 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "perf_hooks": {
+      "date": "2026-11-25",
+      "passed": 15,
+      "total": 15,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 15/15 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "process": {
+      "date": "2026-11-25",
+      "passed": 92,
+      "total": 97,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 92/97 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "readline": {
+      "date": "2026-11-25",
+      "passed": 22,
+      "total": 22,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 22/22 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "repl": {
+      "date": "2026-11-25",
+      "passed": 94,
+      "total": 102,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 94/102 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "stream": {
+      "date": "2026-11-25",
+      "passed": 180,
+      "total": 205,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 180/205 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "string_decoder": {
+      "date": "2026-11-25",
+      "passed": 3,
+      "total": 3,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 3/3 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "timers": {
+      "date": "2026-11-25",
+      "passed": 45,
+      "total": 45,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 45/45 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "trace_events": {
+      "date": "2026-11-25",
+      "passed": 27,
+      "total": 29,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 27/29 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "tty": {
+      "date": "2026-11-25",
+      "passed": 3,
+      "total": 3,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 3/3 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "util": {
+      "date": "2026-11-25",
+      "passed": 29,
+      "total": 31,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 29/31 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "vm": {
+      "date": "2026-11-25",
+      "passed": 62,
+      "total": 97,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 62/97 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "worker_threads": {
+      "date": "2026-11-25",
+      "passed": 140,
+      "total": 143,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 140/143 of the drift selection (2,527 tests); baseline values, not banked program numbers."
+    },
+    "zlib": {
+      "date": "2026-11-25",
+      "passed": 52,
+      "total": 65,
+      "source": "Node 24 baseline 2026-11-25 (parity/drift/node24-baseline.jsonc); 52/65 of the drift selection (2,527 tests); baseline values, not banked program numbers."
     }
   }
 }

@@ -331,4 +331,4 @@ log file, never pipe through `tail`.
 
 ## Ship
 
-(TODO — fill after merge: PR number, merge SHA, CI run link.)
+Merged as PR #562 (branch `infra-drift-target24`, code SHA `33c810a6d8450b8035d6aa7f5d6ba394c29ee62e`, merge `f084ca00`, 2026-11-25). CI green on the code SHA (build + Parity completed/success, verified via the check-runs API). No banked numbers change in this PR — the node24 baseline (2,113/2,527 pass, 379 fail, 35 timeout; oracle shim-gap 381 / fails-natively 27 / native-timeout 6) is recorded in `parity/measured-rates.json` under top-level `node24` by the docs sync (this PR).
