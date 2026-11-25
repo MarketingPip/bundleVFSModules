@@ -39,6 +39,40 @@ Three layers, each catching what the others cannot:
    "fail" without the oracle can be a broken test, not a shim gap — the
    oracle is what makes baseline reasons honest.
 
+## Second target: Node 24 (`--target`)
+
+`run-baseline.mjs` and `run-oracle.mjs` take `--target 24|26`
+(default 26). The target selects the tree, the shim behaviour, and the
+oracle binary — nothing else changes shape:
+
+- **Baseline 24:** `node parity/drift/run-baseline.mjs --target 24
+  --worktree <dir> --out parity/drift/node24-baseline.jsonc --csv-dir
+  <dir> [--jobs 2]` — stages the repo's vendored v24.20.0 tree
+  (`parity/node-test/` as committed; snapshotted first, no download) and
+  runs it with `PARITY_TARGET_NODE=24`, so the run measures the
+  down-versioned build. `--node-src` overrides the tree with a 24.20.0
+  source checkout. CSVs are `node24-baseline-<module>.csv`.
+- **Baseline 26:** `node parity/drift/run-baseline.mjs --target 26
+  --node26-src <dir> --worktree <dir> --out
+  parity/drift/node26-baseline.jsonc --csv-dir <dir>` (the original
+  invocation; `--node-src` is the generic alias for `--node26-src`).
+- **Oracle 24:** `node parity/drift/run-oracle.mjs --target 24
+  --node24-bin <path> --baseline parity/drift/node24-baseline.jsonc
+  --out parity/drift/node24-oracle.json` — headers from the vendored
+  tree, tests run with cwd `parity/node-test/` under the 24.20.0 binary.
+- **Oracle 26:** as before (`--node26-src` + `--node26-bin`).
+- **`export-diff.mjs` needs no `--target`:** it already diffs both
+  versions in one run and writes both versioned JSONs plus the one diff
+  markdown.
+- **`// Flags:` support is re-probed per target by the same host probe**
+  (`isFlagSupported` in run-baseline): the drop list is whatever the
+  host Node rejects for the flags in THAT tree's headers — the 26 drop
+  list is never reused for 24. Measured on host v24.22.1, see
+  `NOTES-26-drift-target24.md` for the per-target lists.
+- **CI (`.github/workflows/drift.yaml`):** runs both targets back to
+  back and uploads one `node-drift` artifact; still informational, never
+  blocks merges, never commits.
+
 ## Node versions used
 
 - Pinned base: Node **v24.20.0** (source pack `hidden_files/node-src/`, binary

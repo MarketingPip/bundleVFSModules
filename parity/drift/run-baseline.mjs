@@ -1,8 +1,18 @@
-// Baseline runner: stage the Node 26 test tree into a THROWAWAY worktree's
+// Baseline runner: stage a Node test tree into a THROWAWAY worktree's
 // parity/node-test/ (parallel + common + fixtures), run the per-module
 // test files under the parity harness, aggregate exit codes into a
-// Deno-style allow-list baseline (parity/drift/node26-baseline.jsonc), then
-// restore parity/node-test/ to its committed state.
+// Deno-style allow-list baseline (parity/drift/node<TARGET>-baseline.jsonc),
+// then restore parity/node-test/ to its committed state.
+//
+// --target selects the tree AND the shim behaviour under test:
+//   26 (default): the Node 26.13.1 tree from --node26-src (a Node source
+//     checkout), shims run with PARITY_TARGET_NODE=26 (the default).
+//   24: the vendored v24.20.0 tree (parity/node-test/ as committed —
+//     snapshotted before staging, no download needed), shims run with
+//     PARITY_TARGET_NODE=24, so the run measures the down-versioned build,
+//     not the 26 build against v24 tests (the gate's harness override;
+//     src/version-gate.js). --node-src may point at a 24.20.0 source
+//     checkout instead of the vendored snapshot.
 //
 // The runner loop mirrors fast-sweep.py / sweep-mjs.py run_one/run_phase
 // exactly (PARITY_TARGET=<module>, `timeout N node [flags from the test's
@@ -25,14 +35,20 @@
 // of the setup error it is (caught live: fs 0/385 before the fix).
 //
 // Usage:
-//   node parity/drift/run-baseline.mjs --node26-src <dir> --worktree <dir>
-//     --out parity/drift/node26-baseline.jsonc --csv-dir <dir> [--jobs 2]
+//   node parity/drift/run-baseline.mjs [--target 24|26]
+//     --worktree <dir> --out <jsonc> --csv-dir <dir> [--jobs 2]
 //     [--modules fs,http] [--short 10] [--full 30]
+//     [--node26-src <dir>] [--node-src <dir>]
+//   Target 26 (default) requires --node26-src (or --node-src): a Node
+//   26.13.1 source checkout. Target 24 defaults to the worktree's
+//   committed parity/node-test/ tree; --node-src overrides it with a
+//   24.20.0 source checkout. --node26-src with --target 24 is an error.
 import { spawnSync, spawn } from "node:child_process";
 import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -40,6 +56,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 export const MODULES = [
@@ -98,17 +115,38 @@ function arg(name, def) {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : def;
 }
 
-const node26Src = arg("--node26-src", null);
-const worktree = arg("--worktree", null);
+// ponytail: one map is the whole target table — a third target (Node 27 at
+// LTS) adds one line here plus its tree source, never a new branch of the
+// runner. The version strings are the pinned releases the artifacts record.
+const TARGETS = { 24: "24.20.0", 26: "26.13.1" };
+const target = arg("--target", "26");
+if (!(target in TARGETS)) {
+  console.error(`--target must be 24 or 26, got ${JSON.stringify(target)}`);
+  process.exit(2);
+}
+const nodeVersion = TARGETS[target];
+const nodeSrcArg = arg("--node-src", null);
+const node26SrcArg = arg("--node26-src", null);
+if (target === "24" && node26SrcArg) {
+  console.error("--node26-src is only valid with --target 26 (use --node-src for target 24)");
+  process.exit(2);
+}
+const nodeSrc = target === "26" ? (nodeSrcArg ?? node26SrcArg) : nodeSrcArg;
+// createRequire (preflight below) and git -C need an absolute worktree:
+// a relative --worktree (drift.yaml passes `--worktree .`) made
+// createRequire throw, which the preflight mis-reported as missing
+// node_modules. resolve() here; --out/--csv-dir stay cwd-relative.
+const worktreeArg = arg("--worktree", null);
+const worktree = worktreeArg ? resolve(worktreeArg) : null;
 const outFile = arg("--out", null);
 const csvDir = arg("--csv-dir", null);
 const jobs = parseInt(arg("--jobs", "2"), 10);
 const shortS = parseInt(arg("--short", "10"), 10);
 const fullS = parseInt(arg("--full", "30"), 10);
 const onlyModules = arg("--modules", null)?.split(",").filter(Boolean) ?? null;
-if (!node26Src || !worktree || !outFile || !csvDir) {
+if ((target === "26" && !nodeSrc) || !worktree || !outFile || !csvDir) {
   console.error(
-    "usage: node parity/drift/run-baseline.mjs --node26-src <dir> --worktree <dir> --out <jsonc> --csv-dir <dir> [--jobs N] [--modules a,b] [--short N] [--full N]",
+    "usage: node parity/drift/run-baseline.mjs [--target 24|26] --worktree <dir> --out <jsonc> --csv-dir <dir> [--jobs N] [--modules a,b] [--short N] [--full N] [--node26-src <dir>] [--node-src <dir>]",
   );
   process.exit(2);
 }
@@ -124,6 +162,27 @@ function git(...args) {
 }
 
 // --- stage / restore -------------------------------------------------------
+// Test-tree layout differs by source shape: a Node source checkout keeps
+// the tree under test/{parallel,common,fixtures}; the vendored v24 tree
+// keeps it directly under parity/node-test/{parallel,common,fixtures}.
+// Detect it from the directory itself (same as run-oracle.mjs), so
+// --node-src works for either shape on either target — branching on the
+// target here would mis-stage a source checkout passed for target 24.
+function treeDirs(srcRoot) {
+  if (existsSync(join(srcRoot, "test", "parallel"))) {
+    return {
+      parallel: join(srcRoot, "test", "parallel"),
+      common: join(srcRoot, "test", "common"),
+      fixtures: join(srcRoot, "test", "fixtures"),
+    };
+  }
+  return {
+    parallel: join(srcRoot, "parallel"),
+    common: join(srcRoot, "common"),
+    fixtures: join(srcRoot, "fixtures"),
+  };
+}
+
 function stage() {
   const st = git("status", "--porcelain", "--", "parity/node-test");
   if (st.status !== 0) throw new Error(`git status failed: ${st.stderr}`);
@@ -134,17 +193,31 @@ function stage() {
     .stdout.split("\0")
     .map((l) => l.trim())
     .filter(Boolean);
+  // Target 24 with no --node-src stages from the worktree's own committed
+  // tree: snapshot it first (the preflight above verified it is clean, so
+  // the snapshot is exactly HEAD), because staging deletes the destination
+  // dirs before copying. The snapshot is removed in main's finally.
+  let snapshot = null;
+  let srcRoot = nodeSrc;
+  if (target === "24" && !nodeSrc) {
+    snapshot = mkdtempSync(join(tmpdir(), "node24-tree-"));
+    for (const d of ["parallel", "common", "fixtures"]) {
+      cpSync(join(worktree, "parity", "node-test", d), join(snapshot, d), { recursive: true });
+    }
+    srcRoot = snapshot;
+  }
+  const src = treeDirs(srcRoot);
   const staged = [];
-  for (const [src, dst] of [
-    [join(node26Src, "test", "parallel"), parallelDir],
-    [join(node26Src, "test", "common"), commonDir],
-    [join(node26Src, "test", "fixtures"), fixturesDir],
+  for (const [s, dst] of [
+    [src.parallel, parallelDir],
+    [src.common, commonDir],
+    [src.fixtures, fixturesDir],
   ]) {
     rmSync(dst, { recursive: true, force: true });
-    cpSync(src, dst, { recursive: true });
+    cpSync(s, dst, { recursive: true });
     staged.push(dst);
   }
-  return { before: new Set(before), staged };
+  return { before: new Set(before), staged, snapshot };
 }
 
 function restore(state) {
@@ -183,7 +256,8 @@ function restore(state) {
 // already passes them through. The baseline did NOT — a test needing a flag
 // was run without it and mis-measured (e.g. a test requiring internals
 // failed before its first assertion). Read the header from the STAGED file:
-// parallelDir holds the Node 26 tree after stage().
+// parallelDir holds the target's tree after stage() (Node 26.13.1 for
+// --target 26, v24.20.0 for --target 24).
 function flagsFor(test) {
   try {
     const src = readFileSync(join(parallelDir, test), "utf8")
@@ -248,13 +322,20 @@ function signalExit(signal) {
   return n === undefined ? -1 : 128 + n;
 }
 
-function runOne(test, timeoutS, target) {
+// ponytail: the runner's `target` parameter below is the MODULE name
+// (PARITY_TARGET); the drift target (24/26) is the outer `target` const.
+// Renamed the parameter to `mod` so the two can never be confused again.
+function runOne(test, timeoutS, mod) {
   return new Promise((res) => {
     const flags = flagsFor(test).filter(isFlagSupported);
     const p = spawn(
       "timeout",
       [String(timeoutS), "node", ...flags, "--import", preload, `parity/node-test/parallel/${test}`],
-      { cwd: worktree, env: { ...process.env, PARITY_TARGET: target }, stdio: "ignore" },
+      // PARITY_TARGET_NODE selects the shim behaviour under test
+      // (src/version-gate.js harness override): the --target value, never
+      // an ambient env value — an explicit flag beats the shell. For 26
+      // this is the gate's default, so the 26 path is unchanged.
+      { cwd: worktree, env: { ...process.env, PARITY_TARGET: mod, PARITY_TARGET_NODE: target }, stdio: "ignore" },
     );
     p.on("error", () => res(-1));
     p.on("close", (code, signal) => {
@@ -264,14 +345,14 @@ function runOne(test, timeoutS, target) {
   });
 }
 
-async function runPhase(tests, timeoutS, target, label) {
+async function runPhase(tests, timeoutS, mod, label) {
   const results = {};
   let idx = 0;
   let done = 0;
   const workers = Array.from({ length: Math.max(1, jobs) }, async () => {
     while (idx < tests.length) {
       const t = tests[idx++];
-      results[t] = await runOne(t, timeoutS, target);
+      results[t] = await runOne(t, timeoutS, mod);
       done++;
       if (done % 50 === 0 || done === tests.length) {
         console.log(`[${label}] ${done}/${tests.length}`);
@@ -327,7 +408,7 @@ try {
     const results = await runModule(mod);
     const rows = Object.keys(results).sort();
     const csv = ["test,exit", ...rows.map((t) => `${t},${results[t]}`)].join("\n") + "\n";
-    writeFileSync(join(csvDir, `node26-baseline-${mod}.csv`), csv);
+    writeFileSync(join(csvDir, `node${target}-baseline-${mod}.csv`), csv);
     const counts = { total: rows.length, pass: 0, fail: 0, timeout: 0 };
     const tests = {};
     for (const t of rows) {
@@ -341,26 +422,27 @@ try {
   }
 } finally {
   restore(state);
+  if (state.snapshot) rmSync(state.snapshot, { recursive: true, force: true });
 }
 
 const head = git("rev-parse", "HEAD").stdout.trim();
 const baseline = {
-  node: "26.13.1",
+  node: nodeVersion,
   host: spawnSync("node", ["--version"], { encoding: "utf8" }).stdout.trim(),
   generated: new Date().toISOString().slice(0, 10),
   worktree: head,
   modules: aggregate,
 };
-const header = `// Node 26 baseline: Node v26.13.1 test/parallel files for the 28 program
-// modules, run under the parity harness (PARITY_TARGET per module, preload)
-// on host ${baseline.host}. Each test is run with its // Flags: header flags
-// (a flag the host Node cannot parse is dropped and logged, not passed
-// through). Status per test: "pass" (exit 0), "fail" (any other
-// non-zero exit), "timeout" (exit 124).
-// "fail" means "does not pass under the v24.20.0 shims" — NOT "the shim is
-// wrong": a Node 26 test can fail because it needs a Node 26 API, a newer
-// test/common helper, or a feature the shim never implemented. Reasons are
-// added per test as lanes triage them; until then the exit code is the reason.
+const header = `// Node ${target} baseline: Node v${nodeVersion} test/parallel files for the 28 program
+// modules, run under the parity harness (PARITY_TARGET per module, preload,
+// PARITY_TARGET_NODE=${target}) on host ${baseline.host}. Each test is run
+// with its // Flags: header flags (a flag the host Node cannot parse is
+// dropped and logged, not passed through). Status per test: "pass" (exit 0),
+// "fail" (any other non-zero exit), "timeout" (exit 124).
+// "fail" means "does not pass under the shims" — NOT "the shim is wrong": a
+// test can fail because it needs a newer API, a newer test/common helper, or
+// a feature the shim never implemented. Reasons are added per test as lanes
+// triage them; until then the exit code is the reason.
 `;
 writeFileSync(outFile, header + JSON.stringify(baseline, null, 2) + "\n");
 const tot = Object.values(aggregate).reduce(

@@ -1,5 +1,5 @@
 // Native oracle: for every test that did NOT pass in the harness baseline,
-// run it once under real Node 26 (no preload, no shims) and record whether
+// run it once under real Node (no preload, no shims) and record whether
 // it passes natively. This is what turns a baseline "fail" into a reason:
 //   native pass + harness fail  → "shim-gap" (the shim is what fails it)
 //   native fail                → "fails-natively" (the test itself is broken
@@ -8,30 +8,77 @@
 //   native timeout             → "native-timeout"
 // Flags: the test file's `// Flags: ...` header comment is parsed and passed
 // through (e.g. --expose-internals), because many Node tests need one.
+// --target selects the oracle Node and the tree the headers are read from:
+//   26 (default): --node26-src (source checkout) + --node26-bin (26.13.1
+//     binary); headers from <src>/test/parallel, run with cwd <src>.
+//   24: the vendored v24.20.0 tree (parity/node-test/ in this repo —
+//     headers from parity/node-test/parallel, run with cwd parity/node-test/)
+//     + --node24-bin (24.20.0 binary). --node-src overrides the tree root
+//     for either target (a source checkout: <src>/test/parallel).
 // Usage:
-//   node parity/drift/run-oracle.mjs --node26-src <dir> --node26-bin <path>
-//     --baseline parity/drift/node26-baseline.jsonc
-//     --out parity/drift/node26-oracle.json [--jobs 4]
+//   node parity/drift/run-oracle.mjs [--target 24|26]
+//     --baseline <jsonc> --out <json> [--jobs 4]
+//     [--node26-src <dir> --node26-bin <path>]
+//     [--node24-bin <path>] [--node-src <dir> --node-bin <path>]
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function arg(name, def) {
   const i = process.argv.indexOf(name);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : def;
 }
 
-const node26Src = arg("--node26-src", null);
-const node26Bin = arg("--node26-bin", null);
+// ponytail: one map is the whole target table (mirrors run-baseline.mjs).
+const TARGETS = { 24: "24.20.0", 26: "26.13.1" };
+const target = arg("--target", "26");
+if (!(target in TARGETS)) {
+  console.error(`--target must be 24 or 26, got ${JSON.stringify(target)}`);
+  process.exit(2);
+}
+const nodeVersion = TARGETS[target];
+const nodeSrcArg = arg("--node-src", null);
+const nodeBinArg = arg("--node-bin", null);
+const node26SrcArg = arg("--node26-src", null);
+const node26BinArg = arg("--node26-bin", null);
+const node24SrcArg = arg("--node24-src", null);
+const node24BinArg = arg("--node24-bin", null);
+if (target === "24" && (node26SrcArg || node26BinArg)) {
+  console.error("--node26-src/--node26-bin are only valid with --target 26 (use --node-src/--node-bin or --node24-src/--node24-bin for target 24)");
+  process.exit(2);
+}
+if (target === "26" && (node24SrcArg || node24BinArg)) {
+  console.error("--node24-src/--node24-bin are only valid with --target 24 (use --node-src/--node-bin or --node26-src/--node26-bin for target 26)");
+  process.exit(2);
+}
+// Tree root: target 26 needs a source checkout; target 24 defaults to the
+// vendored tree in this repo. Layout differs (source checkout:
+// test/parallel; vendored tree: parallel) — detect it from the directory
+// itself, so an explicit --node-src pointing at either shape works.
+const nodeSrc =
+  target === "26"
+    ? (nodeSrcArg ?? node26SrcArg)
+    : (nodeSrcArg ?? node24SrcArg ?? join(repoRoot, "parity", "node-test"));
+const nodeBin = target === "26" ? (nodeBinArg ?? node26BinArg) : (nodeBinArg ?? node24BinArg);
 const baselineFile = arg("--baseline", null);
 const outFile = arg("--out", null);
 const jobs = parseInt(arg("--jobs", "4"), 10);
-if (!node26Src || !node26Bin || !baselineFile || !outFile) {
+if (!nodeSrc || !nodeBin || !baselineFile || !outFile) {
   console.error(
-    "usage: node parity/drift/run-oracle.mjs --node26-src <dir> --node26-bin <path> --baseline <jsonc> --out <json> [--jobs N]",
+    "usage: node parity/drift/run-oracle.mjs [--target 24|26] --baseline <jsonc> --out <json> [--jobs N] [--node26-src <dir> --node26-bin <path>] [--node24-bin <path>] [--node-src <dir> --node-bin <path>]",
   );
   process.exit(2);
 }
+// Layout detection runs AFTER the usage check: with target 26 and no src,
+// nodeSrc is null and join() would throw a TypeError instead of the usage
+// error above.
+const parallelDir = existsSync(join(nodeSrc, "test", "parallel"))
+  ? join(nodeSrc, "test", "parallel")
+  : join(nodeSrc, "parallel");
+const runDir = nodeSrc;
 
 // Strip // comment lines: the baseline is JSONC.
 const raw = readFileSync(baselineFile, "utf8")
@@ -49,7 +96,7 @@ console.log(`${failing.length} non-passing tests to classify`);
 
 function flagsFor(test) {
   try {
-    const src = readFileSync(join(node26Src, "test", "parallel", test), "utf8")
+    const src = readFileSync(join(parallelDir, test), "utf8")
       .split("\n")
       .slice(0, 30)
       .join("\n");
@@ -86,8 +133,12 @@ function signalExit(signal) {
 function runOne({ test }) {
   return new Promise((res) => {
     const flags = flagsFor(test);
-    const p = spawn(node26Bin, [...flags, join("test", "parallel", test)], {
-      cwd: node26Src,
+    // Test path is relative to the tree root: test/parallel/<test> for a
+    // source checkout, parallel/<test> for the vendored tree — same
+    // parallelDir detection as flagsFor, expressed relative to runDir.
+    const relTest = join(parallelDir.slice(runDir.length + 1), test);
+    const p = spawn(nodeBin, [...flags, relTest], {
+      cwd: runDir,
       stdio: "ignore",
     });
     const timer = setTimeout(() => {
@@ -127,7 +178,7 @@ for (const r of Object.values(results)) counts[r.class]++;
 writeFileSync(
   outFile,
   JSON.stringify(
-    { node: "26.13.1", generated: new Date().toISOString().slice(0, 10), counts, tests: results },
+    { node: nodeVersion, generated: new Date().toISOString().slice(0, 10), counts, tests: results },
     null,
     2,
   ) + "\n",

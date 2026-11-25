@@ -1,0 +1,3575 @@
+{
+  "node": "24.20.0",
+  "generated": "2026-11-25",
+  "counts": {
+    "shim-gap": 381,
+    "fails-natively": 27,
+    "native-timeout": 6
+  },
+  "tests": {
+    "test-async-hooks-correctly-switch-promise-hook.js": {
+      "mod": "async_hooks",
+      "test": "test-async-hooks-correctly-switch-promise-hook.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-assert-fail-deprecation.js": {
+      "mod": "assert",
+      "test": "test-assert-fail-deprecation.js",
+      "harnessExit": 1,
+      "flags": [
+        "--no-warnings"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-assert.js": {
+      "mod": "assert",
+      "test": "test-assert.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-async-hooks-disable-during-promise.js": {
+      "mod": "async_hooks",
+      "test": "test-async-hooks-disable-during-promise.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-async-hooks-enable-before-promise-resolve.js": {
+      "mod": "async_hooks",
+      "test": "test-async-hooks-enable-before-promise-resolve.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-assert-deep.js": {
+      "mod": "assert",
+      "test": "test-assert-deep.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-async-hooks-promise-triggerid.js": {
+      "mod": "async_hooks",
+      "test": "test-async-hooks-promise-triggerid.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-async-hooks-enable-recursive.js": {
+      "mod": "async_hooks",
+      "test": "test-async-hooks-enable-recursive.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-buffer-isascii.js": {
+      "mod": "buffer",
+      "test": "test-buffer-isascii.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-async-hooks-top-level-clearimmediate.js": {
+      "mod": "async_hooks",
+      "test": "test-async-hooks-top-level-clearimmediate.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-async-hooks-promise.js": {
+      "mod": "async_hooks",
+      "test": "test-async-hooks-promise.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-buffer-isutf8.js": {
+      "mod": "buffer",
+      "test": "test-buffer-isutf8.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-crypto-gcm-implicit-short-tag.js": {
+      "mod": "crypto",
+      "test": "test-crypto-gcm-implicit-short-tag.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-crypto-authenticated.js": {
+      "mod": "crypto",
+      "test": "test-crypto-authenticated.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-crypto-getcipherinfo.js": {
+      "mod": "crypto",
+      "test": "test-crypto-getcipherinfo.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-crypto-encap-decap.js": {
+      "mod": "crypto",
+      "test": "test-crypto-encap-decap.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-crypto-pqc-key-objects-ml-dsa.js": {
+      "mod": "crypto",
+      "test": "test-crypto-pqc-key-objects-ml-dsa.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-crypto-fips.js": {
+      "mod": "crypto",
+      "test": "test-crypto-fips.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-crypto-pqc-key-objects-ml-kem.js": {
+      "mod": "crypto",
+      "test": "test-crypto-pqc-key-objects-ml-kem.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-cancel-reverse-lookup.js": {
+      "mod": "dns",
+      "test": "test-dns-cancel-reverse-lookup.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-channel-cancel-promise.js": {
+      "mod": "dns",
+      "test": "test-dns-channel-cancel-promise.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-crypto-key-objects-to-crypto-key.js": {
+      "mod": "crypto",
+      "test": "test-crypto-key-objects-to-crypto-key.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-channel-cancel.js": {
+      "mod": "dns",
+      "test": "test-dns-channel-cancel.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-default-order-ipv4.js": {
+      "mod": "dns",
+      "test": "test-dns-default-order-ipv4.js",
+      "harnessExit": 124,
+      "flags": [
+        "--expose-internals",
+        "--dns-result-order=ipv4first"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-default-order-ipv6.js": {
+      "mod": "dns",
+      "test": "test-dns-default-order-ipv6.js",
+      "harnessExit": 124,
+      "flags": [
+        "--expose-internals",
+        "--dns-result-order=ipv6first"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-lookup-promises.js": {
+      "mod": "dns",
+      "test": "test-dns-lookup-promises.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-default-order-verbatim.js": {
+      "mod": "dns",
+      "test": "test-dns-default-order-verbatim.js",
+      "harnessExit": 124,
+      "flags": [
+        "--expose-internals",
+        "--dns-result-order=verbatim"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-lookup.js": {
+      "mod": "dns",
+      "test": "test-dns-lookup.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-lookupService-promises.js": {
+      "mod": "dns",
+      "test": "test-dns-lookupService-promises.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-lookupService.js": {
+      "mod": "dns",
+      "test": "test-dns-lookupService.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-perf_hooks.js": {
+      "mod": "dns",
+      "test": "test-dns-perf_hooks.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-resolve-promises.js": {
+      "mod": "dns",
+      "test": "test-dns-resolve-promises.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-resolveany-bad-ancount.js": {
+      "mod": "dns",
+      "test": "test-dns-resolveany-bad-ancount.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-resolveany-ttl-overflow.js": {
+      "mod": "dns",
+      "test": "test-dns-resolveany-ttl-overflow.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-dns-resolver-max-timeout.js": {
+      "mod": "dns",
+      "test": "test-dns-resolver-max-timeout.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-dns-multi-channel.js": {
+      "mod": "dns",
+      "test": "test-dns-multi-channel.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-dns-resolvesrv-econnrefused.js": {
+      "mod": "dns",
+      "test": "test-dns-resolvesrv-econnrefused.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-dns-set-default-order.js": {
+      "mod": "dns",
+      "test": "test-dns-set-default-order.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-channel-timeout.js": {
+      "mod": "dns",
+      "test": "test-dns-channel-timeout.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-setserver-when-querying.js": {
+      "mod": "dns",
+      "test": "test-dns-setserver-when-querying.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-cp-async-overwrites-force-true.mjs": {
+      "mod": "fs",
+      "test": "test-fs-cp-async-overwrites-force-true.mjs",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-cp-async-socket.mjs": {
+      "mod": "fs",
+      "test": "test-fs-cp-async-socket.mjs",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-cp-sync-copy-socket-error.mjs": {
+      "mod": "fs",
+      "test": "test-fs-cp-sync-copy-socket-error.mjs",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-resolveany.js": {
+      "mod": "dns",
+      "test": "test-dns-resolveany.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-fs-promises-file-handle-close.js": {
+      "mod": "fs",
+      "test": "test-fs-promises-file-handle-close.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-gc",
+        "--no-warnings"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-filehandle.js": {
+      "mod": "fs",
+      "test": "test-fs-filehandle.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-gc",
+        "--no-warnings",
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-promises-file-handle-pull.js": {
+      "mod": "fs",
+      "test": "test-fs-promises-file-handle-pull.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-promises-file-handle-pullsync.js": {
+      "mod": "fs",
+      "test": "test-fs-promises-file-handle-pullsync.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-promises-file-handle-readFile.js": {
+      "mod": "fs",
+      "test": "test-fs-promises-file-handle-readFile.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-promises-file-handle-read-worker.js": {
+      "mod": "fs",
+      "test": "test-fs-promises-file-handle-read-worker.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-promises-file-handle-readLines.mjs": {
+      "mod": "fs",
+      "test": "test-fs-promises-file-handle-readLines.mjs",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-read-stream.js": {
+      "mod": "fs",
+      "test": "test-fs-read-stream.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-rmdir-recursive-sync-warns-not-found.js": {
+      "mod": "fs",
+      "test": "test-fs-rmdir-recursive-sync-warns-not-found.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-rmdir-recursive-sync-warns-on-file.js": {
+      "mod": "fs",
+      "test": "test-fs-rmdir-recursive-sync-warns-on-file.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-rmdir-recursive-throws-not-found.js": {
+      "mod": "fs",
+      "test": "test-fs-rmdir-recursive-throws-not-found.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-rmdir-recursive-throws-on-file.js": {
+      "mod": "fs",
+      "test": "test-fs-rmdir-recursive-throws-on-file.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-rmdir-recursive-warns-not-found.js": {
+      "mod": "fs",
+      "test": "test-fs-rmdir-recursive-warns-not-found.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-rmdir-recursive-warns-on-file.js": {
+      "mod": "fs",
+      "test": "test-fs-rmdir-recursive-warns-on-file.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-syncwritestream.js": {
+      "mod": "fs",
+      "test": "test-fs-syncwritestream.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-fs-rmdir-recursive.js": {
+      "mod": "fs",
+      "test": "test-fs-rmdir-recursive.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-fs-watch-recursive-prefix-sibling.js": {
+      "mod": "fs",
+      "test": "test-fs-watch-recursive-prefix-sibling.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-http-1.0.js": {
+      "mod": "http",
+      "test": "test-http-1.0.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http-agent-domain-reused-gc.js": {
+      "mod": "http",
+      "test": "test-http-agent-domain-reused-gc.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-gc",
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-fs-write-reuse-callback.js": {
+      "mod": "fs",
+      "test": "test-fs-write-reuse-callback.js",
+      "harnessExit": 124,
+      "flags": [
+        "--expose-gc"
+      ],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-http-chunk-problem.js": {
+      "mod": "http",
+      "test": "test-http-chunk-problem.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http-parser-lazy-loaded.js": {
+      "mod": "http",
+      "test": "test-http-parser-lazy-loaded.js",
+      "harnessExit": 134,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 134,
+      "class": "fails-natively"
+    },
+    "test-http-parser-timeout-reset.js": {
+      "mod": "http",
+      "test": "test-http-parser-timeout-reset.js",
+      "harnessExit": 139,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http-pipeline-flood.js": {
+      "mod": "http",
+      "test": "test-http-pipeline-flood.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http-server-drop-connections-in-cluster.js": {
+      "mod": "http",
+      "test": "test-http-server-drop-connections-in-cluster.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http-server-stale-close.js": {
+      "mod": "http",
+      "test": "test-http-server-stale-close.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-allow-http1-upgrade-ws.js": {
+      "mod": "http2",
+      "test": "test-http2-allow-http1-upgrade-ws.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-allow-http1.js": {
+      "mod": "http2",
+      "test": "test-http2-allow-http1.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-alpn.js": {
+      "mod": "http2",
+      "test": "test-http2-alpn.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-altsvc.js": {
+      "mod": "http2",
+      "test": "test-http2-altsvc.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-autoselect-protocol.js": {
+      "mod": "http2",
+      "test": "test-http2-autoselect-protocol.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-backpressure.js": {
+      "mod": "http2",
+      "test": "test-http2-backpressure.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-buffersize.js": {
+      "mod": "http2",
+      "test": "test-http2-buffersize.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-byteswritten-server.js": {
+      "mod": "http2",
+      "test": "test-http2-byteswritten-server.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-cancel-while-client-reading.js": {
+      "mod": "http2",
+      "test": "test-http2-cancel-while-client-reading.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-capture-rejection.js": {
+      "mod": "http2",
+      "test": "test-http2-capture-rejection.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-connection-tunnelling.js": {
+      "mod": "http2",
+      "test": "test-http2-client-connection-tunnelling.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-client-destroy.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-http1-server.js": {
+      "mod": "http2",
+      "test": "test-http2-client-http1-server.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-jsstream-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-client-jsstream-destroy.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-onconnect-errors.js": {
+      "mod": "http2",
+      "test": "test-http2-client-onconnect-errors.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-port-80.js": {
+      "mod": "http2",
+      "test": "test-http2-client-port-80.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-priority-before-connect.js": {
+      "mod": "http2",
+      "test": "test-http2-client-priority-before-connect.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns-resolvesrv.js": {
+      "mod": "dns",
+      "test": "test-dns-resolvesrv.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-http2-client-promisify-connect-error.js": {
+      "mod": "http2",
+      "test": "test-http2-client-promisify-connect-error.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-promisify-connect.js": {
+      "mod": "http2",
+      "test": "test-http2-client-promisify-connect.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-proxy-over-http2.js": {
+      "mod": "http2",
+      "test": "test-http2-client-proxy-over-http2.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-session-close-before-stream-close.js": {
+      "mod": "http2",
+      "test": "test-http2-client-session-close-before-stream-close.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-set-priority.js": {
+      "mod": "http2",
+      "test": "test-http2-client-set-priority.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-socket-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-client-socket-destroy.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-stream-destroy-before-connect.js": {
+      "mod": "http2",
+      "test": "test-http2-client-stream-destroy-before-connect.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-client-unescaped-path.js": {
+      "mod": "http2",
+      "test": "test-http2-client-unescaped-path.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-close-while-writing.js": {
+      "mod": "http2",
+      "test": "test-http2-close-while-writing.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-aborted.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-aborted.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-expect-continue-check.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-expect-continue-check.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-errors.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-errors.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-dns.js": {
+      "mod": "dns",
+      "test": "test-dns.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-http2-compat-expect-continue.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-expect-continue.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-expect-handling.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-expect-handling.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-method-connect.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-method-connect.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverrequest-end.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverrequest-end.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverrequest-trailers.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverrequest-trailers.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverrequest-settimeout.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverrequest-settimeout.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-close.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-close.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverrequest.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverrequest.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-destroy.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-drain.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-drain.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-finished.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-finished.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-end.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-end.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-flushheaders.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-flushheaders.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-headers-after-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-headers-after-destroy.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-headers.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-headers.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-settimeout.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-settimeout.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-write.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-write.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse-writehead-array.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse-writehead-array.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-serverresponse.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-serverresponse.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-socket-set.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-socket-set.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-short-stream-client-server.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-short-stream-client-server.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-socket-destroy-delayed.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-socket-destroy-delayed.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-write-early-hints-invalid-argument-value.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-write-early-hints-invalid-argument-value.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-socket.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-socket.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-write-early-hints.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-write-early-hints.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-write-information.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-write-information.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-compat-write-head-destroyed.js": {
+      "mod": "http2",
+      "test": "test-http2-compat-write-head-destroyed.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-connect-method-extended-cant-turn-off.js": {
+      "mod": "http2",
+      "test": "test-http2-connect-method-extended-cant-turn-off.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-connect-method.js": {
+      "mod": "http2",
+      "test": "test-http2-connect-method.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-connect-method-extended.js": {
+      "mod": "http2",
+      "test": "test-http2-connect-method-extended.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-connect-options.js": {
+      "mod": "http2",
+      "test": "test-http2-connect-options.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-connect-tls-with-delay.js": {
+      "mod": "http2",
+      "test": "test-http2-connect-tls-with-delay.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-connect.js": {
+      "mod": "http2",
+      "test": "test-http2-connect.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-cookies.js": {
+      "mod": "http2",
+      "test": "test-http2-cookies.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-create-client-secure-session.js": {
+      "mod": "http2",
+      "test": "test-http2-create-client-secure-session.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-create-client-session.js": {
+      "mod": "http2",
+      "test": "test-http2-create-client-session.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-destroy-after-write.js": {
+      "mod": "http2",
+      "test": "test-http2-destroy-after-write.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-empty-frame-without-eof.js": {
+      "mod": "http2",
+      "test": "test-http2-empty-frame-without-eof.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-dont-lose-data.js": {
+      "mod": "http2",
+      "test": "test-http2-dont-lose-data.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-createwritereq.js": {
+      "mod": "http2",
+      "test": "test-http2-createwritereq.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-gc"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-endafterheaders.js": {
+      "mod": "http2",
+      "test": "test-http2-endafterheaders.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http-autoselectfamily.js": {
+      "mod": "http",
+      "test": "test-http-autoselectfamily.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 124,
+      "class": "native-timeout"
+    },
+    "test-http2-error-order.js": {
+      "mod": "http2",
+      "test": "test-http2-error-order.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-exceeds-server-trailer-size.js": {
+      "mod": "http2",
+      "test": "test-http2-exceeds-server-trailer-size.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-generic-streams-sendfile.js": {
+      "mod": "http2",
+      "test": "test-http2-generic-streams-sendfile.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-generic-streams.js": {
+      "mod": "http2",
+      "test": "test-http2-generic-streams.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-goaway-opaquedata.js": {
+      "mod": "http2",
+      "test": "test-http2-goaway-opaquedata.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-goaway-delayed-request.js": {
+      "mod": "http2",
+      "test": "test-http2-goaway-delayed-request.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-graceful-close.js": {
+      "mod": "http2",
+      "test": "test-http2-graceful-close.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-head-request.js": {
+      "mod": "http2",
+      "test": "test-http2-head-request.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-https-fallback-http-server-options.js": {
+      "mod": "http2",
+      "test": "test-http2-https-fallback-http-server-options.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-https-fallback.js": {
+      "mod": "http2",
+      "test": "test-http2-https-fallback.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-info-headers-errors.js": {
+      "mod": "http2",
+      "test": "test-http2-info-headers-errors.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-info-headers.js": {
+      "mod": "http2",
+      "test": "test-http2-info-headers.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-invalid-last-stream-id.js": {
+      "mod": "http2",
+      "test": "test-http2-invalid-last-stream-id.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-malformed-altsvc.js": {
+      "mod": "http2",
+      "test": "test-http2-malformed-altsvc.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-ip-address-host.js": {
+      "mod": "http2",
+      "test": "test-http2-ip-address-host.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-many-writes-and-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-many-writes-and-destroy.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-max-concurrent-streams.js": {
+      "mod": "http2",
+      "test": "test-http2-max-concurrent-streams.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-max-invalid-frames.js": {
+      "mod": "http2",
+      "test": "test-http2-max-invalid-frames.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-max-settings.js": {
+      "mod": "http2",
+      "test": "test-http2-max-settings.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-misbehaving-flow-control-paused.js": {
+      "mod": "http2",
+      "test": "test-http2-misbehaving-flow-control-paused.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-max-session-memory-stalled-headers.js": {
+      "mod": "http2",
+      "test": "test-http2-max-session-memory-stalled-headers.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-misbehaving-flow-control.js": {
+      "mod": "http2",
+      "test": "test-http2-misbehaving-flow-control.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-multiheaders.js": {
+      "mod": "http2",
+      "test": "test-http2-multiheaders.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-misbehaving-multiplex.js": {
+      "mod": "http2",
+      "test": "test-http2-misbehaving-multiplex.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-multistream-destroy-on-read-tls.js": {
+      "mod": "http2",
+      "test": "test-http2-multistream-destroy-on-read-tls.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-no-more-streams.js": {
+      "mod": "http2",
+      "test": "test-http2-no-more-streams.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-onping.js": {
+      "mod": "http2",
+      "test": "test-http2-onping.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-options-max-headers-block-length.js": {
+      "mod": "http2",
+      "test": "test-http2-options-max-headers-block-length.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-options-max-headers-exceeds-nghttp2.js": {
+      "mod": "http2",
+      "test": "test-http2-options-max-headers-exceeds-nghttp2.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-options-max-reserved-streams.js": {
+      "mod": "http2",
+      "test": "test-http2-options-max-reserved-streams.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-options-server-request.js": {
+      "mod": "http2",
+      "test": "test-http2-options-server-request.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-origin.js": {
+      "mod": "http2",
+      "test": "test-http2-origin.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-pack-end-stream-flag.js": {
+      "mod": "http2",
+      "test": "test-http2-pack-end-stream-flag.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-padding-aligned.js": {
+      "mod": "http2",
+      "test": "test-http2-padding-aligned.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-origin-set-max-size.mjs": {
+      "mod": "http2",
+      "test": "test-http2-origin-set-max-size.mjs",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-perf_hooks.js": {
+      "mod": "http2",
+      "test": "test-http2-perf_hooks.js",
+      "harnessExit": 1,
+      "flags": [
+        "--no-warnings"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-perform-server-handshake.js": {
+      "mod": "http2",
+      "test": "test-http2-perform-server-handshake.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-ping-unsolicited-ack.js": {
+      "mod": "http2",
+      "test": "test-http2-ping-unsolicited-ack.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-ping.js": {
+      "mod": "http2",
+      "test": "test-http2-ping.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-premature-close.js": {
+      "mod": "http2",
+      "test": "test-http2-premature-close.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-priority-cycle-.js": {
+      "mod": "http2",
+      "test": "test-http2-priority-cycle-.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-propagate-session-destroy-code.js": {
+      "mod": "http2",
+      "test": "test-http2-propagate-session-destroy-code.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-priority-event.js": {
+      "mod": "http2",
+      "test": "test-http2-priority-event.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-res-writable-properties.js": {
+      "mod": "http2",
+      "test": "test-http2-res-writable-properties.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-res-corked.js": {
+      "mod": "http2",
+      "test": "test-http2-res-corked.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-ping-settings-heapdump.js": {
+      "mod": "http2",
+      "test": "test-http2-ping-settings-heapdump.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-304.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-304.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-404.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-404.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-error-dir.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-error-dir.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-compat.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-compat.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-error-pipe-offset.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-error-pipe-offset.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-fd-invalid.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-fd-invalid.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-fd-leak.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-fd-leak.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-fd-range.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-fd-range.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-http2-respond-file-filehandle.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-filehandle.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-fd.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-fd.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-push.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-push.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-range.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-range.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-file-with-pipe.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-file-with-pipe.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-nghttperrors.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-nghttperrors.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-no-data.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-no-data.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-with-fd-errors.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-with-fd-errors.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-respond-with-file-connection-abort.js": {
+      "mod": "http2",
+      "test": "test-http2-respond-with-file-connection-abort.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-response-splitting.js": {
+      "mod": "http2",
+      "test": "test-http2-response-splitting.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-rst-stream-reentrancy.js": {
+      "mod": "http2",
+      "test": "test-http2-rst-stream-reentrancy.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-sensitive-headers.js": {
+      "mod": "http2",
+      "test": "test-http2-sensitive-headers.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-sent-headers.js": {
+      "mod": "http2",
+      "test": "test-http2-sent-headers.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-forget-closed-streams.js": {
+      "mod": "http2",
+      "test": "test-http2-forget-closed-streams.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-close-callback.js": {
+      "mod": "http2",
+      "test": "test-http2-server-close-callback.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-http1-client.js": {
+      "mod": "http2",
+      "test": "test-http2-server-http1-client.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-close-idle-connection.js": {
+      "mod": "http2",
+      "test": "test-http2-server-close-idle-connection.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-errors.js": {
+      "mod": "http2",
+      "test": "test-http2-server-errors.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-push-stream.js": {
+      "mod": "http2",
+      "test": "test-http2-server-push-stream.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-push-stream-errors.js": {
+      "mod": "http2",
+      "test": "test-http2-server-push-stream-errors.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-push-stream-head.js": {
+      "mod": "http2",
+      "test": "test-http2-server-push-stream-head.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-rfc-9113-client.js": {
+      "mod": "http2",
+      "test": "test-http2-server-rfc-9113-client.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-rfc-9113-server.js": {
+      "mod": "http2",
+      "test": "test-http2-server-rfc-9113-server.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-rst-stream.js": {
+      "mod": "http2",
+      "test": "test-http2-server-rst-stream.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-sessionerror.js": {
+      "mod": "http2",
+      "test": "test-http2-server-sessionerror.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-shutdown-before-respond.js": {
+      "mod": "http2",
+      "test": "test-http2-server-shutdown-before-respond.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-set-header.js": {
+      "mod": "http2",
+      "test": "test-http2-server-set-header.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-shutdown-redundant.js": {
+      "mod": "http2",
+      "test": "test-http2-server-shutdown-redundant.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-socket-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-server-socket-destroy.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-stream-session-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-server-stream-session-destroy.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-session-cleanup-on-nghttp2-goaway.js": {
+      "mod": "http2",
+      "test": "test-http2-session-cleanup-on-nghttp2-goaway.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-startup.js": {
+      "mod": "http2",
+      "test": "test-http2-server-startup.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-timeout.js": {
+      "mod": "http2",
+      "test": "test-http2-server-timeout.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-server-unknown-protocol.js": {
+      "mod": "http2",
+      "test": "test-http2-server-unknown-protocol.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-session-gc-while-write-scheduled.js": {
+      "mod": "http2",
+      "test": "test-http2-session-gc-while-write-scheduled.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-gc"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-session-graceful-close.js": {
+      "mod": "http2",
+      "test": "test-http2-session-graceful-close.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-session-reuse-different-authority.js": {
+      "mod": "http2",
+      "test": "test-http2-session-reuse-different-authority.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-session-settings.js": {
+      "mod": "http2",
+      "test": "test-http2-session-settings.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-session-unref.js": {
+      "mod": "http2",
+      "test": "test-http2-session-unref.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-session-stream-state.js": {
+      "mod": "http2",
+      "test": "test-http2-session-stream-state.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-short-stream-client-server.js": {
+      "mod": "http2",
+      "test": "test-http2-short-stream-client-server.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-settings-unsolicited-ack.js": {
+      "mod": "http2",
+      "test": "test-http2-settings-unsolicited-ack.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-socket-close.js": {
+      "mod": "http2",
+      "test": "test-http2-socket-close.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-socket-proxy-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-socket-proxy-destroy.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-socket-proxy-handler-for-has.js": {
+      "mod": "http2",
+      "test": "test-http2-socket-proxy-handler-for-has.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-socket-proxy.js": {
+      "mod": "http2",
+      "test": "test-http2-socket-proxy.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-stream-client.js": {
+      "mod": "http2",
+      "test": "test-http2-stream-client.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-stream-destroy-event-order.js": {
+      "mod": "http2",
+      "test": "test-http2-stream-destroy-event-order.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-stream-removelisteners-after-close.js": {
+      "mod": "http2",
+      "test": "test-http2-stream-removelisteners-after-close.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-timeouts.js": {
+      "mod": "http2",
+      "test": "test-http2-timeouts.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-too-large-headers.js": {
+      "mod": "http2",
+      "test": "test-http2-too-large-headers.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-too-many-headers.js": {
+      "mod": "http2",
+      "test": "test-http2-too-many-headers.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-too-many-settings.js": {
+      "mod": "http2",
+      "test": "test-http2-too-many-settings.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-too-many-streams.js": {
+      "mod": "http2",
+      "test": "test-http2-too-many-streams.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-trailers-after-session-close.js": {
+      "mod": "http2",
+      "test": "test-http2-trailers-after-session-close.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-update-settings.js": {
+      "mod": "http2",
+      "test": "test-http2-update-settings.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-unbound-socket-proxy.js": {
+      "mod": "http2",
+      "test": "test-http2-unbound-socket-proxy.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-util-headers-list.js": {
+      "mod": "http2",
+      "test": "test-http2-util-headers-list.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-window-update-overflow.js": {
+      "mod": "http2",
+      "test": "test-http2-window-update-overflow.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-write-empty-string.js": {
+      "mod": "http2",
+      "test": "test-http2-write-empty-string.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-write-finishes-after-stream-destroy.js": {
+      "mod": "http2",
+      "test": "test-http2-write-finishes-after-stream-destroy.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-gc"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-http2-zero-length-header.js": {
+      "mod": "http2",
+      "test": "test-http2-zero-length-header.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-https-agent-getname.js": {
+      "mod": "https",
+      "test": "test-https-agent-getname.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-https-agent-create-connection.js": {
+      "mod": "https",
+      "test": "test-https-agent-create-connection.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-https-agent-keylog.js": {
+      "mod": "https",
+      "test": "test-https-agent-keylog.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-https-agent-unref-socket.js": {
+      "mod": "https",
+      "test": "test-https-agent-unref-socket.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-https-resume-after-renew.js": {
+      "mod": "https",
+      "test": "test-https-resume-after-renew.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-https-client-renegotiation-limit.js": {
+      "mod": "https",
+      "test": "test-https-client-renegotiation-limit.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-https-selfsigned-no-keycertsign-no-crash.js": {
+      "mod": "https",
+      "test": "test-https-selfsigned-no-keycertsign-no-crash.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-inspector-already-activated-cli.js": {
+      "mod": "inspector",
+      "test": "test-inspector-already-activated-cli.js",
+      "harnessExit": 1,
+      "flags": [
+        "--inspect=0"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-async-call-stack.js": {
+      "mod": "inspector",
+      "test": "test-inspector-async-call-stack.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-async-context-brk.js": {
+      "mod": "inspector",
+      "test": "test-inspector-async-context-brk.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-bindings.js": {
+      "mod": "inspector",
+      "test": "test-inspector-bindings.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-async-hook-after-done.js": {
+      "mod": "inspector",
+      "test": "test-inspector-async-hook-after-done.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-https-autoselectfamily.js": {
+      "mod": "https",
+      "test": "test-https-autoselectfamily.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-inspector-close-worker.js": {
+      "mod": "inspector",
+      "test": "test-inspector-close-worker.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-https-connect-address-family.js": {
+      "mod": "https",
+      "test": "test-https-connect-address-family.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-inspector-console-top-frame.js": {
+      "mod": "inspector",
+      "test": "test-inspector-console-top-frame.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-emit-protocol-event.js": {
+      "mod": "inspector",
+      "test": "test-inspector-emit-protocol-event.js",
+      "harnessExit": 1,
+      "flags": [
+        "--inspect=0",
+        "--experimental-network-inspection",
+        "--experimental-storage-inspection"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-contexts.js": {
+      "mod": "inspector",
+      "test": "test-inspector-contexts.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-gc"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-connect-main-thread.js": {
+      "mod": "inspector",
+      "test": "test-inspector-connect-main-thread.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-inspector-exit-worker-in-wait-for-connection.js": {
+      "mod": "inspector",
+      "test": "test-inspector-exit-worker-in-wait-for-connection.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-break-when-eval.js": {
+      "mod": "inspector",
+      "test": "test-inspector-break-when-eval.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-inspector-has-idle.js": {
+      "mod": "inspector",
+      "test": "test-inspector-has-idle.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-esm.js": {
+      "mod": "inspector",
+      "test": "test-inspector-esm.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-inspector-heapdump.js": {
+      "mod": "inspector",
+      "test": "test-inspector-heapdump.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-heap-allocation-tracker.js": {
+      "mod": "inspector",
+      "test": "test-inspector-heap-allocation-tracker.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-exception.js": {
+      "mod": "inspector",
+      "test": "test-inspector-exception.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-inspector-multisession-js.js": {
+      "mod": "inspector",
+      "test": "test-inspector-multisession-js.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-network-arbitrary-data.js": {
+      "mod": "inspector",
+      "test": "test-inspector-network-arbitrary-data.js",
+      "harnessExit": 1,
+      "flags": [
+        "--inspect=0",
+        "--experimental-network-inspection"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-network-content-type.js": {
+      "mod": "inspector",
+      "test": "test-inspector-network-content-type.js",
+      "harnessExit": 124,
+      "flags": [
+        "--inspect=0",
+        "--experimental-network-inspection"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-network-data-received.js": {
+      "mod": "inspector",
+      "test": "test-inspector-network-data-received.js",
+      "harnessExit": 1,
+      "flags": [
+        "--inspect=0",
+        "--experimental-network-inspection"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-network-data-sent.js": {
+      "mod": "inspector",
+      "test": "test-inspector-network-data-sent.js",
+      "harnessExit": 1,
+      "flags": [
+        "--inspect=0",
+        "--experimental-network-inspection"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-network-http2.js": {
+      "mod": "inspector",
+      "test": "test-inspector-network-http2.js",
+      "harnessExit": 124,
+      "flags": [
+        "--inspect=0",
+        "--experimental-network-inspection"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-network-websocket.js": {
+      "mod": "inspector",
+      "test": "test-inspector-network-websocket.js",
+      "harnessExit": 124,
+      "flags": [
+        "--inspect=0",
+        "--experimental-network-inspection"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-open.js": {
+      "mod": "inspector",
+      "test": "test-inspector-open.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-overwrite-config.js": {
+      "mod": "inspector",
+      "test": "test-inspector-overwrite-config.js",
+      "harnessExit": 1,
+      "flags": [
+        "--require",
+        "./test/fixtures/overwrite-config-preload-module.js"
+      ],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-inspector-promises.js": {
+      "mod": "inspector",
+      "test": "test-inspector-promises.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-resource-name-to-url.js": {
+      "mod": "inspector",
+      "test": "test-inspector-resource-name-to-url.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-runtime-evaluate-with-timeout.js": {
+      "mod": "inspector",
+      "test": "test-inspector-runtime-evaluate-with-timeout.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-strip-types.js": {
+      "mod": "inspector",
+      "test": "test-inspector-strip-types.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-inspector-tracing-domain.js": {
+      "mod": "inspector",
+      "test": "test-inspector-tracing-domain.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-vm-global-accessors-getter-sideeffect.js": {
+      "mod": "inspector",
+      "test": "test-inspector-vm-global-accessors-getter-sideeffect.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-vm-global-accessors-sideeffects.js": {
+      "mod": "inspector",
+      "test": "test-inspector-vm-global-accessors-sideeffects.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-worker-target.js": {
+      "mod": "inspector",
+      "test": "test-inspector-worker-target.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-module-create-require.js": {
+      "mod": "module",
+      "test": "test-module-create-require.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-module-strip-types.js": {
+      "mod": "module",
+      "test": "test-module-strip-types.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-child-process-connect-reset.js": {
+      "mod": "net",
+      "test": "test-net-child-process-connect-reset.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-listen-handle-in-cluster-1.js": {
+      "mod": "net",
+      "test": "test-net-listen-handle-in-cluster-1.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-listen-ipv6only.js": {
+      "mod": "net",
+      "test": "test-net-listen-ipv6only.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-net-persistent-nodelay.js": {
+      "mod": "net",
+      "test": "test-net-persistent-nodelay.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-persistent-ref-unref.js": {
+      "mod": "net",
+      "test": "test-net-persistent-ref-unref.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-server-listen-handle.js": {
+      "mod": "net",
+      "test": "test-net-server-listen-handle.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-server-transfer-worker.js": {
+      "mod": "net",
+      "test": "test-net-server-transfer-worker.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-ip-detection.js": {
+      "mod": "inspector",
+      "test": "test-inspector-ip-detection.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 124,
+      "class": "native-timeout"
+    },
+    "test-net-socket-transfer-worker-http.js": {
+      "mod": "net",
+      "test": "test-net-socket-transfer-worker-http.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-socket-transfer-worker.js": {
+      "mod": "net",
+      "test": "test-net-socket-transfer-worker.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-transfer-guards.js": {
+      "mod": "net",
+      "test": "test-net-transfer-guards.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-write-fully-async-buffer.js": {
+      "mod": "net",
+      "test": "test-net-write-fully-async-buffer.js",
+      "harnessExit": 124,
+      "flags": [
+        "--expose-gc"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-inspector-network-fetch.js": {
+      "mod": "inspector",
+      "test": "test-inspector-network-fetch.js",
+      "harnessExit": 124,
+      "flags": [
+        "--inspect=0",
+        "--experimental-network-inspection",
+        "--expose-internals"
+      ],
+      "nativeExit": 124,
+      "class": "native-timeout"
+    },
+    "test-inspector-network-http.js": {
+      "mod": "inspector",
+      "test": "test-inspector-network-http.js",
+      "harnessExit": 124,
+      "flags": [
+        "--inspect=0",
+        "--experimental-network-inspection"
+      ],
+      "nativeExit": 124,
+      "class": "native-timeout"
+    },
+    "test-process-env-allowed-flags-are-documented.js": {
+      "mod": "process",
+      "test": "test-process-env-allowed-flags-are-documented.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-process-get-builtin.mjs": {
+      "mod": "process",
+      "test": "test-process-get-builtin.mjs",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-write-fully-async-hex-string.js": {
+      "mod": "net",
+      "test": "test-net-write-fully-async-hex-string.js",
+      "harnessExit": 124,
+      "flags": [
+        "--expose-gc"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-process-uncaught-exception-monitor.js": {
+      "mod": "process",
+      "test": "test-process-uncaught-exception-monitor.js",
+      "harnessExit": 7,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-process-versions.js": {
+      "mod": "process",
+      "test": "test-process-versions.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-repl-mode.js": {
+      "mod": "repl",
+      "test": "test-repl-mode.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-net-throttle.js": {
+      "mod": "net",
+      "test": "test-net-throttle.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-repl-envvars.js": {
+      "mod": "repl",
+      "test": "test-repl-envvars.js",
+      "harnessExit": 124,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-process-load-env-file.js": {
+      "mod": "process",
+      "test": "test-process-load-env-file.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 1,
+      "class": "fails-natively"
+    },
+    "test-repl-save-load-editor-mode.js": {
+      "mod": "repl",
+      "test": "test-repl-save-load-editor-mode.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-repl-preview.js": {
+      "mod": "repl",
+      "test": "test-repl-preview.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-repl-top-level-await.js": {
+      "mod": "repl",
+      "test": "test-repl-top-level-await.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-compose.js": {
+      "mod": "stream",
+      "test": "test-stream-compose.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-repl-tab-complete-require.js": {
+      "mod": "repl",
+      "test": "test-repl-tab-complete-require.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-repl-tab-complete-import.js": {
+      "mod": "repl",
+      "test": "test-repl-tab-complete-import.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-broadcast-backpressure.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-broadcast-backpressure.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-consumers-merge.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-consumers-merge.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-broadcast-basic.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-broadcast-basic.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-consumers-text.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-consumers-text.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-pipeto-edge.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-pipeto-edge.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-repl.js": {
+      "mod": "repl",
+      "test": "test-repl.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-duplex.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-duplex.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-pipeto.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-pipeto.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-push-writer.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-push-writer.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-share-coverage.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-share-coverage.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-share-from.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-share-from.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-share-sync.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-share-sync.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-transform-errors.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-transform-errors.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-transform-coverage.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-transform-coverage.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-transform-compat.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-transform-compat.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-transform-roundtrip.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-transform-roundtrip.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-transform-sync.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-transform-sync.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-validation.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-validation.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-writable-interop.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-writable-interop.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-iter-writable-from.js": {
+      "mod": "stream",
+      "test": "test-stream-iter-writable-from.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-stream-iter"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-push-strings.js": {
+      "mod": "stream",
+      "test": "test-stream-push-strings.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-readable-emittedReadable.js": {
+      "mod": "stream",
+      "test": "test-stream-readable-emittedReadable.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-readable-infinite-read.js": {
+      "mod": "stream",
+      "test": "test-stream-readable-infinite-read.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-readable-needReadable.js": {
+      "mod": "stream",
+      "test": "test-stream-readable-needReadable.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-trace-events-get-category-enabled-buffer.js": {
+      "mod": "trace_events",
+      "test": "test-trace-events-get-category-enabled-buffer.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-util-inspect-proxy.js": {
+      "mod": "util",
+      "test": "test-util-inspect-proxy.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-stream-pipeline.js": {
+      "mod": "stream",
+      "test": "test-stream-pipeline.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-context-async-script.js": {
+      "mod": "vm",
+      "test": "test-vm-context-async-script.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-function-declaration.js": {
+      "mod": "vm",
+      "test": "test-vm-function-declaration.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-global-property-prototype.js": {
+      "mod": "vm",
+      "test": "test-vm-global-property-prototype.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-global-setter.js": {
+      "mod": "vm",
+      "test": "test-vm-global-setter.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-util-inspect.js": {
+      "mod": "util",
+      "test": "test-util-inspect.js",
+      "harnessExit": 1,
+      "flags": [
+        "--expose-internals"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-harmony-symbols.js": {
+      "mod": "vm",
+      "test": "test-vm-harmony-symbols.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-after-evaluate.js": {
+      "mod": "vm",
+      "test": "test-vm-module-after-evaluate.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-cached-data.js": {
+      "mod": "vm",
+      "test": "test-vm-module-cached-data.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-basic.js": {
+      "mod": "vm",
+      "test": "test-vm-module-basic.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-dynamic-import-promise.js": {
+      "mod": "vm",
+      "test": "test-vm-module-dynamic-import-promise.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-dynamic-import.js": {
+      "mod": "vm",
+      "test": "test-vm-module-dynamic-import.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-errors.js": {
+      "mod": "vm",
+      "test": "test-vm-module-errors.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-dynamic-namespace.js": {
+      "mod": "vm",
+      "test": "test-vm-module-dynamic-namespace.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-evaluate-source-text-module.js": {
+      "mod": "vm",
+      "test": "test-vm-module-evaluate-source-text-module.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-evaluate-synthethic-module-rejection.js": {
+      "mod": "vm",
+      "test": "test-vm-module-evaluate-synthethic-module-rejection.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-evaluate-synthethic-module.js": {
+      "mod": "vm",
+      "test": "test-vm-module-evaluate-synthethic-module.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-evaluate-while-evaluating.js": {
+      "mod": "vm",
+      "test": "test-vm-module-evaluate-while-evaluating.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-hasasyncgraph.js": {
+      "mod": "vm",
+      "test": "test-vm-module-hasasyncgraph.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-hastoplevelawait.js": {
+      "mod": "vm",
+      "test": "test-vm-module-hastoplevelawait.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-import-meta.js": {
+      "mod": "vm",
+      "test": "test-vm-module-import-meta.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-instantiate.js": {
+      "mod": "vm",
+      "test": "test-vm-module-instantiate.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-link-shared-deps.js": {
+      "mod": "vm",
+      "test": "test-vm-module-link-shared-deps.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-link.js": {
+      "mod": "vm",
+      "test": "test-vm-module-link.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules",
+        "--harmony-import-attributes"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-linkmodulerequests-circular.js": {
+      "mod": "vm",
+      "test": "test-vm-module-linkmodulerequests-circular.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules",
+        "--js-source-phase-imports"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-linkmodulerequests-deep.js": {
+      "mod": "vm",
+      "test": "test-vm-module-linkmodulerequests-deep.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules",
+        "--js-source-phase-imports"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-linkmodulerequests.js": {
+      "mod": "vm",
+      "test": "test-vm-module-linkmodulerequests.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules",
+        "--js-source-phase-imports"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-reevaluate.js": {
+      "mod": "vm",
+      "test": "test-vm-module-reevaluate.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-modulerequests.js": {
+      "mod": "vm",
+      "test": "test-vm-module-modulerequests.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules",
+        "--js-source-phase-imports"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-referrer-realm.mjs": {
+      "mod": "vm",
+      "test": "test-vm-module-referrer-realm.mjs",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-module-synthetic.js": {
+      "mod": "vm",
+      "test": "test-vm-module-synthetic.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-proxies.js": {
+      "mod": "vm",
+      "test": "test-vm-proxies.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-script-after-evaluate.js": {
+      "mod": "vm",
+      "test": "test-vm-script-after-evaluate.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-timeout-escape-promise-2.js": {
+      "mod": "vm",
+      "test": "test-vm-timeout-escape-promise-2.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-timeout-escape-promise-module.js": {
+      "mod": "vm",
+      "test": "test-vm-timeout-escape-promise-module.js",
+      "harnessExit": 1,
+      "flags": [
+        "--experimental-vm-modules"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-timeout.js": {
+      "mod": "vm",
+      "test": "test-vm-timeout.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-vm-timeout-escape-promise.js": {
+      "mod": "vm",
+      "test": "test-vm-timeout-escape-promise.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-worker-message-port-inspect-during-init-hook.js": {
+      "mod": "worker_threads",
+      "test": "test-worker-message-port-inspect-during-init-hook.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-brotli-16GB.js": {
+      "mod": "zlib",
+      "test": "test-zlib-brotli-16GB.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-worker-process-env.js": {
+      "mod": "worker_threads",
+      "test": "test-worker-process-env.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-brotli-flush.js": {
+      "mod": "zlib",
+      "test": "test-zlib-brotli-flush.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-brotli-dictionary.js": {
+      "mod": "zlib",
+      "test": "test-zlib-brotli-dictionary.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-brotli-from-string.js": {
+      "mod": "zlib",
+      "test": "test-zlib-brotli-from-string.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-brotli.js": {
+      "mod": "zlib",
+      "test": "test-zlib-brotli.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-premature-end.js": {
+      "mod": "zlib",
+      "test": "test-zlib-premature-end.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-random-byte-pipes.js": {
+      "mod": "zlib",
+      "test": "test-zlib-random-byte-pipes.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-convenience-methods.js": {
+      "mod": "zlib",
+      "test": "test-zlib-convenience-methods.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-reject-garbage-after-end.js": {
+      "mod": "zlib",
+      "test": "test-zlib-reject-garbage-after-end.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-type-error.js": {
+      "mod": "zlib",
+      "test": "test-zlib-type-error.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-write-after-flush.js": {
+      "mod": "zlib",
+      "test": "test-zlib-write-after-flush.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib-zstd-flush.js": {
+      "mod": "zlib",
+      "test": "test-zlib-zstd-flush.js",
+      "harnessExit": 1,
+      "flags": [],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-zlib.js": {
+      "mod": "zlib",
+      "test": "test-zlib.js",
+      "harnessExit": 1,
+      "flags": [
+        "--no-warnings"
+      ],
+      "nativeExit": 0,
+      "class": "shim-gap"
+    },
+    "test-trace-events-fs-async.js": {
+      "mod": "trace_events",
+      "test": "test-trace-events-fs-async.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 124,
+      "class": "native-timeout"
+    },
+    "test-worker-debug.js": {
+      "mod": "worker_threads",
+      "test": "test-worker-debug.js",
+      "harnessExit": 124,
+      "flags": [],
+      "nativeExit": 124,
+      "class": "native-timeout"
+    }
+  }
+}
