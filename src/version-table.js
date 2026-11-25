@@ -200,14 +200,14 @@ export const VERSION_TABLE = {
   "fs-rmdir-recursive": {
     module: "fs",
     kind: "behaviour",
-    status: "pending",
+    status: "gated",
     v24: "rmdir(path, {recursive:true}) works, emits DEP0147",
     node26: "recursive rmdir throws ERR_INVALID_ARG_VALUE (option removed)",
     tests: {
       v24: "test-fs-rmdir-recursive*.js (7 files)",
       node26: "test-fs-rmdir-recursive-error.js (replacement)",
     },
-    source: "set rows 20-26; step 3 of the strategy",
+    source: "set rows 20-26; gated in step 3 (PR #TODO)",
   },
   "fs-filehandle-gc-close": {
     module: "fs",
