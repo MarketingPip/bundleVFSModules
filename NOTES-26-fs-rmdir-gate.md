@@ -212,4 +212,4 @@ The gate selects exactly one side per target, both ways.
 
 ## Ship
 
-(TODO — filled after merge: branch, code SHA, PR number, merge SHA.)
+Merged as PR #561 (branch `fix/26-fs-rmdir-gate`, code SHA `a22b933cd7dd3da11fa03a252e5d8ab70008b230`, merge `3bc83ffb`, 2026-11-25). CI green on the code SHA (build + Parity completed/success, verified via the check-runs API). Parent-verified on live main `3bc83ffb`: all 7 flip files exit 0 under `PARITY_TARGET_NODE=24` (isolated 2×), exit 1 under target 26; Node 26 replacement `test-fs-rmdir-recursive-error.js` exits 0 under target 26 and 1 under 24. Banked by the docs sync (PR #563): v24 fs 333→340/349, program v24 2,311→2,318/3,206; node26 unchanged 2,373/2,814.
