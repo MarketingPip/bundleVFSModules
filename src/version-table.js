@@ -207,7 +207,7 @@ export const VERSION_TABLE = {
       v24: "test-fs-rmdir-recursive*.js (7 files)",
       node26: "test-fs-rmdir-recursive-error.js (replacement)",
     },
-    source: "set rows 20-26; gated in step 3 (PR #TODO)",
+    source: "set rows 20-26; gated in step 3 (PR #561)",
   },
   "fs-filehandle-gc-close": {
     module: "fs",
